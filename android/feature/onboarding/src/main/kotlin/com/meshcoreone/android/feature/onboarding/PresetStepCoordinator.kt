@@ -30,7 +30,7 @@ class PresetStepCoordinator(
     private val scope: CoroutineScope,
     private val regionPort: OnboardingRegionPort,
     private val presets: OnboardingPresetPort,
-    private val onCompleted: () -> Unit,
+    private val onCompleted: suspend () -> Unit,
 ) {
     private val mutable = MutableStateFlow(PresetStepState())
     val state: StateFlow<PresetStepState> = mutable.asStateFlow()
@@ -50,24 +50,23 @@ class PresetStepCoordinator(
         if (mutable.value.isApplying) return
         mutable.update { it.copy(isApplying = true) }
         scope.launch {
-            val outcome = try {
-                presets.apply(option.id)
+            try {
+                finish(option.id, presets.apply(option.id))
             } catch (cancel: CancellationException) {
                 mutable.update { it.copy(isApplying = false) }
                 throw cancel
             } catch (failure: Exception) {
-                OnboardingPresetOutcome.Failed(UiText.Verbatim(failure.message.orEmpty()))
+                mutable.update { it.copy(isApplying = false, error = UiText.Verbatim(failure.message.orEmpty())) }
             }
-            finish(option.id, outcome)
         }
     }
 
-    private fun finish(id: String, outcome: OnboardingPresetOutcome) {
+    private suspend fun finish(id: String, outcome: OnboardingPresetOutcome) {
         when (outcome) {
             OnboardingPresetOutcome.Applied, OnboardingPresetOutcome.NoRadioToConfigure -> {
+                onCompleted()
                 retryCount = 0
                 mutable.update { it.copy(isApplying = false, retryAlert = null, commitTick = it.commitTick + 1) }
-                onCompleted()
             }
             OnboardingPresetOutcome.NotConnected -> mutable.update {
                 it.copy(isApplying = false, error = UiText.Resource(O.presetErrorNotConnected))

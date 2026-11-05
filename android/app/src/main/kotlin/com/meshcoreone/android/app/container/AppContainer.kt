@@ -435,6 +435,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
     suspend fun close() {
         withContext(NonCancellable) {
             hostBinding?.close()
+            dependencies.onboardingPlatform?.flags?.shutdown()
             appState.shutdown()
             connectionManager.close()
             processJob.cancelAndJoin()

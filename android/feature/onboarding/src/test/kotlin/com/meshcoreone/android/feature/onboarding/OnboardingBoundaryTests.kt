@@ -301,7 +301,7 @@ class PresetStepCoordinatorTest {
         null to listOf(OnboardingPresetOption("loc", "Locale", 433.0)),
     )
 
-    private fun coordinator(port: FakePresets, region: FakeRegion = FakeRegion(presets = presets), done: () -> Unit = {}) =
+    private fun coordinator(port: FakePresets, region: FakeRegion = FakeRegion(presets = presets), done: suspend () -> Unit = {}) =
         PresetStepCoordinator(scope, region, port, done)
 
     @Test fun visiblePresetsFollowRegionWithLocaleFallback() {
@@ -327,6 +327,30 @@ class PresetStepCoordinatorTest {
         val c = coordinator(FakePresets(OnboardingPresetOutcome.NoRadioToConfigure), done = { done += 1 })
         c.select("loc"); c.apply()
         assertEquals(1, done)
+    }
+
+    @Test fun completionAcknowledgementKeepsPresetBusyAndRejectsDuplicateApply() {
+        val acknowledged = CompletableDeferred<Unit>()
+        val port = FakePresets()
+        val c = PresetStepCoordinator(scope, FakeRegion(presets = presets), port) { acknowledged.await() }
+        c.select("loc"); c.apply()
+        assertTrue(c.state.value.isApplying)
+        assertEquals(0, c.state.value.commitTick)
+        c.apply()
+        assertEquals(listOf("loc"), port.applied)
+        acknowledged.complete(Unit)
+        assertFalse(c.state.value.isApplying)
+        assertEquals(1, c.state.value.commitTick)
+    }
+
+    @Test fun completionPersistenceFailureRemainsVisibleWithoutSuccessfulPresetTick() {
+        val c = PresetStepCoordinator(scope, FakeRegion(presets = presets), FakePresets()) {
+            throw java.io.IOException("completion unavailable")
+        }
+        c.select("loc"); c.apply()
+        assertEquals(UiText.Verbatim("completion unavailable"), c.state.value.error)
+        assertFalse(c.state.value.isApplying)
+        assertEquals(0, c.state.value.commitTick)
     }
 
     @Test fun notConnectedSurfacesErrorWithoutCompleting() {
@@ -402,6 +426,84 @@ class OnboardingFlowCoordinatorTest {
         assertTrue(flow.onboarding.hasCompletedOnboarding)
         assertEquals(PairSheet.NONE, flow.deviceScan.state.value.sheet)
         assertEquals(OnboardingStep.PAIR, flow.currentStep)
+    }
+
+    @Test fun noDeviceWaitsForDurableCompletionAndRejectsDuplicateConfirmation() {
+        val acknowledged = CompletableDeferred<Unit>()
+        val memory = InMemoryOnboardingFlagStore()
+        var writes = 0
+        val flags = object : OnboardingFlagStore {
+            override fun getBoolean(key: String) = memory.getBoolean(key)
+            override fun setBoolean(key: String, value: Boolean) = memory.setBoolean(key, value)
+            override suspend fun persistBoolean(key: String, value: Boolean) {
+                writes++
+                acknowledged.await()
+                memory.setBoolean(key, value)
+            }
+        }
+        val flow = OnboardingFlowCoordinator(scope, Deps(flags = flags))
+        flow.confirmNoDevice()
+        assertFalse(flow.onboarding.hasCompletedOnboarding)
+        assertNull(flow.onboarding.completionReceipt)
+        assertFalse(memory.getBoolean(OnboardingState.KEY_HAS_COMPLETED))
+        flow.confirmNoDevice()
+        assertEquals(1, writes)
+        acknowledged.complete(Unit)
+        assertTrue(flow.onboarding.hasCompletedOnboarding)
+        assertTrue(memory.getBoolean(OnboardingState.KEY_HAS_COMPLETED))
+        assertEquals(OnboardingCompletionReceipt.WithoutDevice, flow.onboarding.completionReceipt)
+    }
+
+    @Test fun noDeviceFailureIsVisibleAndCanRetryWithoutOpeningGate() {
+        val memory = InMemoryOnboardingFlagStore()
+        var fail = true
+        val flags = object : OnboardingFlagStore {
+            override fun getBoolean(key: String) = memory.getBoolean(key)
+            override fun setBoolean(key: String, value: Boolean) = memory.setBoolean(key, value)
+            override suspend fun persistBoolean(key: String, value: Boolean) {
+                if (fail) throw java.io.IOException("completion unavailable")
+                memory.setBoolean(key, value)
+            }
+        }
+        val flow = OnboardingFlowCoordinator(scope, Deps(flags = flags))
+        flow.confirmNoDevice()
+        assertFalse(flow.onboarding.hasCompletedOnboarding)
+        assertNull(flow.onboarding.completionReceipt)
+        assertEquals(UiText.Verbatim("completion unavailable"), flow.deviceScan.state.value.failure)
+        assertEquals(1, flow.deviceScan.state.value.failureTick)
+        flow.deviceScan.dismissFailure()
+        fail = false
+        flow.confirmNoDevice()
+        assertTrue(flow.onboarding.hasCompletedOnboarding)
+    }
+
+    @Test fun flowRetirementRejectsPendingExactAttemptBeforeSeal() {
+        val staged = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val memory = InMemoryOnboardingFlagStore()
+        val flags = object : OnboardingFlagStore by memory {
+            override suspend fun persistBoolean(
+                key: String, value: Boolean, requireCurrent: () -> Unit,
+                seal: (com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt) -> Boolean,
+                attempt: com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt,
+            ) {
+                staged.complete(Unit)
+                release.await()
+                assertFalse(seal(attempt))
+                checkNotNull(attempt.rejection())
+                requireCurrent()
+                error("Retired flow must not persist")
+            }
+        }
+        val flow = OnboardingFlowCoordinator(scope, Deps(flags = flags))
+        flow.confirmNoDevice()
+        assertTrue(staged.isCompleted)
+        flow.retire()
+        release.complete(Unit)
+        assertFalse(flow.onboarding.hasCompletedOnboarding)
+        assertFalse(memory.getBoolean(OnboardingState.KEY_HAS_COMPLETED))
+        assertNull(flow.onboarding.completionReceipt)
+        assertNotNull(flow.deviceScan.state.value.failure)
     }
 
     @Test fun wifiConnectNavigatesToRegionAndClosesSheet() {

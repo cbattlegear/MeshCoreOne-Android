@@ -1,6 +1,8 @@
 // AndroidOnly: WP-305 composition of the onboarding step coordinators behind OnboardingFeatureDependencies.
 package com.meshcoreone.android.feature.onboarding
 
+import com.meshcoreone.android.core.ui.UiText
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -24,6 +26,7 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
     private val clearing = MutableStateFlow(false)
     val isClearingPairings: StateFlow<Boolean> = clearing.asStateFlow()
     private var pendingPairAfterPermission = false
+    private var completingWithoutDevice = false
 
     val currentStep: OnboardingStep get() = onboarding.onboardingPath.lastOrNull() ?: OnboardingStep.WELCOME
 
@@ -57,9 +60,23 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
     }
 
     fun confirmNoDevice() {
+        if (completingWithoutDevice) return
+        completingWithoutDevice = true
         deviceScan.dismissSheet()
-        onboarding.completeOnboarding()
+        scope.launch {
+            try {
+                onboarding.completeOnboarding()
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (failure: Exception) {
+                deviceScan.reportCompletionFailure(UiText.Verbatim(failure.message.orEmpty()))
+            } finally {
+                completingWithoutDevice = false
+            }
+        }
     }
+
+    fun retire() = onboarding.retireCompletion()
 
     fun clearStalePairings() {
         if (clearing.value) return

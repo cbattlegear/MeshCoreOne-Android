@@ -20,6 +20,60 @@ The coordinator assigned an independent clean-current-main foundation. Runtime/d
 
 ## Source custody and adaptations
 
+### Wired staged Flags prerequisite on the current-main foundation
+
+The successor of c3cd86d0e2660574bf89ca5318c82fe84112c971 transfers exactly two
+producer-approved files from 800df719216f378459883ed87b33b4fd4c652c7a:
+OnboardingFlags.kt and OnboardingFlagsTest.kt. Both working blobs match the producer
+endpoint, with all 26 authored controls, including typed uncertain IO/cancellation errors,
+original failure identities, real preference readback, explicit seal/reject races and
+shutdown/abandoned-waiter draining. No historical ancestry or other producer files are
+imported. Historical runs are not successor execution evidence.
+
+The four acknowledged OnboardingFlagStore overloads and the completion/reset/retirement
+lock and exact-attempt semantics are extracted from that producer's feature state. The
+current-main adaptation deliberately omits its preset-target receipt and navigation
+publication machinery: only WithoutDevice/Restored receipts are present. Completion
+and reset await persistence; retirement synchronously rejects pending attempts.
+The existing synchronous setter remains supported. All original feature state cases
+and assertions remain, with blocking test adapters added only around the newly
+suspending calls.
+
+The actual no-device and preset-finish consumers now await completion rather than
+queueing a plain optimistic Boolean. Completion failure is visible through their
+existing error surfaces; cancellation propagates. Preset success ticks wait for the
+acknowledgement, duplicate no-device confirmation is suppressed while pending, flow
+disposal retires its exact attempt, and process shutdown drains Flags before cancelling
+the process job. Five added coordinator methods cover pending acknowledgement,
+duplicate application/confirmation, visible failure/retry and explicit retirement.
+Production load now reaches the c3cd ShowOnceTips staged/finalized/exact-readback APIs.
+
+Storage owner 896808b8-b03c-48e0-b93f-870598b885bd confirmed the foundation already
+contains the transaction-local guards; no storage production edit is needed. Its
+218b7f5f940dac8775489dceadb82f8845eeb891 queued actual-Room control is composed
+method-only, preserving all three add/remove/preset families, full DTO, all channels,
+membership, revision, rejection and no-publication assertions. Imports are deduplicated.
+The sole method adaptation nests cleanup finally blocks so an executor-termination
+assertion cannot skip repository/database close.
+
+Fresh trusted WP-305 admissions accepted every changed feature-owned path and the
+related app consumer/test paths. The documented native-Windows readiness command
+`C:\Python312\python.exe tools\android-port\controller\ci.py preflight --local --state
+$env:ANDROID_CI_STATE --output
+C:\Users\camer\.copilot\session-state\6e767589-3de4-4390-a618-1fafe7293cbb\files\preflight-staged-flags-01`
+passed. `C:\Python312\python.exe tools\android-port\controller\validate.py`,
+`C:\Python312\python.exe tools\android-port\portmap.py`,
+`C:\Python312\python.exe tools\android-port\controller\verification_config.py` and
+`git diff --check` passed. These are source/configuration checks, not Kotlin execution.
+Local Gradle remains held by local-check:f516a7e271f444dd9cb2efcc8b995a16.
+
+Exact c3cd run 41982352370 remains active while this successor is authored; its ref is
+unchanged and no duplicate is dispatched. This wired successor requires independent
+source review and its own fresh exact-head hosted verification. Device-token preset
+consumer/receipt integration, Settings Repeat snapshot integration and the separately
+owned OCV ABA repair are not supplied or accepted by this slice. No full onboarding,
+device, hardware or whole-port completion is claimed.
+
 ### Bounded producer tip prerequisite composition
 
 Exact 79028d017892ff7e24c9ac3432a24c9ecb1558e4 run

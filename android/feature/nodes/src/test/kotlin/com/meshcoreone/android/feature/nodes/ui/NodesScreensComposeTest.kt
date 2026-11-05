@@ -609,7 +609,24 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
         @Test
         fun mountedSyncCannotPublishRetiredNotReadyFailureAcrossTheHandoff() = verifySyncHandoffOwner(ready = false)
 
-        private fun verifySyncHandoffOwner(ready: Boolean) {
+        @Test
+        fun mountedSyncCannotDisplayRetiredErrorAfterTheFinalOwnershipCheck() =
+            verifySyncHandoffOwner(ready = false, finalBoundary = true)
+
+        @Test
+        fun mountedCurrentNotReadySyncStillReportsTheConnectError() {
+            val harness = Harness().connect()
+            harness.session.state = DeviceConnectionState.DISCONNECTED
+            mount { NodesListScreen(harness.dependencies, NodesNavigation.NONE) }
+            val context = controller.get()
+            click(awaitAction(context.getString(C.contactsListSyncNodes)))
+            awaitText(context.getString(C.contactsListConnectToSync))
+            assertTrue(checkNotNull(ShadowDialog.getLatestDialog()).isShowing)
+            assertTrue(harness.contactService.calls.isEmpty())
+            assertTrue(harness.adverts.syncingFlags.isEmpty())
+        }
+
+        private fun verifySyncHandoffOwner(ready: Boolean, finalBoundary: Boolean = false) {
             val harness = Harness().connect()
             val radio = checkNotNull(harness.session.radioId)
             harness.session.state = if (ready) DeviceConnectionState.READY else DeviceConnectionState.DISCONNECTED
@@ -620,8 +637,7 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
             val fresh = Fixtures.contact(radioId = radio, name = "Fresh")
             replacement.store.contacts += fresh
             var swaps = 0
-            harness.session.onConnectionStateRead = {
-                harness.session.onConnectionStateRead = {}
+            val replace: () -> Unit = {
                 swaps++
                 harness.session.contacts = replacement.contactService
                 harness.session.adverts = replacement.adverts
@@ -629,6 +645,20 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
                 harness.session.servicesStore = replacement.store
                 harness.session.offlineStore = replacement.store
                 harness.session.state = DeviceConnectionState.READY
+            }
+            if (finalBoundary) {
+                var checks = 0
+                harness.session.onRadioIdRead = {
+                    if (++checks == 2) {
+                        harness.session.onRadioIdRead = {}
+                        replace()
+                    }
+                }
+            } else {
+                harness.session.onConnectionStateRead = {
+                    harness.session.onConnectionStateRead = {}
+                    replace()
+                }
             }
             click(oldNode)
             assertEquals(1, swaps, "The graph must actually change during the ready/not-ready handoff")

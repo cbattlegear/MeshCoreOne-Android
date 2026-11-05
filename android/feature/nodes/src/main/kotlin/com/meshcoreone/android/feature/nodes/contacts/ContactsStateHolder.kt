@@ -11,6 +11,7 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.feature.nodes.deps.CommandTimeoutException
 import com.meshcoreone.android.feature.nodes.deps.EventSubscription
 import com.meshcoreone.android.feature.nodes.deps.NodesContactFailure
+import com.meshcoreone.android.feature.nodes.deps.NodesConnectionSnapshot
 import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
 import com.meshcoreone.android.feature.nodes.deps.NodesMessage
 import com.meshcoreone.android.feature.nodes.deps.RadioCommandTimeout
@@ -42,6 +43,8 @@ data class ContactsState(
     val isSyncing: Boolean = false,
     val syncProgress: SyncProgress? = null,
     val errorMessage: NodesMessage? = null,
+    /** Graph/radio owner for Sync failures, including readiness errors before an operation starts. */
+    val errorConnection: NodesConnectionSnapshot? = null,
     val togglingFavoriteId: UUID? = null,
     /** Rows hidden after a confirmed delete, held until a reload sees the row gone. */
     val pendingRemovalIds: Set<UUID> = emptySet(),
@@ -96,11 +99,15 @@ class ContactsStateHolder(
     /** Load contacts from the local database. */
     suspend fun loadContacts(radioId: RadioId) = loadContacts(radioId) { true }
 
-    private suspend fun loadContacts(radioId: RadioId, canPublish: () -> Boolean) {
+    private suspend fun loadContacts(
+        radioId: RadioId,
+        errorOwner: NodesConnectionSnapshot? = null,
+        canPublish: () -> Boolean,
+    ) {
         val dataStore = session.offlineDataStore() ?: return
         val generation = ++loadGeneration
         val admissionsAtStart = pendingAdmissions.toMap()
-        mutableState.update { it.copy(isLoading = true, errorMessage = null) }
+        mutableState.update { it.copy(isLoading = true, errorMessage = null, errorConnection = null) }
         try {
             val fetched = dataStore.fetchContacts(radioId)
             if (generation != loadGeneration || !canPublish()) return
@@ -113,7 +120,7 @@ class ContactsStateHolder(
             throw cancelled
         } catch (error: Exception) {
             if (generation != loadGeneration || !canPublish()) return
-            mutableState.update { it.copy(errorMessage = failure(error)) }
+            mutableState.update { it.copy(errorMessage = failure(error), errorConnection = errorOwner) }
         }
         // Best-effort inbound-hop fallback: a failure here must not fail the contact load.
         val hops = try {
@@ -170,7 +177,12 @@ class ContactsStateHolder(
         val ready = session.connectionState() == DeviceConnectionState.READY
         session.ensureContactConnection(connection, radioId)
         if (!ready) {
-            mutableState.update { it.copy(errorMessage = NodesMessage.res(R.string.l10n_app_contacts_contacts_list_connecttosync)) }
+            mutableState.update {
+                it.copy(
+                    errorMessage = NodesMessage.res(R.string.l10n_app_contacts_contacts_list_connecttosync),
+                    errorConnection = NodesConnectionSnapshot(radioId, connection),
+                )
+            }
             return
         }
         onConnectionChanged()
@@ -181,7 +193,7 @@ class ContactsStateHolder(
         // Providers can observe different registry generations; reject a mixed capture before any side effect.
         session.ensureContactConnection(operation.connection, radioId)
         activeSync = operation
-        mutableState.update { it.copy(isSyncing = true, syncProgress = null, errorMessage = null) }
+        mutableState.update { it.copy(isSyncing = true, syncProgress = null, errorMessage = null, errorConnection = null) }
         var cancellation: CancellationException? = null
         try {
             // Flag the advert pipeline first and register before sending so no progress is missed.
@@ -197,14 +209,16 @@ class ContactsStateHolder(
             }
             contactService.syncContactsForRefresh(radioId)
             ensureCurrentSync(operation)
-            loadContacts(radioId) { isCurrentSync(operation) }
+            loadContacts(radioId, NodesConnectionSnapshot(radioId, operation.connection)) { isCurrentSync(operation) }
             ensureCurrentSync(operation)
             mutableState.update { it.copy(syncProgress = null) }
         } catch (cancelled: CancellationException) {
             // Interrupted refresh (tab switch, teardown) is not a failure to report.
             cancellation = cancelled
         } catch (error: Exception) {
-            if (isCurrentSync(operation)) mutableState.update { it.copy(errorMessage = failure(error)) }
+            if (isCurrentSync(operation)) mutableState.update {
+                it.copy(errorMessage = failure(error), errorConnection = NodesConnectionSnapshot(radioId, operation.connection))
+            }
             else onConnectionChanged()
         } finally {
             operation.stopProgress()
@@ -222,6 +236,14 @@ class ContactsStateHolder(
 
     /** Retire only connection-owned work; cached contacts and pending admissions remain radio-owned. */
     fun onConnectionChanged() {
+        val errorOwner = state.value.errorConnection
+        if (errorOwner != null &&
+            (session.connectionIdentity() !== errorOwner.identity || session.currentRadioId() != errorOwner.radioId)
+        ) {
+            mutableState.update {
+                if (it.errorConnection === errorOwner) it.copy(errorMessage = null, errorConnection = null) else it
+            }
+        }
         val operation = activeSync ?: return
         if (isCurrentSync(operation)) return
         activeSync = null
@@ -249,7 +271,7 @@ class ContactsStateHolder(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
-            mutableState.update { it.copy(errorMessage = failure(error)) }
+            mutableState.update { it.copy(errorMessage = failure(error), errorConnection = null) }
         } finally {
             mutableState.update { it.copy(togglingFavoriteId = null) }
         }
@@ -280,7 +302,9 @@ class ContactsStateHolder(
      */
     suspend fun deleteContact(contact: ContactDTO) {
         val contactService = session.contactService() ?: run {
-            mutableState.update { it.copy(errorMessage = NodesMessage.res(R.string.l10n_app_contacts_contacts_viewmodel_connecttodelete)) }
+            mutableState.update {
+                it.copy(errorMessage = NodesMessage.res(R.string.l10n_app_contacts_contacts_viewmodel_connecttodelete), errorConnection = null)
+            }
             return
         }
         if (isDeletePending(contact.id)) return
@@ -297,11 +321,13 @@ class ContactsStateHolder(
                 hideDeletedContact(contact)
             }
         } catch (_: CommandTimeoutException) {
-            mutableState.update { it.copy(errorMessage = NodesMessage.res(R.string.l10n_app_contacts_contacts_viewmodel_removetimedout)) }
+            mutableState.update {
+                it.copy(errorMessage = NodesMessage.res(R.string.l10n_app_contacts_contacts_viewmodel_removetimedout), errorConnection = null)
+            }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
-            mutableState.update { it.copy(errorMessage = failure(error)) }
+            mutableState.update { it.copy(errorMessage = failure(error), errorConnection = null) }
         } finally {
             mutableState.update { it.copy(deletingIds = it.deletingIds - contact.id) }
         }
@@ -315,7 +341,7 @@ class ContactsStateHolder(
         }
     }
 
-    fun clearError() = mutableState.update { it.copy(errorMessage = null) }
+    fun clearError() = mutableState.update { it.copy(errorMessage = null, errorConnection = null) }
 
     /** Contacts filtered by segment (or search, which ignores the segment) and sorted. */
     fun filteredContacts(
@@ -336,7 +362,7 @@ class ContactsStateHolder(
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
-            mutableState.update { it.copy(errorMessage = failure(error)) }
+            mutableState.update { it.copy(errorMessage = failure(error), errorConnection = null) }
         }
     }
 

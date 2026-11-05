@@ -113,6 +113,9 @@ internal fun NodesListScreen(
         holder.onConnectionChanged()
         if (radioId != null && !holder.state.value.hasLoadedOnce) holder.loadContacts(radioId)
     }
+    LaunchedEffect(holder, state.errorConnection) {
+        holder.onConnectionChanged()
+    }
     LaunchedEffect(state.hasLoadedOnce) {
         if (state.hasLoadedOnce && segment == NodeSegment.CONTACTS && state.hasFavorites) segment = NodeSegment.FAVORITES
     }
@@ -209,7 +212,9 @@ internal fun NodesListScreen(
         }
     }
 
-    state.errorMessage?.let { error ->
+    state.errorMessage?.takeIf {
+        state.errorConnection?.let { owner -> owner.identity === connection && owner.radioId == radioId } != false
+    }?.let { error ->
         AlertDialog(
             onDismissRequest = holder::clearError,
             confirmButton = { TextButton(onClick = holder::clearError) { Text(stringResource(C.contactsCommonOk)) } },

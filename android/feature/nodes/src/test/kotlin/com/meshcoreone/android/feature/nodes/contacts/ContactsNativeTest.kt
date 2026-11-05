@@ -131,6 +131,40 @@ class ContactsNativeTest {
         assertEquals(listOf(true, false), replacement.adverts.syncingFlags)
     }
 
+    @Test
+    fun `not-ready publication after its final check retains the original error owner`() = scenario {
+        val harness = Harness(clock).connect()
+        val radio = checkNotNull(harness.session.radioId)
+        val owner = harness.session.connectionIdentity()
+        harness.session.state = DeviceConnectionState.DISCONNECTED
+        val replacement = Harness(clock).connect(radio)
+        var checks = 0
+        harness.session.onRadioIdRead = {
+            if (++checks == 2) {
+                harness.session.onRadioIdRead = {}
+                harness.session.contacts = replacement.contactService
+                harness.session.adverts = replacement.adverts
+                harness.session.servicesStore = replacement.store
+                harness.session.offlineStore = replacement.store
+                harness.session.state = DeviceConnectionState.READY
+            }
+        }
+        val holder = ContactsStateHolder(harness.dependencies, scope)
+        holder.syncContacts(radio, owner)
+        assertEquals(2, checks)
+        assertTrue(holder.state.value.errorConnection?.identity === owner, "The late failure must not acquire B's identity")
+        assertTrue(harness.contactService.calls.isEmpty())
+        assertTrue(replacement.contactService.calls.isEmpty())
+        holder.onConnectionChanged()
+        assertNull(holder.state.value.errorMessage, "A readiness error retires even without an active sync")
+        assertNull(holder.state.value.errorConnection)
+        holder.syncContacts(radio, harness.session.connectionIdentity())
+        assertEquals(listOf("sync"), replacement.contactService.calls)
+        assertEquals(listOf(true, false), replacement.adverts.syncingFlags)
+        assertNull(holder.state.value.errorMessage)
+        assertTrue(harness.adverts.syncingFlags.isEmpty())
+    }
+
     private fun verifySyncAcquisitionSwap(boundary: String) = scenario {
         val harness = Harness(clock).connect()
         val radio = checkNotNull(harness.session.radioId)

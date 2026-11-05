@@ -141,6 +141,14 @@ covering both ready and not-ready A, and require no A/B commands, flags or stale
 fresh B success. A holder-entry control independently rejects an already-retired initiating owner
 before any provider acquisition. Existing acquisition and held-operation controls are preserved.
 
+Sync errors also retain their graph/radio owner in observable state. The mounted list filters
+their display against its binding, and connection-change cleanup retires a stale owned error even
+when no Sync operation started. This covers replacement after the last readiness ownership check
+but before state publication without relying on another check to close a concurrent window.
+Deterministic holder and mounted controls swap during the final check's last provider read; they
+require A attribution, no B error display, retirement without active sync and fresh B success.
+A positive mounted control still requires the live not-ready owner's normal connect error.
+
 Both `ContactsImmediateAdmissionApi31ComposeTest` and
 `ContactsImmediateAdmissionApi37ComposeTest` inherit six mounted tests:
 

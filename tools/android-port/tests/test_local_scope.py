@@ -413,6 +413,21 @@ class LocalScopeBindingTests(unittest.TestCase):
             notification_inputs_for_candidate=lambda: notification_instrumentation_candidate(self.repo, head),
         )["positive_discovery"])
 
+        base = head
+        self.git("update-ref", "refs/remotes/origin/main", base)
+        self.write("tools/android-port/tests/test_mixed.py", "changed controller fixture only\n")
+        head = self.commit()
+        self.assertEqual(provider(None)["scopes"], [])
+        self.assertIsNotNone(notification_instrumentation_candidate(self.repo, head))
+        self.assertTrue(validate(report)["positive_discovery"])
+        for scopes in (None, "scaffold", ["scaffold", "scaffold"], [""], [7], ["module:unknown"]):
+            def malformed(requested):
+                return {"scopes": scopes} if requested is None else provider(requested)
+            with self.subTest(derived_scopes=scopes), self.assertRaises(PortError):
+                validate(report, malformed)
+        with self.assertRaises(PortError):
+            validate(report, lambda requested: {} if requested is None else provider(requested))
+
     def test_remapped_runner_survives_dependency_parser_full_fallback(self):
         notification_fixture(self.write)
         self.write("android/core/model/src/main/kotlin/Model.kt", "base")

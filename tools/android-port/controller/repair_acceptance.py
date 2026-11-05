@@ -775,7 +775,7 @@ def _trusted_full_candidate_plan(plan_for_scopes):
         raise PortError("Missing/malformed trusted candidate-derived scopes")
     scopes = derived.get("scopes")
     if (
-        not isinstance(scopes, list) or not scopes
+        not isinstance(scopes, list)
         or not all(isinstance(scope, str) and scope for scope in scopes)
         or len(scopes) != len(set(scopes))
     ):

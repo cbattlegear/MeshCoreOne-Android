@@ -49,6 +49,29 @@ class NotificationReplyStagingStoreTest {
     }
 
     @Test
+    fun copyTextAndContainingInventoryRedactRenderingWithoutChangingValueSemantics() = runTest {
+        val exact = "private-copy-sentinel \t\u0000e\u0301\uD800 \r\n "
+        assertTrue(store.stage(post, payload, exact) is NotificationReplyStagingStore.StageResult.Staged)
+        val retained = store.readCopyOnly() as NotificationReplyStagingStore.CopyInventory.Retained
+        val record = retained.records.single()
+        val same = record.copy()
+        val changed = record.copy(exactText = "$exact ")
+
+        assertEquals(exact.toCharArray().toList(), record.exactText.toCharArray().toList())
+        assertEquals(record, same)
+        assertEquals(record.hashCode(), same.hashCode())
+        assertNotEquals(record, changed)
+        assertEquals("$exact ", changed.exactText)
+        assertEquals(retained, NotificationReplyStagingStore.CopyInventory.Retained(listOf(same)))
+        assertEquals("CopyText(<redacted>)", record.toString())
+        assertEquals(record.toString(), changed.toString())
+        listOf(record, same, changed, retained).forEach {
+            assertFalse(it.toString().contains("private-copy-sentinel"))
+            assertFalse(it.toString().contains(exact))
+        }
+    }
+
+    @Test
     fun exactTextAndStableIdsSurviveReopenAndIdenticalSecondSendNeedsNewToken() = runTest {
         val text = " \t\r\nhello\u0000 e\u0301 \u00e9 \uD83D\uDE80 \uD800 \uDC00 \n "
         val first = store.stage(post, payload, text) as NotificationReplyStagingStore.StageResult.Staged

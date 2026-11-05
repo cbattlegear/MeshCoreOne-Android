@@ -48,6 +48,36 @@ class NotificationReplyEnrollmentTest {
     fun cleanup() = removeDatabase(file)
 
     @Test
+    fun unboundTextAndContainingResultsRedactRenderingWithoutChangingValueSemantics() = runTest {
+        val bound = bindFixture(prepareFixture())
+        val submission = UUID.randomUUID()
+        val exact = "private-unbound-sentinel$text"
+        val durable = store.retainUnbound(bound, submission, exact) as
+            NotificationReplyEnrollmentStore.TextResult.Durable
+        val duplicate = store.retainUnbound(bound, submission, exact) as
+            NotificationReplyEnrollmentStore.TextResult.AlreadyRetained
+        val retained = store.readUnbound(bound) as NotificationReplyEnrollmentStore.TextInventory.Retained
+        val record = durable.record
+        val same = record.copy()
+        val changed = record.copy(exactText = "$exact ")
+
+        assertEquals(exact.toCharArray().toList(), record.exactText.toCharArray().toList())
+        assertEquals(record, same)
+        assertEquals(record.hashCode(), same.hashCode())
+        assertNotEquals(record, changed)
+        assertEquals("$exact ", changed.exactText)
+        assertEquals(record, duplicate.record)
+        assertEquals(listOf(record), retained.records)
+        assertEquals(record, retained.records.single().copy())
+        assertEquals("UnboundText(<redacted>)", record.toString())
+        assertEquals(record.toString(), changed.toString())
+        listOf(record, same, changed, durable, duplicate, retained).forEach {
+            assertFalse(it.toString().contains("private-unbound-sentinel"))
+            assertFalse(it.toString().contains(exact))
+        }
+    }
+
+    @Test
     fun missingReconcileAndCopyDoNotCreateOrInferAuthorizedFreshInstallation() = runTest {
         assertEquals(notRetained(NotificationReplyEnrollmentStore.Failure.MISSING_STORAGE),
             store.reconcile(operation))

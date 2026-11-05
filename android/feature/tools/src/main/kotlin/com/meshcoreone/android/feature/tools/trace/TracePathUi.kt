@@ -122,8 +122,8 @@ object TracePathScreen {
                     override fun connectedDevice() = dependencies.feature.connectedDevice()
                 })
             }
-            DisposableEffect(savedPaths) { onDispose { savedPaths.retireConnection() } }
         }
+        DisposableEffect(savedPaths) { onDispose { savedPaths.retireConnection() } }
 
         DisposableEffect(holder, dependencies.generation, dependencies.radioId) {
             holder.configure(dependencies.feature)

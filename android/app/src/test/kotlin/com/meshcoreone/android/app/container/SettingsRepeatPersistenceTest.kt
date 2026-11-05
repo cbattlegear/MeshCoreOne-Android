@@ -21,6 +21,7 @@ import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.config.SessionConfiguration
 import com.meshcoreone.android.core.services.sync.SyncState
 import com.meshcoreone.android.core.ui.UiText
 import com.meshcoreone.android.feature.settings.device.*
@@ -46,6 +47,73 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class SettingsRepeatPersistenceTest : RoomProcessTest() {
+    @Test fun queuedRealEditorCannotPreventDisconnectFromClosingAnActualSuspendedRestoreSend() = runTest {
+        val editorEntered = CompletableDeferred<Unit>()
+        val runtimeEntered = CompletableDeferred<Unit>()
+        var armed = false
+        val observed = object : PersistenceStoreProtocol by store {
+            override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+                if (!armed) return store.saveDeviceIfUnchanged(dto, expected)
+                editorEntered.complete(Unit)
+                return store.saveDeviceIfUnchanged(dto, expected.copy(withAuthority = { write ->
+                    expected.withAuthority {
+                        runtimeEntered.complete(Unit)
+                        write()
+                    }
+                }))
+            }
+        }
+        withRepeat(observed, sessionConfiguration = SessionConfiguration(defaultTimeout = 60.0)) { h, _, _, radio ->
+            val before = assertNotNull(h.manager.connectedDevice)
+            val token = assertNotNull(h.sessions.current).token
+            val sending = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            radio.beforeRadioSend = { sending.complete(Unit); release.await() }
+            val restore = async {
+                runCatching {
+                    assertNotNull(h.sessions.current).settingsService.setRadioParamsVerified(
+                        before.frequency, before.bandwidth, before.spreadingFactor, before.codingRate, false,
+                        restoreAuthority = h.container.deviceEditor.preRepeatSettingsRestoreAuthority(token, before),
+                    )
+                }
+            }
+            var edit: kotlinx.coroutines.Deferred<Result<Boolean>>? = null
+            var disconnect: kotlinx.coroutines.Deferred<*>? = null
+            try {
+                h.eventually("actual restore send suspended") { sending.isCompleted }
+                armed = true
+                val editor = async(start = CoroutineStart.UNDISPATCHED) {
+                    runCatching { h.container.deviceEditor.updatePathHashMode(2u, token) }
+                }
+                edit = editor
+                h.eventually("real editor reached actual Room CAS") { editorEntered.isCompleted }
+                assertFalse(editor.isCompleted)
+                assertEquals(before, store.fetchDevice(before.id))
+                val physical = h.links.radios.last()
+                val closing = async(start = CoroutineStart.UNDISPATCHED) { h.manager.disconnect() }
+                disconnect = closing
+                h.eventually(
+                    "disconnect physically closes the suspended send without a protocol timeout (runtimeHeld=${runtimeEntered.isCompleted})",
+                    virtualBudgetMillis = 0,
+                ) { physical.closes > 0 && !physical.connected }
+                assertTrue(radio.radioWrites.isEmpty(), "Disconnect cancelled the send before its frame")
+                assertFalse(release.isCompleted, "Only actual teardown, not the test latch or a timeout, made progress")
+                assertEquals(before, store.fetchDevice(before.id))
+                h.eventually("retired editor and disconnect settle") { editor.isCompleted && closing.isCompleted }
+                val outcome = editor.await()
+                assertTrue(outcome.getOrNull() == false || outcome.exceptionOrNull() is kotlinx.coroutines.CancellationException)
+                assertEquals(before, store.fetchDevice(before.id))
+            } finally {
+                release.complete(Unit)
+                restore.cancel()
+                edit?.cancel()
+                restore.join()
+                edit?.join()
+                disconnect?.join()
+            }
+        }
+    }
+
     @Test fun identityWritersCannotChangeAnAdmittedRestoreBeforeItsActualSet() = runTest {
         for ((index, operation) in listOf("delete", "delete-all", "demote", "reconcile", "insert").withIndex()) {
             withRepeat(store) { h, _, _, radio ->
@@ -861,9 +929,10 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
         beforeRestoreWrite: (suspend () -> Unit)? = null,
         connectExisting: UUID? = null,
         initiallyRepeating: Boolean = false,
+        sessionConfiguration: SessionConfiguration = SessionConfiguration.DEFAULT,
         action: suspend (ContainerHarness, RadioPresetStateHolder, MutableList<Throwable>, RepeatRadio) -> Unit,
     ) {
-        val h = ContainerHarness(this, room, persistenceOverride = persistence)
+        val h = ContainerHarness(this, room, persistenceOverride = persistence, sessionConfiguration = sessionConfiguration)
         val radio = RepeatRadio()
         var holder: RadioPresetStateHolder? = null
         try {

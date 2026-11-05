@@ -92,15 +92,17 @@ class LocationManagerLocationProducing(
     }
 
     private suspend fun acquireForegroundFix(): GeoCoordinate {
-        var existing: Request? = null
-        try {
-            return acquireLocation { existing = it }
-        } catch (error: LocationServiceError) {
-            if (error != LocationServiceError.RequestInProgress) throw error
+        while (true) {
+            var existing: Request? = null
+            try {
+                return acquireLocation { existing = it }
+            } catch (error: LocationServiceError) {
+                if (error != LocationServiceError.RequestInProgress) throw error
+            }
+            val result = checkNotNull(existing).finished.await()
+            // Follow cancelled owners only within the caller's original timeout; never retry a failed fix.
+            if (result.exceptionOrNull() !is CancellationException) return result.getOrThrow()
         }
-        val result = checkNotNull(existing).finished.await()
-        // One cancellation handoff within the original timeout, not a provider-failure retry.
-        return if (result.exceptionOrNull() is CancellationException) requestLocation() else result.getOrThrow()
     }
 
     init {

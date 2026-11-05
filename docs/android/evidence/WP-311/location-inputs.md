@@ -19,9 +19,10 @@ with granted permission and an empty cache acquires one bounded foreground fix
 (10 seconds). It never invokes a permission requester or adds continuous tracking.
 An overlapping list observes the exact existing request's completion without
 owning it. If that acquiring list leaves and cancels its request, the remaining
-observer may acquire one replacement within its original 10-second budget.
-Provider failures are not retried; neither repeated handoffs nor retries are
-unbounded.
+observer follows the current request and may acquire a replacement within its
+original 10-second budget, including when another observer wins an intermediate
+handoff. Provider failures are not retried; cancellation handoffs share the same
+bounded deadline rather than extending it.
 Its existing advert cache and one-shot cancellation/timeout behavior stay intact.
 Authorization is refreshed when the UI resumes collection and on the adapter's
 existing permission/fix callbacks. Denied/revoked access withdraws the phone fix
@@ -54,6 +55,9 @@ Core navigation, list loading and radio commands remain independent of location.
   `disposingAcquiringCollectorHandsOneBoundedFixToTheRemainingObserver`
   specifically holds acquiring A and observing B, disposes A, rejects A's late
   callback and requires B's replacement real platform callback to publish a fix.
+  `lastForegroundObserverFollowsTwoDisposedAcquiringOwnersWithinItsOriginalDeadline`
+  holds A/B/C, disposes A then the replacement-owning B, rejects both retired
+  callbacks, and requires surviving C to acquire and publish its own callback.
 - `NodesLocationIntegrationTest.actualNodesAdapterPrefersAuthorizedPhoneThenLiveRadioAndWithdrawsDisconnectedFallback`
   exercises the actual AppContainer nodes dependency, live radio-coordinate
   updates, phone precedence, unavailable phone fallback and disconnect withdrawal.

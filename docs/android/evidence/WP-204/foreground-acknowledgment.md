@@ -184,7 +184,15 @@ Combined execution attempts (preserved, not attributed to successors):
   actual focus-loss and queued-confirm negative controls remain present.
   Its combined run
   [42002017581](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42002017581)
-  is pending; no earlier outcome is transferred to it.
+  failed after compiling and executing 2,058 app tests with the same 24 mounted
+  failures. The warning was still absent at display/request assertions, and
+  the focus-loss test encountered a null dialog window. The fixture change did
+  not establish a working focused dialog. The actual adapter suite logged
+  `END|SUCCESS`, but the mounted real-ledger discriminator remains unverified.
+  The producer owner has the exact assertion locations for repair; no product
+  guard was weakened and no earlier outcome is transferred to this attempt.
+  Classification, controller policy and Swift codec jobs passed; SwiftData
+  restore/export was skipped following the Android job failure.
 
 Not verified:
 

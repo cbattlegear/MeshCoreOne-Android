@@ -46,7 +46,6 @@ data class DirectAckRadioWireEvidence(
 enum class DirectAckRadioEvidenceCoverage { COMPLETE, TRUNCATED, SATURATED }
 
 object DirectAckRadioEvidenceLimits {
-    const val MAX_TRACKED_WIRES_PER_RADIO = 4_096
     const val MAX_DIAGNOSTIC_WIRES_PER_RADIO = 4_096
 }
 
@@ -64,6 +63,7 @@ data class DirectAckRadioEvidenceSnapshot(
 
 data class DirectAckEmissionReceipt(
     val emissionRequestId: UUID,
+    val resolutionRequestId: UUID?,
     val evidence: DirectAckRadioWireEvidence,
 )
 
@@ -80,7 +80,10 @@ sealed interface DirectAckEmissionMarkResult {
         val receipt: DirectAckEmissionReceipt,
     ) : DirectAckEmissionMarkResult
 
-    /** Sticky saturation is durable; the send may proceed, but no exact-emission handle is fabricated. */
+    /**
+     * An already-persisted sticky wildcard covers this send. No handle is fabricated and ordinary
+     * journal growth never creates this result.
+     */
     data class CoveredBySaturation(
         val receipt: DirectAckRadioSaturationReceipt,
     ) : DirectAckEmissionMarkResult
@@ -204,22 +207,24 @@ object DirectAckRadioEvidenceAssessment {
  * emissionRequestId is fresh per invocation even when wireRequestId is reused for retry/backoff.
  * A commit-uncertain caller replays or inspects that exact ID; transport is never replayed to
  * reconcile metadata. Inspection does not mint a handle; replaying the exact marker request recovers
- * the storage-issued handle when one was committed. Storage failures/cancellation propagate and
- * dispatch cannot proceed without a committed marker or CoveredBySaturation result. Saturation
- * atomically commits a sticky radio wildcard, allows sending to continue, and returns no fake handle.
+ * the storage-issued handle when one was committed. The exact authoritative marker journal has no
+ * total-row cap and retains every emission identity, replay result, contradiction and unresolved
+ * fact. Storage failures/cancellation propagate and dispatch cannot proceed without a committed
+ * marker or an already-persisted CoveredBySaturation result. Normal journal growth never creates
+ * saturation or sacrifices exact per-emission evidence.
  *
  * The handle refines only its exact persisted physical emission. resolutionRequestId is caller-known
  * before resolution and exact replay is idempotent; reusing it for different input is CONFLICT.
- * DefinitelyUnsent is accepted only before accepted-code evidence; contradictory accepted/unsent
- * facts are retained as Conflict and remain wildcard ambiguity. Accepted carries the actual returned
- * code, preserves prediction history, and may refine after grant invalidation without restoring or
- * changing message authority. It atomically binds this exact emission's actual code and matching
- * registered-wire acceptance metadata. It may advance the claim's ACCEPTED phase only while the
- * original grant remains current; it never changes product delivery status. DefinitelyUnsent
- * refines only that physical emission and cannot clear
- * another marker with the same registered wireRequestId. The legacy recordDirectSendAccepted API has
- * no physical emission ID and must never clear per-emission MAY_HAVE_WRITTEN evidence; only this
- * exact-handle resolver can do so. Markerless legacy wires with no accepted code remain LegacyUnknown.
+ * DefinitelyUnsent is nonconflicting only before accepted-code evidence; contradictory accepted/
+ * unsent facts are retained as Conflict and remain wildcard ambiguity. Accepted carries the actual
+ * returned code, preserves prediction history, and may refine after grant invalidation without
+ * restoring or changing message authority. It atomically binds this exact emission's actual code
+ * and matching registered-wire acceptance metadata. It may advance the claim's ACCEPTED phase only
+ * while the original grant remains current; it never changes product delivery status.
+ * DefinitelyUnsent refines only that physical emission and cannot clear another marker with the
+ * same registered wireRequestId. The legacy recordDirectSendAccepted API has no physical emission
+ * ID and must never clear per-emission MAY_HAVE_WRITTEN evidence; only this exact-handle resolver
+ * can do so. Markerless legacy wires with no accepted code remain LegacyUnknown.
  *
  * Marker registration and settlement share a database-level per-radio serialization/fence across
  * every Room handle. In a race, the marker transaction and settlement transaction have a single
@@ -230,13 +235,17 @@ object DirectAckRadioEvidenceAssessment {
  * happen. Firmware rejection after bytes were written is not DefinitelyUnsent; the marker stays
  * MAY_HAVE_WRITTEN unless an exact accepted result or explicit zero-write proof refines that handle.
  *
- * inspectDirectAckRadioEvidence is bounded and diagnostic: TRUNCATED is incomplete and SATURATED
- * is an already-persisted sticky wildcard. Settlement must not authorize from this public snapshot.
+ * inspectDirectAckRadioEvidence is bounded and diagnostic to MAX_DIAGNOSTIC_WIRES_PER_RADIO:
+ * TRUNCATED means the sample omitted rows; SATURATED means a sticky wildcard already exists in
+ * persisted history (for example, conservative legacy migration). Neither sample state authorizes
+ * settlement. The storage query must check every persisted competing emission, using bounded/paged
+ * working memory or an equivalent database-side query without dropping exact journal rows.
  * settleDirectAckExcludingRadioHistory validates the current target grant and compares all claims
  * for that radio in the same serialized storage transaction as delivery. For the target claim,
- * only a matching Accepted actual code is eligible; an earlier accepted wire of the same claim
- * remains eligible across a prepared or differently accepted retry. For every other claim, a
- * completed wire contributes both its predicted and accepted codes as competitors; any unresolved
+ * any matching Accepted actual code from the valid claim is eligible, including multiple physical
+ * emissions that reused one wireRequestId; an earlier accepted emission remains eligible across a
+ * prepared or differently accepted retry. For every other claim, a completed emission contributes
+ * both its predicted and accepted codes as competitors; any unresolved
  * MAY_HAVE_WRITTEN/LegacyUnknown/Conflict emission is a wildcard. DefinitelyUnsent excludes only
  * that exact wire. TRUNCATED, SATURATED, unresolved competitors, and known code collisions return
  * typed Nonsettling reasons without a delivery mutation. Only Settled(Applied/AlreadyApplied)
@@ -244,11 +253,11 @@ object DirectAckRadioEvidenceAssessment {
  * abandons only the exact pending ACK candidate, leaves the logical claim waiting, and preserves
  * the product row. A successful send response or evidence refinement is not a delivery fallback.
  *
- * Marker capacity is bounded by MAX_TRACKED_WIRES_PER_RADIO physical emissions and inspection by
- * MAX_DIAGNOSTIC_WIRES_PER_RADIO rows. When a new distinct marker would exceed that cap, storage
- * retains existing marker/wire rows, commits a sticky wildcard, and never resets it by TTL, lease
- * replacement, reconnect, or process restart. A raw ACK observed only in RAM is not durably ingested
- * or promised to replay after process death.
+ * Authoritative marker retention is not count-bounded and has no TTL/eviction/reset rule. Diagnostic
+ * inspection is bounded by MAX_DIAGNOSTIC_WIRES_PER_RADIO and reports TRUNCATED rather than implying
+ * completeness. Any already-persisted SATURATED fact remains sticky across lease replacement,
+ * reconnect and process restart. A raw ACK observed only in RAM is not durably ingested or promised
+ * to replay after process death.
  */
 interface DirectAckRadioExclusionAuthority {
     /**
@@ -269,6 +278,15 @@ interface DirectAckRadioExclusionAuthority {
         emissionRequestId: UUID,
     ): DirectAckEmissionObservation
 
+    /**
+     * The caller supplies a resolutionRequestId before the operation. Exact ID/input replay is
+     * AlreadyApplied; reusing an ID with different input returns Conflict. A fresh ID carrying the
+     * same evidence records that ID as the latest resolution and returns Applied. Contradictory
+     * facts return Conflict with sticky wildcard evidence, preserving the first accepted actual
+     * and any definitely-unsent fact. Accepted atomically updates only this emission, its
+     * registered-wire actual metadata, and the current claim's ACCEPTED phase when its original
+     * grant is still valid. It never renews authority or changes delivery status.
+     */
     suspend fun resolveDirectAckWireEmission(
         handle: DirectAckEmissionHandle,
         resolutionRequestId: UUID,

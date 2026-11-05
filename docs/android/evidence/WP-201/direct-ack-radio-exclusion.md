@@ -19,6 +19,10 @@ nonactivated. The service and storage owners confirmed the per-emission marker
 and resolver boundary. Storage's schema work is a separate implementation and
 is not included or validated by this contract candidate.
 
+This correction supersedes `5db00defc6c7ac1e6c22237edd1d48b8d99beb35` because
+its total-marker cap lost normal-history selectivity. Hosted run `42077798177`
+targets that superseded SHA and is not verification of this corrected source.
+
 ## Contract boundary
 
 `DirectAckRadioExclusionAuthority` is optional and additive. It does not replace
@@ -54,8 +58,10 @@ boundary: a competitor registration and settlement are totally ordered, the
 settlement validates the current grant and all radio claims while committing
 delivery, and it never trusts an earlier service-side snapshot. If the
 pre-dispatch marker cannot be durably committed, transport is not invoked.
-An accepted response updates the same evidence through the transaction that
-resolves its exact emission handle. The legacy
+An accepted response updates the exact emission and its registered-wire actual
+metadata through the transaction that resolves its exact emission handle. Every
+physical emission retains its own actual code even when a retry reuses the same
+wire ID. The legacy
 `recordDirectSendAccepted(attempt, wireRequestId, ackCode)` has no physical
 emission ID and must not clear any per-emission marker.
 
@@ -74,7 +80,11 @@ ID; every physical invocation therefore has its own marker and resolution
 handle. The only current definite-nonwrite signal is
 `MessageWriteDispatch.cancellationDisposition == DEFINITELY_UNSENT` after the
 actual send propagates `CancellationException`. Firmware `DeviceError` means
-the command bytes were written and remains `MAY_HAVE_WRITTEN`.
+the command bytes were written and remains `MAY_HAVE_WRITTEN`. A firmware code
+3 is not a generic zero-write signal: attribution to the direct operation and
+deployed firmware behavior are not established for all clients/interfaces,
+and older ACK entries are not proven drained. No raw `DeviceError` code is
+classified as definitely unsent by this contract.
 
 The service owner confirmed that receipt/tracker delivery is completed only
 after `Settled`; `Nonsettling` discards only the exact pending ACK candidate
@@ -82,22 +92,24 @@ and leaves the logical claim waiting. A successful send response, late evidence
 refinement, or raw ACK retained only in RAM cannot synthesize or publish
 recipient delivery.
 
-For the target logical claim, only a matching accepted actual code is eligible;
-an earlier accepted wire of the same claim remains eligible across a prepared
-or differently accepted retry. For every other claim on that radio, both its
-predicted and accepted codes remain known competitors. An unresolved
-`MAY_HAVE_WRITTEN`, `LEGACY_UNKNOWN`, or conflict is wildcard ambiguity.
-`DEFINITELY_UNSENT` excludes only that exact wire.
+For the target logical claim, any matching accepted actual code from that
+claim is eligible, including multiple physical emissions that reused one wire
+ID; an earlier accepted emission remains eligible across a prepared or
+differently accepted retry. For every other claim on that radio, each physical
+emission contributes its predicted and accepted codes as known competitors.
+An unresolved `MAY_HAVE_WRITTEN`, `LEGACY_UNKNOWN`, or conflict is wildcard
+ambiguity. `DEFINITELY_UNSENT` excludes only that exact physical emission.
 
-The contract fixes the agreed bounds at 4,096 detailed markers and 4,096
-diagnostic sample rows per radio. When marker capacity is reached, storage
-commits sticky radio-wide saturation and returns `CoveredBySaturation` without
-inventing a per-wire handle. Sending can continue under that persisted
-wildcard, but settlement remains nonsettling indefinitely. Existing wire and
-marker evidence is not deleted or expired, and saturation is never reset by
-reconnect, lease replacement, or process restart. A truncated diagnostic
-sample is explicitly distinct from persisted saturation and is never a clean
-history proof.
+The authoritative per-emission journal has no total-row cap, TTL or eviction:
+exact emission identities, replay/conflict evidence, and unresolved facts are
+retained. The 4,096-row bound applies only to diagnostic samples;
+`TRUNCATED` means the sample omitted history and never implies completeness.
+Normal journal growth does not create saturation. `CoveredBySaturation` and
+`SATURATED` only report a sticky wildcard already persisted (for example,
+conservative legacy history); it is never reset by reconnect, lease
+replacement, or process restart. Storage must use bounded/paged working memory
+or database-side evaluation without dropping journal rows, and surface
+persistence failures before physical dispatch.
 
 The API does not durably ingest a raw ACK that was observed only in RAM and
 does not promise to replay such an ACK after process death. The service owner
@@ -106,11 +118,12 @@ the matching actual code is persisted.
 
 ## Validation and limits
 
-Twelve new pure classifier controls cover target accepted-code matching,
+Thirteen new pure classifier controls cover target accepted-code matching,
 same-claim prior wires, both foreign predicted/actual code memberships,
 unknown and conflicting wildcards, definite non-emission, saturation,
 truncation, radio partitioning, reused wire IDs across distinct physical
-emissions, and a definite-unsent retry that cannot clear an earlier
+emissions (including different actual codes on foreign emissions sharing one
+wire ID), and a definite-unsent retry that cannot clear an earlier
 possible-emission marker. They specify only the diagnostic candidate;
 they are not evidence of transactional storage enforcement, real service
 routing, radio hardware behavior, or durable ACK ingress.
@@ -120,7 +133,9 @@ Therefore identical actual codes across distinct claims, unresolved possible
 emissions, and sticky saturation are fundamentally nonsettling; the contract
 preserves safety rather than inventing origin or expiry.
 
-No local Gradle/Kotlin build or tests were run due the explicit memory
-constraint. Hosted exact-candidate compilation/test discovery is pending.
+No local Gradle/Kotlin build or tests were run because of the explicit local
+Gradle owner hold. Source-only `git diff --check` passed and 13 test annotations were
+present in the contract test file; neither check establishes compilation or
+test execution. Hosted exact-candidate compilation/test discovery is pending.
 Physical radio testing and a real Room implementation of the optional
 capability are not claimed.

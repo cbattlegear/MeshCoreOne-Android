@@ -52,6 +52,26 @@ class DirectAckRadioExclusionTest {
     }
 
     @Test
+    fun foreignActualCodesRemainCompetitorsAcrossEmissionsReusingWireId() {
+        val target = wire(2, 3, 123u, DirectAckRadioWireOutcome.Accepted(123u))
+        val firstForeignEmission =
+            wire(5, 6, 789u, DirectAckRadioWireOutcome.Accepted(456u), emission = 8)
+        val secondForeignEmission =
+            wire(5, 6, 789u, DirectAckRadioWireOutcome.Accepted(987u), emission = 9)
+
+        assertEquals(
+            setOf(DirectAckRadioNonsettlingReason.KNOWN_OTHER_CLAIM_CODE),
+            reasons(456u, target, firstForeignEmission, secondForeignEmission),
+        )
+        assertEquals(
+            setOf(DirectAckRadioNonsettlingReason.KNOWN_OTHER_CLAIM_CODE),
+            reasons(987u, target, firstForeignEmission, secondForeignEmission),
+        )
+        assertEquals(firstForeignEmission.wireRequestId, secondForeignEmission.wireRequestId)
+        assertNotEquals(firstForeignEmission.emissionRequestId, secondForeignEmission.emissionRequestId)
+    }
+
+    @Test
     fun definitelyUnsentRetryDoesNotClearEarlierPossibleEmissionWithSameWireId() {
         val target = wire(2, 3, 123u, DirectAckRadioWireOutcome.Accepted(123u))
         val possible = wire(5, 6, 789u, DirectAckRadioWireOutcome.MayHaveWritten, emission = 8)

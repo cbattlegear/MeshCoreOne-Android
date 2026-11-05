@@ -102,6 +102,7 @@ class ForegroundWitnessAcknowledgmentVerifier internal constructor(
         File(requireNotNull(requestedFile.parentFile).canonicalFile, requestedFile.name)
     }
     private val presentations = ConcurrentHashMap<UUID, ForegroundAcknowledgmentPresentation>()
+    private val allocationInProgress = AtomicBoolean(false)
 
     constructor(context: Context, warning: ForegroundAcknowledgmentWarning) : this(
         File(context.applicationContext.noBackupFilesDir, "notification-enrollment-ack-v1.db"),
@@ -319,30 +320,40 @@ class ForegroundWitnessAcknowledgmentVerifier internal constructor(
     private suspend fun persist(evidence: Evidence, status: Status): ForegroundAcknowledgmentStaging {
         authentication.requireAccessible()
         checkPath()
-        val allocated = initializeIfNeeded()
-        val staged = open().use { db ->
-            configure(db)
-            transaction(db) {
-                if (allocated) createSchema(db)
-                val history = readAll(db, allowEmpty = allocated)
-                val current = history.lastByAcknowledgment[evidence.acknowledgmentId]
-                if (current != null) {
-                    if (!current.evidence.sameIdentity(evidence)) {
-                        ForegroundAcknowledgmentStaging.Rejected
-                    } else when (current.status) {
-                        Status.STAGED -> ForegroundAcknowledgmentStaging.Staged
-                        Status.CONSUMED -> ForegroundAcknowledgmentStaging.AlreadyConsumed
-                        Status.INVALIDATED -> ForegroundAcknowledgmentStaging.Rejected
-                    }
-                } else {
-                    if (containsOperation(history.lastByAcknowledgment.values, evidence)) {
-                        ForegroundAcknowledgmentStaging.Rejected
+        var ownsAllocation = false
+        val staged = try {
+            val allocated = initializeIfNeeded {
+                if (!allocationInProgress.compareAndSet(false, true)) {
+                    throw Invalid(WitnessProblem.STORAGE_UNAVAILABLE)
+                }
+                ownsAllocation = true
+            }
+            open().use { db ->
+                configure(db)
+                transaction(db) {
+                    if (allocated) createSchema(db)
+                    val history = readAll(db, allowEmpty = allocated)
+                    val current = history.lastByAcknowledgment[evidence.acknowledgmentId]
+                    if (current != null) {
+                        if (!current.evidence.sameIdentity(evidence)) {
+                            ForegroundAcknowledgmentStaging.Rejected
+                        } else when (current.status) {
+                            Status.STAGED -> ForegroundAcknowledgmentStaging.Staged
+                            Status.CONSUMED -> ForegroundAcknowledgmentStaging.AlreadyConsumed
+                            Status.INVALIDATED -> ForegroundAcknowledgmentStaging.Rejected
+                        }
                     } else {
-                        append(db, evidence, status)
-                        ForegroundAcknowledgmentStaging.Staged
+                        if (containsOperation(history.lastByAcknowledgment.values, evidence)) {
+                            ForegroundAcknowledgmentStaging.Rejected
+                        } else {
+                            append(db, evidence, status)
+                            ForegroundAcknowledgmentStaging.Staged
+                        }
                     }
                 }
             }
+        } finally {
+            if (ownsAllocation) allocationInProgress.set(false)
         }
         return if (staged == ForegroundAcknowledgmentStaging.Staged) {
             synchronize(file)
@@ -353,12 +364,13 @@ class ForegroundWitnessAcknowledgmentVerifier internal constructor(
         } else staged
     }
 
-    private fun initializeIfNeeded(): Boolean {
+    private fun initializeIfNeeded(onAllocationStarted: () -> Unit): Boolean {
         if (file.exists()) {
             if (!authentication.hasKey()) throw Invalid(WitnessProblem.MISSING_AUTHENTICATOR)
             return false
         }
         if (authentication.hasKey()) throw Invalid(WitnessProblem.CORRUPT_STORAGE)
+        onAllocationStarted()
         authentication.createKey()
         fault?.invoke(WritePoint.KEY_CREATED)
         if (!file.createNewFile()) throw Invalid(WitnessProblem.STORAGE_UNAVAILABLE)
@@ -369,7 +381,8 @@ class ForegroundWitnessAcknowledgmentVerifier internal constructor(
     private suspend fun transition(evidence: Evidence, next: Status): Status? {
         authentication.requireAccessible()
         checkPath()
-        if (!file.exists()) return null
+        // The allocating writer owns schema validation and completes retirement after staging.
+        if (!file.exists() || allocationInProgress.get()) return null
         if (!authentication.hasKey()) throw Invalid(WitnessProblem.MISSING_AUTHENTICATOR)
         val result = open().use { db ->
             configure(db)

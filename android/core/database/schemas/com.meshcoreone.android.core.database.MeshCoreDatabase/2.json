@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 2,
-    "identityHash": "e04a68a685879f5293d881f381622531",
+    "identityHash": "a3393bbacc299c85a57cb7e0a5d564fc",
     "entities": [
       {
         "tableName": "devices",
@@ -2444,7 +2444,7 @@
       },
       {
         "tableName": "direct_ack_claims",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`requestId` TEXT NOT NULL, `leaseId` TEXT NOT NULL, `firstWireId` TEXT NOT NULL, `incarnation` TEXT NOT NULL, `revision` INTEGER NOT NULL, `phase` TEXT NOT NULL, `mode` TEXT NOT NULL, `initialStatus` INTEGER NOT NULL, `current` INTEGER NOT NULL, `pendingId` TEXT, `pendingIncarnation` TEXT, `snapshot_radioId` TEXT NOT NULL, `snapshot_id` TEXT NOT NULL, `snapshot_contactID` TEXT, `snapshot_channelIndex` INTEGER, `snapshot_text` TEXT NOT NULL, `snapshot_timestamp` INTEGER NOT NULL, `snapshot_directionRawValue` INTEGER NOT NULL, `snapshot_statusRawValue` INTEGER NOT NULL, `snapshot_textTypeRawValue` INTEGER NOT NULL, `snapshot_ackCode` INTEGER, `snapshot_pathLength` INTEGER NOT NULL, `snapshot_snr` REAL, `snapshot_pathNodes` BLOB, `snapshot_senderKeyPrefix` BLOB, `snapshot_senderNodeName` TEXT, `snapshot_isRead` INTEGER NOT NULL, `snapshot_replyToID` TEXT, `snapshot_roundTripTime` INTEGER, `snapshot_heardRepeats` INTEGER NOT NULL, `snapshot_sendCount` INTEGER NOT NULL, `snapshot_retryAttempt` INTEGER NOT NULL, `snapshot_maxRetryAttempts` INTEGER NOT NULL, `snapshot_deduplicationKey` TEXT, `snapshot_linkPreviewURL` TEXT, `snapshot_linkPreviewTitle` TEXT, `snapshot_linkPreviewImageData` BLOB, `snapshot_linkPreviewIconData` BLOB, `snapshot_linkPreviewFetched` INTEGER NOT NULL, `snapshot_containsSelfMention` INTEGER NOT NULL, `snapshot_mentionSeen` INTEGER NOT NULL, `snapshot_failureSeen` INTEGER NOT NULL, `snapshot_timestampCorrected` INTEGER NOT NULL, `snapshot_senderTimestamp` INTEGER, `snapshot_reactionSummary` TEXT, `snapshot_routeTypeRawValue` INTEGER NOT NULL, `snapshot_regionScope` TEXT, `snapshot_regionScopeMatches` TEXT NOT NULL, `snapshot_createdAt_seconds` INTEGER NOT NULL, `snapshot_createdAt_nanos` INTEGER NOT NULL, `snapshot_sortDate_seconds` INTEGER NOT NULL, `snapshot_sortDate_nanos` INTEGER NOT NULL, PRIMARY KEY(`snapshot_radioId`, `requestId`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`requestId` TEXT NOT NULL, `leaseId` TEXT NOT NULL, `firstWireId` TEXT NOT NULL, `incarnation` TEXT NOT NULL, `revision` INTEGER NOT NULL, `phase` TEXT NOT NULL, `mode` TEXT NOT NULL, `initialStatus` INTEGER NOT NULL, `current` INTEGER NOT NULL, `pendingId` TEXT, `pendingIncarnation` TEXT, `radioId` TEXT NOT NULL, `messageId` TEXT NOT NULL, `snapshot_radioId` TEXT, `snapshot_id` TEXT, `snapshot_contactID` TEXT, `snapshot_channelIndex` INTEGER, `snapshot_text` TEXT, `snapshot_timestamp` INTEGER, `snapshot_directionRawValue` INTEGER, `snapshot_statusRawValue` INTEGER, `snapshot_textTypeRawValue` INTEGER, `snapshot_ackCode` INTEGER, `snapshot_pathLength` INTEGER, `snapshot_snr` REAL, `snapshot_pathNodes` BLOB, `snapshot_senderKeyPrefix` BLOB, `snapshot_senderNodeName` TEXT, `snapshot_isRead` INTEGER, `snapshot_replyToID` TEXT, `snapshot_roundTripTime` INTEGER, `snapshot_heardRepeats` INTEGER, `snapshot_sendCount` INTEGER, `snapshot_retryAttempt` INTEGER, `snapshot_maxRetryAttempts` INTEGER, `snapshot_deduplicationKey` TEXT, `snapshot_linkPreviewURL` TEXT, `snapshot_linkPreviewTitle` TEXT, `snapshot_linkPreviewImageData` BLOB, `snapshot_linkPreviewIconData` BLOB, `snapshot_linkPreviewFetched` INTEGER, `snapshot_containsSelfMention` INTEGER, `snapshot_mentionSeen` INTEGER, `snapshot_failureSeen` INTEGER, `snapshot_timestampCorrected` INTEGER, `snapshot_senderTimestamp` INTEGER, `snapshot_reactionSummary` TEXT, `snapshot_routeTypeRawValue` INTEGER, `snapshot_regionScope` TEXT, `snapshot_regionScopeMatches` TEXT, `snapshot_createdAt_seconds` INTEGER, `snapshot_createdAt_nanos` INTEGER, `snapshot_sortDate_seconds` INTEGER, `snapshot_sortDate_nanos` INTEGER, PRIMARY KEY(`radioId`, `requestId`))",
         "fields": [
           {
             "fieldPath": "requestId",
@@ -2511,16 +2511,26 @@
             "affinity": "TEXT"
           },
           {
-            "fieldPath": "snapshot.radioId",
-            "columnName": "snapshot_radioId",
+            "fieldPath": "radioId",
+            "columnName": "radioId",
             "affinity": "TEXT",
             "notNull": true
           },
           {
-            "fieldPath": "snapshot.id",
-            "columnName": "snapshot_id",
+            "fieldPath": "messageId",
+            "columnName": "messageId",
             "affinity": "TEXT",
             "notNull": true
+          },
+          {
+            "fieldPath": "snapshot.radioId",
+            "columnName": "snapshot_radioId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "snapshot.id",
+            "columnName": "snapshot_id",
+            "affinity": "TEXT"
           },
           {
             "fieldPath": "snapshot.contactID",
@@ -2535,32 +2545,27 @@
           {
             "fieldPath": "snapshot.text",
             "columnName": "snapshot_text",
-            "affinity": "TEXT",
-            "notNull": true
+            "affinity": "TEXT"
           },
           {
             "fieldPath": "snapshot.timestamp",
             "columnName": "snapshot_timestamp",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.directionRawValue",
             "columnName": "snapshot_directionRawValue",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.statusRawValue",
             "columnName": "snapshot_statusRawValue",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.textTypeRawValue",
             "columnName": "snapshot_textTypeRawValue",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.ackCode",
@@ -2570,8 +2575,7 @@
           {
             "fieldPath": "snapshot.pathLength",
             "columnName": "snapshot_pathLength",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.snr",
@@ -2596,8 +2600,7 @@
           {
             "fieldPath": "snapshot.isRead",
             "columnName": "snapshot_isRead",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.replyToID",
@@ -2612,26 +2615,22 @@
           {
             "fieldPath": "snapshot.heardRepeats",
             "columnName": "snapshot_heardRepeats",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.sendCount",
             "columnName": "snapshot_sendCount",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.retryAttempt",
             "columnName": "snapshot_retryAttempt",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.maxRetryAttempts",
             "columnName": "snapshot_maxRetryAttempts",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.deduplicationKey",
@@ -2661,32 +2660,27 @@
           {
             "fieldPath": "snapshot.linkPreviewFetched",
             "columnName": "snapshot_linkPreviewFetched",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.containsSelfMention",
             "columnName": "snapshot_containsSelfMention",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.mentionSeen",
             "columnName": "snapshot_mentionSeen",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.failureSeen",
             "columnName": "snapshot_failureSeen",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.timestampCorrected",
             "columnName": "snapshot_timestampCorrected",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.senderTimestamp",
@@ -2701,8 +2695,7 @@
           {
             "fieldPath": "snapshot.routeTypeRawValue",
             "columnName": "snapshot_routeTypeRawValue",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.regionScope",
@@ -2712,45 +2705,40 @@
           {
             "fieldPath": "snapshot.regionScopeMatches",
             "columnName": "snapshot_regionScopeMatches",
-            "affinity": "TEXT",
-            "notNull": true
+            "affinity": "TEXT"
           },
           {
             "fieldPath": "snapshot.createdAt.seconds",
             "columnName": "snapshot_createdAt_seconds",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.createdAt.nanos",
             "columnName": "snapshot_createdAt_nanos",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.sortDate.seconds",
             "columnName": "snapshot_sortDate_seconds",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.sortDate.nanos",
             "columnName": "snapshot_sortDate_nanos",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           }
         ],
         "primaryKey": {
           "autoGenerate": false,
           "columnNames": [
-            "snapshot_radioId",
+            "radioId",
             "requestId"
           ]
         }
       },
       {
         "tableName": "direct_ack_deliveries",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`claimId` TEXT NOT NULL, `ackCode` INTEGER NOT NULL, `roundTripTime` INTEGER, `snapshot_radioId` TEXT NOT NULL, `snapshot_id` TEXT NOT NULL, `snapshot_contactID` TEXT, `snapshot_channelIndex` INTEGER, `snapshot_text` TEXT NOT NULL, `snapshot_timestamp` INTEGER NOT NULL, `snapshot_directionRawValue` INTEGER NOT NULL, `snapshot_statusRawValue` INTEGER NOT NULL, `snapshot_textTypeRawValue` INTEGER NOT NULL, `snapshot_ackCode` INTEGER, `snapshot_pathLength` INTEGER NOT NULL, `snapshot_snr` REAL, `snapshot_pathNodes` BLOB, `snapshot_senderKeyPrefix` BLOB, `snapshot_senderNodeName` TEXT, `snapshot_isRead` INTEGER NOT NULL, `snapshot_replyToID` TEXT, `snapshot_roundTripTime` INTEGER, `snapshot_heardRepeats` INTEGER NOT NULL, `snapshot_sendCount` INTEGER NOT NULL, `snapshot_retryAttempt` INTEGER NOT NULL, `snapshot_maxRetryAttempts` INTEGER NOT NULL, `snapshot_deduplicationKey` TEXT, `snapshot_linkPreviewURL` TEXT, `snapshot_linkPreviewTitle` TEXT, `snapshot_linkPreviewImageData` BLOB, `snapshot_linkPreviewIconData` BLOB, `snapshot_linkPreviewFetched` INTEGER NOT NULL, `snapshot_containsSelfMention` INTEGER NOT NULL, `snapshot_mentionSeen` INTEGER NOT NULL, `snapshot_failureSeen` INTEGER NOT NULL, `snapshot_timestampCorrected` INTEGER NOT NULL, `snapshot_senderTimestamp` INTEGER, `snapshot_reactionSummary` TEXT, `snapshot_routeTypeRawValue` INTEGER NOT NULL, `snapshot_regionScope` TEXT, `snapshot_regionScopeMatches` TEXT NOT NULL, `snapshot_createdAt_seconds` INTEGER NOT NULL, `snapshot_createdAt_nanos` INTEGER NOT NULL, `snapshot_sortDate_seconds` INTEGER NOT NULL, `snapshot_sortDate_nanos` INTEGER NOT NULL, PRIMARY KEY(`snapshot_radioId`, `claimId`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`claimId` TEXT NOT NULL, `ackCode` INTEGER NOT NULL, `roundTripTime` INTEGER, `radioId` TEXT NOT NULL, `messageId` TEXT NOT NULL, `snapshot_radioId` TEXT, `snapshot_id` TEXT, `snapshot_contactID` TEXT, `snapshot_channelIndex` INTEGER, `snapshot_text` TEXT, `snapshot_timestamp` INTEGER, `snapshot_directionRawValue` INTEGER, `snapshot_statusRawValue` INTEGER, `snapshot_textTypeRawValue` INTEGER, `snapshot_ackCode` INTEGER, `snapshot_pathLength` INTEGER, `snapshot_snr` REAL, `snapshot_pathNodes` BLOB, `snapshot_senderKeyPrefix` BLOB, `snapshot_senderNodeName` TEXT, `snapshot_isRead` INTEGER, `snapshot_replyToID` TEXT, `snapshot_roundTripTime` INTEGER, `snapshot_heardRepeats` INTEGER, `snapshot_sendCount` INTEGER, `snapshot_retryAttempt` INTEGER, `snapshot_maxRetryAttempts` INTEGER, `snapshot_deduplicationKey` TEXT, `snapshot_linkPreviewURL` TEXT, `snapshot_linkPreviewTitle` TEXT, `snapshot_linkPreviewImageData` BLOB, `snapshot_linkPreviewIconData` BLOB, `snapshot_linkPreviewFetched` INTEGER, `snapshot_containsSelfMention` INTEGER, `snapshot_mentionSeen` INTEGER, `snapshot_failureSeen` INTEGER, `snapshot_timestampCorrected` INTEGER, `snapshot_senderTimestamp` INTEGER, `snapshot_reactionSummary` TEXT, `snapshot_routeTypeRawValue` INTEGER, `snapshot_regionScope` TEXT, `snapshot_regionScopeMatches` TEXT, `snapshot_createdAt_seconds` INTEGER, `snapshot_createdAt_nanos` INTEGER, `snapshot_sortDate_seconds` INTEGER, `snapshot_sortDate_nanos` INTEGER, PRIMARY KEY(`radioId`, `claimId`))",
         "fields": [
           {
             "fieldPath": "claimId",
@@ -2770,16 +2758,26 @@
             "affinity": "INTEGER"
           },
           {
-            "fieldPath": "snapshot.radioId",
-            "columnName": "snapshot_radioId",
+            "fieldPath": "radioId",
+            "columnName": "radioId",
             "affinity": "TEXT",
             "notNull": true
           },
           {
-            "fieldPath": "snapshot.id",
-            "columnName": "snapshot_id",
+            "fieldPath": "messageId",
+            "columnName": "messageId",
             "affinity": "TEXT",
             "notNull": true
+          },
+          {
+            "fieldPath": "snapshot.radioId",
+            "columnName": "snapshot_radioId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "snapshot.id",
+            "columnName": "snapshot_id",
+            "affinity": "TEXT"
           },
           {
             "fieldPath": "snapshot.contactID",
@@ -2794,32 +2792,27 @@
           {
             "fieldPath": "snapshot.text",
             "columnName": "snapshot_text",
-            "affinity": "TEXT",
-            "notNull": true
+            "affinity": "TEXT"
           },
           {
             "fieldPath": "snapshot.timestamp",
             "columnName": "snapshot_timestamp",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.directionRawValue",
             "columnName": "snapshot_directionRawValue",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.statusRawValue",
             "columnName": "snapshot_statusRawValue",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.textTypeRawValue",
             "columnName": "snapshot_textTypeRawValue",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.ackCode",
@@ -2829,8 +2822,7 @@
           {
             "fieldPath": "snapshot.pathLength",
             "columnName": "snapshot_pathLength",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.snr",
@@ -2855,8 +2847,7 @@
           {
             "fieldPath": "snapshot.isRead",
             "columnName": "snapshot_isRead",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.replyToID",
@@ -2871,26 +2862,22 @@
           {
             "fieldPath": "snapshot.heardRepeats",
             "columnName": "snapshot_heardRepeats",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.sendCount",
             "columnName": "snapshot_sendCount",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.retryAttempt",
             "columnName": "snapshot_retryAttempt",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.maxRetryAttempts",
             "columnName": "snapshot_maxRetryAttempts",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.deduplicationKey",
@@ -2920,32 +2907,27 @@
           {
             "fieldPath": "snapshot.linkPreviewFetched",
             "columnName": "snapshot_linkPreviewFetched",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.containsSelfMention",
             "columnName": "snapshot_containsSelfMention",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.mentionSeen",
             "columnName": "snapshot_mentionSeen",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.failureSeen",
             "columnName": "snapshot_failureSeen",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.timestampCorrected",
             "columnName": "snapshot_timestampCorrected",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.senderTimestamp",
@@ -2960,8 +2942,7 @@
           {
             "fieldPath": "snapshot.routeTypeRawValue",
             "columnName": "snapshot_routeTypeRawValue",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.regionScope",
@@ -2971,38 +2952,33 @@
           {
             "fieldPath": "snapshot.regionScopeMatches",
             "columnName": "snapshot_regionScopeMatches",
-            "affinity": "TEXT",
-            "notNull": true
+            "affinity": "TEXT"
           },
           {
             "fieldPath": "snapshot.createdAt.seconds",
             "columnName": "snapshot_createdAt_seconds",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.createdAt.nanos",
             "columnName": "snapshot_createdAt_nanos",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.sortDate.seconds",
             "columnName": "snapshot_sortDate_seconds",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "snapshot.sortDate.nanos",
             "columnName": "snapshot_sortDate_nanos",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           }
         ],
         "primaryKey": {
           "autoGenerate": false,
           "columnNames": [
-            "snapshot_radioId",
+            "radioId",
             "claimId"
           ]
         }
@@ -3105,7 +3081,7 @@
       },
       {
         "tableName": "direct_pending_completions",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`captureRequestId` TEXT NOT NULL, `leaseId` TEXT NOT NULL, `messageIncarnation` TEXT NOT NULL, `messageRevision` INTEGER NOT NULL, `pendingIncarnation` TEXT NOT NULL, `reason` TEXT NOT NULL, `maximumAttempts` INTEGER, `current` INTEGER NOT NULL, `completedRequestId` TEXT, `message_radioId` TEXT NOT NULL, `message_id` TEXT NOT NULL, `message_contactID` TEXT, `message_channelIndex` INTEGER, `message_text` TEXT NOT NULL, `message_timestamp` INTEGER NOT NULL, `message_directionRawValue` INTEGER NOT NULL, `message_statusRawValue` INTEGER NOT NULL, `message_textTypeRawValue` INTEGER NOT NULL, `message_ackCode` INTEGER, `message_pathLength` INTEGER NOT NULL, `message_snr` REAL, `message_pathNodes` BLOB, `message_senderKeyPrefix` BLOB, `message_senderNodeName` TEXT, `message_isRead` INTEGER NOT NULL, `message_replyToID` TEXT, `message_roundTripTime` INTEGER, `message_heardRepeats` INTEGER NOT NULL, `message_sendCount` INTEGER NOT NULL, `message_retryAttempt` INTEGER NOT NULL, `message_maxRetryAttempts` INTEGER NOT NULL, `message_deduplicationKey` TEXT, `message_linkPreviewURL` TEXT, `message_linkPreviewTitle` TEXT, `message_linkPreviewImageData` BLOB, `message_linkPreviewIconData` BLOB, `message_linkPreviewFetched` INTEGER NOT NULL, `message_containsSelfMention` INTEGER NOT NULL, `message_mentionSeen` INTEGER NOT NULL, `message_failureSeen` INTEGER NOT NULL, `message_timestampCorrected` INTEGER NOT NULL, `message_senderTimestamp` INTEGER, `message_reactionSummary` TEXT, `message_routeTypeRawValue` INTEGER NOT NULL, `message_regionScope` TEXT, `message_regionScopeMatches` TEXT NOT NULL, `message_createdAt_seconds` INTEGER NOT NULL, `message_createdAt_nanos` INTEGER NOT NULL, `message_sortDate_seconds` INTEGER NOT NULL, `message_sortDate_nanos` INTEGER NOT NULL, `pending_radioId` TEXT NOT NULL, `pending_id` TEXT NOT NULL, `pending_messageID` TEXT NOT NULL, `pending_kindRawValue` INTEGER NOT NULL, `pending_contactID` TEXT, `pending_channelIndex` INTEGER, `pending_isResend` INTEGER NOT NULL, `pending_messageText` TEXT NOT NULL, `pending_messageTimestamp` INTEGER NOT NULL, `pending_localNodeName` TEXT, `pending_sequence` INTEGER NOT NULL, `pending_attemptCount` INTEGER, `pending_enqueuedAt_seconds` INTEGER NOT NULL, `pending_enqueuedAt_nanos` INTEGER NOT NULL, PRIMARY KEY(`message_radioId`, `captureRequestId`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`captureRequestId` TEXT NOT NULL, `leaseId` TEXT NOT NULL, `messageIncarnation` TEXT NOT NULL, `messageRevision` INTEGER NOT NULL, `pendingIncarnation` TEXT NOT NULL, `reason` TEXT NOT NULL, `maximumAttempts` INTEGER, `current` INTEGER NOT NULL, `completedRequestId` TEXT, `radioId` TEXT NOT NULL, `messageId` TEXT NOT NULL, `pendingId` TEXT NOT NULL, `message_radioId` TEXT, `message_id` TEXT, `message_contactID` TEXT, `message_channelIndex` INTEGER, `message_text` TEXT, `message_timestamp` INTEGER, `message_directionRawValue` INTEGER, `message_statusRawValue` INTEGER, `message_textTypeRawValue` INTEGER, `message_ackCode` INTEGER, `message_pathLength` INTEGER, `message_snr` REAL, `message_pathNodes` BLOB, `message_senderKeyPrefix` BLOB, `message_senderNodeName` TEXT, `message_isRead` INTEGER, `message_replyToID` TEXT, `message_roundTripTime` INTEGER, `message_heardRepeats` INTEGER, `message_sendCount` INTEGER, `message_retryAttempt` INTEGER, `message_maxRetryAttempts` INTEGER, `message_deduplicationKey` TEXT, `message_linkPreviewURL` TEXT, `message_linkPreviewTitle` TEXT, `message_linkPreviewImageData` BLOB, `message_linkPreviewIconData` BLOB, `message_linkPreviewFetched` INTEGER, `message_containsSelfMention` INTEGER, `message_mentionSeen` INTEGER, `message_failureSeen` INTEGER, `message_timestampCorrected` INTEGER, `message_senderTimestamp` INTEGER, `message_reactionSummary` TEXT, `message_routeTypeRawValue` INTEGER, `message_regionScope` TEXT, `message_regionScopeMatches` TEXT, `message_createdAt_seconds` INTEGER, `message_createdAt_nanos` INTEGER, `message_sortDate_seconds` INTEGER, `message_sortDate_nanos` INTEGER, `pending_radioId` TEXT, `pending_id` TEXT, `pending_messageID` TEXT, `pending_kindRawValue` INTEGER, `pending_contactID` TEXT, `pending_channelIndex` INTEGER, `pending_isResend` INTEGER, `pending_messageText` TEXT, `pending_messageTimestamp` INTEGER, `pending_localNodeName` TEXT, `pending_sequence` INTEGER, `pending_attemptCount` INTEGER, `pending_enqueuedAt_seconds` INTEGER, `pending_enqueuedAt_nanos` INTEGER, PRIMARY KEY(`radioId`, `captureRequestId`))",
         "fields": [
           {
             "fieldPath": "captureRequestId",
@@ -3160,16 +3136,32 @@
             "affinity": "TEXT"
           },
           {
-            "fieldPath": "message.radioId",
-            "columnName": "message_radioId",
+            "fieldPath": "radioId",
+            "columnName": "radioId",
             "affinity": "TEXT",
             "notNull": true
           },
           {
-            "fieldPath": "message.id",
-            "columnName": "message_id",
+            "fieldPath": "messageId",
+            "columnName": "messageId",
             "affinity": "TEXT",
             "notNull": true
+          },
+          {
+            "fieldPath": "pendingId",
+            "columnName": "pendingId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "message.radioId",
+            "columnName": "message_radioId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "message.id",
+            "columnName": "message_id",
+            "affinity": "TEXT"
           },
           {
             "fieldPath": "message.contactID",
@@ -3184,32 +3176,27 @@
           {
             "fieldPath": "message.text",
             "columnName": "message_text",
-            "affinity": "TEXT",
-            "notNull": true
+            "affinity": "TEXT"
           },
           {
             "fieldPath": "message.timestamp",
             "columnName": "message_timestamp",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "message.directionRawValue",
             "columnName": "message_directionRawValue",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "message.statusRawValue",
             "columnName": "message_statusRawValue",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "message.textTypeRawValue",
             "columnName": "message_textTypeRawValue",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "message.ackCode",
@@ -3219,8 +3206,7 @@
           {
             "fieldPath": "message.pathLength",
             "columnName": "message_pathLength",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "message.snr",
@@ -3245,8 +3231,7 @@
           {
             "fieldPath": "message.isRead",
             "columnName": "message_isRead",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "message.replyToID",
@@ -3261,26 +3246,22 @@
           {
             "fieldPath": "message.heardRepeats",
             "columnName": "message_heardRepeats",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "message.sendCount",
             "columnName": "message_sendCount",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "message.retryAttempt",
             "columnName": "message_retryAttempt",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "message.maxRetryAttempts",
             "columnName": "message_maxRetryAttempts",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "message.deduplicationKey",
@@ -3310,32 +3291,27 @@
           {
             "fieldPath": "message.linkPreviewFetched",
             "columnName": "message_linkPreviewFetched",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "message.containsSelfMention",
             "columnName": "message_containsSelfMention",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "message.mentionSeen",
             "columnName": "message_mentionSeen",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "message.failureSeen",
             "columnName": "message_failureSeen",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "message.timestampCorrected",
             "columnName": "message_timestampCorrected",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "message.senderTimestamp",
@@ -3350,8 +3326,7 @@
           {
             "fieldPath": "message.routeTypeRawValue",
             "columnName": "message_routeTypeRawValue",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "message.regionScope",
@@ -3361,56 +3336,47 @@
           {
             "fieldPath": "message.regionScopeMatches",
             "columnName": "message_regionScopeMatches",
-            "affinity": "TEXT",
-            "notNull": true
+            "affinity": "TEXT"
           },
           {
             "fieldPath": "message.createdAt.seconds",
             "columnName": "message_createdAt_seconds",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "message.createdAt.nanos",
             "columnName": "message_createdAt_nanos",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "message.sortDate.seconds",
             "columnName": "message_sortDate_seconds",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "message.sortDate.nanos",
             "columnName": "message_sortDate_nanos",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "pending.radioId",
             "columnName": "pending_radioId",
-            "affinity": "TEXT",
-            "notNull": true
+            "affinity": "TEXT"
           },
           {
             "fieldPath": "pending.id",
             "columnName": "pending_id",
-            "affinity": "TEXT",
-            "notNull": true
+            "affinity": "TEXT"
           },
           {
             "fieldPath": "pending.messageID",
             "columnName": "pending_messageID",
-            "affinity": "TEXT",
-            "notNull": true
+            "affinity": "TEXT"
           },
           {
             "fieldPath": "pending.kindRawValue",
             "columnName": "pending_kindRawValue",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "pending.contactID",
@@ -3425,20 +3391,17 @@
           {
             "fieldPath": "pending.isResend",
             "columnName": "pending_isResend",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "pending.messageText",
             "columnName": "pending_messageText",
-            "affinity": "TEXT",
-            "notNull": true
+            "affinity": "TEXT"
           },
           {
             "fieldPath": "pending.messageTimestamp",
             "columnName": "pending_messageTimestamp",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "pending.localNodeName",
@@ -3448,8 +3411,7 @@
           {
             "fieldPath": "pending.sequence",
             "columnName": "pending_sequence",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "pending.attemptCount",
@@ -3459,28 +3421,377 @@
           {
             "fieldPath": "pending.enqueuedAt.seconds",
             "columnName": "pending_enqueuedAt_seconds",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           },
           {
             "fieldPath": "pending.enqueuedAt.nanos",
             "columnName": "pending_enqueuedAt_nanos",
-            "affinity": "INTEGER",
-            "notNull": true
+            "affinity": "INTEGER"
           }
         ],
         "primaryKey": {
           "autoGenerate": false,
           "columnNames": [
-            "message_radioId",
+            "radioId",
             "captureRequestId"
+          ]
+        }
+      },
+      {
+        "tableName": "direct_ack_intents",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`radioId` TEXT NOT NULL, `requestId` TEXT NOT NULL, `leaseId` TEXT NOT NULL, `messageId` TEXT NOT NULL, `pendingId` TEXT, `mode` TEXT NOT NULL, `incarnation` TEXT NOT NULL, `revision` INTEGER NOT NULL, `pendingIncarnation` TEXT, `pendingRevision` INTEGER, `current` INTEGER NOT NULL, `message_radioId` TEXT, `message_id` TEXT, `message_contactID` TEXT, `message_channelIndex` INTEGER, `message_text` TEXT, `message_timestamp` INTEGER, `message_directionRawValue` INTEGER, `message_statusRawValue` INTEGER, `message_textTypeRawValue` INTEGER, `message_ackCode` INTEGER, `message_pathLength` INTEGER, `message_snr` REAL, `message_pathNodes` BLOB, `message_senderKeyPrefix` BLOB, `message_senderNodeName` TEXT, `message_isRead` INTEGER, `message_replyToID` TEXT, `message_roundTripTime` INTEGER, `message_heardRepeats` INTEGER, `message_sendCount` INTEGER, `message_retryAttempt` INTEGER, `message_maxRetryAttempts` INTEGER, `message_deduplicationKey` TEXT, `message_linkPreviewURL` TEXT, `message_linkPreviewTitle` TEXT, `message_linkPreviewImageData` BLOB, `message_linkPreviewIconData` BLOB, `message_linkPreviewFetched` INTEGER, `message_containsSelfMention` INTEGER, `message_mentionSeen` INTEGER, `message_failureSeen` INTEGER, `message_timestampCorrected` INTEGER, `message_senderTimestamp` INTEGER, `message_reactionSummary` TEXT, `message_routeTypeRawValue` INTEGER, `message_regionScope` TEXT, `message_regionScopeMatches` TEXT, `message_createdAt_seconds` INTEGER, `message_createdAt_nanos` INTEGER, `message_sortDate_seconds` INTEGER, `message_sortDate_nanos` INTEGER, `pending_radioId` TEXT, `pending_id` TEXT, `pending_messageID` TEXT, `pending_kindRawValue` INTEGER, `pending_contactID` TEXT, `pending_channelIndex` INTEGER, `pending_isResend` INTEGER, `pending_messageText` TEXT, `pending_messageTimestamp` INTEGER, `pending_localNodeName` TEXT, `pending_sequence` INTEGER, `pending_attemptCount` INTEGER, `pending_enqueuedAt_seconds` INTEGER, `pending_enqueuedAt_nanos` INTEGER, PRIMARY KEY(`radioId`, `requestId`))",
+        "fields": [
+          {
+            "fieldPath": "radioId",
+            "columnName": "radioId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "requestId",
+            "columnName": "requestId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "leaseId",
+            "columnName": "leaseId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "messageId",
+            "columnName": "messageId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "pendingId",
+            "columnName": "pendingId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "mode",
+            "columnName": "mode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "incarnation",
+            "columnName": "incarnation",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "revision",
+            "columnName": "revision",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "pendingIncarnation",
+            "columnName": "pendingIncarnation",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "pendingRevision",
+            "columnName": "pendingRevision",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "current",
+            "columnName": "current",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "message.radioId",
+            "columnName": "message_radioId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "message.id",
+            "columnName": "message_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "message.contactID",
+            "columnName": "message_contactID",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "message.channelIndex",
+            "columnName": "message_channelIndex",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "message.text",
+            "columnName": "message_text",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "message.timestamp",
+            "columnName": "message_timestamp",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "message.directionRawValue",
+            "columnName": "message_directionRawValue",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "message.statusRawValue",
+            "columnName": "message_statusRawValue",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "message.textTypeRawValue",
+            "columnName": "message_textTypeRawValue",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "message.ackCode",
+            "columnName": "message_ackCode",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "message.pathLength",
+            "columnName": "message_pathLength",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "message.snr",
+            "columnName": "message_snr",
+            "affinity": "REAL"
+          },
+          {
+            "fieldPath": "message.pathNodes",
+            "columnName": "message_pathNodes",
+            "affinity": "BLOB"
+          },
+          {
+            "fieldPath": "message.senderKeyPrefix",
+            "columnName": "message_senderKeyPrefix",
+            "affinity": "BLOB"
+          },
+          {
+            "fieldPath": "message.senderNodeName",
+            "columnName": "message_senderNodeName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "message.isRead",
+            "columnName": "message_isRead",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "message.replyToID",
+            "columnName": "message_replyToID",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "message.roundTripTime",
+            "columnName": "message_roundTripTime",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "message.heardRepeats",
+            "columnName": "message_heardRepeats",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "message.sendCount",
+            "columnName": "message_sendCount",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "message.retryAttempt",
+            "columnName": "message_retryAttempt",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "message.maxRetryAttempts",
+            "columnName": "message_maxRetryAttempts",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "message.deduplicationKey",
+            "columnName": "message_deduplicationKey",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "message.linkPreviewURL",
+            "columnName": "message_linkPreviewURL",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "message.linkPreviewTitle",
+            "columnName": "message_linkPreviewTitle",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "message.linkPreviewImageData",
+            "columnName": "message_linkPreviewImageData",
+            "affinity": "BLOB"
+          },
+          {
+            "fieldPath": "message.linkPreviewIconData",
+            "columnName": "message_linkPreviewIconData",
+            "affinity": "BLOB"
+          },
+          {
+            "fieldPath": "message.linkPreviewFetched",
+            "columnName": "message_linkPreviewFetched",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "message.containsSelfMention",
+            "columnName": "message_containsSelfMention",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "message.mentionSeen",
+            "columnName": "message_mentionSeen",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "message.failureSeen",
+            "columnName": "message_failureSeen",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "message.timestampCorrected",
+            "columnName": "message_timestampCorrected",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "message.senderTimestamp",
+            "columnName": "message_senderTimestamp",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "message.reactionSummary",
+            "columnName": "message_reactionSummary",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "message.routeTypeRawValue",
+            "columnName": "message_routeTypeRawValue",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "message.regionScope",
+            "columnName": "message_regionScope",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "message.regionScopeMatches",
+            "columnName": "message_regionScopeMatches",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "message.createdAt.seconds",
+            "columnName": "message_createdAt_seconds",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "message.createdAt.nanos",
+            "columnName": "message_createdAt_nanos",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "message.sortDate.seconds",
+            "columnName": "message_sortDate_seconds",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "message.sortDate.nanos",
+            "columnName": "message_sortDate_nanos",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "pending.radioId",
+            "columnName": "pending_radioId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "pending.id",
+            "columnName": "pending_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "pending.messageID",
+            "columnName": "pending_messageID",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "pending.kindRawValue",
+            "columnName": "pending_kindRawValue",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "pending.contactID",
+            "columnName": "pending_contactID",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "pending.channelIndex",
+            "columnName": "pending_channelIndex",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "pending.isResend",
+            "columnName": "pending_isResend",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "pending.messageText",
+            "columnName": "pending_messageText",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "pending.messageTimestamp",
+            "columnName": "pending_messageTimestamp",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "pending.localNodeName",
+            "columnName": "pending_localNodeName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "pending.sequence",
+            "columnName": "pending_sequence",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "pending.attemptCount",
+            "columnName": "pending_attemptCount",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "pending.enqueuedAt.seconds",
+            "columnName": "pending_enqueuedAt_seconds",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "pending.enqueuedAt.nanos",
+            "columnName": "pending_enqueuedAt_nanos",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "radioId",
+            "requestId"
           ]
         }
       }
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'e04a68a685879f5293d881f381622531')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'a3393bbacc299c85a57cb7e0a5d564fc')"
     ]
   }
 }

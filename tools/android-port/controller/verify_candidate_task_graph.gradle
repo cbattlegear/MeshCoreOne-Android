@@ -38,6 +38,10 @@ gradle.beforeProject { project ->
                 compilers.each { compiler ->
                     compiler.sources.files.each { source ->
                         def absolute = source.toPath().toAbsolutePath().normalize()
+                        if (task.path == ":platform:notifications:testDebugUnitTest" &&
+                            source.isFile() && source.name.endsWith(".kt") && !absolute.startsWith(androidRoot)) {
+                            throw new GradleException("Notification Kotlin test source is outside android/: ${source}")
+                        }
                         if (absolute.startsWith(androidRoot) && source.isFile() && source.name.endsWith(".kt")) {
                             def relative = "android/" + androidRoot.relativize(absolute).toString().replace("\\", "/")
                             def bytes = source.bytes

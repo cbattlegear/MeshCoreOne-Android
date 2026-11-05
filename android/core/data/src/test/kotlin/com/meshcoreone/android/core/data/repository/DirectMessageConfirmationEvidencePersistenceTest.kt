@@ -355,6 +355,52 @@ class DirectMessageConfirmationEvidencePersistenceTest : RepositoryTest() {
         assertEquals(row, store.fetchMessage(EntityKey(RADIO_A, row.id)))
     }
 
+    @Test fun oldTrackedCoverageRemainsLegacyWithMatchingPhysicalAcceptanceAndSaturationWithoutJournalBackfill() = runTest {
+        val row = message()
+        val claim = begin(row, activate())
+        val initial = db.directAcks().operations(RADIO_A.value, claim.id)
+        val birth = initial.single { it.kind == "ACCEPTANCE_HISTORY_REQUIRED:${claim.wire}" }
+        db.openHelper.writableDatabase.execSQL(
+            "DELETE FROM direct_ack_operations WHERE radioId=? AND claimId=? AND requestId=?",
+            arrayOf<Any?>(RADIO_A.value.toString().uppercase(), claim.id.toString().uppercase(),
+                birth.requestId.toString().uppercase()),
+        )
+        accept(claim, 999u)
+        db.directAckExclusions().radio(DirectAckRadioExclusionEntity(RADIO_A.value, true))
+        val before = db.directAcks().operations(RADIO_A.value, claim.id)
+        val own = present(row)
+        assertTrue(DirectMessageConfirmationUncertaintyReason.TARGET_UNTRACKED_LEGACY_ANCESTRY in own.reasons)
+        assertTrue(DirectMessageConfirmationUncertaintyReason.RADIO_HISTORY_SATURATED in own.reasons)
+        assertFalse(DirectMessageConfirmationUncertaintyReason.TARGET_CONFLICTING_PHYSICAL_EVIDENCE in own.reasons)
+        val foreignRow = message(contactID = UUID.randomUUID())
+        store.saveMessage(foreignRow)
+        assertTrue(DirectMessageConfirmationUncertaintyReason.UNTRACKED_OTHER_CLAIM_ANCESTRY in
+            present(foreignRow).reasons)
+        assertEquals(before, db.directAcks().operations(RADIO_A.value, claim.id))
+        assertTrue(before.none { it.kind == "ACCEPTANCE_HISTORY_REQUIRED:${claim.wire}" })
+        assertEquals(PersistenceStoreError.InvalidData, assertFailsWith<PersistenceStoreException> {
+            store.inspectDirectAckRadioEvidence(RADIO_A)
+        }.error)
+    }
+
+    @Test fun outOfRangeRetainedRegisteredActualDoesNotDisappearAsMissingOrUnprovenOnly() = runTest {
+        val row = message()
+        val claim = begin(row, activate())
+        accept(claim, 999u)
+        db.openHelper.writableDatabase.execSQL(
+            "UPDATE direct_ack_wires SET acceptedCode=4294967296 WHERE radioId=? AND claimId=? AND requestId=?",
+            arrayOf<Any?>(RADIO_A.value.toString().uppercase(), claim.id.toString().uppercase(),
+                claim.wire.toString().uppercase()),
+        )
+        val before = db.directAcks().operations(RADIO_A.value, claim.id)
+        assertEquals(PersistenceStoreError.InvalidData, assertFailsWith<PersistenceStoreException> {
+            store.inspectDirectMessageConfirmationEvidence(EntityKey(RADIO_A, row.id))
+        }.error)
+        assertEquals(before, db.directAcks().operations(RADIO_A.value, claim.id))
+        assertEquals(row, store.fetchMessage(EntityKey(RADIO_A, row.id)))
+        assertNull(db.directAcks().delivery(RADIO_A.value, claim.id))
+    }
+
     @Test fun corruptStoredIdentityOrMissingImmutableMetadataFailsExplicitlyInsteadOfClaimingMissingOrClean() = runTest {
         val row = message()
         store.saveMessage(row)

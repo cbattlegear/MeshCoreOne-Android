@@ -1,6 +1,76 @@
 # Direct ACK storage authority
 
-## Combined v4 bootstrap and compact diagnostics: unexecuted review candidate
+## Reviewed findings repaired in the source successor to c77: UNEXECUTED
+
+This is the coordinator-requested strict-bootstrap/policy source-review and
+possible exact-head KSP diagnostic candidate. It explicitly EXCLUDES the
+not-yet-authored channel-success/completion contract, producer, completion table
+and consumer integration. Owner 808 retains that separate work; its eventual
+combined-v4 integration is still required. This 30-entity source freeze is not
+the final composed v4 application or schema.
+
+Immutable `c77e8a732d49680f78b74973515c1ed8f574e486` is not admitted for
+execution. Its exact channel repository `45b71761...` accidentally nested the
+capture-validation overload inside identity validation. The successor imports
+owner 808's exact corrected blob `21163a92eb341a8fe3306ac7b9906f1cb92ae76d`
+from `3e2c36508946d79a544d88320cacdbcdcc6b503e`; its raw CRLF bytes were
+compared to the Git blob, not normalized into a different purported owner blob.
+No channel behavior, table, contract or v4 migration is changed by that import.
+The new v4 primary keys are now explicitly covered by the existing schema-boundary
+assertions; the real v2 migration control also checks immutable UNKNOWN.
+
+The coordinator explicitly directed individual strict-policy test adaptation.
+No real fresh, migrated, reopened or restored store can manufacture known physical
+prehistory. Therefore old new-operation strict successes are not constructible
+under this production policy. They now require Nonfailing/Nonsettling with
+PREAUTHORITY_HISTORY_UNKNOWN, retaining each applicable collision, MAY, legacy
+and saturation assertion. A shared real-Room snapshot compares actual message,
+pending rows and identities, claim, wires, operation journal, delivery, complete
+physical history, saturation and metadata before and after strict refusal.
+The unmarked/all-UNSENT case includes actual queued pending rows and independently
+checks the retained target/foreign SQL projections. It is not conditional-positive
+real-Room coverage under an unreachable clean state.
+
+| Source controls | Changed expectation and retained behavior |
+| --- | --- |
+| Exclusion: own accepted/generic FAILED, resolved MAY, never-invoked competitor, earlier accepted actual, different radio, more-than-4096 known history, truncated sample, tracked-registration race | New strict delivery is refused with UNKNOWN and unchanged state. Original physical acceptance, per-code eligibility, radio isolation, full-history counts and real SQLite BUSY assertions remain. Ordinary generic delivery and exact replay remain actual successful public API calls. |
+| Failure: no marker/all UNSENT with unrelated foreign MAY | UNKNOWN independently blocks; target remains unaccepted/nonconflicting, foreign MAY remains distinct, queued pending survives, no RADIO_FAILURE operation appears. This does not claim the old conditional positive executed. |
+| Failure: prior guarded-replay, delivery-after-failure and restore/reopen cases | Repeated new strict refusals cannot mint replay proof. Actual generic failure/delivery and their replay, invalidation, retirement, restore, replacement and old-handle rejection remain constructible. Generic failure is never relabeled a RADIO_FAILURE certificate. |
+| Failure/settlement proof-insertion and cancellation cases | UNKNOWN prevents reaching the strict proof insertion hook, including when a rejecting trigger is installed. No commit-then-cancel strict proof is claimed. Caller cancellation before/after a refusal remains explicit; generic transaction rollback/cancellation controls are unchanged. |
+| Confirmation reads/observer: initially empty, known/UNSENT only, other radio, reopen, rollback, poll and error cases | Every valid snapshot includes durable UNKNOWN plus the exact existing independent wildcard reasons. Polling, transaction isolation, cancellation and typed terminal errors remain asserted. |
+| Receipt-journal query and malformed-physical matrix | Strict refusal preserves rows/journal; genuine generic delivery preserves receipt/pending/query-shape success assertions. Malformed-data errors are not converted into UNKNOWN-only snapshots. |
+
+Independent review also found that the full radio warning and bounded diagnostic
+could overlook out-of-range registered legacy codes, especially outside the
+materialized sample. Global registered-history validation now precedes every new
+public radio/message assessment, strict settlement and guarded failure. The bounded
+diagnostic additionally validates physical shape over the complete radio, not just
+sampled rows. Historical delivery/proof replay and actual DELIVERED precedence stay
+before these new-operation checks; no historical receipt is fabricated for testing.
+The genuine generic delivery replay control includes unrelated malformed registered
+and physical history, while strict reinterpretation remains rejected.
+
+A new raw legacy-wire control covers negative/overflow prediction and accepted
+codes, with no physical row or acceptance operation, beyond 4,096 sampled physical
+rows. All five public assessment paths must fail typed InvalidData without
+message/pending/history mutation; another radio retains only its own UNKNOWN.
+A malformed physical row omitted from the sample must also fail the bounded read;
+guarded failure retains its existing conflict classification plus UNKNOWN.
+Repairing only that corrupt test row restores a real truncated observation, not
+clean prehistory. Two additional compact controls retain old tracked-only legacy
+coverage despite matching physical acceptance/saturation and reject an out-of-range
+registered actual.
+
+Source annotation counts only (NOT discovered/executed tests): exclusion 24,
+failure 23, complete confirmation 7, observer 2, receipt query 1, malformed matrix 2,
+compact message 14, exact owner channel 16. No test is skipped, no UNKNOWN metadata
+is cleared or falsified, and all pre-existing generic-API success controls remain.
+The source successor still needs independent exact-source review, genuine hosted
+KSP v4 generation and exact-head validation. Genuine schema v1-v3 and c77 remain
+immutable; no v4 export is fabricated. No build, test, SQL, dispatch, PR or merge
+has run for this successor. Local execution holds remain in force.
+
+## Historical c77 combined v4 bootstrap and compact diagnostic source
 
 The coordinator assigned v4 as the sole combined successor to genuine v3.
 This candidate builds on frozen acceptance source

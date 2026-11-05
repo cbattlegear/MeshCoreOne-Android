@@ -63,7 +63,8 @@ class DirectAckRadioConfirmationObservationTest {
             collector = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
                 observations.collect { events.send(it) }
             }
-            assertEquals(DirectAckRadioConfirmationEvidence.NoPersistedWildcard(RADIO_A), nextSnapshot(events))
+            assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.PREAUTHORITY_HISTORY_UNKNOWN),
+                assertIs<DirectAckRadioConfirmationEvidence.PersistedWildcard>(nextSnapshot(events)).reasons.toSet())
             runCurrent()
             assertEquals(1, queries.get())
             advanceTimeBy(999)
@@ -90,7 +91,8 @@ class DirectAckRadioConfirmationObservationTest {
             }
             advanceTimeBy(1)
             runCurrent()
-            assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.UNRESOLVED_PHYSICAL_EMISSION),
+            assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.PREAUTHORITY_HISTORY_UNKNOWN,
+                DirectAckRadioConfirmationWildcardReason.UNRESOLVED_PHYSICAL_EMISSION),
                 assertIs<DirectAckRadioConfirmationEvidence.PersistedWildcard>(nextSnapshot(events)).reasons.toSet())
             runCurrent()
 
@@ -100,7 +102,8 @@ class DirectAckRadioConfirmationObservationTest {
             )
             advanceTimeBy(1_000)
             runCurrent()
-            assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.CONFLICTING_PHYSICAL_EVIDENCE),
+            assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.PREAUTHORITY_HISTORY_UNKNOWN,
+                DirectAckRadioConfirmationWildcardReason.CONFLICTING_PHYSICAL_EVIDENCE),
                 assertIs<DirectAckRadioConfirmationEvidence.PersistedWildcard>(nextSnapshot(events)).reasons.toSet())
             runCurrent()
 
@@ -112,7 +115,8 @@ class DirectAckRadioConfirmationObservationTest {
             )
             advanceTimeBy(1_000)
             runCurrent()
-            assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.CONFLICTING_PHYSICAL_EVIDENCE,
+            assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.PREAUTHORITY_HISTORY_UNKNOWN,
+                DirectAckRadioConfirmationWildcardReason.CONFLICTING_PHYSICAL_EVIDENCE,
                 DirectAckRadioConfirmationWildcardReason.UNTRACKED_LEGACY_ANCESTRY),
                 assertIs<DirectAckRadioConfirmationEvidence.PersistedWildcard>(nextSnapshot(events)).reasons.toSet())
             runCurrent()
@@ -130,14 +134,16 @@ class DirectAckRadioConfirmationObservationTest {
             advanceTimeBy(1_000)
             runCurrent()
             val beforeRollback = nextSnapshot(events)
-            assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.CONFLICTING_PHYSICAL_EVIDENCE,
+            assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.PREAUTHORITY_HISTORY_UNKNOWN,
+                DirectAckRadioConfirmationWildcardReason.CONFLICTING_PHYSICAL_EVIDENCE,
                 DirectAckRadioConfirmationWildcardReason.UNTRACKED_LEGACY_ANCESTRY,
                 DirectAckRadioConfirmationWildcardReason.STICKY_SATURATION),
                 assertIs<DirectAckRadioConfirmationEvidence.PersistedWildcard>(beforeRollback).reasons.toSet())
             runCurrent()
             val otherEvents = store.observeDirectAckRadioConfirmationEvidence(RADIO_B).take(2).toList()
             assertEquals(DirectAckRadioConfirmationObservation.Inspecting(RADIO_B), otherEvents.first())
-            assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.UNRESOLVED_PHYSICAL_EMISSION),
+            assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.PREAUTHORITY_HISTORY_UNKNOWN,
+                DirectAckRadioConfirmationWildcardReason.UNRESOLVED_PHYSICAL_EMISSION),
                 assertIs<DirectAckRadioConfirmationEvidence.PersistedWildcard>(
                     assertIs<DirectAckRadioConfirmationObservation.Snapshot>(otherEvents.last()).evidence,
                 ).reasons.toSet())
@@ -205,7 +211,8 @@ class DirectAckRadioConfirmationObservationTest {
             writer.directAckExclusions().radio(DirectAckRadioExclusionEntity(RADIO_A.value, true))
             beginInitialRead.complete(Unit)
             val initial = assertIs<DirectAckRadioConfirmationObservation.Snapshot>(events.receive())
-            assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.STICKY_SATURATION),
+            assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.PREAUTHORITY_HISTORY_UNKNOWN,
+                DirectAckRadioConfirmationWildcardReason.STICKY_SATURATION),
                 assertIs<DirectAckRadioConfirmationEvidence.PersistedWildcard>(initial.evidence).reasons.toSet())
             runCurrent()
             writer.openHelper.writableDatabase.execSQL("DROP TABLE direct_ack_emissions")

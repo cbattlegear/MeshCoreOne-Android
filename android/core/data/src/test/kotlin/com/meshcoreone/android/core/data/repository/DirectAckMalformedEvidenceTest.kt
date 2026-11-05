@@ -3,6 +3,7 @@ package com.meshcoreone.android.core.data.repository
 
 import android.content.Context
 import androidx.room.Room
+import androidx.room.withTransaction
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.database.*
@@ -10,6 +11,7 @@ import com.meshcoreone.android.core.model.*
 import java.util.UUID
 import java.util.concurrent.Executor
 import kotlin.test.*
+import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.*
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
@@ -27,6 +29,120 @@ class DirectAckMalformedEvidenceTest {
         val receipt: DirectAckReceipt,
         val emission: DirectAckEmissionEntity,
     )
+
+    @Test fun malformedLegacyWireBeyondPhysicalSampleFailsEveryNewAssessmentWithoutHidingOtherReasons() =
+        runTest(timeout = 180.seconds) {
+            val context = ApplicationProvider.getApplicationContext<Context>()
+            val owner = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+            val immediate = Executor { it.run() }
+            val db = Room.inMemoryDatabaseBuilder(context, MeshCoreDatabase::class.java)
+                .addCallback(DirectAckStorage.callback).allowMainThreadQueries()
+                .setQueryExecutor(immediate).setTransactionExecutor(immediate).build()
+            val failures = mutableListOf<PersistenceStoreException>()
+            val store = RoomPersistenceStore(db, owner, RepositoryClock(),
+                RepositoryIssueReporter { _, error -> failures += error })
+            try {
+                val lease = assertIs<DirectAckActivationResult.Activated>(store.activateDirectAckSession(
+                    SessionToken(ProcessEpoch(UUID.randomUUID()), Generation(1), RADIO_A), UUID.randomUUID())).lease
+                val row = message(status = MessageStatus.PENDING)
+                val queued = pending(messageID = row.id)
+                store.saveMessage(row)
+                store.upsertPendingSend(queued)
+                val claimId = UUID.randomUUID()
+                val key = EntityKey(RADIO_A, row.id)
+                val intent = assertIs<DirectAckIntentResult.Captured>(store.captureDirectAckIntent(
+                    lease, key, claimId, DirectAckMode.SEND, queued.id)).intent
+                val wire = UUID.randomUUID()
+                val attempt = assertIs<DirectAckBeginResult.Begun>(
+                    store.beginDirectAckAttemptRequiringEmissionTracking(intent, wire, 123u)).attempt
+                val marker = assertIs<DirectAckEmissionMarkResult.Marked>(
+                    store.markDirectAckWireMayHaveWritten(attempt, wire, UUID.randomUUID()))
+                assertIs<DirectAckEmissionMutationResult.Applied>(store.resolveDirectAckWireEmission(
+                    marker.handle, UUID.randomUUID(), DirectAckEmissionResolution.Accepted(999u)))
+                suspend fun assertMalformedPublicReads() {
+                    withUnchangedDirectAckState(db, key, claimId) {
+                        for (read in listOf<suspend () -> Any>(
+                            { store.inspectDirectMessageConfirmationEvidence(key) },
+                            { store.inspectDirectAckRadioConfirmationEvidence(RADIO_A) },
+                            { store.inspectDirectAckRadioEvidence(RADIO_A) },
+                            { store.settleDirectAckExcludingRadioHistory(attempt, 999u, 42u) },
+                            { store.recordDirectFailureExcludingRadioHistory(attempt) },
+                        )) {
+                            assertEquals(PersistenceStoreError.InvalidData,
+                                assertFailsWith<PersistenceStoreException> { read() }.error)
+                        }
+                    }
+                }
+                val initiallyMalformed = DirectAckWireEntity(
+                    RADIO_A.value, UUID.randomUUID(), UUID.randomUUID(), -1, null)
+                db.directAcks().wire(initiallyMalformed)
+                assertMalformedPublicReads()
+                db.directAcks().wire(initiallyMalformed.copy(predictedCode = 123))
+                db.withTransaction {
+                    repeat(4_100) {
+                        val known = DirectAckWireEntity(RADIO_A.value, UUID.randomUUID(), UUID.randomUUID(), 789, 888)
+                        db.directAcks().wire(known)
+                        db.directAcks().operation(DirectAckOperationEntity(
+                            known.radioId, known.claimId, known.requestId,
+                            "EMISSION_TRACKING_REQUIRED", known.predictedCode, 1, null))
+                        db.directAcks().operation(DirectAckOperationEntity(
+                            known.radioId, known.claimId, UUID.randomUUID(),
+                            "ACCEPTANCE_HISTORY_REQUIRED:${known.requestId}", known.predictedCode, 1, null))
+                        db.directAckExclusions().emission(DirectAckEmissionEntity(
+                            known.radioId, known.claimId, known.requestId, UUID.randomUUID(), UUID.randomUUID(),
+                            known.predictedCode, "ACCEPTED", known.acceptedCode, UUID.randomUUID()))
+                    }
+                }
+                val maximum = DirectAckRadioEvidenceLimits.MAX_DIAGNOSTIC_WIRES_PER_RADIO
+                assertEquals(maximum, db.directAckExclusions().emissions(RADIO_A.value, maximum).size)
+                val legacy = DirectAckWireEntity(RADIO_A.value, UUID.randomUUID(), UUID.randomUUID(), 123, null)
+                val badInputs = listOf(
+                    legacy.copy(predictedCode = -1),
+                    legacy.copy(predictedCode = 4_294_967_296),
+                    legacy.copy(acceptedCode = -1),
+                    legacy.copy(acceptedCode = 4_294_967_296),
+                )
+                for (bad in badInputs) {
+                    db.directAcks().wire(bad)
+                    assertTrue(db.directAcks().operations(RADIO_A.value, legacy.claimId).isEmpty())
+                    assertTrue(db.directAckExclusions().emissions(RADIO_A.value, Int.MAX_VALUE)
+                        .none { it.claimId == legacy.claimId })
+                    assertTrue(db.directAckExclusions().legacyWires(RADIO_A.value, 0).isEmpty())
+                    assertTrue(db.directAckExclusions().malformedRegisteredHistory(RADIO_A.value))
+                    assertMalformedPublicReads()
+                    assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.PREAUTHORITY_HISTORY_UNKNOWN),
+                        assertIs<DirectAckRadioConfirmationEvidence.PersistedWildcard>(
+                            store.inspectDirectAckRadioConfirmationEvidence(RADIO_B)).reasons.toSet())
+                }
+                assertEquals(25, failures.size)
+                db.directAcks().wire(legacy)
+                withUnchangedDirectAckState(db, key, claimId) {
+                    val result = assertIs<DirectAckRadioSettlementResult.Nonsettling>(
+                        store.settleDirectAckExcludingRadioHistory(attempt, 999u, 42u))
+                    assertTrue(DirectAckRadioNonsettlingReason.PREAUTHORITY_HISTORY_UNKNOWN in result.reasons)
+                    assertTrue(DirectAckRadioNonsettlingReason.UNRESOLVED_OTHER_CLAIM_EMISSION in result.reasons)
+                }
+                val sampled = db.directAckExclusions().emissions(RADIO_A.value, maximum)
+                val omitted = db.directAckExclusions().emissions(RADIO_A.value, Int.MAX_VALUE)
+                    .first { row -> sampled.none { it.markRequestId == row.markRequestId } }
+                db.directAckExclusions().emission(omitted.copy(state = "DEFINITELY_UNSENT"))
+                assertFalse(db.directAckExclusions().emissions(RADIO_A.value, maximum)
+                    .any { it.markRequestId == omitted.markRequestId })
+                withUnchangedDirectAckState(db, key, claimId) {
+                    assertEquals(PersistenceStoreError.InvalidData, assertFailsWith<PersistenceStoreException> {
+                        store.inspectDirectAckRadioEvidence(RADIO_A)
+                    }.error)
+                    val refusal = assertIs<DirectAckRadioFailureResult.Nonfailing>(
+                        store.recordDirectFailureExcludingRadioHistory(attempt))
+                    assertTrue(DirectAckRadioNonfailingReason.PREAUTHORITY_HISTORY_UNKNOWN in refusal.reasons)
+                    assertTrue(DirectAckRadioNonfailingReason.CONFLICTING_OTHER_CLAIM_EVIDENCE in refusal.reasons)
+                }
+                db.directAckExclusions().emission(omitted)
+                assertEquals(DirectAckRadioEvidenceCoverage.TRUNCATED,
+                    assertIs<DirectAckRadioEvidenceObservation.Found>(
+                        store.inspectDirectAckRadioEvidence(RADIO_A)).snapshot.coverage)
+            } finally { store.close(); owner.cancel(); db.close() }
+        }
 
     @Test fun malformedTargetOrCompetitorCannotBeAcceptedAsUnsentClearOrDelivery() = runTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
@@ -113,8 +229,9 @@ class DirectAckMalformedEvidenceTest {
                     assertEquals(PersistenceStoreError.InvalidData, assertFailsWith<PersistenceStoreException>(name) {
                         store.settleDirectAckExcludingRadioHistory(target.attempt, 999u, 42u)
                     }.error)
-                    assertEquals(DirectAckRadioConfirmationEvidence.NoPersistedWildcard(RADIO_B),
-                        store.inspectDirectAckRadioConfirmationEvidence(RADIO_B))
+                    assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.PREAUTHORITY_HISTORY_UNKNOWN),
+                        assertIs<DirectAckRadioConfirmationEvidence.PersistedWildcard>(
+                            store.inspectDirectAckRadioConfirmationEvidence(RADIO_B)).reasons.toSet())
                     assertEquals(row, store.fetchMessage(target.receipt.key), name)
                     assertEquals(identity, db.directAcks().incarnation(RADIO_A.value, target.receipt.key.id, "message"), name)
                     assertEquals(journal, db.directAcks().operations(RADIO_A.value, target.receipt.requestId), name)
@@ -142,13 +259,16 @@ class DirectAckMalformedEvidenceTest {
                 state = "DEFINITELY_UNSENT", actualCode = null, resolutionRequestId = UUID.randomUUID(),
             ))
             assertFalse(db.directAckExclusions().unresolvedCompetitor(RADIO_A.value, target.receipt.requestId))
-            assertEquals(DirectAckRadioConfirmationEvidence.NoPersistedWildcard(RADIO_A),
-                store.inspectDirectAckRadioConfirmationEvidence(RADIO_A))
-            assertEquals(999u, assertIs<DirectAckRadioSettlementReceipt.Applied>(
-                assertIs<DirectAckRadioSettlementResult.Settled>(
-                    store.settleDirectAckExcludingRadioHistory(target.attempt, 999u, 42u),
-                ).receipt,
-            ).receipt.delivery?.ackCode)
+            assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.PREAUTHORITY_HISTORY_UNKNOWN),
+                assertIs<DirectAckRadioConfirmationEvidence.PersistedWildcard>(
+                    store.inspectDirectAckRadioConfirmationEvidence(RADIO_A)).reasons.toSet())
+            withUnchangedDirectAckState(db, target.receipt.key, target.receipt.requestId) {
+                assertEquals(setOf(DirectAckRadioNonsettlingReason.PREAUTHORITY_HISTORY_UNKNOWN),
+                    assertIs<DirectAckRadioSettlementResult.Nonsettling>(
+                        store.settleDirectAckExcludingRadioHistory(target.attempt, 999u, 42u)).reasons.toSet())
+            }
+            assertEquals(999u, assertIs<DirectAckMutationResult.Applied>(
+                store.settleDirectAck(target.attempt, 999u, 42u)).receipt.delivery?.ackCode)
         } finally { store.close(); owner.cancel(); db.close() }
     }
 }

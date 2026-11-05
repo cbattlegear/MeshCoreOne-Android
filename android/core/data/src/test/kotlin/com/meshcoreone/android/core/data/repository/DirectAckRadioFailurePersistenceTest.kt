@@ -65,11 +65,13 @@ class DirectAckRadioFailurePersistenceTest {
         tracked: Boolean = true,
         row: MessageDTO = message(),
         mode: DirectAckMode = DirectAckMode.SEND,
+        queued: PendingSendDTO? = null,
     ): Claim {
         target.saveMessage(row)
+        if (queued != null) target.upsertPendingSend(queued)
         val id = UUID.randomUUID()
         val intent = assertIs<DirectAckIntentResult.Captured>(target.captureDirectAckIntent(
-            lease, EntityKey(RADIO_A, row.id), id, mode, null,
+            lease, EntityKey(RADIO_A, row.id), id, mode, queued?.id,
         )).intent
         val wire = UUID.randomUUID()
         val result = if (tracked) target.beginDirectAckAttemptRequiringEmissionTracking(intent, wire, 123u)
@@ -101,11 +103,13 @@ class DirectAckRadioFailurePersistenceTest {
         val receipt = assertIs<DirectAckObservation.Found>(target.inspectDirectAckAttempt(claim.lease, claim.id)).receipt
         val identity = database.directAcks().incarnation(RADIO_A.value, claim.row.id, "message")
         val operations = database.directAcks().operations(RADIO_A.value, claim.id)
-        val result = assertIs<DirectAckRadioFailureResult.Nonfailing>(
-            target.recordDirectFailureExcludingRadioHistory(claim.attempt),
-        )
+        val result = withUnchangedDirectAckState(database, key, claim.id) {
+            assertIs<DirectAckRadioFailureResult.Nonfailing>(
+                target.recordDirectFailureExcludingRadioHistory(claim.attempt))
+        }
         assertTrue(expected.isNotEmpty())
         assertTrue(result.reasons.containsAll(expected.toList()))
+        assertTrue(DirectAckRadioNonfailingReason.PREAUTHORITY_HISTORY_UNKNOWN in result.reasons)
         assertEquals(row, target.fetchMessage(key))
         assertEquals(receipt, assertIs<DirectAckObservation.Found>(
             target.inspectDirectAckAttempt(claim.lease, claim.id),
@@ -115,6 +119,19 @@ class DirectAckRadioFailurePersistenceTest {
         assertTrue(database.directAcks().radioFailures(RADIO_A.value, claim.id).isEmpty())
         assertNull(database.directAcks().delivery(RADIO_A.value, claim.id))
     }
+
+    private suspend fun nonsettling(
+        claim: Claim,
+        code: UInt,
+        target: RoomPersistenceStore = store,
+        database: MeshCoreDatabase = db,
+    ): DirectAckRadioSettlementResult.Nonsettling =
+        withUnchangedDirectAckState(database, EntityKey(RADIO_A, claim.row.id), claim.id) {
+            assertIs<DirectAckRadioSettlementResult.Nonsettling>(
+                target.settleDirectAckExcludingRadioHistory(claim.attempt, code, 42u)).also {
+                assertTrue(DirectAckRadioNonsettlingReason.PREAUTHORITY_HISTORY_UNKNOWN in it.reasons)
+            }
+        }
 
     @Test fun ownMayAndEarlierMayBeforeLaterUnsentNeverBecomeFailed() = runTest {
         val claim = begin(activate(), row = message(status = MessageStatus.PENDING))
@@ -165,9 +182,7 @@ class DirectAckRadioFailurePersistenceTest {
         accept(target, 888u)
         assertEquals(888L, db.directAcks().wire(RADIO_A.value, target.id, target.wire)?.acceptedCode)
         nonfailing(target, DirectAckRadioNonfailingReason.TARGET_CONFLICTING_PHYSICAL_EVIDENCE)
-        val result = assertIs<DirectAckRadioSettlementResult.Nonsettling>(
-            store.settleDirectAckExcludingRadioHistory(target.attempt, 888u, 42u),
-        )
+        val result = nonsettling(target, 888u)
         assertTrue(DirectAckRadioNonsettlingReason.TARGET_ACCEPTANCE_UNRESOLVED in result.reasons)
         val warning = assertIs<DirectAckRadioConfirmationEvidence.PersistedWildcard>(
             store.inspectDirectAckRadioConfirmationEvidence(RADIO_A),
@@ -224,9 +239,7 @@ class DirectAckRadioFailurePersistenceTest {
                 accept(current, 999u, target)
                 nonfailing(current, DirectAckRadioNonfailingReason.KNOWN_OTHER_CLAIM_CODE,
                     target = target, database = file)
-                val outcome = assertIs<DirectAckRadioSettlementResult.Nonsettling>(
-                    target.settleDirectAckExcludingRadioHistory(current.attempt, 999u, 42u),
-                )
+                val outcome = nonsettling(current, 999u, target, file)
                 assertTrue(DirectAckRadioNonsettlingReason.KNOWN_OTHER_CLAIM_CODE in outcome.reasons)
                 if (physicalCode == 888u) {
                     assertTrue(DirectAckRadioNonsettlingReason.UNRESOLVED_OTHER_CLAIM_EMISSION in outcome.reasons)
@@ -240,8 +253,9 @@ class DirectAckRadioFailurePersistenceTest {
                             target.inspectDirectAckRadioConfirmationEvidence(RADIO_A),
                         ).reasons)
                 } else {
-                    assertEquals(DirectAckRadioConfirmationEvidence.NoPersistedWildcard(RADIO_A),
-                        target.inspectDirectAckRadioConfirmationEvidence(RADIO_A))
+                    assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.PREAUTHORITY_HISTORY_UNKNOWN),
+                        assertIs<DirectAckRadioConfirmationEvidence.PersistedWildcard>(
+                            target.inspectDirectAckRadioConfirmationEvidence(RADIO_A)).reasons.toSet())
                     assertIs<DirectAckRadioEvidenceObservation.Found>(target.inspectDirectAckRadioEvidence(RADIO_A))
                 }
                 assertEquals(current.row, target.fetchMessage(EntityKey(RADIO_A, current.row.id)))
@@ -390,9 +404,7 @@ class DirectAckRadioFailurePersistenceTest {
             store.registerDirectAckDispatchRequiringEmissionTracking(older.attempt, retry, 666u),
         )
         accept(older.copy(wire = retry), 666u)
-        val own = assertIs<DirectAckRadioSettlementResult.Nonsettling>(
-            store.settleDirectAckExcludingRadioHistory(older.attempt, 666u, 42u),
-        )
+        val own = nonsettling(older, 666u)
         assertTrue(DirectAckRadioNonsettlingReason.TARGET_ACCEPTANCE_UNRESOLVED in own.reasons)
         val operations = db.directAcks().operations(RADIO_A.value, older.id)
         assertTrue(operations.none { it.kind == "ACCEPTANCE_HISTORY_REQUIRED:${older.wire}" })
@@ -403,9 +415,7 @@ class DirectAckRadioFailurePersistenceTest {
         accept(current, 999u)
         nonfailing(current, DirectAckRadioNonfailingReason.UNTRACKED_OTHER_CLAIM_ANCESTRY,
             DirectAckRadioNonfailingReason.KNOWN_OTHER_CLAIM_CODE)
-        val foreign = assertIs<DirectAckRadioSettlementResult.Nonsettling>(
-            store.settleDirectAckExcludingRadioHistory(current.attempt, 999u, 42u),
-        )
+        val foreign = nonsettling(current, 999u)
         assertTrue(DirectAckRadioNonsettlingReason.UNRESOLVED_OTHER_CLAIM_EMISSION in foreign.reasons)
         assertTrue(DirectAckRadioConfirmationWildcardReason.UNTRACKED_LEGACY_ANCESTRY in
             assertIs<DirectAckRadioConfirmationEvidence.PersistedWildcard>(
@@ -416,45 +426,43 @@ class DirectAckRadioFailurePersistenceTest {
         }.error)
     }
 
-    @Test fun committedDeliveryReplayPrecedesUnrelatedMalformedHistoryButTupleAndProofCorruptionDoNot() = runTest {
+    @Test fun actualGenericDeliveryReplaysBeforeMalformedForeignHistoryButNeverBecomesAStrictProof() = runTest {
         val lease = activate()
         val claim = begin(lease)
         accept(claim, 999u)
-        val receipt = assertIs<DirectAckRadioSettlementReceipt.Applied>(
-            assertIs<DirectAckRadioSettlementResult.Settled>(
-                store.settleDirectAckExcludingRadioHistory(claim.attempt, 999u, 42u),
-            ).receipt,
-        ).receipt
+        nonsettling(claim, 999u)
+        val receipt = assertIs<DirectAckMutationResult.Applied>(
+            store.settleDirectAck(claim.attempt, 999u, 42u)).receipt
         val foreign = begin(lease)
         val marker = mark(foreign)
+        val foreignWire = assertNotNull(db.directAcks().wire(RADIO_A.value, foreign.id, foreign.wire))
+        db.directAcks().wire(foreignWire.copy(predictedCode = -1))
         db.openHelper.writableDatabase.execSQL(
             "UPDATE direct_ack_emissions SET state='DEFINITELY_UNSENT',actualCode=123 WHERE markRequestId=?",
             arrayOf<Any?>(marker.receipt.emissionRequestId.toString().uppercase()),
         )
         val operations = db.directAcks().operations(RADIO_A.value, claim.id)
         val identity = db.directAcks().incarnation(RADIO_A.value, claim.row.id, "message")
-        assertEquals(receipt, assertIs<DirectAckRadioSettlementReceipt.AlreadyApplied>(
-            assertIs<DirectAckRadioSettlementResult.Settled>(
-                store.settleDirectAckExcludingRadioHistory(claim.attempt, 999u, 42u),
-            ).receipt,
-        ).receipt)
+        assertEquals(receipt, assertIs<DirectAckMutationResult.AlreadyApplied>(
+            store.settleDirectAck(claim.attempt, 999u, 42u)).receipt)
+        assertIs<DirectAckRadioFailureResult.AlreadyDelivered>(
+            store.recordDirectFailureExcludingRadioHistory(claim.attempt))
         assertEquals(operations, db.directAcks().operations(RADIO_A.value, claim.id))
         assertEquals(identity, db.directAcks().incarnation(RADIO_A.value, claim.row.id, "message"))
         assertEquals(DirectAckRejection.CONFLICT, assertIs<DirectAckRadioSettlementResult.Rejected>(
             store.settleDirectAckExcludingRadioHistory(claim.attempt, 999u, 43u),
         ).reason)
-        val proof = db.directAcks().radioDeliveries(RADIO_A.value, claim.id).single()
-        db.directAcks().operation(proof.copy(pendingId = UUID.randomUUID()))
         assertEquals(DirectAckRejection.CONFLICT, assertIs<DirectAckRadioSettlementResult.Rejected>(
             store.settleDirectAckExcludingRadioHistory(claim.attempt, 999u, 42u),
         ).reason)
-        db.directAcks().operation(proof)
+        assertTrue(db.directAcks().radioDeliveries(RADIO_A.value, claim.id).isEmpty())
         val delivery = assertNotNull(db.directAcks().delivery(RADIO_A.value, claim.id))
         db.directAcks().delivery(delivery.copy(ackCode = 888))
-        assertEquals(DirectAckRejection.CONFLICT, assertIs<DirectAckRadioSettlementResult.Rejected>(
-            store.settleDirectAckExcludingRadioHistory(claim.attempt, 999u, 42u),
+        assertEquals(DirectAckRejection.CONFLICT, assertIs<DirectAckMutationResult.Rejected>(
+            store.settleDirectAck(claim.attempt, 999u, 42u),
         ).reason)
         assertEquals(MessageStatus.DELIVERED, store.fetchMessage(EntityKey(RADIO_A, claim.row.id))?.status)
+        db.directAcks().wire(foreignWire)
         val next = begin(lease)
         accept(next, 888u)
         assertEquals(PersistenceStoreError.InvalidData, assertFailsWith<PersistenceStoreException> {
@@ -499,9 +507,7 @@ class DirectAckRadioFailurePersistenceTest {
         assertIs<DirectAckMutationResult.Applied>(store.recordDirectSendAccepted(foreign.attempt, foreign.wire, 999u))
         nonfailing(target, DirectAckRadioNonfailingReason.CONFLICTING_OTHER_CLAIM_EVIDENCE)
         val row = store.fetchMessage(EntityKey(RADIO_A, target.row.id))
-        val result = assertIs<DirectAckRadioSettlementResult.Nonsettling>(
-            store.settleDirectAckExcludingRadioHistory(target.attempt, 888u, 42u),
-        )
+        val result = nonsettling(target, 888u)
         assertTrue(DirectAckRadioNonsettlingReason.UNRESOLVED_OTHER_CLAIM_EMISSION in result.reasons)
         assertEquals(row, store.fetchMessage(EntityKey(RADIO_A, target.row.id)))
         assertNull(db.directAcks().delivery(RADIO_A.value, target.id))
@@ -512,8 +518,9 @@ class DirectAckRadioFailurePersistenceTest {
         val unavailable = assertFailsWith<PersistenceStoreException> { store.inspectDirectAckRadioEvidence(RADIO_A) }
         assertEquals(PersistenceStoreError.InvalidData, unavailable.error)
         assertEquals(1, reported.size)
-        assertEquals(DirectAckRadioConfirmationEvidence.NoPersistedWildcard(RADIO_B),
-            store.inspectDirectAckRadioConfirmationEvidence(RADIO_B))
+        assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.PREAUTHORITY_HISTORY_UNKNOWN),
+            assertIs<DirectAckRadioConfirmationEvidence.PersistedWildcard>(
+                store.inspectDirectAckRadioConfirmationEvidence(RADIO_B)).reasons.toSet())
     }
 
     @Test fun realPhysicalAcceptanceReconcilesGenericAcceptanceAndLaterUnsentRetryDoesNotContradictIt() = runTest {
@@ -528,13 +535,13 @@ class DirectAckRadioFailurePersistenceTest {
         assertIs<DirectAckEmissionMutationResult.Applied>(store.resolveDirectAckWireEmission(
             retry.handle, UUID.randomUUID(), DirectAckEmissionResolution.DefinitelyUnsent,
         ))
-        assertEquals(DirectAckRadioConfirmationEvidence.NoPersistedWildcard(RADIO_A),
-            store.inspectDirectAckRadioConfirmationEvidence(RADIO_A))
+        assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.PREAUTHORITY_HISTORY_UNKNOWN),
+            assertIs<DirectAckRadioConfirmationEvidence.PersistedWildcard>(
+                store.inspectDirectAckRadioConfirmationEvidence(RADIO_A)).reasons.toSet())
         assertIs<DirectAckRadioEvidenceObservation.Found>(store.inspectDirectAckRadioEvidence(RADIO_A))
-        assertIs<DirectAckRadioFailureResult.Applied>(store.recordDirectFailureExcludingRadioHistory(claim.attempt))
-        assertIs<DirectAckRadioSettlementResult.Settled>(
-            store.settleDirectAckExcludingRadioHistory(claim.attempt, 999u, 42u),
-        )
+        nonfailing(claim, DirectAckRadioNonfailingReason.PREAUTHORITY_HISTORY_UNKNOWN)
+        nonsettling(claim, 999u)
+        assertIs<DirectAckMutationResult.Applied>(store.settleDirectAck(claim.attempt, 999u, 42u))
         assertEquals(MessageStatus.DELIVERED, store.fetchMessage(EntityKey(RADIO_A, claim.row.id))?.status)
     }
 
@@ -547,9 +554,7 @@ class DirectAckRadioFailurePersistenceTest {
         )
         assertIs<DirectAckMutationResult.Applied>(store.recordDirectSendAccepted(claim.attempt, second, 888u))
         val row = store.fetchMessage(EntityKey(RADIO_A, claim.row.id))
-        val result = assertIs<DirectAckRadioSettlementResult.Nonsettling>(
-            store.settleDirectAckExcludingRadioHistory(claim.attempt, 999u, 42u),
-        )
+        val result = nonsettling(claim, 999u)
         assertTrue(DirectAckRadioNonsettlingReason.TARGET_ACCEPTANCE_UNRESOLVED in result.reasons)
         nonfailing(claim, DirectAckRadioNonfailingReason.TARGET_CONFLICTING_PHYSICAL_EVIDENCE)
         assertEquals(row, store.fetchMessage(EntityKey(RADIO_A, claim.row.id)))
@@ -591,9 +596,7 @@ class DirectAckRadioFailurePersistenceTest {
                 else assertIs<DirectAckMutationResult.Applied>(accepted)
             assertNull(db.directAckExclusions().emission(RADIO_A.value, claim.id, claim.wire, coveredId))
             nonfailing(claim, DirectAckRadioNonfailingReason.RADIO_HISTORY_SATURATED)
-            val settlement = assertIs<DirectAckRadioSettlementResult.Nonsettling>(
-                store.settleDirectAckExcludingRadioHistory(claim.attempt, 999u, 42u),
-            )
+            val settlement = nonsettling(claim, 999u)
             assertTrue(DirectAckRadioNonsettlingReason.RADIO_HISTORY_SATURATED in settlement.reasons)
         }
         assertEquals(physicalBefore, db.directAckExclusions().emissions(RADIO_A.value, 100))
@@ -652,12 +655,14 @@ class DirectAckRadioFailurePersistenceTest {
             DirectAckRadioNonfailingReason.RADIO_HISTORY_SATURATED)
     }
 
-    @Test fun noMarkerAndAllExplicitlyUnsentRemainSafeDespiteForeignMayButSaturationAlwaysBlocks() = runTest {
+    @Test fun noMarkerAndAllExplicitlyUnsentStillRetainUnknownForeignMayAndSaturationWithoutFailure() = runTest {
         val lease = activate()
         val foreign = begin(lease)
         mark(foreign)
         for (unsent in listOf(false, true)) {
-            val claim = begin(lease)
+            val row = message(status = MessageStatus.PENDING)
+            val queued = pending(messageID = row.id)
+            val claim = begin(lease, row = row, queued = queued)
             if (unsent) {
                 repeat(2) {
                     val marker = mark(claim)
@@ -666,14 +671,16 @@ class DirectAckRadioFailurePersistenceTest {
                     ))
                 }
             }
-            val applied = assertIs<DirectAckRadioFailureResult.Applied>(
-                store.recordDirectFailureExcludingRadioHistory(claim.attempt),
-            ).receipt
-            assertEquals(MessageStatus.FAILED, applied.message?.status)
-            assertTrue(applied.bookkeeping.isEmpty())
-            assertTrue(applied.pendingCompletions.isEmpty())
-            assertNull(applied.delivery)
-            assertEquals(1, db.directAcks().radioFailures(RADIO_A.value, claim.id).size)
+            val own = db.directAckExclusions().failureEvidence(RADIO_A.value, claim.id)
+            assertFalse(own.targetAccepted)
+            assertFalse(own.targetUnresolved)
+            assertFalse(own.targetConflict)
+            assertFalse(own.sameIncarnationOtherUncertainty)
+            assertFalse(own.sameIncarnationOtherAccepted)
+            assertTrue(own.otherUnresolved)
+            nonfailing(claim, DirectAckRadioNonfailingReason.PREAUTHORITY_HISTORY_UNKNOWN,
+                DirectAckRadioNonfailingReason.UNRESOLVED_OTHER_CLAIM_EMISSION)
+            assertEquals(listOf(queued), store.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id)))
         }
         val representedUnsent = begin(lease)
         val unsentMarker = mark(representedUnsent)
@@ -693,31 +700,31 @@ class DirectAckRadioFailurePersistenceTest {
         nonfailing(representedUnsent, DirectAckRadioNonfailingReason.RADIO_HISTORY_SATURATED)
     }
 
-    @Test fun guardedFailureReplayIsHistoricalAndCannotBeForgedFromLegacyFailure() = runTest {
+    @Test fun unknownRefusalCannotBecomeGuardedReplayAndActualGenericFailureRemainsGeneric() = runTest {
         val lease = activate()
         val claim = begin(lease)
         accept(claim, 999u)
-        val applied = assertIs<DirectAckRadioFailureResult.Applied>(
-            store.recordDirectFailureExcludingRadioHistory(claim.attempt),
-        ).receipt
-        val proof = db.directAcks().radioFailures(RADIO_A.value, claim.id).single()
+        nonfailing(claim, DirectAckRadioNonfailingReason.PREAUTHORITY_HISTORY_UNKNOWN)
+        val applied = assertIs<DirectAckMutationResult.Applied>(store.recordDirectFailure(claim.attempt)).receipt
         val foreign = begin(lease)
         mark(foreign)
         db.directAckExclusions().radio(DirectAckRadioExclusionEntity(RADIO_A.value, true))
         val row = store.fetchMessage(EntityKey(RADIO_A, claim.row.id))
-        assertEquals(applied, assertIs<DirectAckRadioFailureResult.AlreadyApplied>(
-            store.recordDirectFailureExcludingRadioHistory(claim.attempt),
+        assertEquals(applied, assertIs<DirectAckMutationResult.AlreadyApplied>(
+            store.recordDirectFailure(claim.attempt),
         ).receipt)
+        assertEquals(DirectAckRejection.CONFLICT, assertIs<DirectAckRadioFailureResult.Rejected>(
+            store.recordDirectFailureExcludingRadioHistory(claim.attempt)).reason)
         db.messages().setStatus(RADIO_A.value, claim.row.id, MessageStatus.FAILED.rawValue)
-        val invalidated = assertIs<DirectAckRadioFailureResult.AlreadyApplied>(
-            store.recordDirectFailureExcludingRadioHistory(claim.attempt),
+        val invalidated = assertIs<DirectAckMutationResult.AlreadyApplied>(
+            store.recordDirectFailure(claim.attempt),
         ).receipt
         assertEquals(DirectAckPermission.INVALIDATED, invalidated.permission)
         assertEquals(row, store.fetchMessage(EntityKey(RADIO_A, claim.row.id)))
-        assertEquals(proof, db.directAcks().radioFailures(RADIO_A.value, claim.id).single())
+        assertTrue(db.directAcks().radioFailures(RADIO_A.value, claim.id).isEmpty())
         assertIs<DirectAckRevocationResult.Revoked>(store.revokeDirectAckSession(lease))
-        val retired = assertIs<DirectAckRadioFailureResult.AlreadyApplied>(
-            store.recordDirectFailureExcludingRadioHistory(claim.attempt),
+        val retired = assertIs<DirectAckMutationResult.AlreadyApplied>(
+            store.recordDirectFailure(claim.attempt),
         ).receipt
         assertEquals(DirectAckPermission.STALE_LEASE, retired.permission)
         assertNull(retired.message)
@@ -732,14 +739,13 @@ class DirectAckRadioFailurePersistenceTest {
         assertTrue(db.directAcks().radioFailures(RADIO_A.value, generic.id).isEmpty())
     }
 
-    @Test fun ownDeliveryAfterGuardedFailureAndInitialDeliveredResendAlwaysWin() = runTest {
+    @Test fun actualGenericDeliveryAndInitialDeliveredResendWinWithoutInventingGuardedFailure() = runTest {
         val lease = activate()
         val claim = begin(lease)
         accept(claim, 999u)
-        assertIs<DirectAckRadioFailureResult.Applied>(store.recordDirectFailureExcludingRadioHistory(claim.attempt))
-        assertIs<DirectAckRadioSettlementResult.Settled>(
-            store.settleDirectAckExcludingRadioHistory(claim.attempt, 999u, 42u),
-        )
+        nonfailing(claim, DirectAckRadioNonfailingReason.PREAUTHORITY_HISTORY_UNKNOWN)
+        assertIs<DirectAckMutationResult.Applied>(store.recordDirectFailure(claim.attempt))
+        assertIs<DirectAckMutationResult.Applied>(store.settleDirectAck(claim.attempt, 999u, 42u))
         db.directAckExclusions().radio(DirectAckRadioExclusionEntity(RADIO_A.value, true))
         val delivered = assertIs<DirectAckRadioFailureResult.AlreadyDelivered>(
             store.recordDirectFailureExcludingRadioHistory(claim.attempt),
@@ -776,7 +782,7 @@ class DirectAckRadioFailurePersistenceTest {
         assertTrue(db.directAcks().radioFailures(RADIO_A.value, target.id).isEmpty())
     }
 
-    @Test fun proofInsertionFailureRollsBackStatusRevisionAndClaimAndCommitThenCancelReplays() = runTest {
+    @Test fun unknownRefusalNeverReachesProofInsertionAndCancellationAfterRefusalCreatesNoReplay() = runTest {
         val claim = begin(activate())
         val before = assertIs<DirectAckObservation.Found>(store.inspectDirectAckAttempt(claim.lease, claim.id)).receipt
         val identity = db.directAcks().incarnation(RADIO_A.value, claim.row.id, "message")
@@ -784,8 +790,8 @@ class DirectAckRadioFailurePersistenceTest {
             "CREATE TRIGGER reject_guarded_failure BEFORE INSERT ON direct_ack_operations " +
                 "WHEN NEW.kind='RADIO_FAILURE' BEGIN SELECT RAISE(ABORT,'controlled guarded failure'); END",
         )
-        assertFailsWith<PersistenceStoreException> { store.recordDirectFailureExcludingRadioHistory(claim.attempt) }
-        assertEquals(1, reported.size)
+        nonfailing(claim, DirectAckRadioNonfailingReason.PREAUTHORITY_HISTORY_UNKNOWN)
+        assertTrue(reported.isEmpty())
         assertEquals(claim.row, store.fetchMessage(EntityKey(RADIO_A, claim.row.id)))
         assertEquals(identity, db.directAcks().incarnation(RADIO_A.value, claim.row.id, "message"))
         assertEquals(before, assertIs<DirectAckObservation.Found>(store.inspectDirectAckAttempt(claim.lease, claim.id)).receipt)
@@ -794,16 +800,16 @@ class DirectAckRadioFailurePersistenceTest {
         val caller = Job()
         assertFailsWith<CancellationException> {
             withContext(caller) {
-                assertIs<DirectAckRadioFailureResult.Applied>(store.recordDirectFailureExcludingRadioHistory(claim.attempt))
+                nonfailing(claim, DirectAckRadioNonfailingReason.PREAUTHORITY_HISTORY_UNKNOWN)
                 caller.cancel()
                 ensureActive()
             }
         }
-        assertIs<DirectAckRadioFailureResult.AlreadyApplied>(store.recordDirectFailureExcludingRadioHistory(claim.attempt))
-        assertEquals(1, db.directAcks().radioFailures(RADIO_A.value, claim.id).size)
+        nonfailing(claim, DirectAckRadioNonfailingReason.PREAUTHORITY_HISTORY_UNKNOWN)
+        assertTrue(db.directAcks().radioFailures(RADIO_A.value, claim.id).isEmpty())
     }
 
-    @Test fun cancellationDuringProofInsertionRollsBackFailureAndDoesNotBecomeGuardedReplay() = runTest {
+    @Test fun unknownRefusalDoesNotReachProofCancellationHookAndCancelledCallerCannotInventFailure() = runTest {
         var cancelOnProof: Job? = null
         var cancellations = 0
         val local = Room.inMemoryDatabaseBuilder(context, MeshCoreDatabase::class.java)
@@ -820,11 +826,16 @@ class DirectAckRadioFailurePersistenceTest {
             val identity = local.directAcks().incarnation(RADIO_A.value, claim.row.id, "message")
             val caller = Job()
             cancelOnProof = caller
+            withContext(caller) {
+                nonfailing(claim, DirectAckRadioNonfailingReason.PREAUTHORITY_HISTORY_UNKNOWN,
+                    target = target, database = local)
+            }
+            caller.cancel()
             assertFailsWith<CancellationException> {
                 withContext(caller) { target.recordDirectFailureExcludingRadioHistory(claim.attempt) }
             }
             cancelOnProof = null
-            assertEquals(1, cancellations)
+            assertEquals(0, cancellations)
             assertEquals(claim.row, target.fetchMessage(EntityKey(RADIO_A, claim.row.id)))
             assertEquals(identity, local.directAcks().incarnation(RADIO_A.value, claim.row.id, "message"))
             assertEquals(DirectAckPhase.REGISTERED, assertIs<DirectAckObservation.Found>(
@@ -832,36 +843,43 @@ class DirectAckRadioFailurePersistenceTest {
             ).receipt.phase)
             assertTrue(local.directAcks().radioFailures(RADIO_A.value, claim.id).isEmpty())
             assertTrue(reported.isEmpty())
-            assertIs<DirectAckRadioFailureResult.Applied>(target.recordDirectFailureExcludingRadioHistory(claim.attempt))
+            nonfailing(claim, DirectAckRadioNonfailingReason.PREAUTHORITY_HISTORY_UNKNOWN,
+                target = target, database = local)
         } finally { cancelOnProof = null; target.close(); local.close() }
     }
 
-    @Test fun guardedProofSurvivesRestoreAndReopenButNeverReissuesAnAttemptOrOverwritesAReplacement() = runTest {
+    @Test fun genericFailureSurvivesRestoreAndReopenWithoutGuardedProofReissuedAttemptOrReplacementWrite() = runTest {
         val name = "guarded-failure-reopen-${UUID.randomUUID()}.db"
         var file = MeshCoreDatabase.open(context, name)
         var target = newStore(file)
         try {
             val claim = begin(activate(target), target)
-            assertIs<DirectAckRadioFailureResult.Applied>(target.recordDirectFailureExcludingRadioHistory(claim.attempt))
-            val proof = file.directAcks().radioFailures(RADIO_A.value, claim.id).single()
+            nonfailing(claim, DirectAckRadioNonfailingReason.PREAUTHORITY_HISTORY_UNKNOWN,
+                target = target, database = file)
+            assertIs<DirectAckMutationResult.Applied>(target.recordDirectFailure(claim.attempt))
+            val retained = file.directAcks().operations(RADIO_A.value, claim.id)
             target.withBackupRestore { _, _ -> Unit }
-            val restored = assertIs<DirectAckRadioFailureResult.AlreadyApplied>(
-                target.recordDirectFailureExcludingRadioHistory(claim.attempt),
+            val restored = assertIs<DirectAckMutationResult.AlreadyApplied>(
+                target.recordDirectFailure(claim.attempt),
             ).receipt
             assertEquals(DirectAckPermission.STALE_LEASE, restored.permission)
             assertNull(restored.message)
-            assertEquals(proof, file.directAcks().radioFailures(RADIO_A.value, claim.id).single())
+            assertEquals(retained, file.directAcks().operations(RADIO_A.value, claim.id))
+            assertTrue(file.directAcks().radioFailures(RADIO_A.value, claim.id).isEmpty())
+            assertEquals(DirectAckRejection.CONFLICT, assertIs<DirectAckRadioFailureResult.Rejected>(
+                target.recordDirectFailureExcludingRadioHistory(claim.attempt)).reason)
             target.deleteMessage(EntityKey(RADIO_A, claim.row.id))
             target.saveMessage(claim.row)
-            assertIs<DirectAckRadioFailureResult.AlreadyApplied>(
-                target.recordDirectFailureExcludingRadioHistory(claim.attempt),
+            assertIs<DirectAckMutationResult.AlreadyApplied>(
+                target.recordDirectFailure(claim.attempt),
             )
             assertEquals(claim.row, target.fetchMessage(EntityKey(RADIO_A, claim.row.id)))
             target.close()
             file.close()
             file = MeshCoreDatabase.open(context, name)
             target = newStore(file)
-            assertEquals(proof, file.directAcks().radioFailures(RADIO_A.value, claim.id).single())
+            assertEquals(retained, file.directAcks().operations(RADIO_A.value, claim.id))
+            assertTrue(file.directAcks().radioFailures(RADIO_A.value, claim.id).isEmpty())
             assertEquals(DirectAckRejection.INVALID_HANDLE, assertIs<DirectAckRadioFailureResult.Rejected>(
                 target.recordDirectFailureExcludingRadioHistory(claim.attempt),
             ).reason)

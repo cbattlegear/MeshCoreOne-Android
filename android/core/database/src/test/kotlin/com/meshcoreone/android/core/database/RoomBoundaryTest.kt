@@ -71,6 +71,9 @@ class RoomBoundaryTest {
                 "direct_ack_intents" to listOf("radioId", "requestId"),
                 "direct_ack_emissions" to listOf("radioId", "claimId", "wireId", "markRequestId"),
                 "direct_ack_radio_exclusions" to listOf("radioId"),
+                "direct_ack_prehistory" to listOf("singleton"),
+                "channel_send_attempts" to listOf("radioId", "captureRequestId"),
+                "channel_send_operations" to listOf("radioId", "captureRequestId", "requestId"),
             )
             if (name !in setOf("devices", "debug_log_entries", "link_preview_data", "node_status_snapshots")) {
                 assertEquals(authorityKeys[name] ?: listOf("radioId", "id"), (0 until pk.length()).map { pk.getString(it) })

@@ -76,8 +76,8 @@ class DirectAckRadioConfirmationPersistenceTest {
         ).also { db.directAckExclusions().emission(it) }
     }
 
-    @Test fun noWildcardReportsOnlyExplicitRadioHistoryNotPerCodeEligibility() = runTest {
-        assertEquals(DirectAckRadioConfirmationEvidence.NoPersistedWildcard(RADIO_A), evidence())
+    @Test fun unknownPrehistoryRemainsIndependentOfEmptyKnownUnsentAndNeverInvokedHistory() = runTest {
+        assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.PREAUTHORITY_HISTORY_UNKNOWN), reasons())
         physical("ACCEPTED", actual = 123)
         physical("ACCEPTED", actual = 123)
         physical("DEFINITELY_UNSENT")
@@ -91,7 +91,7 @@ class DirectAckRadioConfirmationPersistenceTest {
             neverInvoked.radioId, neverInvoked.claimId, UUID.randomUUID(),
             "ACCEPTANCE_HISTORY_REQUIRED:${neverInvoked.requestId}", neverInvoked.predictedCode, 1, null,
         ))
-        assertEquals(DirectAckRadioConfirmationEvidence.NoPersistedWildcard(RADIO_A), evidence())
+        assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.PREAUTHORITY_HISTORY_UNKNOWN), reasons())
         val emissions = db.directAckExclusions().emissions(RADIO_A.value, 10)
         assertTrue(db.directAckExclusions().competingCode(RADIO_A.value, neverInvoked.claimId, 123))
         assertEquals(emissions, db.directAckExclusions().emissions(RADIO_A.value, 10))
@@ -108,7 +108,7 @@ class DirectAckRadioConfirmationPersistenceTest {
         val wires = db.directAcks().wires(RADIO_A.value, legacy.claimId)
         val operations = db.directAcks().operations(RADIO_A.value, legacy.claimId)
         assertEquals(DirectAckRadioConfirmationWildcardReason.entries.toSet(), reasons())
-        assertEquals(DirectAckRadioConfirmationEvidence.NoPersistedWildcard(RADIO_B), evidence(RADIO_B))
+        assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.PREAUTHORITY_HISTORY_UNKNOWN), reasons(RADIO_B))
         assertEquals(emissions, db.directAckExclusions().emissions(RADIO_A.value, 10))
         assertEquals(wires, db.directAcks().wires(RADIO_A.value, legacy.claimId))
         assertEquals(operations, db.directAcks().operations(RADIO_A.value, legacy.claimId))
@@ -119,7 +119,8 @@ class DirectAckRadioConfirmationPersistenceTest {
 
     @Test fun conflictIsDistinctFromUnresolvedAndMalformedPhysicalStateFailsWithTypedInvalidData() = runTest {
         val conflict = physical("CONFLICT_UNSENT")
-        assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.CONFLICTING_PHYSICAL_EVIDENCE), reasons())
+        assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.PREAUTHORITY_HISTORY_UNKNOWN,
+            DirectAckRadioConfirmationWildcardReason.CONFLICTING_PHYSICAL_EVIDENCE), reasons())
         db.directAckExclusions().emission(conflict.copy(state = "UNRECOGNIZED_STATE"))
         assertEquals(PersistenceStoreError.InvalidData,
             assertFailsWith<PersistenceStoreException> { evidence() }.error)
@@ -147,7 +148,8 @@ class DirectAckRadioConfirmationPersistenceTest {
         assertFalse(db.directAckExclusions().emissions(RADIO_A.value, maximum).any { it.state == "MAY_HAVE_WRITTEN" })
         assertEquals(DirectAckRadioEvidenceCoverage.TRUNCATED,
             assertIs<DirectAckRadioEvidenceObservation.Found>(store.inspectDirectAckRadioEvidence(RADIO_A)).snapshot.coverage)
-        assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.UNRESOLVED_PHYSICAL_EMISSION), reasons())
+        assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.PREAUTHORITY_HISTORY_UNKNOWN,
+            DirectAckRadioConfirmationWildcardReason.UNRESOLVED_PHYSICAL_EMISSION), reasons())
         assertFalse(db.directAckExclusions().saturated(RADIO_A.value))
         assertEquals(4_101, db.directAckExclusions().count(RADIO_A.value).toInt())
     }
@@ -174,15 +176,17 @@ class DirectAckRadioConfirmationPersistenceTest {
                 target.markDirectAckWireMayHaveWritten(attempt, wire, UUID.randomUUID()),
             ).receipt
             val before = target.inspectDirectAckRadioConfirmationEvidence(RADIO_A)
-            assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.UNRESOLVED_PHYSICAL_EMISSION),
+            assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.PREAUTHORITY_HISTORY_UNKNOWN,
+                DirectAckRadioConfirmationWildcardReason.UNRESOLVED_PHYSICAL_EMISSION),
                 assertIs<DirectAckRadioConfirmationEvidence.PersistedWildcard>(before).reasons.toSet())
             target.close()
             file.close()
             file = MeshCoreDatabase.open(context, name)
             target = newStore(file)
             assertEquals(before, target.inspectDirectAckRadioConfirmationEvidence(RADIO_A))
-            assertEquals(DirectAckRadioConfirmationEvidence.NoPersistedWildcard(RADIO_B),
-                target.inspectDirectAckRadioConfirmationEvidence(RADIO_B))
+            assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.PREAUTHORITY_HISTORY_UNKNOWN),
+                assertIs<DirectAckRadioConfirmationEvidence.PersistedWildcard>(
+                    target.inspectDirectAckRadioConfirmationEvidence(RADIO_B)).reasons.toSet())
             assertEquals(marked.emissionRequestId, file.directAckExclusions().emissions(RADIO_A.value, 10).single().markRequestId)
             assertEquals(row, target.fetchMessage(EntityKey(RADIO_A, row.id)))
             assertNull(file.directAcks().delivery(RADIO_A.value, marked.evidence.claimRequestId))
@@ -197,7 +201,8 @@ class DirectAckRadioConfirmationPersistenceTest {
         val wire = DirectAckWireEntity(RADIO_A.value, UUID.randomUUID(), UUID.randomUUID(), 123, null)
         try {
             first.directAcks().wire(wire)
-            assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.UNTRACKED_LEGACY_ANCESTRY),
+            assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.PREAUTHORITY_HISTORY_UNKNOWN,
+                DirectAckRadioConfirmationWildcardReason.UNTRACKED_LEGACY_ANCESTRY),
                 assertIs<DirectAckRadioConfirmationEvidence.PersistedWildcard>(
                     target.inspectDirectAckRadioConfirmationEvidence(RADIO_A),
                 ).reasons.toSet())
@@ -245,7 +250,8 @@ class DirectAckRadioConfirmationPersistenceTest {
                 }
             }
             val committed = target.inspectDirectAckRadioConfirmationEvidence(RADIO_A)
-            assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.UNRESOLVED_PHYSICAL_EMISSION),
+            assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.PREAUTHORITY_HISTORY_UNKNOWN,
+                DirectAckRadioConfirmationWildcardReason.UNRESOLVED_PHYSICAL_EMISSION),
                 assertIs<DirectAckRadioConfirmationEvidence.PersistedWildcard>(committed).reasons.toSet())
             assertFailsWith<IllegalStateException> {
                 first.withTransaction {
@@ -257,8 +263,9 @@ class DirectAckRadioConfirmationPersistenceTest {
                 }
             }
             assertEquals(committed, target.inspectDirectAckRadioConfirmationEvidence(RADIO_A))
-            assertEquals(DirectAckRadioConfirmationEvidence.NoPersistedWildcard(RADIO_B),
-                target.inspectDirectAckRadioConfirmationEvidence(RADIO_B))
+            assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.PREAUTHORITY_HISTORY_UNKNOWN),
+                assertIs<DirectAckRadioConfirmationEvidence.PersistedWildcard>(
+                    target.inspectDirectAckRadioConfirmationEvidence(RADIO_B)).reasons.toSet())
         } finally { target.close(); first.close(); second.close(); context.deleteDatabase(name) }
     }
 

@@ -360,23 +360,23 @@ internal class ChannelSendRepository(
         if (identity.revision < 0 || !identity.incarnation.matches(Regex("[0-9a-f]{64}"))) {
             invalidData("Malformed channel persisted incarnation")
         }
+    }
 
-        private fun validate(capture: ChannelSendAttemptEntity) {
-            val hasPending = capture.pendingId != null
-            if (capture.version < 0 || capture.messageRevision < 0 ||
-                !capture.messageIncarnation.matches(Regex("[0-9a-f]{64}")) ||
-                (capture.origin != "CREATE" && capture.origin != "PREPARE") ||
-                (capture.origin == "CREATE" && (capture.creationDigest?.matches(Regex("[0-9a-f]{64}")) != true ||
-                    hasPending || capture.resendTimestamp != null)) ||
-                (capture.origin == "PREPARE" && capture.creationDigest != null) ||
-                capture.resendTimestamp?.let { it !in 0..UInt.MAX_VALUE.toLong() } == true ||
-                hasPending != (capture.pendingIncarnation != null) ||
-                hasPending != (capture.pendingRevision != null) ||
-                capture.pendingIncarnation?.matches(Regex("[0-9a-f]{64}")) == false ||
-                capture.pendingRevision?.let { it < 0 } == true ||
-                (capture.pendingDeleted && (!hasPending || capture.current))
-            ) invalidData("Malformed channel capture binding")
-        }
+    private fun validate(capture: ChannelSendAttemptEntity) {
+        val hasPending = capture.pendingId != null
+        if (capture.version < 0 || capture.messageRevision < 0 ||
+            !capture.messageIncarnation.matches(Regex("[0-9a-f]{64}")) ||
+            (capture.origin != "CREATE" && capture.origin != "PREPARE") ||
+            (capture.origin == "CREATE" && (capture.creationDigest?.matches(Regex("[0-9a-f]{64}")) != true ||
+                hasPending || capture.resendTimestamp != null)) ||
+            (capture.origin == "PREPARE" && capture.creationDigest != null) ||
+            capture.resendTimestamp?.let { it !in 0..UInt.MAX_VALUE.toLong() } == true ||
+            hasPending != (capture.pendingIncarnation != null) ||
+            hasPending != (capture.pendingRevision != null) ||
+            capture.pendingIncarnation?.matches(Regex("[0-9a-f]{64}")) == false ||
+            capture.pendingRevision?.let { it < 0 } == true ||
+            (capture.pendingDeleted && (!hasPending || capture.current))
+        ) invalidData("Malformed channel capture binding")
     }
 
     private fun ownWrite(count: Int) {

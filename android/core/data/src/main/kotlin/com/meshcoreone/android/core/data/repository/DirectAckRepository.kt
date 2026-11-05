@@ -521,7 +521,9 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         context.read("inspectDirectAckRadioConfirmationEvidence") {
             val dao = database.directAckExclusions()
             val row = dao.confirmationEvidence(radioId.value)
-            if (row.malformedPhysicalEvidence || dao.malformedAcceptanceHistory(radioId.value)) {
+            if (row.malformedPhysicalEvidence || dao.malformedAcceptanceHistory(radioId.value) ||
+                dao.malformedRegisteredHistory(radioId.value)
+            ) {
                 invalidData("Malformed persisted radio emission evidence")
             }
             val reasons = linkedSetOf<DirectAckRadioConfirmationWildcardReason>()
@@ -537,7 +539,9 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
     override suspend fun inspectDirectAckRadioEvidence(radioId: RadioId): DirectAckRadioEvidenceObservation =
         transaction("inspectDirectAckRadioEvidence") {
             val dao = database.directAckExclusions()
-            if (dao.inconsistentAcceptedHistory(radioId.value) ||
+            if (dao.confirmationEvidence(radioId.value).malformedPhysicalEvidence ||
+                dao.malformedRegisteredHistory(radioId.value) ||
+                dao.inconsistentAcceptedHistory(radioId.value) ||
                 dao.incompleteAcceptanceCoverageHistory(radioId.value) ||
                 dao.malformedAcceptanceHistory(radioId.value)
             ) {
@@ -599,7 +603,9 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
             return@transaction DirectAckRadioSettlementResult.Rejected(it)
         }
         val history = database.directAckExclusions()
-        if (history.confirmationEvidence(radio).malformedPhysicalEvidence || history.malformedAcceptanceHistory(radio)) {
+        if (history.confirmationEvidence(radio).malformedPhysicalEvidence || history.malformedAcceptanceHistory(radio) ||
+            history.malformedRegisteredHistory(radio)
+        ) {
             invalidData("Malformed persisted radio emission evidence")
         }
         val reasons = linkedSetOf<DirectAckRadioNonsettlingReason>()
@@ -692,6 +698,9 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         }
         rejection(permission(claim, issued.lease))?.let {
             return@transaction DirectAckRadioFailureResult.Rejected(it)
+        }
+        if (database.directAckExclusions().malformedRegisteredHistory(radio)) {
+            invalidData("Malformed persisted registered radio evidence")
         }
         val history = database.directAckExclusions().failureEvidence(radio, claim.requestId)
         val reasons = linkedSetOf<DirectAckRadioNonfailingReason>()

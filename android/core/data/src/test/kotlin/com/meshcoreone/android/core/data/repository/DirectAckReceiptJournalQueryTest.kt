@@ -75,6 +75,12 @@ class DirectAckReceiptJournalQueryTest {
                     assertTrue(it.moveToFirst())
                     assertEquals(4_103, it.getInt(0))
                 }
+                withUnchangedDirectAckState(db, EntityKey(RADIO_A, row.id), claim) {
+                    val refused = assertIs<DirectAckRadioSettlementResult.Nonsettling>(
+                        store.settleDirectAckExcludingRadioHistory(attempt, 123u, 42u))
+                    assertEquals(setOf(DirectAckRadioNonsettlingReason.PREAUTHORITY_HISTORY_UNKNOWN),
+                        refused.reasons.toSet())
+                }
                 queries.clear()
                 val change = DirectAckBookkeeping.RetryStarted(1, 4)
                 val bookkeeping = UUID.randomUUID()
@@ -106,11 +112,8 @@ class DirectAckReceiptJournalQueryTest {
                 assertEquals(unchangedRow, store.fetchMessage(EntityKey(RADIO_A, row.id)))
                 assertTrue(store.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id)).isEmpty())
                 assertEquals(firstResolution, db.directAcks().operation(RADIO_A.value, claim, resolution))
-                val delivery = assertIs<DirectAckRadioSettlementReceipt.Applied>(
-                    assertIs<DirectAckRadioSettlementResult.Settled>(
-                        store.settleDirectAckExcludingRadioHistory(attempt, 123u, 42u),
-                    ).receipt,
-                ).receipt
+                val delivery = assertIs<DirectAckMutationResult.Applied>(
+                    store.settleDirectAck(attempt, 123u, 42u)).receipt
                 assertEquals(receipt.bookkeeping, delivery.bookkeeping)
                 assertEquals(receipt.pendingCompletions, delivery.pendingCompletions)
                 assertEquals(MessageStatus.DELIVERED, delivery.delivery?.message?.status)

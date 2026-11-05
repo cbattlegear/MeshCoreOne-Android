@@ -300,6 +300,8 @@ class DirectAckExclusionStorageTest {
                     assertTrue(exclusions.competingCode(radio, current, 789))
                     assertFalse(exclusions.competingCode(radio, current, 999))
                     assertFalse(exclusions.saturated(radio))
+                    assertEquals(listOf(DirectAckPrehistoryEntity(1, "UNKNOWN")), db.directAckPrehistory().rows())
+                    DirectAckPrehistoryStorage.verify(db.openHelper.readableDatabase)
                     DirectAckStorage.verify(db.openHelper.readableDatabase)
                 } finally { db.close() }
             }

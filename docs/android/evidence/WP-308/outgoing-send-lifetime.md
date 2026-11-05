@@ -27,6 +27,34 @@ from independently mutable selection state. The mounted content assertion
 checks that exact event value. This does not replace copy-time persistence
 validation or grant a destination; both remain future adapter obligations.
 
+`UnboundRecoveryCopy` now supplies the independently safe copy-side guard.
+Its reader is injected: it must reread the entire real projection or throw,
+not substitute an empty list for storage failure. It rejects missing, duplicate
+or changed full-key entries and compares exact String code units. An explicit
+destination choice captures the actual `ComposerDraftStore` revision before
+the later read/copy action. The existing atomic `restoreIfUnchanged` rejects
+nonempty drafts and revision changes, including typing then clearing.
+Cancellation is checked after reading and before the synchronous draft write.
+No send, retention, retirement, source mutation or automatic replay exists.
+
+Four additional mounted controls are authored against the real App draft store:
+exact UTF-16 (including isolated surrogate code units), changed source text under
+the same coordinates, a newer draft during the suspended inventory read, and
+typing then clearing during that read. They use a controlled inventory reader,
+not an actual journal; storage-to-draft integration remains unproved. Each uses
+explicit selection/choose/copy gestures and checks an empty message/pending queue.
+These controls are uncompiled/unexecuted. The real journal adapter, production
+route, destination navigation custody, localized new failure labels and native
+verification remain outstanding; this helper does not activate receiver intake.
+Trusted path/operation admission returned `wp-owned` for the helper and evidence,
+and `reviewed-support-test` / `add-or-update-related-test` for the App controls.
+The historical advisory-claim identity failure is not repaired or replaced.
+With pinned Python 3.12.4, `python tools\android-port\portmap.py`,
+`python tools\android-port\controller\validate.py` and `git diff --check`
+each returned 0 for this slice. These are source checks, not Kotlin compilation
+or mounted-test execution. No native/Gradle command, runtime installation,
+owner-lock cleanup, hosted dispatch or public-ref update was performed.
+
 `RecoveryContinuityNotice` is separately authored stateless Material content
 for the coordinator-proposed loss-aware new-action-generation acknowledgment.
 It is not a user-selected product decision or an activated enrollment flow.

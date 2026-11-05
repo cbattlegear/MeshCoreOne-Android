@@ -29,6 +29,8 @@ import com.meshcoreone.android.feature.chats.composer.ui.RecoveryContinuityNotic
 import com.meshcoreone.android.feature.chats.composer.ui.UnboundRecoveryKey
 import com.meshcoreone.android.feature.chats.composer.ui.UnboundRecoveryText
 import com.meshcoreone.android.feature.chats.composer.ui.UnboundRecoveryList
+import com.meshcoreone.android.feature.chats.composer.ui.UnboundRecoveryCopy
+import com.meshcoreone.android.feature.chats.composer.ui.UnboundRecoveryCopyException
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.ui.UiText
 import java.time.Instant
@@ -63,6 +65,140 @@ class ChannelDraftRecoveryAdapterTest : RoomProcessTest() {
         text = "  original \u4e2d\uD83D\uDE80 $id  ", timestamp = 100u,
         createdAt = Instant.ofEpochSecond(id), channelOccupantID = origin, status = MessageStatus.FAILED,
     )
+
+    private enum class UnboundCopyOutcome { EXACT, SOURCE_CHANGED, NEWER_DRAFT, TYPED_THEN_CLEARED }
+
+    @Test fun mountedUnboundCopyTransfersExactUtf16IntoActualAppDraft() =
+        mountedUnboundCopy(UnboundCopyOutcome.EXACT)
+
+    @Test fun mountedUnboundCopyRefusesChangedTextUnderSameSourceCoordinates() =
+        mountedUnboundCopy(UnboundCopyOutcome.SOURCE_CHANGED)
+
+    @Test fun mountedUnboundCopyPreservesDraftChangedDuringSourceRead() =
+        mountedUnboundCopy(UnboundCopyOutcome.NEWER_DRAFT)
+
+    @Test fun mountedUnboundCopyRefusesTypingThenClearingAfterDestinationSelection() =
+        mountedUnboundCopy(UnboundCopyOutcome.TYPED_THEN_CLEARED)
+
+    private fun mountedUnboundCopy(outcome: UnboundCopyOutcome) = runTest {
+        store.saveChannel(radio, channel(1))
+        val target = ComposerTarget.Channel(assertNotNull(store.fetchChannel(radio, 2u)))
+        val rig = ContainerHarness(this, store)
+        val host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
+        host.get().actionBar?.hide()
+        host.windowFocusChanged(true)
+        val source = UnboundRecoveryText(
+            UnboundRecoveryKey(UUID(0, 100), UUID(0, 101), 1),
+            "  \u4e2d\uD83D\uDE80 e\u0301 \uD800 x \uDC00\r\n  ",
+        )
+        val records = listOf(source)
+        var inventory = records
+        val selected = mutableStateOf<UnboundRecoveryKey?>(null)
+        val destination = mutableStateOf<UnboundRecoveryCopy.Destination?>(null)
+        val failure = mutableStateOf<UiText?>(null)
+        val working = mutableStateOf(false)
+        val readStarted = CompletableDeferred<Unit>()
+        val readGate = CompletableDeferred<Unit>()
+        val failures = mutableListOf<UnboundRecoveryCopyException.Failure>()
+        var completed = 0
+        var reads = 0
+        try {
+            val drafts = rig.container.chatsFeature.drafts
+            val copier = UnboundRecoveryCopy(
+                readInventory = {
+                    reads++
+                    readStarted.complete(Unit)
+                    readGate.await()
+                    inventory
+                },
+                drafts = drafts,
+            )
+            host.get().setContent {
+                MeshCoreTheme {
+                    CompositionLocalProvider(LocalDensity provides Density(1f, 2f)) {
+                        val scope = rememberCoroutineScope()
+                        UnboundRecoveryList(
+                            records = records, selected = selected.value, labels = recoveredDraftLabels(),
+                            unboundWarning = UiText.Verbatim("Unbound text. Manual copy does not send."),
+                            destinationLabel = destination.value?.let { UiText.Verbatim("Selected chat") },
+                            working = working.value, failure = failure.value,
+                            onSelect = { selected.value = it }, onRefresh = {},
+                            onChooseChat = { destination.value = copier.selectDestination(target) },
+                            onCopy = { displayed ->
+                                val chosen = checkNotNull(destination.value)
+                                scope.launch {
+                                    working.value = true
+                                    try {
+                                        copier.copy(displayed, chosen)
+                                        completed++
+                                    } catch (rejected: UnboundRecoveryCopyException) {
+                                        failures += rejected.failure
+                                        failure.value = UiText.Verbatim(rejected.failure.name)
+                                    } finally {
+                                        working.value = false
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                }
+            }
+            fun node(text: String): SemanticsNodeInteraction {
+                compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText(text))
+                return compose.onNodeWithText(text)
+            }
+            node(source.exactText).performClick()
+            node("Choose chat").performClick()
+            assertEquals(0, reads)
+            assertNull(drafts.get(target.conversationId))
+            node("Copy to selected chat").performClick()
+            compose.waitUntil(5_000) { readStarted.isCompleted }
+            val newer = "newer destination text"
+            compose.runOnIdle {
+                when (outcome) {
+                    UnboundCopyOutcome.EXACT -> Unit
+                    UnboundCopyOutcome.SOURCE_CHANGED -> inventory = listOf(source.copy(exactText = "replacement"))
+                    UnboundCopyOutcome.NEWER_DRAFT -> drafts.set(target.conversationId, newer)
+                    UnboundCopyOutcome.TYPED_THEN_CLEARED -> {
+                        drafts.set(target.conversationId, newer)
+                        drafts.set(target.conversationId, null)
+                    }
+                }
+                readGate.complete(Unit)
+            }
+            compose.waitUntil(5_000) { !working.value }
+            assertEquals(1, reads)
+            assertEquals(source.key, selected.value)
+            when (outcome) {
+                UnboundCopyOutcome.EXACT -> {
+                    assertEquals(1, completed)
+                    assertEquals(source.exactText.toCharArray().toList(),
+                        assertNotNull(drafts.get(target.conversationId)).toCharArray().toList())
+                    assertTrue(failures.isEmpty())
+                    assertEquals(records, inventory)
+                }
+                else -> {
+                    assertEquals(0, completed)
+                    val expected = if (outcome == UnboundCopyOutcome.SOURCE_CHANGED) {
+                        UnboundRecoveryCopyException.Failure.SOURCE_CHANGED
+                    } else UnboundRecoveryCopyException.Failure.DESTINATION_CHANGED
+                    assertEquals(listOf(expected), failures)
+                    node(expected.name).assertIsDisplayed()
+                    assertEquals(if (outcome == UnboundCopyOutcome.NEWER_DRAFT) newer else null,
+                        drafts.get(target.conversationId))
+                }
+            }
+            compose.waitForIdle()
+            assertEquals(1, reads)
+            assertTrue(store.fetchMessages(radio, target.channel.index, 20, 0).isEmpty())
+            assertTrue(store.fetchPendingSends(radio).isEmpty())
+            assertTrue(rig.links.links.isEmpty())
+        } finally {
+            host.pause().stop().destroy()
+            rig.container.close()
+        }
+    }
 
     @Test fun mountedNoRouteInventoryRequiresExactEntryAndIndependentDestinationBeforeCopy() {
         val host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()

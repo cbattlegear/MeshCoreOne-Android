@@ -333,7 +333,10 @@ class RadioPresetStateHolder(
             throw cancelled
         } catch (error: Exception) {
             mutable.update {
-                it.copy(isRepeatEnabled = if (it.sessionToken == target.token) !repeatOffAcknowledged else it.device?.clientRepeat ?: false)
+                val enabled = if (it.sessionToken == target.token) {
+                    !repeatOffAcknowledged && it.device?.clientRepeat != false
+                } else it.device?.clientRepeat ?: false
+                it.copy(isRepeatEnabled = enabled)
             }
             val message = failures.route(error) { disableRepeatMode(target) }
             mutable.update { it.copy(errorMessage = message ?: it.errorMessage) }

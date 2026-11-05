@@ -28,7 +28,7 @@ class NeighborNameResolverParityTest {
     private fun key(vararg prefix: Int) = Bytes.of(*prefix) + Bytes(ByteArray(32 - prefix.size))
 
     private fun saved() = contact(publicKey = key(0xAB, 0xCD), name = "Saved Repeater", outPathLength = 0u)
-        .copy(lastAdvertTimestamp = 10u)
+        .copy(id = UUID(0, 0xABCD), lastAdvertTimestamp = 10u)
 
     private fun discovered(
         publicKey: Bytes = key(0xAB, 0xCD, 0xEF),

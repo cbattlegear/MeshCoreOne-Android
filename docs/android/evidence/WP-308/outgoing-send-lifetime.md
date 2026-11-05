@@ -1,5 +1,27 @@
 # WP-308 outgoing send lifetime (#524)
 
+## Independent recovery confirmation review repair
+
+Review `4486841610` identified that `RecoveredDraftList` nested successful-copy
+feedback inside its optional failure block. Success sets `copied=true` with
+`failure=null`, so the confirmation was unreachable. The confirmation now renders
+independently, retaining its localized text and polite accessibility live region.
+No copy, draft, source-row or send policy changes.
+
+Added mounted `mountedCopyConfirmationIsVisibleWithoutFailureAndClearsWithNextSelection`
+at API31/37 and 200% font. It checks initially absent feedback, visible successful
+feedback with no failure, polite live-region semantics, and removal on the next
+explicit source selection. Existing actual-copy success/cancellation/conflict
+controls and held wrong-channel/restart assertions remain unchanged.
+
+Historical exact-head run `42120152996` for `6b1d335feef83bd93edb9e7dced9a2a17bd63de1`
+failed at `:app:compileDebugKotlin`: `validateChannelMessageOrigin` and consequently
+`expectedOccupantID` were unresolved on the App persistence interface. App tests
+did not execute. This is a real producer-interface dependency, not a passing
+restart check; the current-main storage owner is producing compatible APIs.
+No duplicate producer implementation or guard removal is used to mask it.
+The new mounted confirmation control is authored, not yet executed.
+
 ## Current-main restart repair continuation
 
 Reconciled actual main `83fc29b14f082ef1806f2d68516668128f63b1d4` in

@@ -87,14 +87,14 @@ fun RecoveredDraftList(
                 Text(failureText(failure), Modifier.padding(horizontal = 16.dp),
                     color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
             }
-            if (state.copied) {
-                item("copied") {
-                    Text(
-                        uiString(UiText.Resource(R.string.wp308_recovery_copied)),
-                        Modifier.padding(horizontal = 16.dp).semantics { liveRegion = LiveRegionMode.Polite },
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
+        }
+        if (state.copied) {
+            item("copied") {
+                Text(
+                    uiString(UiText.Resource(R.string.wp308_recovery_copied)),
+                    Modifier.padding(horizontal = 16.dp).semantics { liveRegion = LiveRegionMode.Polite },
+                    style = MaterialTheme.typography.bodyMedium,
+                )
             }
         }
         if (state.messages.isEmpty() && !state.loading && state.failure == null) {

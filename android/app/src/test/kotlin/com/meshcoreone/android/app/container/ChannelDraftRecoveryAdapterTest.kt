@@ -75,6 +75,50 @@ class ChannelDraftRecoveryAdapterTest : RoomProcessTest() {
 
     private enum class UnboundCopyOutcome { EXACT, SOURCE_CHANGED, NEWER_DRAFT, TYPED_THEN_CLEARED }
 
+    @Test fun mountedCopyConfirmationIsVisibleWithoutFailureAndClearsWithNextSelection() {
+        val host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
+        host.get().actionBar?.hide()
+        host.windowFocusChanged(true)
+        val source = row(701, null)
+        val key = EntityKey(radio, source.id)
+        val state = mutableStateOf(com.meshcoreone.android.feature.chats.composer.RecoveredDraftState(
+            messages = listOf(source), hasMore = false,
+        ))
+        val feedback = host.get().getString(com.meshcoreone.android.core.l10n.R.string.wp308_recovery_copied)
+        try {
+            host.get().setContent {
+                MeshCoreTheme {
+                    CompositionLocalProvider(LocalDensity provides Density(1f, 2f)) {
+                        RecoveredDraftList(
+                            state = state.value, labels = recoveredDraftLabels(), destinationLabel = null,
+                            originLabel = { UiText.Verbatim("Unknown origin") },
+                            failureText = { error("Successful copying must not render a failure") },
+                            onSelect = { state.value = state.value.copy(selected = it, copied = false) },
+                            onRefresh = {}, onLoadMore = {}, onChooseChat = {}, onCopy = {},
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                }
+            }
+            compose.onNodeWithText(feedback).assertDoesNotExist()
+            compose.runOnIdle { state.value = state.value.copy(copied = true, failure = null) }
+            compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText(feedback))
+            compose.onNodeWithText(feedback).assertIsDisplayed().assert(SemanticsMatcher.expectValue(
+                androidx.compose.ui.semantics.SemanticsProperties.LiveRegion,
+                androidx.compose.ui.semantics.LiveRegionMode.Polite,
+            ))
+            compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText(source.text))
+            compose.onNodeWithText(source.text).performClick()
+            compose.runOnIdle {
+                assertEquals(key, state.value.selected)
+                assertNull(state.value.failure)
+            }
+            compose.onNodeWithText(feedback).assertDoesNotExist()
+        } finally {
+            host.pause().stop().destroy()
+        }
+    }
+
     private data class WarningOperation(val operationId: UUID, val storeId: UUID, val creationNonce: UUID)
     private data class WarningObservation(val revision: Long, val retainedHistory: String)
     private data class WarningPresentation(val fixtureId: Int)

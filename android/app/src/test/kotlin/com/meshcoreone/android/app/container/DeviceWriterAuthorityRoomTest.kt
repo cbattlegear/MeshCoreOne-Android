@@ -46,62 +46,6 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
             return room.fetchDeviceWriteSnapshot(id)
         }
 
-        @Test fun initializationAndRepeatedSimulatorSeedCannotReplaceSettingsOrActivateAnOlderRadio() = runTest {
-            val successor = DeviceDTO(radioId = RadioId(UUID(0, 301)), publicKey = key(3), nodeName = "Successor")
-            store.saveDevice(successor)
-            store.setActiveDevice(successor.id)
-            val staleSeed = DeviceDTO(
-                radioId = RadioId(UUID(0, 302)), publicKey = key(4), nodeName = "Simulator", isActive = true,
-            )
-            val seed = RoomSimulatorSeedStore(store)
-            seed.saveDevice(staleSeed)
-            val inserted = assertNotNull(store.fetchDevice(staleSeed.id))
-            assertFalse(inserted.isActive, "Only explicit activation may choose the active device")
-            val ticket = store.fetchDeviceWriteSnapshot(inserted.id)!!
-            val edited = inserted.copy(appliedRadioPresetID = "new-preset", pathHashMode = 2u, ocvPreset = "liFePO4")
-            assertTrue(store.saveDeviceIfUnchanged(edited, ticket))
-            seed.saveDevice(staleSeed)
-            assertEquals(edited, store.fetchDevice(inserted.id), "A delayed/repeated seed never replaces an existing row")
-            assertEquals(successor.id, store.fetchActiveDevice()!!.id)
-            assertFalse(store.insertDeviceIfAbsent(staleSeed.copy(nodeName = "Late initialization")))
-            assertEquals(edited, store.fetchDevice(inserted.id))
-            val activeTicket = store.fetchDeviceWriteSnapshot(inserted.id)!!
-            assertFalse(store.saveDeviceIfUnchanged(edited.copy(isActive = true), activeTicket))
-            assertEquals(successor.id, store.fetchActiveDevice()!!.id)
-        }
-
-        @Test fun activationRechecksRetiredOwnerAfterWaitingForTheActualRoomTransaction() = runTest {
-            val original = DeviceDTO(radioId = RadioId(UUID(0, 401)), publicKey = key(3), nodeName = "Original")
-            val successor = DeviceDTO(radioId = RadioId(UUID(0, 402)), publicKey = key(4), nodeName = "Successor")
-            store.saveDevice(original)
-            store.saveDevice(successor)
-            store.setActiveDevice(successor.id)
-            val entered = CompletableDeferred<Unit>()
-            val release = CompletableDeferred<Unit>()
-            var current = true
-            var guardCalls = 0
-            val transaction = async {
-                db.withTransaction { entered.complete(Unit); release.await() }
-            }
-            try {
-                entered.await()
-                val submitted = CompletableDeferred<Unit>()
-                val activation = async {
-                    submitted.complete(Unit)
-                    store.activateDeviceIfCurrent(original.id) { guardCalls++; current }
-                }
-                submitted.await()
-                assertEquals(0, guardCalls, "The guard must run inside Room, not before waiting for its transaction")
-                current = false
-                release.complete(Unit)
-                assertFalse(activation.await())
-                transaction.await()
-                assertEquals(1, guardCalls)
-                assertEquals(successor.id, store.fetchActiveDevice()!!.id)
-                assertFalse(store.fetchDevice(original.id)!!.isActive)
-            } finally { release.complete(Unit) }
-        }
-
         override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
             val hook = beforeSave
             beforeSave = {}
@@ -120,6 +64,62 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
             hook()
             room.removeDeviceKnownRegion(radioId, region)
         }
+    }
+
+    @Test fun initializationAndRepeatedSimulatorSeedCannotReplaceSettingsOrActivateAnOlderRadio() = runTest {
+        val successor = DeviceDTO(radioId = RadioId(UUID(0, 301)), publicKey = key(3), nodeName = "Successor")
+        store.saveDevice(successor)
+        store.setActiveDevice(successor.id)
+        val staleSeed = DeviceDTO(
+            radioId = RadioId(UUID(0, 302)), publicKey = key(4), nodeName = "Simulator", isActive = true,
+        )
+        val seed = RoomSimulatorSeedStore(store)
+        seed.saveDevice(staleSeed)
+        val inserted = assertNotNull(store.fetchDevice(staleSeed.id))
+        assertFalse(inserted.isActive, "Only explicit activation may choose the active device")
+        val ticket = store.fetchDeviceWriteSnapshot(inserted.id)!!
+        val edited = inserted.copy(appliedRadioPresetID = "new-preset", pathHashMode = 2u, ocvPreset = "liFePO4")
+        assertTrue(store.saveDeviceIfUnchanged(edited, ticket))
+        seed.saveDevice(staleSeed)
+        assertEquals(edited, store.fetchDevice(inserted.id), "A delayed/repeated seed never replaces an existing row")
+        assertEquals(successor.id, store.fetchActiveDevice()!!.id)
+        assertFalse(store.insertDeviceIfAbsent(staleSeed.copy(nodeName = "Late initialization")))
+        assertEquals(edited, store.fetchDevice(inserted.id))
+        val activeTicket = store.fetchDeviceWriteSnapshot(inserted.id)!!
+        assertFalse(store.saveDeviceIfUnchanged(edited.copy(isActive = true), activeTicket))
+        assertEquals(successor.id, store.fetchActiveDevice()!!.id)
+    }
+
+    @Test fun activationRechecksRetiredOwnerAfterWaitingForTheActualRoomTransaction() = runTest {
+        val original = DeviceDTO(radioId = RadioId(UUID(0, 401)), publicKey = key(3), nodeName = "Original")
+        val successor = DeviceDTO(radioId = RadioId(UUID(0, 402)), publicKey = key(4), nodeName = "Successor")
+        store.saveDevice(original)
+        store.saveDevice(successor)
+        store.setActiveDevice(successor.id)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var current = true
+        var guardCalls = 0
+        val transaction = async {
+            db.withTransaction { entered.complete(Unit); release.await() }
+        }
+        try {
+            entered.await()
+            val submitted = CompletableDeferred<Unit>()
+            val activation = async {
+                submitted.complete(Unit)
+                store.activateDeviceIfCurrent(original.id) { guardCalls++; current }
+            }
+            submitted.await()
+            assertEquals(0, guardCalls, "The guard must run inside Room, not before waiting for its transaction")
+            current = false
+            release.complete(Unit)
+            assertFalse(activation.await())
+            transaction.await()
+            assertEquals(1, guardCalls)
+            assertEquals(successor.id, store.fetchActiveDevice()!!.id)
+            assertFalse(store.fetchDevice(original.id)!!.isActive)
+        } finally { release.complete(Unit) }
     }
 
     @Test fun ocvCommittedWhileFreshTicketIsSuspendedIsNotDerivedFromOldLiveDto() = runTest {

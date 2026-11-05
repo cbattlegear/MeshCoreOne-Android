@@ -5,7 +5,8 @@
 Repository: `cbattlegear/MeshCoreOne-Android`.
 Worktree branch: `cbattlegear-foreground-enrollment-acknowledgment`.
 Exact base: `94493a7248f8ad4a4a72f9751946339418174679`.
-Verifier and test source commit: `007ed6bf7c66c5988dcf8416a8fcbd98a0bebb73`.
+Verifier and test source commits: `007ed6bf7c66c5988dcf8416a8fcbd98a0bebb73`
+and `8ed6164ad926578167f29205a153619d00519138`.
 Frozen Swift reference: `db14559b39d32322b06477c6ae676112f583db50`.
 This is Android-only enrollment infrastructure, not Swift parity and not an
 activation of notification delivery or ingress.
@@ -30,8 +31,10 @@ the copy was actually rendered, proof of user intent, or antirollback.
 the real foreground lifecycle, displayed localized warning and actual explicit
 user action to `present`, `recordExplicitAction` and `invalidate`. Until that
 handoff is integrated and reviewed, this implementation does not prove a real
-user interaction or feature readiness. It does not claim resistance to
-same-device snapshot rollback.
+user interaction or feature readiness. The producer's non-suspending lifecycle
+callback can synchronously call `retire` before launching suspendable
+`invalidate`; retirement fences in-memory verification immediately. It does
+not claim resistance to same-device snapshot rollback.
 
 ## Ownership and advisory state
 
@@ -88,8 +91,10 @@ request-field mismatch, version/copy changes, lifecycle invalidation, restart,
 concurrent verification, replay, post-commit uncertainty, corrupt/missing
 independent authenticator, independent witness database/key loss, and failure
 to retry the same in-memory explicit action as first-install after joint
-acknowledgment-ledger/key loss. These are source assertions only until the
-declared execution lane runs them.
+acknowledgment-ledger/key loss. Held-synchronization tests also retire the
+presentation during staged-write and consumed-write synchronization; staging
+must reject and consumption must never return a fresh grant. These are source
+assertions only until the declared execution lane runs them.
 
 The restart/replay fixture uses a fresh operation/store/creation-nonce tuple
 for an independent acknowledgment; the separate same-tuple test retains the

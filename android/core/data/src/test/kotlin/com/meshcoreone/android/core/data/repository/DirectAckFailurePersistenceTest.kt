@@ -2,6 +2,9 @@
 package com.meshcoreone.android.core.data.repository
 
 import androidx.room.Room
+import androidx.sqlite.db.SupportSQLiteDatabase
+import androidx.sqlite.db.SupportSQLiteOpenHelper
+import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceException
@@ -67,12 +70,37 @@ class DirectAckFailurePersistenceTest {
     private lateinit var store: RoomPersistenceStore
     private lateinit var contact: ContactDTO
     private val generations = mutableListOf<RadioGeneration>()
+    private var failedCommitObserver: (() -> Unit)? = null
 
     @Before fun open() {
         val immediate = Executor { it.run() }
         db = Room.inMemoryDatabaseBuilder(
             ApplicationProvider.getApplicationContext(), MeshCoreDatabase::class.java,
-        ).allowMainThreadQueries().setQueryExecutor(immediate).setTransactionExecutor(immediate).build()
+        ).openHelperFactory(object : SupportSQLiteOpenHelper.Factory {
+            override fun create(configuration: SupportSQLiteOpenHelper.Configuration): SupportSQLiteOpenHelper {
+                val helper = FrameworkSQLiteOpenHelperFactory().create(configuration)
+                fun observe(database: SupportSQLiteDatabase): SupportSQLiteDatabase =
+                    object : SupportSQLiteDatabase by database {
+                        override fun endTransaction() {
+                            database.endTransaction()
+                            if (!database.inTransaction() && failedCommitObserver != null) {
+                                val failed = database.query("SELECT statusRawValue FROM messages").use { cursor ->
+                                    cursor.moveToFirst() && cursor.getLong(0) == MessageStatus.FAILED.rawValue
+                                }
+                                if (failed) {
+                                    val observer = requireNotNull(failedCommitObserver)
+                                    failedCommitObserver = null
+                                    observer()
+                                }
+                            }
+                        }
+                    }
+                return object : SupportSQLiteOpenHelper by helper {
+                    override val writableDatabase: SupportSQLiteDatabase get() = observe(helper.writableDatabase)
+                    override val readableDatabase: SupportSQLiteDatabase get() = observe(helper.readableDatabase)
+                }
+            }
+        }).allowMainThreadQueries().setQueryExecutor(immediate).setTransactionExecutor(immediate).build()
         store = RoomPersistenceStore(db, process, clock.wallClock)
         contact = ContactDTO(radioId = radio, publicKey = peer, name = "Peer", lastHeardTimestamp = 0u)
     }
@@ -133,6 +161,9 @@ class DirectAckFailurePersistenceTest {
         var failedWrites = 0
         var ackWrites = 0
         var committed: Boolean? = null
+        val cancellation = CancellationException("controlled caller cancellation at actual Room commit")
+        var cancelAtRoomCommit = false
+        var cancelledAfterCommit = false
 
         override suspend fun updateMessageStatusUnlessDelivered(key: EntityKey, status: MessageStatus): Boolean {
             if (status != MessageStatus.FAILED) return store.updateMessageStatusUnlessDelivered(key, status)
@@ -140,6 +171,13 @@ class DirectAckFailurePersistenceTest {
             check(failedWrites == 1) { "Unexpected second FAILED writer" }
             entered.complete(Unit)
             release.await()
+            if (cancelAtRoomCommit) {
+                val caller = requireNotNull(currentCoroutineContext()[Job])
+                failedCommitObserver = {
+                    cancelledAfterCommit = true
+                    caller.cancel(cancellation)
+                }
+            }
             val changed = if (commit) store.updateMessageStatusUnlessDelivered(key, status) else false
             if (commit) committed = changed
             if (throws) throw failure
@@ -243,7 +281,7 @@ class DirectAckFailurePersistenceTest {
         assertEquals(code.readUInt32LE(0), delivered.ackCode)
         assertEquals(123u, delivered.roundTripTime)
         assertEquals(0, generation.service.pendingAckCount)
-        assertEquals(listOf(MessageStatusEvent.StatusResolved(message.id, MessageStatus.DELIVERED, 123u)), generation.statuses)
+        assertEquals(listOf<MessageStatusEvent>(MessageStatusEvent.StatusResolved(message.id, MessageStatus.DELIVERED, 123u)), generation.statuses)
         assertTrue(generation.stop().isComplete)
     }
 
@@ -260,7 +298,7 @@ class DirectAckFailurePersistenceTest {
         assertEquals(true, writer.committed)
         assertEquals(MessageStatus.DELIVERED, store.fetchMessage(EntityKey(radio, message.id))?.status)
         assertEquals(0, generation.service.pendingAckCount)
-        assertEquals(listOf(MessageStatusEvent.StatusResolved(message.id, MessageStatus.DELIVERED, 123u)), generation.statuses)
+        assertEquals(listOf<MessageStatusEvent>(MessageStatusEvent.StatusResolved(message.id, MessageStatus.DELIVERED, 123u)), generation.statuses)
         assertTrue(generation.stop().isComplete)
     }
 
@@ -288,12 +326,12 @@ class DirectAckFailurePersistenceTest {
         generation.service.failAllPendingMessages()
         runCurrent()
         assertEquals(0, generation.service.pendingAckCount)
-        assertEquals(listOf(MessageStatusEvent.Failed(message.id)), generation.statuses)
+        assertEquals(listOf<MessageStatusEvent>(MessageStatusEvent.Failed(message.id)), generation.statuses)
         generation.firmware.pushAck()
         runCurrent()
         assertEquals(message.copy(status = MessageStatus.FAILED), store.fetchMessage(EntityKey(radio, message.id)))
         assertEquals(0, generation.service.pendingAckCount)
-        assertEquals(listOf(MessageStatusEvent.Failed(message.id)), generation.statuses)
+        assertEquals(listOf<MessageStatusEvent>(MessageStatusEvent.Failed(message.id)), generation.statuses)
         assertTrue(generation.diagnostics.any { it is MessagingDiagnostic.UnmatchedAcknowledgement })
         assertTrue(generation.stop().isComplete)
     }
@@ -387,9 +425,51 @@ class DirectAckFailurePersistenceTest {
         assertTrue(replacement.stop().isComplete)
     }
 
+    @Test fun actualRoomCommitThenCallerCancellationRetainsAckWithoutCancellingLiveMonitor() = runTest(scheduler) {
+        val writer = FailedWriter().apply { cancelAtRoomCommit = true }
+        val generation = RadioGeneration(13, writer)
+        val message = sent(generation)
+        val work = async { generation.service.failAllPendingMessages() }
+        runCurrent()
+        registerAckWhileWriterIsHeld(generation, writer)
+        writer.release.complete(Unit)
+        assertSame(writer.cancellation, assertFailsWith<CancellationException> { work.await() })
+        runCurrent()
+        assertTrue(writer.cancelledAfterCommit, "Caller cancellation must originate after actual SQLite endTransaction")
+        assertNull(failedCommitObserver)
+        assertNull(writer.committed, "The repository's cancelled return must not become a successful write receipt")
+        assertEquals(message.copy(status = MessageStatus.FAILED), store.fetchMessage(EntityKey(radio, message.id)))
+        assertEquals(1, generation.service.pendingAckCount)
+        assertTrue(generation.service.isEventMonitoringActive, "Uncertainty must not cancel the fresh live ACK monitor")
+        assertTrue(generation.statuses.isEmpty())
+        assertNull(generation.statusFailure)
+        assertTrue(generation.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+            it.cause === writer.cancellation
+        })
+        generation.service.checkExpiredAcks()
+        runCurrent()
+        assertEquals(1, generation.service.pendingAckCount)
+        assertTrue(generation.service.isEventMonitoringActive)
+        val nextCode = Bytes.fromHex("89ABCDEF")
+        generation.firmware.acceptedCode = nextCode
+        val next = generation.service.sendDirectMessage("independent ACK after caller cancellation", contact)
+        runCurrent()
+        generation.statuses.clear()
+        generation.firmware.pushAck(nextCode)
+        runCurrent()
+        assertEquals(MessageStatus.DELIVERED, store.fetchMessage(EntityKey(radio, next.id))?.status)
+        assertEquals(listOf<MessageStatusEvent>(MessageStatusEvent.StatusResolved(next.id, MessageStatus.DELIVERED, 123u)),
+            generation.statuses)
+        assertEquals(1, generation.service.pendingAckCount)
+        val report = generation.stop()
+        assertTrue(report.issues.any { it.cause === writer.cancellation })
+        assertEquals(0, generation.service.pendingAckCount)
+        assertEquals(message.copy(status = MessageStatus.FAILED), store.fetchMessage(EntityKey(radio, message.id)))
+    }
+
     private class Signals(token: SessionToken) : ConnectionSignals {
-        private val value = MutableStateFlow(snapshot(token))
-        override val snapshot get() = value
+        private val value: MutableStateFlow<ConnectionSnapshot> = MutableStateFlow(snapshot(token))
+        override val snapshot: MutableStateFlow<ConnectionSnapshot> get() = value
         fun replace(token: SessionToken) { value.value = snapshot(token) }
         override suspend fun subscribeTransitions(): ConnectionSubscription = object : ConnectionSubscription {
             override val initial = value.value
@@ -397,7 +477,7 @@ class DirectAckFailurePersistenceTest {
             override fun close() = Unit
         }
         companion object {
-            fun snapshot(token: SessionToken) = ConnectionSnapshot(
+            fun snapshot(token: SessionToken): ConnectionSnapshot = ConnectionSnapshot(
                 DeviceConnectionState.CONNECTED, ConnectionState.Connected, null,
                 ConnectionIntent.WantsConnection(), token, null,
             )
@@ -406,6 +486,7 @@ class DirectAckFailurePersistenceTest {
 
     private inner class Firmware : MeshTransport {
         private val mock = MockTransport()
+        var acceptedCode: Bytes = code
         override suspend fun isConnected() = mock.isConnected()
         override suspend fun connect() = mock.connect()
         override suspend fun disconnect() = mock.disconnect()
@@ -424,15 +505,15 @@ class DirectAckFailurePersistenceTest {
                 )
                 CommandCode.SEND_MESSAGE -> mock.simulateReceive(
                     ByteWriter().appendUInt8(ResponseCode.MESSAGE_SENT.rawValue).appendUInt8(0u)
-                        .append(code).appendUInt32LE(1u).toBytes(),
+                        .append(acceptedCode).appendUInt32LE(1u).toBytes(),
                 )
                 CommandCode.GET_CONTACT_BY_KEY -> mock.simulateError(2u)
                 else -> throw AssertionError("Unexpected direct-ACK test command: ${data[0]}")
             }
         }
-        suspend fun pushAck() {
+        suspend fun pushAck(ack: Bytes = code) {
             mock.simulateReceive(
-                ByteWriter().appendUInt8(ResponseCode.ACK.rawValue).append(code).appendUInt32LE(123u).toBytes(),
+                ByteWriter().appendUInt8(ResponseCode.ACK.rawValue).append(ack).appendUInt32LE(123u).toBytes(),
             )
         }
     }

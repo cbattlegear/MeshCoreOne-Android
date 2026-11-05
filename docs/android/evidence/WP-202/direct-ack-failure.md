@@ -54,7 +54,7 @@ contract, not inference from these tests.
 
 ## Deterministic real-Room test contract
 
-`DirectAckFailurePersistenceTest` contains ten declared JUnit cases using native
+`DirectAckFailurePersistenceTest` contains eleven declared JUnit cases using native
 SQLite-backed in-memory Room on Robolectric SDK31, the actual process store,
 actual `MessageService`, actual `MeshCoreSession`, raw protocol ACK packets and
 a deterministic coroutine clock. This is not device or hardware evidence.
@@ -80,6 +80,18 @@ Room commit and throws the original typed persistence error.
 | `competingDeliveredWriterRemainsDeliveredWhenFailedWriterThrows` | Room refuses FAILED over DELIVERED; matching ACK can reconcile delivery |
 | `replacementSessionCannotBorrowTheOldInstancesUncertaintyOrPendingAck` | Original teardown reports cause and retires tracking; new generation has no inherited authority |
 | `replacementWhileFailedWriterAndRecordedAckAreInFlightCannotMutateSuccessorDelivery` | Replacement starts before the held writer returns; old live reconciliation and teardown cannot turn uncertain FAILED into successor delivery |
+| `actualRoomCommitThenCallerCancellationRetainsAckWithoutCancellingLiveMonitor` | A delegating SQLite helper cancels the real caller after successful `endTransaction`; Room propagates the original cancellation, uncertain ACK survives, and a second independent raw ACK still delivers |
+
+The cancellation control does not manufacture a thrown return in the store
+wrapper. A test-only `SupportSQLiteOpenHelper` delegates all SQLite operations,
+then cancels the actual caller job only after the real transaction has ended
+and its FAILED row is readable. This exercises the existing
+`RoomRepositoryContext.committedTransaction` late-cancellation path. The
+cancelled return is not recorded as successful writer authority. The paired
+service correction `d6f278821e4468027eda5f767f3efa19adf94621` preserves that
+original cancellation for caller propagation and diagnostics, while subsequent
+live reconciliation uses a typed persistence error rather than cancelling
+the fresh event monitor.
 
 These are Android-only race/uncertainty controls, not additional claimed Swift
 original-case acceptance. Existing tests and their provenance remain unchanged.
@@ -101,7 +113,7 @@ Executed successfully with Python 3.12.4:
 - `python .\tools\android-port\portmap.py`: exit 0.
 - `git diff --check`: exit 0.
 
-**Kotlin compilation and all ten runtime cases are unverified.** No passing
+**All eleven runtime cases are unverified.** No passing
 test-discovery count is claimed. The retained hard `gradle-execution` owner is
 `local-check:f516a7e271f444dd9cb2efcc8b995a16`; no Gradle/native invocation,
 recovery, runtime deployment or ownership bypass was attempted.
@@ -120,3 +132,21 @@ the authority; no duplicate CI result bundle is retained here.
 
 This bounded repair test work does not complete the unresolved original
 WP-202 acceptance scope.
+
+## First hosted diagnostic outcome
+
+The authoritative [run 41938806937](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41938806937)
+executed exact candidate `864fe8c2b42e2bc1463faa078b3ad27a528e76af`. It failed
+`:core:data:compileDebugUnitTestKotlin`: four expected event lists needed an
+explicit `MessageStatusEvent` element type and the signals state/companion
+factory needed explicit types to break recursive inference. Those owned test
+errors are corrected in the successor. Mandatory Room and service JUnit reports
+were missing; unrelated reported tests are not target acceptance. No runtime
+failure reproduction or passing target case is claimed from that run.
+
+The first candidate is not a landing candidate: in addition to its test compile
+errors, service-owner review found that a real Room commit can throw
+`CancellationException` on return, outside the original typed persistence catch.
+The successor includes the owner's immutable cancellation correction and the
+real commit-boundary control above. The existing run is not rerun or cancelled;
+the successor requires its own exact pushed-SHA diagnostic dispatch.

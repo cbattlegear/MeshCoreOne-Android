@@ -253,6 +253,15 @@ and ownership also rejects a reset awaiting acknowledgement. A synchronous lifec
 control checks that reset never exposes the old receipt during notification, then completes a
 fresh explicit attempt. This authored control is not execution evidence.
 
+Further source review found that reset/retirement observers cannot be scheduled StateFlow
+consumers: with a queued dispatcher, reset could return while the old preset remained completed,
+or a delayed observer could erase a new apply. Flow-owned invalidation callbacks now clear retained
+state and cancel the actual clear Job synchronously as part of explicit invalidation. The observable
+generation remains for captured-producer guards; terminal retirement releases its callbacks.
+Queued-dispatcher controls require immediate reset state, actual Job cancellation before dispatcher
+resumption, fresh-apply preservation, and rejection of an old apply that had not started yet.
+These authored controls have not executed in Kotlin.
+
 ## Authored controls
 
 - `PresetSessionFencingTest`: disconnected apply and retry; replacement radio and same-radio new

@@ -544,6 +544,91 @@ class PresetStepCoordinatorTest {
 }
 
 class OnboardingFlowCoordinatorTest {
+    private class QueuedDispatcher : kotlinx.coroutines.CoroutineDispatcher() {
+        private val queued = ArrayDeque<Runnable>()
+        override fun dispatch(context: kotlin.coroutines.CoroutineContext, block: Runnable) { queued.addLast(block) }
+        fun drain() { while (queued.isNotEmpty()) queued.removeFirst().run() }
+    }
+
+    @Test fun resetClearsCompletedPresetBeforeReturningWithoutDispatcherNotification() = kotlinx.coroutines.runBlocking {
+        val dispatcher = QueuedDispatcher()
+        val owner = Job()
+        try {
+            val option = OnboardingPresetOption("p", "Preset", 915.0)
+            val port = FakePresets()
+            val flow = OnboardingFlowCoordinator(
+                CoroutineScope(dispatcher + owner),
+                Deps(region = FakeRegion(presets = mapOf(null to listOf(option))), presets = port),
+            )
+            flow.preset.apply(option.id)
+            dispatcher.drain()
+            assertTrue(flow.preset.state.value.isCompleted)
+            assertTrue(flow.onboarding.hasCompletedOnboarding)
+            flow.onboarding.resetOnboarding()
+            assertFalse(flow.preset.state.value.isCompleted, "Reset must not wait for a StateFlow collector")
+            flow.preset.select(option.id)
+            flow.preset.apply()
+            assertTrue(flow.preset.state.value.isApplying)
+            dispatcher.drain()
+            assertEquals(listOf(option.id, option.id), port.applied)
+            assertTrue(flow.preset.state.value.isCompleted)
+            assertTrue(flow.onboarding.hasCompletedOnboarding)
+        } finally { owner.cancel(); dispatcher.drain() }
+    }
+
+    @Test fun resetCancelsTheClearingJobBeforeDispatcherResumption() = kotlinx.coroutines.runBlocking {
+        val dispatcher = QueuedDispatcher()
+        val owner = Job()
+        try {
+            val release = CompletableDeferred<Unit>()
+            lateinit var clearingJob: Job
+            val pairing = FakePairing().apply {
+                beforeClear = {
+                    clearingJob = checkNotNull(kotlinx.coroutines.currentCoroutineContext()[Job])
+                    release.await()
+                }
+            }
+            val flow = OnboardingFlowCoordinator(CoroutineScope(dispatcher + owner), Deps(pairing = pairing))
+            flow.openPairingSheet(PairSheet.WIFI)
+            flow.clearStalePairings()
+            dispatcher.drain()
+            assertTrue(clearingJob.isActive)
+            flow.onboarding.resetOnboarding()
+            assertTrue(clearingJob.isCancelled, "Revocation must cancel the actual Job before reset returns")
+            assertFalse(flow.isClearingPairings.value)
+            release.complete(Unit)
+            dispatcher.drain()
+            assertEquals(0, pairing.cleared)
+            assertEquals(PairSheet.WIFI, flow.deviceScan.state.value.sheet)
+            flow.clearStalePairings()
+            dispatcher.drain()
+            assertEquals(1, pairing.cleared)
+            assertEquals(PairSheet.NONE, flow.deviceScan.state.value.sheet)
+        } finally { owner.cancel(); dispatcher.drain() }
+    }
+
+    @Test fun resetBeforeQueuedApplyStartsDoesNotRunTheOldRadioProducer() = kotlinx.coroutines.runBlocking {
+        val dispatcher = QueuedDispatcher()
+        val owner = Job()
+        try {
+            val option = OnboardingPresetOption("p", "Preset", 915.0)
+            val port = FakePresets()
+            val flow = OnboardingFlowCoordinator(
+                CoroutineScope(dispatcher + owner),
+                Deps(region = FakeRegion(presets = mapOf(null to listOf(option))), presets = port),
+            )
+            flow.preset.apply(option.id)
+            flow.onboarding.resetOnboarding()
+            dispatcher.drain()
+            assertTrue(port.applied.isEmpty())
+            assertFalse(flow.onboarding.hasCompletedOnboarding)
+            flow.preset.apply(option.id)
+            dispatcher.drain()
+            assertEquals(listOf(option.id), port.applied)
+            assertTrue(flow.onboarding.hasCompletedOnboarding)
+        } finally { owner.cancel(); dispatcher.drain() }
+    }
+
     @Test fun completedAndRetiredFlowsCannotStartClearingSharedPairings() = kotlinx.coroutines.runBlocking {
         val pairing = FakePairing()
         val completed = OnboardingFlowCoordinator(scope, Deps(pairing = pairing))

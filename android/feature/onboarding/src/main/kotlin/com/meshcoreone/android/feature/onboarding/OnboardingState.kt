@@ -84,6 +84,7 @@ class OnboardingState(private val store: OnboardingFlagStore) {
     private var completionRevision = 0L
     private var retired = false
     private var resetRequired = false
+    private val invalidationObservers = mutableListOf<() -> Unit>()
     private val lifecycle = MutableStateFlow(0L)
     val lifecycleGeneration: StateFlow<Long> = lifecycle.asStateFlow()
     private val completed = MutableStateFlow(store.getBoolean(KEY_HAS_COMPLETED))
@@ -190,7 +191,10 @@ class OnboardingState(private val store: OnboardingFlagStore) {
     fun canStartCompletion(): Boolean =
         synchronized(completionLock) { !retired && !resetRequired && !completed.value && pendingAttempt == null }
 
-    internal fun isRetired(): Boolean = synchronized(completionLock) { retired }
+    internal fun onInvalidation(observer: () -> Unit) = synchronized(completionLock) {
+        check(!retired) { "Onboarding flow was retired" }
+        invalidationObservers += observer
+    }
 
     internal fun ownsCompletion(value: OnboardingCompletionPublication): Boolean =
         synchronized(completionLock) {
@@ -202,6 +206,9 @@ class OnboardingState(private val store: OnboardingFlagStore) {
         pendingAttempt = null
         val revision = ++completionRevision
         lifecycle.value = Math.incrementExact(lifecycle.value)
+        val observers = invalidationObservers.toList()
+        if (retired) invalidationObservers.clear()
+        observers.forEach { it() }
         revision
     }
 

@@ -9,9 +9,6 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.onEach
-import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -58,16 +55,14 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
     val currentStep: OnboardingStep get() = onboarding.onboardingPath.lastOrNull() ?: OnboardingStep.WELCOME
 
     init {
-        scope.launch(start = CoroutineStart.UNDISPATCHED) {
-            onboarding.lifecycleGeneration.onEach {
-                clearingJob?.cancel()
-                clearingJob = null
-                clearing.value = false
-                completing = false
-                completingWithoutDevice.value = false
-                completionError.value = false
-                pendingPairAfterPermission = false
-            }.takeWhile { !onboarding.isRetired() }.collect()
+        onboarding.onInvalidation {
+            clearingJob?.cancel()
+            clearingJob = null
+            clearing.value = false
+            completing = false
+            completingWithoutDevice.value = false
+            completionError.value = false
+            pendingPairAfterPermission = false
         }
     }
 

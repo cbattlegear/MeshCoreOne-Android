@@ -12,9 +12,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.onEach
-import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -60,14 +57,10 @@ class PresetStepCoordinator(
     private val currentGeneration: Long get() = lifecycle?.lifecycleGeneration?.value ?: 0L
 
     init {
-        lifecycle?.let { lifecycle ->
-            scope.launch(start = CoroutineStart.UNDISPATCHED) {
-                lifecycle.lifecycleGeneration.onEach {
-                    retryCount = 0
-                    appliedPreset = null
-                    mutable.value = PresetStepState()
-                }.takeWhile { !lifecycle.isRetired() }.collect()
-            }
+        lifecycle?.onInvalidation {
+            retryCount = 0
+            appliedPreset = null
+            mutable.value = PresetStepState()
         }
     }
 
@@ -96,6 +89,7 @@ class PresetStepCoordinator(
             it.copy(isApplying = true, error = null, retryAlert = null, completionNeedsRetry = false)
         }
         scope.launch {
+            if (currentGeneration != generation) return@launch
             val outcome = try {
                 presets.apply(option.id, target)
             } catch (cancel: CancellationException) {

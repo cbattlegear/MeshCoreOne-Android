@@ -1002,11 +1002,15 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
                 }
             }
             compose.waitForIdle()
-            compose.onNodeWithText("Long-list radio 30").performScrollTo().assertIsDisplayed()
-            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth))
-                .performScrollTo().performClick()
-            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionConnectViaWifi))
-                .performScrollTo().performClick()
+            val list = compose.onNodeWithTag("device-selection-list")
+            list.performScrollToNode(hasText("Long-list radio 30"))
+            compose.onNodeWithText("Long-list radio 30").assertIsDisplayed()
+            val scan = compose.activity.getString(S.deviceSelectionScanBluetooth)
+            list.performScrollToNode(hasText(scan))
+            compose.onNodeWithText(scan).assertIsDisplayed().performClick()
+            val wifi = compose.activity.getString(S.deviceSelectionConnectViaWifi)
+            list.performScrollToNode(hasText(wifi))
+            compose.onNodeWithText(wifi).assertIsDisplayed().performClick()
             assertTrue(scanned)
             assertTrue(connectedViaWifi)
         }

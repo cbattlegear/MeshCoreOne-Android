@@ -13,6 +13,7 @@ import com.meshcoreone.android.feature.nodes.model.NodeSortOrder
 import com.meshcoreone.android.feature.nodes.support.Fixtures
 import com.meshcoreone.android.feature.nodes.support.Fixtures.contact
 import com.meshcoreone.android.feature.nodes.support.Harness
+import com.meshcoreone.android.feature.nodes.support.FakeAdvertisementService
 import com.meshcoreone.android.feature.nodes.support.scenario
 import com.meshcoreone.android.feature.nodes.support.settle
 import kotlin.test.assertEquals
@@ -64,6 +65,25 @@ class ContactsNativeTest {
         assertNull(holder.state.value.errorMessage)
         assertFalse(holder.state.value.isSyncing)
         assertEquals(listOf(true, false), harness.adverts.syncingFlags)
+    }
+
+    @Test
+    fun `held sync resets only its original sessions advert pipeline`() = scenario {
+        val harness = Harness(clock).connect()
+        val radio = checkNotNull(harness.session.radioId)
+        val release = CompletableDeferred<Unit>()
+        harness.contactService.sync = { release.await() }
+        val holder = ContactsStateHolder(harness.dependencies, scope)
+        val syncing = scope.launch { holder.syncContacts(radio) }
+        settle()
+        val replacement = FakeAdvertisementService()
+        harness.session.adverts = replacement
+        release.complete(Unit)
+        syncing.join()
+        assertEquals(listOf(true, false), harness.adverts.syncingFlags)
+        assertTrue(replacement.syncingFlags.isEmpty())
+        assertEquals(0, harness.contactService.progress.subscriberCount)
+        assertFalse(holder.state.value.isSyncing)
     }
 
     @Test

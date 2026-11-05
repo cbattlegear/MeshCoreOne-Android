@@ -150,7 +150,8 @@ class ContactsStateHolder(
         if (state.value.isSyncing) return
         mutableState.update { it.copy(isSyncing = true, syncProgress = null, errorMessage = null) }
         // Flag the advert pipeline first so an advert-driven sync cannot interleave progress events.
-        session.advertisementService()?.setSyncingContacts(true)
+        val advertisementService = session.advertisementService()
+        advertisementService?.setSyncingContacts(true)
         // Subscribed before the sync starts so no progress event is missed; scoped to this sync.
         val subscription = contactService.syncProgressEvents()
         val listener = scope.launch { subscription.events.collect { progress -> mutableState.update { it.copy(syncProgress = progress) } } }
@@ -170,7 +171,7 @@ class ContactsStateHolder(
         }
         // Awaited so this sync's reset cannot land after a later sync's setSyncingContacts(true).
         withContext(NonCancellable) {
-            session.advertisementService()?.setSyncingContacts(false)
+            advertisementService?.setSyncingContacts(false)
             mutableState.update { it.copy(isSyncing = false) }
         }
         cancellation?.let { throw it }

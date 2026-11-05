@@ -45,6 +45,8 @@ service/store wrappers are recreated by each provider call. Both flows check can
 the current graph/radio after suspended operations. Scan reset invalidates a held completion.
 The mounted list holder is keyed by radio so pending admissions cannot cross into another radio.
 Already admitted rows remain visible during a held refresh, rather than behind its spinner.
+That refresh resets only its captured advertisement service, never a replacement session's pipeline;
+`ContactsNativeTest.held sync resets only its original sessions advert pipeline` discriminates this.
 
 A fetch begun before an admission overlays the newer admitted DTO when its old result includes
 the same UUID or radio/key; it does not restore the superseded row or clear retention.

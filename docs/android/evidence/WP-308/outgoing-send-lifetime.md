@@ -4,6 +4,25 @@
 
 ### Foreground loss-warning interaction boundary (not activated)
 
+Synchronous-retirement successor: inspected actual WP-204 verifier source
+`c786c16bd1be664f7906730a5dd07881a5edc6d8` (parent
+`2fb3e565a27a01d4405b726b7ff08a310ba8a607`, tree
+`65e06b3b4b2489214a382daf32719336c0b2e120`) exposes
+`ForegroundWitnessAcknowledgmentVerifier.retire(presentation)` as a non-suspending
+producer fence before its suspending `invalidate`. The UI now requires a separate
+`onRetirePresentation` callback. It first invalidates its own live action, then
+synchronously calls producer retirement, and only afterwards invokes the callback
+that may schedule ledger invalidation. Omitting producer retirement is no longer
+an API-compatible adapter. Throwing retirement does not schedule invalidation or
+restore the UI action; the caller must surface the failure.
+
+Two further mounted controls hold action dispatch and ledger invalidation,
+pause or dispose the actual Activity content, and check synchronous retirement
+before releasing held dispatch, with ledger work still withheld. They check
+UI/adapter callback ordering with an explicit retirement fixture, not real SQLite
+staging/consumption. Actual b8-verifier staging/consume integration and execution
+remain unproved. No backend implementation is copied into the feature.
+
 The coordinator assigned this WP-308 UI boundary separately from b8's WP-204
 independent durable verifier. It wraps the existing `RecoveryContinuityNotice`;
 the earlier Boolean checkbox/content callback is not treated as consent proof.

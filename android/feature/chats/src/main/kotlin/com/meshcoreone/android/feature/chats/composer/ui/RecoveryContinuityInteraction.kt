@@ -75,7 +75,8 @@ private class RecoveryInteractionState {
 /**
  * Owns only the live foreground interaction around the existing content. Nothing is remembered across
  * recreation. Effects only invalidate the producer's presentation; they never acknowledge it or
- * create a witness, enrollment or retained text. Invalidation must be nonblocking and idempotent.
+ * create a witness, enrollment or retained text. Retirement must synchronously fence the producer's
+ * staging/consume before invalidation is scheduled; both callbacks must be idempotent.
  */
 @Composable
 fun <Request : Any, Observation : Any, Presentation : Any> RecoveryContinuityInteraction(
@@ -85,6 +86,7 @@ fun <Request : Any, Observation : Any, Presentation : Any> RecoveryContinuityInt
     creationAvailable: Boolean,
     failure: UiText?,
     onForegroundAction: (ForegroundRecoveryAction<Request, Observation, Presentation>) -> Unit,
+    onRetirePresentation: (Presentation) -> Unit,
     onInvalidatePresentation: (Presentation) -> Unit,
     onInspectRecoveredText: () -> Unit,
     modifier: Modifier = Modifier,
@@ -99,12 +101,15 @@ fun <Request : Any, Observation : Any, Presentation : Any> RecoveryContinuityInt
     val interaction = remember(binding.presentation) {
         RecoveryInteractionState()
     }
+    val retirePresentation by rememberUpdatedState(onRetirePresentation)
     val invalidatePresentation by rememberUpdatedState(onInvalidatePresentation)
     DisposableEffect(interaction, binding, warning, lifecycle, focused) {
         fun invalidate() {
             interaction.foregroundChanged(false)
             if (!interaction.retired) {
                 interaction.retired = true
+                // This must complete the producer's in-memory fence before any ledger work is queued.
+                retirePresentation(binding.presentation)
                 invalidatePresentation(binding.presentation)
             }
         }

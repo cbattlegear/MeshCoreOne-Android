@@ -92,7 +92,17 @@ class ChannelDraftRecoveryAdapterTest : RoomProcessTest() {
         mountedForegroundInteraction(changeEvidence = true)
     }
 
-    private fun mountedForegroundInteraction(changeEvidence: Boolean) {
+    @Test fun mountedHeldForegroundDispatchIsRetiredBeforePauseInvalidationCanRun() {
+        mountedForegroundInteraction(changeEvidence = false, holdDispatch = true)
+    }
+
+    @Test fun mountedHeldForegroundDispatchIsRetiredBeforeDisposeInvalidationCanRun() {
+        mountedForegroundInteraction(changeEvidence = false, holdDispatch = true, disposeHeld = true)
+    }
+
+    private fun mountedForegroundInteraction(
+        changeEvidence: Boolean, holdDispatch: Boolean = false, disposeHeld: Boolean = false,
+    ) {
         val host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
         host.get().actionBar?.hide()
         host.windowFocusChanged(true)
@@ -110,6 +120,10 @@ class ChannelDraftRecoveryAdapterTest : RoomProcessTest() {
         val mounted = mutableStateOf(true)
         val actions = mutableListOf<ForegroundRecoveryAction<WarningRequest, WarningObservation, WarningPresentation>>()
         val invalidated = mutableListOf<WarningPresentation>()
+        val retired = mutableSetOf<WarningPresentation>()
+        val heldInvalidations = mutableListOf<() -> Unit>()
+        val heldDispatch = mutableListOf<() -> Unit>()
+        val dispatched = mutableListOf<WarningPresentation>()
         var inspections = 0
         val acknowledgment = "I understand that a new generation does not recover lost text."
         val create = "Create a new notification action generation"
@@ -129,8 +143,20 @@ class ChannelDraftRecoveryAdapterTest : RoomProcessTest() {
                                     UiText.Verbatim(acknowledgment), UiText.Verbatim(create), UiText.Verbatim(inspect),
                                 ),
                                 working = working.value, creationAvailable = ready.value, failure = null,
-                                onForegroundAction = { actions += it },
-                                onInvalidatePresentation = { invalidated += it },
+                                onForegroundAction = { action ->
+                                    actions += action
+                                    if (holdDispatch) heldDispatch += {
+                                        if (action.isCurrentForegroundInteraction() &&
+                                            action.binding.presentation !in retired
+                                        ) dispatched += action.binding.presentation
+                                    }
+                                },
+                                onRetirePresentation = { retired += it },
+                                onInvalidatePresentation = { presentation ->
+                                    assertTrue(presentation in retired)
+                                    if (holdDispatch) heldInvalidations += { invalidated += presentation }
+                                    else invalidated += presentation
+                                },
                                 onInspectRecoveredText = { inspections++ },
                                 modifier = Modifier.fillMaxSize(),
                             )
@@ -201,7 +227,8 @@ class ChannelDraftRecoveryAdapterTest : RoomProcessTest() {
             val beforePause = binding.value.presentation
             compose.runOnIdle { host.resume().visible().windowFocusChanged(true) }
             node(create).assertIsNotEnabled()
-            assertEquals(1, invalidated.count { it == beforePause })
+            assertTrue(beforePause in retired)
+            if (!holdDispatch) assertEquals(1, invalidated.count { it == beforePause })
             compose.runOnIdle {
                 binding.value = binding.value.copy(presentation = WarningPresentation(nextPresentation++))
             }
@@ -219,6 +246,24 @@ class ChannelDraftRecoveryAdapterTest : RoomProcessTest() {
             node(create).assertIsNotEnabled()
             compose.waitForIdle()
             assertEquals(1, actions.size)
+            if (holdDispatch) {
+                assertEquals(1, heldDispatch.size)
+                assertTrue(dispatched.isEmpty())
+                compose.runOnIdle {
+                    if (disposeHeld) mounted.value = false else host.pause()
+                }
+                compose.waitForIdle()
+                assertFalse(action.isCurrentForegroundInteraction())
+                assertTrue(action.binding.presentation in retired)
+                assertTrue(action.binding.presentation !in invalidated)
+                // Deliberately dispatch before allowing asynchronous ledger invalidation.
+                heldDispatch.single().invoke()
+                assertTrue(dispatched.isEmpty())
+                assertTrue(action.binding.presentation !in invalidated)
+                heldInvalidations.forEach { it() }
+                assertEquals(1, invalidated.count { it == action.binding.presentation })
+                return
+            }
             if (changeEvidence) {
                 compose.runOnIdle {
                     binding.value = binding.value.copy(

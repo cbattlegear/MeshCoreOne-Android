@@ -830,6 +830,77 @@ class TraceExecutionTest {
     }
 
     @Test
+    fun `completed batch results cannot be saved after same-radio replacement`() = retiredBatchSave(false, false)
+
+    @Test
+    fun `completed batch results cannot be saved after different-radio replacement`() = retiredBatchSave(true, false)
+
+    @Test
+    fun `partial batch results cannot be saved after same-radio replacement`() = retiredBatchSave(false, true)
+
+    @Test
+    fun `partial batch results cannot be saved after different-radio replacement`() = retiredBatchSave(true, true)
+
+    private fun retiredBatchSave(crossRadio: Boolean, partial: Boolean) {
+        val h = TraceHarness(configureDependencies = true)
+        val epoch = com.meshcoreone.android.core.contracts.domain.ProcessEpoch(UUID.randomUUID())
+        var token = com.meshcoreone.android.core.contracts.domain.SessionToken(
+            epoch, com.meshcoreone.android.core.contracts.domain.Generation(1), RADIO,
+        )
+        val feature = object : TracePathFeatureDependencies by h.deps {
+            override fun sessionToken() = token
+        }
+        val persistence = InMemoryTracePathStore { h.time.now() }
+        val recorded = FakeTraceSender()
+        h.deps.device = device()
+        h.deps.sender = recorded
+        h.deps.store = persistence
+        h.holder.configure(feature)
+        h.holder.bindConnection(RADIO, 1, token)
+        h.holder.addNode(alpha)
+        h.holder.addNode(bravo)
+        h.holder.setBatchEnabled(true)
+        h.holder.setBatchSize(2)
+        val oldRun = h.start { h.holder.runBatchTrace() }
+        fun respond() = h.respond(recorded.sent.last().tag,
+            listOf(node(0xA1, 6.0), node(0xB2, 4.0), node(0xA1, 5.0), node(null, 3.0)), token.radioId)
+        respond()
+        if (!partial) {
+            h.time.advanceBy(500.milliseconds)
+            respond()
+        }
+        assertTrue(h.state.canSavePath, "A's actual successful batch is initially eligible")
+        val retained = h.state.completedResults
+        assertEquals(if (partial) 1 else 2, retained.size)
+        val route = h.state.fullPathData
+        val newRadio = if (crossRadio) RadioId(UUID.randomUUID()) else RADIO
+        token = token.copy(generation = com.meshcoreone.android.core.contracts.domain.Generation(2), radioId = newRadio)
+        h.deps.device = device().copy(radioId = newRadio)
+        h.holder.bindConnection(newRadio, 2, token)
+        h.main.runCurrent()
+        assertTrue(oldRun.isCompleted)
+        assertEquals(retained, h.state.completedResults, "Retirement retains history, not save authority")
+        assertEquals(route, h.state.fullPathData, "The editable route survives")
+        assertFalse(h.state.canSavePath, "A's completed or partial results cannot gain B authority")
+        assertFalse(h.complete { h.holder.savePath("Stale A batch") })
+        assertTrue(persistence.paths.isEmpty(), "No A result is attributed to the newly bound radio/session")
+        val fresh = h.start { h.holder.runBatchTrace() }
+        respond()
+        h.time.advanceBy(500.milliseconds)
+        respond()
+        assertTrue(fresh.isCompleted)
+        assertTrue(h.state.canSavePath)
+        assertTrue(h.complete { h.holder.savePath("Fresh B batch") })
+        val saved = persistence.paths.values.single()
+        assertEquals(newRadio, saved.radioId)
+        assertEquals("Fresh B batch", saved.name)
+        assertEquals(2, saved.runs.size)
+        assertTrue(saved.runs.all { it.success })
+        assertEquals(route, saved.pathBytes)
+        assertEquals(1L, saved.hashSize)
+    }
+
+    @Test
     fun `single dispatch width survives a same-session device mode update during lookup`() {
         dispatchWidthDuringLookup(batch = false, outcome = "success")
     }

@@ -355,6 +355,38 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         }
     }
 
+    @Test fun manualWifiFormSubmitsEnteredEndpointWithFullSyncAndDismissesOnSuccess() = runTest {
+        withSettings { h, feature ->
+            val gate = CompletableDeferred<Unit>()
+            h.links.configureRadio = { it.connectGate = gate }
+            mount(h, feature)
+            open(h)
+            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionConnectViaWifi)).performClick()
+            compose.onNode(hasSetTextAction() and hasText(compose.activity.getString(O.wifiConnectionIpAddressPlaceholder)))
+                .performScrollTo().performTextReplacement("manual-radio.local")
+            compose.onNode(hasSetTextAction() and hasText(compose.activity.getString(O.wifiConnectionPortPlaceholder)))
+                .performScrollTo().performTextReplacement("6217")
+            compose.onNode(hasText(compose.activity.getString(O.wifiConnectionConnect)) and hasClickAction())
+                .performScrollTo().assertIsEnabled().performClick()
+            h.eventually("manual Wi-Fi reaches the process adapter") { h.links.links.isNotEmpty() }
+            assertEquals(ConnectionTarget.WiFi("manual-radio.local", 6217u), h.links.links.single().target)
+            assertEquals(ConnectionIntent.WantsConnection(forceFullSync = true), h.manager.connectionIntent)
+            compose.onNodeWithText(compose.activity.getString(O.wifiConnectionTitle)).assertIsDisplayed()
+            compose.onNodeWithText(compose.activity.getString(L.commonCancel)).assertIsNotEnabled()
+            gate.complete(Unit)
+            h.eventually("manual Wi-Fi ready") {
+                h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
+            }
+            compose.waitForIdle()
+            compose.onNodeWithText(compose.activity.getString(O.wifiConnectionTitle)).assertDoesNotExist()
+            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionTitle)).assertDoesNotExist()
+            assertEquals(AppTab.SETTINGS, h.container.navigation.state.value.selectedTab)
+            assertFalse(h.appState.connectionUI.showingConnectionFailedAlert)
+            assertFalse(h.container.connectionPort.isPairingFlowActive)
+            assertEquals(0, h.pairing.removeCalls)
+        }
+    }
+
     @Test fun failedSavedDeviceReadSurfacesAnErrorRatherThanAnEmptySuccessfulSelector() = runTest {
         val persistence = object : PersistenceStoreProtocol by store {
             override suspend fun fetchDevices(): SnapshotList<DeviceDTO> = throw IllegalStateException("saved-device read failed")

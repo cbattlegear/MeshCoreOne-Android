@@ -102,6 +102,18 @@ not `PreviouslyCompleted`. A later pending UUID/birth cannot prove separation wh
 birth was captured; a genuinely recreated message incarnation or unrelated message is distinct.
 This narrow relevant-history ambiguity is explicit, not a new durable legacy quarantine.
 
+### DAO correction after bounded source review
+
+The initial `7c4baf558fcab797d18be7e63255bfc80aacd896` producer query accidentally filtered out
+captures whose original `pendingId` was null. That made the committed-unbound-history control
+unable to reach the repository's `UNBOUND_ACCEPTANCE_LINEAGE` branch and could allow a queue bump.
+The bounded correction removes only that predicate; the query remains bound to radio, message ID
+and captured message incarnation, and the repository still distinguishes exact bound lineage from
+unbound ambiguity. The unchanged authored control
+`committedUnboundHistoryIsUnknownForSameMessageIncarnationNotAnExactPendingCompletion` covers it,
+but has not been executed. This correction is a separate exact-source successor and does not
+retroactively make the original `7c4` candidate safe or reviewed.
+
 There is no TTL or capacity eviction. Only the exact durable completion's after-commit action
 prunes its matching note; rollback or a thrown storage return does not falsely clear suppression.
 Process-store disposal explicitly closes and clears the registry after runtime shutdown. The

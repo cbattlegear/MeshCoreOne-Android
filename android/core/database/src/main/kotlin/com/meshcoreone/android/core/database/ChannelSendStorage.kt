@@ -70,7 +70,6 @@ interface ChannelSendDao {
         SELECT a.* FROM channel_send_attempts a
         JOIN channel_send_completions c ON c.radioId = a.radioId AND c.captureRequestId = a.captureRequestId
         WHERE a.radioId = :radio AND a.messageId = :message AND a.messageIncarnation = :incarnation
-          AND a.pendingId IS NOT NULL
         ORDER BY a.captureRequestId
     """)
     suspend fun completedCaptures(radio: UUID, message: UUID, incarnation: String): List<ChannelSendAttemptEntity>

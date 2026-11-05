@@ -89,10 +89,7 @@ class CliSettingsReadbackTest : RoomProcessTest() {
             assertEquals(22.toByte(), h.appState.connectedDevice?.txPower)
             assertEquals(22.toByte(), assertNotNull(store.fetchDevice(originalId)).txPower)
 
-            h.eventually("committed readback value is observed") {
-                saves.any { it.id == originalId && it.txPower == 22.toByte() }
-            }
-            // Closing drains already-published events; both their consumer and save launches use this scheduler.
+            // Mismatched verification publishes no update; drain before ruling out a stray write.
             assertNotNull(h.sessions.current).settingsService.finishEvents()
             testScheduler.runCurrent()
             assertFalse(saves.any { it.id == originalId && it.txPower != 22.toByte() })

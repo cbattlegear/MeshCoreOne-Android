@@ -22,6 +22,19 @@ The coordinator assigned an independent clean-current-main foundation. Runtime/d
 
 ### Follow-up: actual committed CLI observer seam
 
+Exact fd6d50bc3 hosted run 41971269263 executed 2,012 App tests with one failure:
+the newly added negative-case wait for a committed 22 readback timed out. The original
+positive typed-TX case passed, as did writer, persistence and notification suites.
+SettingsService.setTxPowerVerified checks mismatched readback and throws before publishing
+DeviceUpdated; therefore the negative case intentionally has no settings commit to observe.
+The bounded successor removes only that new three-line wait. Original negative wire/readback,
+no-OK, Room/live 22 and no-unexpected-power assertions, event drain, and the positive 17
+committed-write observer/wait remain intact. This corrects the added test requirement rather
+than requiring a fake successful commit. The CLI producer was notified to serialize this repair.
+Producer correction b26999d04978efab83036014d46681d7b52ac4b6 independently supplied the
+same removal plus explanatory comment; the composed CLI file exactly matches its bytes.
+No production changes or transfer of fd6 results to the successor are claimed.
+
 Exact `dcfdc5e2ac6672cde8489eae19125847b9d3cec7` hosted run
 [41967846619](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41967846619)
 executed 2,012 App tests with one failure: the typed-TX CliSettingsReadbackTest at line 177.

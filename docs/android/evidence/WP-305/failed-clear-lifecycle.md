@@ -181,12 +181,64 @@ claimed.
 
 Late-registration test-only predecessor
 `f9ee60a45375b214ebda1f554917afedff6199be` retains the earlier repair's production
-and adds only the new actual-readback control/local test hook. Its expected
-failure is a source hypothesis until executed, not reproduced-test credit.
+and adds only the new actual-readback control/local test hook. Its exact hosted
+run `42063234319`, Android `127370446624`, succeeded, with the named readback
+method in the real inventory and the Repeat suite END/SUCCESS. Consequently
+this control did not reproduce the source hypothesis on the predecessor and is
+not red/green evidence for the committed-clear proof. In the full successful
+publication path, a later all-null consumer commit invokes the clear observer
+again. The test is retained as a safety/progress control; the versioned clear
+proof is defensive source hardening, not a claimed reproduced permanent lockout.
 Generation-custody test-only predecessor
 `16607b4fbd13fc50d66ea9e4b1d78301d4451923` preserves `ed529370` production and
 adds the reconnect/different-identity controls and the stronger existing-control
 tail. Its execution likewise remains separate from the final identity-scoped fix.
 
-No Kotlin execution, hardware, signing, iOS UI or whole-WP acceptance is claimed
-for the repaired candidate by the source checks or prior #585 greens.
+## Exact repair execution and integration handoff
+
+Product/test head: `d5ce4af4bf43c4f2d3912aaf209eea6276f22b08`.
+Published immutable feature ref: `diagnostic/wp305-retirement-d5ce4af4`.
+Command:
+`gh workflow run android-ci.yml --repo cbattlegear/MeshCoreOne-Android --ref diagnostic/wp305-retirement-d5ce4af4`.
+Exact run: [42065697165](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42065697165).
+Android job `127379247580` completed **SUCCESS**. Its completed-job log and
+structured actual JUnit inventory were independently read through the GitHub REST
+job-log endpoint; no second result bundle was created, uploaded or committed.
+
+| Executed module | Discovered/run/passed | Failed/errors/skipped |
+| --- | --- | --- |
+| App | 2,139 / 2,139 / 2,139 | 0 / 0 / 0 |
+| core/services | 3,006 / 3,006 / 3,006 | 0 / 0 / 0 |
+| feature/settings | 327 / 327 / 327 | 0 / 0 / 0 |
+| core/connectivity | 186 / 186 / 186 | 0 / 0 / 0 |
+| core/data | 616 / 616 / 616 | 0 / 0 / 0 |
+| core/runtime | 309 / 309 / 309 | 0 / 0 / 0 |
+| contracts | 14 / 14 / 14 | 0 / 0 / 0 |
+
+Actual inventory includes all five new App methods and the new service method
+listed above; the Repeat suite and both real-Room device-authority suites report
+END/SUCCESS. There are 25 Repeat/preset methods: the original 20 plus five new
+methods. The separate current-Flags composition is not this candidate: its
+`ce639690` run `42066311912` failed before App execution due to the separately
+owned OnboardingFlagsTest assertion argument order. That failure is preserved,
+not hidden by this head's success. Flags owner supplied its own correction.
+
+Independent producer `6e767589` reviewed the final authority/recovery seam at
+`d5ce4af4` with no additional consequential finding. Settings custodian `244fb3ac`
+owns composition and fresh exact-current-head checks. Transfer only the following
+seven-path delta against `033b3c43`, preserving the custodian's Flags and scope
+guard bytes; do not merge this session's historical authority ancestry:
+
+- `android/core/connectivity/src/main/kotlin/com/meshcoreone/android/core/connectivity/device/ConnectedDeviceEditor.kt`
+- `android/core/contracts/src/main/kotlin/com/meshcoreone/android/core/contracts/domain/DeviceAndContactPersisting.kt`
+- `android/core/services/src/main/kotlin/com/meshcoreone/android/core/services/device/SettingsService.kt`
+- `android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/device/SettingsRadioSerializationTest.kt`
+- `android/app/src/test/kotlin/com/meshcoreone/android/app/container/SettingsRepeatPersistenceTest.kt`
+- `docs/android/deviations/WP-305.md`
+- `docs/android/evidence/WP-305/failed-clear-lifecycle.md`
+
+At this evidence revision the independent SwiftData restore/export job remains
+pending; Android success does not claim whole-workflow success. No physical
+radio/device, signing, iOS UI, process-restart custody or whole-WP acceptance is
+claimed. The explicit discard operation is tested as an editor API, not as a
+mounted UI recovery flow.

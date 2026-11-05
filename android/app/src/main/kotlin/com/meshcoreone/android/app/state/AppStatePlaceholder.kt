@@ -80,11 +80,16 @@ private object InertConnectionPort : AppConnectionPort {
     override suspend fun stopBleScanning() = Unit
     override suspend fun removeStaleNodes(olderThanDays: Int): RemoveUnfavoritedResult = RemoveUnfavoritedResult(0, 0)
     override fun updateDevice(info: SelfInfo, appliedRadioPresetId: String?) = Unit
+    override suspend fun updateDevice(info: SelfInfo, appliedRadioPresetId: String?, expectedToken: SessionToken) = false
     override fun updateDevice(device: DeviceDTO) = Unit
     override fun updateOCVSettings(device: DeviceDTO, expectedToken: com.meshcoreone.android.core.contracts.domain.SessionToken) = Unit
     override fun updateAutoAddConfig(config: AutoAddConfig) = Unit
+    override suspend fun updateAutoAddConfig(config: AutoAddConfig, expectedToken: SessionToken) = false
     override fun updateClientRepeat(enabled: Boolean) = Unit
+    override suspend fun updateClientRepeat(enabled: Boolean, expectedToken: SessionToken) = false
     override fun updatePathHashMode(mode: UByte) = Unit
     override fun updateDefaultFloodScopeName(name: String?) = Unit
+    override suspend fun updateDefaultFloodScopeName(name: String?, expectedToken: SessionToken) = false
     override fun setAllowedRepeatFreqRanges(ranges: SnapshotList<FrequencyRange>) = Unit
+    override fun setAllowedRepeatFreqRanges(ranges: SnapshotList<FrequencyRange>, expectedToken: SessionToken) = false
 }

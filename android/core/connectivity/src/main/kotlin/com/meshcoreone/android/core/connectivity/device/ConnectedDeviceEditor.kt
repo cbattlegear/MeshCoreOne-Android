@@ -39,6 +39,7 @@ interface ConnectedDeviceAccess {
     val connectedDeviceToken: SessionToken? get() = null
     fun currentDevice(expectedToken: SessionToken): DeviceDTO? =
         throw UnsupportedOperationException("Session-bound connected-device reads are not supported")
+    suspend fun withDeviceWriteAuthority(expectedToken: SessionToken?, write: suspend () -> Boolean): Boolean = write()
     fun transformConnectedDevice(
         expectedToken: SessionToken?,
         transform: (DeviceDTO) -> DeviceDTO,
@@ -91,21 +92,33 @@ class ConnectedDeviceEditor(
     val connectedDevice: DeviceDTO? get() = access.connectedDevice
 
     fun updateDevice(info: SelfInfo, appliedRadioPresetID: String?): Job? {
-        return edit("updateDevice") { device ->
-            var updated = device.updating(info)
-            if (appliedRadioPresetID != null) {
-                updated = updated.copy(appliedRadioPresetID = appliedRadioPresetID)
-            } else if (!device.clientRepeat) {
-                val matches = presets.matchingPresetIds(updated.frequency, updated.bandwidth, updated.spreadingFactor, updated.codingRate)
-                val current = updated.appliedRadioPresetID
-                if (current != null && current !in matches) updated = updated.copy(appliedRadioPresetID = null)
-            }
-            updated
-        }
+        return edit("updateDevice") { it.updatingSettings(info, appliedRadioPresetID) }
     }
 
-    suspend fun updateDevice(info: SelfInfo, appliedRadioPresetID: String, expectedToken: SessionToken): Boolean =
-        sessionEdit("updateDevice", expectedToken) { it.updating(info).copy(appliedRadioPresetID = appliedRadioPresetID) }
+    suspend fun updateDevice(info: SelfInfo, appliedRadioPresetID: String?, expectedToken: SessionToken): Boolean =
+        sessionEdit("updateDevice", expectedToken) { it.updatingSettings(info, appliedRadioPresetID) }
+
+    private fun DeviceDTO.updatingSettings(info: SelfInfo, presetId: String?): DeviceDTO {
+        var updated = updating(info)
+        if (presetId != null) {
+            updated = updated.copy(appliedRadioPresetID = presetId)
+        } else if (!clientRepeat) {
+            val matches = presets.matchingPresetIds(updated.frequency, updated.bandwidth, updated.spreadingFactor, updated.codingRate)
+            if (updated.appliedRadioPresetID != null && updated.appliedRadioPresetID !in matches) {
+                updated = updated.copy(appliedRadioPresetID = null)
+            }
+        }
+        return updated
+    }
+
+    suspend fun updateAutoAddConfig(config: AutoAddConfig, expectedToken: SessionToken): Boolean =
+        sessionEdit("autoAddConfig", expectedToken) { it.copy(autoAddConfig = config.bitmask, autoAddMaxHops = config.maxHops) }
+
+    suspend fun updateClientRepeat(enabled: Boolean, expectedToken: SessionToken): Boolean =
+        sessionEdit("clientRepeat", expectedToken) { it.copy(clientRepeat = enabled) }
+
+    suspend fun updateDefaultFloodScopeName(name: String?, expectedToken: SessionToken): Boolean =
+        sessionEdit("defaultFloodScope", expectedToken) { it.copy(defaultFloodScopeName = name) }
 
     suspend fun updatePathHashMode(mode: UByte, expectedToken: SessionToken): Boolean =
         sessionEdit("pathHashMode", expectedToken) { it.copy(pathHashMode = mode) }
@@ -128,23 +141,28 @@ class ConnectedDeviceEditor(
             return live != null && live.id == original.id && live.radioId == original.radioId
         }
         try {
-            val saved = devices.editDevice(original.id, ::current) { authoritative ->
+            var published = false
+            devices.editDevice(original.id, ::current, withAuthority = { write ->
+                access.withDeviceWriteAuthority(expectedToken, write)
+            }, onCommitted = { saved ->
+                var updated: DeviceDTO? = null
+                val edit = access.transformConnectedDevice(expectedToken) { live ->
+                    saved.preservingChanges(original, live).also { updated = it }
+                }
+                if (edit != null) {
+                    val device = checkNotNull(updated)
+                    if (edit.previousKnownRegions != device.knownRegions) {
+                        onKnownRegionsChanged(edit, device.knownRegions.toList())
+                    }
+                    published = true
+                }
+            }) { authoritative ->
                 if (authoritative.radioId != original.radioId || authoritative.isActive != original.isActive) {
                     throw DeviceWriteConflict()
                 }
                 transform(authoritative)
             } ?: return false
-            currentCoroutineContext().ensureActive()
-            var published: DeviceDTO? = null
-            val edit = access.transformConnectedDevice(expectedToken) { live ->
-                // A callback may have published unrelated fields while Room was suspended.
-                saved.preservingChanges(original, live).also { published = it }
-            } ?: return false
-            val updated = checkNotNull(published)
-            if (edit.previousKnownRegions != updated.knownRegions) {
-                onKnownRegionsChanged(edit, updated.knownRegions.toList())
-            }
-            return true
+            return published
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (conflict: DeviceWriteConflict) {
@@ -186,17 +204,18 @@ class ConnectedDeviceEditor(
     fun clearPreRepeatSettings(): Job? = edit("clearPreRepeat") { it.clearingPreRepeatSettings() }
 
     fun addKnownRegion(region: String): Job? {
-        val device = access.connectedDevice ?: return null
-        if (region in device.knownRegions) return null
         val token = access.connectedDeviceToken
+        val device = if (token == null) access.connectedDevice else access.currentDevice(token)
+        device ?: return null
+        if (region in device.knownRegions) return null
         return scope.launch(start = CoroutineStart.UNDISPATCHED) {
             report("addKnownRegion") { changeKnownRegion(region, false, token) }
         }
     }
 
     fun removeKnownRegion(region: String): Job? {
-        access.connectedDevice ?: return null
         val token = access.connectedDeviceToken
+        (if (token == null) access.connectedDevice else access.currentDevice(token)) ?: return null
         return scope.launch(start = CoroutineStart.UNDISPATCHED) {
             report("removeKnownRegion") {
                 changeKnownRegion(region, true, token, clearRadio = true)
@@ -219,21 +238,14 @@ class ConnectedDeviceEditor(
     ): Boolean = sessionEdits.withLock {
         val original = if (expectedToken == null) access.connectedDevice else access.currentDevice(expectedToken)
         original ?: return@withLock false
-        if (remove) devices.removeDeviceKnownRegion(original.radioId, region)
-        else devices.addDeviceKnownRegion(original.radioId, region)
         if (clearRadio && original.defaultFloodScopeName == region) clearDefaultFloodScope()
-        var published: DeviceDTO? = null
-        val edit = access.transformConnectedDevice(expectedToken) { live ->
-            if (live.id != original.id || live.radioId != original.radioId) live
-            else live.copy(
-                knownRegions = if (remove) live.knownRegions.filterNot { it == region }.snapshot()
-                else (live.knownRegions + region).distinct().snapshot(),
-                defaultFloodScopeName = if (remove && live.defaultFloodScopeName == region) null else live.defaultFloodScopeName,
-            ).also { published = it }
-        } ?: return@withLock false
-        val updated = published ?: return@withLock false
-        if (edit.previousKnownRegions != updated.knownRegions) onKnownRegionsChanged(edit, updated.knownRegions.toList())
-        true
+        persistEdit(if (remove) "removeKnownRegion" else "addKnownRegion", expectedToken) { authoritative ->
+            authoritative.copy(
+                knownRegions = if (remove) authoritative.knownRegions.filterNot { it == region }.snapshot()
+                else (authoritative.knownRegions + region).distinct().snapshot(),
+                defaultFloodScopeName = authoritative.defaultFloodScopeName.takeUnless { remove && it == region },
+            )
+        }
     }
 
     suspend fun unfavoritedNodeCount(): Int {
@@ -287,8 +299,9 @@ class ConnectedDeviceEditor(
     }
 
     private fun edit(operation: String, transform: (DeviceDTO) -> DeviceDTO): Job? {
-        val device = access.connectedDevice ?: return null
         val token = access.connectedDeviceToken
+        val device = if (token == null) access.connectedDevice else access.currentDevice(token)
+        device ?: return null
         // UNDISPATCHED enqueues this call before a later awaited preset can acquire the edit mutex.
         return scope.launch(start = CoroutineStart.UNDISPATCHED) {
             report(operation) {

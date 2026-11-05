@@ -540,29 +540,31 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
                     when (val event = wrapped.event) {
                         is SettingsEvent.DeviceUpdated -> {
                             val presetId = event.appliedRadioPresetID
-                            if (presetId == null) {
-                                connection.updateDevice(event.info, null)
-                            } else {
-                                persistSessionDeviceEdit("radio preset") {
-                                    connection.updateDevice(event.info, presetId, wrapped.token)
-                                }
+                            persistSessionDeviceEdit(if (presetId == null) "device settings" else "radio preset") {
+                                connection.updateDevice(event.info, presetId, wrapped.token)
                             }
                         }
                         is SettingsEvent.AutoAddConfigUpdated -> {
-                            connection.updateAutoAddConfig(event.config)
-                            // Clear the storage-full flag when overwrite-oldest is enabled.
-                            if ((event.config.bitmask and AutoAddConfig.OVERWRITE_OLDEST_BIT) != 0.toUByte()) {
-                                connectionUI.isNodeStorageFull = false
+                            persistSessionDeviceEdit("auto-add") {
+                                val accepted = connection.updateAutoAddConfig(event.config, wrapped.token)
+                                if (accepted && (event.config.bitmask and AutoAddConfig.OVERWRITE_OLDEST_BIT) != 0.toUByte()) {
+                                    connectionUI.isNodeStorageFull = false
+                                }
+                                accepted
                             }
                         }
-                        is SettingsEvent.ClientRepeatUpdated -> connection.updateClientRepeat(event.enabled)
+                        is SettingsEvent.ClientRepeatUpdated -> persistSessionDeviceEdit("client repeat") {
+                            connection.updateClientRepeat(event.enabled, wrapped.token)
+                        }
                         is SettingsEvent.PathHashModeUpdated -> {
                             persistSessionDeviceEdit("path hash", event.persistence) {
                                 connection.updatePathHashMode(event.mode, wrapped.token)
                             }
                         }
-                        is SettingsEvent.AllowedRepeatFreqUpdated -> connection.setAllowedRepeatFreqRanges(event.ranges)
-                        is SettingsEvent.DefaultFloodScopeUpdated -> connection.updateDefaultFloodScopeName(event.name)
+                        is SettingsEvent.AllowedRepeatFreqUpdated -> connection.setAllowedRepeatFreqRanges(event.ranges, wrapped.token)
+                        is SettingsEvent.DefaultFloodScopeUpdated -> persistSessionDeviceEdit("default scope") {
+                            connection.updateDefaultFloodScopeName(event.name, wrapped.token)
+                        }
                     }
                 }
             } finally {

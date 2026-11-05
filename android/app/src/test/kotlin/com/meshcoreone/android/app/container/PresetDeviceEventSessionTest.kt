@@ -1,4 +1,4 @@
-// AndroidOnly: WP-305 The real settings event collector forwards the originating token for preset updates only.
+// AndroidOnly: WP-305 The real settings event collector forwards the originating token for all device updates.
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.contracts.domain.Generation
@@ -104,7 +104,30 @@ class PresetDeviceEventSessionTest : RoomProcessTest() {
                 session.settingsService.refreshDeviceInfo()
                 h.eventually("non-preset event reaches existing port") { "updateDeviceInfo" in port.calls }
                 assertTrue(port.presetTokens.isEmpty())
+                assertEquals(listOf(session.token), port.ordinaryTokens)
                 assertEquals(1, port.calls.count { it == "updateDeviceInfo" })
+            } finally { state.tearDownAppStateSessionState() }
+        } finally { h.container.close() }
+    }
+
+    @Test fun nonPresetDeviceEventCannotAcquireASameRadioSuccessorToken() = runTest {
+        val h = ContainerHarness(this, store)
+        try {
+            h.connect()
+            val session = assertNotNull(h.sessions.current)
+            val successor = session.token.copy(generation = Generation(session.token.generation.value + 1))
+            val port = FakeConnectionPort().also {
+                it.connectionState = h.manager.connectionState
+                it.connectedDevice = h.manager.connectedDevice
+                it.acceptsOrdinaryToken = { expected -> expected == successor }
+            }
+            val state = appStateOf(backgroundScope, port, session = { session })
+            state.wireServicesIfConnected()
+            try {
+                session.settingsService.refreshDeviceInfo()
+                h.eventually("ordinary event reaches token-bound port") { port.ordinaryTokens.isNotEmpty() }
+                assertEquals(listOf(session.token), port.ordinaryTokens)
+                assertEquals(0, port.calls.count { it == "updateDeviceInfo" })
             } finally { state.tearDownAppStateSessionState() }
         } finally { h.container.close() }
     }

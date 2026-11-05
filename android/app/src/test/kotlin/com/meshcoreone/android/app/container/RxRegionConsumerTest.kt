@@ -14,6 +14,7 @@ import com.meshcoreone.android.core.connectivity.device.ConnectedDeviceAccess
 import com.meshcoreone.android.core.connectivity.device.ConnectedDeviceEditor
 import com.meshcoreone.android.core.connectivity.device.RadioPresetMatcher
 import com.meshcoreone.android.core.contracts.domain.ConnectedDeviceEdit
+import com.meshcoreone.android.core.contracts.domain.DeviceWriteSnapshot
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
@@ -195,10 +196,12 @@ class RxRegionConsumerTest : RoomProcessTest() {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         val held = object : PersistenceStoreProtocol by store {
-            override suspend fun addDeviceKnownRegion(radioId: RadioId, region: String) {
-                entered.complete(Unit)
-                release.await()
-                store.addDeviceKnownRegion(radioId, region)
+            override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+                if ("Germany" in dto.knownRegions && "Germany" !in expected.device.knownRegions) {
+                    entered.complete(Unit)
+                    release.await()
+                }
+                return store.saveDeviceIfUnchanged(dto, expected)
             }
 
         }
@@ -221,10 +224,44 @@ class RxRegionConsumerTest : RoomProcessTest() {
             f.live = replacement
             release.complete(Unit)
             edit.join()
-            assertEquals(listOf("Germany"), assertNotNull(store.fetchDevice(f.radio)).knownRegions)
+            assertTrue(assertNotNull(store.fetchDevice(f.radio)).knownRegions.isEmpty(),
+                "A retired edit must not mutate Room after the same-radio successor loaded")
             assertTrue(assertNotNull(f.harness.manager.connectedDevice).knownRegions.isEmpty())
             val packet = f.packet(Bytes.of(1, 2, 3, 4), region = "Germany")
             assertNull(f.ingest(packet).regionScope, "old edit must not retarget replacement service's cache")
+        } finally {
+            release.complete(Unit)
+            f.harness.container.close()
+        }
+
+    }
+
+    @Test fun callerCancellationAfterRegionCommitStillReconcilesLiveAndTheRealRxCache() = runTest {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val held = object : PersistenceStoreProtocol by store {
+            override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+                val accepted = store.saveDeviceIfUnchanged(dto, expected)
+                if (accepted && "Germany" in dto.knownRegions && "Germany" !in expected.device.knownRegions) {
+                    entered.complete(Unit)
+                    release.await()
+                }
+                return accepted
+            }
+        }
+        val f = RxIngestionFixture(this, store, held)
+        try {
+            f.connect()
+            val update = async { f.harness.container.deviceEditor.addKnownRegion("Germany", f.live.token) }
+            entered.await()
+            assertEquals(listOf("Germany"), assertNotNull(store.fetchDevice(f.radio)).knownRegions)
+            assertTrue(assertNotNull(f.harness.manager.connectedDevice).knownRegions.isEmpty())
+            update.cancel()
+            release.complete(Unit)
+            update.join()
+            assertTrue(update.isCancelled)
+            assertEquals(listOf("Germany"), assertNotNull(f.harness.manager.connectedDevice).knownRegions)
+            assertEquals("Germany", f.ingest(f.packet(Bytes.of(1, 2, 3, 4), region = "Germany")).regionScope)
         } finally {
             release.complete(Unit)
             f.harness.container.close()

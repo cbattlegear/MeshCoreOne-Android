@@ -79,7 +79,7 @@ class RuntimePairingPort(
         manager.reconnectionCoordinator.clearReconnectingDevice()
     }
 
-    override fun markDisconnected() {
+    override suspend fun markDisconnected() {
         if (!manager.connectionState.isOperational) manager.setConnectionState(DeviceConnectionState.DISCONNECTED)
     }
 

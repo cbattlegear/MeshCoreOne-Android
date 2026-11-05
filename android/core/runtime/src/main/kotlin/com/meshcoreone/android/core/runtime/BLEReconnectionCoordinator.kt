@@ -19,8 +19,8 @@ import kotlinx.coroutines.withContext
 interface BLEReconnectionDelegate {
     val connectionIntent: ConnectionIntent
     val connectionState: DeviceConnectionState
-    fun setConnectionState(state: DeviceConnectionState)
-    fun clearConnectedDevice()
+    suspend fun setConnectionState(state: DeviceConnectionState)
+    suspend fun clearConnectedDevice()
     suspend fun teardownSessionForReconnect()
     suspend fun rebuildSession(deviceId: UUID)
     suspend fun disconnectTransport()

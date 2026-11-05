@@ -31,7 +31,6 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 import kotlin.test.*
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -237,33 +236,34 @@ class RxRegionConsumerTest : RoomProcessTest() {
     }
 
     @Test fun callerCancellationAfterRegionCommitStillReconcilesLiveAndTheRealRxCache() = runTest {
-        val entered = CompletableDeferred<Unit>()
-        val release = CompletableDeferred<Unit>()
-        val held = object : PersistenceStoreProtocol by store {
-            override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
-                val accepted = store.saveDeviceIfUnchanged(dto, expected)
-                if (accepted && "Germany" in dto.knownRegions && "Germany" !in expected.device.knownRegions) {
-                    entered.complete(Unit)
-                    release.await()
-                }
-                return accepted
-            }
-        }
-        val f = RxIngestionFixture(this, store, held)
+        val f = RxIngestionFixture(this, store)
         try {
             f.connect()
-            val update = async { f.harness.container.deviceEditor.addKnownRegion("Germany", f.live.token) }
-            entered.await()
-            assertEquals(listOf("Germany"), assertNotNull(store.fetchDevice(f.radio)).knownRegions)
-            assertTrue(assertNotNull(f.harness.manager.connectedDevice).knownRegions.isEmpty())
-            update.cancel()
-            release.complete(Unit)
+            lateinit var update: kotlinx.coroutines.Deferred<Boolean>
+            var committedCallback = false
+            val access = object : ConnectedDeviceAccess by f.harness.container.deviceAccess {
+                override fun transformConnectedDevice(
+                    expectedToken: SessionToken?,
+                    transform: (DeviceDTO) -> DeviceDTO,
+                ): ConnectedDeviceEdit? {
+                    committedCallback = true
+                    update.cancel()
+                    return f.harness.container.deviceAccess.transformConnectedDevice(expectedToken, transform)
+                }
+            }
+            val editor = ConnectedDeviceEditor(
+                access, store, store, { null }, RadioPresetMatcher { _, _, _, _ -> emptySet() },
+                backgroundScope, { EPOCH }, onKnownRegionsChanged = f.harness.container::knownRegionsChanged,
+            )
+            update = async(start = CoroutineStart.LAZY) { editor.addKnownRegion("Germany", f.live.token) }
+            update.start()
             update.join()
+            assertTrue(committedCallback, "Cancellation occurs inside the actual post-commit publication callback")
             assertTrue(update.isCancelled)
+            assertEquals(listOf("Germany"), assertNotNull(store.fetchDevice(f.radio)).knownRegions)
             assertEquals(listOf("Germany"), assertNotNull(f.harness.manager.connectedDevice).knownRegions)
             assertEquals("Germany", f.ingest(f.packet(Bytes.of(1, 2, 3, 4), region = "Germany")).regionScope)
         } finally {
-            release.complete(Unit)
             f.harness.container.close()
         }
     }
@@ -271,26 +271,22 @@ class RxRegionConsumerTest : RoomProcessTest() {
     @Test fun reconnectBetweenAcceptedEditAndRegistryLookupRejectsTheOriginalGeneration() = runTest {
         val f = RxIngestionFixture(this, store)
         val accepted = CompletableDeferred<SessionToken>()
-        val resumeCallback = CountDownLatch(1)
+        val resumeCallback = CompletableDeferred<Unit>()
+        var notification: Job? = null
         try {
             f.connect()
             val old = f.live
             val id = assertNotNull(f.harness.manager.connectedDevice).id
-            val access = object : ConnectedDeviceAccess by f.harness.container.deviceAccess {
-                override fun transformConnectedDevice(
-                    expectedToken: SessionToken?,
-                    transform: (DeviceDTO) -> DeviceDTO,
-                ): ConnectedDeviceEdit? {
-                    val edit = f.harness.container.deviceAccess.transformConnectedDevice(expectedToken, transform)
-                    accepted.complete(assertNotNull(edit).token)
-                    check(resumeCallback.await(10, TimeUnit.SECONDS)) { "Accepted-edit callback was not released" }
-                    return edit
-                }
-            }
             val editor = ConnectedDeviceEditor(
-                access, store, store, { null }, RadioPresetMatcher { _, _, _, _ -> emptySet() },
-                CoroutineScope(backgroundScope.coroutineContext + Dispatchers.Default), { EPOCH },
-                onKnownRegionsChanged = f.harness.container::knownRegionsChanged,
+                f.harness.container.deviceAccess, store, store, { null }, RadioPresetMatcher { _, _, _, _ -> emptySet() },
+                backgroundScope, { EPOCH },
+                onKnownRegionsChanged = { edit, regions ->
+                    accepted.complete(edit.token)
+                    notification = backgroundScope.launch {
+                        resumeCallback.await()
+                        f.harness.container.knownRegionsChanged(edit, regions)
+                    }
+                },
             )
             val edit = async(Dispatchers.Default) { editor.addKnownRegion("Germany") }
             f.harness.eventually("DTO accepted before callback lookup") { accepted.isCompleted }
@@ -309,13 +305,14 @@ class RxRegionConsumerTest : RoomProcessTest() {
             assertNotEquals(old.token, f.live.token)
             // A live packet also establishes that the replacement's initial cache load has finished.
             f.ingest(f.packet(Bytes.of(1, 2, 3, 4)))
-            resumeCallback.countDown()
+            resumeCallback.complete(Unit)
             assertNotNull(edit.await()).join()
+            assertNotNull(notification).join()
             assertTrue(assertNotNull(store.fetchDevice(f.radio)).knownRegions.isEmpty())
             assertTrue(assertNotNull(f.harness.manager.connectedDevice).knownRegions.isEmpty())
             assertNull(f.ingest(f.packet(Bytes.of(5, 6, 7, 8), region = "Germany")).regionScope)
         } finally {
-            resumeCallback.countDown()
+            resumeCallback.complete(Unit)
             f.harness.container.close()
         }
     }

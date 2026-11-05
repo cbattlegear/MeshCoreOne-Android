@@ -29,8 +29,8 @@ private class Delegate : BLEReconnectionDelegate {
     var failureHook: suspend () -> Unit = {}
     var queryHook: suspend () -> Unit = {}
     var notifyHook: suspend () -> Unit = {}
-    override fun setConnectionState(state: DeviceConnectionState) { this.state = state }
-    override fun clearConnectedDevice() { cleared = true }
+    override suspend fun setConnectionState(state: DeviceConnectionState) { this.state = state }
+    override suspend fun clearConnectedDevice() { cleared = true }
     override suspend fun teardownSessionForReconnect() { teardowns++; order += "teardown" }
     override suspend fun rebuildSession(deviceId: UUID) {
         rebuilds += deviceId

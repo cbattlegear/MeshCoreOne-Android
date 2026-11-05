@@ -85,11 +85,16 @@ internal class TestDevices : DevicePersisting, DeviceEditPersisting {
         fetchDevice(id)?.let { DeviceWriteSnapshot(it, revision, authorityRevision) }
     override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
         failure?.let { throw it }
-        if (!expected.isCurrent() || revision != expected.revision || authorityRevision != expected.authorityRevision || rows[dto.id] != expected.device) return false
-        calls += "save"
-        rows[dto.id] = dto
-        revision++
-        return true
+        return expected.withAuthority {
+            if (!expected.isCurrent() || revision != expected.revision || authorityRevision != expected.authorityRevision || rows[dto.id] != expected.device) false
+            else {
+                calls += "save"
+                rows[dto.id] = dto
+                revision++
+                expected.onCommitted(dto)
+                true
+            }
+        }
     }
     override suspend fun fetchDevice(id: UUID): DeviceDTO? { failure?.let { throw it }; calls += "id"; return rows[id] }
     override suspend fun fetchDevice(radioId: RadioId): DeviceDTO? = rows.values.firstOrNull { it.radioId == radioId }

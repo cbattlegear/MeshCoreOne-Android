@@ -94,11 +94,16 @@ internal class FakeDevices : DevicePersisting, DeviceEditPersisting {
     override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
         beforeConditionalSave()
         conditionalSaveFailure?.let { throw it }
-        if (!expected.isCurrent() || deviceRevision != expected.revision || authorityRevision != expected.authorityRevision || rows[dto.id] != expected.device) return false
-        calls += "save"
-        rows[dto.id] = dto
-        deviceRevision++
-        return true
+        return expected.withAuthority {
+            if (!expected.isCurrent() || deviceRevision != expected.revision || authorityRevision != expected.authorityRevision || rows[dto.id] != expected.device) false
+            else {
+                calls += "save"
+                rows[dto.id] = dto
+                deviceRevision++
+                expected.onCommitted(dto)
+                true
+            }
+        }
     }
     override suspend fun setActiveDevice(id: UUID) {
         rows.replaceAll { key, row -> row.copy(isActive = key == id) }
@@ -353,7 +358,7 @@ internal class RuntimePairingPort(
         manager.reconnectionCoordinator.cancelTimeout()
         manager.reconnectionCoordinator.clearReconnectingDevice()
     }
-    override fun markDisconnected() {
+    override suspend fun markDisconnected() {
         if (!manager.connectionState.isOperational) manager.setConnectionState(DeviceConnectionState.DISCONNECTED)
     }
     override suspend fun clearPersistedConnection(deviceId: UUID) = manager.clearPersistedConnection(deviceId)

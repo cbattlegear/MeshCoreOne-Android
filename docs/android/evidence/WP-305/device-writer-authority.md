@@ -100,3 +100,28 @@ mistaken `tools\android-port\validate.py` path and `portmap.py validate` invocat
 and were corrected; neither is test evidence. Local Gradle ownership and all user holds remain
 untouched. Hosted exact-candidate jobs/logs remain authoritative; no second CI-result bundle is
 retained, committed, uploaded, hashed or substituted for the hosted result.
+
+### Corrective commit-boundary review
+
+Source review of `4a01c6c5fc23ebed20a29fc6b90dff040ccddb89` found two remaining gaps:
+the outer `NonCancellable` section could defer cancellation while waiting to enter Room, and BLE
+state/clear setters plus restoration-route generation replacement did not acquire the new runtime
+authority gate. That candidate is therefore provisional, not accepted.
+
+The storage producer explicitly transferred the single conditional-save `afterCommit` callback
+hunk back to this producer, retaining its independently running diagnostic branch unchanged.
+The corrective contract carries `onCommitted` on the ticket; Room invokes it synchronously after
+the real commit and revision updates, under the same runtime lease and existing commit worker.
+No broad non-cancellable save wait remains. BLE delegate setters, their pairing call-through and
+restoration generation construction become suspending gate participants; all actual callers and
+the reconnection test double are wired without asynchronous success-shaped fallbacks.
+The same gate now also protects generic state publication (including adoption fallthrough)
+and WiFi reconnect cooldown publication. Synchronous issue-only publication continues to change
+only the issue under the short runtime monitor; it cannot change the active writer predicates.
+Additional real-Room controls cancel a queued commit before its blocking transaction ends, cancel
+inside the actual committed RX publication callback, and queue both reconnect state and live clear
+behind a suspended Room commit. These remain authored controls until exact hosted discovery.
+The corrective source passes `C:\Python312\python.exe .\tools\android-port\controller\validate.py`,
+`C:\Python312\python.exe .\tools\android-port\portmap.py`,
+`C:\Python312\python.exe .\tools\android-port\controller\verification_config.py` and
+`git diff --check`. These are source controls, not Kotlin compilation or Android test execution.

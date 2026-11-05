@@ -13,8 +13,6 @@ import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.withContext
 
 /** A process-owned optimistic write ticket; device writers invalidate it inside their transaction. */
 data class DeviceWriteSnapshot(
@@ -23,6 +21,8 @@ data class DeviceWriteSnapshot(
     val authorityRevision: Long = revision,
     val isCurrent: () -> Boolean = { true },
     val withAuthority: suspend (suspend () -> Boolean) -> Boolean = { it() },
+    /** Post-commit, under [withAuthority]; must not suspend or re-enter persistence. */
+    val onCommitted: (DeviceDTO) -> Unit = {},
 )
 
 class DeviceWriteConflict : IllegalStateException("Device write authority changed")
@@ -101,19 +101,14 @@ suspend fun DevicePersisting.editDevice(
         require(updated.id == snapshot.device.id && updated.radioId == snapshot.device.radioId)
         require(updated.isActive == snapshot.device.isActive && updated.lastConnected == snapshot.device.lastConnected)
         val caller = currentCoroutineContext()
-        val committed = withContext(NonCancellable) {
-            val guarded = snapshot.copy(withAuthority = withAuthority, isCurrent = {
-                caller.ensureActive()
-                isCurrent()
-            })
-            val accepted = try {
-                persistence.saveDeviceIfUnchanged(updated, guarded)
-            } catch (failure: PersistenceStoreException) {
-                onSaveFailure(failure)
-            }
-            // A committed row must reach the token-bound live/cache consumer before cancellation escapes.
-            if (accepted) onCommitted(updated)
-            accepted
+        val guarded = snapshot.copy(withAuthority = withAuthority, onCommitted = onCommitted, isCurrent = {
+            caller.ensureActive()
+            isCurrent()
+        })
+        val committed = try {
+            persistence.saveDeviceIfUnchanged(updated, guarded)
+        } catch (failure: PersistenceStoreException) {
+            onSaveFailure(failure)
         }
         caller.ensureActive()
         if (committed) return updated
@@ -127,6 +122,7 @@ interface DeviceEditPersisting {
     /** Evaluate connection ownership inside the serialized activation transaction, not before waiting. */
     suspend fun activateDeviceIfCurrent(id: UUID, isCurrent: () -> Boolean): Boolean
     suspend fun fetchDeviceWriteSnapshot(id: UUID): DeviceWriteSnapshot?
+    /** Publish [DeviceWriteSnapshot.onCommitted] exactly once after commit, never on a rejected write. */
     suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean
 }
 

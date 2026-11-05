@@ -68,6 +68,7 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
                 database.devices().upsert(dto.toEntity())
                 resetRemovedRegionScopes(dto.radioId, removed)
                 changed(dto.id, authority = dto.publicKey != expected.device.publicKey)
+                afterCommit { expected.onCommitted(dto) }
                 save()
                 true
             }

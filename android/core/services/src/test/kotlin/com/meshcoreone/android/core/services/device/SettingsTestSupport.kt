@@ -219,10 +219,15 @@ internal class DeviceRows : DevicePersisting, DeviceEditPersisting {
     override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
         beforeSave()
         saveFailure?.let { throw it }
-        if (!expected.isCurrent() || revision != expected.revision || rows[dto.id] != expected.device) return false
-        rows[dto.id] = dto
-        revision++
-        return true
+        return expected.withAuthority {
+            if (!expected.isCurrent() || revision != expected.revision || rows[dto.id] != expected.device) false
+            else {
+                rows[dto.id] = dto
+                revision++
+                expected.onCommitted(dto)
+                true
+            }
+        }
     }
     override suspend fun fetchDevice(id: UUID): DeviceDTO? { fetchFailure?.let { throw it }; return rows[id] }
     override suspend fun fetchDevice(radioId: RadioId): DeviceDTO? = rows.values.firstOrNull { it.radioId == radioId }

@@ -861,10 +861,12 @@ class ConnectionManager(
         return report to expectedRevision
     }
 
-    override fun setConnectionState(state: DeviceConnectionState) {
+    override suspend fun setConnectionState(state: DeviceConnectionState) {
         publish { copy(state = state, token = if (state == DeviceConnectionState.DISCONNECTED) null else token) }
     }
-    override fun clearConnectedDevice() { synchronized(lock) { deviceValue = null; repeatRanges = SnapshotList.empty() } }
+    override suspend fun clearConnectedDevice() {
+        mutateDeviceAuthority { deviceValue = null; repeatRanges = SnapshotList.empty() }
+    }
     override suspend fun notifyAutoReconnectStarted() = observer.onAutoReconnectStarted()
     override suspend fun notifyConnectionLost() {
         observer.onConnectionLost()
@@ -1254,7 +1256,7 @@ class ConnectionManager(
         }
     }
 
-    private fun newGeneration(target: ConnectionTarget, claimedRevision: Long): RadioGeneration = synchronized(lock) {
+    private suspend fun newGeneration(target: ConnectionTarget, claimedRevision: Long): RadioGeneration = mutateDeviceAuthority {
         requireRevision(claimedRevision)
         nextGeneration = Math.incrementExact(nextGeneration)
         RadioGeneration(nextGeneration, target, claimedRevision, context, processJob).also {
@@ -1543,7 +1545,7 @@ class ConnectionManager(
         throw LinkFailure.DeviceConnectedToOtherApp()
     }
 
-    private fun ensureRestorationRoute(target: ConnectionTarget, expectedRevision: Long): RadioGeneration {
+    private suspend fun ensureRestorationRoute(target: ConnectionTarget, expectedRevision: Long): RadioGeneration {
         val existing = synchronized(lock) { (active ?: retained)?.takeIf { it.target == target && it.revision == expectedRevision } }
         if (existing != null) return existing
         val owner = newGeneration(target, expectedRevision)
@@ -1580,9 +1582,9 @@ class ConnectionManager(
         if (old !== except) old?.cancel()
     }
 
-    private fun startWiFiReconnection(target: ConnectionTarget) {
+    private suspend fun startWiFiReconnection(target: ConnectionTarget) {
         if (!connectionIntent.wantsConnection || identityImportPending) return
-        val task = synchronized(lock) {
+        val task = mutateDeviceAuthority {
             if (wifiReconnect?.isActive == true) return
             val previous = lastWiFiReconnect
             if (previous != null && clock.elapsed - previous < ConnectionRetryPolicy.WIFI_RECONNECT_COOLDOWN) {
@@ -1749,11 +1751,11 @@ class ConnectionManager(
      * leaves alone cannot be captured before a racing publication and written back stale.
      * With [expectedRevision], a superseded attempt publishes nothing and returns false.
      */
-    private fun publish(
+    private suspend fun publish(
         expectedRevision: Long? = null,
         change: ConnectionSnapshot.() -> ConnectionSnapshot,
-    ): Boolean = synchronized(lock) {
-        if (expectedRevision != null && (closed || revision != expectedRevision)) return@synchronized false
+    ): Boolean = mutateDeviceAuthority {
+        if (expectedRevision != null && (closed || revision != expectedRevision)) return@mutateDeviceAuthority false
         val next = values.value.change()
         publishLocked(next.state, next.transport, next.token, next.issue)
         true
@@ -1805,7 +1807,7 @@ class ConnectionManager(
     }
     private fun reportIssue(failure: Throwable, stage: LifecycleStage) {
         reporter.report(RuntimeDiagnostic.Failure(stage.name, failure))
-        publish { copy(issue = issueFor(failure, stage)) }
+        synchronized(lock) { publishLocked(issue = issueFor(failure, stage)) }
     }
     private fun staleIdentity(token: SessionToken): RadioId? {
         reporter.report(RuntimeDiagnostic.StaleCallback("identity", token.generation.value))

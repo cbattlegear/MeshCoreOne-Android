@@ -10,6 +10,7 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 
@@ -102,7 +103,7 @@ class DirectAckAuthorityTest {
         assertEquals(MessageStatus.DELIVERED, registered.initialStatus)
         assertNull(registered.delivery)
         assertEquals(DirectAckMode.RESEND, registered.mode)
-        assertEquals(7u, registered.message.ackCode)
+        assertEquals(7u, assertNotNull(registered.message).ackCode)
     }
 
     @Test

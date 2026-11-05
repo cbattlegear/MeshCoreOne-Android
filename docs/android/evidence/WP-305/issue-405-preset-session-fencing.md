@@ -644,3 +644,73 @@ remain intact. Trusted path/operation admissions and the documented validator,
 portmap, pinned inventory and diff checks passed; these source-only results do
 not compile or execute Kotlin. No runtime/storage owner delta, #495 source,
 reservation or publication was imported; no local Gradle or manual CI rerun.
+
+## Exact a5 result and residual reset/readiness controls
+
+Exact published `a5d7af3da905ccf62c41c7cefe7cce279a481240`, automatic
+`41947420835` / Linux `126983053481`, completed **FAILURE**:
+**1,939 app tests / 20 failures**. App test compilation completed; this does
+not retroactively turn 3f22's compilation failure into a pass. Classifier and
+controller passed; Swift oracles skipped. OnboardingGateTest has an actual
+suite END/SUCCESS record on a5, not execution of local 431 or this successor.
+The existing 19 owner-surface failures from 82 remain; no corrected runtime,
+storage or Settings owner handoff was imported.
+
+The additional owned failure is
+`OnboardingFlagsTest.real committed readback survives child cancellation but reset and retirement revoke its receipt`.
+The authoritative full failure stack locates `assertFalse(hasUnsettledCompletion)`
+at exact a5 line 321 (method-entry summary 271). After initiating-child
+cancellation, `runCurrent()` does not establish that actual Room readback has
+finished on its I/O executor. The successor adds a bounded wait on the process
+owner's observable actual settlement before retaining that assertion and all
+receipt/storage/count assertions. This is a proposed test-order correction,
+not an executed diagnosis or a claim that the underlying production control
+has passed. All existing cases and new control semantics remain required.
+
+Independent source review of a5-to-local
+`4319a193a4b48a4fa64a4a77918d8a68a5dede9c` closed the earlier dismissed-retry,
+stale-read enqueue ordering, Wi-Fi-reset callback and self-triggered mounted
+test schedules, but supplied five residual source-only findings. The commit
+containing this section is the isolated 431 successor:
+
+- Revision authority is reserved before synchronous lifecycle/unsettled
+  publication, and completion admission, synchronous setter and reconciliation
+  all fence every admitted reset until its actual settlement. A reentrant
+  nested-reset control runs R2 from R1's actual unsettled observer, attempts
+  completion after R2 settles while R1 remains admitted, requires rejection and
+  only the nested false write, then permits a fresh explicit true after R1
+  settles. It fails if the old R1 can adopt new authority or overwrite fresh true.
+- An acknowledged reset settles only the exact attempt captured at its
+  admission, even when retirement subsequently rejects the old owner's result.
+  The new real-writer control first produces a sealed unknown write/readback,
+  holds false before submission, retires, acknowledges false and requires the
+  old unsettled flag to clear. It then completes a fresh owner with false/true
+  writer ordering and no retired receipt. A reset failure does not clear
+  unknown sealed authority.
+- Reconciliation readiness is an observable StateFlow, updated when uncertainty,
+  active readback or reset/retirement authority changes, and collected by actual
+  preset content. A mounted control captures/cancels the actual sealed
+  completion child, allows Compose to observe not-applying with recovery still
+  unavailable, then lets the process writer report unknown. Without unrelated
+  UI mutation, localized primary Try Again must become enabled and reconcile
+  the original ID/target with one radio apply and one finalization.
+- The Wi-Fi callback rechecks the full connection-admission condition after
+  dismissal, including no-device completion busy state. A queued flow producer
+  plus unconfined dismissal observer synchronously admits no-device completion
+  before its attempt job runs. Old Wi-Fi success must not append REGION; the
+  queued no-device job completes its original receipt.
+- The held stale-read test now requires exact IllegalStateException rejection
+  text `Onboarding reconciliation was retired` and exactly one storage readback
+  invocation (the initial uncertainty). A worker that wrongly reaches the
+  always-throwing fake for the stale read cannot satisfy either condition.
+
+These are four new methods and strengthened existing assertions, not execution.
+Independent child cancellation and reentrant public reset/no-device observers
+are conditional API schedules, not demonstrated Activity recreation or observed
+product callers. Original receipts, no-reapply behavior and gate/witness holds
+are unchanged. Pinned Python 3.12.4, trusted path/operation admissions,
+`validate.py` (64 WPs / 1,866 references), `portmap.py` (exit 0),
+`test_inventory.py --check` (468 pinned paths / 5,133 declarations) and
+`git diff --check` passed during authoring. Exact-successor hosted discovery
+and independent review remain required. The exact a5 failure remains recorded;
+no second CI-result bundle, local Gradle, manual dispatch or #495 changes.

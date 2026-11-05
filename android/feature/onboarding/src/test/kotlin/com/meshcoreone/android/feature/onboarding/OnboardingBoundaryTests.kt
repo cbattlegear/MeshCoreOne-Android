@@ -552,6 +552,40 @@ class OnboardingFlowCoordinatorTest {
         fun drain() { while (true) (queued.poll() ?: return).run() }
     }
 
+    @Test fun synchronousNestedResetCannotReopenCompletionWhileTheOriginalResetIsAdmitted() = kotlinx.coroutines.runBlocking {
+        val writes = mutableListOf<Boolean>()
+        val store = object : OnboardingFlagStore {
+            var value = false
+            override fun getBoolean(key: String) = value
+            override fun setBoolean(key: String, value: Boolean) { writes += value; this.value = value }
+        }
+        val state = OnboardingState(store)
+        var observed = false
+        var admittedDuringOuterReset = true
+        var attempted: Result<Unit>? = null
+        val observer = scope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            state.unsettledCompletionFlow.collect {
+                if (it && !observed) {
+                    observed = true
+                    state.resetOnboarding()
+                    admittedDuringOuterReset = state.canStartCompletion()
+                    attempted = runCatching { state.completeOnboarding() }
+                }
+            }
+        }
+        try {
+            assertFailsWith<IllegalStateException> { state.resetOnboarding() }
+            assertTrue(observed)
+            assertFalse(admittedDuringOuterReset)
+            assertTrue(attempted?.exceptionOrNull() is IllegalStateException)
+            assertEquals(listOf(false), writes)
+            assertFalse(state.hasUnsettledCompletion)
+            state.completeOnboarding()
+            assertEquals(listOf(false, true), writes)
+            assertTrue(state.hasCompletedOnboarding)
+        } finally { observer.cancel() }
+    }
+
     @Test fun presetAdmissionRegistersItsJobBeforeConcurrentResetCanRevokeIt() = kotlinx.coroutines.runBlocking {
         val dispatcher = QueuedDispatcher()
         val owner = Job()
@@ -1171,6 +1205,32 @@ class OnboardingFlowCoordinatorTest {
             flow.wifi.connect()
             dispatcher.drain()
             assertEquals(listOf(OnboardingStep.REGION), flow.onboarding.onboardingPath)
+        } finally { observer.cancel(); owner.cancel() }
+    }
+
+    @Test fun synchronousSheetDismissalNoDeviceAdmissionPreventsTheWifiRegionAppend() {
+        val dispatcher = QueuedDispatcher()
+        val owner = Job()
+        val flow = OnboardingFlowCoordinator(CoroutineScope(owner + dispatcher), Deps())
+        flow.onboarding.replacePath(listOf(OnboardingStep.PAIR))
+        flow.deviceScan.showSheet(PairSheet.WIFI)
+        var admitted = false
+        val observer = scope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            flow.deviceScan.state.collect {
+                if (!admitted && it.sheet == PairSheet.NONE) {
+                    admitted = true
+                    flow.confirmNoDevice()
+                }
+            }
+        }
+        try {
+            flow.wifi.setAddress("mesh.local")
+            flow.wifi.connect()
+            dispatcher.drain()
+            assertTrue(admitted)
+            assertEquals(listOf(OnboardingStep.PAIR), flow.onboarding.onboardingPath)
+            assertEquals(OnboardingCompletionReceipt.WithoutDevice, flow.onboarding.completionReceipt)
+            assertTrue(flow.onboarding.hasCompletedOnboarding)
         } finally { observer.cancel(); owner.cancel() }
     }
 

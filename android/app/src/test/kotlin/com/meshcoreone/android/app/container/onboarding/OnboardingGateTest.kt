@@ -450,6 +450,128 @@ class OnboardingGateTest {
         } finally { release.complete(Unit); processScope.cancel() }
     }
 
+    @Test fun `acknowledged retired reset settles the matching previously unknown sealed attempt`() = runBlocking {
+        val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val release = CompletableDeferred<Unit>()
+        try {
+            val entered = CompletableDeferred<Unit>()
+            val writes = mutableListOf<Boolean>()
+            var first = true
+            val flags = WriteBehindOnboardingFlags(
+                emptyMap(), processScope, { _, value -> writes += value },
+                persistCompletion = {
+                    if (first) { first = false; throw java.io.IOException("unknown commit") }
+                    writes += true
+                },
+                reconcileCompletion = { throw java.io.IOException("readback unavailable") },
+            )
+            val delayed = object : OnboardingFlagStore by flags {
+                override suspend fun persistBoolean(key: String, value: Boolean) {
+                    entered.complete(Unit)
+                    release.await()
+                    flags.persistBoolean(key, value)
+                }
+            }
+            val dependencies = onboarding(delayed, flags.hasCompleted, processScope)
+            val old = dependencies.retainedFlowCoordinator()
+            val initial = runCatching { old.onboarding.completeOnboarding() }
+            assertTrue(initial.exceptionOrNull() is OnboardingCompletionOutcomeUnknownException)
+            assertTrue(old.onboarding.hasUnsettledCompletion)
+            val resetting = async(start = CoroutineStart.UNDISPATCHED) {
+                runCatching { old.onboarding.resetOnboarding() }
+            }
+            entered.await()
+            dependencies.onFlowCompletionHandled(old)
+            assertSame(old, dependencies.retainedFlowCoordinator())
+            release.complete(Unit)
+            assertTrue(resetting.await().isFailure)
+            assertFalse(old.onboarding.hasUnsettledCompletion)
+            val fresh = dependencies.retainedFlowCoordinator()
+            assertNotSame(old, fresh)
+            fresh.onboarding.completeOnboarding()
+            assertEquals(listOf(false, true), writes)
+            assertTrue(fresh.onboarding.hasCompletedOnboarding)
+            assertEquals(null, old.onboarding.completionReceipt)
+        } finally { release.complete(Unit); processScope.cancel() }
+    }
+
+    @Test fun `mounted recovery observes late unknown outcome after its sealed child was cancelled`() = runBlocking {
+        val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val release = CompletableDeferred<Unit>()
+        try {
+            host.setup().visible()
+            val entered = CompletableDeferred<Unit>()
+            var child: kotlinx.coroutines.Job? = null
+            var readbackAvailable = false
+            var applies = 0
+            val writes = mutableListOf<String>()
+            val reads = mutableListOf<String>()
+            val flags = WriteBehindOnboardingFlags(
+                emptyMap(), processScope, { _, _ -> error("Use original finalizer") },
+                persistCompletion = { id ->
+                    writes += id
+                    entered.complete(Unit)
+                    release.await()
+                    throw java.io.IOException("lost acknowledgement")
+                },
+                reconcileCompletion = { id ->
+                    reads += id
+                    if (!readbackAvailable) throw java.io.IOException("readback unavailable")
+                    true
+                },
+            )
+            val capturing = object : OnboardingFlagStore by flags {
+                override suspend fun persistBoolean(
+                    key: String, value: Boolean, requireCurrent: () -> Unit,
+                    seal: (com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt) -> Boolean,
+                    attempt: com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt,
+                    onFinished: (Result<Unit>) -> Unit,
+                ) {
+                    child = kotlinx.coroutines.currentCoroutineContext()[kotlinx.coroutines.Job]
+                    flags.persistBoolean(key, value, requireCurrent, seal, attempt, onFinished)
+                }
+            }
+            val target = OnboardingPresetTarget(java.util.UUID.randomUUID(), 1, java.util.UUID.randomUUID())
+            val presets = object : OnboardingPresetPort {
+                override val canApply = MutableStateFlow(true)
+                override fun currentTarget() = target
+                override suspend fun apply(presetId: String): OnboardingPresetOutcome {
+                    applies++
+                    return OnboardingPresetOutcome.Applied
+                }
+            }
+            val dependencies = onboarding(capturing, flags.hasCompleted, processScope, presets = presets)
+            val flow = dependencies.retainedFlowCoordinator()
+            flow.onboarding.replacePath(listOf(OnboardingStep.PRESET))
+            val id = flow.preset.visiblePresets().first().id
+            val delivered = mutableListOf<com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt>()
+            showFlow(dependencies) { delivered += it; true }
+            compose.runOnIdle { flow.preset.apply(id) }
+            entered.await()
+            checkNotNull(child).cancel()
+            checkNotNull(child).join()
+            compose.runOnIdle { presets.canApply.value = false }
+            compose.waitForIdle()
+            assertFalse(flow.preset.state.value.isApplying)
+            assertFalse(flow.onboarding.reconciliationReadyFlow.value)
+            release.complete(Unit)
+            flow.onboarding.reconciliationReadyFlow.first { it }
+            compose.waitForIdle()
+            compose.runOnIdle { readbackAvailable = true }
+            compose.onNodeWithText(host.get().getString(
+                com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings.commonTryAgain,
+            )).assertIsEnabled().performClick()
+            compose.waitForIdle()
+            assertEquals(1, applies)
+            assertEquals(1, writes.size)
+            assertEquals(listOf(writes.single(), writes.single()), reads)
+            assertEquals(
+                listOf(com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt.Preset(id, target)),
+                delivered,
+            )
+        } finally { release.complete(Unit); processScope.cancel() }
+    }
+
     @Test fun `still-mounted explicitly retired owner is replaced after known-uncommitted finalization`() = runBlocking {
         val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
         val release = CompletableDeferred<Unit>()

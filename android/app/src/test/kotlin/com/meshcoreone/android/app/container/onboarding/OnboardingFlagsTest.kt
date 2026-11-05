@@ -18,6 +18,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
@@ -315,6 +316,7 @@ class OnboardingFlagsTest {
                 if (invalidation != "cancel") retry.await()
                 resetting?.await()
                 runCurrent()
+                kotlinx.coroutines.withTimeout(5_000) { state.unsettledCompletionFlow.first { !it } }
                 assertEquals(1, stages)
                 assertEquals(1, ids.size)
                 assertEquals(2, reads)
@@ -342,6 +344,7 @@ class OnboardingFlagsTest {
         val releaseStage = CompletableDeferred<Unit>()
         var stages = 0
         var finalizations = 0
+        var storageReads = 0
         try {
             val flags = WriteBehindOnboardingFlags(
                 emptyMap(), scope, { _, _ -> },
@@ -352,7 +355,7 @@ class OnboardingFlagsTest {
                     }
                 },
                 persistCompletion = { if (++finalizations == 1) throw IOException("unknown commit") },
-                reconcileCompletion = { throw IOException("read unavailable") },
+                reconcileCompletion = { storageReads++; throw IOException("read unavailable") },
             )
             val delayed = object : OnboardingFlagStore by flags {
                 override suspend fun reconcileCompletion(
@@ -389,7 +392,10 @@ class OnboardingFlagsTest {
             assertTrue(submitted.await(5, java.util.concurrent.TimeUnit.SECONDS))
             releaseStage.complete(Unit)
             fresh.await()
-            assertTrue(oldRead.get(5, java.util.concurrent.TimeUnit.SECONDS).isFailure)
+            val rejected = oldRead.get(5, java.util.concurrent.TimeUnit.SECONDS).exceptionOrNull()
+            assertTrue(rejected is IllegalStateException)
+            assertEquals("Onboarding reconciliation was retired", rejected?.message)
+            assertEquals(1, storageReads)
             assertEquals(2, stages)
             assertEquals(2, finalizations)
             assertTrue(flags.hasCompleted.value)

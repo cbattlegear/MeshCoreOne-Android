@@ -173,10 +173,11 @@ private fun PresetStep(flow: OnboardingFlowCoordinator, deps: OnboardingFeatureD
     val state by flow.preset.state.collectAsState()
     val canApply by deps.presets.canApply.collectAsState()
     val selection by deps.region.selection.collectAsState()
+    val canReconcile by flow.onboarding.reconciliationReadyFlow.collectAsState()
     PresetStepScreen(
         state, selection?.let(deps.region.catalog::displayName), flow.preset.visiblePresets(),
         flow.preset.canApply(canApply, state),
         PresetStepActions(flow.preset::select, { flow.preset.apply() }, flow.preset::dismissError, flow.preset::retry, flow.preset::dismissRetryAlert),
-        canReconcileCompletion = flow.onboarding.canReconcileCompletion(),
+        canReconcileCompletion = canReconcile,
     )
 }

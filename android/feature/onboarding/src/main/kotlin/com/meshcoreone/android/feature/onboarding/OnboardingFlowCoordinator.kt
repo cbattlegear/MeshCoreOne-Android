@@ -28,7 +28,7 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
         onConnected = {
             val generation = onboarding.lifecycleGeneration.value
             deviceScan.dismissSheet()
-            if (onboarding.lifecycleGeneration.value == generation && onboarding.canStartCompletion()) {
+            if (onboarding.lifecycleGeneration.value == generation && !completing && onboarding.canStartCompletion()) {
                 onboarding.append(OnboardingStep.REGION)
             }
         },

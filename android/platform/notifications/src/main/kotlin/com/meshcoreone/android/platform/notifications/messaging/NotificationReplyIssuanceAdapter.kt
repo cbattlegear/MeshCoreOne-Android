@@ -46,14 +46,40 @@ sealed interface NotificationReplyDeliveryParsing {
 class NotificationReplyIssuanceAdapter internal constructor(
     context: Context,
     private val expectedStoreId: UUID,
+    private val reserveIssuedReply: (suspend (UUID, IssuedAction, Int) -> IssuanceResult)? = null,
     private val registerIssued: suspend (UUID, IssuedAction) -> IssuanceResult,
 ) {
     constructor(context: Context, expectedStoreId: UUID, store: NotificationReplyStagingStore) :
-        this(context, expectedStoreId, store::registerIssued)
+        this(context, expectedStoreId, store::reserveIssuedReply, store::registerIssued)
 
     private val context = context.applicationContext
 
-    suspend fun prepare(proposal: IssuedAction): NotificationReplyPreparation {
+    /** Registry only, with no quota for future reply text. Never substitutes for [prepareReserved]. */
+    suspend fun prepare(proposal: IssuedAction): NotificationReplyPreparation =
+        prepareExact(proposal, null) { registerIssued(expectedStoreId, proposal) }
+
+    /**
+     * Reserves logical quota for ONE initial submission within the caller's UTF-16 code-unit bound.
+     * Not filesystem preallocation, input truncation, repeated-input custody or a successful-write
+     * guarantee. Android may still deliver oversized text; the journal decides actual admission.
+     */
+    suspend fun prepareReserved(proposal: IssuedAction, maxReplyCodeUnits: Int): NotificationReplyPreparation {
+        currentCoroutineContext().ensureActive()
+        if (maxReplyCodeUnits <= 0 || maxReplyCodeUnits > Int.MAX_VALUE / Char.SIZE_BYTES) {
+            return NotificationReplyPreparation.NotIssued(Failure.INVALID_REPLY_TEXT_BOUND)
+        }
+        val reserve = reserveIssuedReply
+            ?: return NotificationReplyPreparation.NotIssued(Failure.REPLY_RESERVATIONS_NOT_INITIALIZED)
+        return prepareExact(proposal, maxReplyCodeUnits) {
+            reserve(expectedStoreId, proposal, maxReplyCodeUnits)
+        }
+    }
+
+    private suspend fun prepareExact(
+        proposal: IssuedAction,
+        expectedBound: Int?,
+        register: suspend () -> IssuanceResult,
+    ): NotificationReplyPreparation {
         currentCoroutineContext().ensureActive()
         if (proposal.post.version != 1 || proposal.post.action != "REPLY") {
             return NotificationReplyPreparation.NotIssued(Failure.INVALID_IDENTITY)
@@ -63,13 +89,15 @@ class NotificationReplyIssuanceAdapter internal constructor(
             proposal.payload !is NotificationPayload.ChannelMessage
         ) return NotificationReplyPreparation.NotIssued(Failure.INVALID_PAYLOAD)
 
-        val reserved = when (val result = registerIssued(expectedStoreId, proposal)) {
+        val reserved = when (val result = register()) {
             is IssuanceResult.Reserved -> result.record
             is IssuanceResult.AlreadyReserved -> result.record
             is IssuanceResult.Rejected -> return NotificationReplyPreparation.NotIssued(result.reason)
             is IssuanceResult.Indeterminate -> return NotificationReplyPreparation.Indeterminate(result.token)
         }
-        if (reserved.storeId != expectedStoreId || reserved.action != proposal) {
+        if (reserved.storeId != expectedStoreId || reserved.action != proposal ||
+            reserved.maxReplyCodeUnits != expectedBound
+        ) {
             return NotificationReplyPreparation.NotIssued(Failure.CORRUPT_STORAGE)
         }
         currentCoroutineContext().ensureActive()

@@ -30,6 +30,7 @@ import com.meshcoreone.android.core.contracts.domain.NotificationPostResult
 import com.meshcoreone.android.core.contracts.notifications.NotificationRequest
 import com.meshcoreone.android.core.contracts.domain.NotificationId
 import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
+import com.meshcoreone.android.core.database.DirectAckStorage
 import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.model.DevicePlatform
 import com.meshcoreone.android.core.model.NotificationPreferences
@@ -315,6 +316,7 @@ internal fun openMemoryDatabase(): MeshCoreDatabase {
     val context = ApplicationProvider.getApplicationContext<Context>()
     val immediate = java.util.concurrent.Executor { it.run() }
     return Room.inMemoryDatabaseBuilder(context, MeshCoreDatabase::class.java)
+        .addCallback(DirectAckStorage.callback)
         .allowMainThreadQueries().setQueryExecutor(immediate).setTransactionExecutor(immediate).build()
 }
 

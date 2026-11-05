@@ -106,6 +106,24 @@ successor-action assertions remain. The save family still reports Repeat off and
 must retain no snapshot. Initialization/model semantics are unchanged. Neither
 fixture correction is accepted until fresh exact-head execution.
 
+Exact 679ee8eecc1f953ba71b6dfb6987682cb29e4067 run 41999560456
+failed in Linux job 127151162769 with App 2081 tests / one failure:
+retiredSnapshotOrClearCannotMutateASameRadioSuccessorOrItsDurableSnapshot,
+CancellationException ("Superseded connection generation") during reconnect.
+The newly active Repeat firmware triggers GET_REPEAT_FREQ; the common fake replies
+with generic OK, not AllowedRepeatFreq. The fixture successor supplies the actual
+0x1a response to command 0x3c, with a valid empty range list, without altering
+connection/watchdog semantics or assertions. This is not yet a verified fix.
+
+The additional coordinator-requested actual Room regression commits a new snapshot,
+performs an independent durable revision (including equal-DTO ABA), cancels before
+SET, verifies exact cleanup refusal, changes manual RF on the same token, then
+freshly enables/disables Repeat. It requires either safe reconciliation or explicit
+fencing, never restoration of the abandoned RF. The fence branch also requires
+zero additional SET on disable and working fresh enable/off after an explicit
+current-token snapshot clear. This test-only discriminator precedes the production
+repair; it is not claimed to have reproduced until exact hosted execution.
+
 Independent producer reviews accepted the bounded source seams but found an
 additional actual cancellation gap: a newly committed snapshot could survive
 cancellation before SET, then a later manual RF edit and fresh enable/off would

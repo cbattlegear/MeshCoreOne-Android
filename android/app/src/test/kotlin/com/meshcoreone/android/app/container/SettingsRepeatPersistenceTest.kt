@@ -38,6 +38,102 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class SettingsRepeatPersistenceTest : RoomProcessTest() {
+    @Test fun conflictedUnsentSnapshotCannotRestoreOldRfAfterAnInterveningWriteAndFreshEnable() = runTest {
+        for (aba in listOf(false, true)) {
+            val committed = CompletableDeferred<Job>()
+            val hold = CompletableDeferred<Unit>()
+            var armed = false
+            val held = object : PersistenceStoreProtocol by store {
+                override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+                    val saved = store.saveDeviceIfUnchanged(dto, expected)
+                    if (saved && armed && expected.device.preRepeatFrequency == null && dto.preRepeatFrequency != null) {
+                        armed = false
+                        committed.complete(currentCoroutineContext()[Job]!!)
+                        hold.await()
+                    }
+                    return saved
+                }
+            }
+            try {
+                withRepeat(held) { h, holder, failures, radio ->
+                    val before = assertNotNull(h.manager.connectedDevice)
+                    val token = assertNotNull(h.sessions.current).token
+                    armed = true
+                    holder.onRepeatToggled(true)
+                    holder.confirmEnableRepeatMode()
+                    h.eventually("snapshot committed before intervening revision") { committed.isCompleted }
+                    val created = assertNotNull(store.fetchDeviceWriteSnapshot(before.id))
+                    store.updateDeviceLastContactSync(before.radioId, created.device.lastContactSync + 1u)
+                    if (aba) store.updateDeviceLastContactSync(before.radioId, created.device.lastContactSync)
+                    val intervened = assertNotNull(store.fetchDeviceWriteSnapshot(before.id))
+                    assertTrue(intervened.revision > created.revision)
+                    if (aba) assertEquals(created.device, intervened.device, "Equal DTOs do not restore creation authority")
+                    committed.await().cancel()
+                    h.eventually("strict unsent cleanup conflict is reported") {
+                        !holder.state.value.isApplyingRepeat && failures.isNotEmpty()
+                    }
+                    assertTrue(radio.radioWrites.isEmpty(), "The abandoned attempt never sent SET")
+                    assertEquals(intervened.device, store.fetchDevice(before.id), "Conflicting cleanup must not rebase or clear")
+                    assertNotNull(holder.state.value.errorMessage)
+                    val service = assertNotNull(h.sessions.current).settingsService
+                    service.setRadioParamsVerified(868_000u, 125_000u, 9u, 6u, false)
+                    h.eventually("later manual RF is live and observed on the original token") {
+                        h.manager.connectedDevice?.frequency == 868_000u && holder.state.value.device?.frequency == 868_000u
+                    }
+                    val manual = assertNotNull(h.manager.connectedDevice)
+                    assertEquals(token, h.sessions.current?.token)
+                    val oldFailures = failures.size
+                    holder.onRepeatToggled(true)
+                    holder.confirmEnableRepeatMode()
+                    h.eventually("fresh enable is reconciled or explicitly fenced") {
+                        !holder.state.value.isApplyingRepeat && (failures.size > oldFailures ||
+                            (h.manager.connectedDevice?.clientRepeat == true && holder.state.value.device?.clientRepeat == true &&
+                                h.manager.connectedDevice?.frequency == radio.frequency && holder.state.value.device?.frequency == radio.frequency))
+                    }
+                    if (h.manager.connectedDevice?.clientRepeat == true) {
+                        holder.onRepeatToggled(false)
+                        h.eventually("fresh Repeat off finishes") {
+                            !holder.state.value.isApplyingRepeat && h.manager.connectedDevice?.clientRepeat == false &&
+                                h.manager.connectedDevice?.frequency == radio.frequency
+                        }
+                        val restored = assertNotNull(store.fetchDevice(before.id))
+                        assertEquals(manual.frequency, restored.frequency, "An abandoned snapshot must never restore the pre-cancellation RF")
+                        assertEquals(manual.bandwidth, restored.bandwidth)
+                        assertEquals(manual.spreadingFactor, restored.spreadingFactor)
+                        assertEquals(manual.codingRate, restored.codingRate)
+                    } else {
+                        assertNotNull(holder.state.value.errorMessage)
+                        assertEquals(1, radio.radioWrites.size, "A fenced fresh enable cannot send SET")
+                        assertEquals(manual, store.fetchDevice(before.id))
+                        holder.onRepeatToggled(false)
+                        h.eventually("fenced restoration releases its busy state") { !holder.state.value.isApplyingRepeat }
+                        assertEquals(1, radio.radioWrites.size, "A fenced restore cannot use the abandoned baseline either")
+                        assertEquals(manual, store.fetchDevice(before.id))
+                        assertTrue(h.container.deviceEditor.clearPreRepeatSettings(token), "Explicit current-token clear resolves the ambiguity")
+                        h.eventually("explicit resolution is observed") { holder.state.value.device?.preRepeatFrequency == null }
+                        holder.onRepeatToggled(true)
+                        holder.confirmEnableRepeatMode()
+                        h.eventually("resolved fresh Repeat is live and observed") {
+                            !holder.state.value.isApplyingRepeat && h.manager.connectedDevice?.clientRepeat == true &&
+                                holder.state.value.device?.clientRepeat == true && h.manager.connectedDevice?.frequency == radio.frequency &&
+                                holder.state.value.device?.frequency == radio.frequency
+                        }
+                        holder.onRepeatToggled(false)
+                        h.eventually("resolved Repeat restores the later manual baseline") {
+                            !holder.state.value.isApplyingRepeat && h.manager.connectedDevice?.clientRepeat == false &&
+                                h.manager.connectedDevice?.preRepeatFrequency == null && h.manager.connectedDevice?.frequency == manual.frequency
+                        }
+                        val restored = assertNotNull(store.fetchDevice(before.id))
+                        assertEquals(manual.frequency, restored.frequency)
+                        assertEquals(manual.bandwidth, restored.bandwidth)
+                        assertEquals(manual.spreadingFactor, restored.spreadingFactor)
+                        assertEquals(manual.codingRate, restored.codingRate)
+                    }
+                }
+            } finally { hold.complete(Unit) }
+        }
+    }
+
     @Test fun committedSnapshotCancelledBeforeSetIsAbortedAndFreshEnableRestoresTheLaterManualRf() = runTest {
         val committed = CompletableDeferred<Job>()
         val hold = CompletableDeferred<Unit>()
@@ -399,6 +495,7 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                             Bytes.utf8("T-Deck").paddedOrTruncated(40) +
                             Bytes.utf8("v1.13.0").paddedOrTruncated(20) + Bytes.of(if (repeat) 1 else 0, 0),
                     ) else null
+                    0x3c -> listOf(Bytes.of(0x1a))
                     else -> null
                 }
             }

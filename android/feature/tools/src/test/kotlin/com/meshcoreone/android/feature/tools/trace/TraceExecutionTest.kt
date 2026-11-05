@@ -830,6 +830,87 @@ class TraceExecutionTest {
     }
 
     @Test
+    fun `accepted save keeps original radio and width when publication follows its token read`() {
+        val nextRadio = RadioId(UUID.randomUUID())
+        val epoch = com.meshcoreone.android.core.contracts.domain.ProcessEpoch(UUID.randomUUID())
+        var token = com.meshcoreone.android.core.contracts.domain.SessionToken(
+            epoch, com.meshcoreone.android.core.contracts.domain.Generation(1), RADIO,
+        )
+        var armed = false
+        val feature = object : TracePathFeatureDependencies by harness.deps {
+            override fun sessionToken(): com.meshcoreone.android.core.contracts.domain.SessionToken {
+                val captured = token
+                if (armed) {
+                    armed = false
+                    harness.deps.device = device(pathHashMode = 2u).copy(radioId = nextRadio)
+                    token = token.copy(generation = com.meshcoreone.android.core.contracts.domain.Generation(2), radioId = nextRadio)
+                }
+                return captured
+            }
+        }
+        holder.configure(feature)
+        holder.bindConnection(RADIO, 1)
+        harness.complete { holder.runTrace() }
+        answer()
+        armed = true
+        assertTrue(harness.complete { holder.savePath("Accepted A") })
+        val saved = store.paths.values.single()
+        assertEquals(RADIO, saved.radioId)
+        assertEquals(1L, saved.hashSize)
+        assertEquals(Bytes.of(0xA1, 0xB2, 0xA1), saved.pathBytes)
+        assertEquals(SnapshotList.of(6.0, 4.0, 2.0), saved.runs.single().hopsSNR)
+        assertNull(harness.state.activeSavedPath)
+        assertFalse(harness.complete { holder.savePath("Stale B") })
+        assertEquals(1, store.paths.size)
+    }
+
+    @Test
+    fun `accepted dispatch keeps its captured sender radio and flags across graph publication`() {
+        val h = TraceHarness(configureDependencies = true)
+        val oldRadio = RADIO
+        val nextRadio = RadioId(UUID.randomUUID())
+        val epoch = com.meshcoreone.android.core.contracts.domain.ProcessEpoch(UUID.randomUUID())
+        var token = com.meshcoreone.android.core.contracts.domain.SessionToken(
+            epoch, com.meshcoreone.android.core.contracts.domain.Generation(1), oldRadio,
+        )
+        val oldSender = FakeTraceSender()
+        val nextSender = FakeTraceSender()
+        h.deps.device = device(pathHashMode = 0u)
+        var correlatedRadio: RadioId? = null
+        h.deps.sender = TraceSender { tag, auth, flags, path ->
+            correlatedRadio = h.holder.pendingDeviceId
+            oldSender.sendTrace(tag, auth, flags, path)
+        }
+        var tokenReads = 0
+        var armed = false
+        val feature = object : TracePathFeatureDependencies by h.deps {
+            override fun sessionToken(): com.meshcoreone.android.core.contracts.domain.SessionToken {
+                val captured = token
+                if (armed && ++tokenReads == 2) {
+                    h.deps.device = device(pathHashMode = 2u).copy(radioId = nextRadio)
+                    h.deps.sender = nextSender
+                    token = token.copy(generation = com.meshcoreone.android.core.contracts.domain.Generation(2), radioId = nextRadio)
+                }
+                return captured
+            }
+        }
+        h.holder.configure(feature)
+        h.holder.bindConnection(oldRadio, 1)
+        h.holder.addNode(alpha)
+        h.holder.editStateForTesting { it.copy(activeSavedPath = savedPath(it.fullPathData, radioId = oldRadio)) }
+        armed = true
+        h.complete { h.holder.runTrace() }
+        assertEquals(1, oldSender.sent.size)
+        assertEquals(oldRadio, correlatedRadio)
+        assertEquals(0u.toUByte(), oldSender.sent.single().flags)
+        assertEquals(Bytes.of(0xA1), oldSender.sent.single().path)
+        assertTrue(nextSender.sent.isEmpty())
+        assertFalse(h.state.isRunning)
+        assertNull(h.state.result)
+        assertNull(h.state.activeSavedPath)
+    }
+
+    @Test
     fun `changing batch mode retires the pending operation without sending another trace`() {
         for (initialBatch in listOf(false, true)) for (held in listOf(false, true)) {
             val h = TraceHarness(configureDependencies = true)

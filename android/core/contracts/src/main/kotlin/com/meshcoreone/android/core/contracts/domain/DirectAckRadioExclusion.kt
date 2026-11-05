@@ -308,6 +308,11 @@ interface DirectAckRadioExclusionAuthority {
      * untracked operation, or trying to upgrade an existing legacy wire is Rejected(CONFLICT).
      * This method has no begin-then-tag gap. Generic DirectAckAuthority begin remains the legacy
      * untracked path.
+     * New wire creation also atomically records independent immutable acceptance-history-required
+     * birth provenance. It certifies retention from this wire's creation, not physical no-write.
+     * Existing wires must never acquire that provenance by replay, backfill, generic acceptance or
+     * a later physical resolution. Preserve original operation replay/denial semantics without
+     * retroactively describing an older emission-tracked wire as acceptance-history-complete.
      */
     suspend fun beginDirectAckAttemptRequiringEmissionTracking(
         intent: DirectAckIntent,
@@ -320,6 +325,8 @@ interface DirectAckRadioExclusionAuthority {
      * Exact tracked replay returns AlreadyApplied; collisions and attempts to upgrade a legacy wire,
      * cross a generic untracked operation, or downgrade a tracked attempt return
      * Rejected(CONFLICT). Generic DirectAckAuthority registration remains the legacy untracked path.
+     * New retry-wire creation records the same independent acceptance-history-required birth
+     * provenance as initial tracked creation; existing-wire replay must not add missing provenance.
      */
     suspend fun registerDirectAckDispatchRequiringEmissionTracking(
         attempt: DirectAckAttempt,
@@ -638,6 +645,13 @@ sealed interface DirectAckRadioFailureResult {
  * preserve existing payload erasure. Denied acceptance creates no accepted fact, and exact replay
  * preserves the original operation's meaning without renewing permission or fabricating history.
  * Existing genuine delivery/proven replay precedence and sticky-saturation exceptions still apply.
+ * Strict completeness requires BOTH original emission-tracking provenance and independent
+ * acceptance-history-required provenance established atomically at new tracked-wire birth. An
+ * older tracked wire without the latter remains legacy/unproven even if its latest actual matches
+ * a physical row or its internal generic-acceptance journal is empty. Absence cannot reconstruct
+ * previously overwritten generic codes. Never backfill or upgrade that wire to clean history.
+ * Internal birth markers and acceptance entries are not public bookkeeping or wire receipts;
+ * preserve existing receipt filtering, generic eligibility, original replay and denied semantics.
  * Do not fabricate a marker or legacy ancestry, silently discard the accepted binding, or repair
  * rows during assessment. Distinct genuine accepted and unsent physical invocations sharing one
  * logical wire are valid: an unsent retry does not contradict or erase an earlier accepted send.

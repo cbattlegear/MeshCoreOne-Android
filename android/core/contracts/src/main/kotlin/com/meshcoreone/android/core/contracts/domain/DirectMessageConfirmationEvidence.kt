@@ -80,6 +80,10 @@ sealed interface DirectMessageConfirmationEvidence {
  * metadata. A later physical/generic code cannot erase earlier diagnostic collision or unmatched
  * acceptance evidence. Matching physical evidence may reconcile that exact binding without
  * deleting it; strict assessments must still consider every other retained binding.
+ * A wire is not acceptance-history-complete without independent immutable retention provenance
+ * established at its original tracked birth, alongside emission-tracking provenance. Older tracked
+ * wires lacking it remain legacy/unproven even with an empty journal or matching latest physical
+ * actual. Do not backfill provenance or reconstruct lost codes from absence.
  * Sticky saturation can legitimately cover a physical invocation without an emission row/handle
  * followed by generic wire acceptance. Retain RADIO_HISTORY_SATURATED; the missing physical match
  * alone is not a conflict or invalid-data failure there, even alongside UNSENT/MAY/mismatched rows.

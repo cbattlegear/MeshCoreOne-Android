@@ -820,3 +820,33 @@ Denied acceptance must not create an accepted fact; replay must preserve the
 original operation semantics without regranting permission. Genuine delivery,
 proven historical replay and the sticky-saturation exception keep precedence.
 No missing historical binding may be manufactured during migration or read.
+
+### Independent acceptance-history birth provenance
+
+The admitted storage repair identified a necessary limit on retrospective
+coverage: an older emission-tracked wire may already have lost a generic
+actual before immutable acceptance retention existed. An empty new journal
+or a latest wire actual matching a physical row cannot prove that no earlier
+unmatched actual was overwritten.
+
+New tracked initial/retry wire creation therefore atomically records a
+separate immutable acceptance-history-required birth provenance alongside
+the unchanged emission-tracking provenance. Strict completeness requires
+both. This is retention coverage from birth, not a message no-dispatch
+certificate, authenticated public token or proof of external radio history.
+Existing wires must not acquire it by backfill, replay, generic acceptance,
+physical resolution or DTO equality. Original replay/denied semantics remain;
+an older tracked wire without this marker stays legacy/unproven even when
+its current actual matches a valid physical row.
+
+Internal birth markers and immutable accepted-code entries must remain
+excluded from public receipt/bookkeeping projections. Generic API/results/
+eligibility, payload erasure, delivered/proven replay precedence and the
+legitimate sticky-saturation gap exception are unchanged. No missing
+historical actual may be manufactured. No public method signature or schema
+version is selected or changed in this contract clarification.
+
+Storage owns the actual marker/journal mechanism and controls for new-wire
+atomic creation, rollback/dedup, denied/replayed acceptance, older wire without
+retention provenance, overwrite, deletion and file reopen. These remain
+separate producer evidence; no executable validation is claimed here.

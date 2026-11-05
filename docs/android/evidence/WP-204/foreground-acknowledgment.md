@@ -42,9 +42,10 @@ scheduling `onInvalidatePresentation`; its pause/dispose tests are fixture
 source, not live integration evidence. The coordinator subsequently assigned
 the actual foreground enrollment producer to session
 `c8e06c81-e88c-429e-97af-e85f06bbfa19`; the composer source is not that producer.
-The real producer's warning/action and lifecycle integration is still pending.
-This implementation does not yet prove a real user interaction or feature
-readiness. No same-device snapshot rollback guarantee is claimed.
+The real producer now has mounted warning/action and lifecycle integration,
+with exact-candidate execution tracked below. Automated mounted interaction
+is not physical user-consent evidence or feature readiness. No same-device
+snapshot rollback guarantee is claimed.
 
 ## Typed consumer integration successor
 
@@ -163,6 +164,28 @@ These are reviewed source assertions, not passing UI execution evidence.
 One combined exact-candidate hosted run is coordinated with the producer;
 there is no duplicate verification bundle or transfer of the earlier run.
 
+Combined execution attempts (preserved, not attributed to successors):
+
+- Run [41999079789](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41999079789)
+  on `3fc62cb36c770a7c152eba4f9dfaad020f17a34b` failed app test compilation:
+  an invalid `assertDoesNotExist` import and accidentally nested `retireHost`
+  helper. Missing JUnit results were a compilation consequence, not executed
+  test failures.
+- Run [41999738888](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41999738888)
+  on `3b360f056f27d9b5ceb1bfcc66be1b203db76eba` compiled and executed
+  2,058 app tests with 24 failures: twelve mounted methods at both SDKs.
+  The warning retired at the initial dialog-focus check because Robolectric
+  had focused the activity but not its dialog. This was not passing mounted
+  interaction evidence.
+- Successor `aee0f1f0166bf29d45e1d14d1a311ed88eacea23`, immutable ref
+  `diagnostic-wp303-enrollment-aee0f1f01-20261105`, supplies the missing
+  dialog view window-focus event in the test fixture before the posted initial
+  focus observation. Reviewed test diff leaves production guards unchanged;
+  actual focus-loss and queued-confirm negative controls remain present.
+  Its combined run
+  [42002017581](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42002017581)
+  is pending; no earlier outcome is transferred to it.
+
 Not verified:
 
 - A prior hosted attempt, run `41984383470` on an earlier SHA, failed Kotlin
@@ -182,7 +205,7 @@ Related baseline evidence, not evidence for this verifier:
   datastore tests and six alias cases. That source predates these uncommitted
   verifier/test files, so the result does not verify their compilation or tests.
 
-The 18 focused verifier methods contain assertions for exact warning-copy hashing,
+The 21 focused verifier methods contain assertions for exact warning-copy hashing,
 request-field mismatch, version/copy changes, lifecycle invalidation, restart,
 concurrent verification, replay, post-commit uncertainty, corrupt/missing
 independent authenticator, independent witness database/key loss, and failure

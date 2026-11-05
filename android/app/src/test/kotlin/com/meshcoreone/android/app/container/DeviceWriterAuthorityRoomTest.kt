@@ -795,6 +795,40 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
         } finally { h.container.close() }
     }
 
+    @Test fun legacyRegionRemovalRecomputesBothAliasDecisionsAfterRealRoomConflicts() = runTest {
+        val paused = PausedStore(store)
+        val h = ContainerHarness(this, store, persistenceOverride = paused)
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            val before = assertNotNull(h.manager.connectedDevice)
+            val token = h.sessions.current!!.token
+            val short = "\u754c".repeat(10)
+            val long = short + "-suffix"
+            for (hasAlias in listOf(false, true)) {
+                val ticket = assertNotNull(store.fetchDeviceWriteSnapshot(before.id))
+                val seeded = ticket.device.copy(
+                    knownRegions = (if (hasAlias) listOf(short, long) else listOf(short)).snapshot(),
+                    defaultFloodScopeName = short,
+                )
+                assertTrue(store.saveDeviceIfUnchanged(seeded, ticket))
+                h.container.deviceEditor.updateDevice(seeded)
+                paused.beforeSave = {
+                    if (hasAlias) store.removeDeviceKnownRegion(before.radioId, long)
+                    else store.addDeviceKnownRegion(before.radioId, long)
+                }
+                assertNotNull(h.container.deviceEditor.removeKnownRegion(short)).join()
+                val saved = assertNotNull(store.fetchDevice(before.id))
+                assertEquals(if (hasAlias) emptyList() else listOf(long), saved.knownRegions.toList())
+                assertEquals(if (hasAlias) null else short, saved.defaultFloodScopeName)
+                assertEquals(saved, h.manager.connectedDevice)
+                assertEquals(token, h.manager.snapshot.value.token)
+                assertTrue(h.manager.connectionState.isOperational)
+            }
+            assertEquals(2, paused.rejected, "The legacy Job API must also rederive both survivor decisions")
+        } finally { h.container.close() }
+    }
+
     private fun DeviceDTO.info(frequency: Double = 915.0) = SelfInfo(
         advertisementType = 0u, txPower = txPower, maxTxPower = maxTxPower, publicKey = publicKey,
         latitude = latitude, longitude = longitude, multiAcks = multiAcks,

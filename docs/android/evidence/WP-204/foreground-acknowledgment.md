@@ -139,14 +139,29 @@ Passed:
   restore/export oracle. The two admission-race test names appear in its test
   discovery output.
 
-In progress, not a passing result:
+Passed for its own exact candidate only:
 
 - Hosted run [41994415358](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41994415358)
-  targets exact adapter candidate
+  passed on exact adapter candidate
   `96a2512cae9e359571cde4fc5d343431324abc44` on fresh immutable diagnostic
-  ref `wp204-foreground-adapter-96a2512c-20261105-022557`. It predates the
+  ref `wp204-foreground-adapter-96a2512c-20261105-022557`. The actual Linux
+  job log discovers all six adapter methods and the 36 SDK-specific executions
+  of the then-current 18 verifier methods. The Linux build, controller policy,
+  Swift codec and SwiftData restore/export jobs all passed. It predates the
   witness successor reconciliation and the new verifier codec/corruption tests.
   Its inputs and workflow are unchanged; no later source is attributed to it.
+  The independent expected-record assertions in `834aaf637` likewise require
+  successor execution.
+
+The real producer source was reviewed at
+`dec5bf2b820b958f8e4900ad86bcdc61ef908d1b`, and the producer owner repaired
+the reported class-companion placement, stale failed-read epoch path and direct
+dialog focus/lifecycle confirmation boundary in `1c463663a`. Its test suite
+adds actual warning actions through the real verifier, witness and journal,
+including native-SQLite pause/dispose barriers before stage and consume.
+These are reviewed source assertions, not passing UI execution evidence.
+One combined exact-candidate hosted run is coordinated with the producer;
+there is no duplicate verification bundle or transfer of the earlier run.
 
 Not verified:
 

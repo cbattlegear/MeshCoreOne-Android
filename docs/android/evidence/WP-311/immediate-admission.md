@@ -166,6 +166,14 @@ revalidate after contact-service acquisition, before side effects. Deterministic
 controls require no A/B command, unchanged row state and a valid fresh B mutation. Existing retained
 menu/confirmation controls and held-operation expectations remain intact; WP-209 is untouched.
 
+Favorite, block and delete also retain distinct active operation identities. Rebinding or entering
+fresh B work retires A's in-flight guards; A's late cleanup can remove only its own operation, never
+B's favorite/delete guard. Mutation reloads retain that identity through publication and loading
+cleanup, without requiring an active Sync; relevant errors retain graph/radio ownership for the
+same mounted display filter. Eight held-command/fetch controls cover success and ordinary failure,
+same-contact delete and different-contact favorite handoff, duplicate B protection, stale rows/errors,
+held B loading and successful fresh B completion. Pending radio-owned admissions remain intact.
+
 Both `ContactsImmediateAdmissionApi31ComposeTest` and
 `ContactsImmediateAdmissionApi37ComposeTest` inherit six mounted tests:
 

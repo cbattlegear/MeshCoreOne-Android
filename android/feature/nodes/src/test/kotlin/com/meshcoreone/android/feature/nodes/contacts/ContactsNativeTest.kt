@@ -29,6 +29,147 @@ import org.junit.Test
 
 class ContactsNativeTest {
     @Test
+    fun `retired favorite cleanup cannot clear a different B favorite guard`() = verifyHeldMutation("favorite", fails = false)
+
+    @Test
+    fun `retired favorite failure cannot fail or release B favorite`() = verifyHeldMutation("favorite", fails = true)
+
+    @Test
+    fun `retired delete completion cannot hide B row or clear B delete guard`() = verifyHeldMutation("delete", fails = false)
+
+    @Test
+    fun `retired delete failure cannot fail or release B delete`() = verifyHeldMutation("delete", fails = true)
+
+    private fun verifyHeldMutation(action: String, fails: Boolean) = scenario {
+        val harness = Harness(clock).connect()
+        val radio = checkNotNull(harness.session.radioId)
+        val first = contact(radioId = radio, name = "First")
+        val second = contact(radioId = radio, name = "Second")
+        val holder = ContactsStateHolder(harness.dependencies, scope)
+        holder.upsert(first)
+        holder.upsert(second)
+        val oldRelease = CompletableDeferred<Unit>()
+        val oldEntered = CompletableDeferred<Unit>()
+        suspend fun oldWork() {
+            oldEntered.complete(Unit)
+            oldRelease.await()
+            if (fails) error("retired mutation failed")
+        }
+        harness.contactService.favoriteBehavior = { _, _ -> oldWork() }
+        harness.contactService.removeContact = { _, _ -> oldWork() }
+        val old = scope.launch {
+            if (action == "favorite") holder.toggleFavorite(first) else holder.deleteContact(first)
+        }
+        oldEntered.await()
+        val replacement = Harness(clock).connect(radio)
+        val newRelease = CompletableDeferred<Unit>()
+        val newEntered = CompletableDeferred<Unit>()
+        suspend fun newWork() { newEntered.complete(Unit); newRelease.await() }
+        replacement.contactService.favoriteBehavior = { _, _ -> newWork() }
+        replacement.contactService.removeContact = { _, _ -> newWork() }
+        harness.session.contacts = replacement.contactService
+        harness.session.adverts = replacement.adverts
+        harness.session.servicesStore = replacement.store
+        harness.session.offlineStore = replacement.store
+        // No screen hook: fresh entry itself must retire A's guard.
+        val target = if (action == "favorite") second else first
+        val fresh = scope.launch {
+            if (action == "favorite") holder.toggleFavorite(target) else holder.deleteContact(target)
+        }
+        newEntered.await()
+        if (action == "favorite") assertEquals(second.id, holder.state.value.togglingFavoriteId)
+        else assertTrue(first.id in holder.state.value.deletingIds)
+        oldRelease.complete(Unit)
+        old.join()
+        assertTrue(old.isCancelled)
+        assertNull(holder.state.value.errorMessage)
+        assertEquals(listOf(first, second), holder.state.value.contacts)
+        if (action == "favorite") {
+            assertEquals(second.id, holder.state.value.togglingFavoriteId, "A cleanup must not remove B's different-contact guard")
+            holder.toggleFavorite(second)
+        } else {
+            assertTrue(first.id in holder.state.value.deletingIds, "A cleanup must not remove B's same-contact guard")
+            holder.deleteContact(first)
+        }
+        assertEquals(1, replacement.contactService.calls.size, "B remains protected against a duplicate action")
+        newRelease.complete(Unit)
+        fresh.join()
+        assertFalse(fresh.isCancelled)
+        assertNull(holder.state.value.errorMessage)
+        assertNull(holder.state.value.togglingFavoriteId)
+        assertTrue(holder.state.value.deletingIds.isEmpty())
+        if (action == "delete") assertEquals(listOf(second), holder.state.value.contacts)
+    }
+
+    @Test
+    fun `retired favorite fetch cannot publish stale rows into same-radio B`() = verifyMutationFetch("favorite", fails = false)
+
+    @Test
+    fun `retired favorite fetch failure cannot publish into same-radio B`() = verifyMutationFetch("favorite", fails = true)
+
+    @Test
+    fun `retired block fetch cannot publish stale rows into same-radio B`() = verifyMutationFetch("block", fails = false)
+
+    @Test
+    fun `retired block fetch failure cannot publish into same-radio B`() = verifyMutationFetch("block", fails = true)
+
+    private fun verifyMutationFetch(action: String, fails: Boolean) = scenario {
+        val harness = Harness(clock).connect()
+        val radio = checkNotNull(harness.session.radioId)
+        val row = contact(radioId = radio, name = "Admitted")
+        val stale = contact(radioId = radio, name = "Stale A")
+        harness.store.contacts += stale
+        val holder = ContactsStateHolder(harness.dependencies, scope)
+        holder.upsert(row)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        harness.store.fetchContactsGate = {
+            entered.complete(Unit)
+            release.await()
+            if (fails) error("retired fetch failed")
+        }
+        val old = scope.launch {
+            if (action == "favorite") holder.toggleFavorite(row) else holder.toggleBlocked(row)
+        }
+        entered.await()
+        assertTrue(holder.state.value.isLoading)
+        val replacement = Harness(clock).connect(radio)
+        val freshRow = contact(radioId = radio, name = "Fresh B")
+        replacement.store.contacts += freshRow
+        val freshEntered = CompletableDeferred<Unit>()
+        val freshRelease = CompletableDeferred<Unit>()
+        replacement.store.fetchContactsGate = {
+            freshEntered.complete(Unit)
+            freshRelease.await()
+        }
+        harness.session.contacts = replacement.contactService
+        harness.session.servicesStore = replacement.store
+        harness.session.offlineStore = replacement.store
+        holder.onConnectionChanged()
+        assertFalse(holder.state.value.isLoading)
+        assertNull(holder.state.value.togglingFavoriteId)
+        val fresh = scope.launch {
+            if (action == "favorite") holder.toggleFavorite(row) else holder.toggleBlocked(row)
+        }
+        freshEntered.await()
+        release.complete(Unit)
+        old.join()
+        assertTrue(old.isCancelled)
+        assertTrue(holder.state.value.isLoading, "A cleanup cannot finish B's held reload")
+        if (action == "favorite") assertEquals(row.id, holder.state.value.togglingFavoriteId)
+        assertEquals(listOf(row), holder.state.value.contacts)
+        assertNull(holder.state.value.errorMessage)
+        assertNull(holder.state.value.errorConnection)
+        freshRelease.complete(Unit)
+        fresh.join()
+        assertFalse(fresh.isCancelled)
+        assertEquals(listOf(freshRow, row), holder.state.value.contacts)
+        assertFalse(holder.state.value.isLoading)
+        assertNull(holder.state.value.togglingFavoriteId)
+        assertNull(holder.state.value.errorMessage)
+    }
+
+    @Test
     fun `delete rejects a graph replaced during service acquisition then fresh B succeeds`() = verifyMutationAcquisition("delete")
 
     @Test

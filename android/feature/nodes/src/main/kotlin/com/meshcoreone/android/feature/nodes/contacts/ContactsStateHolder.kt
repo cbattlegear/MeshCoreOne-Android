@@ -43,7 +43,7 @@ data class ContactsState(
     val isSyncing: Boolean = false,
     val syncProgress: SyncProgress? = null,
     val errorMessage: NodesMessage? = null,
-    /** Graph/radio owner for Sync failures, including readiness errors before an operation starts. */
+    /** Graph/radio owner for connection-owned failures, including readiness before a command starts. */
     val errorConnection: NodesConnectionSnapshot? = null,
     val togglingFavoriteId: UUID? = null,
     /** Rows hidden after a confirmed delete, held until a reload sees the row gone. */
@@ -88,6 +88,11 @@ class ContactsStateHolder(
     }
 
     private var activeSync: ContactSync? = null
+    private enum class MutationKind { FAVORITE, BLOCK, DELETE }
+    private class ContactMutation(val owner: NodesConnectionSnapshot, val contactId: UUID, val kind: MutationKind) {
+        var load: Int? = null
+    }
+    private val mutations = mutableSetOf<ContactMutation>()
 
     private val session get() = dependencies.session
 
@@ -102,10 +107,12 @@ class ContactsStateHolder(
     private suspend fun loadContacts(
         radioId: RadioId,
         errorOwner: NodesConnectionSnapshot? = null,
+        mutation: ContactMutation? = null,
         canPublish: () -> Boolean,
     ) {
         val dataStore = session.offlineDataStore() ?: return
         val generation = ++loadGeneration
+        mutation?.load = generation
         val admissionsAtStart = pendingAdmissions.toMap()
         mutableState.update { it.copy(isLoading = true, errorMessage = null, errorConnection = null) }
         try {
@@ -242,6 +249,13 @@ class ContactsStateHolder(
 
     /** Retire only connection-owned work; cached contacts and pending admissions remain radio-owned. */
     fun onConnectionChanged() {
+        mutations.toList().filterNot(::isCurrentMutation).forEach { operation ->
+            if (operation.load == loadGeneration) {
+                ++loadGeneration
+                mutableState.update { it.copy(isLoading = false) }
+            }
+            finishMutation(operation)
+        }
         val errorOwner = state.value.errorConnection
         if (errorOwner != null &&
             (session.connectionIdentity() !== errorOwner.identity || session.currentRadioId() != errorOwner.radioId)
@@ -266,6 +280,38 @@ class ContactsStateHolder(
         if (activeSync !== operation) throw CancellationException("Contact sync was retired")
     }
 
+    private fun isCurrentMutation(operation: ContactMutation): Boolean =
+        operation in mutations && session.connectionIdentity() === operation.owner.identity &&
+            session.currentRadioId() == operation.owner.radioId
+
+    private suspend fun ensureCurrentMutation(operation: ContactMutation) {
+        session.ensureContactConnection(operation.owner.identity, operation.owner.radioId)
+        if (operation !in mutations) throw CancellationException("Contact mutation was retired")
+    }
+
+    private fun beginMutation(contact: ContactDTO, connection: Any?, kind: MutationKind): ContactMutation? {
+        onConnectionChanged()
+        if (mutations.any { it.kind == kind && (kind == MutationKind.FAVORITE || it.contactId == contact.id) }) return null
+        return ContactMutation(NodesConnectionSnapshot(contact.radioId, connection), contact.id, kind).also { mutations += it }
+    }
+
+    private fun finishMutation(operation: ContactMutation) {
+        if (!mutations.remove(operation)) return
+        mutableState.update {
+            when (operation.kind) {
+                MutationKind.FAVORITE -> it.copy(togglingFavoriteId = null)
+                MutationKind.DELETE -> it.copy(deletingIds = it.deletingIds - operation.contactId)
+                MutationKind.BLOCK -> it
+            }
+        }
+    }
+
+    private suspend fun reloadMutation(operation: ContactMutation) {
+        ensureCurrentMutation(operation)
+        loadContacts(checkNotNull(operation.owner.radioId), operation.owner, operation) { isCurrentMutation(operation) }
+        ensureCurrentMutation(operation)
+    }
+
     /** Toggle favorite on the device, then reload. */
     suspend fun toggleFavorite(contact: ContactDTO, owner: NodesConnectionSnapshot? = null) {
         val connection = if (owner != null) owner.identity else session.connectionIdentity()
@@ -273,18 +319,21 @@ class ContactsStateHolder(
         val contactService = session.contactService() ?: return
         session.ensureContactConnection(connection, contact.radioId)
         val current = state.value.contacts.firstOrNull { it.id == contact.id } ?: return
+        val operation = beginMutation(contact, connection, MutationKind.FAVORITE) ?: return
         mutableState.update { it.copy(togglingFavoriteId = contact.id) }
         try {
+            ensureCurrentMutation(operation)
             contactService.setContactFavorite(contact.key, !current.isFavorite)
-            session.ensureContactConnection(connection, contact.radioId)
-            if (state.value.contacts.any { it.id == contact.id }) loadContacts(contact.radioId)
+            ensureCurrentMutation(operation)
+            if (state.value.contacts.any { it.id == contact.id }) reloadMutation(operation)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
-            session.ensureContactConnection(connection, contact.radioId)
-            mutableState.update { it.copy(errorMessage = failure(error), errorConnection = null) }
+            ensureCurrentMutation(operation)
+            mutableState.update { it.copy(errorMessage = failure(error), errorConnection = operation.owner) }
         } finally {
-            mutableState.update { it.copy(togglingFavoriteId = null) }
+            onConnectionChanged()
+            finishMutation(operation)
         }
     }
 
@@ -295,10 +344,19 @@ class ContactsStateHolder(
         val contactService = session.contactService() ?: return
         session.ensureContactConnection(connection, contact.radioId)
         val current = state.value.contacts.firstOrNull { it.id == contact.id } ?: return
-        reportingFailure(NodesConnectionSnapshot(contact.radioId, connection)) {
+        val operation = beginMutation(contact, connection, MutationKind.BLOCK) ?: return
+        try {
+            ensureCurrentMutation(operation)
             contactService.updateContactPreferences(contact.key, isBlocked = !current.isBlocked)
-            session.ensureContactConnection(connection, contact.radioId)
-            loadContacts(contact.radioId)
+            reloadMutation(operation)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            ensureCurrentMutation(operation)
+            mutableState.update { it.copy(errorMessage = failure(error), errorConnection = operation.owner) }
+        } finally {
+            onConnectionChanged()
+            finishMutation(operation)
         }
     }
 
@@ -321,39 +379,43 @@ class ContactsStateHolder(
         val contactService = session.contactService() ?: run {
             if (owner != null) session.ensureContactConnection(owner.identity, owner.radioId)
             mutableState.update {
-                it.copy(errorMessage = NodesMessage.res(R.string.l10n_app_contacts_contacts_viewmodel_connecttodelete), errorConnection = null)
+                it.copy(errorMessage = NodesMessage.res(R.string.l10n_app_contacts_contacts_viewmodel_connecttodelete), errorConnection = owner)
             }
             return
         }
         session.ensureContactConnection(connection, contact.radioId)
+        onConnectionChanged()
         if (isDeletePending(contact.id)) return
+        val operation = beginMutation(contact, connection, MutationKind.DELETE) ?: return
         mutableState.update { it.copy(deletingIds = it.deletingIds + contact.id) }
         try {
             withCommandTimeout(dependencies.clock, RadioCommandTimeout.delete, "removeContact") {
+                ensureCurrentMutation(operation)
                 contactService.removeContact(contact.radioId, contact.publicKey)
             }
-            session.ensureContactConnection(connection, contact.radioId)
+            ensureCurrentMutation(operation)
             hideDeletedContact(contact)
         } catch (_: NodesContactFailure.ContactNotFound) {
-            session.ensureContactConnection(connection, contact.radioId)
+            ensureCurrentMutation(operation)
             // The radio no longer knows this contact: clear the orphaned local row.
-            reportingFailure(NodesConnectionSnapshot(contact.radioId, connection)) {
+            reportingFailure(operation.owner) {
                 contactService.removeLocalContact(contact.key, contact.publicKey)
-                session.ensureContactConnection(connection, contact.radioId)
+                ensureCurrentMutation(operation)
                 hideDeletedContact(contact)
             }
         } catch (_: CommandTimeoutException) {
-            session.ensureContactConnection(connection, contact.radioId)
+            ensureCurrentMutation(operation)
             mutableState.update {
-                it.copy(errorMessage = NodesMessage.res(R.string.l10n_app_contacts_contacts_viewmodel_removetimedout), errorConnection = null)
+                it.copy(errorMessage = NodesMessage.res(R.string.l10n_app_contacts_contacts_viewmodel_removetimedout), errorConnection = operation.owner)
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
-            session.ensureContactConnection(connection, contact.radioId)
-            mutableState.update { it.copy(errorMessage = failure(error), errorConnection = null) }
+            ensureCurrentMutation(operation)
+            mutableState.update { it.copy(errorMessage = failure(error), errorConnection = operation.owner) }
         } finally {
-            mutableState.update { it.copy(deletingIds = it.deletingIds - contact.id) }
+            onConnectionChanged()
+            finishMutation(operation)
         }
     }
 
@@ -387,7 +449,7 @@ class ContactsStateHolder(
             throw cancelled
         } catch (error: Exception) {
             if (owner != null) session.ensureContactConnection(owner.identity, owner.radioId)
-            mutableState.update { it.copy(errorMessage = failure(error), errorConnection = null) }
+            mutableState.update { it.copy(errorMessage = failure(error), errorConnection = owner) }
         }
     }
 

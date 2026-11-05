@@ -56,7 +56,10 @@ Activity recreation thus keeps both the backing authority and clock dependency
 stable; genuinely different injected clocks still replace the holder.
 Leaving history invalidates its load unless the owning Activity is changing
 configuration. Genuine close/re-entry therefore reloads snapshots captured
-while the route was closed; Activity recreation keeps the loaded state.
+while the route was closed; Activity recreation keeps the loaded state. Genuine
+exit also detaches the loaded holder and clears store, authority and job
+references instead of retaining each visited node's cached history until
+Activity destruction.
 
 ICU's regional `LocaleData.getMeasurementSystem` is retained for normal locales
 and regional `rg` overrides. Its supplemental-region lookup does not implement
@@ -169,11 +172,16 @@ It does not calculate expected values with production helpers.
 7. Mount history, close its composition, change the store's captured latest
    snapshot, and reopen the same node with unchanged store/clock. Assert exactly
    one new load and the new latest sample rather than stale cached history.
+   While closed, assert the retained owner has no loaded snapshots and that
+   refresh cannot reach the obsolete store, including after UI work is drained.
 
 Mounted counter assertions synchronize through Compose/Android idle before
 reading exact counts, rather than polling counters while Android UI work is
 pending. Neighbor readouts explicitly scroll into the viewport at 200% font
 before asserting visibility; selection/value assertions remain unchanged.
+Neighbor literals match the production number formatter's trimmed trailing
+zeros (`4 dB`, not `4.0 dB`), including the negative latest-sample assertion
+(`9 dB`) so it detects a real selection reset.
 
 ## Admission, verification and limits
 

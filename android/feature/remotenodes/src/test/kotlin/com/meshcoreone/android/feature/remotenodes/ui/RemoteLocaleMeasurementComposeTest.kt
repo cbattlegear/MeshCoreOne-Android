@@ -36,6 +36,7 @@ import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.Density
+import androidx.lifecycle.ViewModelProvider
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.contracts.domain.ContactPersisting
 import com.meshcoreone.android.core.contracts.domain.DiscoveredNodePersisting
@@ -48,6 +49,7 @@ import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.model.TelemetrySnapshotEntry
 import com.meshcoreone.android.core.model.snapshot
+import com.meshcoreone.android.core.model.uppercaseHexString
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.TelemetryResponse
 import com.meshcoreone.android.core.protocol.lpp.LPPEncoder
@@ -293,12 +295,12 @@ class RemoteLocaleMeasurementComposeTest {
         val slider = SemanticsMatcher.keyIsDefined(SemanticsActions.SetProgress)
         compose.onNode(slider and hasContentDescription("Alpha.", substring = true))
             .performScrollTo().performSemanticsAction(SemanticsActions.SetProgress) { it(0f) }
-        compose.onNode(hasText("Alpha: 4.0 dB", substring = true)).performScrollTo().assertIsDisplayed()
+        compose.onNode(hasText("Alpha: 4 dB", substring = true)).performScrollTo().assertIsDisplayed()
         compose.runOnIdle {
             chart.value = neighbor.copy(name = "Beta").asStableMetricChart()
         }
-        compose.onNode(hasText("Beta: 4.0 dB", substring = true)).performScrollTo().assertIsDisplayed()
-        compose.onNode(hasText("Beta: 9.0 dB", substring = true)).assertDoesNotExist()
+        compose.onNode(hasText("Beta: 4 dB", substring = true)).performScrollTo().assertIsDisplayed()
+        compose.onNode(hasText("Beta: 9 dB", substring = true)).assertDoesNotExist()
     }
 
     @Test fun historyStoreTransitionsFenceLateResultsAndClockChangesReload() {
@@ -453,6 +455,16 @@ class RemoteLocaleMeasurementComposeTest {
         compose.runOnIdle { assertEquals(1, reads) }
         compose.onNodeWithText("Toggle history").performClick()
         compose.onNode(hasTestTag("remote-history-content")).assertDoesNotExist()
+        compose.runOnIdle {
+            val radio = RadioId(UUID(0, 1))
+            val retained = ViewModelProvider(activity.get())[
+                "remote-history:$radio:${key.uppercaseHexString()}", RetainedRemoteHistory::class.java,
+            ]
+            assertTrue("Closing history releases its loaded snapshots", retained.holder.state.value.snapshots.isEmpty())
+            retained.refresh(key, radio)
+        }
+        compose.waitForIdle()
+        compose.runOnIdle { assertEquals("Closing history releases the store used for refresh", 1, reads) }
         compose.runOnIdle { latest = 30.5 }
         compose.onNodeWithText("Toggle history").performClick()
         compose.onNode(hasText(": 86.9 \u00b0F", substring = true)).performScrollTo().assertIsDisplayed()

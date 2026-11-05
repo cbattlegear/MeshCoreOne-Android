@@ -40,7 +40,7 @@ import java.util.Locale
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
-private class RetainedRemoteHistory(
+internal class RetainedRemoteHistory(
     private var clock: RemoteNodesClock,
     private var zone: ZoneId,
     initialPresentation: HistoryPresentation,
@@ -93,6 +93,11 @@ private class RetainedRemoteHistory(
 
     fun leave() {
         loadJob?.cancel()
+        loadJob = null
+        store = null
+        authorityIdentity = null
+        holder = newHolder(clock, zone, presentation)
+        started = false
         configured = false
     }
 

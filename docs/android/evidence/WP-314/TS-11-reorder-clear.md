@@ -375,3 +375,10 @@ before fresh same/different-radio input. Run eligibility and both callback
 launch boundaries require a live device independently of local editing authority;
 an offline attempt must not retire the valid draft binding. R24's already-running
 diagnostics remain bound to their older heads.
+
+R24 negative `e68cd7ffa4496c989cafcecc418307c84841eddc`,
+run `42036763477`, failed tools test compilation before discovering the new
+controls: the new forwarding fixture declared `List` instead of the contract's
+`SnapshotList`, and its final suspend cleanup lacked the harness coroutine.
+The successor corrects those two fixture signatures/call sites without changing
+any assertion. This compile failure is not negative behavioral evidence.

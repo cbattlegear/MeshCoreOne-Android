@@ -5,6 +5,8 @@ import com.meshcoreone.android.core.contracts.domain.TracePathPersisting
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.model.SavedTracePathDTO
+import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import java.io.IOException
 import java.util.UUID
@@ -268,7 +270,7 @@ class SavedPathsStateHolderTest {
                 configure(object : SavedPathsDependencies {
                     override fun connectedDevice() = connected
                     override fun savedPaths() = object : TracePathPersisting by store {
-                        override suspend fun fetchSavedTracePaths(radioId: RadioId): List<com.meshcoreone.android.core.model.SavedTracePathDTO> {
+                        override suspend fun fetchSavedTracePaths(radioId: RadioId): SnapshotList<SavedTracePathDTO> {
                             val held = ++reads == 2
                             if (held && holdBeforeRead) gate.await()
                             val snapshot = store.fetchSavedTracePaths(radioId)
@@ -292,7 +294,7 @@ class SavedPathsStateHolderTest {
             assertFalse(store.paths.containsKey(b.id))
             assertNull(current.state.value.errorMessage)
             assertFalse(current.state.value.isLoading)
-            store.deleteSavedTracePath(EntityKey(a.radioId, a.id))
+            harness.complete { store.deleteSavedTracePath(EntityKey(a.radioId, a.id)) }
         }
     }
 

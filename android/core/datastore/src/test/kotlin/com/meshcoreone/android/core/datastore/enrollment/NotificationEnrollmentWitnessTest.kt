@@ -121,6 +121,24 @@ class NotificationEnrollmentWitnessTest {
     }
 
     @Test
+    fun databaseDeletedDuringStaleAcknowledgmentCannotBeRecreatedAsAnEmptySchema() = runBlocking {
+        val f = fixture()
+        val current = f.authorize()
+        f.verification = {
+            assertEquals(current, it.expectedCurrent)
+            assertTrue(f.file.delete())
+            ForegroundAcknowledgmentResult.NewlyVerified(it)
+        }
+
+        assertEquals(
+            WitnessMutation.NotRetained(WitnessProblem.CORRUPT_STORAGE),
+            f.store().authorize(f.newRequest(current)),
+        )
+        assertFalse(f.file.exists())
+        assertEquals(1, f.keys.created)
+    }
+
+    @Test
     fun verifierSubstitutedNonceOrPriorObservationCannotAuthorize() = runBlocking {
         val f = fixture()
         f.verification = { ForegroundAcknowledgmentResult.NewlyVerified(it.copy(

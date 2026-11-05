@@ -95,7 +95,7 @@ class NotificationEnrollmentWitness internal constructor(
                 return WitnessMutation.NotRetained(WitnessProblem.ACKNOWLEDGMENT_MISMATCH)
             }
         }
-        return mutate(request.operation, allowAllocation = true) { db, previous, mutation ->
+        return mutate(request.operation, allowAllocation = request.expectedCurrent == null) { db, previous, mutation ->
             if (previous?.record != request.expectedCurrent) return@mutate WitnessMutation.Stale
             val witness = newWitnessId()
             val next = EnrollmentWitnessRecord(request.operation, witness, 1, WitnessPhase.AUTHORIZED, null)

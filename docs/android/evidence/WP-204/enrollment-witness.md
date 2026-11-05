@@ -183,6 +183,10 @@ escape typed corruption handling. The successor source now walks a bounded,
 cycle-safe cause chain for the existing typed Keystore categories and rejects
 null history/head blobs as `CORRUPT_STORAGE`; regressions cover both wrapped
 Keystore causes and nullable payload/MAC columns after SQLite `quick_check`.
-These changes do not add verifier/UI wiring or activation. The successor's
-exact-head CI and review outcomes must be recorded from their actual GitHub
-results; the earlier-head run and review are not evidence for the successor.
+The next review found that database allocation after acknowledgment must also
+require an originally absent expected state. Allocation is now limited to
+`expectedCurrent == null`, with a regression deleting an existing database
+during verification and confirming the stale request cannot create an empty
+replacement schema. These changes do not add verifier/UI wiring or activation.
+Each successor's exact-head CI and review outcomes must be recorded from actual
+GitHub results; earlier-head runs and reviews are not evidence for successors.

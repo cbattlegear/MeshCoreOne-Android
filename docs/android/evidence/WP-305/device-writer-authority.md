@@ -296,3 +296,16 @@ The persistence producer separately verified exact `83a63efa` to `f2b5e73d` cust
 targeted hunk (minus the already-present import), exact transferred test/helper bytes, no removed
 older assertions, and clean diff check. That disposition is source-only. The hosted job/log remain
 the authoritative execution evidence; no duplicate result bundle is retained.
+
+The subsequent independent review confirms no in-repository callback client, unchanged legacy
+Job/awaited method signatures, and a changed public constructor signature; compatibility with
+unestablished external clients is not claimed. Its requested combined control is
+`targetedSameAliasRemovalRebasesEditorRoomAndLiveInBothOrders`: real production editor plus
+real targeted Room writer removes the same short/long alias behind the editor's CAS pause in
+both orders, checks the intermediate targeted row without manufactured live publication, requires
+two rejected tickets, then checks retained/last-cleared Room and live defaults under the original
+operational token. These are final-state checks, not continuous connection-state history.
+The isolated old-base storage successor must not ship by itself; the normalized editor, CAS guard,
+targeted writer and postcommit publication are composed here. Source count becomes twenty-five
+writer and fifteen persistence methods. Run `41954394380` at exact `9972903c` predates this
+additional control and cannot provide its execution evidence.

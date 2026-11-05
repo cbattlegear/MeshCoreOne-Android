@@ -84,8 +84,10 @@ class RemoteNodesComposeTest {
     private var renderedMap: MapPresentationState? = null
     private var renderedLabels = true
     private var renderedClusters = true
+    private var firstCameraCallback: ((MapCamera) -> Unit)? = null
 
     @Before fun createHost() {
+        firstCameraCallback = null
         host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
         host.get().actionBar?.hide()
         host.get().getSharedPreferences("shared-map", 0).edit().clear().commit()
@@ -107,6 +109,7 @@ class RemoteNodesComposeTest {
                                 renderedMap = state
                                 renderedLabels = labels
                                 renderedClusters = clusters
+                                if (firstCameraCallback == null) firstCameraCallback = camera
                             }
                             Column(modifier.testTag("synthetic-map")) {
                                 Text("Local map fixture: ${state.points.size} markers")
@@ -260,6 +263,9 @@ class RemoteNodesComposeTest {
         }
         show(RemoteNodeLaunch(fixture.contact, RemoteNodeLaunchAction.SAVED_HISTORY))
         val labels = text(com.meshcoreone.android.core.l10n.generated.AppMapStrings.mapControlsShowLabels)
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithText(labels, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+        }
         compose.onNodeWithText(labels, useUnmergedTree = true).performScrollTo().performClick()
         compose.waitUntil(5_000) {
             writeStarted.isCompleted &&
@@ -520,6 +526,24 @@ class RemoteNodesComposeTest {
         compose.onNodeWithText(text(L.remoteNodesCancel)).performScrollTo().performClick()
         compose.onNodeWithText(text(L.remoteNodesSettingsPickOnMap)).performScrollTo().performClick()
         settleMapComposition()
+        compose.waitUntil(5_000) {
+            renderedMap?.camera == MapCamera(GeoPoint(37.7, -122.4), .05, .05)
+        }
+        compose.runOnIdle {
+            firstCameraCallback?.invoke(MapCamera(GeoPoint(39.0, -122.0), .3, .7))
+        }
+        compose.waitForIdle()
+        compose.runOnIdle {
+            assertEquals(GeoPoint(37.7, -122.4), requireNotNull(renderedMap).points.single().position)
+        }
+        compose.runOnUiThread { host.get().onBackPressedDispatcher.onBackPressed() }
+        compose.waitForIdle()
+        compose.onNodeWithText(text(L.remoteNodesCancel)).assertDoesNotExist()
+        compose.onNodeWithText(text(L.remoteNodesSettingsPickOnMap)).performScrollTo().performClick()
+        settleMapComposition()
+        compose.waitUntil(5_000) {
+            renderedMap?.camera == MapCamera(GeoPoint(37.7, -122.4), .05, .05)
+        }
         compose.runOnIdle {
             assertEquals("Reopening must initialize from the unchanged saved location",
                 MapCamera(GeoPoint(37.7, -122.4), .05, .05), requireNotNull(renderedMap).camera)

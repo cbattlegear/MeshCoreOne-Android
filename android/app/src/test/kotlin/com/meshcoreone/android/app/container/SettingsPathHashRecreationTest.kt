@@ -4,6 +4,9 @@ package com.meshcoreone.android.app.container
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isPopup
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
@@ -101,7 +104,7 @@ class SettingsPathHashRecreationTest : RoomProcessTest() {
             }
             fun choose(text: Int) {
                 compose.onNodeWithText(context.getString(S.pathHashModeLabel)).performScrollTo().performClick()
-                compose.onNodeWithText(context.getString(text)).performClick()
+                compose.onNode(hasText(context.getString(text)) and hasAnyAncestor(isPopup())).performClick()
             }
             mount()
             choose(S.pathHashModeOneByte)

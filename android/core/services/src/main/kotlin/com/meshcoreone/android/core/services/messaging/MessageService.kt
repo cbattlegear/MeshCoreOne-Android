@@ -2169,13 +2169,7 @@ class MessageService(
         queuedChannel(messageID, true, preserveTimestamp)
 
     private suspend fun queuedChannel(id: UUID, isResend: Boolean, preserveTimestamp: Boolean): UInt {
-        val mode = if (isResend) ChannelSendCompletionMode.RESEND else ChannelSendCompletionMode.SEND
-        val claimID = synchronized(lock) {
-            channelClaims.values.firstOrNull {
-                it.message.id == id && it.pendingID == null && it.mode == mode &&
-                    it.acceptedTimestamp != null && !it.retired
-            }?.id
-        } ?: UUID.randomUUID()
+        val claimID = UUID.randomUUID()
         var completed = false
         try {
             return when (val result = sendPendingChannelClaim(claimID, id, null, isResend, preserveTimestamp)) {

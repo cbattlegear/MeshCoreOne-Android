@@ -21,6 +21,41 @@ import org.junit.jupiter.api.TestFactory
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class NativeMessagingTest {
+    @TestFactory fun acceptedChannelInvocationIdentity() =
+        listOf(false, true).map { isResend ->
+            native("newPublicChannelInvocationCannotRebindAcceptedCaptureWithResend$isResend") {
+                val h = Harness(this); h.start()
+                val message = h.message(MessageStatus.PENDING, 0u)
+                val claimID = UUID.randomUUID()
+                val fault = storageFailure()
+                h.store.channelFailureAuthority.afterCompletion = { throw fault }
+                assertSame(fault, assertFailsWith<PersistenceStoreException> {
+                    h.service.sendPendingChannelClaim(claimID, message.id, null, true, true)
+                })
+                h.store.channelFailureAuthority.afterCompletion = null
+                assertTrue(h.service.channelClaimAccepted(claimID))
+                val committed = h.stored(message.id)
+                assertEquals(MessageStatus.SENT, committed.status)
+                assertEquals(2L, committed.sendCount)
+                val accesses = mutableListOf<String>()
+                h.store.before = { accesses += it }
+                assertFailsWith<PersistenceStoreException> {
+                    if (isResend) h.service.resendChannelMessage(message.id, true)
+                    else h.service.sendPendingChannelMessage(message.id)
+                }
+                h.store.before = null
+                assertTrue(accesses.isEmpty(), "New invocation must not prepare or replay old accepted work")
+                assertEquals(committed, h.stored(message.id))
+                val reconciled = assertIs<MessageService.ChannelSendOutcome.Completed>(
+                    h.service.sendPendingChannelClaim(claimID, message.id, null, true, true))
+                assertEquals(committed, reconciled.message)
+                assertEquals(1, h.sends(CommandCode.SEND_CHANNEL_MESSAGE).size)
+                h.service.releaseChannelClaim(claimID)
+                assertTrue(h.service.close().isComplete)
+                h.close()
+            }
+        }
+
     @TestFactory fun capturedChannelSuccessLifecycle() =
         listOf("message-replacement", "same-value-write", "commit-then-throw", "cleanup-then-throw").map { schedule ->
             native("conditionalRealChannelAcceptanceKeepsOriginalCaptureAcross$schedule") {

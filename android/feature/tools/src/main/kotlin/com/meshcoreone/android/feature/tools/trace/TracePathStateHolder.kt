@@ -112,6 +112,7 @@ class TracePathStateHolder(
 
     internal fun isConnectionCurrent(device: DeviceDTO? = deps.connectedDevice()): Boolean {
         if (connectionRetired) return false
+        if (connectionIdentity != null && isLocalDraftCurrent(device)) return false
         val token = sessionToken
         val identity = connectionIdentity
         if (token == deps.sessionToken() &&
@@ -126,12 +127,12 @@ class TracePathStateHolder(
     internal fun isBoundConnectionCurrent(radioId: RadioId?, generation: Int, originatingToken: SessionToken?): Boolean =
         connectionIdentity == (radioId to generation) && sessionToken == originatingToken && isConnectionCurrent()
 
-    internal fun isEditingCurrent(): Boolean {
-        if (!connectionRetired && sessionToken == null && connectionIdentity?.first == null &&
-            deps.sessionToken() == null && deps.connectedDevice() == null
-        ) return true
-        return isConnectionCurrent()
-    }
+    private fun isLocalDraftCurrent(device: DeviceDTO?): Boolean =
+        !connectionRetired && sessionToken == null && connectionIdentity?.first == null &&
+            deps.sessionToken() == null && device == null
+
+    internal fun isEditingCurrent(): Boolean =
+        isLocalDraftCurrent(deps.connectedDevice()) || isConnectionCurrent()
 
     internal fun isBoundEditingCurrent(radioId: RadioId?, generation: Int, originatingToken: SessionToken?): Boolean =
         connectionIdentity == (radioId to generation) && sessionToken == originatingToken && isEditingCurrent()
@@ -394,7 +395,7 @@ class TracePathStateHolder(
         val result = snapshot.result?.takeIf { it.success } ?: return false
         return try {
             val saved = store.createSavedTracePath(radioId, name, result.tracedPathBytes, result.hashSize.toLong(), run(result, time.now()))
-            if (isConnectionCurrent() && pathSelectionRevision == revision && deps.connectedDevice()?.radioId == radioId) {
+            if (pathSelectionRevision == revision && isConnectionCurrent() && deps.connectedDevice()?.radioId == radioId) {
                 update { it.copy(activeSavedPath = saved) }
             }
             true
@@ -423,7 +424,7 @@ class TracePathStateHolder(
             }
         }
         store.fetchSavedTracePath(key)?.let { updated ->
-            if (isConnectionCurrent() && pathSelectionRevision == revision && deps.connectedDevice()?.radioId == radioId) {
+            if (pathSelectionRevision == revision && isConnectionCurrent() && deps.connectedDevice()?.radioId == radioId) {
                 update { it.copy(activeSavedPath = updated) }
             }
         }
@@ -477,7 +478,7 @@ class TracePathStateHolder(
             store.appendTracePathRun(key, run)
             val refresh = ++historyRefreshSequence
             store.fetchSavedTracePath(key)?.let { updated ->
-                if (!isConnectionCurrent()) return
+                if (pathSelectionRevision != revision || !isConnectionCurrent()) return
                 update {
                     val active = it.activeSavedPath
                     if (pathSelectionRevision == revision && refresh > publishedHistoryRefresh &&

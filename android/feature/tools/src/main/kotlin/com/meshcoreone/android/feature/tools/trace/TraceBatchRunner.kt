@@ -27,7 +27,7 @@ internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
     }
 
     private fun isCurrent(operation: Long): Boolean =
-        holder.isConnectionCurrent() && generation == operation
+        generation == operation && holder.isConnectionCurrent()
 
     private data class Dispatch(val sender: TraceSender, val radioId: RadioId?, val mode: UByte)
 
@@ -162,9 +162,9 @@ internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
     }
 
     fun handleTraceResponse(traceInfo: TraceInfo, radioId: RadioId?) {
+        if (traceInfo.tag != holder.pendingTag) return
         val device = holder.deps.connectedDevice()
         if (!holder.isConnectionCurrent(device)) return
-        if (traceInfo.tag != holder.pendingTag) return
         val mode = pendingMode ?: return
         val pendingDevice = holder.pendingDeviceId
         if (pendingDevice != null && radioId != null && pendingDevice != radioId) return

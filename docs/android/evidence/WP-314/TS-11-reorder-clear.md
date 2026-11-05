@@ -469,3 +469,27 @@ pressure; earlier Windows Java preflight could not allocate its G1 heap. Hosted
 exact execution is authoritative. Final PR-head checks and independent cumulative
 review are separate from these immutable diagnostics. Physical radio/firmware,
 emulator, TalkBack and whole-WP-314 acceptance remain unverified.
+
+### Final-head asynchronous offline finding
+
+Final PR candidate `f068445f0e7f4bde5845a067885992ce7b3bf0b8`,
+run `42057782369`, passed all selected jobs (Swift oracle jobs were not selected).
+The authoritative affected-scaffold log matched all 159 named cases and six
+compiled class blobs, Tools 795/795 and App 2016/2016 with zero failures/errors/
+skips. Independent complete-delta review found no high-confidence blocker, but
+a subsequent automated inline review identified another valid schedule before
+merge: old asynchronous A work could call the mutating connection gate before
+its generation/revision check and retire a correctly rebound offline draft.
+No merge occurred.
+
+The successor adds seven mounted real-holder controls: held lookup, held send,
+inter-trace batch sleep, accepted single save, accepted batch save, accepted
+history refresh and unmatched late response. Each disconnects/rebinds offline,
+releases old work, requires unchanged offline state and usable Text/Paste/Done,
+checks no old send and retained accepted A attribution, then exercises fresh B
+Add on the actual retained route. Source changes reject obsolete generations/
+revisions before the live gate and reject strict connected authority on an
+explicitly current offline draft without retiring local editing authority.
+Real stale token/device/origin mismatches still retire; unbound legacy adapters
+retain their previous behavior. These new assertions require fresh exact
+execution and do not inherit acceptance from the green f068 head.

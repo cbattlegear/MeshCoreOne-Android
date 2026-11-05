@@ -81,6 +81,37 @@ class DirectAckExclusionStorageTest {
         preauthorityHistoryMustRemainUnknown(deleted = true)
     }
 
+    @Test fun freshLocalDatabaseCannotProveAConnectedRadiosExternalPhysicalHistoryClearAcrossReopen() = runTest {
+        val name = "ack-fresh-external-history-${UUID.randomUUID()}.db"
+        val radio = UUID.randomUUID()
+        val current = UUID.randomUUID()
+        val wire = UUID.randomUUID()
+        val blockedAfterEachOpen = mutableListOf<Boolean>()
+        try {
+            repeat(2) { opening ->
+                val db = MeshCoreDatabase.open(context, name)
+                try {
+                    val exclusions = db.directAckExclusions()
+                    if (opening == 0) {
+                        assertEquals(0, exclusions.count(radio).toInt())
+                        assertEquals(0, exclusions.legacyCount(radio).toInt())
+                        trackedWire(db, DirectAckWireEntity(radio, current, wire, 123, 999))
+                        exclusions.emission(DirectAckEmissionEntity(
+                            radio, current, wire, UUID.randomUUID(), UUID.randomUUID(),
+                            123, "ACCEPTED", 999, UUID.randomUUID(),
+                        ))
+                    }
+                    assertTrue(exclusions.acceptedCurrentWire(radio, current, 999))
+                    blockedAfterEachOpen += exclusions.unresolvedCompetitor(radio, current) ||
+                        exclusions.saturated(radio)
+                } finally { db.close() }
+            }
+            assertEquals(listOf(true, true), blockedAfterEachOpen,
+                "A new local file cannot exclude an old code-999 ACK emitted for another installation; " +
+                    "the supported creation path supplies no physical-history certificate")
+        } finally { context.deleteDatabase(name) }
+    }
+
     private suspend fun preauthorityHistoryMustRemainUnknown(deleted: Boolean) {
         val name = "ack-preauthority-${UUID.randomUUID()}.db"
         val schema = JSONObject(File(requireNotNull(System.getProperty("roomSchemaDirectory")),

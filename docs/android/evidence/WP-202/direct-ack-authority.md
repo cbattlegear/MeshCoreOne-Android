@@ -900,6 +900,53 @@ has six test annotations: four existing controls and two expected-failing
 prehistory controls. All successor controls remain UNEXECUTED under the retained
 local execution hold. The original source/run and genuine v3 export stay immutable.
 
+### Separate fresh-install physical-history regression
+
+The coordinator provisionally selected strict safety while the user is unavailable,
+not a user-selected trust boundary. Both fresh and upgraded stores must treat
+unowned external/pre-authority physical history as UNKNOWN absent genuine proof;
+new confirmations may remain unavailable indefinitely while sending continues.
+No new local database, radio UUID, reconnect, APP_START or payload import is a
+physical-history certificate. No TTL/reset or guessed safe epoch is introduced.
+
+A third, separate expected-failing control creates an actual fresh Room file,
+records a new accepted physical code 999, reopens it, and requires uncertainty on
+both reads because the supported creation path has no evidence excluding an
+external previous installation's code-999 send. It is an adversarial environmental
+assumption/control, not physical-radio execution. It is UNEXECUTED, as are the two
+earlier v1 migration controls. The database test now has seven annotations.
+No production/migration/schema defaults change in this diagnostic source.
+
+The actual local creation callback installs identities/triggers only. Backup
+restore erases authority payloads and inserts/remaps imported devices/messages;
+it supplies no physical send-history journal or certificate. Device save, ghost
+reconciliation and radio deletion likewise establish registry identity only.
+They cannot clear a future DB-wide unknown latch or establish a trusted first-use
+boundary. The protocol/firmware owners separately reported client-switch delayed
+ACK counterexamples; no external source pin or hardware acceptance is advanced
+by this storage diagnosis.
+
+Implementing the successor remains gated on negative-control source review,
+typed schema/version admission, corrected canonical contracts and supported
+hosted schema generation. Existing successful-ACK assertions must not be changed
+to success-shaped unknown outcomes or passed with a fabricated production birth/
+physical-history certificate. Conditional retained-journal algorithm controls
+do not establish confirmation availability on real fresh installations.
+
+The same separate source also supplies the directly necessary owned data-test
+wiring for the service owner's public migration control: the Test tasks declare
+`core/database/schemas` as an input and pass its actual absolute location as
+`roomSchemaDirectory`, using the Android root project's directory provider.
+There is no CWD fallback, copied schema, invented DDL, dependency/version change
+or test assertion change. The trusted `dependency-resolution-metadata` rule admits
+this `update-directly-required-build-wiring` on the existing owned data build
+surface. Build/test execution remains unverified. Actual immutable schema blobs
+1=`0e6ce7706f75e08c4a70555178b2fdebb98f2184`,
+2=`2a1c5c66d5c42b53b146becf2ed085cffee93f68` and
+3=`e7bf0f62999896bca4d36a2a636096d962b12638` were independently read through REST:
+all have root keys formatVersion/database and setupQueries INSIDE database.
+The relayed root-level setupQueries guess was false and was not implemented.
+
 ### Separate accepted-code mismatch repair
 
 This successor is based on the fixture-only `94af032ee0a7bbe21fee822c86f63edac8745187`

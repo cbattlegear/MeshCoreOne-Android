@@ -111,6 +111,12 @@ class FactoryPublicationIntegrationTest : RoomProcessTest() {
                 h.eventually("nodes to observe registry publication without an unrelated UI change") {
                     observed.lastOrNull()?.identity === live
                 }
+                h.eventually("nodes to observe the ready device after registry publication") {
+                    observed.lastOrNull()?.let {
+                        it.identity === live && it.device == h.container.appState.connectedDevice &&
+                            it.device != null && it.state == DeviceConnectionState.READY
+                    } == true
+                }
                 assertFalse(live.isTornDown)
                 assertSame(live.token, h.manager.snapshot.value.token)
                 assertEquals(2, h.sessions.created)

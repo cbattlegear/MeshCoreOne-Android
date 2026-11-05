@@ -95,6 +95,7 @@ internal fun NodesListScreen(
         .collectAsStateWithLifecycle(
             initialValue = NodesConnectionSnapshot(
                 dependencies.session.currentRadioId(), dependencies.session.connectionIdentity(),
+                dependencies.session.connectedDevice(), dependencies.session.connectionState(),
             ),
         )
     val radioId = binding.radioId
@@ -109,11 +110,9 @@ internal fun NodesListScreen(
     var showShare by remember { mutableStateOf(false) }
     var pendingAction by remember(dependencies, radioId, connection) { mutableStateOf<Pair<RowActionKind, ContactDTO>?>(null) }
 
-    LaunchedEffect(holder, radioId) {
-        if (radioId != null) holder.loadContacts(radioId)
-    }
     LaunchedEffect(holder, connection, radioId) {
         holder.onConnectionChanged()
+        if (radioId != null && !holder.state.value.hasLoadedOnce) holder.loadContacts(radioId)
     }
     LaunchedEffect(state.hasLoadedOnce) {
         if (state.hasLoadedOnce && segment == NodeSegment.CONTACTS && state.hasFavorites) segment = NodeSegment.FAVORITES
@@ -151,7 +150,7 @@ internal fun NodesListScreen(
             Button(onClick = { showAdd = true }) { Text(stringResource(C.contactsListAddContact)) }
             Button(
                 onClick = { showShare = true },
-                enabled = dependencies.session.connectedDevice() != null,
+                enabled = binding.device != null,
             ) { Text(stringResource(C.contactsListShareMyContact)) }
             key(connection, radioId) {
                 val syncScope = rememberCoroutineScope()

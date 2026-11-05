@@ -126,6 +126,14 @@ acquire B's click handler during recomposition. Mounted same-radio and different
 retain A's actual Sync callback, quietly rebind, require no A/B command or advertisement effects
 from it and then require a fresh B click to sync and render B's fetched contact.
 
+Connection snapshots include device and readiness facts, so the registry's early publication does
+not suppress a later same-graph device update and leave Share My Contact disabled. The mounted
+readiness control changes only connection facts; actual factory observation additionally requires
+the ready device. If a graph changes before the first local load completes, the graph-keyed load
+effect starts a replacement local read after retiring Sync, without starting a radio command.
+Mounted held-initial-read controls cover both empty state and an actual manual admission, require
+B's row before A's read is released, retain the admitted DTO and then require fresh B Sync.
+
 Both `ContactsImmediateAdmissionApi31ComposeTest` and
 `ContactsImmediateAdmissionApi37ComposeTest` inherit six mounted tests:
 

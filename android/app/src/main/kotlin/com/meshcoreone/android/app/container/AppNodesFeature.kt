@@ -86,7 +86,9 @@ private class AppNodesSession(private val container: AppContainer) : NodesSessio
         container.connectionManager.snapshot,
         container.appState.servicesVersion,
         container.appState.sessionStateChangeCount,
-    ) { graph, _, _, _ -> NodesConnectionSnapshot(currentRadioId(), graph) }.distinctUntilChanged()
+    ) { graph, _, _, _ ->
+        NodesConnectionSnapshot(currentRadioId(), graph, connectedDevice(), connectionState())
+    }.distinctUntilChanged()
 
     override fun connectionIdentity(): Any? = container.sessions.current
     override fun connectionState() = container.appState.connectionState

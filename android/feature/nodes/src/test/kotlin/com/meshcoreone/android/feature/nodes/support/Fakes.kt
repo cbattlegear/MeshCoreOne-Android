@@ -212,7 +212,15 @@ internal class FakeSession : NodesSession {
     private val connection = MutableStateFlow(NodesConnectionSnapshot(null, null))
     override fun connectionSnapshots() = connection
     var state: DeviceConnectionState = DeviceConnectionState.READY
+        set(value) {
+            field = value
+            publishConnection()
+        }
     var device: DeviceDTO? = null
+        set(value) {
+            field = value
+            publishConnection()
+        }
     var radioId: RadioId? = null
         set(value) {
             field = value
@@ -232,7 +240,7 @@ internal class FakeSession : NodesSession {
     var onAdvertisementServiceRead: () -> Unit = {}
 
     private fun publishConnection() {
-        connection.value = NodesConnectionSnapshot(radioId, contacts)
+        connection.value = NodesConnectionSnapshot(radioId, contacts, device, state)
     }
 
     override fun connectionState() = state

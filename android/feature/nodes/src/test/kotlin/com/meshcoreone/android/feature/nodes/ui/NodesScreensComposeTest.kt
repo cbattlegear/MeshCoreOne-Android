@@ -603,6 +603,88 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
         @Test
         fun mountedRetainedSyncCannotStartReplacementRadioSync() = verifySyncControlOwner(sameRadio = false)
 
+        @Test
+        fun mountedShareEnablesWhenReplacementDeviceBecomesReadyWithoutAnotherUiChange() {
+            val harness = Harness().connect()
+            mount { NodesListScreen(harness.dependencies, NodesNavigation.NONE) }
+            val label = controller.get().getString(C.contactsListShareMyContact)
+            awaitCondition { actionNode(label)?.config?.contains(SemanticsProperties.Disabled) == false }
+            val replacement = Harness().connect(checkNotNull(harness.session.radioId))
+            harness.session.contacts = replacement.contactService
+            harness.session.device = null
+            harness.session.state = DeviceConnectionState.DISCONNECTED
+            awaitCondition { actionNode(label)?.config?.contains(SemanticsProperties.Disabled) == true }
+            harness.session.device = replacement.session.device
+            harness.session.state = DeviceConnectionState.READY
+            awaitCondition { actionNode(label)?.config?.contains(SemanticsProperties.Disabled) == false }
+        }
+
+        @Test
+        fun mountedInitialReadRestartsAfterSyncAndQuietSameRadioReplacement() = verifyInitialLoadReplacement(admit = false)
+
+        @Test
+        fun mountedInitialReadReplacementRetainsAnActualManualAdmission() = verifyInitialLoadReplacement(admit = true)
+
+        private fun verifyInitialLoadReplacement(admit: Boolean) {
+            val harness = Harness().connect()
+            val radio = checkNotNull(harness.session.radioId)
+            val initialEntered = CompletableDeferred<Unit>()
+            val initialRelease = CompletableDeferred<Unit>()
+            harness.store.fetchContactsGate = {
+                initialEntered.complete(Unit)
+                initialRelease.await()
+            }
+            val syncEntered = CompletableDeferred<Unit>()
+            val syncRelease = CompletableDeferred<Unit>()
+            harness.contactService.sync = {
+                syncEntered.complete(Unit)
+                syncRelease.await()
+            }
+            mount { NodesListScreen(harness.dependencies, NodesNavigation.NONE) }
+            awaitCondition { initialEntered.isCompleted }
+            val admitted = Fixtures.contact(radioId = radio, name = "Admitted")
+            if (admit) {
+                harness.contactService.addBehavior = { _, _ -> }
+                harness.contactService.getContactBehavior = { _, _ -> admitted }
+                val context = controller.get()
+                click(awaitAction(context.getString(C.contactsListAddContact)))
+                val fields = allSemanticsNodes().filter { it.config.contains(SemanticsActions.SetText) }
+                setText(fields[0], admitted.name)
+                setText(fields[1], admitted.publicKey.hexString)
+                click(awaitAction(context.getString(C.contactsAddAdd)))
+                awaitText(admitted.name)
+            }
+            val syncLabel = controller.get().getString(C.contactsListSyncNodes)
+            click(awaitAction(syncLabel))
+            awaitCondition { syncEntered.isCompleted }
+            val replacement = Harness().connect(radio)
+            val fresh = Fixtures.contact(radioId = radio, name = "Fresh")
+            replacement.store.contacts += fresh
+            var reads = 0
+            replacement.store.fetchContactsGate = { reads++ }
+            harness.session.contacts = replacement.contactService
+            harness.session.adverts = replacement.adverts
+            harness.session.device = replacement.session.device
+            harness.session.servicesStore = replacement.store
+            harness.session.offlineStore = replacement.store
+            awaitText(fresh.name)
+            if (admit) awaitText(admitted.name)
+            assertFalse(initialRelease.isCompleted, "B must load before A's independent read is released")
+            assertFalse(syncRelease.isCompleted)
+            assertEquals(1, reads)
+            assertTrue(replacement.contactService.calls.isEmpty(), "Rebinding starts a local read, not a radio sync")
+            initialRelease.complete(Unit)
+            syncRelease.complete(Unit)
+            advanceFrames()
+            awaitText(fresh.name)
+            if (admit) awaitText(admitted.name)
+            click(awaitAction(syncLabel))
+            awaitCondition { replacement.adverts.syncingFlags == listOf(true, false) }
+            assertEquals(2, reads)
+            assertEquals(listOf("sync"), replacement.contactService.calls)
+            if (admit) awaitText(admitted.name)
+        }
+
         private fun verifySyncControlOwner(sameRadio: Boolean) {
             val harness = Harness().connect()
             val oldRadio = checkNotNull(harness.session.radioId)

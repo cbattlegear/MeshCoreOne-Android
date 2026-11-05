@@ -174,6 +174,19 @@ same mounted display filter. Eight held-command/fetch controls cover success and
 same-contact delete and different-contact favorite handoff, duplicate B protection, stale rows/errors,
 held B loading and successful fresh B completion. Pending radio-owned admissions remain intact.
 
+Same-graph favorites remain concurrent across different rows, matching the source's lack of a
+global command lock. Observable guards are per-row sets: each pending row is disabled and rejects
+duplicates, while another enabled row actually starts its command. Three controls cover either
+completion order and a late ordinary failure without releasing another row's guard.
+The original singular state accessor remains a compatibility projection, not the action guard.
+
+Connection-owned loads revalidate their publication predicate immediately after acquiring the
+offline store, before advancing the load generation, associating a mutation or changing loading/error
+state. Two favorite/block acquisition controls replace A inside that provider read and synchronously
+start B through its held reload before A's acquisition returns. They require no A fetch, preserved B
+loading/guard, no stale error and B's eventual row publication/loading completion. These controls
+distinguish provider-acquisition retirement from the existing held-fetch retirement cases.
+
 Both `ContactsImmediateAdmissionApi31ComposeTest` and
 `ContactsImmediateAdmissionApi37ComposeTest` inherit six mounted tests:
 

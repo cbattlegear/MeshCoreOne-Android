@@ -45,12 +45,15 @@ data class ContactsState(
     val errorMessage: NodesMessage? = null,
     /** Graph/radio owner for connection-owned failures, including readiness before a command starts. */
     val errorConnection: NodesConnectionSnapshot? = null,
-    val togglingFavoriteId: UUID? = null,
+    val togglingFavoriteIds: Set<UUID> = emptySet(),
     /** Rows hidden after a confirmed delete, held until a reload sees the row gone. */
     val pendingRemovalIds: Set<UUID> = emptySet(),
     /** Rows with a delete command in flight (spinner). */
     val deletingIds: Set<UUID> = emptySet(),
 ) {
+    /** Compatibility projection; row guards use the complete pending set. */
+    val togglingFavoriteId: UUID? get() = togglingFavoriteIds.lastOrNull()
+
     /** True when any loaded contact is a favorite; drives the initial Nodes segment. */
     val hasFavorites: Boolean get() = contacts.any { it.isFavorite }
 
@@ -111,6 +114,7 @@ class ContactsStateHolder(
         canPublish: () -> Boolean,
     ) {
         val dataStore = session.offlineDataStore() ?: return
+        if (!canPublish()) return
         val generation = ++loadGeneration
         mutation?.load = generation
         val admissionsAtStart = pendingAdmissions.toMap()
@@ -291,7 +295,7 @@ class ContactsStateHolder(
 
     private fun beginMutation(contact: ContactDTO, connection: Any?, kind: MutationKind): ContactMutation? {
         onConnectionChanged()
-        if (mutations.any { it.kind == kind && (kind == MutationKind.FAVORITE || it.contactId == contact.id) }) return null
+        if (mutations.any { it.kind == kind && it.contactId == contact.id }) return null
         return ContactMutation(NodesConnectionSnapshot(contact.radioId, connection), contact.id, kind).also { mutations += it }
     }
 
@@ -299,7 +303,7 @@ class ContactsStateHolder(
         if (!mutations.remove(operation)) return
         mutableState.update {
             when (operation.kind) {
-                MutationKind.FAVORITE -> it.copy(togglingFavoriteId = null)
+                MutationKind.FAVORITE -> it.copy(togglingFavoriteIds = it.togglingFavoriteIds - operation.contactId)
                 MutationKind.DELETE -> it.copy(deletingIds = it.deletingIds - operation.contactId)
                 MutationKind.BLOCK -> it
             }
@@ -320,7 +324,7 @@ class ContactsStateHolder(
         session.ensureContactConnection(connection, contact.radioId)
         val current = state.value.contacts.firstOrNull { it.id == contact.id } ?: return
         val operation = beginMutation(contact, connection, MutationKind.FAVORITE) ?: return
-        mutableState.update { it.copy(togglingFavoriteId = contact.id) }
+        mutableState.update { it.copy(togglingFavoriteIds = it.togglingFavoriteIds + contact.id) }
         try {
             ensureCurrentMutation(operation)
             contactService.setContactFavorite(contact.key, !current.isFavorite)

@@ -3,6 +3,7 @@ package com.meshcoreone.android.feature.nodes.contacts
 
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.l10n.R
+import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.VContactIdentity
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.feature.nodes.deps.NodesContactFailure
@@ -17,6 +18,7 @@ import com.meshcoreone.android.feature.nodes.support.Harness
 import com.meshcoreone.android.feature.nodes.support.FakeAdvertisementService
 import com.meshcoreone.android.feature.nodes.support.scenario
 import com.meshcoreone.android.feature.nodes.support.settle
+import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
@@ -24,10 +26,156 @@ import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.launch
 import org.junit.Test
 
 class ContactsNativeTest {
+    @Test
+    fun `same-graph favorites on different rows remain concurrent when the older finishes first`() =
+        verifyConcurrentFavorites(olderFinishesFirst = true, olderFails = false)
+
+    @Test
+    fun `late same-graph favorite success releases only its own row guard`() =
+        verifyConcurrentFavorites(olderFinishesFirst = false, olderFails = false)
+
+    @Test
+    fun `late same-graph favorite failure releases only its own row guard`() =
+        verifyConcurrentFavorites(olderFinishesFirst = false, olderFails = true)
+
+    private fun verifyConcurrentFavorites(olderFinishesFirst: Boolean, olderFails: Boolean) = scenario {
+        val harness = Harness(clock).connect()
+        val radio = checkNotNull(harness.session.radioId)
+        val first = contact(radioId = radio, name = "First")
+        val second = contact(radioId = radio, name = "Second")
+        harness.store.contacts += listOf(first, second)
+        val holder = ContactsStateHolder(harness.dependencies, scope)
+        holder.loadContacts(radio)
+        val firstRelease = CompletableDeferred<Unit>()
+        val secondRelease = CompletableDeferred<Unit>()
+        val sent = mutableListOf<UUID>()
+        val persist = harness.contactService.favoriteBehavior
+        harness.contactService.favoriteBehavior = { key, favorite ->
+            sent += key.id
+            if (key.id == first.id) {
+                firstRelease.await()
+                if (olderFails) error("first favorite failed")
+            } else {
+                secondRelease.await()
+            }
+            persist(key, favorite)
+        }
+        fun enabled(row: ContactDTO) =
+            ContactRowActions.actions(row, RowActionEdge.LEADING, DeviceConnectionState.READY, null, holder.state.value).single().enabled
+        val older = scope.launch { holder.toggleFavorite(first) }
+        settle()
+        assertEquals(setOf(first.id), holder.state.value.togglingFavoriteIds)
+        assertFalse(enabled(first))
+        assertTrue(enabled(second), "A different row remains visibly actionable")
+        val newer = scope.launch { holder.toggleFavorite(second) }
+        settle()
+        assertEquals(listOf(first.id, second.id), sent, "Both visibly enabled commands must actually start")
+        assertEquals(setOf(first.id, second.id), holder.state.value.togglingFavoriteIds)
+        assertFalse(enabled(first))
+        assertFalse(enabled(second))
+        holder.toggleFavorite(first)
+        holder.toggleFavorite(second)
+        assertEquals(listOf(first.id, second.id), sent, "Each pending row rejects only its own duplicate")
+        val completed = if (olderFinishesFirst) first else second
+        val remaining = if (olderFinishesFirst) second else first
+        if (olderFinishesFirst) {
+            firstRelease.complete(Unit)
+            older.join()
+        } else {
+            secondRelease.complete(Unit)
+            newer.join()
+        }
+        assertEquals(setOf(remaining.id), holder.state.value.togglingFavoriteIds)
+        assertTrue(enabled(completed))
+        assertFalse(enabled(remaining), "Another row's cleanup must not re-enable this held action")
+        holder.toggleFavorite(remaining)
+        assertEquals(listOf(first.id, second.id), sent)
+        if (olderFinishesFirst) {
+            secondRelease.complete(Unit)
+            newer.join()
+        } else {
+            firstRelease.complete(Unit)
+            older.join()
+        }
+        assertFalse(older.isCancelled)
+        assertFalse(newer.isCancelled)
+        assertTrue(holder.state.value.togglingFavoriteIds.isEmpty())
+        assertTrue(enabled(first))
+        assertTrue(enabled(second))
+        assertEquals(!olderFails, holder.state.value.contacts.first { it.id == first.id }.isFavorite)
+        assertTrue(holder.state.value.contacts.first { it.id == second.id }.isFavorite)
+        if (olderFails) assertEquals(NodesMessage.Text("failed: first favorite failed"), holder.state.value.errorMessage)
+        else assertNull(holder.state.value.errorMessage)
+    }
+
+    @Test
+    fun `favorite reload acquisition cannot supersede a replacement graphs held load`() =
+        verifyMutationReloadAcquisition("favorite")
+
+    @Test
+    fun `block reload acquisition cannot supersede a replacement graphs held load`() =
+        verifyMutationReloadAcquisition("block")
+
+    private fun verifyMutationReloadAcquisition(action: String) = scenario {
+        val harness = Harness(clock).connect()
+        val radio = checkNotNull(harness.session.radioId)
+        val row = contact(radioId = radio, name = "Admitted")
+        val holder = ContactsStateHolder(harness.dependencies, scope)
+        holder.upsert(row)
+        val replacement = Harness(clock).connect(radio)
+        val freshRow = contact(radioId = radio, name = "Fresh B")
+        replacement.store.contacts += freshRow
+        val freshEntered = CompletableDeferred<Unit>()
+        val freshRelease = CompletableDeferred<Unit>()
+        replacement.store.fetchContactsGate = {
+            freshEntered.complete(Unit)
+            freshRelease.await()
+        }
+        var oldFetches = 0
+        harness.store.fetchContactsGate = { oldFetches++ }
+        var fresh: kotlinx.coroutines.Job? = null
+        var swaps = 0
+        harness.session.onOfflineStoreRead = {
+            harness.session.onOfflineStoreRead = {}
+            swaps++
+            harness.session.contacts = replacement.contactService
+            harness.session.servicesStore = replacement.store
+            harness.session.offlineStore = replacement.store
+            // Start B synchronously inside A's provider read, before A can mutate loadGeneration.
+            fresh = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                if (action == "favorite") holder.toggleFavorite(row) else holder.toggleBlocked(row)
+            }
+            assertTrue(freshEntered.isCompleted, "B must already own a held reload when A's acquisition returns")
+            assertTrue(holder.state.value.isLoading)
+        }
+        val old = scope.launch {
+            if (action == "favorite") holder.toggleFavorite(row) else holder.toggleBlocked(row)
+        }
+        old.join()
+        assertEquals(1, swaps)
+        assertTrue(old.isCancelled)
+        assertEquals(0, oldFetches, "Retired A must reject the acquired store before starting a load")
+        assertEquals(1, harness.contactService.calls.size)
+        assertEquals(1, replacement.contactService.calls.size)
+        assertEquals(listOf(row), holder.state.value.contacts)
+        assertTrue(holder.state.value.isLoading, "A cleanup cannot replace B's loading lifetime")
+        assertNull(holder.state.value.errorMessage)
+        if (action == "favorite") assertEquals(setOf(row.id), holder.state.value.togglingFavoriteIds)
+        freshRelease.complete(Unit)
+        checkNotNull(fresh).join()
+        assertFalse(checkNotNull(fresh).isCancelled)
+        assertEquals(listOf(freshRow, row), holder.state.value.contacts, "B's load generation must remain publishable")
+        assertFalse(holder.state.value.isLoading, "B must finish its own loading lifetime")
+        assertTrue(holder.state.value.togglingFavoriteIds.isEmpty())
+        assertNull(holder.state.value.errorMessage)
+        assertNull(holder.state.value.errorConnection)
+    }
+
     @Test
     fun `retired favorite cleanup cannot clear a different B favorite guard`() = verifyHeldMutation("favorite", fails = false)
 

@@ -4,6 +4,7 @@ package com.meshcoreone.android.app.state
 import com.meshcoreone.android.core.connectivity.device.RemoveUnfavoritedResult
 import com.meshcoreone.android.core.connectivity.pairing.SystemPairedAccessory
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SnapshotList

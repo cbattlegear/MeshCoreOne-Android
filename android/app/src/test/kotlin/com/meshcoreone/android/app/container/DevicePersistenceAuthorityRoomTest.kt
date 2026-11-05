@@ -1,7 +1,9 @@
 // AndroidOnly: WP-305 Real Room controls for per-device authority, shared-store CAS and atomic regions.
 package com.meshcoreone.android.app.container
 
-import androidx.room.withTransaction
+import android.content.Context
+import androidx.room.Room
+import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.DeviceWriteConflict
 import com.meshcoreone.android.core.contracts.domain.DeviceWriteSnapshot
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
@@ -9,12 +11,18 @@ import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.editDevice
 import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
+import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.ChannelFloodScope
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.snapshot
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executor
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -196,7 +204,33 @@ class DevicePersistenceAuthorityRoomTest : RoomProcessTest() {
         var guardCalls = 0
         val accepted = store.saveDeviceIfUnchanged(
             original.copy(knownRegions = listOf("AU915").snapshot(), defaultFloodScopeName = null),
-            ticket.copy(isCurrent = { ++guardCalls == 1 }),
+            ticket.copy(isCurrent = {
+                guardCalls++
+                if (guardCalls == 1) true else {
+                    assertTrue(db.inTransaction(), "The retirement guard must observe the actual open transaction")
+                    db.openHelper.writableDatabase.query(
+                        "SELECT knownRegions, defaultFloodScopeName FROM devices WHERE nodeName = ?",
+                        arrayOf(original.nodeName),
+                    ).use { cursor ->
+                        assertTrue(cursor.moveToFirst())
+                        assertTrue(cursor.getString(0).contains("AU915"))
+                        assertFalse(cursor.getString(0).contains("US915"))
+                        assertFalse(cursor.getString(0).contains("EU868"))
+                        assertTrue(cursor.isNull(1), "The default clear is staged before retirement")
+                        assertFalse(cursor.moveToNext())
+                    }
+                    db.openHelper.writableDatabase.query(
+                        "SELECT floodScopeModeRawValue, regionScope FROM channels WHERE name = ?",
+                        arrayOf(scoped.name),
+                    ).use { cursor ->
+                        assertTrue(cursor.moveToFirst())
+                        assertEquals("inherit", cursor.getString(0))
+                        assertTrue(cursor.isNull(1), "The channel scope reset is staged before retirement")
+                        assertFalse(cursor.moveToNext())
+                    }
+                    false
+                }
+            }),
         )
         assertFalse(accepted)
         assertEquals(2, guardCalls, "The second guard follows the staged DAO work, not only transaction entry")
@@ -215,7 +249,20 @@ class DevicePersistenceAuthorityRoomTest : RoomProcessTest() {
         store.setActiveDevice(successor.id)
         val before = assertNotNull(store.fetchDeviceWriteSnapshot(successor.id))
         var guardCalls = 0
-        assertFalse(store.activateDeviceIfCurrent(original.id) { ++guardCalls == 1 })
+        assertFalse(store.activateDeviceIfCurrent(original.id) {
+            guardCalls++
+            if (guardCalls == 1) true else {
+                assertTrue(db.inTransaction())
+                db.openHelper.writableDatabase.query(
+                    "SELECT nodeName FROM devices WHERE isActive = 1",
+                ).use { cursor ->
+                    assertTrue(cursor.moveToFirst())
+                    assertEquals(original.nodeName, cursor.getString(0), "Old-device activation is actually staged")
+                    assertFalse(cursor.moveToNext(), "The previous active device is already demoted in this transaction")
+                }
+                false
+            }
+        })
         assertEquals(2, guardCalls)
         assertEquals(successor.id, store.fetchActiveDevice()!!.id)
         assertFalse(store.fetchDevice(original.id)!!.isActive)
@@ -226,49 +273,62 @@ class DevicePersistenceAuthorityRoomTest : RoomProcessTest() {
 
     @Test fun ticketAuthorityLeaseSpansTheActualRoomWaitCommitAndRevisionPublication() = runTest {
         val original = device(614)
-        store.saveDevice(original)
-        val ticket = assertNotNull(store.fetchDeviceWriteSnapshot(original.id))
         val authority = Mutex()
-        val transactionEntered = CompletableDeferred<Unit>()
-        val releaseTransaction = CompletableDeferred<Unit>()
-        val authorityEntered = CompletableDeferred<Unit>()
+        val transactionRequested = CompletableDeferred<Unit>()
+        val releaseTransaction = CountDownLatch(1)
+        val pauseNextTransaction = AtomicBoolean(false)
+        val worker = Executors.newSingleThreadExecutor()
+        val immediate = Executor { it.run() }
+        val transactionExecutor = Executor { command ->
+            if (pauseNextTransaction.compareAndSet(true, false)) {
+                transactionRequested.complete(Unit)
+                worker.execute { releaseTransaction.await(); command.run() }
+            } else command.run()
+        }
+        val database = Room.inMemoryDatabaseBuilder(
+            ApplicationProvider.getApplicationContext<Context>(), MeshCoreDatabase::class.java,
+        ).allowMainThreadQueries().setQueryExecutor(immediate).setTransactionExecutor(transactionExecutor).build()
+        val repository = RoomPersistenceStore(database, backgroundScope)
         val retirementSubmitted = CompletableDeferred<Unit>()
         var current = true
-        val holder = async(Dispatchers.IO) {
-            db.withTransaction { transactionEntered.complete(Unit); releaseTransaction.await() }
-        }
         try {
-            transactionEntered.await()
+            repository.saveDevice(original)
+            val ticket = assertNotNull(repository.fetchDeviceWriteSnapshot(original.id))
+            pauseNextTransaction.set(true)
             val saved = async(Dispatchers.IO) {
-                store.saveDeviceIfUnchanged(original.copy(pathHashMode = 2u), ticket.copy(
+                repository.saveDeviceIfUnchanged(original.copy(pathHashMode = 2u), ticket.copy(
                     isCurrent = { current },
                     withAuthority = { write ->
                         authority.withLock {
-                            authorityEntered.complete(Unit)
                             write().also { accepted ->
                                 assertTrue(accepted)
-                                assertEquals(original.copy(pathHashMode = 2u), store.fetchDevice(original.id))
-                                assertEquals(ticket.revision + 1, store.fetchDeviceWriteSnapshot(original.id)!!.revision)
+                                assertEquals(original.copy(pathHashMode = 2u), repository.fetchDevice(original.id))
+                                assertEquals(ticket.revision + 1, repository.fetchDeviceWriteSnapshot(original.id)!!.revision)
                             }
                         }
                     },
                 ))
             }
-            authorityEntered.await()
+            transactionRequested.await()
             val retired = async {
                 retirementSubmitted.complete(Unit)
                 authority.withLock { current = false }
             }
             retirementSubmitted.await()
-            assertFalse(retired.isCompleted, "Retirement cannot cross the authority lease while Room is suspended")
+            assertFalse(retired.isCompleted, "Retirement waits behind an actual Room-submitted transaction command")
             assertFalse(saved.isCompleted)
-            releaseTransaction.complete(Unit)
+            releaseTransaction.countDown()
             assertTrue(saved.await())
             retired.await()
-            holder.await()
             assertFalse(current)
-            assertEquals(original.copy(pathHashMode = 2u), store.fetchDevice(original.id))
-        } finally { releaseTransaction.complete(Unit) }
+            assertEquals(original.copy(pathHashMode = 2u), repository.fetchDevice(original.id))
+        } finally {
+            releaseTransaction.countDown()
+            worker.shutdown()
+            assertTrue(worker.awaitTermination(10, TimeUnit.SECONDS), "The owned Room transaction worker must finish")
+            repository.close()
+            database.close()
+        }
     }
 
     @Test fun retirementWinningTheAuthorityLeasePreventsTheConditionalWrite() = runTest {

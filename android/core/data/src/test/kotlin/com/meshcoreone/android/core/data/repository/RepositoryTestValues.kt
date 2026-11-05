@@ -6,9 +6,11 @@ package com.meshcoreone.android.core.data.repository
 
 import android.content.Context
 import androidx.room.Room
+import androidx.room.withTransaction
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
+import com.meshcoreone.android.core.database.DirectAckStorage
 import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -21,6 +23,7 @@ import java.time.ZoneId
 import java.time.ZoneOffset
 import java.util.UUID
 import java.util.concurrent.Executor
+import kotlin.test.assertEquals
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -43,6 +46,35 @@ internal val RADIO_A = RadioId(UUID.fromString("00000000-0000-0000-0000-00000000
 internal val RADIO_B = RadioId(UUID.fromString("00000000-0000-0000-0000-000000000002"))
 internal val CONTACT_A = UUID.fromString("00000000-0000-0000-0000-000000000003")
 internal val AT: Instant = Instant.ofEpochSecond(1_700_000_000)
+
+internal suspend fun <T> withUnchangedDirectAckState(
+    database: MeshCoreDatabase,
+    key: EntityKey,
+    claimId: UUID,
+    block: suspend () -> T,
+): T {
+    suspend fun snapshot(): List<Any?> = database.withTransaction {
+        val radio = key.radioId.value
+        val pending = database.pendingSends().forMessage(radio, key.id)
+        listOf(
+            database.messages().byId(radio, key.id),
+            pending,
+            pending.map { database.directAcks().incarnation(radio, it.id, "pending") },
+            database.directAcks().incarnation(radio, key.id, "message"),
+            database.directAcks().claim(radio, claimId),
+            database.directAcks().wires(radio, claimId),
+            database.directAcks().operations(radio, claimId),
+            database.directAcks().delivery(radio, claimId),
+            database.directAckExclusions().emissions(radio, Int.MAX_VALUE),
+            database.directAckExclusions().saturated(radio),
+            database.directAckPrehistory().rows(),
+        )
+    }
+    val before = snapshot()
+    val result = block()
+    assertEquals(before, snapshot(), "Strict refusal must not change message, pending, identity or retained history")
+    return result
+}
 internal fun key(byte: Int = 0x44): Bytes = Bytes(ByteArray(32) { byte.toByte() })
 internal fun entity(radio: RadioId = RADIO_A, id: UUID = CONTACT_A): EntityKey = EntityKey(radio, id)
 internal fun device(radio: RadioId = RADIO_A, id: UUID = UUID.randomUUID()): DeviceDTO =
@@ -98,6 +130,7 @@ abstract class RepositoryTest {
     @Before fun openRepository() {
         val immediate = Executor { it.run() }
         db = Room.inMemoryDatabaseBuilder(context, MeshCoreDatabase::class.java)
+            .addCallback(DirectAckStorage.callback)
             .allowMainThreadQueries().setQueryExecutor(immediate).setTransactionExecutor(immediate).build()
         store = newStore()
     }

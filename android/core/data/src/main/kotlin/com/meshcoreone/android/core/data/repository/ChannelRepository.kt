@@ -29,6 +29,9 @@ internal class ChannelRepository(
         context.write("saveChannelInfo", flushBeforeRollback = true) {
             val existing = database.channels().forIndex(radioId.value, info.index.toLong()).firstOrNull()
             val row = if (existing != null) applyingRadioInfo(existing, info) else ChannelDTO.fromInfo(radioId, info).toEntity()
+            if (existing != null && existing.id != row.id) {
+                database.channels().delete(radioId.value, existing.id)
+            }
             database.channels().upsert(row)
             save()
             row.id
@@ -36,7 +39,16 @@ internal class ChannelRepository(
 
     override suspend fun saveChannel(dto: ChannelDTO) = context.write("saveChannel") {
         val existing = database.channels().byId(dto.radioId.value, dto.id)
-        database.channels().upsert(existing?.applying(dto) ?: dto.toEntity())
+        val row = when {
+            existing == null -> dto.toEntity()
+            existing.secret == dto.secret -> existing.applying(dto)
+            else -> {
+                deleteChannelMessages(dto.radioId, existing.toDTO().index)
+                database.channels().delete(existing.radioId, existing.id)
+                existing.applying(dto).copy(id = UUID.randomUUID())
+            }
+        }
+        database.channels().upsert(row)
         save()
     }
 
@@ -51,6 +63,9 @@ internal class ChannelRepository(
         for (info in configured) {
             val existing = byIndex[info.index.toLong()]
             val row = if (existing == null) ChannelDTO.fromInfo(radioId, info).toEntity() else applyingRadioInfo(existing, info)
+            if (existing != null && existing.id != row.id) {
+                database.channels().delete(radioId.value, existing.id)
+            }
             database.channels().upsert(row)
             byIndex[row.index] = row
         }
@@ -74,7 +89,10 @@ internal class ChannelRepository(
     private suspend fun RepositoryTransaction.applyingRadioInfo(row: ChannelEntity, info: ChannelInfo): ChannelEntity {
         if (row.secret == info.secret) return row.copy(name = info.name, secret = info.secret)
         deleteChannelMessages(RadioId(row.radioId), row.toDTO().index)
-        return row.copy(name = info.name, secret = info.secret, lastMessageDate = null, unreadCount = 0, unreadMentionCount = 0)
+        return row.copy(
+            id = UUID.randomUUID(), name = info.name, secret = info.secret,
+            lastMessageDate = null, unreadCount = 0, unreadMentionCount = 0,
+        )
     }
 
     override suspend fun deleteChannel(key: EntityKey) = context.write("deleteChannel", flushBeforeRollback = true) {

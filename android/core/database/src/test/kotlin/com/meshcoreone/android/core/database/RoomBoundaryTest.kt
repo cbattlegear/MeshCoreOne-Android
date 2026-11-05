@@ -36,10 +36,10 @@ class RoomBoundaryTest {
     @Test fun actualSqliteTablesColumnsPrimaryKeysForeignKeysAndIdentityMatchTheKspExport() = runTest {
         db.devices().count()
         val export = JSONObject(File(requireNotNull(System.getProperty("roomSchemaDirectory")),
-            "com.meshcoreone.android.core.database.MeshCoreDatabase\\1.json".replace('\\', File.separatorChar)).readText()).getJSONObject("database")
-        assertEquals(1, export.getInt("version")); assertEquals(17, export.getJSONArray("entities").length())
+            "com.meshcoreone.android.core.database.MeshCoreDatabase\\4.json".replace('\\', File.separatorChar)).readText()).getJSONObject("database")
+        assertEquals(4, export.getInt("version")); assertEquals(33, export.getJSONArray("entities").length())
         val sqlite = db.openHelper.readableDatabase
-        sqlite.query("PRAGMA user_version").use { assertTrue(it.moveToFirst()); assertEquals(1, it.getInt(0)) }
+        sqlite.query("PRAGMA user_version").use { assertTrue(it.moveToFirst()); assertEquals(4, it.getInt(0)) }
         sqlite.query("SELECT identity_hash FROM room_master_table WHERE id=42").use {
             assertTrue(it.moveToFirst()); assertEquals(export.getString("identityHash"), it.getString(0))
         }
@@ -60,8 +60,26 @@ class RoomBoundaryTest {
                 assertEquals(field.getString("affinity") to notNull, actual[field.getString("columnName")], "$name.${field.getString("columnName")}")
             }
             val pk = entity.getJSONObject("primaryKey").getJSONArray("columnNames")
+            val authorityKeys = mapOf(
+                "direct_ack_incarnations" to listOf("radioId", "id", "kind"),
+                "direct_ack_leases" to listOf("radioId", "requestId"),
+                "direct_ack_claims" to listOf("radioId", "requestId"),
+                "direct_ack_deliveries" to listOf("radioId", "claimId"),
+                "direct_ack_wires" to listOf("radioId", "claimId", "requestId"),
+                "direct_ack_operations" to listOf("radioId", "claimId", "requestId"),
+                "direct_pending_completions" to listOf("radioId", "captureRequestId"),
+                "direct_ack_intents" to listOf("radioId", "requestId"),
+                "direct_ack_emissions" to listOf("radioId", "claimId", "wireId", "markRequestId"),
+                "direct_ack_radio_exclusions" to listOf("radioId"),
+                "direct_ack_prehistory" to listOf("singleton"),
+                "channel_send_attempts" to listOf("radioId", "captureRequestId"),
+                "channel_send_operations" to listOf("radioId", "captureRequestId", "requestId"),
+                "channel_pending_lifecycles" to listOf("radioId", "pendingId"),
+                "channel_message_origins" to listOf("radioId", "messageId"),
+                "channel_send_completions" to listOf("radioId", "captureRequestId"),
+            )
             if (name !in setOf("devices", "debug_log_entries", "link_preview_data", "node_status_snapshots")) {
-                assertEquals(listOf("radioId", "id"), (0 until pk.length()).map { pk.getString(it) })
+                assertEquals(authorityKeys[name] ?: listOf("radioId", "id"), (0 until pk.length()).map { pk.getString(it) })
             }
             val keys = if (entity.has("foreignKeys")) entity.getJSONArray("foreignKeys") else JSONArray()
             foreignKeys += keys.length()
@@ -240,7 +258,7 @@ class RoomBoundaryTest {
             val reopened = fileDatabase(name)
             try {
                 assertEquals(id, assertNotNull(reopened.devices().byId(id)).id)
-                reopened.openHelper.writableDatabase.execSQL("PRAGMA user_version=2")
+                reopened.openHelper.writableDatabase.execSQL("PRAGMA user_version=99")
             } finally { reopened.close() }
             val unsupported = fileDatabase(name)
             try { assertFailsWith<IllegalStateException> { unsupported.devices().count() } } finally { unsupported.close() }

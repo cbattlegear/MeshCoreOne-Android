@@ -126,6 +126,7 @@ abstract class BackupRoomTest {
 
     @Before fun openStores() {
         db = Room.inMemoryDatabaseBuilder(context, MeshCoreDatabase::class.java)
+            .addCallback(DirectAckStorage.callback)
             .allowMainThreadQueries().setQueryExecutor(immediate).setTransactionExecutor(immediate).build()
         store = RoomPersistenceStore(db, owner, clock)
         storage = MeshCoreStorage.get(context)
@@ -146,11 +147,13 @@ abstract class BackupRoomTest {
 
     protected fun fileDatabase(file: File): MeshCoreDatabase =
         Room.databaseBuilder(context, MeshCoreDatabase::class.java, file.absolutePath)
+            .addCallback(DirectAckStorage.callback)
             .setJournalMode(androidx.room.RoomDatabase.JournalMode.TRUNCATE)
             .allowMainThreadQueries().setQueryExecutor(immediate).setTransactionExecutor(immediate).build()
 
     protected suspend fun withIndependentStore(block: suspend (MeshCoreDatabase, RoomPersistenceStore) -> Unit) {
         val destination = Room.inMemoryDatabaseBuilder(context, MeshCoreDatabase::class.java)
+            .addCallback(DirectAckStorage.callback)
             .allowMainThreadQueries().setQueryExecutor(immediate).setTransactionExecutor(immediate).build()
         try {
             val destinationStore = RoomPersistenceStore(destination, owner, clock)

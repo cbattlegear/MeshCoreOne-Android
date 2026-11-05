@@ -1,0 +1,441 @@
+// AndroidOnly: WP-202 Real Room exclusion queries and forward v2 migration.
+package com.meshcoreone.android.core.database
+
+import android.content.Context
+import android.database.sqlite.SQLiteDatabaseLockedException
+import androidx.room.Room
+import androidx.room.withTransaction
+import androidx.sqlite.db.SupportSQLiteDatabase
+import androidx.sqlite.db.SupportSQLiteOpenHelper
+import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
+import androidx.test.core.app.ApplicationProvider
+import java.io.File
+import java.util.UUID
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
+import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import org.json.JSONObject
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+import org.robolectric.annotation.SQLiteMode
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [31])
+@SQLiteMode(SQLiteMode.Mode.NATIVE)
+class DirectAckExclusionStorageTest {
+    private val context: Context get() = ApplicationProvider.getApplicationContext()
+
+    private suspend fun trackedWire(db: MeshCoreDatabase, wire: DirectAckWireEntity) = db.withTransaction {
+        db.directAcks().wire(wire)
+        db.directAcks().operation(DirectAckOperationEntity(
+            wire.radioId, wire.claimId, wire.requestId, "EMISSION_TRACKING_REQUIRED", wire.predictedCode, 1, null,
+        ))
+        db.directAcks().operation(DirectAckOperationEntity(
+            wire.radioId, wire.claimId, UUID.randomUUID(),
+            "ACCEPTANCE_HISTORY_REQUIRED:${wire.requestId}", wire.predictedCode, 1, null,
+        ))
+    }
+
+    private fun immediateBusyFailure(db: MeshCoreDatabase) {
+        val sqlite = db.openHelper.writableDatabase
+        sqlite.beginTransaction()
+        try {
+            sqlite.query("PRAGMA busy_timeout=0").use {
+                assertTrue(it.moveToFirst())
+                assertEquals(0, it.getInt(0))
+            }
+            sqlite.setTransactionSuccessful()
+        } finally { sqlite.endTransaction() }
+    }
+
+    private fun createExportedSchema(old: SupportSQLiteDatabase, schema: JSONObject) {
+        val entities = schema.getJSONArray("entities")
+        assertTrue(entities.length() > 0)
+        for (i in 0 until entities.length()) {
+            val entity = entities.getJSONObject(i)
+            val table = entity.getString("tableName")
+            old.execSQL(entity.getString("createSql").replace("\${TABLE_NAME}", table))
+            if (entity.has("indices")) {
+                val indices = entity.getJSONArray("indices")
+                for (j in 0 until indices.length()) {
+                    old.execSQL(indices.getJSONObject(j).getString("createSql")
+                        .replace("\${TABLE_NAME}", table))
+                }
+            }
+        }
+        val setup = schema.getJSONArray("setupQueries")
+        assertTrue(setup.length() > 0)
+        for (i in 0 until setup.length()) old.execSQL(setup.getString(i))
+    }
+
+    @Test fun v1SentMessageRemainsUnknownAfterUpgrade() = runTest {
+        preauthorityHistoryMustRemainUnknown(deleted = false)
+    }
+
+    @Test fun genuineV3UpgradeKeepsUnknownHistory() = runTest {
+        val name = "ack-v3-strict-history-${UUID.randomUUID()}.db"
+        val schema = JSONObject(File(requireNotNull(System.getProperty("roomSchemaDirectory")),
+            "com.meshcoreone.android.core.database.MeshCoreDatabase${File.separator}3.json").readText())
+            .getJSONObject("database")
+        val radio = UUID.randomUUID()
+        val claim = UUID.randomUUID()
+        val wire = UUID.randomUUID()
+        val marker = UUID.randomUUID()
+        val issuer = UUID.randomUUID()
+        val resolution = UUID.randomUUID()
+        val pendingId = UUID.randomUUID()
+        val pendingMessageId = UUID.randomUUID()
+        val helper = FrameworkSQLiteOpenHelperFactory().create(
+            SupportSQLiteOpenHelper.Configuration.builder(context).name(name)
+                .callback(object : SupportSQLiteOpenHelper.Callback(3) {
+                    override fun onCreate(old: SupportSQLiteDatabase) {
+                        createExportedSchema(old, schema)
+                        DirectAckStorage.migration1To2.migrate(old)
+                        old.execSQL("INSERT INTO direct_ack_wires VALUES (?,?,?,?,?)",
+                            arrayOf<Any?>(radio.toString().uppercase(), claim.toString().uppercase(),
+                                wire.toString().uppercase(), 123, 999))
+                        old.execSQL("INSERT INTO direct_ack_operations VALUES (?,?,?,?,?,?,?)",
+                            arrayOf<Any?>(radio.toString().uppercase(), claim.toString().uppercase(),
+                                wire.toString().uppercase(), "EMISSION_TRACKING_REQUIRED", 123, 1, null))
+                        old.execSQL("INSERT INTO direct_ack_emissions VALUES (?,?,?,?,?,?,?,?,?)",
+                            arrayOf<Any?>(radio.toString().uppercase(), claim.toString().uppercase(),
+                                wire.toString().uppercase(), issuer.toString().uppercase(), marker.toString().uppercase(),
+                                123, "ACCEPTED", 999, resolution.toString().uppercase()))
+                        old.execSQL(
+                            "INSERT INTO pending_sends (radioId,id,messageID,kindRawValue,contactID,channelIndex," +
+                                "isResend,messageText,messageTimestamp,localNodeName,sequence,attemptCount," +
+                                "enqueuedAt_seconds,enqueuedAt_nanos) VALUES (?,?,?,1,NULL,2,0,'queued',1,NULL,1,0,1,0)",
+                            arrayOf<Any?>(radio.toString().uppercase(), pendingId.toString().uppercase(),
+                                pendingMessageId.toString().uppercase()),
+                        )
+                    }
+
+                    override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) =
+                        error("The genuine v3 fixture must be newly created")
+                }).build(),
+        )
+        try {
+            try { helper.writableDatabase } finally { helper.close() }
+            repeat(2) {
+                val current = MeshCoreDatabase.open(context, name)
+                try {
+                    assertEquals(4, current.openHelper.readableDatabase.version)
+                    assertEquals(listOf(DirectAckPrehistoryEntity(1, "UNKNOWN")), current.directAckPrehistory().rows())
+                    DirectAckPrehistoryStorage.verify(current.openHelper.readableDatabase)
+                    assertEquals(DirectAckWireEntity(radio, claim, wire, 123, 999),
+                        current.directAcks().wire(radio, claim, wire))
+                    assertEquals(DirectAckEmissionEntity(radio, claim, wire, issuer, marker, 123, "ACCEPTED", 999, resolution),
+                        current.directAckExclusions().emission(radio, claim, wire, marker))
+                    assertEquals(1L, current.directAckExclusions().legacyCount(radio))
+                    assertTrue(current.directAckExclusions().incompleteAcceptanceCoverageHistory(radio))
+                    assertEquals(1, current.directAcks().operations(radio, claim).size)
+                    assertTrue(current.channelSends().operations(radio, claim).isEmpty())
+                    val lifecycle = assertNotNull(current.channelSends().pendingLifecycle(radio, pendingId))
+                    assertEquals(pendingMessageId, lifecycle.messageId)
+                    assertTrue(lifecycle.incarnation.matches(Regex("[0-9a-f]{64}")))
+                    val pendingIdentity = assertNotNull(current.directAcks().incarnation(radio, pendingId, "pending"))
+                    current.pendingSends().setAttemptCount(radio, pendingId, 0)
+                    assertEquals(lifecycle, current.channelSends().pendingLifecycle(radio, pendingId))
+                    assertNotEquals(pendingIdentity, current.directAcks().incarnation(radio, pendingId, "pending"))
+                    ChannelSendStorage.verifyPendingLifecycles(current.openHelper.writableDatabase)
+                    for (sql in listOf(
+                        "UPDATE direct_ack_prehistory SET state='CLEAR'",
+                        "DELETE FROM direct_ack_prehistory",
+                        "INSERT OR REPLACE INTO direct_ack_prehistory VALUES (1,'UNKNOWN')",
+                    )) {
+                        assertFailsWith<android.database.sqlite.SQLiteException> {
+                            current.openHelper.writableDatabase.execSQL(sql)
+                        }
+                        assertEquals(listOf(DirectAckPrehistoryEntity(1, "UNKNOWN")), current.directAckPrehistory().rows())
+                    }
+                } finally { current.close() }
+            }
+        } finally { context.deleteDatabase(name) }
+    }
+
+    @Test fun v1DeletedMessageRemainsUnknownAfterUpgrade() = runTest {
+        preauthorityHistoryMustRemainUnknown(deleted = true)
+    }
+
+    @Test fun freshDatabaseCannotProveExternalHistoryClear() = runTest {
+        val name = "ack-fresh-external-history-${UUID.randomUUID()}.db"
+        val radio = UUID.randomUUID()
+        val current = UUID.randomUUID()
+        val wire = UUID.randomUUID()
+        val blockedAfterEachOpen = mutableListOf<Boolean>()
+        try {
+            repeat(2) { opening ->
+                val db = MeshCoreDatabase.open(context, name)
+                try {
+                    val exclusions = db.directAckExclusions()
+                    if (opening == 0) {
+                        assertEquals(0, exclusions.count(radio).toInt())
+                        assertEquals(0, exclusions.legacyCount(radio).toInt())
+                        trackedWire(db, DirectAckWireEntity(radio, current, wire, 123, 999))
+                        exclusions.emission(DirectAckEmissionEntity(
+                            radio, current, wire, UUID.randomUUID(), UUID.randomUUID(),
+                            123, "ACCEPTED", 999, UUID.randomUUID(),
+                        ))
+                    }
+                    assertTrue(exclusions.acceptedCurrentWire(radio, current, 999))
+                    blockedAfterEachOpen += exclusions.unresolvedCompetitor(radio, current) ||
+                        exclusions.saturated(radio) || db.directAckPrehistory().rows().single().also {
+                            assertEquals(DirectAckPrehistoryEntity(1, "UNKNOWN"), it)
+                        }.state == "UNKNOWN"
+                } finally { db.close() }
+            }
+            assertEquals(listOf(true, true), blockedAfterEachOpen,
+                "A new local file cannot exclude an old code-999 ACK emitted for another installation; " +
+                    "the supported creation path supplies no physical-history certificate")
+        } finally { context.deleteDatabase(name) }
+    }
+
+    private suspend fun preauthorityHistoryMustRemainUnknown(deleted: Boolean) {
+        val name = "ack-preauthority-${UUID.randomUUID()}.db"
+        val schema = JSONObject(File(requireNotNull(System.getProperty("roomSchemaDirectory")),
+            "com.meshcoreone.android.core.database.MeshCoreDatabase${File.separator}1.json").readText())
+            .getJSONObject("database")
+        val radio = UUID.randomUUID()
+        val oldMessage = UUID.randomUUID()
+        val current = UUID.randomUUID()
+        val wire = UUID.randomUUID()
+        val blockedAfterEachOpen = mutableListOf<Boolean>()
+        try {
+            val helper = FrameworkSQLiteOpenHelperFactory().create(
+                SupportSQLiteOpenHelper.Configuration.builder(context).name(name)
+                    .callback(object : SupportSQLiteOpenHelper.Callback(1) {
+                        override fun onCreate(old: SupportSQLiteDatabase) {
+                            createExportedSchema(old, schema)
+                            old.execSQL(
+                                "INSERT INTO messages (radioId,id,contactID,text,timestamp," +
+                                    "createdAt_seconds,createdAt_nanos,sortDate_seconds,sortDate_nanos," +
+                                    "directionRawValue,statusRawValue,textTypeRawValue,ackCode,pathLength,isRead," +
+                                    "heardRepeats,sendCount,retryAttempt,maxRetryAttempts,linkPreviewFetched," +
+                                    "containsSelfMention,mentionSeen,failureSeen,timestampCorrected," +
+                                    "routeTypeRawValue,regionScopeMatches) VALUES " +
+                                    "(?,?,?,'pre-authority sent DM',1700000000,1700000000,0,1700000000,0," +
+                                    "1,2,0,999,0,0,0,1,0,0,0,0,0,0,0,0,'[]')",
+                                arrayOf<Any?>(radio.toString().uppercase(), oldMessage.toString().uppercase(),
+                                    UUID.randomUUID().toString().uppercase()),
+                            )
+                            if (deleted) old.execSQL("DELETE FROM messages WHERE radioId=?",
+                                arrayOf<Any?>(radio.toString().uppercase()))
+                        }
+
+                        override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) =
+                            error("The pre-authority v1 fixture must be newly created")
+                    }).build(),
+            )
+            try { helper.writableDatabase } finally { helper.close() }
+            repeat(2) { opening ->
+                val db = MeshCoreDatabase.open(context, name)
+                try {
+                    assertEquals(4, db.openHelper.readableDatabase.version)
+                    val exclusions = db.directAckExclusions()
+                    assertEquals(0, exclusions.legacyCount(radio).toInt())
+                    if (opening == 0) {
+                        assertEquals(0, exclusions.count(radio).toInt())
+                        trackedWire(db, DirectAckWireEntity(radio, current, wire, 123, 999))
+                        exclusions.emission(DirectAckEmissionEntity(
+                            radio, current, wire, UUID.randomUUID(), UUID.randomUUID(),
+                            123, "ACCEPTED", 999, UUID.randomUUID(),
+                        ))
+                    }
+                    assertEquals(1, exclusions.count(radio).toInt())
+                    assertTrue(exclusions.acceptedCurrentWire(radio, current, 999))
+                    blockedAfterEachOpen += exclusions.unresolvedCompetitor(radio, current) ||
+                        exclusions.saturated(radio) || db.directAckPrehistory().rows().single().also {
+                            assertEquals(DirectAckPrehistoryEntity(1, "UNKNOWN"), it)
+                        }.state == "UNKNOWN"
+                } finally { db.close() }
+            }
+            assertEquals(listOf(true, true), blockedAfterEachOpen,
+                "A delayed code-999 ACK from an unjournaled v1 send must not gain a safe exclusion result " +
+                    "after migration or reopen, including a deleted message/absent then re-added radio")
+        } finally { context.deleteDatabase(name) }
+    }
+
+    @Test fun v2UpgradeRetainsLegacyCodes() = runTest {
+        val name = "ack-exclusion-migration-${UUID.randomUUID()}.db"
+        val file = context.getDatabasePath(name)
+        assertTrue(file.parentFile!!.exists() || file.parentFile!!.mkdirs())
+        val schema = JSONObject(File(requireNotNull(System.getProperty("roomSchemaDirectory")),
+            "com.meshcoreone.android.core.database.MeshCoreDatabase${File.separator}2.json").readText())
+            .getJSONObject("database")
+        val radio = UUID.randomUUID()
+        val unknownClaim = UUID.randomUUID()
+        val knownClaim = UUID.randomUUID()
+        val unknownWire = UUID.randomUUID()
+        val knownWire = UUID.randomUUID()
+        val current = UUID.randomUUID()
+        val unknown = DirectAckWireEntity(radio, unknownClaim, unknownWire, 123, null)
+        val known = DirectAckWireEntity(radio, knownClaim, knownWire, 456, 789)
+        try {
+            val helper = FrameworkSQLiteOpenHelperFactory().create(
+                SupportSQLiteOpenHelper.Configuration.builder(context).name(name)
+                    .callback(object : SupportSQLiteOpenHelper.Callback(2) {
+                        override fun onCreate(old: SupportSQLiteDatabase) {
+                            createExportedSchema(old, schema)
+                            for (wire in listOf(unknown, known)) {
+                                old.execSQL(
+                                    "INSERT INTO direct_ack_wires VALUES (?,?,?,?,?)",
+                                    arrayOf<Any?>(wire.radioId.toString().uppercase(), wire.claimId.toString().uppercase(),
+                                        wire.requestId.toString().uppercase(), wire.predictedCode, wire.acceptedCode),
+                                )
+                            }
+                            DirectAckStorage.migration1To2.migrate(old)
+                        }
+
+                        override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) =
+                            error("The v2 fixture must be newly created")
+                    }).build(),
+            )
+            try { helper.writableDatabase } finally { helper.close() }
+            repeat(2) {
+                val db = Room.databaseBuilder(context, MeshCoreDatabase::class.java, name)
+                    .addMigrations(DirectAckExclusionStorage.migration2To3, MeshCoreDatabase.migration3To4)
+                    .addCallback(DirectAckStorage.callback).build()
+                try {
+                    assertEquals(4, db.openHelper.readableDatabase.version)
+                    assertEquals(listOf(unknown), db.directAcks().wires(radio, unknownClaim))
+                    assertEquals(listOf(known), db.directAcks().wires(radio, knownClaim))
+                    val exclusions = db.directAckExclusions()
+                    assertEquals(0, exclusions.count(radio).toInt())
+                    assertEquals(2, exclusions.legacyCount(radio).toInt())
+                    assertTrue(exclusions.unresolvedCompetitor(radio, current))
+                    assertTrue(exclusions.competingCode(radio, current, 123))
+                    assertTrue(exclusions.competingCode(radio, current, 456))
+                    assertTrue(exclusions.competingCode(radio, current, 789))
+                    assertFalse(exclusions.competingCode(radio, current, 999))
+                    assertFalse(exclusions.saturated(radio))
+                    assertEquals(listOf(DirectAckPrehistoryEntity(1, "UNKNOWN")), db.directAckPrehistory().rows())
+                    DirectAckPrehistoryStorage.verify(db.openHelper.readableDatabase)
+                    DirectAckStorage.verify(db.openHelper.readableDatabase)
+                } finally { db.close() }
+            }
+        } finally { context.deleteDatabase(name) }
+    }
+
+    @Test fun knownAndUnresolvedCompetitorsAreRadioScopedAndDefinitelyUnsentIsExcluded() = runTest {
+        val db = Room.inMemoryDatabaseBuilder(context, MeshCoreDatabase::class.java)
+            .addCallback(DirectAckStorage.callback).build()
+        val radio = UUID.randomUUID()
+        val otherRadio = UUID.randomUUID()
+        val claim = UUID.randomUUID()
+        val wire = UUID.randomUUID()
+        val current = UUID.randomUUID()
+        val issuer = UUID.randomUUID()
+        try {
+            trackedWire(db, DirectAckWireEntity(radio, claim, wire, 123, null))
+            val marker = DirectAckEmissionEntity(radio, claim, wire, issuer, UUID.randomUUID(),
+                123, "MAY_HAVE_WRITTEN", null, null)
+            val exclusions = db.directAckExclusions()
+            exclusions.emission(marker)
+            assertTrue(exclusions.unresolvedCompetitor(radio, current))
+            assertFalse(exclusions.unresolvedCompetitor(radio, claim))
+            assertFalse(exclusions.unresolvedCompetitor(otherRadio, current))
+            exclusions.emission(marker.copy(state = "DEFINITELY_UNSENT", resolutionRequestId = UUID.randomUUID()))
+            assertFalse(exclusions.unresolvedCompetitor(radio, current))
+            assertFalse(exclusions.competingCode(radio, current, 123))
+            exclusions.emission(marker.copy(state = "CONFLICT"))
+            assertTrue(exclusions.unresolvedCompetitor(radio, current))
+            assertTrue(exclusions.conflictedClaim(radio, claim))
+        } finally { db.close() }
+    }
+
+    @Test fun separateHandlesDoNotReuseCleanSnapshots() = runTest {
+        val name = "ack-exclusion-handles-${UUID.randomUUID()}.db"
+        val first = Room.databaseBuilder(context, MeshCoreDatabase::class.java, name)
+            .addCallback(DirectAckStorage.callback).build()
+        val second = Room.databaseBuilder(context, MeshCoreDatabase::class.java, name)
+            .addCallback(DirectAckStorage.callback).build()
+        val radio = UUID.randomUUID()
+        val claim = UUID.randomUUID()
+        val competitor = UUID.randomUUID()
+        val wire = UUID.randomUUID()
+        try {
+            first.openHelper.writableDatabase
+            second.openHelper.writableDatabase
+            immediateBusyFailure(second)
+            assertFalse(first.directAckExclusions().unresolvedCompetitor(radio, claim))
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            withContext(Dispatchers.IO) {
+                withTimeout(30_000) {
+                    val heldTransaction = async(Dispatchers.IO) {
+                        first.withTransaction {
+                            assertFalse(first.directAckExclusions().unresolvedCompetitor(radio, claim))
+                            entered.complete(Unit)
+                            release.await()
+                            assertFalse(first.directAckExclusions().unresolvedCompetitor(radio, claim))
+                        }
+                    }
+                    entered.await()
+                    assertFailsWith<SQLiteDatabaseLockedException> {
+                        second.withTransaction {
+                            trackedWire(second, DirectAckWireEntity(radio, competitor, wire, 123, null))
+                        }
+                    }
+                    release.complete(Unit)
+                    heldTransaction.await()
+                    second.withTransaction {
+                        trackedWire(second, DirectAckWireEntity(radio, competitor, wire, 123, null))
+                        second.directAckExclusions().emission(DirectAckEmissionEntity(
+                            radio, competitor, wire, UUID.randomUUID(), UUID.randomUUID(),
+                            123, "MAY_HAVE_WRITTEN", null, null,
+                        ))
+                    }
+                }
+            }
+            first.withTransaction {
+                assertTrue(first.directAckExclusions().unresolvedCompetitor(radio, claim))
+                assertTrue(first.directAckExclusions().competingCode(radio, claim, 123))
+            }
+        } finally {
+            first.close()
+            second.close()
+            context.deleteDatabase(name)
+        }
+    }
+
+    @Test fun laterDefinitelyUnsentPhysicalCallCannotClearEarlierMayHaveWrittenOnSameWire() = runTest {
+        val db = Room.inMemoryDatabaseBuilder(context, MeshCoreDatabase::class.java)
+            .addCallback(DirectAckStorage.callback).build()
+        val radio = UUID.randomUUID()
+        val claim = UUID.randomUUID()
+        val wire = UUID.randomUUID()
+        val current = UUID.randomUUID()
+        try {
+            trackedWire(db, DirectAckWireEntity(radio, claim, wire, 123, null))
+            val first = DirectAckEmissionEntity(radio, claim, wire, UUID.randomUUID(), UUID.randomUUID(),
+                123, "MAY_HAVE_WRITTEN", null, null)
+            val second = first.copy(markRequestId = UUID.randomUUID())
+            val exclusions = db.directAckExclusions()
+            exclusions.emission(first)
+            exclusions.emission(second)
+            assertEquals(2, exclusions.count(radio).toInt())
+            exclusions.emission(second.copy(state = "DEFINITELY_UNSENT", resolutionRequestId = UUID.randomUUID()))
+            assertTrue(exclusions.unresolvedCompetitor(radio, current))
+            assertEquals(first, exclusions.emission(radio, claim, wire, first.markRequestId))
+            assertFalse(exclusions.acceptedCurrentWire(radio, claim, 123))
+            db.directAcks().wire(DirectAckWireEntity(radio, claim, wire, 123, 456))
+            exclusions.emission(first.copy(state = "ACCEPTED", actualCode = 456, resolutionRequestId = UUID.randomUUID()))
+            assertFalse(exclusions.unresolvedCompetitor(radio, current))
+            assertTrue(exclusions.acceptedCurrentWire(radio, claim, 456))
+            assertFalse(exclusions.acceptedCurrentWire(radio, claim, 123))
+            assertTrue(exclusions.competingCode(radio, current, 123))
+            assertTrue(exclusions.competingCode(radio, current, 456))
+        } finally { db.close() }
+    }
+}

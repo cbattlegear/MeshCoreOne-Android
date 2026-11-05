@@ -22,6 +22,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import org.junit.Test
 
@@ -84,6 +85,73 @@ class ContactsNativeTest {
         assertTrue(replacement.syncingFlags.isEmpty())
         assertEquals(0, harness.contactService.progress.subscriberCount)
         assertFalse(holder.state.value.isSyncing)
+    }
+
+    @Test
+    fun `same-radio swap during contact acquisition rejects the mixed capture before side effects`() =
+        verifySyncAcquisitionSwap("contact")
+
+    @Test
+    fun `same-radio swap during advert acquisition rejects the mixed capture before side effects`() =
+        verifySyncAcquisitionSwap("advert")
+
+    @Test
+    fun `same-radio swap while setting advert flag cleans only the captured pipeline`() =
+        verifySyncAcquisitionSwap("flag")
+
+    private fun verifySyncAcquisitionSwap(boundary: String) = scenario {
+        val harness = Harness(clock).connect()
+        val radio = checkNotNull(harness.session.radioId)
+        val replacement = Harness(clock).connect(radio)
+        val holder = ContactsStateHolder(harness.dependencies, scope)
+        val admitted = contact(radioId = radio, name = "Admitted")
+        holder.upsert(admitted)
+        var swaps = 0
+        val replace: () -> Unit = {
+            swaps++
+            harness.session.contacts = replacement.contactService
+            harness.session.adverts = replacement.adverts
+            harness.session.device = replacement.session.device
+            harness.session.servicesStore = replacement.store
+            harness.session.offlineStore = replacement.store
+        }
+        when (boundary) {
+            "contact" -> harness.session.onContactServiceRead = {
+                harness.session.onContactServiceRead = {}
+                replace()
+            }
+            "advert" -> harness.session.onAdvertisementServiceRead = {
+                harness.session.onAdvertisementServiceRead = {}
+                replace()
+            }
+            "flag" -> harness.adverts.syncingBehavior = { if (it) replace() }
+        }
+        var cancelled = false
+        try {
+            holder.syncContacts(radio)
+        } catch (_: CancellationException) {
+            cancelled = true
+        }
+        assertEquals(1, swaps, "The graph must actually change during acquisition or flagging")
+        assertTrue(cancelled, "A mixed or retired capture must cancel, not masquerade as B")
+        assertTrue(harness.contactService.calls.isEmpty(), "A must not subscribe or send after the swap")
+        assertTrue(replacement.contactService.calls.isEmpty(), "Acquisition cannot send through B either")
+        assertEquals(0, harness.contactService.progress.subscriberCount)
+        assertEquals(0, replacement.contactService.progress.subscriberCount)
+        assertEquals(if (boundary == "flag") listOf(true, false) else emptyList(), harness.adverts.syncingFlags)
+        assertTrue(replacement.adverts.syncingFlags.isEmpty(), "A cleanup must not flag B")
+        assertFalse(holder.state.value.isSyncing)
+        assertNull(holder.state.value.errorMessage)
+        assertEquals(listOf(admitted), holder.state.value.contacts)
+
+        holder.syncContacts(radio)
+        assertEquals(listOf("sync"), replacement.contactService.calls)
+        assertEquals(listOf(true, false), replacement.adverts.syncingFlags)
+        assertEquals(if (boundary == "flag") listOf(true, false) else emptyList(), harness.adverts.syncingFlags)
+        assertEquals(0, replacement.contactService.progress.subscriberCount)
+        assertFalse(holder.state.value.isSyncing)
+        assertNull(holder.state.value.errorMessage)
+        assertEquals(listOf(admitted), holder.state.value.contacts)
     }
 
     @Test

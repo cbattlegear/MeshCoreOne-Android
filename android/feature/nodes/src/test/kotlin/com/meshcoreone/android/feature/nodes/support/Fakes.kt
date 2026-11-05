@@ -184,8 +184,12 @@ internal class FakeContactService(private val store: FakeDataStore? = null) : No
 internal class FakeAdvertisementService : NodesAdvertisementService {
     val broadcaster = TestBroadcaster<NodesAdvertEvent>()
     val syncingFlags = mutableListOf<Boolean>()
+    var syncingBehavior: suspend (Boolean) -> Unit = {}
     override fun events(): EventSubscription<NodesAdvertEvent> = broadcaster.subscribe()
-    override suspend fun setSyncingContacts(isSyncing: Boolean) { syncingFlags += isSyncing }
+    override suspend fun setSyncingContacts(isSyncing: Boolean) {
+        syncingFlags += isSyncing
+        syncingBehavior(isSyncing)
+    }
 }
 
 internal class FakeTraceService(var behavior: suspend (UInt, UByte, Bytes) -> MessageSentInfo = { _, _, _ -> FakeContactService.sentInfo(0u) }) :
@@ -224,18 +228,21 @@ internal class FakeSession : NodesSession {
     var adverts: NodesAdvertisementService? = null
     var trace: NodesTraceService? = null
     var notifications: NodesNotificationCleanup? = null
+    var onContactServiceRead: () -> Unit = {}
+    var onAdvertisementServiceRead: () -> Unit = {}
 
     private fun publishConnection() {
         connection.value = NodesConnectionSnapshot(radioId, contacts)
     }
 
     override fun connectionState() = state
+    override fun connectionIdentity() = contacts
     override fun connectedDevice() = device
     override fun currentRadioId() = radioId
     override fun offlineDataStore() = offlineStore
     override fun servicesDataStore() = servicesStore
-    override fun contactService() = contacts
-    override fun advertisementService() = adverts
+    override fun contactService() = contacts.also { onContactServiceRead() }
+    override fun advertisementService() = adverts.also { onAdvertisementServiceRead() }
     override fun traceService() = trace
     override fun notificationCleanup() = notifications
 }

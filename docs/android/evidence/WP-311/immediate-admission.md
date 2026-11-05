@@ -107,6 +107,14 @@ additional observations in `FactoryPublicationIntegrationTest`. The existing fai
 successful-successor expectations remain intact. Menu, confirmation and held-sync replacement
 controls no longer mutate padding or any unrelated Compose state to force a rebind.
 
+Sync captures the graph identity before reading either service provider and revalidates it after
+both reads, before progress registration, advertisement flags or commands. A concurrent registry
+replacement therefore cancels a mixed-generation capture rather than labelling A's service as B.
+Deterministic controls swap the same-radio graph during contact-service acquisition, during
+advertisement-service acquisition and while setting A's advertisement flag. They require no stale
+command/subscription/publication, no B advertisement mutation by A, cleanup of A's flag when it was
+set, retained admissions and an independent fresh B sync. Existing held-A/B controls remain intact.
+
 Both `ContactsImmediateAdmissionApi31ComposeTest` and
 `ContactsImmediateAdmissionApi37ComposeTest` inherit six mounted tests:
 

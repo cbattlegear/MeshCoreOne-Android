@@ -166,13 +166,14 @@ class ContactsStateHolder(
     /** Sync contacts from the device; a re-trigger while one is in flight is a no-op. */
     suspend fun syncContacts(radioId: RadioId) {
         onConnectionChanged()
-        val contactService = session.contactService() ?: return
         if (activeSync != null) return
         val operation = ContactSync(session.connectionIdentity(), radioId)
+        val contactService = session.contactService() ?: return
+        val advertisementService = session.advertisementService()
+        // Providers can observe different registry generations; reject a mixed capture before any side effect.
         session.ensureContactConnection(operation.connection, radioId)
         activeSync = operation
         mutableState.update { it.copy(isSyncing = true, syncProgress = null, errorMessage = null) }
-        val advertisementService = session.advertisementService()
         var cancellation: CancellationException? = null
         try {
             // Flag the advert pipeline first and register before sending so no progress is missed.

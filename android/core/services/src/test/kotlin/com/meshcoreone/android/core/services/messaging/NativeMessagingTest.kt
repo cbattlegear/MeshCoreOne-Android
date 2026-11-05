@@ -53,6 +53,41 @@ class NativeMessagingTest {
         native("lateDifferentActualAckRetiresTrackerAndDrainsRealQueue") {
             lateDifferentActualAckCompletes(queued = true, listener = true)
         },
+        native("oldActualCodeCannotDeliverANewerClaimWithListener") {
+            oldActualCodeCannotDeliverNewerClaim(listener = true)
+        },
+        native("oldActualCodeCannotCompleteANewerRawMailboxWait") {
+            oldActualCodeCannotDeliverNewerClaim(listener = false)
+        },
+        native("retiredEmissionHistorySaturationRetainsExplicitDeliveryUncertainty") {
+            val h = Harness(this, MessageServiceConfig(maxAttempts = 1, minTimeout = 0.0))
+            h.start(); h.service.startEventMonitoring()
+            h.transport.acknowledge = false
+            h.transport.expectedAckOverride = ByteWriter().appendUInt32LE(1u).toBytes()
+            val message = h.service.sendDirectMessage("bounded predecessor history", h.contact)
+            repeat(65) { index ->
+                h.transport.expectedAckOverride = ByteWriter().appendUInt32LE((index + 2).toUInt()).toBytes()
+                val sending = async { h.service.resendDirectMessage(message.id, h.contact, preserveTimestamp = true) }
+                runCurrent(); advanceTimeBy(13); runCurrent()
+                sending.await()
+            }
+            val actual = ByteWriter().appendUInt32LE(1000u).toBytes()
+            h.transport.expectedAckOverride = actual
+            val sending = async { h.service.resendDirectMessage(message.id, h.contact, preserveTimestamp = true) }
+            try {
+                runCurrent()
+                val before = h.stored(message.id)
+                h.transport.pushAck(actual, 321u); runCurrent()
+                assertEquals(before, h.stored(message.id))
+                assertFalse(sending.isCompleted)
+                assertEquals(67, h.sends(CommandCode.SEND_MESSAGE).size)
+                assertTrue(h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+                    it.operation.startsWith("ackAmbiguous.")
+                })
+            } finally {
+                withContext(NonCancellable) { sending.cancelAndJoin(); h.close() }
+            }
+        },
         native("bufferedUnrelatedAckIsReportedUnmatchedOnlyAfterActualResponse") {
             val h = Harness(this); h.start(); h.service.startEventMonitoring()
             val gate = CompletableDeferred<Unit>()
@@ -426,6 +461,34 @@ class NativeMessagingTest {
             p.close(); h.close()
         },
     )
+    private suspend fun TestScope.oldActualCodeCannotDeliverNewerClaim(listener: Boolean) {
+        val h = Harness(this, MessageServiceConfig(maxAttempts = 1))
+        h.start()
+        if (listener) h.service.startEventMonitoring()
+        h.transport.acknowledge = false
+        val actual = Bytes.of(9, 8, 7, 6)
+        h.transport.expectedAckOverride = actual
+        val first = h.service.sendDirectMessage("older same actual", h.contact)
+        val events = h.service.statusEvents()
+        val sending = async { h.service.resendDirectMessage(first.id, h.contact, preserveTimestamp = true) }
+        try {
+            runCurrent()
+            val before = h.stored(first.id)
+            h.transport.pushAck(actual, 999u); runCurrent()
+            assertEquals(before, h.stored(first.id))
+            assertFalse(sending.isCompleted)
+            assertEquals(2, h.sends(CommandCode.SEND_MESSAGE).size)
+            assertNull(assertNotNull(h.service.pendingAck(first.id)).acknowledgement)
+            assertFalse(assertNotNull(h.service.pendingAck(first.id)).receipt.isCompleted)
+            assertTrue(h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+                it.operation.startsWith("ackAmbiguous.")
+            })
+            assertTrue(statuses(h.service, events).isEmpty())
+        } finally {
+            withContext(NonCancellable) { sending.cancelAndJoin(); h.close() }
+        }
+    }
+
     private suspend fun TestScope.lateDifferentActualAckCompletes(queued: Boolean, listener: Boolean) {
         val h = Harness(this, MessageServiceConfig(maxAttempts = 1))
         h.start()

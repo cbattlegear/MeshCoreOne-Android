@@ -74,16 +74,21 @@ class MessageService(
         val attempt: DirectAckAttempt,
         firstWireID: UUID,
         val correlateResponses: Boolean,
+        val registrationOrder: Long,
     ) {
         val wires = mutableMapOf(0 to firstWireID)
         val operations = mutableMapOf<String, UUID>()
         val predictedCodes = mutableMapOf<UUID, Bytes>()
         val acceptedCodes = mutableMapOf<UUID, Bytes>()
+        val possiblyEmittedCodes = mutableMapOf<UUID, Bytes?>()
         val confirmedCodes = mutableSetOf<Bytes>()
         val bufferedAcknowledgements = mutableListOf<MeshAcknowledgement>()
         var acknowledgementBufferOverflow = false
     }
     private val directAuthorities = mutableMapOf<UUID, DirectAuthorityState>()
+    private val retiredDirectEmissions = mutableListOf<DirectAuthorityState>()
+    private var directEmissionHistoryOverflow = false
+    private var directRegistrationOrder = 0L
     private val directIntentMessages = mutableSetOf<UUID>()
     private val directRegistrationIDs = mutableMapOf<UUID, UUID>()
     private class NoDispatchCompletion(
@@ -219,14 +224,41 @@ class MessageService(
             is DirectAckBeginResult.Rejected -> throw authorityFailure(result.reason.name)
         }
         if (receipt.permission != DirectAckPermission.CURRENT) throw authorityFailure(receipt.permission.name)
-        val state = DirectAuthorityState(requestID, attempt, wireID, correlateResponses)
+        val state = DirectAuthorityState(requestID, attempt, wireID, correlateResponses, synchronized(lock) {
+            Math.incrementExact(directRegistrationOrder).also { directRegistrationOrder = it }
+        })
         synchronized(lock) {
+            if (prior != null && prior.possiblyEmittedCodes.isNotEmpty()) {
+                if (retiredDirectEmissions.size < 64) retiredDirectEmissions += prior
+                else directEmissionHistoryOverflow = true
+            }
             state.predictedCodes[wireID] = predicted
             directAuthorities[id] = state
             pendingAcks.remove(id)?.receipt?.cancel()
         }
         return state to wireID
     }
+
+    private suspend fun directWire(
+        state: DirectAuthorityState, wireID: UUID, transmit: suspend () -> MessageSentInfo,
+    ): MessageSentInfo {
+        synchronized(lock) { state.possiblyEmittedCodes[wireID] = null }
+        try {
+            return transmit().also { info ->
+                synchronized(lock) { state.possiblyEmittedCodes[wireID] = info.expectedAck }
+            }
+        } catch (rejected: MeshCoreException.DeviceError) {
+            synchronized(lock) { state.possiblyEmittedCodes.remove(wireID) }
+            throw rejected
+        }
+    }
+
+    private fun hasCompetingEmission(target: DirectAuthorityState, code: Bytes): Boolean =
+        directEmissionHistoryOverflow ||
+            (retiredDirectEmissions.asSequence() + directAuthorities.values.asSequence()).any { other ->
+                other.registrationOrder < target.registrationOrder &&
+                    other.possiblyEmittedCodes.values.any { it == null || it == code }
+            }
 
     private suspend fun recordDirectAcceptance(state: DirectAuthorityState, wireID: UUID, info: MessageSentInfo) {
         val receipt = mutationReceipt(authority().recordDirectSendAccepted(state.attempt, wireID, info.expectedAck.ackCodeUInt32))
@@ -510,12 +542,18 @@ class MessageService(
         checkIdentity("acknowledgement")
         var deferred = false
         val overflows = mutableListOf<UUID>()
+        val ambiguous = mutableSetOf<UUID>()
         val tracking = synchronized(lock) {
             val found = pendingAcks.values.firstOrNull {
                 code in it.ackCodes && !it.isDelivered &&
                     (expectedAttempt == null || it.authority === expectedAttempt) &&
                     directAuthorities[it.messageID]?.takeIf { state -> state.attempt === it.authority }
-                        ?.let { state -> !state.correlateResponses || code in state.confirmedCodes } != false
+                        ?.let { state ->
+                            if (state.correlateResponses && hasCompetingEmission(state, code)) {
+                                ambiguous += state.requestID
+                                false
+                            } else !state.correlateResponses || code in state.confirmedCodes
+                        } != false
             }
             directAuthorities.forEach { (id, state) ->
                 if (found == null && (expectedAttempt == null || state.attempt === expectedAttempt) &&
@@ -544,8 +582,14 @@ class MessageService(
         overflows.forEach {
             remember("ackBuffer.$it", authorityFailure("ACK correlation buffer overflow; early delivery evidence is uncertain"))
         }
+        ambiguous.forEach {
+            remember("ackAmbiguous.$it", authorityFailure(
+                if (synchronized(lock) { directEmissionHistoryOverflow })
+                    "ACK correlation history overflow; delivery remains unproven"
+                else "ACK may belong to an earlier emitted claim; delivery remains unproven"))
+        }
         if (tracking == null) {
-            if (!deferred) reportUnmatchedAcknowledgement(code)
+            if (!deferred && ambiguous.isEmpty()) reportUnmatchedAcknowledgement(code)
             return
         }
         reconcileAcknowledgement(tracking.messageID, expectedAttempt = tracking.authority)
@@ -1088,8 +1132,10 @@ class MessageService(
                             checkIdentity("sendDirectMessage.wire")
                             inlineWire { dispatch ->
                                 val timestamp = Instant.ofEpochSecond(captured.timestamp.toLong())
-                                if (dispatch == null) session.sendMessage(selected.publicKey, captured.text, timestamp)
-                                else session.sendMessage(selected.publicKey, captured.text, timestamp, dispatch = dispatch)
+                                directWire(registration.first, registration.second) {
+                                    if (dispatch == null) session.sendMessage(selected.publicKey, captured.text, timestamp)
+                                    else session.sendMessage(selected.publicKey, captured.text, timestamp, dispatch = dispatch)
+                                }
                             }
                         }
                     }
@@ -1339,10 +1385,12 @@ class MessageService(
                         if (unacknowledgedRetirement(claim)) null
                         else completedDirect(claim) ?: notificationWire { dispatch ->
                             val timestamp = Instant.ofEpochSecond(stamp.toLong())
-                            if (dispatch == null) {
-                                session.sendMessage(contact.publicKey.prefix(6), text, timestamp, attempt)
-                            } else {
-                                session.sendMessage(contact.publicKey.prefix(6), text, timestamp, attempt, dispatch)
+                            directWire(authorityState, wireID) {
+                                if (dispatch == null) {
+                                    session.sendMessage(contact.publicKey.prefix(6), text, timestamp, attempt)
+                                } else {
+                                    session.sendMessage(contact.publicKey.prefix(6), text, timestamp, attempt, dispatch)
+                                }
                             }
                         }
                     }
@@ -1369,7 +1417,7 @@ class MessageService(
                         if (ack == null) return@messagingDeadline true
                         if (ack.code in (pendingAck(id)?.ackCodes ?: tracking.ackCodes)) {
                             handleAcknowledgement(ack.code, ack.tripTime)
-                            return@messagingDeadline true
+                            if (tracking.receipt.isCompleted) return@messagingDeadline true
                         }
                     }
                 }
@@ -1682,6 +1730,7 @@ class MessageService(
                 pendingAcks.values.forEach { it.receipt.cancel() }
                 pendingAcks.clear()
                 directAuthorities.clear()
+                retiredDirectEmissions.clear()
                 directRegistrationIDs.clear()
                 noDispatchCompletions.clear()
                 uncertainFailureWrites.clear()

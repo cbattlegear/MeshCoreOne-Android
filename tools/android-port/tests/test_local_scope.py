@@ -15,6 +15,16 @@ from controller.local_scope import (
     candidate_plan, collect_named_cases, collect_targeted_reports, report_inputs,
     run_scaffold, select_paths, validate_plan, validation_preflight_options,
 )
+from test_module_junit import notification_fixture, notification_report
+
+
+def compiled_notification_sources(repo):
+    from controller.module_junit import _notification_jvm_test_sources, module_sources
+
+    inputs = module_sources(repo)["platform/notifications"]
+    return {
+        "platform/notifications": _notification_jvm_test_sources("platform/notifications", inputs),
+    }
 
 
 class LocalScopeSelectionTests(unittest.TestCase):
@@ -225,13 +235,149 @@ class LocalScopeBindingTests(unittest.TestCase):
     def write(self, name, content):
         path = self.repo / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
+        path.write_text(content, encoding="utf-8", newline="\n")
 
     def commit(self):
         self.git("add", "--all")
         self.git("-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false",
                  "commit", "--quiet", "-m", "scope fixture")
         return self.git("rev-parse", "HEAD")
+
+    def test_remapped_notification_sources_select_real_runner_in_affected_and_full(self):
+        notification_fixture(self.write)
+        base = self.commit()
+        self.git("update-ref", "refs/remotes/origin/main", base)
+        source = "android/platform/notifications/src/main/kotlin/Delivery.kt"
+        self.write(source, "changed producer")
+        head = self.commit()
+        plan = candidate_plan(self.repo, base, head)
+        self.assertIn("module:platform/notifications", plan["scopes"])
+        self.assertIn(":platform:notifications:testDebugUnitTest", plan["tasks"])
+        directories, _ = report_inputs(self.repo, plan)
+        self.assertIn(self.repo / "android/platform/notifications/build/test-results/testDebugUnitTest", directories)
+        self.assertNotIn(self.repo / "android/platform/notifications/build/test-results/test", directories)
+        with self.assertRaises(PortError):
+            collect_targeted_reports(self.repo, plan["scopes"])
+        notification_report(self.repo)
+        compiled = compiled_notification_sources(self.repo)
+        self.assertEqual(
+            collect_targeted_reports(self.repo, plan["scopes"], compiled, plan["head"])
+            ["platform/notifications"]["passed"],
+            6,
+        )
+        self.write("android/gradle.properties", "build change")
+        full = candidate_plan(self.repo, base, self.commit())
+        self.assertTrue(full["full_scaffold"])
+        self.assertIn(":platform:notifications:testDebugUnitTest", full["tasks"])
+
+    def test_absent_notification_full_plan_and_reader_use_unmodified_task_inventories(self):
+        from controller.local_scope import SCOPED_TASKS, TASKS
+        from controller.repair_acceptance import validate_build_log
+        from test_repair_acceptance import build_log
+
+        notification_task = ":platform:notifications:testDebugUnitTest"
+        original = list(TASKS["scaffold"])
+        self.assertIn(notification_task, original)
+        affected = candidate_plan(self.repo, self.base, self.head)
+        self.assertFalse(affected["full_scaffold"])
+        self.assertNotIn(notification_task, affected["tasks"])
+        self.write("android/gradle.properties", "org.gradle.parallel=false\n")
+        head = self.commit()
+        full = candidate_plan(self.repo, self.base, head)
+        self.assertTrue(full["full_scaffold"])
+        self.assertNotIn(notification_task, full["tasks"])
+
+        def plan(scopes):
+            self.assertEqual(scopes, list(SCOPED_TASKS))
+            return candidate_plan(self.repo, self.base, head, scopes)
+
+        log = build_log(["core/services"], tasks=full["tasks"])
+        with self.assertRaises(PortError):
+            validate_build_log(log, ["core/services"])
+        proof = validate_build_log(log, ["core/services"], plan_for_scopes=plan)
+        self.assertTrue(proof["positive_discovery"])
+        for malformed in (
+            {"scopes": ["scaffold"], "tasks": full["tasks"]},
+            {"scopes": list(SCOPED_TASKS), "tasks": full["tasks"] + [full["tasks"][0]]},
+        ):
+            with self.subTest(plan=malformed), self.assertRaises(PortError):
+                validate_build_log(log, ["core/services"], plan_for_scopes=lambda scopes: malformed)
+        for tasks in (
+            [task for task in full["tasks"] if task != ":app:assembleDebug"],
+            full["tasks"] + [":platform:notifications:unsafeTask"],
+            full["tasks"] + [full["tasks"][0]],
+        ):
+            with self.subTest(tasks=tasks), self.assertRaises(PortError):
+                validate_build_log(
+                    build_log(["core/services"], tasks=tasks), ["core/services"], plan_for_scopes=plan,
+                )
+        notification_fixture(self.write)
+        head = self.commit()
+        present = plan(list(SCOPED_TASKS))
+        self.assertIn(notification_task, present["tasks"])
+        with self.assertRaises(PortError):
+            validate_build_log(log, ["core/services"], plan_for_scopes=plan)
+        self.assertEqual(TASKS["scaffold"], original)
+        self.assertIs(SCOPED_TASKS["scaffold"], TASKS["scaffold"])
+
+    def test_remapped_runner_survives_dependency_parser_full_fallback(self):
+        notification_fixture(self.write)
+        self.write("android/core/model/src/main/kotlin/Model.kt", "base")
+        self.write(
+            "android/core/model/build.gradle.kts",
+            'plugins { id("mesh.jvm.library") }\n'
+            'dependencies { implementation(project(path = ":core:model")) }\n',
+        )
+        base = self.commit()
+        self.git("update-ref", "refs/remotes/origin/main", base)
+        self.write("android/core/model/src/main/kotlin/Model.kt", "changed")
+        head = self.commit()
+        from controller import local_scope
+        scaffold_tasks = [
+            task for task in local_scope.SCOPED_TASKS["scaffold"]
+            if task != ":platform:notifications:testDebugUnitTest"
+        ]
+        with patch.dict(local_scope.SCOPED_TASKS, {"scaffold": scaffold_tasks}):
+            plan = candidate_plan(self.repo, base, head)
+        self.assertTrue(plan["full_scaffold"])
+        self.assertIn("Unclassified project dependency expression", plan["reason"])
+        self.assertIn(":platform:notifications:testDebugUnitTest", plan["tasks"])
+
+    def test_remapped_targeted_reports_cannot_be_substituted_or_dirty(self):
+        from controller.module_junit import NOTIFICATION_CASES, NOTIFICATION_ROOT
+
+        notification_fixture(self.write)
+        self.commit()
+        scopes = ["module:platform/notifications"]
+        compiled = compiled_notification_sources(self.repo)
+        notification_report(self.repo, {(c, m + "Substitute") for c, m in NOTIFICATION_CASES})
+        with self.assertRaisesRegex(PortError, "mandatory remapped"):
+            collect_targeted_reports(self.repo, scopes, compiled)
+        notification_report(self.repo)
+        self.write("android/platform/notifications/" + NOTIFICATION_ROOT + "/Dirty.kt", "dirty")
+        with self.assertRaisesRegex(PortError, "differ"):
+            collect_targeted_reports(self.repo, scopes, compiled)
+
+    def test_instrumentation_only_module_does_not_select_jvm_runner(self):
+        self.write("android/platform/widgets/build.gradle.kts", 'plugins { id("mesh.android.library") }\n')
+        self.write("android/platform/widgets/src/androidTest/kotlin/DeviceTest.kt", "device")
+        base = self.commit()
+        self.git("update-ref", "refs/remotes/origin/main", base)
+        self.write("android/platform/widgets/src/main/kotlin/Widget.kt", "production")
+        plan = candidate_plan(self.repo, base, self.commit())
+        self.assertIn("module:platform/widgets", plan["scopes"])
+        self.assertNotIn(":platform:widgets:testDebugUnitTest", plan["tasks"])
+        self.assertEqual(collect_targeted_reports(self.repo, plan["scopes"]), {})
+
+    def test_unsupported_mapping_cannot_supply_a_targeted_pass(self):
+        notification_fixture(self.write)
+        base = self.commit()
+        self.git("update-ref", "refs/remotes/origin/main", base)
+        build = self.repo / "android/platform/notifications/build.gradle.kts"
+        self.write(build, build.read_text(encoding="utf-8").replace('getByName("test")', 'getByName("androidTest")'))
+        head = self.commit()
+        with self.assertRaisesRegex(PortError, "mapping build"):
+            candidate_plan(self.repo, base, head)
 
     def test_actual_git_diff_binds_base_head_tree_and_scopes(self):
         plan = candidate_plan(self.repo, self.base, self.head)
@@ -291,6 +437,9 @@ class LocalScopeBindingTests(unittest.TestCase):
         (control / "local_scope.py").write_bytes(
             (source / "tools/android-port/controller/local_scope.py").read_bytes())
         (control / "fast.py").write_bytes((source / "tools/android-port/local/fast.py").read_bytes())
+        collector = control / "verify_candidate_task_graph.gradle"
+        collector.write_bytes(
+            (source / "tools/android-port/controller/verify_candidate_task_graph.gradle").read_bytes())
         spec = importlib.util.spec_from_file_location("owned_fast_fixture", control / "fast.py")
         fast = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(fast)
@@ -360,6 +509,7 @@ class LocalScopeBindingTests(unittest.TestCase):
                     "--affected-plan", str(self.repo / "request.json"), "--affected-base", base,
                 ]), patch.object(Path, "read_text", new=read_text), \
                 patch.object(fast, "execution_lane", return_value=None), \
+                patch.object(fast, "owned_verification", return_value=collector), \
                 patch.object(fast, "execute", side_effect=complete), \
                 patch.object(ci_environment, "candidate_environment", return_value={}), \
                 patch.object(ci_environment, "verify_wrapper"), \
@@ -372,6 +522,8 @@ class LocalScopeBindingTests(unittest.TestCase):
             else:
                 fast.main()
         self.assertEqual(len(calls), 2)
+        for command in calls:
+            self.assertEqual(command[-2:], ["--init-script", str(collector)])
         preflight_tasks = ["validateModuleGraph", "runtimeDependencyInventory"]
         build_tasks = [task for task in plan["tasks"] if task not in preflight_tasks]
         self.assertEqual(self.requested_gradle_tasks(calls[0]), preflight_tasks)

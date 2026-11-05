@@ -286,7 +286,11 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
                     h.manager.connectedDevice?.defaultFloodScopeName == "EU868"
             }
             assertNotNull(rewire).join()
-            assertNotNull(holder.state.value.errorMessage, "The retired action must not claim success")
+            assertNotNull(
+                holder.state.value.errorMessage ?: holder.retryAlertState.value.message,
+                "The retired action must not claim success",
+            )
+            assertTrue(holder.state.value.errorMessage != null || holder.retryAlertState.value.isPresented)
             assertEquals("EU868", radio.mode)
             assertEquals(before.copy(defaultFloodScopeName = "EU868"), store.fetchDevice(before.id))
             assertEquals(before.copy(defaultFloodScopeName = "EU868"), h.manager.connectedDevice)

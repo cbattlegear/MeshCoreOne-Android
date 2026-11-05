@@ -202,14 +202,18 @@ class SettingsPathHashPersistenceTest : RoomProcessTest() {
         val commits = mutableListOf<UByte>()
         val held = object : PersistenceStoreProtocol by store {
             override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
-                val saved = if (armed && dto.pathHashMode == 2u.toUByte()) {
+                if (armed && dto.pathHashMode == 2u.toUByte()) {
                     armed = false
+                    val committed = store.saveDeviceIfUnchanged(dto, expected)
+                    assertTrue(committed, "The old Room write must commit before its completion is held")
+                    commits += dto.pathHashMode
                     entered.complete(Unit)
-                    withContext(NonCancellable) {
+                    return withContext(NonCancellable) {
                         release.await()
-                        store.saveDeviceIfUnchanged(dto, expected)
+                        committed
                     }
-                } else store.saveDeviceIfUnchanged(dto, expected)
+                }
+                val saved = store.saveDeviceIfUnchanged(dto, expected)
                 if (saved) commits += dto.pathHashMode
                 return saved
             }
@@ -221,6 +225,7 @@ class SettingsPathHashPersistenceTest : RoomProcessTest() {
                 armed = true
                 holder.onModeSelected(2u)
                 h.eventually("old Room write entered") { entered.isCompleted }
+                assertEquals(2u.toUByte(), store.fetchDevice(before.id)!!.pathHashMode)
                 h.appState.wireServicesIfConnected()
                 h.eventually("retired original waiter fails") {
                     !holder.state.value.isApplying && failures.isNotEmpty()

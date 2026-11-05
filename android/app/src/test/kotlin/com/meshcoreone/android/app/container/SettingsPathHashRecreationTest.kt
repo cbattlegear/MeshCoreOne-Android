@@ -5,6 +5,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -92,6 +93,10 @@ class SettingsPathHashRecreationTest : RoomProcessTest() {
                             AppSettingsContent(feature, navigation.activeStack.last().destination, h.container.navigation)
                         }
                     }
+                }
+                h.eventually("mounted Settings observes the current path-hash-capable device") {
+                    compose.onAllNodesWithText(context.getString(S.pathHashModeLabel))
+                        .fetchSemanticsNodes().size == 1
                 }
             }
             fun choose(text: Int) {

@@ -17,6 +17,12 @@ Other harness users still default to DENIED. No production authorization or
 dispatcher behavior changes. The successor must execute both failed controls
 before either can be accepted.
 
+The next exact-head run `41968481459` at b906 terminally failed before executing
+App tests: Kotlin could not resolve `NotificationAuthorizationStatus` because the
+new test imported it from `core.contracts.domain` instead of its declared
+`core.contracts.notifications` package. The import is corrected in the next
+candidate; this compile failure is not counted as test execution or acceptance.
+
 The authoritative same-run reports discovered 18 passing
 `NotificationAcceptanceRecoveryTests` cases and 31 passing
 `NotificationTransactionNativeTests` cases, including the unchanged

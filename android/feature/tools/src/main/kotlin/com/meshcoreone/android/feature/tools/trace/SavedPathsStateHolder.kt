@@ -43,6 +43,7 @@ class SavedPathsStateHolder(
     private var deps: SavedPathsDependencies? = null
     private var active = true
     private var revision = 0L
+    private var mutationRevision = 0L
 
     fun configure(dependencies: SavedPathsDependencies) {
         deps = dependencies
@@ -64,12 +65,16 @@ class SavedPathsStateHolder(
     private fun isCurrent(operation: Long, radioId: RadioId): Boolean =
         operation == revision && isCurrentConnection(radioId)
 
-    suspend fun loadSavedPaths() {
+    suspend fun loadSavedPaths() = loadSavedPaths(null)
+
+    private suspend fun loadSavedPaths(mutation: Long?) {
         if (!active) return
         val radioId = deps?.connectedDevice()?.radioId ?: return
         val store = deps?.savedPaths() ?: return
         val operation = ++revision
-        mutableState.update { it.copy(isLoading = true, errorMessage = null) }
+        mutableState.update {
+            it.copy(isLoading = true, errorMessage = if (mutation == null || mutation == mutationRevision) null else it.errorMessage)
+        }
         try {
             val paths = store.fetchSavedTracePaths(radioId)
             if (isCurrent(operation, radioId)) mutableState.update { it.copy(savedPaths = paths.toList()) }
@@ -77,7 +82,9 @@ class SavedPathsStateHolder(
             throw error
         } catch (error: Exception) {
             diagnostics.failure("loadSavedPaths", error)
-            if (isCurrent(operation, radioId)) mutableState.update { it.copy(errorMessage = strings.loadFailed) }
+            if (isCurrent(operation, radioId) && (mutation == null || mutation == mutationRevision)) {
+                mutableState.update { it.copy(errorMessage = strings.loadFailed) }
+            }
         } finally {
             if (isCurrent(operation, radioId)) mutableState.update { it.copy(isLoading = false) }
         }
@@ -85,26 +92,28 @@ class SavedPathsStateHolder(
 
     /** Renames, then reloads the whole list. */
     suspend fun renamePath(path: SavedTracePathDTO, newName: String) {
-        val operation = revision
-        if (!isCurrent(operation, path.radioId)) return
+        if (!isCurrentConnection(path.radioId)) return
         val store = deps?.savedPaths() ?: return
+        val operation = ++mutationRevision
         try {
             store.updateSavedTracePathName(EntityKey(path.radioId, path.id), newName)
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
             diagnostics.failure("renamePath", error)
-            if (isCurrent(operation, path.radioId)) mutableState.update { it.copy(errorMessage = strings.renameFailed) }
+            if (isCurrentConnection(path.radioId) && operation == mutationRevision) {
+                mutableState.update { it.copy(errorMessage = strings.renameFailed) }
+            }
             return
         }
-        if (isCurrentConnection(path.radioId)) loadSavedPaths()
+        if (isCurrentConnection(path.radioId)) loadSavedPaths(operation)
     }
 
     /** Deletes and drops the row locally without a reload. */
     suspend fun deletePath(path: SavedTracePathDTO): Boolean {
-        val operation = revision
-        if (!isCurrent(operation, path.radioId)) return false
+        if (!isCurrentConnection(path.radioId)) return false
         val store = deps?.savedPaths() ?: return false
+        val operation = ++mutationRevision
         try {
             store.deleteSavedTracePath(EntityKey(path.radioId, path.id))
             if (isCurrentConnection(path.radioId)) {
@@ -113,6 +122,7 @@ class SavedPathsStateHolder(
                     state.copy(
                         savedPaths = state.savedPaths.filterNot { it.id == path.id && it.radioId == path.radioId },
                         isLoading = false,
+                        errorMessage = if (operation == mutationRevision) null else state.errorMessage,
                     )
                 }
             }
@@ -121,7 +131,9 @@ class SavedPathsStateHolder(
             throw error
         } catch (error: Exception) {
             diagnostics.failure("deletePath", error)
-            if (isCurrent(operation, path.radioId)) mutableState.update { it.copy(errorMessage = strings.deleteFailed) }
+            if (isCurrentConnection(path.radioId) && operation == mutationRevision) {
+                mutableState.update { it.copy(errorMessage = strings.deleteFailed) }
+            }
             return false
         }
     }

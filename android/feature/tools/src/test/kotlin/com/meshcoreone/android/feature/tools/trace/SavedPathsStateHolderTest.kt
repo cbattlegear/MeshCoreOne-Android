@@ -175,6 +175,87 @@ class SavedPathsStateHolderTest {
     }
 
     @Test
+    fun `held mutation failures survive intervening loads but never overwrite a newer mutation outcome`() {
+        for (delete in listOf(false, true)) for (newer in listOf("none", "success", "failure")) {
+            val path = savedPath(Bytes.of(1), radioId = RADIO)
+            store.insert(path)
+            val gate = CompletableDeferred<Unit>()
+            var mutations = 0
+            holder.configure(object : SavedPathsDependencies {
+                override fun connectedDevice() = connected
+                override fun savedPaths() = object : TracePathPersisting by store {
+                    private suspend fun beforeMutation() {
+                        if (++mutations == 1) {
+                            gate.await()
+                            throw IOException("older held mutation")
+                        }
+                        if (newer == "failure") throw IOException("newer mutation")
+                    }
+                    override suspend fun updateSavedTracePathName(key: EntityKey, name: String) {
+                        beforeMutation()
+                        store.updateSavedTracePathName(key, name)
+                    }
+                    override suspend fun deleteSavedTracePath(key: EntityKey) {
+                        beforeMutation()
+                        store.deleteSavedTracePath(key)
+                    }
+                }
+            })
+            harness.complete { holder.loadSavedPaths() }
+            val pending = harness.start {
+                if (delete) holder.deletePath(path) else holder.renamePath(path, "Old request")
+            }
+            harness.complete { holder.loadSavedPaths() }
+            if (newer != "none") {
+                harness.complete {
+                    if (delete) holder.renamePath(path, "New accepted name") else holder.deletePath(path)
+                }
+            }
+            val newerState = holder.state.value
+            gate.complete(Unit)
+            harness.main.runCurrent()
+            assertTrue(pending.isCompleted)
+            val expected = when {
+                newer == "success" -> null
+                newer == "failure" -> if (delete) Strings.renameFailed else Strings.deleteFailed
+                delete -> Strings.deleteFailed
+                else -> Strings.renameFailed
+            }
+            assertEquals(expected, holder.state.value.errorMessage)
+            assertEquals(newerState.savedPaths, holder.state.value.savedPaths)
+            if (newer == "none") assertEquals(path, store.paths[path.id])
+        }
+    }
+
+    @Test
+    fun `older successful rename refresh cannot erase a newer mutation failure`() {
+        val path = savedPath(Bytes.of(1), radioId = RADIO)
+        store.insert(path)
+        val gate = CompletableDeferred<Unit>()
+        holder.configure(object : SavedPathsDependencies {
+            override fun connectedDevice() = connected
+            override fun savedPaths() = object : TracePathPersisting by store {
+                override suspend fun updateSavedTracePathName(key: EntityKey, name: String) {
+                    gate.await()
+                    store.updateSavedTracePathName(key, name)
+                }
+                override suspend fun deleteSavedTracePath(key: EntityKey) {
+                    throw IOException("newer failed delete")
+                }
+            }
+        })
+        harness.complete { holder.loadSavedPaths() }
+        val rename = harness.start { holder.renamePath(path, "Accepted name") }
+        assertFalse(harness.complete { holder.deletePath(path) })
+        assertEquals(Strings.deleteFailed, holder.state.value.errorMessage)
+        gate.complete(Unit)
+        harness.main.runCurrent()
+        assertTrue(rename.isCompleted)
+        assertEquals("Accepted name", holder.state.value.savedPaths.single { it.id == path.id }.name)
+        assertEquals(Strings.deleteFailed, holder.state.value.errorMessage)
+    }
+
+    @Test
     fun `committed deletion retires an older snapshot without resurrecting its row`() {
         val path = savedPath(Bytes.of(1), radioId = RADIO)
         store.insert(path)

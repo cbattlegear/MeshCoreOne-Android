@@ -108,3 +108,45 @@ does not mean seven tests discovered/passed. The receiving owners must compile a
 exercise the actual database/service/queue interleavings against this exact handoff.
 There is no durable-ingress promise for an ACK held only in RAM during storage
 failure followed by process death.
+
+## Additive no-dispatch queue completion follow-up
+
+Follow-up parent: `93125597154c8ae28041f6781c5fb851d2b6188b`. During
+consumer integration, the normal already-DELIVERED queued SEND fast path and the
+legal zero-attempt budget were found to return without beginning an ACK claim.
+The existing claim-bound completion must not be bypassed with fake RESEND
+authority, generic deletion or broadened SEND eligibility.
+
+Storage/service owners agreed a separate optional
+`DirectPendingCompletionAuthority`: capture an exact persisted pending/message
+incarnation/revision, conditionally complete only that capture, and inspect its
+immutable completion history. `AlreadyDeliveredSend` verifies actual outgoing DM,
+DELIVERED and a non-resend DM pending row. `ZeroAttempts` carries the exact
+configured maximum as metadata; the producer admits only zero, never interprets
+it as delivery or acceptance. Both require matching actual direct rows.
+
+Capture follows the initial pending bump and **all** legitimate no-dispatch
+finalization/routing/message bookkeeping. Pinned Swift and current-base Kotlin
+skip status writes when tracking is absent, but prior tracking may run
+`clearRetryingToSent`; capture must follow either branch. No subsequent generic
+message/pending mutation is exempt from invalidation. Completion changes only the
+exact pending row, creates no wire/ACK grant and never regrants invalid authority.
+Exact request replay exposes historical completion without deleting replacement
+rows. Lease/issuer, true message and pending incarnations/revisions, immutable
+snapshots and durable operation identities remain storage obligations, not DTO
+equality or in-memory leases.
+
+Trusted `reserve.py admit` returned `wp-owned/create` for the new domain
+`DirectPendingCompletionAuthority.kt`, `reviewed-support-test/
+add-or-update-related-test` for its new corresponding test, and `wp-owned/modify`
+for this evidence. The historical claim mismatch above remains unchanged; no
+reservation was mutated. No existing signature, assertion or channel behavior
+was changed. Four additional methods test only immutable payloads, exact
+zero-budget metadata, capture versus completion and historical replacement
+distinctions. They do not prove database enforcement or execute a deletion.
+
+The same source-only manifest, verification-configuration, provenance and staged
+diff checks were rerun successfully for this follow-up; provenance now accounts
+for 2,037 Kotlin files. Kotlin compilation and all eleven newly authored methods
+across both handoffs remain **unexecuted** under the same retained execution hold.
+This follow-up contains no schema, migration, DAO, repository or service changes.

@@ -812,3 +812,19 @@ The successor does not rerun unchanged source or bypass the held local runtime.
 Controller validation, portmap, semantic mapping checks and diff whitespace
 checks passed on corrected source `fdb43a9ec`; Android/Kotlin execution remains
 unverified until the successor exact-head hosted run.
+
+Changed successor `0af8e5cbcc1ae269621658b23ba0b6d696fe7a6e`, hosted
+[41938433112](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41938433112),
+failed at `:core:ui:compileDebugUnitTestKotlin`:
+`SharedUiComposeTest.kt:791:76` referenced unresolved `size` inside the new
+physical Slider click assertion. The actual shared owner was asked to supply
+the minimal immutable compile correction. Neither shared mounted controls nor
+consumer mounted controls have successor execution evidence from this failed
+command; source review or successful consumer production compilation is not
+a replacement.
+
+The owner supplied `6e19c3f83ee606b3933f541320513526d1955721`, composed
+as `20445daa6`: the native click uses the available touch-scope `center.x`
+to retain the same 75%-width position. Only that test expression changes;
+the real pointer click, scale-change assertion and all target/preview
+thresholds remain. Fresh exact-head hosted verification is required.

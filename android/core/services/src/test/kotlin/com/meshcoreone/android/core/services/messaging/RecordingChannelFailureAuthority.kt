@@ -7,7 +7,8 @@ import java.util.UUID
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-internal class RecordingChannelFailureAuthority(private val store: RecordingStore) : ChannelFailureAuthority {
+internal class RecordingChannelFailureAuthority(private val store: RecordingStore) :
+    ChannelFailureAuthority, ChannelSendCompletionAuthority {
     private data class Preparation(val key: EntityKey, val pendingID: UUID?, val timestamp: UInt?)
     private class Capture(
         val lease: DirectAckLease, val id: UUID, val key: EntityKey, val pendingID: UUID?, val arguments: Any,
@@ -26,6 +27,106 @@ internal class RecordingChannelFailureAuthority(private val store: RecordingStor
     private val captures = mutableMapOf<UUID, Capture>()
     private val handles = mutableSetOf<Attempt>()
     private val mutations = Mutex()
+    private class Completion(
+        val source: Attempt, val current: Attempt, val id: UUID,
+        val mode: ChannelSendCompletionMode, val timestamp: UInt,
+    ) : ChannelSendCompletion {
+        var cleanupID: UUID? = null
+    }
+    private val completions = mutableMapOf<UUID, Completion>()
+    var afterCompletion: (suspend (ChannelSendCompletionReceipt) -> Unit)? = null
+    var afterCleanup: (suspend (ChannelSendCompletionReceipt) -> Unit)? = null
+
+    private fun completionReceipt(value: Completion) = ChannelSendCompletionReceipt(
+        receipt(value.current), value.id, value.mode, value.timestamp, value.cleanupID,
+    )
+
+    override suspend fun recordChannelSendCompleted(
+        attempt: ChannelFailureAttempt, completionRequestId: UUID,
+        mode: ChannelSendCompletionMode, acceptedTimestamp: UInt,
+    ): ChannelSendCompletionResult {
+        val result = mutations.withLock {
+            val source = resolve(attempt)
+                ?: return@withLock ChannelSendCompletionResult.Rejected(DirectAckRejection.INVALID_HANDLE)
+            val capture = source.capture
+            completions[capture.id]?.let { value ->
+                if (value.source !== source || value.id != completionRequestId ||
+                    value.mode != mode || value.timestamp != acceptedTimestamp) {
+                    return@withLock ChannelSendCompletionResult.Rejected(DirectAckRejection.CONFLICT)
+                }
+                return@withLock ChannelSendCompletionResult.AlreadyApplied(
+                    value.takeIf { permission(value.current) == DirectAckPermission.CURRENT }, completionReceipt(value),
+                )
+            }
+            rejected(source)?.let { return@withLock ChannelSendCompletionResult.Rejected(it) }
+            store.authorityAccess("recordChannelSendCompleted")
+            store.authorityAccess("updateMessageStatus")
+            if (mode == ChannelSendCompletionMode.RESEND) {
+                store.authorityAccess("incrementMessageSendCount")
+                store.authorityAccess("updateMessageHeardRepeats")
+                store.authorityAccess("deleteMessageRepeats")
+            }
+            rejected(source)?.let { return@withLock ChannelSendCompletionResult.Rejected(it) }
+            val message = requireNotNull(store.messages[capture.key])
+            if (message.status == MessageStatus.DELIVERED) {
+                return@withLock ChannelSendCompletionResult.AlreadyDelivered(receipt(source))
+            }
+            val pending = pendingKey(capture)?.let { store.pending[it] }
+            if (message.timestamp != acceptedTimestamp ||
+                pending != null && pending.isResend != (mode == ChannelSendCompletionMode.RESEND)) {
+                return@withLock ChannelSendCompletionResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
+            }
+            val updated = if (mode == ChannelSendCompletionMode.RESEND) message.copy(
+                status = MessageStatus.SENT, sendCount = Math.incrementExact(message.sendCount), heardRepeats = 0,
+            ) else message.copy(status = MessageStatus.SENT)
+            store.messages[capture.key] = updated
+            val successor = Attempt(capture, store.messageRevision(capture.key), source.pendingRevision)
+            handles += successor
+            capture.current = successor
+            source.retired = true
+            val completion = Completion(source, successor, completionRequestId, mode, acceptedTimestamp)
+            completions[capture.id] = completion
+            ChannelSendCompletionResult.Applied(completion, completionReceipt(completion))
+        }
+        if (result is ChannelSendCompletionResult.Applied) afterCompletion?.invoke(result.receipt)
+        return result
+    }
+
+    override suspend fun completeChannelSendPending(
+        completion: ChannelSendCompletion, pendingCompletionRequestId: UUID,
+    ): ChannelSendPendingCompletionResult {
+        val result = mutations.withLock {
+            val value = (completion as? Completion)?.takeIf { completions[it.source.capture.id] === it }
+                ?: return@withLock ChannelSendPendingCompletionResult.Rejected(DirectAckRejection.INVALID_HANDLE)
+            value.cleanupID?.let {
+                return@withLock if (it == pendingCompletionRequestId) {
+                    ChannelSendPendingCompletionResult.AlreadyApplied(completionReceipt(value))
+                } else ChannelSendPendingCompletionResult.Rejected(DirectAckRejection.CONFLICT)
+            }
+            rejected(value.current)?.let { return@withLock ChannelSendPendingCompletionResult.Rejected(it) }
+            val key = pendingKey(value.source.capture)
+                ?: return@withLock ChannelSendPendingCompletionResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
+            store.authorityAccess("completeChannelSendPending")
+            store.authorityAccess("deletePendingSend")
+            rejected(value.current)?.let { return@withLock ChannelSendPendingCompletionResult.Rejected(it) }
+            store.pending.remove(key)
+            value.current.retired = true
+            value.cleanupID = pendingCompletionRequestId
+            ChannelSendPendingCompletionResult.Applied(completionReceipt(value))
+        }
+        if (result is ChannelSendPendingCompletionResult.Applied) afterCleanup?.invoke(result.receipt)
+        return result
+    }
+
+    override suspend fun inspectChannelSendCompletion(
+        lease: DirectAckLease, captureRequestId: UUID, completionRequestId: UUID,
+    ): ChannelSendCompletionObservation = mutations.withLock {
+        val capture = captures[captureRequestId]?.takeIf { it.lease === lease }
+            ?: return@withLock ChannelSendCompletionObservation.Rejected(DirectAckRejection.MISSING)
+        val value = completions[capture.id]?.takeIf { it.id == completionRequestId }
+        if (value == null) ChannelSendCompletionObservation.NotRecorded(captureRequestId, completionRequestId)
+        else ChannelSendCompletionObservation.Found(completionReceipt(value))
+    }
 
     override suspend fun activateChannelFailureSession(token: SessionToken, requestId: UUID) =
         store.directAckAuthority.activateDirectAckSession(token, requestId)

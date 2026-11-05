@@ -111,10 +111,18 @@ private class RevisionedMap<K, V>(private val changed: (K, V?, V?) -> Unit) : Li
     override fun clear() { keys.toList().forEach { remove(it) } }
 }
 
-internal class RecordingStore : PersistenceStoreProtocol by unsupportedStore(), ChannelFailureAuthority {
+internal class RecordingStore : PersistenceStoreProtocol by unsupportedStore(), ChannelFailureAuthority,
+    ChannelSendCompletionAuthority {
     // Conditional algorithm fixture only; this is not a production physical-history certificate.
     val directAckAuthority = RecordingDirectAckAuthority(this, preauthorityHistoryUnknown = false)
     val channelFailureAuthority = RecordingChannelFailureAuthority(this)
+    override suspend fun recordChannelSendCompleted(
+        attempt: ChannelFailureAttempt, completionRequestId: UUID, mode: ChannelSendCompletionMode, acceptedTimestamp: UInt,
+    ) = channelFailureAuthority.recordChannelSendCompleted(attempt, completionRequestId, mode, acceptedTimestamp)
+    override suspend fun completeChannelSendPending(completion: ChannelSendCompletion, pendingCompletionRequestId: UUID) =
+        channelFailureAuthority.completeChannelSendPending(completion, pendingCompletionRequestId)
+    override suspend fun inspectChannelSendCompletion(lease: DirectAckLease, captureRequestId: UUID, completionRequestId: UUID) =
+        channelFailureAuthority.inspectChannelSendCompletion(lease, captureRequestId, completionRequestId)
     override suspend fun activateChannelFailureSession(token: SessionToken, requestId: UUID) =
         channelFailureAuthority.activateChannelFailureSession(token, requestId)
     override suspend fun revokeChannelFailureSession(lease: DirectAckLease) =
@@ -297,6 +305,10 @@ internal class RecordingStore : PersistenceStoreProtocol by unsupportedStore(), 
         access("deletePendingSendsForMessage")
         pending.filterValues { it.radioId == key.radioId && it.messageID == key.id }.keys.forEach {
             invalidatePending(it)
+        }
+        override suspend fun deletePendingSend(key: EntityKey) {
+            access("deletePendingSend")
+            pending.remove(key)
         }
         pending.filterValues { it.radioId == key.radioId && it.messageID == key.id }.keys.toList().forEach {
             pending.remove(it)

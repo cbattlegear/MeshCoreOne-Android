@@ -21,6 +21,124 @@ import org.junit.jupiter.api.TestFactory
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class NativeMessagingTest {
+    @TestFactory fun capturedChannelSuccessLifecycle() =
+        listOf("message-replacement", "same-value-write", "commit-then-throw", "cleanup-then-throw").map { schedule ->
+            native("conditionalRealChannelAcceptanceKeepsOriginalCaptureAcross$schedule") {
+                val h = Harness(this); h.start()
+                val message = h.message(MessageStatus.PENDING, 0u)
+                val pending = h.pending(message, isResend = true)
+                val sibling = h.message(MessageStatus.PENDING, 0u, text = "independent pending")
+                val siblingPending = h.pending(sibling)
+                val claimID = UUID.randomUUID()
+                val events = h.service.statusEvents()
+                val fault = storageFailure()
+                if (schedule == "commit-then-throw") {
+                    h.store.channelFailureAuthority.afterCompletion = { throw fault }
+                    assertSame(fault, assertFailsWith<PersistenceStoreException> {
+                        h.service.sendPendingChannelClaim(claimID, message.id, pending.id, true, true)
+                    })
+                    assertTrue(h.service.channelClaimAccepted(claimID))
+                    assertEquals(2L, h.stored(message.id).sendCount)
+                    h.store.channelFailureAuthority.afterCompletion = null
+                } else if (schedule != "cleanup-then-throw") {
+                    h.store.before = { operation -> if (operation == "recordChannelSendCompleted") {
+                        if (schedule == "message-replacement") {
+                            h.store.deleteMessage(EntityKey(RADIO, message.id))
+                            h.store.saveMessage(message.copy(text = "replacement direct", channelIndex = null, contactID = CONTACT))
+                            h.store.upsertPendingSend(pending)
+                        } else h.store.saveMessage(h.stored(message.id))
+                    } }
+                    assertEquals(MessageService.ChannelSendOutcome.Retired,
+                        h.service.sendPendingChannelClaim(claimID, message.id, pending.id, true, true))
+                    h.store.before = null
+                    assertEquals(MessageStatus.PENDING, h.stored(message.id).status)
+                    assertEquals(1L, h.stored(message.id).sendCount)
+                    assertEquals(pending, h.store.pending[EntityKey(RADIO, pending.id)])
+                }
+                if (schedule == "commit-then-throw" || schedule == "cleanup-then-throw") {
+                    val result = assertIs<MessageService.ChannelSendOutcome.Completed>(
+                        h.service.sendPendingChannelClaim(claimID, message.id, pending.id, true, true))
+                    assertEquals(MessageStatus.SENT, result.message.status)
+                    assertEquals(2L, result.message.sendCount)
+                    assertEquals(message.timestamp, result.timestamp)
+                    if (schedule == "cleanup-then-throw") {
+                        h.store.channelFailureAuthority.afterCleanup = { throw fault }
+                        assertSame(fault, assertFailsWith<PersistenceStoreException> {
+                            h.service.completeQueuedChannelPending(claimID)
+                        })
+                        h.store.channelFailureAuthority.afterCleanup = null
+                        assertNull(h.store.pending[EntityKey(RADIO, pending.id)])
+                        h.store.upsertPendingSend(pending.copy(messageText = "replacement exact UUID"))
+                    }
+                    assertTrue(h.service.completeQueuedChannelPending(claimID))
+                    if (schedule == "cleanup-then-throw") {
+                        assertEquals("replacement exact UUID", h.store.pending[EntityKey(RADIO, pending.id)]?.messageText)
+                    } else assertNull(h.store.pending[EntityKey(RADIO, pending.id)])
+                }
+                assertEquals(sibling, h.stored(sibling.id))
+                assertEquals(siblingPending, h.store.pending[EntityKey(RADIO, siblingPending.id)])
+                assertEquals(1, h.sends(CommandCode.SEND_CHANNEL_MESSAGE).size)
+                assertTrue(statuses(h.service, events).all { it is MessageStatusEvent.PersistenceChanged })
+                h.service.releaseChannelClaim(claimID)
+                assertTrue(h.service.close().isComplete)
+                h.close()
+            }
+        }
+
+    @TestFactory fun capturedChannelFailureLifecycle() =
+        listOf("own-remap", "message-replacement", "same-value-write", "pending-replacement").map { schedule ->
+            native("conditionalRealChannelFailureRetainsOnlyItsExactGrantFor$schedule") {
+                val h = Harness(this, MessageServiceConfig(poolBackoff = PoolBackoffConfig(attemptCap = 0)))
+                h.start(); h.transport.channelError = 2u
+                val message = h.message(MessageStatus.PENDING, 0u)
+                val pending = h.pending(message)
+                val sibling = h.message(MessageStatus.PENDING, 0u, text = "independent channel send")
+                val siblingPending = h.pending(sibling)
+                val claimID = UUID.randomUUID()
+                val events = h.service.statusEvents()
+                assertFailsWith<MessageServiceException> {
+                    h.service.sendPendingChannelClaim(claimID, message.id, pending.id, false, true)
+                }
+                assertEquals(MessageStatus.FAILED, h.stored(message.id).status)
+                assertEquals(pending, h.store.pending[EntityKey(RADIO, pending.id)])
+                if (schedule == "own-remap") {
+                    assertTrue(h.service.remapQueuedChannelClaim(claimID))
+                    assertEquals(MessageStatus.PENDING, h.stored(message.id).status)
+                    assertEquals(pending, h.store.pending[EntityKey(RADIO, pending.id)])
+                    assertTrue(h.service.failQueuedChannelClaim(claimID, message.id))
+                    assertEquals(MessageStatus.FAILED, h.stored(message.id).status)
+                    assertNull(h.store.pending[EntityKey(RADIO, pending.id)])
+                } else {
+                    when (schedule) {
+                        "message-replacement" -> {
+                            h.store.deleteMessage(EntityKey(RADIO, message.id))
+                            h.store.saveMessage(message.copy(text = "new channel incarnation"))
+                        }
+                        "same-value-write" -> h.store.saveMessage(h.stored(message.id))
+                        "pending-replacement" -> {
+                            h.store.deletePendingSend(EntityKey(RADIO, pending.id))
+                            h.store.upsertPendingSend(pending)
+                        }
+                    }
+                    val actualMessage = h.stored(message.id)
+                    val actualPending = h.store.pending[EntityKey(RADIO, pending.id)]
+                    assertFalse(h.service.failQueuedChannelClaim(claimID, message.id))
+                    assertEquals(actualMessage, h.stored(message.id))
+                    assertEquals(actualPending, h.store.pending[EntityKey(RADIO, pending.id)])
+                }
+                assertEquals(sibling, h.stored(sibling.id))
+                assertEquals(siblingPending, h.store.pending[EntityKey(RADIO, siblingPending.id)])
+                val observed = statuses(h.service, events)
+                assertEquals(List(if (schedule == "own-remap") 3 else 1) {
+                    MessageStatusEvent.PersistenceChanged(EntityKey(RADIO, message.id))
+                }, observed)
+                assertEquals(1, h.sends(CommandCode.SEND_CHANNEL_MESSAGE).size)
+                h.service.releaseChannelClaim(claimID)
+                assertTrue(h.service.close().isComplete)
+                h.close()
+            }
+        }
+
     @TestFactory fun queuedFailureInvalidation() =
         listOf<MessageStatus?>(MessageStatus.PENDING, MessageStatus.SENT, null).map { replacementStatus ->
             native("conditionalQueuedGuardCommitInvalidatesAfter${replacementStatus ?: "Deletion"}WithoutReadback") {
@@ -67,6 +185,52 @@ class NativeMessagingTest {
         }
 
     @TestFactory fun regressions() = listOf(
+        native("conditionalReorderedOldFailureHintCannotSuppressReplacementCommitRefresh") {
+            val h = Harness(this, MessageServiceConfig(maxAttempts = 1, floodFallbackOnRetry = false))
+            h.start()
+            val original = h.message(MessageStatus.PENDING, text = "first incarnation")
+            val oldPending = h.pending(original)
+            val oldClaim = UUID.randomUUID()
+            h.service.sendPendingClaim(oldClaim, original.id, h.contact, true, false, oldPending.id)
+            assertTrue(h.service.failQueuedDirectClaim(oldClaim, original.id))
+            h.service.releaseDirectClaim(oldClaim)
+            val replacement = original.copy(text = "second incarnation", status = MessageStatus.PENDING)
+            h.store.deleteMessage(EntityKey(RADIO, original.id))
+            h.store.saveMessage(replacement)
+            val newPending = h.pending(replacement)
+            val newClaim = UUID.randomUUID()
+            val release = CompletableDeferred<Unit>()
+            h.transport.acceptanceGate = release
+            val events = h.service.statusEvents()
+            val refreshed = mutableListOf<MessageDTO?>()
+            val collector = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+                events.events.collect { event ->
+                    val hint = event.event as? MessageStatusEvent.PersistenceChanged ?: return@collect
+                    refreshed += h.store.fetchMessage(hint.key)
+                }
+            }
+            val sending = backgroundScope.async {
+                h.service.sendPendingClaim(newClaim, replacement.id, h.contact, true, false, newPending.id)
+            }
+            try {
+                runCurrent()
+                assertEquals(MessageStatus.PENDING, h.stored(replacement.id).status)
+                h.service.notifyMessageFailed(original.id)
+                runCurrent()
+                assertEquals(listOf(MessageStatus.PENDING), refreshed.map { it?.status })
+                release.complete(Unit); sending.await()
+                assertTrue(h.service.failQueuedDirectClaim(newClaim, replacement.id))
+                h.service.notifyMessageFailed(replacement.id)
+                runCurrent()
+                assertEquals(listOf(MessageStatus.PENDING, MessageStatus.FAILED), refreshed.map { it?.status })
+                assertEquals("second incarnation", refreshed.last()?.text)
+                assertFalse(h.stored(replacement.id).failureSeen)
+                assertEquals(2, h.sends(CommandCode.SEND_MESSAGE).size)
+            } finally {
+                release.complete(Unit); sending.cancelAndJoin(); collector.cancelAndJoin()
+                events.close(); h.service.releaseDirectClaim(newClaim); h.close()
+            }
+        },
         native("conditionalGuardedDirectCommitPublishesOnlyNeutralHintAfterSameKeyReplacement") {
             val h = Harness(this); h.start()
             val message = h.message()
@@ -1043,17 +1207,19 @@ class NativeMessagingTest {
         native("channelDeletionFailureRetriesOnlyPersistenceNotTheAcceptedBroadcast") {
             val h = Harness(this); h.start(); val m = h.message(MessageStatus.PENDING, 0u); h.pending(m)
             val q = h.queue(); h.signals.set(h.token, DeviceConnectionState.CONNECTED)
-            h.store.faults["deletePendingSendsForMessage"] = storageFailure()
+            h.store.faults["completeChannelSendPending"] = storageFailure()
             q.hydrate(); runCurrent(); h.signals.set(h.token, DeviceConnectionState.READY); runCurrent()
             assertEquals(1, h.sends(CommandCode.SEND_CHANNEL_MESSAGE).size); assertEquals(MessageStatus.SENT, h.stored(m.id).status)
+            assertEquals(1L, h.store.fetchPendingSends(RADIO).single().attemptCount)
             h.store.faults.clear(); q.transportDidOpen(); runCurrent(); q.awaitDrainCompletion()
             assertEquals(1, h.sends(CommandCode.SEND_CHANNEL_MESSAGE).size); assertTrue(h.store.fetchPendingSends(RADIO).isEmpty()); q.shutdown(); h.close()
         },
         native("channelStatusCommitFailureRetriesBookkeepingWithoutASecondBroadcast") {
             val h = Harness(this); h.start(); val m = h.message(MessageStatus.PENDING, 0u); h.pending(m)
-            h.store.faults["updateMessageStatus"] = storageFailure(); val q = h.queue()
+            h.store.faults["recordChannelSendCompleted"] = storageFailure(); val q = h.queue()
             h.signals.set(h.token, DeviceConnectionState.CONNECTED); q.hydrate(); runCurrent()
             h.signals.set(h.token, DeviceConnectionState.READY); runCurrent(); assertEquals(1, h.sends(CommandCode.SEND_CHANNEL_MESSAGE).size)
+            assertEquals(1L, h.store.fetchPendingSends(RADIO).single().attemptCount)
             h.store.faults.clear(); q.transportDidOpen(); runCurrent(); q.awaitDrainCompletion()
             assertEquals(1, h.sends(CommandCode.SEND_CHANNEL_MESSAGE).size); assertEquals(MessageStatus.SENT, h.stored(m.id).status); q.shutdown(); h.close()
         },

@@ -52,8 +52,10 @@ class ChatSendQueueService(
     private val completedDMs = mutableSetOf<UUID>()
     private data class DirectAttempt(val pending: Attempt, val claimID: UUID = UUID.randomUUID())
     private val directAttempts = mutableMapOf<UUID, DirectAttempt>()
-    private val completedChannels = mutableMapOf<UUID, UInt>()
-    private val indexedChannels = mutableSetOf<UUID>()
+    private class ChannelAttempt(val pending: Attempt, val claimID: UUID = UUID.randomUUID()) {
+        var indexed = false
+    }
+    private val channelAttempts = mutableMapOf<UUID, ChannelAttempt>()
     private val persistenceSubmissions = mutableSetOf<Deferred<Result<Unit>>>()
     private val directClaimIDs = mutableMapOf<UUID, UUID>()
     private val channelClaimIDs = mutableMapOf<UUID, UUID>()
@@ -337,36 +339,65 @@ class ChatSendQueueService(
         val id = envelope.messageID
         awaitReady()
         checkSendAdmission()
-        if (synchronized(lock) { id !in completedChannels }) {
+        val retained = synchronized(lock) { channelAttempts[id] }
+            ?.takeIf { messageService.channelClaimAccepted(it.claimID) }
+        if (retained == null) {
             synchronized(lock) { channelClaimIDs.remove(id) }?.let(messageService::releaseChannelClaim)
+            synchronized(lock) { channelAttempts.remove(id) }
         }
-        val attempt = try {
-            preflightAndBump(dataStore, key(id)).also { ownership.check("channel.bump") }
-        } catch (failure: PersistenceStoreException) { park(id, failure) }
-        if (attempt == null) { complete(id); return }
-        val claimID = synchronized(lock) { channelClaimIDs.getOrPut(id, UUID::randomUUID) }
+        val state = retained ?: run {
+            val attempt = try {
+                preflightAndBump(dataStore, key(id)).also { ownership.check("channel.bump") }
+            } catch (failure: PersistenceStoreException) { park(id, failure) }
+            if (attempt == null) { complete(id); return }
+            ChannelAttempt(attempt).also {
+                synchronized(lock) {
+                    channelAttempts[id] = it
+                    channelClaimIDs[id] = it.claimID
+                }
+            }
+        }
+        val attempt = state.pending
+        val claimID = state.claimID
         checkSendAdmission()
         try {
-            val stamp = synchronized(lock) { completedChannels[id] } ?: run {
-                val sent = messageService.sendPendingChannelClaim(
-                    claimID, id, attempt.pendingID, envelope.isResend, attempt.preserveTimestamp)
-                ownership.check("channel.completed")
-                synchronized(lock) { completedChannels[id] = sent }
-                sent
+            if (state.indexed) {
+                if (!messageService.completeQueuedChannelPending(claimID)) {
+                    complete(id, clearProgress = false)
+                    return
+                }
+                ownership.check("channel.pendingDeleted")
+                triggers.clear()
+                complete(id)
+                return
             }
-            val captured = messageService.channelClaimMessage(claimID)
+            val sent = when (val outcome = messageService.sendPendingChannelClaim(
+                claimID, id, attempt.pendingID, envelope.isResend, attempt.preserveTimestamp,
+            )) {
+                is MessageService.ChannelSendOutcome.Completed -> outcome
+                MessageService.ChannelSendOutcome.Retired -> {
+                    complete(id, clearProgress = false)
+                    return
+                }
+            }
+            ownership.check("channel.completed")
+            val captured = sent.message
             ownership.check("channel.sent")
-            envelope.localNodeName?.let {
-                if (!synchronized(lock) { id in indexedChannels }) {
+            sent.pending?.localNodeName?.let {
+                if (!state.indexed) {
                     try {
-                        reactionIndexer.indexMessage(id, requireNotNull(captured.channelIndex), it, captured.text, stamp)
+                        reactionIndexer.indexMessage(id, requireNotNull(captured.channelIndex), it, captured.text, sent.timestamp)
                         ownership.check("channel.indexed")
-                        synchronized(lock) { indexedChannels += id }
+                        state.indexed = true
                     } catch (cancelled: CancellationException) { throw cancelled }
                     catch (failure: Exception) { record("index.$id", failure); park(id, failure) }
                 }
             }
-            dataStore.deletePendingSendsForMessage(key(id))
+            state.indexed = true
+            if (!messageService.completeQueuedChannelPending(claimID)) {
+                complete(id, clearProgress = false)
+                return
+            }
             ownership.check("channel.pendingDeleted")
             triggers.clear()
             complete(id)
@@ -530,8 +561,7 @@ class ChatSendQueueService(
             queuedChannels.remove(id)
             completedDMs.remove(id)
             directAttempts.remove(id)
-            completedChannels.remove(id)
-            indexedChannels.remove(id)
+            channelAttempts.remove(id)
             failures.remove("park.$id")
             failures.remove("remap.$id")
             failures.remove("channelQuery.$id")
@@ -568,6 +598,8 @@ class ChatSendQueueService(
             for (id in synchronized(lock) { queued.toList() }) {
                 try {
                     ownership.checkPersistenceCompletion("shutdownPending")
+                    val channelClaim = synchronized(lock) { channelClaimIDs[id] }
+                    if (channelClaim != null && messageService.channelClaimAccepted(channelClaim)) continue
                     val row = dataStore.fetchMessage(key(id))
                     if (row?.status == MessageStatus.RETRYING || row?.status == MessageStatus.FAILED) {
                         if (synchronized(lock) { id in queuedChannels }) remapChannelPending(id)

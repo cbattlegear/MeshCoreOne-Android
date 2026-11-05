@@ -162,7 +162,8 @@ class MessagingRoomIntegrationTest {
             directPendingCompletionAuthority = persistence as? DirectPendingCompletionAuthority ?: store,
             directAckRadioExclusionAuthority = persistence as? DirectAckRadioExclusionAuthority ?: store,
             directAckRadioFailureAuthority = failureAuthority,
-            channelFailureAuthority = persistence as? ChannelFailureAuthority ?: store)
+            channelFailureAuthority = persistence as? ChannelFailureAuthority ?: store,
+            channelSendCompletionAuthority = persistence as? ChannelSendCompletionAuthority ?: store)
         val queue = ChatSendQueueService(token, persistence, service, channelQuery,
             OutgoingChannelReactionIndexer { _, _, _, _, _ -> }, signals, scope, queueConfig, clock,
             reporter = MessagingIssueReporter { diagnostics += it })
@@ -175,7 +176,7 @@ class MessagingRoomIntegrationTest {
     private open inner class DirectRoles(private val actual: RoomPersistenceStore) : PersistenceStoreProtocol by actual,
         DirectAckAuthority by actual, DirectPendingCompletionAuthority by actual,
         DirectAckRadioExclusionAuthority by actual, DirectAckRadioFailureAuthority by actual,
-        ChannelFailureAuthority by actual {
+        ChannelFailureAuthority by actual, ChannelSendCompletionAuthority by actual {
         private val keys = mutableMapOf<DirectAckAttempt, EntityKey>()
         private val intents = mutableMapOf<DirectAckIntent, EntityKey>()
         protected fun attemptKey(attempt: DirectAckAttempt) = requireNotNull(keys[attempt])

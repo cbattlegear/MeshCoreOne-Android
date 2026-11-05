@@ -195,7 +195,8 @@ class SourceSendTest {
             h.store.messages[EntityKey(RADIO, m.id)] = m.copy(heardRepeats = 3)
             val events = h.service.statusEvents(); h.service.resendChannelMessage(m.id)
             assertEquals(MessageStatus.SENT, h.stored(m.id).status); assertEquals(0L, h.stored(m.id).heardRepeats)
-            assertEquals(2L, h.stored(m.id).sendCount); assertEquals(listOf(MessageStatusEvent.Resent(m.id)), statuses(h.service, events))
+            assertEquals(2L, h.stored(m.id).sendCount)
+            assertEquals(listOf(MessageStatusEvent.PersistenceChanged(EntityKey(RADIO, m.id))), statuses(h.service, events))
             assertEquals(1, h.sends(CommandCode.SEND_CHANNEL_MESSAGE).size); h.close()
         },
         original("MessageServiceSendTests", "resendDirectMessage increments sendCount and broadcasts .resent on a successful resend") {

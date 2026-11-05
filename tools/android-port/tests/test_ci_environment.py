@@ -131,6 +131,7 @@ class EnvironmentTests(unittest.TestCase):
             "verifyScaffoldTests", "verifyRoomSchema", "validateModuleGraph",
             "runtimeDependencyInventory", "resolveScaffoldDependencies",
             ":app:assembleDebug", ":app:compileDebugAndroidTestKotlin", "lintScaffold",
+            ":platform:notifications:testDebugUnitTest",
         ]
         for host in ("linux", "windows"):
             for scopes in (None, ["scaffold"], ["scaffold", "protocol"]):
@@ -150,6 +151,7 @@ class EnvironmentTests(unittest.TestCase):
                         expected + ([":core:protocol:test"] if scopes and "protocol" in scopes else []),
                     )
                     self.assertEqual(build_tasks.count(":app:compileDebugAndroidTestKotlin"), 1)
+                    self.assertEqual(build_tasks.count(":platform:notifications:testDebugUnitTest"), 1)
                     self.assertFalse(any(
                         forbidden in task.lower()
                         for task in tasks for forbidden in ("connected", "install", "device")

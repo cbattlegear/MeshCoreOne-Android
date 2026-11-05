@@ -420,6 +420,10 @@ def run_stage(stage: str, state: dict, output: Path, *, local=False, scopes=None
         )
         print(json.dumps({"result": "success", **report}, indent=2))
         return
+    if "scaffold" in selected:
+        from controller.module_junit import remapped_tasks, select_remapped_tasks
+
+        tasks = select_remapped_tasks(tasks, remapped_tasks(REPO))
     lineage_path = prepare_test_lineage(output)
     sources_path = prepare_test_sources(output)
     environment["ANDROID_CI_TEST_LINEAGE"] = str(lineage_path)
@@ -512,7 +516,10 @@ def run_stage(stage: str, state: dict, output: Path, *, local=False, scopes=None
     }
     if "scaffold" in selected:
         report["suites"] = collect_suites(REPO / "android")
-        report["module_unit_tests"] = check_module_tests(REPO)
+        notification_sources = read_test_sources(
+            sources_path, {"platform/notifications": "testDebugUnitTest"},
+        )
+        report["module_unit_tests"] = check_module_tests(REPO, notification_sources)
         execute([sys.executable, str(REPO / "android" / "parity-tests" / "semantic.py"),
                  "--check", "--verify-execution"], environment, output / "parity-family-execution.log")
         report["unit_test_methods"] = module_method_inventory(REPO, report["module_unit_tests"])
@@ -545,6 +552,11 @@ def run_stage(stage: str, state: dict, output: Path, *, local=False, scopes=None
         runners[module] = Path(locations[0]).name
     bind_test_lineage(inventory, read_test_lineage(lineage_path), runners)
     report["compiled_test_sources"] = read_test_sources(sources_path, runners)
+    from controller.module_junit import validate_remapped_compilation
+
+    report["remapped_jvm_inputs"] = validate_remapped_compilation(
+        REPO, report["compiled_test_sources"], runners,
+    )
     print(json.dumps(report, indent=2))
 
 

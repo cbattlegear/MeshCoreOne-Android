@@ -15,6 +15,7 @@ import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.notifications.NotificationAction
 import com.meshcoreone.android.core.contracts.notifications.NotificationActionDefinition
 import com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt
+import com.meshcoreone.android.core.contracts.notifications.NotificationReadReceipt
 import com.meshcoreone.android.core.contracts.notifications.NotificationCategory
 import com.meshcoreone.android.core.contracts.notifications.NotificationCategoryDefinition
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
@@ -58,6 +59,12 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
     }
     @Test fun channelReplyCancelledBeforeWireCanBeRetriedByReplacementDispatcher() = runTest {
         replyBoundary(channel = true, beforeWire = true)
+    }
+    @Test fun acceptedRetryDoesNotDeleteANewerUserDraft() = runTest {
+        replyBoundary(channel = false, beforeWire = true, newerDraft = "User's newer draft")
+    }
+    @Test fun acceptedRetryDoesNotDeleteANewerEqualTextUserDraft() = runTest {
+        replyBoundary(channel = false, beforeWire = true, newerDraft = "one reply")
     }
 
     @Test fun realRoomMarkReadRecordsCommitBeforeReturningToCancelledCaller() = runTest {
@@ -109,10 +116,86 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
         }
     }
 
+    @Test fun realRoomPartialReadRemainsUncertainWhenResponseRouterReturnsTrue() = runTest {
+        var clearCalls = 0
+        var failClear = false
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun clearUnreadCount(key: EntityKey) {
+                if (failClear) {
+                    clearCalls++
+                    throw IllegalStateException("Unread clear refused after the message write")
+                }
+                store.clearUnreadCount(key)
+            }
+        }
+        val h = ContainerHarness(this, store, persistenceOverride = persistence)
+        val peerKey = key(4)
+        h.links.configureRadio = { it.knownContacts += contactFrame(peerKey, "Partial read peer") }
+        val owner = CoroutineScope(backgroundScope.coroutineContext + SupervisorJob(backgroundScope.coroutineContext[Job]))
+        val replacement = CoroutineScope(backgroundScope.coroutineContext + SupervisorJob(backgroundScope.coroutineContext[Job]))
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            h.assertReady()
+            val session = requireNotNull(h.sessions.current)
+            val contact = requireNotNull(store.fetchContact(session.token.radioId, peerKey))
+            val key = EntityKey(contact.radioId, contact.id)
+            store.saveContact(contact.copy(unreadCount = 1))
+            val message = MessageDTO(
+                radioId = contact.radioId, contactID = contact.id, text = "Unread", timestamp = 1u,
+                direction = MessageDirection.INCOMING, isRead = false,
+            )
+            store.saveMessage(message)
+            failClear = true
+            var actions = 0
+            var progress: NotificationReadReceipt? = null
+            val returned = CompletableDeferred<Unit>()
+            val adapter = AndroidMessagingNotificationDelivery(context = ApplicationProvider.getApplicationContext(), scope = owner) { response ->
+                actions++
+                progress = currentCoroutineContext()[NotificationReadReceipt]
+                session.notificationService.didReceive(response)
+                returned.complete(Unit)
+                true
+            }
+            adapter.registerCategories(SnapshotList.of(NotificationCategoryDefinition(
+                NotificationCategory.DIRECT_MESSAGE,
+                SnapshotList.of(NotificationActionDefinition(NotificationAction.MARK_READ, "Mark read", null, null)),
+            )))
+            assertEquals(NotificationPostResult.Posted, adapter.post(NotificationRequest(
+                NotificationId("wp215-partial-read"), NotificationCategory.DIRECT_MESSAGE,
+                "Peer", "Unread", false, null, null, NotificationPayload.DirectMessage(key, message.id),
+            )))
+            val context = ApplicationProvider.getApplicationContext<Context>()
+            context.getSystemService(NotificationManager::class.java).activeNotifications
+                .single { it.tag?.endsWith("wp215-partial-read") == true }.notification
+                .actions.single().actionIntent.send()
+            shadowOf(Looper.getMainLooper()).idle()
+            h.eventually("partial write returned through contained response") { returned.isCompleted }
+            assertTrue(requireNotNull(store.fetchMessage(EntityKey(contact.radioId, message.id))).isRead)
+            assertEquals(1L, requireNotNull(store.fetchContact(key)).unreadCount)
+            assertEquals(NotificationReadReceipt.State.UNCERTAIN, requireNotNull(progress).state)
+            assertEquals(1, requireNotNull(progress).completedWrites)
+            AndroidMessagingNotificationDelivery(context, replacement) { response ->
+                actions++
+                session.notificationService.didReceive(response)
+                true
+            }
+            repeat(10) { runCurrent() }
+            assertEquals(1, actions)
+            assertEquals(1, clearCalls, "An uncertain unread clear must not be blindly repeated")
+        } finally {
+            owner.cancel()
+            replacement.cancel()
+            h.container.close()
+            ApplicationProvider.getApplicationContext<Context>().getSystemService(NotificationManager::class.java).cancelAll()
+        }
+    }
+
     private suspend fun TestScope.replyBoundary(
         channel: Boolean,
         unknown: Boolean = false,
         beforeWire: Boolean = false,
+        newerDraft: String? = null,
     ) {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val entered = CompletableDeferred<Unit>()
@@ -202,9 +285,9 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
                 if (channel) {
                     assertNull(session.notificationService.consumeDraft(contactKey))
                     assertEquals(1, h.delivery.posted.size)
-                } else {
-                    assertEquals("one reply", session.notificationService.consumeDraft(contactKey))
                 }
+                // Do not consume the action-owned draft: acceptance must clean up its own copy.
+                if (newerDraft != null) session.notificationService.saveDraft(contactKey, newerDraft)
                 assertFalse(requireNotNull(receipt).preventsReplay)
                 assertTrue(h.links.radios.single().sent.none { it[0].toInt() == sendCommand })
                 holdBeforeWire = false
@@ -226,7 +309,7 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
             repeat(10) { runCurrent() }
             assertEquals(if (beforeWire) 2 else 1, attempts)
             assertEquals(1, h.links.radios.single().sent.count { it[0].toInt() == sendCommand })
-            assertNull(session.notificationService.consumeDraft(contactKey))
+            assertEquals(newerDraft, session.notificationService.consumeDraft(contactKey))
             if (!beforeWire) assertTrue(h.delivery.posted.isEmpty())
         } finally {
             firstOwner.cancel()

@@ -5,6 +5,7 @@ import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt
 import com.meshcoreone.android.core.contracts.notifications.NotificationReplyOutcomeUncertain
+import com.meshcoreone.android.core.contracts.notifications.NotificationReadReceipt
 import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.RadioId
 import java.util.UUID
@@ -65,10 +66,13 @@ class NotificationActionHandler(
         val stored = contained("fetchContact", null) { dataStore.fetchContact(contact) } ?: return
 
         if (connectionReady() && contact.radioId == radioId && stored.radioId == radioId) {
+            val action = currentCoroutineContext()[NotificationActionReceipt] ?: NotificationActionReceipt()
             sendReply(
+                actionReceipt = action,
                 send = { messageService.sendDirectMessage(text, stored) },
-                notSent = { replyNotSent(contact, stored.displayName, text) },
+                notSent = { replyNotSent(contact, stored.displayName, text, action) },
                 accepted = {
+                    notificationService.clearActionDraft(contact, action)
                     // Clear unread state - user replied so they've seen the chat.
                     contained("clearUnreadCount", Unit) { dataStore.clearUnreadCount(contact) }
                     notificationService.removeDeliveredNotifications(contact.id)
@@ -82,8 +86,14 @@ class NotificationActionHandler(
         replyNotSent(contact, stored.displayName, text)
     }
 
-    private suspend fun replyNotSent(contact: EntityKey, displayName: String, text: String) {
-        notificationService.saveDraft(contact, text)
+    private suspend fun replyNotSent(
+        contact: EntityKey,
+        displayName: String,
+        text: String,
+        owner: NotificationActionReceipt? = null,
+    ) {
+        if (owner == null) notificationService.saveDraft(contact, text)
+        else notificationService.saveActionDraft(contact, text, owner)
         notificationService.postQuickReplyFailedNotification(displayName, contact)
     }
 
@@ -112,11 +122,12 @@ class NotificationActionHandler(
     }
 
     private suspend fun sendReply(
+        actionReceipt: NotificationActionReceipt? = null,
         send: suspend () -> Unit,
         notSent: suspend () -> Unit,
         accepted: suspend () -> Unit,
     ) {
-        val receipt = currentCoroutineContext()[NotificationActionReceipt] ?: NotificationActionReceipt()
+        val receipt = actionReceipt ?: currentCoroutineContext()[NotificationActionReceipt] ?: NotificationActionReceipt()
         try {
             withContext(receipt) {
                 send()
@@ -154,31 +165,51 @@ class NotificationActionHandler(
 
     // MARK: - Mark as Read
 
-    suspend fun handleMarkAsRead(contact: EntityKey, messageID: UUID) = markRead("handleMarkAsRead", messageID) {
+    suspend fun handleMarkAsRead(contact: EntityKey, messageID: UUID) = markRead("handleMarkAsRead", messageID) { progress ->
         dataStore.markMessageAsRead(EntityKey(contact.radioId, messageID))
+        progress.writeReturned()
         dataStore.clearUnreadCount(contact)
+        progress.writeReturned()
     }
 
     suspend fun handleChannelMarkAsRead(radioId: RadioId, channelIndex: UByte, messageID: UUID) =
-        markRead("handleChannelMarkAsRead", messageID) {
+        markRead("handleChannelMarkAsRead", messageID) { progress ->
             dataStore.markMessageAsRead(EntityKey(radioId, messageID))
+            progress.writeReturned()
             dataStore.clearChannelUnreadCount(radioId, channelIndex)
+            progress.writeReturned()
         }
 
-    suspend fun handleRoomMarkAsRead(session: EntityKey, messageID: UUID) = markRead("handleRoomMarkAsRead", messageID) {
+    suspend fun handleRoomMarkAsRead(session: EntityKey, messageID: UUID) = markRead("handleRoomMarkAsRead", messageID) { progress ->
         roomServerService.markAsRead(session)
+        progress.writeReturned()
     }
 
     /**
      * Started local writes finish before caller cancellation can hide their return. Commitment means
      * every requested write returned, not that the group is atomic or a partial failure is rolled back.
      */
-    private suspend fun markRead(operation: String, messageID: UUID, writes: suspend () -> Unit) {
+    private suspend fun markRead(
+        operation: String,
+        messageID: UUID,
+        writes: suspend (NotificationReadReceipt) -> Unit,
+    ) {
         currentCoroutineContext().ensureActive()
         val receipt = currentCoroutineContext()[NotificationActionReceipt] ?: NotificationActionReceipt()
+        val progress = currentCoroutineContext()[NotificationReadReceipt] ?: NotificationReadReceipt()
+        check(!progress.preventsReplay) { "A started notification read action cannot be replayed" }
         contained(operation, Unit) {
             withContext(NonCancellable) {
-                writes()
+                progress.started()
+                try {
+                    writes(progress)
+                    progress.committed()
+                } finally {
+                    progress.uncertain()
+                    if (progress.state == NotificationReadReceipt.State.UNCERTAIN) {
+                        logger.warning("Notification read writes may be partial; automatic replay requires recovery")
+                    }
+                }
                 receipt.committed()
                 notificationService.removeDeliveredNotification(messageID)
                 notificationService.updateBadgeCount()

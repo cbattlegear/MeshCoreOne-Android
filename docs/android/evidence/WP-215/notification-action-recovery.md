@@ -145,3 +145,95 @@ against unobserved ABA. Existing ordinary positive actions are unchanged.
 Process-only quarantine can still be lost on process death and is not the selected
 durable recovered-draft UX. No exactly-once, durable delivery, physical API31/37,
 radio, license, signing or iOS compatibility verification is claimed.
+
+## Source-review follow-up (uncommitted, unexecuted)
+
+Coordinator assignment:
+`assignment:fc9361f4-ec03-4739-994b-ddb9b4e4cec9:call_iB5qkpW9T4XxqRBVEymoGiso`.
+The original c042 commit is not amended or rewritten. These are working-file source
+corrections only, not a new immutable candidate or claimed acceptance.
+
+1. The pre-wire App control no longer consumes the restored direct draft before
+   automatic retry. NotificationService now retains exact receipt ownership beside
+   its existing pending-draft map; successful acceptance clears only a draft still
+   owned by that action. Public saves revoke ownership, including equal-text saves.
+   Three real-session controls and two additional App controls cover no consume,
+   newer text and newer identical text. Original source assertions remain.
+2. A separate `NotificationReadReceipt` appended beside the canonical wire receipt
+   tracks READY/STARTED/COMMITTED/UNCERTAIN and returned local-write calls. The
+   canonical wire class and transitions are unchanged. The handler records
+   uncertainty in a finally block before existing containment can return normally;
+   the dispatcher carries both receipts and retains an uncertain read even if the
+   router returns true. No blind unread-clear retry or fake wire evidence is used.
+   Added one real Room failed-second-write App control, two service failure
+   controls and one dispatcher retained-capacity control.
+3. Full process custody still makes the receiver's ignored REJECTED_CAPACITY a
+   hard integration blocker. No durable intake, visible full-capacity recovery,
+   infinite memory fallback or eviction has been fabricated. The producer and
+   recovery owners were informed; no journal activation follows from this fix.
+
+Two additional existing production paths are involved:
+
+- `android/core/services/src/main/kotlin/com/meshcoreone/android/core/services/notifications/NotificationService.kt`
+  (draft methods/metadata only; no notification posting, snapshot, removal or held
+  private-Activity changes);
+- `android/core/contracts/src/main/kotlin/com/meshcoreone/android/core/contracts/notifications/NotificationActionReceipt.kt`
+  (append-only independent local-read class; original wire class unchanged).
+
+Both map to the current manifest's WP-215-owned notification directories, but
+fresh actual CLI admission/evolution and exact successor review remain **pending**:
+the coordinator explicitly prohibited process retries during host exhaustion.
+No historical #537 acceptance is inherited. Receipt owner
+`a830aafb-8aa1-4bf3-8692-c5bf1c017e70` confirms no active producer edits since
+#537 merged; its earlier overlap warning referred to historical ownership only.
+WP-401 was asked to flag actual draft-method overlap. No ledger was changed.
+
+Read-only inspection checked actual constructor/callback signatures and preserved
+the original controls. No executable/static-validator rerun, independent Git
+identity recheck, commit, push or hosted test was attempted for this successor.
+The prior c042 static results do not validate these additional edits.
+
+## Resumed correction candidate after host readiness recovery
+
+The preceding uncommitted/no-execution status is historical, not a result for the
+successor. Under assignment
+`assignment:fc9361f4-ec03-4739-994b-ddb9b4e4cec9:call_udnqj5HioGvH3zIWgs5dcCqY`,
+lightweight Git confirmed HEAD c042 and all nine modified files intact. Nothing was
+reset, switched, discarded or imported. This successor commit preserves c042 as its
+parent; its exact publication SHA belongs in the PR and coordinator handoff.
+
+Fresh actual trusted admissions passed for both additional production paths:
+`NotificationService.kt --operation modify` and
+`NotificationActionReceipt.kt --operation modify`, capability `wp-owned`.
+The original admission matrix still applies to the seven previously admitted
+paths. A same-owner evolution attempt for NotificationService is recorded
+separately; the historical branch-bound receipt remains unchanged and is advisory,
+not independent proof of a live semantic collision.
+
+The actual resumed evolution returned
+`Capability evolution caller differs from the stored session/branch/worktree`;
+no ledger entry was modified to evade it. The isolated-authoring policy above
+still applies to these admitted source edits.
+
+WP-401 confirms no overlap with draft-method metadata, and no durable authenticated
+reply ingress/full-recovery implementation in held #515. Its neutral capacity log
+does not repair rejection or supply retention. The receiver's full-capacity intake
+finding therefore remains an explicit **integration hold**, not a solved feature.
+No dispatch, retirement, storage initialization or recovered-text copy is activated.
+
+Actual repeated checks on the review corrections:
+
+- `C:\Python312\python.exe tools\android-port\controller\ci.py preflight --local --state $env:ANDROID_CI_STATE --output C:\Users\camer\AppData\Local\MeshCoreOne\verification\wp215-review-20261104-2200`: passed host readiness.
+- `C:\Python312\python.exe tools\android-port\controller\verification_config.py --check`: passed.
+- `C:\Python312\python.exe tools\android-port\controller\validate.py`: passed.
+- `C:\Python312\python.exe tools\android-port\portmap.py`: passed.
+- `git diff --check`: passed.
+
+Readiness does not clear or acquire the retained Gradle owner. No local product
+execution occurred; new controls remain authored, not passed test counts. The
+exact-head hosted run must establish actual discovery and behavior before any
+acceptance claim. No second CI-result bundle is committed or retained.
+
+`C:\Python312\python.exe android\parity-tests\semantic.py --check` also passed on
+the resumed edits (58 groups, 5133 families); this is not independent behavioral
+acceptance or an executed product regression result.

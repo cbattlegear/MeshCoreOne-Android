@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import com.meshcoreone.android.core.contracts.notifications.NotificationAction
 import com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt
+import com.meshcoreone.android.core.contracts.notifications.NotificationReadReceipt
 import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
 import java.util.ArrayDeque
 import java.util.logging.Logger
@@ -62,6 +63,7 @@ internal object NotificationActionDispatcher {
     private class PendingAction(
         val response: NotificationResponse,
         val receipt: NotificationActionReceipt = NotificationActionReceipt(),
+        val readReceipt: NotificationReadReceipt = NotificationReadReceipt(),
     )
     private val pending = ArrayDeque<PendingAction>()
     // Not durable recovery: retain uncertain text without re-routing it or blocking the ready FIFO.
@@ -140,21 +142,24 @@ internal object NotificationActionDispatcher {
             val target = synchronized(lock) { router } ?: return@withLock false
             var handled = false
             try {
-                if (!next.receipt.preventsReplay) {
+                if (!next.receipt.preventsReplay && !next.readReceipt.preventsReplay) {
                     // Set this before withContext's cancellable return to the dispatcher.
-                    withContext(next.receipt) { target(next.response).also { handled = it } }
+                    withContext(next.receipt + next.readReceipt) { target(next.response).also { handled = it } }
                 }
             } finally {
-                if (handled || next.receipt.preventsReplay) {
+                if (handled || next.receipt.preventsReplay || next.readReceipt.preventsReplay) {
                     synchronized(lock) {
                         if (pending.firstOrNull() === next) {
                             val state = next.receipt.state
                             if (state == NotificationActionReceipt.State.IN_FLIGHT ||
-                                state == NotificationActionReceipt.State.UNCERTAIN
+                                state == NotificationActionReceipt.State.UNCERTAIN ||
+                                next.readReceipt.state == NotificationReadReceipt.State.STARTED ||
+                                next.readReceipt.state == NotificationReadReceipt.State.UNCERTAIN
                             ) {
                                 next.receipt.uncertain()
+                                next.readReceipt.uncertain()
                                 unresolved.addLast(next)
-                                logger.warning("Notification reply outcome unknown; text retained in process only, replay suppressed")
+                                logger.warning("Notification action outcome unknown; response retained in process only, replay suppressed")
                             }
                             pending.removeFirst()
                             if (pending.isNotEmpty()) retryRequested = true
@@ -162,7 +167,7 @@ internal object NotificationActionDispatcher {
                     }
                 }
             }
-            if (!handled && !next.receipt.preventsReplay) return@withLock false
+            if (!handled && !next.receipt.preventsReplay && !next.readReceipt.preventsReplay) return@withLock false
         }
         @Suppress("UNREACHABLE_CODE")
         true

@@ -11,6 +11,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.notifications.NotificationAction
 import com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt
+import com.meshcoreone.android.core.contracts.notifications.NotificationReadReceipt
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
 import com.meshcoreone.android.core.model.RadioId
@@ -176,11 +177,39 @@ class NotificationActionDispatcherTest {
         repeat(32) {
             assertEquals(EnqueueResult.DELIVERED_OR_QUEUED, NotificationActionDispatcher.enqueue(response))
         }
+
         assertEquals(EnqueueResult.REJECTED_CAPACITY, NotificationActionDispatcher.enqueue(response))
         var calls = 0
         NotificationActionDispatcher.install(this) { calls++; true }
         runCurrent()
         assertEquals(32, calls)
+    }
+
+    @Test
+    fun routerTrueCannotDiscardAnUncertainReadOrTurnItIntoAutomaticRetry() = runTest {
+        var calls = 0
+        val read = response("10000000-0000-0000-0000-000000000001")
+            .copy(action = NotificationAction.MARK_READ, userText = null)
+        NotificationActionDispatcher.install(this) {
+            calls++
+            val progress = requireNotNull(currentCoroutineContext()[NotificationReadReceipt])
+            progress.started()
+            progress.writeReturned()
+            progress.uncertain()
+            true // The production response containment also returns normally after a store failure.
+        }
+        NotificationActionDispatcher.enqueue(read)
+        runCurrent()
+        assertEquals(1, calls)
+        NotificationActionDispatcher.install(this) { calls++; true }
+        runCurrent()
+        assertEquals(1, calls)
+        repeat(31) {
+            assertEquals(EnqueueResult.DELIVERED_OR_QUEUED, NotificationActionDispatcher.enqueue(read))
+        }
+        assertEquals(EnqueueResult.REJECTED_CAPACITY, NotificationActionDispatcher.enqueue(read))
+        runCurrent()
+        assertEquals(32, calls, "The uncertain read remains retained while later ready actions can progress")
     }
 
     @Test

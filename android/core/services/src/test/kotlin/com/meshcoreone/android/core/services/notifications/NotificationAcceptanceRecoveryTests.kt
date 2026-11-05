@@ -5,6 +5,7 @@ import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt
 import com.meshcoreone.android.core.contracts.notifications.NotificationReplyOutcomeUncertain
+import com.meshcoreone.android.core.contracts.notifications.NotificationReadReceipt
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.RadioId
@@ -35,6 +36,35 @@ import org.junit.jupiter.api.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class NotificationAcceptanceRecoveryTests {
+    @Test fun acceptedRetryClearsOnlyItsOwnUnconsumedDraft() = retryDraft(null)
+    @Test fun acceptedRetryPreservesANewerUserDraft() = retryDraft("newer user text")
+    @Test fun acceptedRetryPreservesANewerEqualTextUserDraft() = retryDraft("retry text")
+
+    private fun retryDraft(newerDraft: String?) = runTest {
+        val h = Harness(this)
+        val n = NotificationHarness(this, RADIO).authorize()
+        try {
+            h.start()
+            n.store.contacts[h.contact.key] = h.contact
+            val handler = NotificationActionHandler(n.store, sender(h), n.service, n.rooms, n.sync)
+            handler.configure({ true }, { "Me" })
+            h.store.before = { if (it == "saveMessage") awaitCancellation() }
+            val receipt = NotificationActionReceipt()
+            val caller = launch(receipt) { handler.handleQuickReply(h.contact.key, "retry text") }
+            runCurrent()
+            caller.cancelAndJoin()
+            assertEquals(NotificationActionReceipt.State.READY, receipt.state)
+            assertTrue(h.sends(CommandCode.SEND_MESSAGE).isEmpty())
+            // Leave the restored draft in place across the actual successful session retry.
+            if (newerDraft != null) n.service.saveDraft(h.contact.key, newerDraft)
+            h.store.before = null
+            withContext(receipt) { handler.handleQuickReply(h.contact.key, "retry text") }
+            assertEquals(NotificationActionReceipt.State.ACCEPTED, receipt.state)
+            assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+            assertEquals(newerDraft, n.service.consumeDraft(h.contact.key))
+        } finally { h.close() }
+    }
+
     private fun sender(h: Harness) = object : NotificationMessageSending {
         override suspend fun sendDirectMessage(text: String, contact: ContactDTO): MessageDTO =
             h.service.sendDirectMessage(text, contact)
@@ -289,9 +319,43 @@ class NotificationAcceptanceRecoveryTests {
         assertFailsWith<kotlinx.coroutines.CancellationException> {
             withContext(receipt) { n.handler.handleMarkAsRead(EntityKey(RADIO_A, UUID.randomUUID()), UUID.randomUUID()) }
         }
+
         assertFalse(receipt.preventsReplay)
         assertEquals(2, n.store.writes.size)
         assertEquals(0, n.sync.notifications)
+    }
+
+    @Test fun partialReadKeepsAnExplicitReceiptAfterContainedFailure() = runTest {
+        val n = NotificationHarness(this)
+        n.store.failing += "clearUnreadCount"
+        val wire = NotificationActionReceipt()
+        val progress = NotificationReadReceipt()
+        val contact = EntityKey(RADIO_A, UUID.randomUUID())
+        val message = UUID.randomUUID()
+        withContext(wire + progress) { n.handler.handleMarkAsRead(contact, message) }
+        assertEquals(NotificationActionReceipt.State.READY, wire.state)
+        assertEquals(NotificationReadReceipt.State.UNCERTAIN, progress.state)
+        assertEquals(1, progress.completedWrites)
+        assertTrue(progress.preventsReplay)
+        assertEquals(2, n.store.writes.size)
+        assertEquals(0, n.sync.notifications)
+        assertFailsWith<IllegalStateException> {
+            withContext(wire + progress) { n.handler.handleMarkAsRead(contact, message) }
+        }
+        assertEquals(2, n.store.writes.size, "No repeated unread clear after an uncertain partial action")
+    }
+
+    @Test fun throwingFirstWriteIsUncertainEvenWithoutAReturnedWrite() = runTest {
+        val n = NotificationHarness(this)
+        n.store.failing += "markMessageAsRead"
+        val progress = NotificationReadReceipt()
+        withContext(progress) {
+            n.handler.handleMarkAsRead(EntityKey(RADIO_A, UUID.randomUUID()), UUID.randomUUID())
+        }
+        assertEquals(NotificationReadReceipt.State.UNCERTAIN, progress.state)
+        assertEquals(0, progress.completedWrites, "A thrown call may still have committed; zero is not unsent proof")
+        assertTrue(progress.preventsReplay)
+        assertEquals(1, n.store.writes.size)
     }
 
     @Test fun alreadyCancelledMarkReadDoesNotStartWrites() = runTest {

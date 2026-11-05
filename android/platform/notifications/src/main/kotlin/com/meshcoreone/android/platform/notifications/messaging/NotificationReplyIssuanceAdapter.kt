@@ -38,8 +38,16 @@ sealed interface NotificationReplyDeliveryParsing {
      */
     data class ReadyForAdmission(val storeId: UUID, val token: UUID, val exactText: String) :
         NotificationReplyDeliveryParsing
-    data class Rejected(val reason: ParseFailure) : NotificationReplyDeliveryParsing
-    enum class ParseFailure { MISSING_IDENTITY, MALFORMED_IDENTITY, STALE_INSTALLATION, MISSING_INPUT }
+    data class Rejected(
+        val reason: ParseFailure,
+        /** Volatile display/recovery data only; never admission, persistence, or send authority. */
+        val readableExactText: String? = null,
+        val inputStatus: InputStatus = InputStatus.MISSING,
+    ) : NotificationReplyDeliveryParsing
+    enum class InputStatus { READABLE, EMPTY, MISSING, MALFORMED }
+    enum class ParseFailure {
+        MISSING_IDENTITY, MALFORMED_IDENTITY, STALE_INSTALLATION, MISSING_INPUT, MALFORMED_INPUT,
+    }
 }
 
 /**
@@ -131,34 +139,84 @@ class NotificationReplyIssuanceAdapter internal constructor(
         return NotificationReplyPreparation.Prepared(reserved, pending)
     }
 
-    fun parseDelivery(intent: Intent): NotificationReplyDeliveryParsing = try {
-        parseIdentityAndInput(intent)
-    } catch (_: BadParcelableException) {
-        rejected(NotificationReplyDeliveryParsing.ParseFailure.MALFORMED_IDENTITY)
-    } catch (_: ClassCastException) {
-        rejected(NotificationReplyDeliveryParsing.ParseFailure.MALFORMED_IDENTITY)
+    fun parseDelivery(intent: Intent): NotificationReplyDeliveryParsing {
+        val input = readReplyInput(intent)
+        return try {
+            parseIdentityAndInput(intent, input)
+        } catch (_: BadParcelableException) {
+            rejected(NotificationReplyDeliveryParsing.ParseFailure.MALFORMED_IDENTITY, input)
+        } catch (_: ClassCastException) {
+            rejected(NotificationReplyDeliveryParsing.ParseFailure.MALFORMED_IDENTITY, input)
+        }
     }
 
-    private fun parseIdentityAndInput(intent: Intent): NotificationReplyDeliveryParsing {
+    private fun parseIdentityAndInput(
+        intent: Intent,
+        input: ReplyInput,
+    ): NotificationReplyDeliveryParsing {
+        fun reject(reason: NotificationReplyDeliveryParsing.ParseFailure) = rejected(reason, input)
+
         if (intent.action != ACTION || intent.component?.className != UnactivatedIssuedReplyReceiver::class.java.name ||
             intent.component?.packageName != context.packageName
-        ) return rejected(NotificationReplyDeliveryParsing.ParseFailure.MALFORMED_IDENTITY)
+        ) return reject(NotificationReplyDeliveryParsing.ParseFailure.MALFORMED_IDENTITY)
         val rawStore = intent.getStringExtra(EXTRA_STORE)
-            ?: return rejected(NotificationReplyDeliveryParsing.ParseFailure.MISSING_IDENTITY)
+            ?: return reject(NotificationReplyDeliveryParsing.ParseFailure.MISSING_IDENTITY)
         val rawToken = intent.getStringExtra(EXTRA_TOKEN)
-            ?: return rejected(NotificationReplyDeliveryParsing.ParseFailure.MISSING_IDENTITY)
-        val store = parseUuid(rawStore) ?: return rejected(NotificationReplyDeliveryParsing.ParseFailure.MALFORMED_IDENTITY)
-        val token = parseUuid(rawToken) ?: return rejected(NotificationReplyDeliveryParsing.ParseFailure.MALFORMED_IDENTITY)
-        if (store != expectedStoreId) return rejected(NotificationReplyDeliveryParsing.ParseFailure.STALE_INSTALLATION)
-        if (intent.data != identity(store, token)) return rejected(NotificationReplyDeliveryParsing.ParseFailure.MALFORMED_IDENTITY)
-        val exactText = RemoteInput.getResultsFromIntent(intent)
-            ?.getCharSequence(NotificationActionReceiver.REMOTE_INPUT_KEY)?.toString()
-            ?: return rejected(NotificationReplyDeliveryParsing.ParseFailure.MISSING_INPUT)
-        return NotificationReplyDeliveryParsing.ReadyForAdmission(store, token, exactText)
+            ?: return reject(NotificationReplyDeliveryParsing.ParseFailure.MISSING_IDENTITY)
+        val store = parseUuid(rawStore)
+            ?: return reject(NotificationReplyDeliveryParsing.ParseFailure.MALFORMED_IDENTITY)
+        val token = parseUuid(rawToken)
+            ?: return reject(NotificationReplyDeliveryParsing.ParseFailure.MALFORMED_IDENTITY)
+        if (store != expectedStoreId) return reject(NotificationReplyDeliveryParsing.ParseFailure.STALE_INSTALLATION)
+        if (intent.data != identity(store, token)) {
+            return reject(NotificationReplyDeliveryParsing.ParseFailure.MALFORMED_IDENTITY)
+        }
+        return when (input) {
+            is ReplyInput.Readable -> NotificationReplyDeliveryParsing.ReadyForAdmission(store, token, input.text)
+            ReplyInput.Missing -> reject(NotificationReplyDeliveryParsing.ParseFailure.MISSING_INPUT)
+            ReplyInput.Malformed -> reject(NotificationReplyDeliveryParsing.ParseFailure.MALFORMED_INPUT)
+        }
     }
 
-    private fun rejected(reason: NotificationReplyDeliveryParsing.ParseFailure) =
-        NotificationReplyDeliveryParsing.Rejected(reason)
+    private fun readReplyInput(intent: Intent): ReplyInput {
+        return try {
+            val results = RemoteInput.getResultsFromIntent(intent) ?: return ReplyInput.Missing
+            if (!results.containsKey(NotificationActionReceiver.REMOTE_INPUT_KEY)) return ReplyInput.Missing
+            val value = results.get(NotificationActionReceiver.REMOTE_INPUT_KEY)
+            if (value is CharSequence) ReplyInput.Readable(value.toString()) else ReplyInput.Malformed
+        } catch (_: BadParcelableException) {
+            ReplyInput.Malformed
+        } catch (_: ClassCastException) {
+            ReplyInput.Malformed
+        }
+    }
+
+    private fun rejected(
+        reason: NotificationReplyDeliveryParsing.ParseFailure,
+        input: ReplyInput,
+    ): NotificationReplyDeliveryParsing.Rejected {
+        val exactText = (input as? ReplyInput.Readable)?.text
+        val status = when (input) {
+            is ReplyInput.Readable -> if (input.text.isEmpty()) {
+                NotificationReplyDeliveryParsing.InputStatus.EMPTY
+            } else {
+                NotificationReplyDeliveryParsing.InputStatus.READABLE
+            }
+            ReplyInput.Missing -> NotificationReplyDeliveryParsing.InputStatus.MISSING
+            ReplyInput.Malformed -> NotificationReplyDeliveryParsing.InputStatus.MALFORMED
+        }
+        return NotificationReplyDeliveryParsing.Rejected(
+            reason = reason,
+            readableExactText = exactText?.takeIf { it.isNotEmpty() },
+            inputStatus = status,
+        )
+    }
+
+    private sealed interface ReplyInput {
+        data class Readable(val text: String) : ReplyInput
+        data object Missing : ReplyInput
+        data object Malformed : ReplyInput
+    }
 
     private fun parseUuid(raw: String): UUID? = try {
         UUID.fromString(raw).takeIf { it.toString() == raw }

@@ -341,13 +341,12 @@ class TracePathStateHolder(
 
     /** Saves the current (or batch's first successful) result; batch mode appends the other runs. */
     suspend fun savePath(name: String): Boolean {
-        val device = deps.connectedDevice() ?: return false
-        val radioId = device.radioId
-        val snapshot = current
-        val size = TraceHashModes.hashSize(snapshot.traceHashMode ?: device.pathHashMode).toLong()
         if (!isConnectionCurrent()) return false
+        val radioId = deps.connectedDevice()?.radioId ?: return false
         val store = deps.savedPaths() ?: return false
+        val snapshot = current
         val revision = pathSelectionRevision
+        val size = hashSize.toLong()
         if (snapshot.batchEnabled && snapshot.completedResults.isNotEmpty()) {
             val firstSuccess = snapshot.successfulResults.firstOrNull() ?: return false
             return persistBatch(store, radioId, name, firstSuccess, snapshot.completedResults, size, revision)

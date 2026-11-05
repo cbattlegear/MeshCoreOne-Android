@@ -19,8 +19,9 @@ import androidx.room.TypeConverters
         DirectAckDeliveryEntity::class, DirectAckWireEntity::class, DirectAckOperationEntity::class,
         DirectPendingCompletionEntity::class,
         DirectAckIntentEntity::class,
+        DirectAckEmissionEntity::class, DirectAckRadioExclusionEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
 @TypeConverters(ValueConverters::class)
@@ -43,12 +44,14 @@ abstract class MeshCoreDatabase : RoomDatabase() {
     abstract fun nodeSnapshots(): NodeSnapshotDao
     abstract fun blockedSenders(): BlockedChannelSenderDao
     abstract fun directAcks(): DirectAckDao
+    abstract fun directAckExclusions(): DirectAckExclusionDao
 
     companion object {
-        const val SCHEMA_VERSION = 2
+        const val SCHEMA_VERSION = 3
         fun open(context: Context, name: String = "meshcoreone.db"): MeshCoreDatabase =
             Room.databaseBuilder(context.applicationContext, MeshCoreDatabase::class.java, name)
                 .addMigrations(DirectAckStorage.migration1To2)
+                .addMigrations(DirectAckExclusionStorage.migration2To3)
                 .addCallback(DirectAckStorage.callback)
                 .build()
     }

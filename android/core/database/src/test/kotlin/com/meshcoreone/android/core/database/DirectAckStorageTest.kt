@@ -158,11 +158,12 @@ class DirectAckStorageTest {
             }
             val db = Room.databaseBuilder(context, MeshCoreDatabase::class.java, name)
                 .setJournalMode(RoomDatabase.JournalMode.TRUNCATE)
-                .addMigrations(DirectAckStorage.migration1To2).addCallback(DirectAckStorage.callback).build()
+                .addMigrations(DirectAckStorage.migration1To2, DirectAckExclusionStorage.migration2To3)
+                .addCallback(DirectAckStorage.callback).build()
             try {
                 val row = assertNotNull(db.messages().byId(UUID.fromString(radio), UUID.fromString(message)))
                 assertEquals("retained text", row.text)
-                assertEquals(2, db.openHelper.readableDatabase.version)
+                assertEquals(3, db.openHelper.readableDatabase.version)
                 val after = db.openHelper.readableDatabase.query("SELECT * FROM messages").use { cursor ->
                     assertTrue(cursor.moveToFirst())
                     (0 until cursor.columnCount).map { if (cursor.isNull(it)) null else cursor.getString(it) }

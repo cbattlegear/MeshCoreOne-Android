@@ -111,8 +111,76 @@ class DirectAckConfirmationNoticeComposeTest {
         }
 
     private fun wildcard(id: RadioId = radio) = DirectAckRadioConfirmationEvidence.PersistedWildcard(
-        id, SnapshotSet(DirectAckRadioConfirmationWildcardReason.entries),
+        id, SnapshotSet(DirectAckRadioConfirmationWildcardReason.entries.filterNot {
+            it == DirectAckRadioConfirmationWildcardReason.PREAUTHORITY_HISTORY_UNKNOWN
+        }),
     )
+
+    @Test fun unknownPrehistoryStatesAllNewConfirmationsUnavailableAndOffersNoClearingAction() {
+        mount(source { id -> DirectAckRadioConfirmationEvidence.PersistedWildcard(
+            id, SnapshotSet(listOf(DirectAckRadioConfirmationWildcardReason.PREAUTHORITY_HISTORY_UNKNOWN)),
+        ) })
+        assertBody(R.string.direct_ack_confirmation_preauthority_unknown)
+        val copy = text(R.string.direct_ack_confirmation_preauthority_unknown)
+        assertTrue(copy.contains("New direct-message delivery confirmations are unavailable"))
+        assertTrue(copy.contains("indefinitely"))
+        assertTrue(copy.contains("still send"))
+        assertTrue(copy.contains("Previously confirmed deliveries remain delivered"))
+        compose.onNodeWithText(text(R.string.direct_ack_confirmation_uncertain)).assertDoesNotExist()
+        compose.onNodeWithText(text(R.string.direct_ack_confirmation_check_again)).assertDoesNotExist()
+    }
+
+    @Test fun unknownPrehistoryDominatesOtherReasonsAndSurvivesAReadFailureWithoutAFakeClear() {
+        var fail = false
+        val releaseFailure = CompletableDeferred<Unit>()
+        mount(source { id ->
+            if (fail) {
+                releaseFailure.await()
+                throw PersistenceStoreException(PersistenceStoreError.FetchFailed("synthetic read failure"))
+            }
+            DirectAckRadioConfirmationEvidence.PersistedWildcard(
+                id, SnapshotSet(DirectAckRadioConfirmationWildcardReason.entries),
+            )
+        })
+        assertBody(R.string.direct_ack_confirmation_preauthority_unknown)
+        fail = true
+        holder.recheck()
+        compose.waitUntil(30_000) {
+            holder.state.value.status ==
+                com.meshcoreone.android.feature.chats.actions.DirectAckConfirmationStatus.Checking
+        }
+        assertBody(R.string.direct_ack_confirmation_preauthority_unknown)
+        compose.onNodeWithText(text(R.string.direct_ack_confirmation_check_again)).assertDoesNotExist()
+        releaseFailure.complete(Unit)
+        compose.waitUntil(30_000) {
+            holder.state.value.status is
+                com.meshcoreone.android.feature.chats.actions.DirectAckConfirmationStatus.ReadUnavailable
+        }
+        assertBody(R.string.direct_ack_confirmation_preauthority_unknown)
+        compose.onNodeWithText(text(R.string.direct_ack_confirmation_check_again)).assertDoesNotExist()
+    }
+
+    @Test fun otherPersistedReasonsKeepScopedWarningAndReadOnlyRecheck() {
+        for (reason in DirectAckRadioConfirmationWildcardReason.entries.filterNot {
+            it == DirectAckRadioConfirmationWildcardReason.PREAUTHORITY_HISTORY_UNKNOWN
+        }) {
+            mount(source { id -> DirectAckRadioConfirmationEvidence.PersistedWildcard(id, SnapshotSet(listOf(reason))) })
+            assertBody(R.string.direct_ack_confirmation_uncertain)
+            compose.onNodeWithText(text(R.string.direct_ack_confirmation_preauthority_unknown)).assertDoesNotExist()
+            compose.onNodeWithText(text(R.string.direct_ack_confirmation_check_again)).performScrollTo().assertIsEnabled()
+        }
+    }
+
+    @Test fun strictUnknownCopyHasDistinctResourcesInEverySupportedLocale() {
+        val english = text(R.string.direct_ack_confirmation_preauthority_unknown)
+        for (tag in listOf("de", "es", "fr", "it", "ko", "nl", "pl", "pt", "ru", "uk", "zh-Hans")) {
+            val localized = host.get().createConfigurationContext(Configuration().apply {
+                setLocale(Locale.forLanguageTag(tag))
+            }).getString(R.string.direct_ack_confirmation_preauthority_unknown)
+            assertTrue(tag, localized.isNotBlank())
+            assertNotEquals(tag, english, localized)
+        }
+    }
 
     private fun mount(
         observer: DirectAckRadioConfirmationEvidenceObserving?,

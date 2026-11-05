@@ -1,0 +1,34 @@
+{
+  "wp": "WP-309",
+  "status": "SOURCE_ONLY_UNCOMPILED_UNEXECUTED",
+  "parent": "a43232b826ed7460a1c78a23beebb8277ad8eeab",
+  "scope": "Reason-specific strict preauthority UNKNOWN notice; preserves ambiguous-row successor and prior delivered state",
+  "behavior": [
+    "When current or retained PREAUTHORITY_HISTORY_UNKNOWN is present, explicitly say new direct-message delivery confirmations are unavailable for this radio and may remain so indefinitely.",
+    "State that sending remains possible and previously confirmed deliveries remain delivered.",
+    "Do not offer Check again for an immutable UNKNOWN reason; do not imply polling, reconnect, TTL or a fresh database clears it.",
+    "Retain the strict warning through checking and typed read failure on the same owner.",
+    "Other reasons keep their appropriately scoped SOME-messages warning and read-only recheck behavior.",
+    "Preserve actual DELIVERED, conservative FAILED/ambiguous-row labels, and diagnostic identity-unavailable boundaries."
+  ],
+  "localization": {
+    "input": "docs/android/evidence/WP-309/direct-ack-confirmation-copy.json",
+    "generator": "tools/android-port/direct_ack_confirmation_convert.py",
+    "new_key": "direct_ack_confirmation_preauthority_unknown",
+    "locales": 12,
+    "result": "Generated source resources only; no native-speaker or runtime localization verification"
+  },
+  "controls": {
+    "new_reason_specific_compose_methods": 4,
+    "existing_actual_room_methods_updated": "Real strict-UNKNOWN Room consumer, delivered Activity recreation, persisted dual-kind direct-timeline wording",
+    "families": [
+      "UNKNOWN alone states universal new-confirmation unavailability, accessible double-font layout, no clearing action",
+      "UNKNOWN combined with every other reason retains priority through checking and actual typed observer read failure",
+      "Every other reason retains scoped warning and enabled read-only recheck",
+      "Actual mounted App capability-required strict-UNKNOWN consumers preserve sending and actual delivered state",
+      "All twelve supported locale resources include distinct strict-UNKNOWN wording without English fallback"
+    ],
+    "executed": 0
+  },
+  "acceptance": "Exact producer/schema/service/UI composition and authorized hosted exact-head validation remain required; no test, migration, device, hardware or whole-WP acceptance claimed."
+}

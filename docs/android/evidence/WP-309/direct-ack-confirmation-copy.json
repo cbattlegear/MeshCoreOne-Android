@@ -4,6 +4,7 @@
   "reference_pin": "db14559b39d32322b06477c6ae676112f583db50",
   "locales": {
     "values": {
+      "preauthority_unknown": "New direct-message delivery confirmations are unavailable for this radio and may remain so indefinitely. You can still send messages. Previously confirmed deliveries remain delivered.",
       "message_uncertain": "Delivery unconfirmed. This message may have been sent.",
       "message_evidence_unavailable": "Message-specific confirmation evidence is unavailable here. Delivery is not confirmed.",
       "title": "Delivery confirmation",
@@ -16,6 +17,7 @@
       "check_again": "Check again"
     },
     "values-de": {
+      "preauthority_unknown": "Neue Zustellbestätigungen für Direktnachrichten sind für dieses Funkgerät nicht verfügbar und bleiben es möglicherweise auf unbestimmte Zeit. Du kannst weiterhin Nachrichten senden. Bereits bestätigte Zustellungen bleiben bestätigt.",
       "message_uncertain": "Zustellung nicht bestätigt. Diese Nachricht wurde möglicherweise gesendet.",
       "message_evidence_unavailable": "Nachrichtenspezifische Zustellnachweise sind hier nicht verfügbar. Die Zustellung ist nicht bestätigt.",
       "title": "Zustellbestätigung",
@@ -28,6 +30,7 @@
       "check_again": "Erneut prüfen"
     },
     "values-es": {
+      "preauthority_unknown": "Las confirmaciones de entrega de nuevos mensajes directos no están disponibles para esta radio y pueden seguir así indefinidamente. Puedes seguir enviando mensajes. Las entregas ya confirmadas siguen confirmadas.",
       "message_uncertain": "Entrega no confirmada. Es posible que este mensaje se haya enviado.",
       "message_evidence_unavailable": "Aquí no están disponibles los registros de confirmación de mensajes concretos. La entrega no está confirmada.",
       "title": "Confirmación de entrega",
@@ -40,6 +43,7 @@
       "check_again": "Volver a comprobar"
     },
     "values-fr": {
+      "preauthority_unknown": "Les confirmations de livraison des nouveaux messages directs sont indisponibles pour cette radio et peuvent le rester indéfiniment. Vous pouvez toujours envoyer des messages. Les livraisons déjà confirmées restent confirmées.",
       "message_uncertain": "Livraison non confirmée. Ce message a peut-être été envoyé.",
       "message_evidence_unavailable": "Les données de confirmation propres à chaque message sont indisponibles ici. La livraison n'est pas confirmée.",
       "title": "Confirmation de livraison",
@@ -52,6 +56,7 @@
       "check_again": "Vérifier à nouveau"
     },
     "values-it": {
+      "preauthority_unknown": "Le conferme di consegna dei nuovi messaggi diretti non sono disponibili per questa radio e potrebbero restarlo a tempo indeterminato. Puoi continuare a inviare messaggi. Le consegne già confermate restano confermate.",
       "message_uncertain": "Consegna non confermata. Questo messaggio potrebbe essere stato inviato.",
       "message_evidence_unavailable": "Qui non sono disponibili dati di conferma specifici per i singoli messaggi. La consegna non è confermata.",
       "title": "Conferma di consegna",
@@ -64,6 +69,7 @@
       "check_again": "Verifica di nuovo"
     },
     "values-ko": {
+      "preauthority_unknown": "이 무전기에서는 새 다이렉트 메시지의 전달 확인을 사용할 수 없으며, 이 상태가 무기한 지속될 수 있습니다. 메시지는 계속 보낼 수 있습니다. 이전에 확인된 전달 상태는 유지됩니다.",
       "message_uncertain": "전달 여부가 확인되지 않았습니다. 이 메시지는 전송되었을 수 있습니다.",
       "message_evidence_unavailable": "여기서는 메시지별 확인 기록을 사용할 수 없습니다. 전달 여부가 확인되지 않았습니다.",
       "title": "전달 확인",
@@ -76,6 +82,7 @@
       "check_again": "다시 확인"
     },
     "values-nl": {
+      "preauthority_unknown": "Afleverbevestigingen voor nieuwe directe berichten zijn niet beschikbaar voor deze radio en kunnen dat voor onbepaalde tijd blijven. Je kunt nog steeds berichten verzenden. Eerder bevestigde afleveringen blijven bevestigd.",
       "message_uncertain": "Aflevering niet bevestigd. Dit bericht is mogelijk verzonden.",
       "message_evidence_unavailable": "Bewijs voor de bevestiging van afzonderlijke berichten is hier niet beschikbaar. De aflevering is niet bevestigd.",
       "title": "Afleverbevestiging",
@@ -88,6 +95,7 @@
       "check_again": "Opnieuw controleren"
     },
     "values-pl": {
+      "preauthority_unknown": "Potwierdzenia dostarczenia nowych wiadomości bezpośrednich są niedostępne dla tego radia i mogą pozostać niedostępne bezterminowo. Nadal możesz wysyłać wiadomości. Wcześniej potwierdzone dostarczenia pozostają potwierdzone.",
       "message_uncertain": "Dostarczenie niepotwierdzone. Ta wiadomość mogła zostać wysłana.",
       "message_evidence_unavailable": "Dane potwierdzenia dla poszczególnych wiadomości są tutaj niedostępne. Dostarczenie nie jest potwierdzone.",
       "title": "Potwierdzenie dostarczenia",
@@ -100,6 +108,7 @@
       "check_again": "Sprawdź ponownie"
     },
     "values-pt": {
+      "preauthority_unknown": "As confirmações de entrega de novas mensagens diretas não estão disponíveis para este rádio e podem continuar assim indefinidamente. Pode continuar a enviar mensagens. As entregas já confirmadas continuam confirmadas.",
       "message_uncertain": "Entrega não confirmada. Esta mensagem pode ter sido enviada.",
       "message_evidence_unavailable": "Os dados de confirmação específicos de cada mensagem não estão disponíveis aqui. A entrega não está confirmada.",
       "title": "Confirmação de entrega",
@@ -112,6 +121,7 @@
       "check_again": "Verificar novamente"
     },
     "values-ru": {
+      "preauthority_unknown": "Подтверждения доставки новых личных сообщений недоступны для этой радиостанции и могут оставаться недоступными неопределённо долго. Вы по-прежнему можете отправлять сообщения. Ранее подтверждённые доставки остаются подтверждёнными.",
       "message_uncertain": "Доставка не подтверждена. Это сообщение могло быть отправлено.",
       "message_evidence_unavailable": "Здесь недоступны данные подтверждения для отдельных сообщений. Доставка не подтверждена.",
       "title": "Подтверждение доставки",
@@ -124,6 +134,7 @@
       "check_again": "Проверить ещё раз"
     },
     "values-uk": {
+      "preauthority_unknown": "Підтвердження доставки нових прямих повідомлень недоступні для цієї радіостанції та можуть залишатися недоступними необмежено довго. Ви й далі можете надсилати повідомлення. Раніше підтверджені доставки залишаються підтвердженими.",
       "message_uncertain": "Доставку не підтверджено. Це повідомлення могло бути надіслане.",
       "message_evidence_unavailable": "Тут недоступні дані підтвердження для окремих повідомлень. Доставку не підтверджено.",
       "title": "Підтвердження доставки",
@@ -136,6 +147,7 @@
       "check_again": "Перевірити знову"
     },
     "values-b+zh+Hans": {
+      "preauthority_unknown": "此电台无法确认新私信的送达状态，而且可能无限期保持此状态。您仍然可以发送消息。此前已确认送达的消息仍保持已送达状态。",
       "message_uncertain": "尚未确认是否送达。此消息可能已发送。",
       "message_evidence_unavailable": "此处无法获取单条消息的确认记录。尚未确认是否送达。",
       "title": "送达确认",

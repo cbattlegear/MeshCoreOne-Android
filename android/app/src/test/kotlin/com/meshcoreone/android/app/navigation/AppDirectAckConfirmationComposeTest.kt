@@ -275,7 +275,10 @@ class AppDirectAckConfirmationComposeTest : RoomProcessTest() {
             compose.onNodeWithText(prompt, useUnmergedTree = true).assertIsDisplayed()
             if (direct) {
                 val monitorBefore = h.container.chatsFeature.directAckConfirmation
-                val expected = resources.getString(if (realPersistence) R.string.direct_ack_confirmation_uncertain
+                val strictUnknown = realPersistence || (reason ==
+                    DirectAckRadioConfirmationWildcardReason.PREAUTHORITY_HISTORY_UNKNOWN &&
+                    ownerChange == null && seedStatus == null)
+                val expected = resources.getString(if (strictUnknown) R.string.direct_ack_confirmation_preauthority_unknown
                     else if (ownerChange != null ||
                     seedStatus == MessageStatus.DELIVERED || identicalReplacement) R.string.direct_ack_confirmation_checked
                     else if (supported) R.string.direct_ack_confirmation_uncertain
@@ -285,6 +288,10 @@ class AppDirectAckConfirmationComposeTest : RoomProcessTest() {
                     compose.onAllNodesWithText(expected).fetchSemanticsNodes().isNotEmpty()
                 }
                 compose.onNodeWithText(expected).assertIsDisplayed()
+                if (strictUnknown) {
+                    compose.onNodeWithText(resources.getString(R.string.direct_ack_confirmation_check_again))
+                        .assertDoesNotExist()
+                }
                 assertEquals(if (supported && !realPersistence) 1 else 0, subscriptions)
                 val editor = compose.onNodeWithContentDescription(
                     resources.getString(AppChatsStrings.chatsInputAccessibilityLabel) + ", " +

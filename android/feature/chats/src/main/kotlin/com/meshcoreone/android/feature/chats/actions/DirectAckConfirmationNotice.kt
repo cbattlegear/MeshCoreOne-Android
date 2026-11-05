@@ -20,6 +20,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.meshcoreone.android.core.contracts.domain.DirectAckRadioConfirmationEvidence
+import com.meshcoreone.android.core.contracts.domain.DirectAckRadioConfirmationWildcardReason
 import com.meshcoreone.android.core.l10n.R
 
 /**
@@ -54,6 +55,15 @@ fun DirectAckConfirmationNotice(
     additionalUncertainty: Boolean = false,
     messageDiagnosticsUnavailable: Boolean = false,
 ) {
+    val currentWildcard = (state.status as? DirectAckConfirmationStatus.Inspected)?.evidence as?
+        DirectAckRadioConfirmationEvidence.PersistedWildcard
+    val preauthorityUnknown = currentWildcard?.reasons?.contains(
+        DirectAckRadioConfirmationWildcardReason.PREAUTHORITY_HISTORY_UNKNOWN,
+    ) == true || state.lastKnownPersistedWildcard?.reasons?.contains(
+        DirectAckRadioConfirmationWildcardReason.PREAUTHORITY_HISTORY_UNKNOWN,
+    ) == true
+    val warningBody = if (preauthorityUnknown) R.string.direct_ack_confirmation_preauthority_unknown
+        else R.string.direct_ack_confirmation_uncertain
     val body = when (val status = state.status) {
         DirectAckConfirmationStatus.NotInspected,
         DirectAckConfirmationStatus.Interrupted -> R.string.direct_ack_confirmation_interrupted
@@ -69,7 +79,7 @@ fun DirectAckConfirmationNotice(
         DirectAckConfirmationStatus.StreamEnded,
         DirectAckConfirmationStatus.UnexpectedUnavailable -> R.string.direct_ack_confirmation_unavailable
         is DirectAckConfirmationStatus.Inspected -> when (status.evidence) {
-            is DirectAckRadioConfirmationEvidence.PersistedWildcard -> R.string.direct_ack_confirmation_uncertain
+            is DirectAckRadioConfirmationEvidence.PersistedWildcard -> warningBody
             is DirectAckRadioConfirmationEvidence.NoPersistedWildcard -> R.string.direct_ack_confirmation_checked
         }
     }
@@ -86,9 +96,9 @@ fun DirectAckConfirmationNotice(
                 style = MaterialTheme.typography.titleMedium,
             )
             val historicalWarning = (state.lastKnownPersistedWildcard != null || additionalUncertainty) &&
-                body != R.string.direct_ack_confirmation_uncertain
+                body != warningBody
             Text(
-                stringResource(if (historicalWarning) R.string.direct_ack_confirmation_uncertain else body),
+                stringResource(if (historicalWarning) warningBody else body),
                 modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                 style = MaterialTheme.typography.bodyLarge,
             )
@@ -106,7 +116,7 @@ fun DirectAckConfirmationNotice(
                     style = MaterialTheme.typography.bodyLarge,
                 )
             }
-            if (state.observation != null && state.isActive &&
+            if (!preauthorityUnknown && state.observation != null && state.isActive &&
                 (state.status != DirectAckConfirmationStatus.Checking || state.lastEvidence != null) &&
                 state.status != DirectAckConfirmationStatus.CapabilityUnavailable
             ) {

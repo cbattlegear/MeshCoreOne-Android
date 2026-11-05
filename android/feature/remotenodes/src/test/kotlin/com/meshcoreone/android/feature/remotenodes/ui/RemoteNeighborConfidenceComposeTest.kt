@@ -1,4 +1,5 @@
 // AndroidOnly: WP-313 Mounted current and disappeared neighbor confidence disclosure.
+// AndroidOnly: WP-312 Explicit shared-map preference injection for the mounted neighbor fixture.
 package com.meshcoreone.android.feature.remotenodes.ui
 
 import android.os.Looper
@@ -58,6 +59,11 @@ import com.meshcoreone.android.feature.remotenodes.dependencies.NodeSnapshotPort
 import com.meshcoreone.android.feature.remotenodes.dependencies.RemoteNodesCatalog
 import com.meshcoreone.android.feature.remotenodes.dependencies.RemoteNodesFeatureDependencies
 import com.meshcoreone.android.core.maps.MapPresentationState
+import com.meshcoreone.android.core.maps.MapColorPreference
+import com.meshcoreone.android.core.maps.MapFilterHost
+import com.meshcoreone.android.core.maps.MapFilterState
+import com.meshcoreone.android.core.maps.MapPreferenceStore
+import com.meshcoreone.android.core.maps.MapPreferences
 import com.meshcoreone.android.feature.remotenodes.status.FakeFaults
 import com.meshcoreone.android.feature.remotenodes.status.RepeaterStatusStateHolder
 import com.meshcoreone.android.feature.remotenodes.status.contact
@@ -71,6 +77,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -240,8 +249,29 @@ class RemoteNeighborConfidenceComposeTest {
             plotted = state
             Box(modifier)
         }
+        val mapPreferences = object : MapPreferenceStore {
+            private val state = MutableStateFlow(
+                MapPreferences(MapFilterState.seed(MapFilterHost.NEIGHBOR_SNR), true, true, MapColorPreference.SYSTEM),
+            )
+            override fun observe(host: MapFilterHost): Flow<MapPreferences> = state
+            override suspend fun setFilter(host: MapFilterHost, filter: MapFilterState) {
+                state.update { it.copy(filter = filter) }
+            }
+            override suspend fun updateFilter(host: MapFilterHost, transform: (MapFilterState) -> MapFilterState) {
+                state.update { it.copy(filter = transform(it.filter)) }
+            }
+            override suspend fun setClustering(enabled: Boolean) {
+                state.update { it.copy(clustering = enabled) }
+            }
+            override suspend fun setLabels(enabled: Boolean) {
+                state.update { it.copy(labels = enabled) }
+            }
+        }
         activity.get().setContent {
-            CompositionLocalProvider(LocalDensity provides Density(1f, 2f)) {
+            CompositionLocalProvider(
+                LocalDensity provides Density(1f, 2f),
+                LocalRemoteMapPreferences provides mapPreferences,
+            ) {
                 MeshCoreTheme(motionScale = 0f) {
                     RemoteNodeStatusContent(node, repeater.helper, repeater, null, catalog, false, Modifier.fillMaxSize(), map)
                 }

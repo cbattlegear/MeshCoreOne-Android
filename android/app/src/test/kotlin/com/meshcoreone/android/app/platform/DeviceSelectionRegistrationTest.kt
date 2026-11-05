@@ -96,10 +96,8 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             val device = saved(h)
             mount(h, feature)
             open(h)
-            // Reconnect the same radio while the selector is open: selecting it must still force a new link.
-            h.manager.connect(h.target(device.id))
-            h.settle()
-            h.assertReady()
+            h.manager.recordConnectionFailure()
+            assertFalse(h.manager.shouldAllowConnection(false))
             val linksBefore = h.links.links.size
             val gate = CompletableDeferred<Unit>()
             h.links.configureRadio = { it.connectGate = gate }
@@ -114,6 +112,30 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             assertEquals(device.radioId, h.manager.connectedDevice?.radioId)
             assertEquals(device.publicKey, h.manager.connectedDevice?.publicKey)
             assertEquals(0, h.pairing.removeCalls)
+        }
+    }
+
+    @Test fun explicitAdapterFlagsReachTheRuntimeWithoutChangingExistingDefaultSync() = runTest {
+        withSettings { h, _ ->
+            val id = UUID.randomUUID()
+            h.manager.recordConnectionFailure()
+            try {
+                h.container.connectionPort.connect(id, forceReconnect = false)
+                fail("An ordinary call must not bypass the open BLE breaker")
+            } catch (expected: com.meshcoreone.android.core.runtime.ConnectionError.ConnectionFailed) {
+                assertEquals("Connection blocked by circuit breaker (cooling down)", expected.reason)
+            }
+            assertTrue(h.links.links.isEmpty())
+            val gate = CompletableDeferred<Unit>()
+            h.links.configureRadio = { it.connectGate = gate }
+            val connect = backgroundScope.async {
+                h.container.connectionPort.connect(id, forceFullSync = true, forceReconnect = true)
+            }
+            h.eventually("explicit adapter bypassed the BLE breaker") { h.links.links.isNotEmpty() }
+            assertEquals(id, (h.links.links.single().target as ConnectionTarget.Bluetooth).deviceId)
+            assertEquals(ConnectionIntent.WantsConnection(forceFullSync = true), h.manager.connectionIntent)
+            connect.cancelAndJoin()
+            assertFalse(h.appState.connectionUI.showingConnectionFailedAlert)
         }
     }
 

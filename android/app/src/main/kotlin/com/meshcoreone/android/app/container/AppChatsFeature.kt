@@ -578,17 +578,12 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                     is TimelineConversation.Channel -> null
                 }
             override suspend fun clearUnread(conversation: TimelineConversation) {
+                // A mounted read is not a durable OPEN receipt, so retain content taps for retry.
                 when (conversation) {
-                    is TimelineConversation.Direct -> {
+                    is TimelineConversation.Direct ->
                         store.clearUnreadCount(EntityKey(radio, conversation.contact.id))
-                        container.sessions.current?.takeIf { it.token.radioId == radio }?.notificationService
-                            ?.removeDeliveredNotifications(conversation.contact.id)
-                    }
-                    is TimelineConversation.Channel -> {
+                    is TimelineConversation.Channel ->
                         store.clearChannelUnreadCount(radio, conversation.channel.index)
-                        container.sessions.current?.takeIf { it.token.radioId == radio }?.notificationService
-                            ?.removeDeliveredNotifications(conversation.channel.index, radio)
-                    }
                 }
                 container.sessions.current?.notificationService?.updateBadgeCount()
                 app.refreshConversations()

@@ -168,3 +168,14 @@ storage owns per-wire `acceptedCode ?: predictedCode` and Room enforcement in
 separate. No delayed-ACK expiry, origin proof, send block or policy activation
 is introduced. This mismatch-corrected successor requires its own exact-head
 hosted compile/test run; the successful `167b8db` run above does not verify it.
+
+The first hosted run for `b8a8daeb345c7e41fba80424c9260b765c907453` is preserved
+as [run 41985924707](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41985924707).
+Compilation completed, but `:core:contracts:test` failed 6 assertions among the
+14 candidate methods. Review of the exact log showed assertion expectations
+omitted the intended combined `TARGET_ACCEPTANCE_UNRESOLVED`/cross-claim/
+wildcard reasons, expected the wrong PREPARED-target result, or omitted
+`UNREGISTERED_CODE` when only another claim matched. The implementation and
+those explicit nonsettling outcomes are retained; only those test expectations
+are corrected in the next immutable successor. The run did not complete the
+mandatory Android baseline and is not passing evidence.

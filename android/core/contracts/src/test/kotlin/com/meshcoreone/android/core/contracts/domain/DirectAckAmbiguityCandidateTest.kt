@@ -68,7 +68,7 @@ class DirectAckAmbiguityCandidateTest {
             assess(retry, 123u, SnapshotList.of(earlier, retry)),
         )
         assertEquals(
-            setOf(DirectAckNonsettlingReason.TARGET_ACCEPTANCE_UNRESOLVED),
+            setOf(DirectAckNonsettlingReason.PRE_WIRE),
             assertIs<DirectAckAmbiguityDecision.Nonsettling>(
                 assess(retry, 789u, SnapshotList.of(earlier, retry)),
             ).reasons,
@@ -126,7 +126,10 @@ class DirectAckAmbiguityCandidateTest {
         val old = wire(6, 7, 123u, 123u)
         val accepted = target.copy(acceptedCode = 456u)
         assertEquals(
-            setOf(DirectAckNonsettlingReason.KNOWN_CROSS_CLAIM_CODE),
+            setOf(
+                DirectAckNonsettlingReason.UNREGISTERED_CODE,
+                DirectAckNonsettlingReason.KNOWN_CROSS_CLAIM_CODE,
+            ),
             nonsettling(accepted, SnapshotList.of(old)).reasons,
         )
         assertSame(
@@ -144,7 +147,9 @@ class DirectAckAmbiguityCandidateTest {
         )
         assertEquals(
             setOf(DirectAckNonsettlingReason.KNOWN_CROSS_CLAIM_CODE),
-            nonsettling(target.copy(acceptedCode = 456u), SnapshotList.of(old)).reasons,
+            assertIs<DirectAckAmbiguityDecision.Nonsettling>(
+                assess(target.copy(acceptedCode = 456u), 456u, SnapshotList.of(old)),
+            ).reasons,
         )
     }
 
@@ -152,7 +157,10 @@ class DirectAckAmbiguityCandidateTest {
     fun unknownPriorActualIsWildcardEvenWhenPredictionsDiffer() {
         val old = wire(6, 7, UInt.MAX_VALUE)
         assertEquals(
-            setOf(DirectAckNonsettlingReason.UNRESOLVED_PRIOR_EMISSION),
+            setOf(
+                DirectAckNonsettlingReason.TARGET_ACCEPTANCE_UNRESOLVED,
+                DirectAckNonsettlingReason.UNRESOLVED_PRIOR_EMISSION,
+            ),
             nonsettling(target, SnapshotList.of(old)).reasons,
         )
     }
@@ -162,6 +170,7 @@ class DirectAckAmbiguityCandidateTest {
         val old = wire(6, 7, 123u).copy(emission = DirectAckEmissionEvidence.LEGACY_UNKNOWN)
         assertEquals(
             setOf(
+                DirectAckNonsettlingReason.TARGET_ACCEPTANCE_UNRESOLVED,
                 DirectAckNonsettlingReason.UNRESOLVED_PRIOR_EMISSION,
                 DirectAckNonsettlingReason.KNOWN_CROSS_CLAIM_CODE,
             ),
@@ -179,7 +188,7 @@ class DirectAckAmbiguityCandidateTest {
         val otherRadio = wire(8, 9, 123u).copy(radioId = RadioId(UUID(0, 10)))
         assertSame(
             DirectAckAmbiguityDecision.NoKnownAmbiguity,
-            assess(target, history = SnapshotList.of(prepared, otherRadio)),
+            assess(target.copy(acceptedCode = 123u), history = SnapshotList.of(prepared, otherRadio)),
         )
     }
 

@@ -57,7 +57,12 @@ import kotlinx.coroutines.launch
 
 /** Settings > Notifications. Call [NotificationSettingsStateHolder.onResume] from the host's lifecycle for the foreground refresh. */
 @Composable
-fun NotificationSettingsScreen(holder: NotificationSettingsStateHolder, navigator: SettingsNavigator, onDone: (() -> Unit)?) {
+fun NotificationSettingsScreen(
+    holder: NotificationSettingsStateHolder,
+    navigator: SettingsNavigator,
+    onDone: (() -> Unit)?,
+    notificationEnrollment: @Composable () -> Unit = {},
+) {
     HolderLifecycle(holder::start, holder::stop)
     val state by holder.state.collectAsState()
     val prefs = state.preferences
@@ -84,6 +89,7 @@ fun NotificationSettingsScreen(holder: NotificationSettingsStateHolder, navigato
                 else -> ActionRow(res(AppSettingsStrings.notificationsEnable), true, holder::requestAuthorization)
             }
         }
+        notificationEnrollment()
     }
 }
 

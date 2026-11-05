@@ -166,7 +166,9 @@ internal fun AppSettingsContent(
             NodeConfigSection(snapshot.state == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY,
                 { configPage = SettingsSubpage.ConfigExport }, { configPage = SettingsSubpage.ConfigImport })
         })
-        page == Page.NOTIFICATIONS -> NotificationSettingsScreen(holders.notifications, navigator, done)
+        page == Page.NOTIFICATIONS -> NotificationSettingsScreen(holders.notifications, navigator, done) {
+            com.meshcoreone.android.app.container.NotificationEnrollmentEntry(container.notificationEnrollment)
+        }
         page == Page.CHATS -> {
             Column(Modifier.fillMaxSize()) {
                 Box(Modifier.weight(1f)) { ChatSettingsScreen(holders.chat, navigator, done) }

@@ -556,8 +556,9 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
                     com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError.NotConnected,
                 ),
             )) {
-                val transport = h.links.radios.single()
+                val transport = h.links.radios.last()
                 val preparationStart = transport.sent.size
+                val transmissionsBefore = radio.channelTransmissions.size
                 val scopeOpcode = PacketBuilder.setFloodScope(FloodScope.Region("EU868").scopeKey())[0]
                 var encountered = false
                 transport.beforeSend = { command ->
@@ -578,9 +579,12 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
                     h.settle()
                     assertTrue(store.hasPendingSend(pendingKey), "Pre-send transient failures cannot delete the unsent envelope")
                     assertEquals(MessageStatus.PENDING, store.fetchMessage(pendingKey)?.status)
+                    assertEquals(transmissionsBefore, radio.channelTransmissions.size)
                     assertFalse(transport.sent.drop(preparationStart).any { it[0] == 0x1f.toUByte() }, "A scope timeout/lost connection is not a channel ERROR2")
                 } finally { transport.beforeSend = {} }
-                h.sessions.current!!.chatSendQueueService.transportDidOpen()
+                // A failed serialized scope exchange can retire its session; recover through the real runtime.
+                h.manager.disconnect()
+                h.manager.connect(h.target())
                 h.eventually("the same parked envelope transmits after scope preparation recovers") {
                     kotlinx.coroutines.runBlocking {
                         store.fetchMessage(pendingKey)?.status == MessageStatus.SENT && !store.hasPendingSend(pendingKey)
@@ -595,7 +599,7 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
                         ?.status == com.meshcoreone.android.core.model.MessageStatus.SENT
                 }
             }
-            val frames = h.links.radios.single().sent
+            val frames = h.links.radios.last().sent
             assertTrue(frames.indexOf(radio.channelTransmissions.last()) > frames.lastIndexOf(radio.activeScopes.last()))
             assertEquals("EU868", radio.mode)
         }

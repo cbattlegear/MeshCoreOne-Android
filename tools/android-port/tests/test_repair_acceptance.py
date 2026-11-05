@@ -1750,6 +1750,11 @@ class RepairExecutionTests(unittest.TestCase):
         )
         self.assertEqual(classes, {"runsAtEverySdk": "sample.ConfiguredTest"})
         self.assertEqual(configurations, {"runsAtEverySdk": (31, 37)})
+        configurations = {}
+        _kotlin_junit_methods(
+            source.replace("[31, 37]", "[31, 37,]"), sdk_configurations=configurations,
+        )
+        self.assertEqual(configurations, {"runsAtEverySdk": (31, 37)})
 
         method_source = """
             import org.junit.Test
@@ -1762,10 +1767,47 @@ class RepairExecutionTests(unittest.TestCase):
         for unsupported in (
             source.replace("[31, 37]", "sdkProvider()"),
             source.replace("[31, 37]", "[31, 31]"),
+            source.replace("[31, 37]", "[]"),
+            source.replace("[31, 37]", "[31,,]"),
         ):
             with self.subTest(source=unsupported), self.assertRaises(PortError):
                 configurations = {}
                 _kotlin_junit_methods(unsupported, sdk_configurations=configurations)
+
+    def test_kotlin_sdk_configuration_preserves_escaped_parameters_and_lexical_scope(self):
+        from controller.repair_acceptance import _kotlin_junit_methods
+
+        source = """
+            package sample
+            import org.junit.Test
+            import org.robolectric.annotation.Config
+            @Config(sdk = [31, 37])
+            class SdkFamilyTest { @Test fun required() {} }
+            class Fixture { @Config(sdk = [37]) class SdkFamilyTest {} }
+        """
+        for configured in (source, source.replace("sdk =", "`sdk` =")):
+            configurations = {}
+            _kotlin_junit_methods(configured, sdk_configurations=configurations)
+            self.assertEqual(configurations, {"required": (31, 37)})
+        for parameter in ("minSdk", "maxSdk", "`minSdk`", "`maxSdk`"):
+            with self.subTest(parameter=parameter), self.assertRaisesRegex(PortError, "SDK range"):
+                _kotlin_junit_methods(
+                    source.replace("sdk = [31, 37]", parameter + " = 31"), sdk_configurations={},
+                )
+        inherited = """
+            import org.junit.Test
+            import org.robolectric.annotation.Config
+            @Config(sdk = [31, 37]) open class Base {}
+            class Child : Base() { @Test fun required() {} }
+        """
+        with self.assertRaisesRegex(PortError, "inherited Robolectric SDK configuration"):
+            _kotlin_junit_methods(inherited, sdk_configurations={})
+        configurations = {}
+        _kotlin_junit_methods(
+            inherited.replace("class Child", "@Config(sdk = [37]) class Child"),
+            sdk_configurations=configurations,
+        )
+        self.assertEqual(configurations, {"required": (37,)})
 
     def test_grouped_annotations_fail_closed_without_rejecting_literals_or_comments(self):
         from controller.repair_acceptance import _kotlin_junit_methods

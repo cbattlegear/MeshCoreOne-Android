@@ -387,6 +387,9 @@ class LocalScopeBindingTests(unittest.TestCase):
         (control / "local_scope.py").write_bytes(
             (source / "tools/android-port/controller/local_scope.py").read_bytes())
         (control / "fast.py").write_bytes((source / "tools/android-port/local/fast.py").read_bytes())
+        collector = control / "verify_candidate_task_graph.gradle"
+        collector.write_bytes(
+            (source / "tools/android-port/controller/verify_candidate_task_graph.gradle").read_bytes())
         spec = importlib.util.spec_from_file_location("owned_fast_fixture", control / "fast.py")
         fast = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(fast)
@@ -456,6 +459,7 @@ class LocalScopeBindingTests(unittest.TestCase):
                     "--affected-plan", str(self.repo / "request.json"), "--affected-base", base,
                 ]), patch.object(Path, "read_text", new=read_text), \
                 patch.object(fast, "execution_lane", return_value=None), \
+                patch.object(fast, "owned_verification", return_value=collector), \
                 patch.object(fast, "execute", side_effect=complete), \
                 patch.object(ci_environment, "candidate_environment", return_value={}), \
                 patch.object(ci_environment, "verify_wrapper"), \
@@ -468,6 +472,8 @@ class LocalScopeBindingTests(unittest.TestCase):
             else:
                 fast.main()
         self.assertEqual(len(calls), 2)
+        for command in calls:
+            self.assertEqual(command[-2:], ["--init-script", str(collector)])
         preflight_tasks = ["validateModuleGraph", "runtimeDependencyInventory"]
         build_tasks = [task for task in plan["tasks"] if task not in preflight_tasks]
         self.assertEqual(self.requested_gradle_tasks(calls[0]), preflight_tasks)

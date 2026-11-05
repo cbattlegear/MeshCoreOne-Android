@@ -1396,7 +1396,7 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
 
         found, cursor, nesting = [], 0, []
         while cursor < len(arguments):
-            value = arguments[cursor]
+            value = arguments[cursor].strip("`")
             if not nesting and value in ("minSdk", "maxSdk"):
                 raise PortError("Unsupported Robolectric SDK range in hosted test source")
             if not nesting and value == "sdk" and cursor + 1 < len(arguments) and arguments[cursor + 1] == "=":
@@ -1413,7 +1413,7 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
                             if arguments[cursor] != ",":
                                 raise PortError("Unsupported Robolectric SDK configuration in hosted test source")
                             cursor += 1
-                            if cursor >= len(arguments) or arguments[cursor] == "]":
+                            if cursor >= len(arguments):
                                 raise PortError("Unsupported Robolectric SDK configuration in hosted test source")
                     if cursor >= len(arguments) or not values:
                         raise PortError("Unsupported Robolectric SDK configuration in hosted test source")
@@ -1495,7 +1495,7 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
                     index += 1
                 if stack:
                     raise PortError("Unclosed Kotlin annotation in hosted test source")
-        if has_config and index < len(tokens) and tokens[index] == "class":
+        if has_config and index < len(tokens) and tokens[index] == "class" and not scopes[index]:
             if index + 1 >= len(tokens) or not name_token(tokens[index + 1]):
                 raise PortError("Cannot establish Robolectric Config class identity")
             class_name = (package + "." if package else "") + tokens[index + 1].strip("`")
@@ -1542,6 +1542,11 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
             sdk_configurations[name] = (
                 method_sdk_configurations.get(name) or class_sdk_configurations.get(test_class)
             )
+            declaration = next((record for record in declarations.values() if record["name"] == test_class), None)
+            if sdk_configurations[name] is None and (
+                declaration is None or declaration["parents"] != [] or declaration["uncertain"]
+            ):
+                raise PortError("Cannot establish inherited Robolectric SDK configuration for " + test_class)
     return methods
 
 

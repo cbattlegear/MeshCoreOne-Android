@@ -368,6 +368,12 @@ retain their existing order. Gradle still schedules prerequisites, so this is
 not a measured wall-clock speedup. The trusted scope planner travels with the
 owned launcher so immutable older product snapshots use the same strict plan
 validation and requested task order without a product rebase.
+The owned control directory also carries the compatible module JUnit reader,
+SDK/source-lineage parser, evidence/publication dependencies and task-graph
+compiler-source collector. Both default and affected local routes load these
+owned readers and use that collector, rather than importing older candidate
+helpers or changing candidate product bytes. A missing owned dependency fails
+closed before execution; it never falls back to a candidate copy.
 The actual resolved production graph is checked against the selected consumer
 closure too: a consumer missed by static declaration inspection fails the
 affected run and explicitly requires full scaffold, never a passing partial result.
@@ -551,7 +557,13 @@ including suffix-only executions for non-SDK parameter families. Notification
 tests in either root with explicit literal Robolectric
 `@Config(sdk = [31, 37])` require both the unsuffixed API-37 execution and `[31]`;
 an explicit single API-31 or API-37 configuration requires the unsuffixed execution.
-Method-level SDK overrides take precedence over class-level SDKs. Dynamic SDK
+Method-level SDK overrides take precedence over top-level class SDKs; an unrelated
+nested class cannot replace that configuration. Escaped parameter names and a
+trailing array comma retain their Kotlin meaning. A test class with a superclass
+must supply a literal method/class SDK override: unresolved inherited SDK settings
+fail closed rather than becoming an unconfigured family. JUnit-free helper
+sources still require immutable lineage proof and an executed compiled consumer.
+Dynamic SDK
 expressions, SDK ranges, unsupported families and missing/duplicate/unexpected
 family executions fail closed. These names prove JVM runner discovery, not device
 coverage. The exact candidate build, production, conventional test

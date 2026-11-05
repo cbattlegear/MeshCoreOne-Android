@@ -484,6 +484,7 @@ def validation_preflight_options(options):
 
 def run_scaffold(
     repo, plan, environment, output, execute, options, *, trusted_base, merge_base_only=False,
+    task_graph_script=None,
 ):
     """Execute fixed affected tasks through the already-owned local supervisor."""
     started = False
@@ -497,6 +498,7 @@ def run_scaffold(
         return _run_scaffold(
             repo, plan, environment, output, owned_execute, options,
             trusted_base=trusted_base, merge_base_only=merge_base_only,
+            task_graph_script=task_graph_script,
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, PortError, OSError, KeyboardInterrupt) as failure:
         if started:
@@ -546,6 +548,7 @@ def run_scaffold(
 
 def _run_scaffold(
     repo, plan, environment, output, execute, options, *, trusted_base, merge_base_only=False,
+    task_graph_script=None,
 ):
     from . import ci
     from .ci_evidence import (
@@ -583,7 +586,7 @@ def _run_scaffold(
         if graph.is_symlink():
             raise PortError("Linked resolved task graph")
         graph.unlink(missing_ok=True)
-    init_script = str(repo / "tools/android-port/controller/verify_candidate_task_graph.gradle")
+    init_script = str(task_graph_script or repo / "tools/android-port/controller/verify_candidate_task_graph.gradle")
     lineage_path = prepare_test_lineage(output)
     sources_path = prepare_test_sources(output)
     graph_summaries = {}

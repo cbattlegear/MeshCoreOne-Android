@@ -42,6 +42,28 @@ def owned_scope():
     return module
 
 
+def owned_verification(repo):
+    source = Path(__file__).resolve().parent
+    if source == (repo / "tools/android-port/local").resolve():
+        return repo / "tools/android-port/controller/verify_candidate_task_graph.gradle"
+    import controller
+    from controller.errors import PortError
+
+    for name in ("ci_evidence", "publication", "repair_acceptance", "module_junit"):
+        path = source / (name + ".py")
+        if path.is_symlink() or not path.is_file():
+            raise PortError("Missing or unsafe owned verification dependency: " + name)
+        spec = importlib.util.spec_from_file_location("controller." + name, path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        setattr(controller, name, module)
+    script = source / "verify_candidate_task_graph.gradle"
+    if script.is_symlink() or not script.is_file():
+        raise PortError("Missing or unsafe owned compiler-source collector")
+    return script
+
+
 def execution_lane(work):
     descriptor = Path("/proc/self/fd/8")
     if not descriptor.is_file():
@@ -112,6 +134,7 @@ def main():
     parser.add_argument("--affected-base")
     args = parser.parse_args()
     sys.path.insert(0, str(args.repo / "tools" / "android-port"))
+    task_graph_script = owned_verification(args.repo)
     from controller import ci
     from controller.ci_environment import candidate_environment, verify_wrapper, write_json
     from controller.ci_evidence import (
@@ -158,7 +181,7 @@ def main():
             if plan is not None:
                 report = owned_scope().run_scaffold(
                     args.repo, plan, environment, args.output, execute, options,
-                    trusted_base=args.affected_base)
+                    trusted_base=args.affected_base, task_graph_script=task_graph_script)
                 print(json.dumps(report, indent=2), flush=True)
                 print(f"===== PASS: {stage} =====", flush=True)
                 continue
@@ -193,8 +216,7 @@ def main():
                 "ANDROID_CI_TASK_GRAPH": str(graph_path),
             }
             execute([str(args.repo / "android" / "gradlew"), "-p", str(project),
-                     *tasks, *options, "--init-script", str(
-                         args.repo / "tools/android-port/controller/verify_candidate_task_graph.gradle")],
+                     *tasks, *options, "--init-script", str(task_graph_script)],
                     args.repo, task_environment, args.output / f"gradle-{stage}.log")
             report = {"stage": stage, "result": "success", "tasks": tasks, "warm_cache": True}
             report["resolved_task_graph"] = ci.validate_candidate_task_graph(graph_path, tasks)

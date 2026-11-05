@@ -252,7 +252,7 @@ class ModuleJUnitTests(unittest.TestCase):
         self.assertEqual(len(executed["platform/notifications"]), 6)
         self.assertEqual(
             {coverage["path"] for coverage in scope["coverage"]},
-            remapped,
+            set(compiled["platform/notifications"]),
         )
         self.assertEqual(report.parent.name, "testDebugUnitTest")
 
@@ -418,6 +418,8 @@ class SdkFamilyTest {
                         "fast.py", "--repo", str(self.repo), "--work", str(work),
                         "--output", str(output), "--stages", "scaffold",
                     ]), patch.object(fast, "execution_lane", return_value=None), \
+                    patch.object(fast, "owned_verification", return_value=(
+                        self.repo / "tools/android-port/controller/verify_candidate_task_graph.gradle")), \
                     patch.object(fast, "execute", side_effect=execute), \
                     patch.object(ci_environment, "candidate_environment", return_value={}), \
                     patch.object(ci_environment, "verify_wrapper"), \
@@ -502,11 +504,23 @@ class AdapterTest { @Test fun conventionalRequired() {} }
         self.notifications()
         self.source("platform/notifications", "src/test/kotlin/ConfiguredAdapterTest.kt", """
 package com.meshcoreone.android.platform.notifications.messaging
+import android.app.NotificationManager
 import org.junit.Test
 import org.robolectric.annotation.Config
-@Config(sdk = [31, 37])
-class ConfiguredAdapterTest { @Test fun conventionalRequired() {} }
+import org.robolectric.annotation.Implements
+import org.robolectric.annotation.Implementation
+import org.robolectric.shadows.ShadowNotificationManager
+@Config(`sdk` = [31, 37,])
+class ConfiguredAdapterTest {
+    @Test fun conventionalRequired() {}
+    @Implements(NotificationManager::class)
+    class CountingNotificationManager : ShadowNotificationManager() {
+        @Implementation
+        fun notify(tag: String?, id: Int) {}
+    }
+}
 class GenericAdapterTest { @Test fun genericParameters() {} }
+class Fixture { @Config(sdk = [37]) class ConfiguredAdapterTest {} }
 """)
         self.command("add", "--all")
         self.command("commit", "--quiet", "-m", "conventional explicit SDK family")
@@ -524,6 +538,68 @@ class GenericAdapterTest { @Test fun genericParameters() {} }
                 check_module_tests(self.repo, compiled)
         notification_report(self.repo, NOTIFICATION_CASES | {generic, base, sdk31})
         self.assertEqual(check_module_tests(self.repo, compiled)["platform/notifications"]["passed"], 9)
+
+    def test_conventional_inherited_only_suite_cannot_hide_as_a_helper(self):
+        self.notifications()
+        self.source("platform/notifications", "src/test/kotlin/BaseTest.kt", """
+package sample
+import org.junit.Test
+open class BaseTest { @Test fun inheritedRequired() {} }
+""")
+        self.source("platform/notifications", "src/test/kotlin/InheritedTest.kt", """
+package sample
+class InheritedTest : BaseTest() {}
+""")
+        self.command("add", "--all")
+        self.command("commit", "--quiet", "-m", "inherited-only conventional suite")
+        notification_report(self.repo, NOTIFICATION_CASES | {("sample.BaseTest", "inheritedRequired")})
+        with self.assertRaisesRegex(PortError, "inherited Kotlin JUnit"):
+            check_module_tests(self.repo, self.compiled_notification_sources())
+
+    def test_conventional_junit_free_inherited_helper_has_verified_consumer(self):
+        self.notifications()
+        self.source("platform/notifications", "src/test/kotlin/Helper.kt", """
+package sample
+open class HelperBase { fun support() {} }
+class Helper : HelperBase() {}
+""")
+        self.command("add", "--all")
+        self.command("commit", "--quiet", "-m", "JUnit-free conventional helper")
+        self.assertEqual(check_module_tests(
+            self.repo, self.compiled_notification_sources(),
+        )["platform/notifications"]["passed"], 6)
+
+    def test_conventional_inherited_sdk_requires_explicit_resolved_configuration(self):
+        self.notifications()
+        self.source("platform/notifications", "src/test/kotlin/ConfiguredBase.kt", """
+package sample
+import org.robolectric.annotation.Config
+@Config(sdk = [31, 37])
+open class ConfiguredBase {}
+""")
+        child = "src/test/kotlin/ChildTest.kt"
+        self.source("platform/notifications", child, """
+package sample
+import org.junit.Test
+class ChildTest : ConfiguredBase() { @Test fun inheritedSdk() {} }
+""")
+        self.command("add", "--all")
+        self.command("commit", "--quiet", "-m", "unresolved inherited SDK family")
+        notification_report(self.repo, NOTIFICATION_CASES | {("sample.ChildTest", "inheritedSdk")})
+        with self.assertRaisesRegex(PortError, "inherited Robolectric SDK configuration"):
+            check_module_tests(self.repo, self.compiled_notification_sources())
+        self.source("platform/notifications", child, """
+package sample
+import org.junit.Test
+import org.robolectric.annotation.Config
+@Config(sdk = [37])
+class ChildTest : ConfiguredBase() { @Test fun inheritedSdk() {} }
+""")
+        self.command("add", "--all")
+        self.command("commit", "--quiet", "-m", "explicit child SDK override")
+        self.assertEqual(check_module_tests(
+            self.repo, self.compiled_notification_sources(),
+        )["platform/notifications"]["passed"], 7)
 
     def test_unsupported_java_notification_test_input_fails_closed(self):
         self.notifications()

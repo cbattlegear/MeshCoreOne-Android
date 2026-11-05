@@ -865,6 +865,93 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
         }
     }
 
+    @Test fun failedClearRetirementSurvivesASameRadioReconnectBeforeTheNextCycle() = runTest {
+        println("WP305_REPEAT_CLEAR|reconnected-retirement|START")
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var failClear = true
+        val held = object : PersistenceStoreProtocol by store {
+            override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+                if (failClear && expected.device.preRepeatFrequency != null && dto.preRepeatFrequency == null) {
+                    failClear = false
+                    entered.complete(Unit)
+                    release.await()
+                    throw PersistenceStoreException(PersistenceStoreError.SaveFailed("Retirement failed before reconnect"))
+                }
+                return store.saveDeviceIfUnchanged(dto, expected)
+            }
+        }
+        try {
+            withRepeat(held) { h, holder, failures, radio ->
+                val before = assertNotNull(h.manager.connectedDevice)
+                val oldToken = assertNotNull(h.sessions.current).token
+                holder.onRepeatToggled(true)
+                holder.confirmEnableRepeatMode()
+                h.eventually("Repeat active before failed retirement and reconnect") {
+                    !holder.state.value.isApplyingRepeat && holder.state.value.device?.clientRepeat == true
+                }
+                holder.onRepeatToggled(false)
+                h.eventually("clear held after old generation durably restores Repeat off") { entered.isCompleted }
+                val consumed = assertNotNull(store.fetchDevice(before.id))
+                assertFalse(consumed.clientRepeat)
+                assertEquals(before.frequency, consumed.preRepeatFrequency)
+                release.complete(Unit)
+                h.eventually("clear failure is visible before reconnect") {
+                    !holder.state.value.isApplyingRepeat && failures.isNotEmpty()
+                }
+                assertEquals(consumed, store.fetchDevice(before.id))
+                h.manager.disconnect()
+                radio.repeatOnNextConnection = true
+                h.manager.connect(h.target(before.id))
+                h.eventually("same radio reconnects with a fresh observed generation") {
+                    h.sessions.current?.token != oldToken &&
+                        h.sessions.current?.syncCoordinator?.state == SyncState.Synced &&
+                        h.appState.canRunSettingsStartupReads &&
+                        holder.state.value.sessionToken == h.sessions.current?.token
+                }
+                val nextToken = assertNotNull(h.sessions.current).token
+                assertEquals(oldToken.radioId, nextToken.radioId)
+                assertTrue(oldToken != nextToken)
+                val successor = assertNotNull(store.fetchDevice(before.id))
+                assertTrue(successor.clientRepeat, "Active reconnect really preserves the consumed snapshot")
+                assertEquals(before.frequency, successor.preRepeatFrequency)
+                assertFalse(h.container.deviceEditor.clearPreRepeatSettings(oldToken))
+                assertEquals(successor, store.fetchDevice(before.id))
+                val manualFrequency = if (before.frequency == 868_000u) 915_000u else 868_000u
+                assertNotNull(h.sessions.current).settingsService.setRadioParamsPersisted(
+                    manualFrequency, before.bandwidth, before.spreadingFactor, before.codingRate, false,
+                )
+                h.eventually("successor observes manual RF with Repeat off") {
+                    holder.state.value.device?.frequency == manualFrequency && !holder.state.value.isRepeatEnabled
+                }
+                assertEquals(before.frequency, store.fetchDevice(before.id)!!.preRepeatFrequency)
+                holder.onRepeatToggled(true)
+                holder.confirmEnableRepeatMode()
+                h.eventually("new generation enables after reconciling old retirement") {
+                    !holder.state.value.isApplyingRepeat && holder.state.value.device?.clientRepeat == true
+                }
+                assertEquals(manualFrequency, store.fetchDevice(before.id)!!.preRepeatFrequency,
+                    "A fresh token must not make a consumed baseline reusable")
+                holder.onRepeatToggled(false)
+                h.eventually("new generation restores its own manual baseline") {
+                    !holder.state.value.isApplyingRepeat && h.manager.connectedDevice?.clientRepeat == false
+                }
+                val restored = assertNotNull(store.fetchDevice(before.id))
+                assertEquals(manualFrequency, restored.frequency)
+                assertEquals(before.bandwidth, restored.bandwidth)
+                assertEquals(before.spreadingFactor, restored.spreadingFactor)
+                assertEquals(before.codingRate, restored.codingRate)
+                assertNull(restored.preRepeatFrequency)
+                assertNull(restored.preRepeatBandwidth)
+                assertNull(restored.preRepeatSpreadingFactor)
+                assertNull(restored.preRepeatCodingRate)
+                assertEquals(restored, h.manager.connectedDevice)
+                assertEquals(listOf(1, 0, 0, 1, 0), radio.radioWrites.map { it[11].toInt() })
+            }
+        } finally { release.complete(Unit) }
+        println("WP305_REPEAT_CLEAR|reconnected-retirement|END|SUCCESS")
+    }
+
     @Test fun committedSiblingClearDuringRestoreReadbackCannotResurrectAnObsoleteRetirement() = runTest {
         println("WP305_REPEAT_CLEAR|late-registration|START")
         for (replacement in listOf("clear", "nonempty", "aba")) {
@@ -980,7 +1067,7 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
 
     @Test fun confirmedRestoreRetirementIsSharedAcrossEditorsAndRejectsSnapshotAba() = runTest {
         println("WP305_REPEAT_CLEAR|shared-retirement|START")
-        for (aba in listOf(false, true)) {
+        for (change in listOf("revision", "snapshot-aba", "identity", "identity-aba")) {
             withRepeat(store) { h, _, _, radio ->
                 val token = assertNotNull(h.sessions.current).token
                 val original = assertNotNull(h.manager.connectedDevice)
@@ -1000,9 +1087,14 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                         RadioPresetMatcher { _, _, _, _ -> emptySet() }, backgroundScope, { java.time.Instant.EPOCH },
                     )
                     assertTrue(store.repeatSnapshotAuthority === alternate.repeatSnapshotAuthority)
-                    if (aba) {
-                        store.saveDevice(restored.copy(preRepeatBandwidth = restored.bandwidth + 1u))
-                        store.saveDevice(restored)
+                    if (change != "revision") {
+                        val changed = if (change == "snapshot-aba") {
+                            restored.copy(preRepeatBandwidth = restored.bandwidth + 1u)
+                        } else restored.copy(publicKey = key(92))
+                        store.saveDevice(changed)
+                        if (change != "identity") store.saveDevice(restored)
+                        val current = assertNotNull(store.fetchDevice(saved.id))
+                        editor.updateDevice(current)
                         val writes = radio.radioWrites.toList()
                         assertIs<RepeatSnapshotClearRequired>(
                             runCatching { sibling.savePreRepeatSettings(token) }.exceptionOrNull(),
@@ -1010,11 +1102,16 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                         assertIs<RepeatSnapshotClearRequired>(
                             runCatching { sibling.validatePreRepeatSettings(token) }.exceptionOrNull(),
                         )
-                        assertEquals(restored, store.fetchDevice(saved.id))
+                        assertEquals(current, store.fetchDevice(saved.id))
                         assertEquals(writes, radio.radioWrites)
-                        val cleared = restored.clearingPreRepeatSettings()
+                        val cleared = current.clearingPreRepeatSettings()
                         store.saveDevice(cleared)
                         editor.updateDevice(cleared)
+                        if (change == "identity") {
+                            val originalIdentity = cleared.copy(publicKey = original.publicKey)
+                            store.saveDevice(originalIdentity)
+                            editor.updateDevice(originalIdentity)
+                        }
                         assertTrue(sibling.savePreRepeatSettings(token))
                     } else {
                         val changed = restored.copy(pathHashMode = 2u)
@@ -1032,7 +1129,7 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                     assertNull(store.fetchDevice(saved.id)!!.preRepeatFrequency)
                 } finally { alternate.close() }
             }
-            println("WP305_REPEAT_CLEAR|shared-retirement|aba=$aba|END|SUCCESS")
+            println("WP305_REPEAT_CLEAR|shared-retirement|$change|END|SUCCESS")
         }
     }
 
@@ -1361,6 +1458,16 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                     assertEquals(durable, store.fetchDevice(successor.id))
                     if (clear) assertNotNull(durable?.preRepeatFrequency, "Old clear cannot erase the successor restoration snapshot")
                     else assertNull(durable?.preRepeatFrequency, "Old save cannot create a successor snapshot")
+                    if (clear) {
+                        assertIs<RepeatSnapshotClearRequired>(
+                            runCatching { h.container.deviceEditor.savePreRepeatSettings(successorToken) }.exceptionOrNull(),
+                            "An active successor cannot reuse the old consumed baseline merely by changing tokens",
+                        )
+                        assertEquals(durable, store.fetchDevice(successor.id))
+                        val explicitlyCleared = assertNotNull(durable).clearingPreRepeatSettings()
+                        store.saveDevice(explicitlyCleared)
+                        h.container.deviceEditor.updateDevice(explicitlyCleared)
+                    }
                     assertTrue(h.container.deviceEditor.savePreRepeatSettings(successorToken))
                     assertNotNull(store.fetchDevice(successor.id)?.preRepeatFrequency, "A fresh successor action remains supported")
                 }

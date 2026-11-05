@@ -472,3 +472,56 @@ The focused lane fixtures are declared by
 The local hook suite also contains real Linux shell/flock/pidfd fixtures using
 test-owned stub work, not Gradle; native Windows instead proves rejection before
 Linux launch. Neither outcome is real remote parallel product acceptance.
+
+### Approved remapped JVM inputs
+
+Notification messaging tests under `src/androidTest` are also JVM inputs only for
+the explicitly supported notification build profiles. The verifier recognizes
+the complete immutable `build.gradle.kts` blobs `9c5e1f4f6ed16f68ff629e6768afdd9185d2da61`
+(current notification mapping) and `1edcfc21437134ff7eb4bc431ffd6358c6967bab`
+(the same mapping plus #515 task wiring). This is a bounded allowlist, not a Gradle
+interpreter. A missing/changed/dynamic/unsafe build mapping fails closed; changing
+that build requires a reviewed profile update. An unrelated instrumentation tree
+does not become JVM test evidence.
+
+Affected and full selection explicitly request `:platform:notifications:testDebugUnitTest`.
+Its existing JUnit and compiled-source collectors must discover every declared
+remapped and conventional `src/test`/`src/testDebug` Kotlin test methods,
+including new candidate methods, plus the six mandatory delivery/payload/dispatcher
+identities. Missing, zero, substituted or skipped cases fail. Unsupported Java
+test sources fail closed. The exact candidate build, production, conventional test
+and approved remapped input blobs are recorded as `remapped_jvm_inputs` in the same
+run log. Tracked changes and untracked additions under those inputs are refused,
+and the actual compiled Kotlin test-source inventory must exactly match candidate
+blobs across both source roots. These are JVM/Robolectric observations, never
+API/device or notification trampoline evidence. A candidate verifier change
+cannot approve itself: trusted reader deployment and admission are separate from
+these source fixtures.
+
+Focused source-only remapping and selector regression command (no Gradle lock,
+runtime installation or device execution):
+
+```powershell
+$env:PYTHONPATH = "$PWD\tools\android-port;$PWD\tools\android-port\tests"
+python -B -c "import unittest; from controller.test_runner import run_suite; raise SystemExit(run_suite(unittest.TestLoader().loadTestsFromNames(['test_module_junit', 'test_local_scope', 'test_ci'])))"
+```
+
+Focused source/launcher integration fixtures (no real Gradle/native/runtime
+deployment) can run within the light-source capacity lane:
+
+```powershell
+$env:PYTHONPATH = "$PWD\tools\android-port;$PWD\tools\android-port\local;$PWD\tools\android-port\tests"
+python -m unittest test_local_scope hook_test.AffectedRunnerTests hook_test.LocalCheckTests.test_affected_scope_cannot_replace_full_pre_push_adapter_or_result_contract hook_test.LocalCheckTests.test_explicit_affected_contract_forwards_base_and_additional_scopes_only hook_test.LocalCheckTests.test_shell_forwards_scoped_request_through_existing_supervision_only -v
+```
+
+The declared strict controller/local suites remain:
+
+```powershell
+python .\tools\android-port\controller\test_runner.py --quiet
+python .\tools\android-port\controller\test_runner.py --tests .\tools\android-port\local --quiet
+```
+
+These Python suites establish source behavior only. Serialize their full runs
+under the coordinator's current host capacity decision. Do not persist a second
+CI-result bundle: the exact-commit hosted job and log remain final automated
+candidate authority.

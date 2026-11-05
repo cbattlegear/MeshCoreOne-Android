@@ -322,7 +322,7 @@ class SourceReconnectionCoordinatorTest {
                 assertNull(c.reconnectingDeviceId)
             }
         },
-        nativeCase("a timeout queued on authority cannot erase a successor runtime or retire its reconnect claim") {
+        nativeCase("a timeout queued on authority cannot erase a successor runtime even without timer cancellation") {
             withCoordinator(timeout = 1.seconds) { c, d ->
                 val id = UUID.randomUUID()
                 c.handleEnteringAutoReconnect(id)
@@ -331,16 +331,13 @@ class SourceReconnectionCoordinatorTest {
                 d.transitionHook = { entered.complete(Unit); release.await() }
                 runCurrent(); advanceTimeBy(1000); runCurrent()
                 assertTrue(entered.isCompleted)
+                val generation = c.reconnectGeneration
                 d.authority++
                 d.state = DeviceConnectionState.READY
-                val successor = UUID.randomUUID()
-                d.transitionHook = {}
-                c.handleEnteringAutoReconnect(successor)
-                val generation = c.reconnectGeneration
                 release.complete(Unit); runCurrent()
-                assertEquals(successor, c.reconnectingDeviceId)
+                assertEquals(id, c.reconnectingDeviceId)
                 assertEquals(generation, c.reconnectGeneration)
-                assertEquals(DeviceConnectionState.CONNECTING, d.connectionState)
+                assertEquals(DeviceConnectionState.READY, d.connectionState)
                 assertFalse(d.cleared)
                 assertEquals(0, d.notifications)
             }

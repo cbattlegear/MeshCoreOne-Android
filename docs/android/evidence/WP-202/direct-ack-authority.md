@@ -269,3 +269,11 @@ observe the same in-transaction erasure, then assert exact restoration of every
 history, product row and current grant after rollback. These are source assertions,
 not executed or passing evidence. Existing exact-head normal run 41965047472
 predates this follow-up and cannot establish its execution.
+
+An additional public `AppBackupService.importBackup` control uses a real unchanged
+envelope and asserts the actual MESSAGES skipped/inserted/merged counts. Its
+before-commit hook directly inspects all four erased histories. Success retains
+the erasure; injected typed failure and cancellation restore exact history rows
+and current permission. All paths preserve the ordinary message and pending
+rows. This companion avoids treating a manually simulated skip as importer
+execution; it too remains authored rather than executed evidence.

@@ -7,6 +7,11 @@ import androidx.room.RoomDatabase
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.database.*
+import com.meshcoreone.android.core.data.backup.AppBackupCodec
+import com.meshcoreone.android.core.data.backup.AppBackupService
+import com.meshcoreone.android.core.data.backup.BackupImportHooks
+import com.meshcoreone.android.core.data.backup.BackupModelKind
+import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.model.*
 import java.util.UUID
 import java.util.concurrent.Executor
@@ -485,6 +490,75 @@ class DirectAckAuthorityPersistenceTest {
             assertEquals(DirectAckPermission.CURRENT, observed(claim).permission)
             assertIs<DirectAckMutationResult.Applied>(store.completeDirectPending(claim.attempt, queued.id, UUID.randomUUID()))
         }
+    }
+
+    @Test fun publicBackupImporterDuplicateSkipAndBeforeCommitFailuresHonorHistoryErasureTransaction() = runTest {
+        val storage = MeshCoreStorage.get(context)
+        try {
+            val lease = activate()
+            val device = device()
+            store.saveDevice(device)
+            store.saveContact(contact())
+            for (outcome in listOf("commit", "failure", "cancel")) {
+                val row = message()
+                val queued = pending(messageID = row.id)
+                store.upsertPendingSend(queued)
+                val claim = begin(row, pendingId = queued.id, lease = lease)
+                val request = UUID.randomUUID()
+                assertIs<DirectPendingCaptureResult.Captured>(
+                    store.captureDirectPendingCompletion(lease, entity(id = row.id), queued.id, request,
+                        DirectPendingCompletionReason.ZeroAttempts(0)),
+                )
+                store.settleDirectAck(claim.attempt, 123u, 7u)
+                val product = assertNotNull(store.fetchMessage(entity(id = row.id)))
+                val claims = db.directAcks().claim(RADIO_A.value, claim.request)
+                val deliveries = db.directAcks().delivery(RADIO_A.value, claim.request)
+                val intents = db.directAcks().intent(RADIO_A.value, claim.request)
+                val completions = db.directAcks().pendingCompletion(RADIO_A.value, request)
+                val backup = com.meshcoreone.android.core.data.backup.envelope(
+                    devices = listOf(device), contacts = listOf(contact()), messages = listOf(product),
+                )
+                var beforeCommitReached = false
+                val service = AppBackupService(AppBackupCodec(), storage.backupPreferences, "1.0", "1",
+                    RepositoryClock(), BackupImportHooks(beforeCommit = {
+                        beforeCommitReached = true
+                        assertPayloadColumnsNull("direct_ack_claims", row.id, "snapshot_")
+                        assertPayloadColumnsNull("direct_ack_deliveries", row.id, "snapshot_")
+                        assertPayloadColumnsNull("direct_ack_intents", row.id, "message_", "pending_")
+                        assertPayloadColumnsNull("direct_pending_completions", row.id, "message_", "pending_")
+                        when (outcome) {
+                            "failure" -> throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+                            "cancel" -> throw CancellationException("Controlled public importer cancellation")
+                        }
+                    }))
+                when (outcome) {
+                    "commit" -> {
+                        val result = service.importBackup(backup, store)
+                        val counts = result.counts.getValue(BackupModelKind.MESSAGES)
+                        assertEquals(1L, counts.skipped)
+                        assertEquals(0L, counts.inserted)
+                        assertEquals(0L, counts.merged)
+                        assertPayloadColumnsNull("direct_ack_claims", row.id, "snapshot_")
+                        assertPayloadColumnsNull("direct_ack_deliveries", row.id, "snapshot_")
+                        assertPayloadColumnsNull("direct_ack_intents", row.id, "message_", "pending_")
+                        assertPayloadColumnsNull("direct_pending_completions", row.id, "message_", "pending_")
+                        assertEquals(DirectAckPermission.INVALIDATED, observed(claim).permission)
+                    }
+                    "failure" -> assertFailsWith<AppBackupException> { service.importBackup(backup, store) }
+                    "cancel" -> assertFailsWith<CancellationException> { service.importBackup(backup, store) }
+                }
+                assertTrue(beforeCommitReached)
+                if (outcome != "commit") {
+                    assertEquals(claims, db.directAcks().claim(RADIO_A.value, claim.request))
+                    assertEquals(deliveries, db.directAcks().delivery(RADIO_A.value, claim.request))
+                    assertEquals(intents, db.directAcks().intent(RADIO_A.value, claim.request))
+                    assertEquals(completions, db.directAcks().pendingCompletion(RADIO_A.value, request))
+                    assertEquals(DirectAckPermission.CURRENT, observed(claim).permission)
+                }
+                assertEquals(product, store.fetchMessage(entity(id = row.id)))
+                assertEquals(listOf(queued), store.fetchPendingSendsForMessage(entity(id = row.id)))
+            }
+        } finally { storage.close() }
     }
 
     @Test fun ownFailureAndMatchingAckCommitAtomicallyWithExactTupleReplay() = runTest {

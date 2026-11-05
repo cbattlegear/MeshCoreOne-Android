@@ -19,6 +19,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 interface LocationPermissionResultReporting {
     fun reportPermissionResult(granted: Boolean)
@@ -42,9 +46,18 @@ class LocationManagerLocationProducing(
     private var closed = false
     private var active: Request? = null
     private var lastCoordinate: GeoCoordinate? = null
+    private val coordinates = MutableStateFlow<GeoCoordinate?>(null)
     private val mutableStatus = MutableStateFlow(readStatus())
     override val authorizationStatus: StateFlow<LocationAuthorizationStatus> = mutableStatus.asStateFlow()
     val currentLocation: GeoCoordinate? get() = synchronized(lock) { lastCoordinate }
+
+    /** Observe existing one-shot results, never start tracking or request permission from a list. */
+    fun foregroundLocations() = flow {
+        refreshAuthorization()
+        emitAll(combine(authorizationStatus, coordinates) { status, coordinate ->
+            coordinate.takeIf { isAuthorized(status) && synchronized(lock) { !closed } }
+        })
+    }.distinctUntilChanged()
 
     private class Request(
         val continuation: CancellableContinuation<GeoCoordinate>,
@@ -171,7 +184,10 @@ class LocationManagerLocationProducing(
             if (active !== request) false else {
                 active = null
                 if (!closed && request.continuation.isActive) {
-                    result.getOrNull()?.let { lastCoordinate = it }
+                    result.getOrNull()?.let {
+                        lastCoordinate = it
+                        coordinates.value = it
+                    }
                 }
                 true
             }
@@ -199,6 +215,7 @@ class LocationManagerLocationProducing(
         val pending = synchronized(lock) {
             if (closed) return
             closed = true
+            coordinates.value = null
             active
         }
         pending?.let(::cancel)

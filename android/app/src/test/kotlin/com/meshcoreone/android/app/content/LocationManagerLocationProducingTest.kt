@@ -21,6 +21,8 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.test.runTest
@@ -40,6 +42,46 @@ class LocationManagerLocationProducingTest {
         this.latitude = latitude
         this.longitude = longitude
         elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
+    }
+
+    @Test
+    fun foregroundLocationsObserveExistingOneShotFixesAndWithdrawOnRevokeWithoutPromptingOrTracking() = runTest {
+        val application = context as android.app.Application
+        shadowOf(locationManager).setProviderEnabled(LocationManager.FUSED_PROVIDER, true)
+        var prompts = 0
+        LocationManagerLocationProducing(context, LocationPermissionRequesting { prompts++ }).use { adapter ->
+            val observed = mutableListOf<GeoCoordinate?>()
+            val collecting = launch { adapter.foregroundLocations().collect { observed += it } }
+            testScheduler.runCurrent()
+            assertEquals(listOf(null), observed)
+            assertEquals(0, prompts)
+            assertTrue(shadowOf(locationManager).getLocationUpdateListeners(LocationManager.FUSED_PROVIDER).isEmpty())
+            shadowOf(application).grantPermissions(android.Manifest.permission.ACCESS_COARSE_LOCATION)
+            for (coordinate in listOf(GeoCoordinate(10.0, 10.0), GeoCoordinate(20.0, 20.0))) {
+                shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(11))
+                val request = async { adapter.requestLocation() }
+                testScheduler.runCurrent()
+                shadowOf(locationManager).simulateLocation(fix(coordinate.latitude, coordinate.longitude))
+                assertEquals(coordinate, request.await())
+                testScheduler.runCurrent()
+                assertEquals(coordinate, observed.last())
+                assertTrue(shadowOf(locationManager).getLocationUpdateListeners(LocationManager.FUSED_PROVIDER).isEmpty())
+            }
+            shadowOf(application).denyPermissions(android.Manifest.permission.ACCESS_COARSE_LOCATION)
+            adapter.refreshAuthorization()
+            testScheduler.runCurrent()
+            assertNull(observed.last(), "Revocation withdraws location from lists without destroying the advert cache")
+            assertEquals(GeoCoordinate(20.0, 20.0), adapter.currentLocation)
+            collecting.cancel()
+            collecting.join()
+            val resumed = launch { adapter.foregroundLocations().collect { observed += it } }
+            testScheduler.runCurrent()
+            assertNull(observed.last())
+            resumed.cancel()
+            resumed.join()
+            assertTrue(shadowOf(locationManager).getLocationUpdateListeners(LocationManager.FUSED_PROVIDER).isEmpty())
+            assertEquals(0, prompts)
+        }
     }
 
     @Test

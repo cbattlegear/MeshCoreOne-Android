@@ -84,13 +84,13 @@ class TracePathStateHolder(
         if (connectionIdentity == null && !connectionRetired) sessionToken = dependencies.sessionToken()
     }
 
-    fun bindConnection(radioId: RadioId?, generation: Int) {
+    fun bindConnection(radioId: RadioId?, generation: Int, originatingToken: SessionToken? = deps.sessionToken()) {
         val identity = radioId to generation
-        if (connectionIdentity == identity) return
+        if (connectionIdentity == identity && sessionToken == originatingToken) return
         retireConnection()
         connectionIdentity = identity
         connectionRetired = false
-        sessionToken = deps.sessionToken()
+        sessionToken = originatingToken
         currentRadioId = radioId
     }
 
@@ -112,7 +112,10 @@ class TracePathStateHolder(
     internal fun isConnectionCurrent(device: DeviceDTO? = deps.connectedDevice()): Boolean {
         if (connectionRetired) return false
         val token = sessionToken
-        if (token == deps.sessionToken() && (token == null || token.radioId == device?.radioId)) return true
+        if (token == deps.sessionToken() &&
+            (token == null || token.radioId == device?.radioId &&
+                (connectionIdentity == null || connectionIdentity?.first == token.radioId))
+        ) return true
         retireConnection()
         return false
     }

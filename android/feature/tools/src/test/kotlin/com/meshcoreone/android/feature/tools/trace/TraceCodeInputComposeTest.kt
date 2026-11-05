@@ -625,6 +625,52 @@ class TraceCodeInputComposeTest {
         }
     }
 
+    @Test fun delayedSameRadioScreenBindingKeepsItsOriginatingGraph() = delayedScreenBinding(crossRadio = false)
+
+    @Test fun delayedDifferentRadioScreenBindingKeepsItsOriginatingGraph() = delayedScreenBinding(crossRadio = true)
+
+    private fun delayedScreenBinding(crossRadio: Boolean) {
+        val epoch = com.meshcoreone.android.core.contracts.domain.ProcessEpoch(UUID.randomUUID())
+        var token = com.meshcoreone.android.core.contracts.domain.SessionToken(
+            epoch, com.meshcoreone.android.core.contracts.domain.Generation(1), RADIO,
+        )
+        val persistence = InMemoryTracePathStore { T0 }
+        val recorded = FakeTraceSender()
+        val deps = FakeTraceDependencies().apply {
+            device = device()
+            store = persistence
+            sender = recorded
+            directory = FakeNodeDirectory()
+        }
+        val feature = object : TracePathFeatureDependencies by deps {
+            override fun sessionToken() = token
+        }
+        val captured = TracePathScreen.Dependencies(
+            feature, MapRecentsStorage(), RecordingDiagnostics(), RADIO, 1,
+        )
+        val nextRadio = if (crossRadio) RadioId(UUID.randomUUID()) else RADIO
+        token = token.copy(generation = com.meshcoreone.android.core.contracts.domain.Generation(2), radioId = nextRadio)
+        deps.device = device().copy(radioId = nextRadio)
+        val path = savedPath(Bytes.of(0xBB), radioId = nextRadio).copy(name = "New graph only")
+        persistence.insert(path)
+        val connection = mutableStateOf(captured)
+        content.setContent { MaterialTheme { TracePathScreen(connection.value) } }
+        settle()
+        click(host.get().getString(C.contactsTraceSaved))
+        assertFalse(texts().contains(path.name), "Delayed A configure must not expose B rows")
+        assertTrue(recorded.sent.isEmpty())
+        click(host.get().getString(L.commonDone))
+        host.get().runOnUiThread { connection.value = captured.copy(radioId = nextRadio, generation = 2) }
+        settle()
+        click(host.get().getString(C.contactsTraceSaved))
+        click(path.name)
+        assertFalse(ShadowDialog.getLatestDialog()?.isShowing == true)
+        assertFalse(texts().contains(host.get().getString(C.contactsTraceListEmptyPath)))
+        click(host.get().getString(C.contactsTraceSaved))
+        clickDescription("${host.get().getString(L.commonDelete)}: ${path.name}")
+        assertFalse(persistence.paths.containsKey(path.id), "Fresh B origin permits the original delete action")
+    }
+
     @Test fun savedRowActionsRejectANewLiveGraphBeforeTheScreenGenerationChanges() {
         val epoch = com.meshcoreone.android.core.contracts.domain.ProcessEpoch(UUID.randomUUID())
         var token = com.meshcoreone.android.core.contracts.domain.SessionToken(

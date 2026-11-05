@@ -107,7 +107,9 @@ object TracePathScreen {
         val generation: Int,
         val mapPreferences: MapPreferenceStore? = null,
         val nodeTableVersion: Int = 0,
-    )
+    ) {
+        val originatingToken = feature.originatingSessionToken(generation)
+    }
 
     @Composable
     operator fun invoke(
@@ -132,24 +134,27 @@ object TracePathScreen {
             ).also { it.configure(dependencies.feature) }
         }
         val savedStrings = rememberSavedPathStrings()
-        val savedPaths = remember(dependencies.feature, dependencies.generation, dependencies.radioId) {
+        val savedPaths = remember(dependencies.feature, dependencies.generation, dependencies.radioId, dependencies.originatingToken) {
             SavedPathsStateHolder(savedStrings, dependencies.diagnostics).also { saved ->
                 saved.configure(object : SavedPathsDependencies {
                     override fun sessionToken() = dependencies.feature.sessionToken()
                     override fun savedPaths() = dependencies.feature.savedPaths()
                     override fun connectedDevice() = dependencies.feature.connectedDevice()
-                })
+                }, dependencies.originatingToken)
             }
         }
         DisposableEffect(savedPaths) { onDispose { savedPaths.retireConnection() } }
 
-        DisposableEffect(holder, dependencies.generation, dependencies.radioId) {
+        DisposableEffect(holder, dependencies.generation, dependencies.radioId, dependencies.originatingToken) {
             holder.configure(dependencies.feature)
-            holder.bindConnection(dependencies.radioId, dependencies.generation)
+            holder.bindConnection(dependencies.radioId, dependencies.generation, dependencies.originatingToken)
             holder.startListening()
             onDispose { holder.retireConnection() }
         }
-        LaunchedEffect(holder, dependencies.generation, dependencies.radioId, dependencies.nodeTableVersion) {
+        LaunchedEffect(
+            holder, dependencies.generation, dependencies.radioId,
+            dependencies.nodeTableVersion, dependencies.originatingToken,
+        ) {
             dependencies.radioId?.let { holder.loadContacts(it) }
         }
         val state by holder.state.collectAsStateWithLifecycle()

@@ -12,6 +12,8 @@ import com.meshcoreone.android.app.container.onboarding.SystemPairingSetupHost
 import com.meshcoreone.android.app.container.onboarding.OnboardingPlatform
 import com.meshcoreone.android.app.container.onboarding.WriteBehindOnboardingFlags
 import com.meshcoreone.android.app.container.onboarding.FakePermissionFacts
+import com.meshcoreone.android.app.container.onboarding.RequestedPermissions
+import com.meshcoreone.android.feature.onboarding.OnboardingPermissionKind
 import com.meshcoreone.android.core.connectivity.permissions.ConnectivityPermission
 import com.meshcoreone.android.core.connectivity.pairing.BluetoothScanPairingService
 import com.meshcoreone.android.core.connectivity.pairing.DevicePairingService
@@ -65,11 +67,12 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         pairingService: DevicePairingService? = null,
         scans: BleScanCoordinator = newScans(),
         openSettings: () -> Unit = {},
+        requests: RequestedPermissions = RequestedPermissions(),
         test: suspend (ContainerHarness, AppSettingsFeature) -> Unit,
     ) {
         val platform = OnboardingPlatform(
             WriteBehindOnboardingFlags(emptyMap(), backgroundScope, { _, _ -> }),
-            permissionFacts, scans = scans, openAppSettings = openSettings, sdkInt = permissionFacts.sdk,
+            permissionFacts, requests = requests, scans = scans, openAppSettings = openSettings, sdkInt = permissionFacts.sdk,
         )
         val h = ContainerHarness(
             this, store, persistenceOverride = persistence, systemLinks = systemLinks,
@@ -92,7 +95,9 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             compose.activity.setContent {
                 val navigation by h.container.navigation.state.collectAsState()
                 MeshCoreTheme(motionScale = 0f) {
-                    AppSettingsContent(feature, navigation.activeStack.last().destination, h.container.navigation)
+                    if (navigation.selectedTab == AppTab.SETTINGS) {
+                        AppSettingsContent(feature, navigation.activeStack.last().destination, h.container.navigation)
+                    }
                     SystemPairingSetupHost(h.appState)
                 }
             }
@@ -132,17 +137,290 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             .performScrollTo().performClick()
     }
 
-    private fun permissionResult(facts: FakePermissionFacts, granted: Boolean) {
+    private fun permissionResult(
+        facts: FakePermissionFacts, granted: Boolean,
+        permissions: Set<ConnectivityPermission> = setOf(ConnectivityPermission.ACCESS_LOCAL_NETWORK),
+    ) {
         val request = requireNotNull(shadowOf(compose.activity).lastRequestedPermission)
-        assertArrayEquals(arrayOf(ConnectivityPermission.ACCESS_LOCAL_NETWORK.manifestName), request.requestedPermissions)
-        if (granted) facts.granted = facts.granted + ConnectivityPermission.ACCESS_LOCAL_NETWORK
+        assertArrayEquals(permissions.map { it.manifestName }.sorted().toTypedArray(), request.requestedPermissions)
+        if (granted) facts.granted = facts.granted + permissions
         compose.runOnUiThread {
             compose.activity.onRequestPermissionsResult(
                 request.requestCode, request.requestedPermissions,
-                intArrayOf(if (granted) android.content.pm.PackageManager.PERMISSION_GRANTED else android.content.pm.PackageManager.PERMISSION_DENIED),
+                IntArray(request.requestedPermissions.size) {
+                    if (granted) android.content.pm.PackageManager.PERMISSION_GRANTED else android.content.pm.PackageManager.PERMISSION_DENIED
+                },
             )
         }
         compose.waitForIdle()
+    }
+
+    private val bluetoothPermissions = setOf(ConnectivityPermission.BLUETOOTH_SCAN, ConnectivityPermission.BLUETOOTH_CONNECT)
+
+    private suspend fun TestScope.bluetoothPermissionControl(grant: Boolean) {
+        val facts = FakePermissionFacts(sdk = 31)
+        val service = BluetoothScanPairingService()
+        var starts = 0
+        var stops = 0
+        var openedSettings = 0
+        val scans = BleScanCoordinator(object : BleScanGateway {
+            override fun startScan(onDevice: (DiscoveredDevice) -> Unit, onFailure: (Throwable) -> Unit) {
+                assertTrue(facts.granted.containsAll(bluetoothPermissions))
+                assertTrue(facts.bluetoothEnabled)
+                starts++
+            }
+            override fun stopScan() { stops++ }
+        })
+        withSettings(permissionFacts = facts, pairingService = service, scans = scans, openSettings = { openedSettings++ }) { h, feature ->
+            mount(h, feature)
+            open(h)
+            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            compose.waitForIdle()
+            h.settle()
+            assertEquals(0, starts)
+            assertEquals(0, stops)
+            assertFalse(service.isPresenting.value)
+            assertTrue(h.links.links.isEmpty())
+            permissionResult(facts, grant, bluetoothPermissions)
+            if (!grant) {
+                h.settle()
+                assertEquals(0, starts)
+                assertFalse(service.isPresenting.value)
+                compose.onNodeWithText(compose.activity.getString(O.deviceScannerBluetoothUnauthorizedTitle)).assertIsDisplayed()
+                compose.onNodeWithText(compose.activity.getString(O.permissionsOpenSettings)).performClick()
+                assertEquals(1, openedSettings)
+                facts.granted = bluetoothPermissions
+                compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+                compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+            }
+            h.eventually("Bluetooth grant starts exactly one fallback scan") { service.isPresenting.value && starts == 1 }
+            compose.onNodeWithText(compose.activity.getString(O.deviceScannerTitle)).assertIsDisplayed()
+            assertNull(feature.selectionAction.value)
+            compose.onNodeWithText(compose.activity.getString(L.commonCancel)).performClick()
+            compose.waitForIdle()
+            h.eventually("permitted scan cancellation completes pairing") {
+                !service.isPresenting.value && !h.container.connectionPort.isPairingFlowActive && stops == 1
+            }
+            assertEquals(1, starts)
+            assertTrue(h.links.links.isEmpty())
+        }
+    }
+
+    @Test fun fallbackScanRequestsMissingBluetoothPermissionsBeforeStartingTheScanner() = runTest {
+        bluetoothPermissionControl(grant = true)
+    }
+
+    @Test fun fallbackScanDenialDoesNotScanAndSettingsRecoveryConsumesTheActionOnce() = runTest {
+        bluetoothPermissionControl(grant = false)
+    }
+
+    @Test fun fallbackScanPreviouslyDeniedBluetoothOffersRecoveryWithoutRequestingOrScanningAgain() = runTest {
+        val facts = FakePermissionFacts(sdk = 31)
+        val requests = RequestedPermissions().also { it.mark(OnboardingPermissionKind.BLUETOOTH) }
+        val service = BluetoothScanPairingService()
+        var starts = 0
+        val scans = BleScanCoordinator(object : BleScanGateway {
+            override fun startScan(onDevice: (DiscoveredDevice) -> Unit, onFailure: (Throwable) -> Unit) { starts++ }
+            override fun stopScan() = Unit
+        })
+        withSettings(permissionFacts = facts, requests = requests, pairingService = service, scans = scans) { h, feature ->
+            mount(h, feature)
+            val beforeRequest = shadowOf(compose.activity).lastRequestedPermission
+            open(h)
+            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            compose.waitForIdle()
+            h.settle()
+            compose.onNodeWithText(compose.activity.getString(O.deviceScannerBluetoothUnauthorizedTitle)).assertIsDisplayed()
+            compose.onNodeWithText(compose.activity.getString(O.permissionsOpenSettings)).assertIsDisplayed()
+            assertSame(beforeRequest, shadowOf(compose.activity).lastRequestedPermission)
+            assertEquals(0, starts)
+            assertFalse(service.isPresenting.value)
+            compose.onNodeWithText(compose.activity.getString(L.commonCancel)).performClick()
+            assertNull(feature.selectionAction.value)
+            assertFalse(h.container.connectionPort.isPairingFlowActive)
+            assertTrue(h.links.links.isEmpty())
+        }
+    }
+
+    @Test fun fallbackScanWithBluetoothOffWaitsForSettingsAndRefreshesTheAdapterOnResume() = runTest {
+        val facts = FakePermissionFacts(sdk = 31, granted = bluetoothPermissions, bluetoothEnabled = false)
+        val service = BluetoothScanPairingService()
+        var starts = 0
+        var openedSettings = 0
+        val scans = BleScanCoordinator(object : BleScanGateway {
+            override fun startScan(onDevice: (DiscoveredDevice) -> Unit, onFailure: (Throwable) -> Unit) {
+                assertTrue(facts.bluetoothEnabled)
+                starts++
+            }
+            override fun stopScan() = Unit
+        })
+        withSettings(permissionFacts = facts, pairingService = service, scans = scans, openSettings = { openedSettings++ }) { h, feature ->
+            mount(h, feature)
+            val beforeRequest = shadowOf(compose.activity).lastRequestedPermission
+            open(h)
+            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            compose.waitForIdle()
+            h.settle()
+            compose.onNodeWithText(compose.activity.getString(O.deviceScannerBluetoothOffTitle)).assertIsDisplayed()
+            assertSame(beforeRequest, shadowOf(compose.activity).lastRequestedPermission)
+            assertEquals(0, starts)
+            assertFalse(service.isPresenting.value)
+            compose.onNodeWithText(compose.activity.getString(O.permissionsOpenSettings)).performClick()
+            assertEquals(1, openedSettings)
+            facts.bluetoothEnabled = true
+            compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+            compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+            h.eventually("adapter recovery starts one scan") { service.isPresenting.value && starts == 1 }
+            compose.onNodeWithText(compose.activity.getString(L.commonCancel)).performClick()
+            compose.waitForIdle()
+            h.eventually("adapter recovery scan cancelled") { !service.isPresenting.value && !h.container.connectionPort.isPairingFlowActive }
+            assertTrue(h.links.links.isEmpty())
+        }
+    }
+
+    @Test fun fallbackScanRevokedPermissionStopsScanningUntilResumeRecoveryWithoutStartingAnotherPairing() = runTest {
+        val facts = FakePermissionFacts(sdk = 31, granted = bluetoothPermissions)
+        val service = BluetoothScanPairingService()
+        var starts = 0
+        var stops = 0
+        val scans = BleScanCoordinator(object : BleScanGateway {
+            override fun startScan(onDevice: (DiscoveredDevice) -> Unit, onFailure: (Throwable) -> Unit) {
+                assertTrue(facts.granted.containsAll(bluetoothPermissions))
+                starts++
+            }
+            override fun stopScan() { stops++ }
+        })
+        withSettings(permissionFacts = facts, pairingService = service, scans = scans) { h, feature ->
+            mount(h, feature)
+            open(h)
+            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            compose.waitForIdle()
+            h.eventually("initial authorized scan") { starts == 1 }
+            facts.granted = emptySet()
+            compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+            compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+            compose.waitForIdle()
+            h.eventually("revocation releases scan collector") { stops == 1 }
+            assertTrue(service.isPresenting.value)
+            permissionResult(facts, false, bluetoothPermissions)
+            assertEquals(1, starts)
+            compose.onNodeWithText(compose.activity.getString(O.permissionsOpenSettings)).performClick()
+            facts.granted = bluetoothPermissions
+            compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+            compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+            h.eventually("restored permission resumes the existing picker") { starts == 2 }
+            assertEquals(1, stops)
+            assertTrue(service.isPresenting.value)
+            compose.onNodeWithText(compose.activity.getString(L.commonCancel)).performClick()
+            compose.waitForIdle()
+            h.eventually("resumed picker terminates") { !service.isPresenting.value && !h.container.connectionPort.isPairingFlowActive && stops == 2 }
+            assertTrue(h.links.links.isEmpty())
+        }
+    }
+
+    @Test fun fallbackScanNavigationAwayDisposesTheHostAndCancelsTheSuspendedPairing() = runTest {
+        val service = BluetoothScanPairingService()
+        var starts = 0
+        var stops = 0
+        val scans = BleScanCoordinator(object : BleScanGateway {
+            override fun startScan(onDevice: (DiscoveredDevice) -> Unit, onFailure: (Throwable) -> Unit) { starts++ }
+            override fun stopScan() { stops++ }
+        })
+        withSettings(pairingService = service, scans = scans) { h, feature ->
+            mount(h, feature)
+            open(h)
+            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            compose.waitForIdle()
+            h.eventually("picker visible before tab transition") { service.isPresenting.value && starts == 1 }
+            compose.runOnUiThread { h.container.navigation.selectTab(AppTab.CHATS) }
+            compose.waitForIdle()
+            compose.onNodeWithText(compose.activity.getString(O.deviceScannerTitle)).assertDoesNotExist()
+            h.eventually("navigation cancels invisible pairing") {
+                !service.isPresenting.value && !h.container.connectionPort.isPairingFlowActive && stops == 1
+            }
+            compose.runOnUiThread { h.container.navigation.selectTab(AppTab.SETTINGS) }
+            compose.waitForIdle()
+            h.settle()
+            assertEquals(1, starts)
+            compose.onNodeWithText(compose.activity.getString(O.deviceScannerTitle)).assertDoesNotExist()
+            assertTrue(h.links.links.isEmpty())
+            assertFalse(h.appState.connectionUI.showingConnectionFailedAlert)
+        }
+    }
+
+    @Test fun fallbackScanActivityRecreationReattachesWithoutCancellingThePairingOrDuplicatingThePicker() = runTest {
+        val service = BluetoothScanPairingService()
+        var starts = 0
+        var stops = 0
+        val scans = BleScanCoordinator(object : BleScanGateway {
+            override fun startScan(onDevice: (DiscoveredDevice) -> Unit, onFailure: (Throwable) -> Unit) { starts++ }
+            override fun stopScan() { stops++ }
+        })
+        withSettings(pairingService = service, scans = scans) { h, feature ->
+            mount(h, feature)
+            open(h)
+            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            compose.waitForIdle()
+            h.eventually("picker pending before recreation") { service.isPresenting.value && starts == 1 }
+            compose.activityRule.scenario.recreate()
+            mount(h, feature)
+            h.eventually("new Activity owns the sole scan collector") { starts == 2 && stops == 1 }
+            assertTrue(service.isPresenting.value)
+            assertTrue(h.container.connectionPort.isPairingFlowActive)
+            compose.onAllNodesWithText(compose.activity.getString(O.deviceScannerTitle)).assertCountEquals(1)
+            compose.onNodeWithText(compose.activity.getString(L.commonCancel)).performClick()
+            compose.waitForIdle()
+            h.eventually("recreated picker cancels original pairing") {
+                !service.isPresenting.value && !h.container.connectionPort.isPairingFlowActive && stops == 2
+            }
+            assertTrue(h.links.links.isEmpty())
+        }
+    }
+
+    @Test fun fallbackScanPendingPermissionReattachesToTheRecreatedActivityAndConsumesTheGrantOnce() = runTest {
+        val facts = FakePermissionFacts(sdk = 31)
+        val service = BluetoothScanPairingService()
+        var starts = 0
+        val scans = BleScanCoordinator(object : BleScanGateway {
+            override fun startScan(onDevice: (DiscoveredDevice) -> Unit, onFailure: (Throwable) -> Unit) {
+                assertTrue(facts.granted.containsAll(bluetoothPermissions))
+                starts++
+            }
+            override fun stopScan() = Unit
+        })
+        withSettings(permissionFacts = facts, pairingService = service, scans = scans) { h, feature ->
+            mount(h, feature)
+            open(h)
+            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            compose.waitForIdle()
+            val request = requireNotNull(shadowOf(compose.activity).lastRequestedPermission)
+            assertArrayEquals(bluetoothPermissions.map { it.manifestName }.sorted().toTypedArray(), request.requestedPermissions)
+            assertEquals(0, starts)
+            compose.activityRule.scenario.recreate()
+            mount(h, feature)
+            compose.waitForIdle()
+            assertEquals(OnboardingPermissionKind.BLUETOOTH, feature.selectionRequestedPermission.value)
+            assertNull(shadowOf(compose.activity).lastRequestedPermission)
+            assertFalse(service.isPresenting.value)
+            assertEquals(0, starts)
+            facts.granted = bluetoothPermissions
+            compose.runOnUiThread {
+                compose.activity.onRequestPermissionsResult(
+                    request.requestCode, request.requestedPermissions,
+                    IntArray(request.requestedPermissions.size) { android.content.pm.PackageManager.PERMISSION_GRANTED },
+                )
+            }
+            compose.waitForIdle()
+            h.eventually("recreated permission result starts one pairing") { service.isPresenting.value && starts == 1 }
+            assertNull(feature.selectionRequestedPermission.value)
+            assertNull(feature.selectionAction.value)
+            compose.onAllNodesWithText(compose.activity.getString(O.deviceScannerTitle)).assertCountEquals(1)
+            compose.onNodeWithText(compose.activity.getString(L.commonCancel)).performClick()
+            compose.waitForIdle()
+            h.eventually("recreated permission flow terminates") { !service.isPresenting.value && !h.container.connectionPort.isPairingFlowActive }
+            assertEquals(1, starts)
+            assertTrue(h.links.links.isEmpty())
+        }
     }
 
     @Test fun fallbackScanMountsActualPickerAndCancellationTerminatesThePairingAttempt() = runTest {
@@ -289,7 +567,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             compose.waitForIdle()
             h.settle()
             assertEquals(before, h.links.links.size)
-            assertNotNull(feature.selectionWifiAction.value)
+            assertNotNull(feature.selectionAction.value)
             permissionResult(facts, grant)
             if (!grant) {
                 assertEquals(before, h.links.links.size)
@@ -305,7 +583,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
                 h.links.links.last().target,
             )
             assertEquals(ConnectionIntent.WantsConnection(forceFullSync = true), h.manager.connectionIntent)
-            assertNull(feature.selectionWifiAction.value)
+            assertNull(feature.selectionAction.value)
             gate.complete(Unit)
             h.eventually("permitted Wi-Fi ready") {
                 h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY

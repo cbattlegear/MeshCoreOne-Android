@@ -25,6 +25,9 @@ import com.meshcoreone.android.app.container.onboarding.OnboardingConnectionHost
 import com.meshcoreone.android.feature.onboarding.OnboardingPermissionKind
 import com.meshcoreone.android.feature.onboarding.PermissionStatus
 import com.meshcoreone.android.feature.onboarding.WiFiConnectionCoordinator
+import com.meshcoreone.android.feature.onboarding.DeviceScanCoordinator
+import com.meshcoreone.android.feature.onboarding.PairingBlocker
+import com.meshcoreone.android.core.contracts.AppTab
 import java.time.Instant
 import java.util.UUID
 import java.util.logging.Level
@@ -105,15 +108,29 @@ class AppSettingsFeature private constructor(
         }),
     ) { selectionWifiVisible.value = false }
 
-    internal sealed interface WifiAction {
-        data class Saved(val device: DeviceDTO) : WifiAction
-        data object Manual : WifiAction
+    internal sealed interface SelectionAction {
+        data class Saved(val device: DeviceDTO) : SelectionAction
+        data object Manual : SelectionAction
+        data object Scan : SelectionAction
     }
 
-    internal val selectionWifiAction = MutableStateFlow<WifiAction?>(null)
+    internal val selectionAction = MutableStateFlow<SelectionAction?>(null)
     internal val selectionPermissionDenied = MutableStateFlow(false)
-    internal var selectionPermissionRequested = false
-        private set
+    internal val selectionScanBlocker = MutableStateFlow(PairingBlocker.NONE)
+    internal val selectionRequestedPermission = MutableStateFlow<OnboardingPermissionKind?>(null)
+    private var selectionScanQueued = false
+    private var selectionScanOwned = false
+    private val selectionScanGate by lazy {
+        val platform = requireNotNull(container.onboarding)
+        DeviceScanCoordinator(scope, platform.pairing, platform.demo, platform.permissions, {})
+    }
+
+    private val selectionPermissionKind: OnboardingPermissionKind?
+        get() = when (selectionAction.value) {
+            SelectionAction.Scan -> OnboardingPermissionKind.BLUETOOTH
+            null -> null
+            else -> OnboardingPermissionKind.LOCAL_NETWORK
+        }
 
     internal fun showSelectionWifi() {
         selectionWifi.reset()
@@ -122,42 +139,67 @@ class AppSettingsFeature private constructor(
 
     internal fun dismissSelectionWifi() {
         if (!selectionWifi.state.value.isConnecting) {
-            if (selectionWifiAction.value == WifiAction.Manual) cancelSelectionPermission()
+            if (selectionAction.value == SelectionAction.Manual) cancelSelectionPermission()
             selectionWifiVisible.value = false
         }
     }
 
     internal fun selectSavedDevice(device: DeviceDTO) {
-        if (device.connectionMethods.any { it.isWiFi }) requestSelectionWifi(WifiAction.Saved(device))
+        if (device.connectionMethods.any { it.isWiFi }) requestSelectionPermission(SelectionAction.Saved(device))
         else connectSavedDevice(device)
     }
 
-    internal fun submitSelectionWifi() = requestSelectionWifi(WifiAction.Manual)
+    internal fun submitSelectionWifi() = requestSelectionPermission(SelectionAction.Manual)
 
-    private fun requestSelectionWifi(action: WifiAction) {
-        if (selectionWifiAction.value != null || selectionWifi.state.value.isConnecting) return
-        selectionWifiAction.value = action
+    private fun requestSelectionPermission(action: SelectionAction) {
+        if (selectionAction.value != null || selectionWifi.state.value.isConnecting) return
+        selectionAction.value = action
         refreshSelectionPermission()
     }
 
     internal fun refreshSelectionPermission() {
-        if (selectionWifiAction.value == null) return
         val platform = container.onboarding
         if (platform == null) {
+            if (selectionAction.value == null) return
             cancelSelectionPermission()
-            report("Wi-Fi permission requester is unavailable", IllegalStateException("Wi-Fi permission requester is unavailable"))
+            report("Connection permission requester is unavailable", IllegalStateException("Connection permission requester is unavailable"))
             return
         }
         val permissions = platform.permissions
         permissions.refresh()
-        when (permissions.snapshot.value.localNetwork) {
+        val snapshot = permissions.snapshot.value
+        val scanBlocker = selectionScanGate.blockerFor(snapshot)
+        selectionScanBlocker.value = scanBlocker
+        if (selectionAction.value == null && selectionScanOwned &&
+            platform.pairing.scanFallback?.isRequested?.value == true && scanBlocker != PairingBlocker.NONE) {
+            selectionAction.value = SelectionAction.Scan
+        }
+        val action = selectionAction.value ?: return
+        if (action == SelectionAction.Scan) {
+            when (scanBlocker) {
+                PairingBlocker.NONE -> {
+                    clearSelectionPermission()
+                    if (platform.pairing.scanFallback?.isRequested?.value != true) {
+                        selectionScanOwned = true
+                        app.connectionUI.queuedSystemPairingSetup = null
+                        app.connectionUI.queuedDeviceScanAfterSelectionDismiss = true
+                        container.connectionPort.isPairingFlowActive = true
+                        app.handleDeviceSelectionSheetDismissed()
+                    }
+                }
+                PairingBlocker.BLUETOOTH_PERMISSION -> selectionPermissionDenied.value = false
+                PairingBlocker.BLUETOOTH_PERMISSION_DENIED, PairingBlocker.BLUETOOTH_OFF ->
+                    selectionPermissionDenied.value = true
+            }
+            return
+        }
+        when (snapshot.localNetwork) {
             PermissionStatus.GRANTED -> {
-                val action = selectionWifiAction.value
-                cancelSelectionPermission()
+                clearSelectionPermission()
                 when (action) {
-                    is WifiAction.Saved -> connectSavedDevice(action.device)
-                    WifiAction.Manual -> selectionWifi.connect()
-                    null -> Unit
+                    is SelectionAction.Saved -> connectSavedDevice(action.device)
+                    SelectionAction.Manual -> selectionWifi.connect()
+                    SelectionAction.Scan -> error("Scan uses the Bluetooth gate")
                 }
             }
             PermissionStatus.DENIED -> selectionPermissionDenied.value = true
@@ -165,22 +207,29 @@ class AppSettingsFeature private constructor(
         }
     }
 
-    internal fun beginSelectionPermissionRequest(): Boolean {
-        if (selectionWifiAction.value == null || selectionPermissionRequested || selectionPermissionDenied.value) return false
-        selectionPermissionRequested = true
-        return true
+    internal fun beginSelectionPermissionRequest(): OnboardingPermissionKind? {
+        val kind = selectionPermissionKind ?: return null
+        if (selectionRequestedPermission.value != null || selectionPermissionDenied.value) return null
+        selectionRequestedPermission.value = kind
+        return kind
     }
 
     internal fun selectionPermissionResult() {
-        requireNotNull(container.onboarding).permissions.onRequestFinished(OnboardingPermissionKind.LOCAL_NETWORK)
-        selectionPermissionRequested = false
+        val kind = selectionRequestedPermission.value
+        selectionRequestedPermission.value = null
+        kind?.let { requireNotNull(container.onboarding).permissions.onRequestFinished(it) }
         refreshSelectionPermission()
     }
 
     internal fun cancelSelectionPermission() {
-        selectionWifiAction.value = null
+        val scan = selectionAction.value == SelectionAction.Scan
+        clearSelectionPermission()
+        if (scan) cancelSelectionScan()
+    }
+
+    private fun clearSelectionPermission() {
+        selectionAction.value = null
         selectionPermissionDenied.value = false
-        selectionPermissionRequested = false
     }
 
     internal fun connectSavedDevice(device: DeviceDTO): Job = scope.launch {
@@ -196,9 +245,23 @@ class AppSettingsFeature private constructor(
     }
 
     internal fun queueDeviceScan() {
-        app.connectionUI.queuedSystemPairingSetup = null
-        app.connectionUI.queuedDeviceScanAfterSelectionDismiss = true
-        container.connectionPort.isPairingFlowActive = true
+        selectionScanQueued = true
+    }
+
+    internal fun selectionSheetDismissed() {
+        app.handleDeviceSelectionSheetDismissed()
+        if (!selectionScanQueued) return
+        selectionScanQueued = false
+        if (container.navigation.state.value.selectedTab == AppTab.SETTINGS) {
+            requestSelectionPermission(SelectionAction.Scan)
+        }
+    }
+
+    internal fun cancelSelectionScan() {
+        selectionScanQueued = false
+        if (selectionAction.value == SelectionAction.Scan) clearSelectionPermission()
+        if (selectionScanOwned) container.onboarding?.pairing?.scanFallback?.cancel()
+        selectionScanOwned = false
     }
 
     internal fun queueDeviceSetup(accessory: SystemPairedAccessory) {

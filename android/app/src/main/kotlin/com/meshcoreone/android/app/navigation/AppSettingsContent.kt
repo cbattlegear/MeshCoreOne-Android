@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
@@ -40,7 +41,8 @@ import com.meshcoreone.android.feature.settings.app.backup.ui.*
 import com.meshcoreone.android.feature.settings.app.diagnostics.*
 import com.meshcoreone.android.feature.settings.app.diagnostics.ui.*
 import com.meshcoreone.android.feature.settings.app.nodeconfig.*
-import com.meshcoreone.android.feature.onboarding.OnboardingPermissionKind
+import com.meshcoreone.android.feature.onboarding.PairingBlocker
+import com.meshcoreone.android.feature.onboarding.PermissionStatus
 import com.meshcoreone.android.feature.onboarding.ui.DeviceScannerSheetContent
 import com.meshcoreone.android.feature.onboarding.ui.WiFiConnectionSheetContent
 import androidx.lifecycle.Lifecycle
@@ -249,7 +251,7 @@ private fun AppDeviceSelection(feature: AppSettingsFeature, onDismiss: () -> Uni
         }
     }
     DisposableEffect(feature) {
-        onDispose { feature.container.appState.handleDeviceSelectionSheetDismissed() }
+        onDispose { feature.selectionSheetDismissed() }
     }
     val loaded = list
     if (loaded == null) {
@@ -283,17 +285,35 @@ private fun AppSelectionWifi(feature: AppSettingsFeature) {
 @Composable
 private fun AppSelectionPlatform(feature: AppSettingsFeature) {
     val platform = feature.container.onboarding ?: return
-    val action by feature.selectionWifiAction.collectAsState()
+    val action by feature.selectionAction.collectAsState()
     val denied by feature.selectionPermissionDenied.collectAsState()
+    val requestedPermission by feature.selectionRequestedPermission.collectAsState()
+    val scanBlocker by feature.selectionScanBlocker.collectAsState()
+    val activity = LocalActivity.current
+    DisposableEffect(feature, activity) {
+        onDispose {
+            if (activity?.isChangingConfigurations != true) feature.cancelSelectionScan()
+        }
+    }
     val requester = platform.rememberPermissionRequester(feature::selectionPermissionResult)
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { feature.refreshSelectionPermission() }
-    LaunchedEffect(action) {
-        if (feature.beginSelectionPermissionRequest()) requester(OnboardingPermissionKind.LOCAL_NETWORK)
+    LaunchedEffect(action, denied, requestedPermission) {
+        feature.beginSelectionPermissionRequest()?.let(requester)
     }
     if (action != null && denied) AlertDialog(
         onDismissRequest = feature::cancelSelectionPermission,
         text = {
-            Text(uiString(UiErrorMapper().connectionIssue(
+            if (action == AppSettingsFeature.SelectionAction.Scan) {
+                val off = scanBlocker == PairingBlocker.BLUETOOTH_OFF
+                Column {
+                    Text(stringResource(if (off)
+                        com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings.deviceScannerBluetoothOffTitle
+                    else com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings.deviceScannerBluetoothUnauthorizedTitle))
+                    Text(stringResource(if (off)
+                        com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings.deviceScannerBluetoothOffMessage
+                    else com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings.deviceScannerBluetoothUnauthorizedMessage))
+                }
+            } else Text(uiString(UiErrorMapper().connectionIssue(
                 com.meshcoreone.android.core.contracts.domain.ConnectionIssue.PermissionDenied(
                     com.meshcoreone.android.core.contracts.domain.Capability.LOCAL_NETWORK,
                 ),
@@ -313,7 +333,10 @@ private fun AppSelectionPlatform(feature: AppSettingsFeature) {
     val permissions by platform.permissions.snapshot.collectAsState()
     if (fallback != null && requested) {
         ModalBottomSheet(fallback::cancel, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-            val discoveries by remember(fallback) { fallback.discoveries() }.collectAsState(emptyList())
+            val ready = permissions.bluetooth == PermissionStatus.GRANTED && permissions.bluetoothAdapterEnabled
+            val discoveries by remember(fallback, ready) {
+                if (ready) fallback.discoveries() else flowOf(emptyList())
+            }.collectAsState(emptyList())
             DeviceScannerSheetContent(discoveries, permissions, fallback::select, fallback::cancel)
         }
     }

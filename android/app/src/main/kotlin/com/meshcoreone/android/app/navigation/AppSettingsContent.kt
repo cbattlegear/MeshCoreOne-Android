@@ -61,6 +61,7 @@ import kotlinx.coroutines.flow.*
 internal fun AppSettingsContent(
     feature: AppSettingsFeature, destination: NavigationDestination, coordinator: NavigationCoordinator,
     nodeDocuments: NodeConfigDocuments? = null,
+    selectionHost: Boolean = true,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -75,8 +76,6 @@ internal fun AppSettingsContent(
     var licenses by remember { mutableStateOf(false) }
     var about by remember { mutableStateOf(false) }
     var rendering by remember { mutableStateOf(false) }
-    var deviceSelection by remember { mutableStateOf(false) }
-    val wifiConnection by feature.selectionWifiVisible.collectAsState()
     val close = { external = null; publicKey = null; licenses = false; about = false; rendering = false; configPage = null }
     BackHandler(external != null || publicKey != null || licenses || about || rendering || configPage != null, close)
     val navigator = remember(coordinator) {
@@ -86,7 +85,7 @@ internal fun AppSettingsContent(
                     Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}")),
                 )
                 SettingsExternalDestination.MapsSettings, SettingsExternalDestination.OfflineMapSettings -> coordinator.selectTab(AppTab.MAP)
-                SettingsExternalDestination.DeviceSelection -> deviceSelection = true
+                SettingsExternalDestination.DeviceSelection -> feature.selectionVisible.value = true
                 else -> external = target
             }
         }
@@ -121,10 +120,6 @@ internal fun AppSettingsContent(
         else container.currentTransport
     val page = (destination as? NavigationDestination.Setting)?.selection?.let { Page.valueOf(it.name) }
     val done = { coordinator.back(); Unit }
-    val error by feature.failure.collectAsState()
-    if (error != null) AlertDialog(onDismissRequest = { feature.failure.value = null },
-        text = { Text(uiString(UiErrorMapper().message(requireNotNull(error)))) },
-        confirmButton = { TextButton(onClick = { feature.failure.value = null }) { Text(stringResource(L.commonOk)) } })
     when {
         configPage == SettingsSubpage.ConfigExport -> NodeConfigExportScreen(configHolder, configDocuments, close)
         configPage == SettingsSubpage.ConfigImport -> NodeConfigImportScreen(configHolder, configDocuments, close)
@@ -145,7 +140,7 @@ internal fun AppSettingsContent(
         page == null -> Column(Modifier.fillMaxSize()) {
             Box(Modifier.weight(1f)) {
                 SettingsListScreen(device, transport, deps.regions, deps.radioCatalog, { coordinator.navigateToSetting(SettingsDetail.valueOf(it.name)) },
-                    { deviceSelection = true }, UiText.Verbatim(appVersion(context)))
+                    { feature.selectionVisible.value = true }, UiText.Verbatim(appVersion(context)))
             }
             TextButton(onClick = { about = true }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(S.aboutHeader)) }
         }
@@ -228,7 +223,18 @@ internal fun AppSettingsContent(
         page == Page.MAPS -> AppMapSettings(feature, done)
         else -> error("Unregistered Settings page: $page")
     }
-    if (deviceSelection) AppDeviceSelection(feature, onDismiss = { deviceSelection = false },
+    if (selectionHost) AppSettingsSelectionHost(feature)
+}
+
+@Composable
+internal fun AppSettingsSelectionHost(feature: AppSettingsFeature) {
+    val deviceSelection by feature.selectionVisible.collectAsState()
+    val wifiConnection by feature.selectionWifiVisible.collectAsState()
+    val error by feature.failure.collectAsState()
+    if (error != null) AlertDialog(onDismissRequest = { feature.failure.value = null },
+        text = { Text(uiString(UiErrorMapper().message(requireNotNull(error)))) },
+        confirmButton = { TextButton(onClick = { feature.failure.value = null }) { Text(stringResource(L.commonOk)) } })
+    if (deviceSelection) AppDeviceSelection(feature, onDismiss = { feature.selectionVisible.value = false },
         onWifi = feature::showSelectionWifi)
     if (wifiConnection) AppSelectionWifi(feature)
     AppSelectionPlatform(feature)
@@ -292,18 +298,24 @@ private fun AppSelectionPlatform(feature: AppSettingsFeature) {
     val activity = LocalActivity.current
     DisposableEffect(feature, activity) {
         onDispose {
-            if (activity?.isChangingConfigurations != true) feature.cancelSelectionScan()
+            if (activity?.isChangingConfigurations != true) {
+                feature.selectionVisible.value = false
+                feature.cancelSelectionScan()
+            }
         }
     }
-    val requester = platform.rememberPermissionRequester(feature::selectionPermissionResult)
+    val connectionRequester = platform.rememberConnectionPermissionRequester(feature::selectionPermissionResult)
+    val scanRequester = platform.rememberPermissionRequester(feature::selectionPermissionResult)
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { feature.refreshSelectionPermission() }
     LaunchedEffect(action, denied, requestedPermission) {
-        feature.beginSelectionPermissionRequest()?.let(requester)
+        feature.beginSelectionPermissionRequest()?.let { kind ->
+            if (action == AppSettingsFeature.SelectionAction.Scan) scanRequester(kind) else connectionRequester(kind)
+        }
     }
     if (action != null && denied) AlertDialog(
         onDismissRequest = feature::cancelSelectionPermission,
         text = {
-            if (action == AppSettingsFeature.SelectionAction.Scan) {
+            if (feature.selectionUsesBluetooth) {
                 val off = scanBlocker == PairingBlocker.BLUETOOTH_OFF
                 Column {
                     Text(stringResource(if (off)
@@ -335,7 +347,11 @@ private fun AppSelectionPlatform(feature: AppSettingsFeature) {
         ModalBottomSheet(fallback::cancel, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
             val ready = permissions.bluetooth == PermissionStatus.GRANTED && permissions.bluetoothAdapterEnabled
             val discoveries by remember(fallback, ready) {
-                if (ready) fallback.discoveries() else flowOf(emptyList())
+                if (ready) fallback.discoveries().catch { failure ->
+                    if (failure is CancellationException) throw failure
+                    feature.cancelSelectionScan()
+                    feature.report("Could not scan for a radio", failure)
+                } else flowOf(emptyList())
             }.collectAsState(emptyList())
             DeviceScannerSheetContent(discoveries, permissions, feature::selectSelectionScanDevice, fallback::cancel)
         }

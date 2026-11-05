@@ -28,6 +28,7 @@ import com.meshcoreone.android.feature.onboarding.WiFiConnectionCoordinator
 import com.meshcoreone.android.feature.onboarding.DeviceScanCoordinator
 import com.meshcoreone.android.feature.onboarding.PairingBlocker
 import com.meshcoreone.android.core.contracts.AppTab
+import com.meshcoreone.android.app.navigation.NavigationDestination
 import java.time.Instant
 import java.util.UUID
 import java.util.logging.Level
@@ -100,6 +101,13 @@ class AppSettingsFeature private constructor(
                 container.isDeviceConnectedToOtherApp(device.id)
         }.map { it.id }.toSet()
 
+    internal val selectionVisible = MutableStateFlow(false)
+    internal fun selectionHostEligible(): Boolean {
+        val navigation = container.navigation.state.value
+        val destination = navigation.activeStack.last().destination
+        return navigation.selectedTab == AppTab.SETTINGS &&
+            (destination == NavigationDestination.Root(AppTab.SETTINGS) || destination is NavigationDestination.Setting)
+    }
     internal val selectionWifiVisible = MutableStateFlow(false)
     internal val selectionWifi = WiFiConnectionCoordinator(
         scope, AppOnboardingWiFiPort(object : OnboardingConnectionHost by AppStateOnboardingHost(container) {
@@ -110,6 +118,7 @@ class AppSettingsFeature private constructor(
 
     internal sealed interface SelectionAction {
         data class Saved(val device: DeviceDTO) : SelectionAction
+        data class Setup(val accessory: SystemPairedAccessory) : SelectionAction
         data object Manual : SelectionAction
         data object Scan : SelectionAction
     }
@@ -118,6 +127,7 @@ class AppSettingsFeature private constructor(
     internal val selectionPermissionDenied = MutableStateFlow(false)
     internal val selectionScanBlocker = MutableStateFlow(PairingBlocker.NONE)
     internal val selectionRequestedPermission = MutableStateFlow<OnboardingPermissionKind?>(null)
+    private var selectionRequestedForScan = false
     private var selectionScanQueued = false
     private var selectionScanOwned = false
     internal var selectionScanJob: Job? = null
@@ -129,9 +139,15 @@ class AppSettingsFeature private constructor(
 
     private val selectionPermissionKind: OnboardingPermissionKind?
         get() = when (selectionAction.value) {
-            SelectionAction.Scan -> OnboardingPermissionKind.BLUETOOTH
             null -> null
-            else -> OnboardingPermissionKind.LOCAL_NETWORK
+            else -> if (selectionUsesBluetooth) OnboardingPermissionKind.BLUETOOTH else OnboardingPermissionKind.LOCAL_NETWORK
+        }
+
+    internal val selectionUsesBluetooth: Boolean
+        get() = when (val action = selectionAction.value) {
+            SelectionAction.Scan, is SelectionAction.Setup -> true
+            is SelectionAction.Saved -> action.device.connectionMethods.none { it.isWiFi }
+            else -> false
         }
 
     internal fun showSelectionWifi() {
@@ -147,8 +163,7 @@ class AppSettingsFeature private constructor(
     }
 
     internal fun selectSavedDevice(device: DeviceDTO) {
-        if (device.connectionMethods.any { it.isWiFi }) requestSelectionPermission(SelectionAction.Saved(device))
-        else connectSavedDevice(device)
+        requestSelectionPermission(SelectionAction.Saved(device))
     }
 
     internal fun submitSelectionWifi() = requestSelectionPermission(SelectionAction.Manual)
@@ -169,7 +184,9 @@ class AppSettingsFeature private constructor(
         }
         val permissions = platform.permissions
         permissions.refresh()
-        val snapshot = permissions.snapshot.value
+        platform.connectionPermissions.refresh()
+        val snapshot = if (selectionUsesBluetooth && selectionAction.value != SelectionAction.Scan)
+            platform.connectionPermissions.snapshot.value else permissions.snapshot.value
         val scanBlocker = selectionScanGate.blockerFor(snapshot)
         selectionScanBlocker.value = scanBlocker
         if (selectionAction.value == null && selectionScanOwned &&
@@ -189,7 +206,7 @@ class AppSettingsFeature private constructor(
                             try {
                                 previous?.join()
                                 ensureActive()
-                                if (container.navigation.state.value.selectedTab != AppTab.SETTINGS) return@launch
+                                if (!selectionHostEligible()) return@launch
                                 platform.permissions.refresh()
                                 if (selectionScanGate.blockerFor(platform.permissions.snapshot.value) != PairingBlocker.NONE) {
                                     requestSelectionPermission(SelectionAction.Scan)
@@ -209,6 +226,22 @@ class AppSettingsFeature private constructor(
             }
             return
         }
+        if (selectionUsesBluetooth) {
+            when (scanBlocker) {
+                PairingBlocker.NONE -> {
+                    clearSelectionPermission()
+                    when (action) {
+                        is SelectionAction.Saved -> connectSavedDevice(action.device)
+                        is SelectionAction.Setup -> startDeviceSetup(action.accessory)
+                        else -> error("Only saved BLE and setup use the connection gate")
+                    }
+                }
+                PairingBlocker.BLUETOOTH_PERMISSION -> selectionPermissionDenied.value = false
+                PairingBlocker.BLUETOOTH_PERMISSION_DENIED, PairingBlocker.BLUETOOTH_OFF ->
+                    selectionPermissionDenied.value = true
+            }
+            return
+        }
         when (snapshot.localNetwork) {
             PermissionStatus.GRANTED -> {
                 clearSelectionPermission()
@@ -216,6 +249,7 @@ class AppSettingsFeature private constructor(
                     is SelectionAction.Saved -> connectSavedDevice(action.device)
                     SelectionAction.Manual -> selectionWifi.connect()
                     SelectionAction.Scan -> error("Scan uses the Bluetooth gate")
+                    is SelectionAction.Setup -> error("Setup uses the Bluetooth gate")
                 }
             }
             PermissionStatus.DENIED -> selectionPermissionDenied.value = true
@@ -226,6 +260,7 @@ class AppSettingsFeature private constructor(
     internal fun beginSelectionPermissionRequest(): OnboardingPermissionKind? {
         val kind = selectionPermissionKind ?: return null
         if (selectionRequestedPermission.value != null || selectionPermissionDenied.value) return null
+        selectionRequestedForScan = selectionAction.value == SelectionAction.Scan
         selectionRequestedPermission.value = kind
         return kind
     }
@@ -233,7 +268,12 @@ class AppSettingsFeature private constructor(
     internal fun selectionPermissionResult() {
         val kind = selectionRequestedPermission.value
         selectionRequestedPermission.value = null
-        kind?.let { requireNotNull(container.onboarding).permissions.onRequestFinished(it) }
+        kind?.let {
+            val platform = requireNotNull(container.onboarding)
+            val permissions = if (selectionRequestedForScan) platform.permissions else platform.connectionPermissions
+            permissions.onRequestFinished(it)
+        }
+        selectionRequestedForScan = false
         refreshSelectionPermission()
     }
 
@@ -268,7 +308,7 @@ class AppSettingsFeature private constructor(
         app.handleDeviceSelectionSheetDismissed()
         if (!selectionScanQueued) return
         selectionScanQueued = false
-        if (container.navigation.state.value.selectedTab == AppTab.SETTINGS) {
+        if (selectionHostEligible()) {
             requestSelectionPermission(SelectionAction.Scan)
         }
     }
@@ -288,13 +328,17 @@ class AppSettingsFeature private constructor(
         requireNotNull(container.onboarding?.pairing?.scanFallback).select(id)
     }
 
-    internal fun queueDeviceSetup(accessory: SystemPairedAccessory) {
+    internal fun queueDeviceSetup(accessory: SystemPairedAccessory) =
+        requestSelectionPermission(SelectionAction.Setup(accessory))
+
+    private fun startDeviceSetup(accessory: SystemPairedAccessory) {
         app.connectionUI.queuedDeviceScanAfterSelectionDismiss = false
         app.connectionUI.queuedSystemPairingSetup =
             com.meshcoreone.android.core.connectivity.pairing.SystemPairingSetupPrompt(
                 listOf(com.meshcoreone.android.core.connectivity.pairing.SystemPairedAccessory(accessory.id, accessory.name)),
             )
         container.connectionPort.isPairingFlowActive = true
+        if (!selectionVisible.value) app.handleDeviceSelectionSheetDismissed()
     }
 
     private fun live(): RadioSessionContainer = container.sessions.current?.takeIf {

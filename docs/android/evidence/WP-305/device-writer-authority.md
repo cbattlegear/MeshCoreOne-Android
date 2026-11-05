@@ -281,3 +281,18 @@ CAS rejection/retry and both last-alias/default directions using ASCII and mixed
 names, with exact raw-channel and revision assertions. The composed source has twenty-four writer
 and fifteen persistence methods; these are source counts, not execution evidence. Settings radio
 integration remains separately owned and unaccepted pending composed execution.
+
+The preserved exact `a7fed6eb9ddb3ed113750d0997c041da7eb9d9bb` hosted diagnostic
+[41952095327](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41952095327)
+completed with overall failure. Job `126998287465` contains deduplicated paired actual method
+markers: writer **23 START / 23 END SUCCESS / 0 END FAILURE** and persistence
+**13 START / 13 END SUCCESS / 0 END FAILURE**. This includes the two original alias controls,
+not the successor legacy Job control or the two transferred targeted-writer controls.
+App discovered 1,939 tests with three failures: the two existing
+`PresetDeviceEventSessionTest` path-hash scenarios and `OnboardingFlagsTest` unavailable
+uncertain-commit readback scenario. Controller/workflow policy and Swift codec oracle jobs passed.
+This result neither executes `83a63efa`/`f2b5e73d` nor accepts the actual Settings radio integration.
+The persistence producer separately verified exact `83a63efa` to `f2b5e73d` custody: identical
+targeted hunk (minus the already-present import), exact transferred test/helper bytes, no removed
+older assertions, and clean diff check. That disposition is source-only. The hosted job/log remain
+the authoritative execution evidence; no duplicate result bundle is retained.

@@ -366,3 +366,19 @@ and mixed thirty-byte UTF-8 prefixes, unchanged rejected-write revision/default/
 and explicit fresh storage admission. It is not a radio-acknowledgment test. The newer fifteen
 persistence methods are retained unchanged, producing sixteen source methods; the writer class
 has twenty-six source methods. These counts require fresh exact hosted execution.
+
+The storage producer independently confirmed exact `725495e4` to `5d7847b8` custody: the
+sixty-five-line transferred method is identical to `b57abf9d`, additive only, with sixteen source
+methods and clean diff check. Its bounded `725495e4` guard trace found no substantive issue:
+projection validation runs inside the actual `editDevice` retry transform, exits before save or
+callback on mismatch, and retains revision CAS, postcommit publication and cancellation behavior.
+This is not Settings whole-queue review or execution acceptance.
+
+The predecessor exact `eed46ffded20110883b9c1801cfd18ee5831343a` run
+[41956807027](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41956807027)
+completed with writer **25 paired START/END SUCCESS**, persistence **15 paired START/END SUCCESS**,
+and zero authority-method failures in job `127013636505`. App discovered 1,943 tests with the same
+three known preset/onboarding failures. This verifies the combined same-target control, not the
+new different-target guard. Fresh exact `5d7847b8ec612ec41a742ddf8b0a3efc4d2dc8bc` run
+`41958395416` is the candidate for the new twenty-six/sixteen controls. All earlier diagnostic
+refs and runs remain immutable; no local Gradle owner was taken over.

@@ -21,6 +21,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 
 class RadioSettingsSessionTargetTest {
@@ -226,7 +227,19 @@ class RadioSettingsSessionTargetTest {
             val current = r.firstDevice.copy(clientRepeat = !initialRepeat, frequency = 910_525u)
             r.base.deviceFlow.value = current
             r.observations.value = SettingsDeviceObservation(current, r.first)
+            val verificationEntered = CompletableDeferred<Unit>()
+            val verificationRelease = CompletableDeferred<Unit>()
+            r.a.onCall = { method ->
+                if (method == "setRadioParamsVerified") {
+                    verificationEntered.complete(Unit)
+                    verificationRelease.await()
+                }
+            }
             if (retry) r.advanced.retry.retry()
+            r.scheduler.runCurrent()
+            assertTrue(verificationEntered.isCompleted)
+            assertTrue(r.advanced.state.value.isApplying)
+            verificationRelease.complete(Unit)
             r.scheduler.runCurrent()
             val expectedFrequency = if (current.clientRepeat) current.frequency else 868_100u
             assertEquals(

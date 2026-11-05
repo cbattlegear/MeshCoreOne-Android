@@ -43,8 +43,14 @@ internal fun RemoteNodeSettingsContent(
     val editable = enabled && !state.isApplying && !state.isRebooting
     var picking by remember { mutableStateOf(false) }
     var picked by remember { mutableStateOf<Coordinate?>(null) }
+    var pickerSession by remember { mutableIntStateOf(0) }
     val pickId = remember { UUID.randomUUID() }
-    androidx.activity.compose.BackHandler(picking) { picking = false }
+    fun closePicker() {
+        pickerSession++
+        picking = false
+        picked = null
+    }
+    androidx.activity.compose.BackHandler(picking) { closePicker() }
     Column(modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         RemoteFailure(state.errorMessage)
         if (state.isApplying || state.isRebooting) LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -88,26 +94,34 @@ internal fun RemoteNodeSettingsContent(
             RemoteFailure(state.longitudeError)
             TextButton({
                 picked = Coordinate(state.latitude ?: 0.0, state.longitude ?: 0.0).takeIf { it.isValidFix }
+                pickerSession++
                 picking = true
             }, enabled = editable && state.identityLoaded) { Text(stringResource(L.remoteNodesSettingsPickOnMap)) }
             if (picking) {
+                val session = pickerSession
                 val coordinate = picked ?: Coordinate(0.0, 0.0)
                 // Selection follows camera reports; only opening the picker initializes its bounds.
                 val initialRegion = remember { CoordinateRegion.around(coordinate, if (picked == null) 80.0 else .05) }
-                RemoteNodeMapContent(
-                    stringResource(L.remoteNodesSettingsPickOnMap),
-                    listOf(MapPoint(pickId, coordinate, PinStyle.CROSSHAIR, null, false, null, null)),
-                    emptyList(), initialRegion,
-                    surface = mapSurface,
-                    onCameraChanged = { picked = Coordinate(it.center.latitude, it.center.longitude) },
-                    saveCameraState = false,
-                )
+                key(session) {
+                    RemoteNodeMapContent(
+                        stringResource(L.remoteNodesSettingsPickOnMap),
+                        listOf(MapPoint(pickId, coordinate, PinStyle.CROSSHAIR, null, false, null, null)),
+                        emptyList(), initialRegion,
+                        surface = mapSurface,
+                        onCameraChanged = {
+                            if (picking && pickerSession == session) {
+                                picked = Coordinate(it.center.latitude, it.center.longitude)
+                            }
+                        },
+                        saveCameraState = false,
+                    )
+                }
                 RemoteValue(stringResource(L.remoteNodesSettingsLatitude), coordinate.latitude.toString())
                 RemoteValue(stringResource(L.remoteNodesSettingsLongitude), coordinate.longitude.toString())
-                TextButton({ picking = false }) { Text(stringResource(L.remoteNodesCancel)) }
+                TextButton(::closePicker) { Text(stringResource(L.remoteNodesCancel)) }
                 RemoteApply(L.remoteNodesDone, editable && picked?.isValidFix == true) {
                     picked?.let { helper.setLocationFromPicker(it.latitude, it.longitude) }
-                    picking = false
+                    closePicker()
                 }
             }
             RemoteApply(L.remoteNodesSettingsApplyIdentitySettings, editable && state.identitySettingsModified) {

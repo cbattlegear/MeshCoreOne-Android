@@ -354,6 +354,48 @@ class DirectAckAuthorityPersistenceTest {
         } finally { other.close() }
     }
 
+    @Test fun explicitRevokeSuccessorActivationAndProcessCloseEraseOnlyRetiredLeasePayloads() = runTest {
+        var currentToken = token
+        for (retire in listOf<suspend (RoomPersistenceStore, DirectAckLease) -> Unit>(
+            { target, lease -> assertIs<DirectAckRevocationResult.Revoked>(target.revokeDirectAckSession(lease)) },
+            { target, _ ->
+                currentToken = currentToken.copy(generation = Generation(currentToken.generation.value + 1))
+                activate(target, currentToken)
+            },
+            { target, _ -> target.close() },
+        )) {
+            val target = newStore(db)
+            currentToken = token.copy(epoch = ProcessEpoch(UUID.randomUUID()))
+            val lease = activate(target, currentToken)
+            val row = message(text = "retired lease payload")
+            val queued = pending(messageID = row.id)
+            target.upsertPendingSend(queued)
+            val claim = begin(row, pendingId = queued.id, lease = lease, target = target)
+            val completion = assertIs<DirectPendingCaptureResult.Captured>(
+                target.captureDirectPendingCompletion(lease, entity(id = row.id), queued.id, UUID.randomUUID(),
+                    DirectPendingCompletionReason.ZeroAttempts(0)),
+            )
+            target.settleDirectAck(claim.attempt, 123u, 7u)
+            val productRow = target.fetchMessage(entity(id = row.id))
+            retire(target, lease)
+            assertPayloadColumnsNull("direct_ack_claims", row.id, "snapshot_")
+            assertPayloadColumnsNull("direct_ack_deliveries", row.id, "snapshot_")
+            assertPayloadColumnsNull("direct_ack_intents", row.id, "message_", "pending_")
+            assertPayloadColumnsNull("direct_pending_completions", row.id, "message_", "pending_")
+            val persisted = assertNotNull(db.directAcks().claim(RADIO_A.value, claim.request))
+            assertEquals(DirectAckPhase.DELIVERED.name, persisted.phase)
+            assertFalse(persisted.current)
+            val delivery = assertNotNull(db.directAcks().delivery(RADIO_A.value, claim.request))
+            assertEquals(123L, delivery.ackCode)
+            assertEquals(7L, delivery.roundTripTime)
+            assertNull(delivery.snapshot)
+            assertEquals(productRow, store.fetchMessage(entity(id = row.id)))
+            assertEquals(listOf(queued), store.fetchPendingSendsForMessage(entity(id = row.id)))
+            assertNotNull(db.directAcks().pendingCompletion(RADIO_A.value, completion.receipt.captureRequestId))
+            target.close()
+        }
+    }
+
     @Test fun ownFailureAndMatchingAckCommitAtomicallyWithExactTupleReplay() = runTest {
         val claim = begin()
         assertIs<DirectAckMutationResult.Applied>(store.recordDirectSendAccepted(claim.attempt, claim.wire, 456u))

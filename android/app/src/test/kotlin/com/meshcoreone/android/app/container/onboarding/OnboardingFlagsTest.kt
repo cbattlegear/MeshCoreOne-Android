@@ -13,6 +13,7 @@ import com.meshcoreone.android.core.ui.TipHostState
 import com.meshcoreone.android.feature.onboarding.OnboardingState
 import java.io.File
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -27,6 +28,7 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.assertFailsWith
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -231,6 +233,80 @@ class OnboardingFlagsTest {
             assertEquals("unknown commit outcome", failure.message)
             assertEquals(listOf("readback unavailable"), failure.suppressed.map { it.message })
             assertTrue(committed != null)
+            assertFalse(flags.hasCompleted.value)
+        } finally { scope.cancel() }
+    }
+
+    @Test fun `typed uncertain outcome retains both original errors across deferred delivery`() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
+        val writeFailure = IOException("unknown commit outcome")
+        val readFailure = IOException("readback unavailable")
+        val reported = mutableListOf<Throwable>()
+        try {
+            val flags = WriteBehindOnboardingFlags(
+                emptyMap(), scope, { _, _ -> error("Use the attempt-bound finalizer") }, reported::add,
+                persistCompletion = { throw writeFailure },
+                reconcileCompletion = { throw readFailure },
+            )
+            val result = async { runCatching { OnboardingState(flags).completeOnboarding() } }
+            val failure = result.await().exceptionOrNull()
+            assertTrue(failure is OnboardingCompletionOutcomeUnknownException)
+            val unknown = failure as OnboardingCompletionOutcomeUnknownException
+            assertSame(writeFailure, unknown.writeFailure)
+            assertSame(readFailure, unknown.readbackFailure)
+            assertSame(writeFailure, unknown.cause)
+            assertEquals(listOf(readFailure), unknown.suppressed.toList())
+            assertSame(unknown, reported.single())
+            assertTrue(writeFailure.suppressed.isEmpty())
+            assertFalse(flags.hasCompleted.value)
+        } finally { scope.cancel() }
+    }
+
+    @Test fun `cancelled uncertain finalizer retains original cancellation and readback failure`() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
+        val writeFailure = CancellationException("finalizer cancelled")
+        val readFailure = IOException("readback unavailable")
+        val reported = mutableListOf<Throwable>()
+        var readbacks = 0
+        try {
+            val flags = WriteBehindOnboardingFlags(
+                emptyMap(), scope, { _, _ -> error("Use the attempt-bound finalizer") }, reported::add,
+                persistCompletion = { throw writeFailure },
+                reconcileCompletion = { readbacks++; throw readFailure },
+            )
+            val result = async { runCatching { OnboardingState(flags).completeOnboarding() } }
+            val failure = result.await().exceptionOrNull()
+            assertTrue(failure is CancellationException)
+            assertTrue(failure is OnboardingCompletionCancellationOutcomeUnknownException)
+            val unknown = failure as OnboardingCompletionCancellationOutcomeUnknownException
+            assertSame(writeFailure, unknown.writeFailure)
+            assertSame(readFailure, unknown.readbackFailure)
+            assertSame(writeFailure, unknown.cause)
+            assertEquals(listOf(readFailure), unknown.suppressed.toList())
+            assertEquals(1, readbacks)
+            assertTrue(reported.isEmpty())
+            assertTrue(writeFailure.suppressed.isEmpty())
+            assertFalse(flags.hasCompleted.value)
+        } finally { scope.cancel() }
+    }
+
+    @Test fun `one shared failure is retained without mutating its suppressed errors`() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
+        val original = IOException("same underlying failure")
+        try {
+            val flags = WriteBehindOnboardingFlags(
+                emptyMap(), scope, { _, _ -> error("Use the attempt-bound finalizer") },
+                persistCompletion = { throw original },
+                reconcileCompletion = { throw original },
+            )
+            val failure = assertFailsWith<OnboardingCompletionOutcomeUnknownException> {
+                OnboardingState(flags).completeOnboarding()
+            }
+            assertSame(original, failure.writeFailure)
+            assertSame(original, failure.readbackFailure)
+            assertSame(original, failure.cause)
+            assertTrue(failure.suppressed.isEmpty())
+            assertTrue(original.suppressed.isEmpty())
             assertFalse(flags.hasCompleted.value)
         } finally { scope.cancel() }
     }

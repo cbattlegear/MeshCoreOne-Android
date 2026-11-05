@@ -437,4 +437,76 @@ that atomically establishes immutable no-dispatch provenance before any
 transport, with explicit import/legacy treatment and every relevant writer
 fenced. That cannot retroactively certify legacy rows. Coordinator was asked
 to resolve that scope versus accepting the explicit retain/park deviation;
-no creation protocol or producer implementation is claimed here.
+no creation protocol or producer implementation is claimed here. The
+coordinator subsequently chose the bounded retain/park option: no new
+preclaim positive API now, and delivered cleanup only through authority that
+actually authorizes that exact operation.
+
+### Separate fresh-creation provenance follow-up design
+
+This is a proposed independently admitted follow-up, not a declaration,
+implementation, prerequisite to the atomic-attempt guard, or promise that
+existing rows become eligible.
+
+1. Establish origin only through a new typed atomic fresh outgoing-DM creation
+   operation. It inserts the message and any initial pending rows together
+   with persisted birth identity and a caller-known stable creation request.
+   The store issues an opaque receipt/handle bound to issuer, exact message
+   incarnation and exact pending identities. Exact creation replay observes
+   the original operation, never upserts a replacement. Generic save,
+   restored DTOs, supplied timestamps/counts and caller-created UUIDs do not
+   certify birth. Retain tombstones so deletion/recreation, key reuse and
+   lost-return replay cannot reset an old identity into fresh eligibility.
+2. Maintain a durable one-way no-dispatch eligibility state. Before every
+   physical invocation, atomically consume that eligibility with the actual
+   pre-dispatch admission, including invocations covered only by saturation
+   and every backoff/retry sharing a logical wire ID. It remains consumed
+   after a thrown return, cancellation or process death; a later unsent
+   outcome cannot retrospectively recreate birth proof. Any future narrower
+   zero-write restoration would require its own exact evidence protocol.
+   Generic message/queue DML across ordinary handles invalidates eligibility;
+   typed preparation may preserve it only through a prevalidated same-
+   transaction rule with explicit tests. No process-local exemption suffices.
+3. Keep creation provenance separate from a connection's mutation grant.
+   A current lease must capture exact eligible message/pending revisions
+   before terminal work. After restart, persisted provenance alone must not
+   reconstruct an old handle or revive a retired lease; a new supported
+   storage capture may bind the current lease to still-eligible provenance.
+   Missing/erased/invalidated provenance returns explicit uncertainty, not
+   an empty-history success.
+4. A future missing-contact terminal transaction revalidates the current
+   lease, captured message/pending incarnations/revisions, actual contact
+   absence, genuine unconsumed provenance and complete target ancestry.
+   Delivery wins without relabeling it; sticky saturation and contradictory,
+   possible or legacy transport evidence deny new failure. Failure, exact
+   captured pending cleanup and an immutable terminal-operation proof commit
+   together. A restored contact, pending replacement or competing mutation
+   rejects without partial cleanup. Read-only exact replay reconciles lost
+   returns without deleting a replacement or implying a fresh proof.
+5. Existing, imported, deduplicated/skipped-import, synced, simulator-seeded
+   and raw-DAO-created rows never acquire birth proof merely because their
+   history is empty. Restore must invalidate affected eligible provenance
+   even when an entry is skipped or remapped to an existing row. Backups must
+   not serialize an exportable authority certificate. Legacy/imported rows
+   retain explicit uncertainty/park behavior unless separately supported
+   genuine evidence exists; no migration backfills proof from absence.
+
+Current-worktree source landmarks demonstrate why this is cross-owner work:
+`MessageRepository.saveMessage` is generic upsert; `MessageService` creates
+inline and retry messages via that API; `ChatSendQueueService` separately
+inserts sequenced pending rows; `BackupMessageRestore` inserts, deduplicates
+and remaps messages independently. Simulator/sync writers also use generic
+save. These source landmarks are not a claim that the owners' later frozen
+candidates were inspected. The service owner must account for pending
+creation, inline/retry/notification paths, creation callbacks, retained queue
+hydration and every actual physical dispatch; storage/restore owners must
+account for public DAO/raw-SQL and restore invalidation.
+
+Required acceptance includes real Room cross-handle same-value mutation,
+delete/recreate and restore-skip controls; creation/terminal commit-then-throw
+replay and file reopen; missing-contact restoration races; exact pending
+replacement protection; pre-dispatch crash/cancellation and saturation-covered
+invocation controls; all creation/callback/queue/transport surfaces; and
+explicit legacy/imported noneligibility. Preserve original successful-send,
+delivery, channel and cleanup assertions. No such tests or follow-up
+implementation have been executed or authorized by this design.

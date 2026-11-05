@@ -417,6 +417,39 @@ $env:PYTHONPATH = "$PWD\tools\android-port"
 python -m unittest discover -s .\tools\android-port\tests -p test_local_scope.py -v
 ```
 
+### Approved remapped JVM inputs
+
+Notification messaging tests under `src/androidTest` are also JVM inputs only for
+the explicitly supported notification build profiles. The verifier recognizes
+the complete immutable `build.gradle.kts` blobs `9c5e1f4f6ed16f68ff629e6768afdd9185d2da61`
+(current notification mapping) and `1edcfc21437134ff7eb4bc431ffd6358c6967bab`
+(the same mapping plus #515 task wiring). This is a bounded allowlist, not a Gradle
+interpreter. A missing/changed/dynamic/unsafe build mapping fails closed; changing
+that build requires a reviewed profile update. An unrelated instrumentation tree
+does not become JVM test evidence.
+
+Affected and full selection explicitly request `:platform:notifications:testDebugUnitTest`.
+Its existing JUnit and compiled-source collectors must discover every declared
+remapped and conventional `src/test`/`src/testDebug` Kotlin test methods,
+including new candidate methods, plus the six mandatory delivery/payload/dispatcher
+identities. Missing, zero, substituted or skipped cases fail. Unsupported Java
+test sources fail closed. The exact candidate build, production, conventional test
+and approved remapped input blobs are recorded as `remapped_jvm_inputs` in the same
+run log. Tracked changes and untracked additions under those inputs are refused,
+and the actual compiled Kotlin test-source inventory must exactly match candidate
+blobs across both source roots. These are JVM/Robolectric observations, never
+API/device or notification trampoline evidence. A candidate verifier change
+cannot approve itself: trusted reader deployment and admission are separate from
+these source fixtures.
+
+Focused source-only remapping and selector regression command (no Gradle lock,
+runtime installation or device execution):
+
+```powershell
+$env:PYTHONPATH = "$PWD\tools\android-port;$PWD\tools\android-port\tests"
+python -B -c "import unittest; from controller.test_runner import run_suite; raise SystemExit(run_suite(unittest.TestLoader().loadTestsFromNames(['test_module_junit', 'test_local_scope', 'test_ci'])))"
+```
+
 Focused source/launcher integration fixtures (no real Gradle/native/runtime
 deployment) can run within the light-source capacity lane:
 

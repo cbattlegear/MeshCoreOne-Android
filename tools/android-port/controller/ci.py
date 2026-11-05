@@ -420,6 +420,10 @@ def run_stage(stage: str, state: dict, output: Path, *, local=False, scopes=None
         )
         print(json.dumps({"result": "success", **report}, indent=2))
         return
+    if "scaffold" in selected:
+        from controller.module_junit import remapped_tasks
+
+        tasks = list(dict.fromkeys([*tasks, *remapped_tasks(REPO)]))
     lineage_path = prepare_test_lineage(output)
     sources_path = prepare_test_sources(output)
     environment["ANDROID_CI_TEST_LINEAGE"] = str(lineage_path)
@@ -545,6 +549,11 @@ def run_stage(stage: str, state: dict, output: Path, *, local=False, scopes=None
         runners[module] = Path(locations[0]).name
     bind_test_lineage(inventory, read_test_lineage(lineage_path), runners)
     report["compiled_test_sources"] = read_test_sources(sources_path, runners)
+    from controller.module_junit import validate_remapped_compilation
+
+    report["remapped_jvm_inputs"] = validate_remapped_compilation(
+        REPO, report["compiled_test_sources"], runners,
+    )
     print(json.dumps(report, indent=2))
 
 

@@ -406,3 +406,35 @@ all declarations, snapshot/observer source, settlement and the 26 unexecuted
 test methods are unchanged. `git diff --check` and source-preservation checks
 passed; no build or test execution occurred. Storage/service own actual
 saturation/no-marker/all-unsent producer and consumer controls.
+
+## Preclaim missing-contact proof limitation
+
+The separate preclaim missing-contact/terminal path has no DirectAckAttempt.
+Its caller has a current session lease and message/contact identity, and may
+read pending DTOs, but those public values are not mutation authority. A
+positive atomic failure/cleanup would need opaque exact message and pending
+incarnation/revision bindings, contact-absence revalidation, complete retained
+target ancestry, a genuine birth/no-write proof, stable operation identity and
+delivery-first guards. Pending-row replacements must never be broadly deleted.
+
+Storage owner confirmed that the current producer has no genuine message-birth
+or no-write certificate: generic save/upsert/import and incarnation/revision
+tracking do not prove whether transport previously ran. Empty claim, intent or
+marker history and an attempt count of zero cannot certify an older untracked
+message. Capturing a current intent cannot create that missing provenance;
+the existing no-dispatch pending-completion capability is cleanup authority,
+not permission to set FAILED. Sticky saturation also prevents new failure.
+
+Consequently this contract handoff adds no success-shaped preclaim API,
+fabricated attempt/handle or interpretation of absence as proof. Service's
+interim safe path retains and parks uncertain preclaim work without generic
+FAILED or pending deletion; this is a known-safe-cleanup parity gap, not a
+passing replacement. Delivered cleanup requires its actual existing proven
+authority, not an unguarded DELIVERED DTO read.
+
+A useful positive API requires a separately agreed/admitted creation protocol
+that atomically establishes immutable no-dispatch provenance before any
+transport, with explicit import/legacy treatment and every relevant writer
+fenced. That cannot retroactively certify legacy rows. Coordinator was asked
+to resolve that scope versus accepting the explicit retain/park deviation;
+no creation protocol or producer implementation is claimed here.

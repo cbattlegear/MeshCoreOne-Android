@@ -576,3 +576,16 @@ Shared local Gradle ownership was not cleared, bypassed or contended for.
 The #495 navigation/source/reservation/publication hold, original entry/activation
 witness, first-run presenter/dismissal, unknown retired-owner recovery, physical
 API31/37/radio evidence and native tip UX remain unresolved as applicable.
+
+### Exact 3f22 compilation result
+
+Automatic run `41946087662`, Linux job `126978620790`, on exact
+`3f22b5eaad4165640e8576df8b77548d53a07eea` failed
+`:app:compileDebugUnitTestKotlin`. The new reset fixture omitted its
+`OnboardingFlagStore` import (line 343, with a consequent adapter type error at
+352) and used kotlin.test argument ordering with JUnit's `assertEquals` (358).
+The isolated correction adds the import and puts the diagnostic message first;
+it changes no assertion or production behavior. App tests did not execute on
+3f22, so the new app/mounted controls remain unverified. Classifier/controller
+passed; Swift oracles were skipped. The corrected successor requires its own
+automatic exact-head result; this failure is not relabeled as test success.

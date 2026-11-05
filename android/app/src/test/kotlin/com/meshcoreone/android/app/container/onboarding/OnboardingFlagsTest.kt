@@ -11,6 +11,7 @@ import com.meshcoreone.android.core.ui.SharedTip
 import com.meshcoreone.android.core.ui.ShowOnceTips
 import com.meshcoreone.android.core.ui.TipHostState
 import com.meshcoreone.android.feature.onboarding.OnboardingState
+import com.meshcoreone.android.feature.onboarding.OnboardingFlagStore
 import java.io.File
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
@@ -355,7 +356,7 @@ class OnboardingFlagsTest {
             val newer = async(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
                 runCatching { state.resetOnboarding() }
             }
-            assertEquals(1, submissions, "The newer reset must wait before entering the actual writer boundary")
+            assertEquals("The newer reset must wait before entering the actual writer boundary", 1, submissions)
             assertFalse(newer.isCompleted)
             assertFalse(state.canStartCompletion())
             assertFailsWith<IllegalStateException> { state.completeOnboarding() }

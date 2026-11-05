@@ -78,6 +78,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     val state: StateFlow<NavigationState> = mutableState.state
     internal val publishedNavigation get() = mutableState.publishedSnapshots
     internal val currentState: NavigationState get() = mutableState.value
+    internal val currentEntryEpoch: Long get() = mutableState.snapshot().activeEntryEpoch
     internal val contactHandoffUpdates get() = mutableState.publishedSnapshots
     private val notificationMutex = Mutex()
     private val drainMutex = Mutex()
@@ -149,6 +150,17 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         return committed
     }
 
+    private fun updateIfCurrent(isCurrent: () -> Boolean, update: (NavigationState) -> NavigationState): Boolean {
+        while (true) {
+            val snapshot = mutableState.snapshot()
+            when (commitIfCurrent(snapshot, update(snapshot.value), isCurrent)) {
+                true -> return true
+                null -> return false
+                false -> Unit
+            }
+        }
+    }
+
     // AndroidOnly: WP-302 Called only by a newly created host, not on resize or connection changes.
     fun restoreHostState(restored: NavigationState) {
         val current = mutableState.snapshot()
@@ -202,8 +214,15 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     }
 
     fun navigateToChannel(channel: ChannelDTO, scrollToMessageID: UUID? = null) = mutableState.update {
+        it.withChannelSelection(channel, scrollToMessageID)
+    }
+
+    internal fun navigateToChannelWhen(channel: ChannelDTO, isCurrent: () -> Boolean): Boolean =
+        updateIfCurrent(isCurrent) { it.withChannelSelection(channel, null) }
+
+    private fun NavigationState.withChannelSelection(channel: ChannelDTO, scrollToMessageID: UUID?): NavigationState {
         val selection = ChatSelection.Channel(channel)
-        it.push(AppTab.CHATS, NavigationDestination.Chat(selection)).copy(
+        return push(AppTab.CHATS, NavigationDestination.Chat(selection)).copy(
             pendingChannel = channel, chatsSelectedRoute = selection,
             tabBarVisible = false,
         ).withMessageScroll(scrollToMessageID)
@@ -713,12 +732,25 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
             }
         }
     }
-    fun stageChannelLink(link: ChannelLinkRequest?, selectChats: Boolean = false) = mutableState.update {
-        (if (selectChats && link != null) it.select(AppTab.CHATS) else it).copy(pendingChannelLink = link)
-    }
-    fun stageHashtag(link: HashtagJoinRequest?, selectChats: Boolean = false) = mutableState.update {
-        (if (selectChats && link != null) it.select(AppTab.CHATS) else it).copy(pendingHashtag = link)
-    }
+    fun stageChannelLink(link: ChannelLinkRequest?, selectChats: Boolean = false) =
+        mutableState.update { it.withChannelLink(link, selectChats) }
+
+    internal fun stageChannelLinkWhen(
+        link: ChannelLinkRequest, selectChats: Boolean, isCurrent: () -> Boolean,
+    ): Boolean = updateIfCurrent(isCurrent) { it.withChannelLink(link, selectChats) }
+
+    private fun NavigationState.withChannelLink(link: ChannelLinkRequest?, selectChats: Boolean): NavigationState =
+        (if (selectChats && link != null) select(AppTab.CHATS) else this).copy(pendingChannelLink = link)
+
+    fun stageHashtag(link: HashtagJoinRequest?, selectChats: Boolean = false) =
+        mutableState.update { it.withHashtag(link, selectChats) }
+
+    internal fun stageHashtagWhen(
+        link: HashtagJoinRequest, selectChats: Boolean, isCurrent: () -> Boolean,
+    ): Boolean = updateIfCurrent(isCurrent) { it.withHashtag(link, selectChats) }
+
+    private fun NavigationState.withHashtag(link: HashtagJoinRequest?, selectChats: Boolean): NavigationState =
+        (if (selectChats && link != null) select(AppTab.CHATS) else this).copy(pendingHashtag = link)
     fun setPendingDeviceMenuTipDonation(pending: Boolean) =
         mutableState.update { it.copy(pendingDeviceMenuTipDonation = pending) }
 

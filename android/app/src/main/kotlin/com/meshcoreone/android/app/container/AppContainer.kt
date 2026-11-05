@@ -425,6 +425,49 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
         }
     }
 
+    internal data class ExternalChannelLinkSession(val radioId: RadioId?, val isCurrent: () -> Boolean)
+
+    private data class ExternalChannelLinkCapture(
+        val graph: RadioSessionContainer?,
+        val lifecycle: ConnectionManager.NavigationLifecycleStamp,
+        val radioId: RadioId?,
+        val generation: Long,
+        val entryEpoch: Long,
+        val quiescentOffline: Boolean,
+    )
+
+    internal fun captureExternalChannelLinkSession(): ExternalChannelLinkSession {
+        val captured = withNavigationCommitBoundary {
+            val lifecycle = connectionManager.captureNavigationLifecycle()
+            ExternalChannelLinkCapture(
+                sessions.current, lifecycle, appState.currentRadioId,
+                navigation.currentState.generation, navigation.currentEntryEpoch,
+                connectionManager.isOfflineNavigationLifecycleCurrent(lifecycle),
+            )
+        }
+        return ExternalChannelLinkSession(captured.radioId) {
+            withNavigationCommitBoundary {
+                val graph = sessions.current
+                if (navigation.currentState.generation != captured.generation ||
+                    navigation.currentEntryEpoch != captured.entryEpoch ||
+                    appState.currentRadioId != captured.radioId
+                ) false
+                else if (captured.graph == null) {
+                    graph == null && (
+                        if (captured.quiescentOffline) {
+                            connectionManager.isOfflineNavigationLifecycleCurrent(captured.lifecycle)
+                        } else connectionManager.isNavigationLifecycleCurrent(captured.lifecycle)
+                        )
+                } else {
+                    graph === captured.graph && !captured.graph.isTornDown &&
+                        connectionManager.isInitialNavigationSession(
+                            captured.lifecycle, captured.graph.token, sessions.publicationIdentity, captured.graph,
+                        )
+                }
+            }
+        }
+    }
+
     internal fun captureContactLinkSession(generation: Long): () -> Boolean {
         val lookupRevision = navigation.beginContactLinkLookup(generation)
         val isCurrentSession = captureContactNavigationSession(generation)

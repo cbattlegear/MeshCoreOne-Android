@@ -24,10 +24,9 @@ import com.meshcoreone.android.app.container.AppConnectionRecoveryDialogs
 import com.meshcoreone.android.app.container.AppConnectionStatus
 import com.meshcoreone.android.app.container.createToolsFeatureDependencies
 import com.meshcoreone.android.app.container.createToolsDiagnosticsDependencies
-import com.meshcoreone.android.app.deeplinks.AppDeepLinkRouter
-import com.meshcoreone.android.app.deeplinks.ContainerDeepLinkEnvironment
 import com.meshcoreone.android.app.deeplinks.DeepLinkRouteOutcome
 import com.meshcoreone.android.app.deeplinks.PendingExternalRoute
+import com.meshcoreone.android.app.navigation.GuardedExternalLinkRouter
 import com.meshcoreone.android.app.navigation.NativeNavigationShell
 import com.meshcoreone.android.app.navigation.AppShortcutContent
 import com.meshcoreone.android.app.navigation.NavigationCoordinator
@@ -62,7 +61,7 @@ class NavigationHostViewModel : ViewModel() {
     private var deepLinksBound = false
     private var initialViewIntentSubmitted = false
     private var deliverySequence = 0L
-    private var router: AppDeepLinkRouter? = null
+    private var router: GuardedExternalLinkRouter? = null
     val pendingExternalRoute = PendingExternalRoute { uri ->
         router?.routeExternal(uri) ?: DeepLinkRouteOutcome.Rejected
     }
@@ -71,7 +70,7 @@ class NavigationHostViewModel : ViewModel() {
         if (deepLinksBound) return
         container.navigation.attachHostState(navigation.state.value)
         navigation = container.navigation
-        router = AppDeepLinkRouter(ContainerDeepLinkEnvironment(container, navigation))
+        router = GuardedExternalLinkRouter(container, navigation)
         deepLinksBound = true
         viewModelScope.launch { pendingExternalRoute.markReady() }
     }

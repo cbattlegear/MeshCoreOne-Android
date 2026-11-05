@@ -70,7 +70,7 @@ class ShowOnceTips(private val preferences: PreferenceStore) {
 
     suspend fun isOnboardingCompletionFinalized(attemptId: String): Boolean {
         val snapshot = preferences.snapshot()
-        return snapshot[finalizedCompletion] == attemptId && snapshot[AppStorageKey.hasCompletedOnboarding] &&
+        return snapshot.stored(finalizedCompletion) == attemptId && snapshot[AppStorageKey.hasCompletedOnboarding] &&
             snapshot[SharedTip.DEVICE_MENU.eventKey]
     }
 

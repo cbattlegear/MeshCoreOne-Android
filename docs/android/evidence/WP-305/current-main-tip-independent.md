@@ -126,6 +126,17 @@ without an actual donation cannot claim. There are now 24 tip methods,
 The exact initial-delay, sidebar/native display and navigation lifetimes remain
 separate integration acceptance, not behavior claimed by this prerequisite.
 
+## Absent identity is not an empty identity
+
+PR #581's independent automated review found that a missing finalized marker's
+empty-string default could match an explicitly empty attempt ID after reset
+and unattributed completion. Finalized readback now uses the existing no-default
+stored lookup. This preserves the distinction between an actually stored empty
+identity and absence without introducing a new input-validation policy. The
+25th real-DataStore control verifies the stored-empty positive, false/true
+invalidation, unattributed replacement, owner close/reopen, later nonempty
+completion and pending-tip claim. All previous assertions are retained.
+
 This supports only the durable-tip portion of WP-305 behavior/boundaries and
 source-test parity. Full onboarding, original Activity/navigation witness #495,
 the held #532 composition, native tip presentation/timing, physical devices,

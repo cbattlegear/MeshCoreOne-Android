@@ -59,6 +59,32 @@ class ShowOnceTipsTest {
         suspend fun close() = storage.close()
     }
 
+    @Test fun removedFinalizedMarkerCannotMatchAnEmptyAttemptIdAfterResetOrUnattributedCompletion() = runBlocking {
+        val directory = temporary.newFolder()
+        val h = Harness(directory)
+        try {
+            h.tips.completeOnboarding("")
+            assertTrue(h.tips.isOnboardingCompletionFinalized(""))
+            h.tips.persistOnboardingFlag(false)
+            assertFalse(h.tips.isOnboardingCompletionFinalized(""))
+            h.tips.persistOnboardingFlag(true)
+            assertTrue(h.storage.preferences.get(AppStorageKey.hasCompletedOnboarding))
+            assertTrue(h.storage.preferences.get(SharedTip.DEVICE_MENU.eventKey))
+            assertFalse(h.tips.isOnboardingCompletionFinalized(""))
+            h.tips.completeOnboarding()
+            assertFalse(h.tips.isOnboardingCompletionFinalized(""))
+        } finally { h.close() }
+        val reopened = Harness(directory)
+        try {
+            assertFalse(reopened.tips.isOnboardingCompletionFinalized(""))
+            assertTrue(reopened.storage.preferences.get(AppStorageKey.hasCompletedOnboarding))
+            reopened.tips.completeOnboarding("attempt-a")
+            assertTrue(reopened.tips.isOnboardingCompletionFinalized("attempt-a"))
+            assertFalse(reopened.tips.isOnboardingCompletionFinalized(""))
+            assertTrue(reopened.tips.claim(SharedTip.DEVICE_MENU) { connected })
+        } finally { reopened.close() }
+    }
+
     @Test fun unattributedSameValueWritesInvalidateIdentityWithoutDonatingOrConsumingTips() = runBlocking {
         val h = Harness(temporary.newFolder())
         try {

@@ -96,23 +96,24 @@ def module_sources(repo: Path, revision=None):
     return entries
 
 
-def remapped_tasks(repo):
+def remapped_tasks(repo, revision=None):
     return [
         ":" + module.replace("/", ":") + ":" + JVM_REMAPS[module]["runner"]
-        for module in module_sources(repo) if module in JVM_REMAPS
+        for module in module_sources(repo, revision) if module in JVM_REMAPS
     ]
 
 
-def check_module_inputs(repo, modules):
+def check_module_inputs(repo, modules, revision=None):
+    revision = revision or git(repo, "rev-parse", "HEAD").decode().strip()
     paths = []
     for module in modules:
         build = f"android/{module}/build.gradle.kts"
-        blob = git(repo, "rev-parse", "HEAD:" + build).decode().strip() if module in JVM_REMAPS else None
+        blob = git(repo, "rev-parse", revision + ":" + build).decode().strip() if module in JVM_REMAPS else None
         paths.extend(f"android/{module}/{relative}" for relative in (
             "build.gradle.kts", "src/main", "src/test", "src/testDebug", *remapped_roots(module, blob),
         ))
     if paths and (
-        git(repo, "diff", "--name-only", "HEAD", "--", *paths).strip()
+        git(repo, "diff", "--name-only", revision, "--", *paths).strip()
         or git(repo, "ls-files", "--others", "-z", "--", *paths).strip()
     ):
         raise PortError("Compiled module inputs differ from the immutable candidate")
@@ -131,47 +132,111 @@ def _notification_jvm_test_sources(module, inputs):
     return sources
 
 
-def require_remapped_cases(repo, module, directory, inputs):
+def _notification_remapped_sources(module, inputs):
+    prefix = f"android/{module}/"
+    roots = JVM_REMAPS[module]["roots"]
+    return {
+        path: blob for path, blob in inputs.items()
+        if path.startswith(prefix) and any(
+            path[len(prefix):].startswith(root + "/") for root in roots
+        )
+    }
+
+
+def candidate_source_tree(repo, revision):
+    result = {}
+    for entry in git(repo, "ls-tree", "-rz", "--full-tree", revision).split(b"\0"):
+        if not entry:
+            continue
+        metadata, raw_path = entry.split(b"\t", 1)
+        mode, kind, blob = metadata.decode("ascii").split()
+        path = git_path(raw_path.decode("utf-8"))
+        if kind != "blob" or not path.endswith((".kt", ".java")):
+            continue
+        if mode not in ("100644", "100755") or SHA.fullmatch(blob) is None:
+            raise PortError("Unsafe committed Kotlin/Java candidate source: " + path)
+        result[path] = blob
+    return result
+
+
+def require_remapped_cases(repo, module, directory, inputs, compiled_sources, revision):
     if module not in JVM_REMAPS:
         return
     from .ci_evidence import suite_case_ids
-    from .repair_acceptance import _kotlin_junit_methods
+    from .repair_acceptance import _kotlin_junit_methods, validate_hosted_methods
 
+    sources = _notification_remapped_sources(module, inputs)
+    expected = _notification_jvm_test_sources(module, inputs)
     required = set(NOTIFICATION_CASES)
-    for path, blob in _notification_jvm_test_sources(module, inputs).items():
+    if not isinstance(compiled_sources, dict) or not isinstance(compiled_sources.get(module), dict):
+        raise PortError("Missing immutable compiled notification test-source inventory")
+    if not sources or not expected or compiled_sources[module] != expected:
+        raise PortError("Actual JVM compilation differs from immutable notification test sources: " + module)
+    records = suite_case_ids(directory)
+    observed = {(case["class"], case["method"]) for case in records}
+    if not required <= observed:
+        raise PortError("Missing mandatory remapped JVM named cases: " + str(sorted(required - observed)))
+    coverage = []
+    for path in sources:
+        coverage.append({
+            "path": path, "modules": [module],
+            "native_methods": [case["class"] + "#" + case["method"] for case in records],
+            "hosted_methods": [],
+        })
+    for path, blob in expected.items():
+        if path in sources:
+            continue
         classes = {}
         methods = _kotlin_junit_methods(
-            git(repo, "cat-file", "blob", blob).decode("utf-8"), classes, reject_inherited=True,
+            git(repo, "cat-file", "blob", blob).decode("utf-8"),
+            classes, reject_inherited=True,
         )
         if any(kind != "test" for kind in methods.values()):
-            raise PortError("Unsupported remapped JVM test family: " + path)
-        required.update((classes[method], method) for method in methods)
-    observed = {(case["class"], case["method"]) for case in suite_case_ids(directory)}
+            raise PortError("Unsupported conventional notification JVM test family: " + path)
+        if methods:
+            required.update((classes[method], method) for method in methods)
+            coverage.append({
+                "path": path, "modules": [module], "native_methods": [],
+                "hosted_methods": [
+                    {"path": path, "blob_sha": blob, "id": method} for method in methods
+                ],
+            })
     if not required <= observed:
         raise PortError("Missing mandatory remapped JVM named cases: " + str(sorted(required - observed)))
 
+    validate_hosted_methods(
+        {"schema_version": 3, "kind": "whole-wp", "coverage": coverage},
+        candidate_source_tree(repo, revision), repo, {module: records}, compiled_sources,
+    )
 
-def validate_remapped_compilation(repo, compiled_sources, modules):
+
+def validate_remapped_compilation(repo, compiled_sources, modules, revision=None):
     selected = set(modules) & JVM_REMAPS.keys()
     if not selected:
         return {}
-    expected = module_sources(repo)
-    check_module_inputs(repo, selected)
+    if not isinstance(compiled_sources, dict):
+        raise PortError("Missing compiled module source inventory")
+    revision = revision or git(repo, "rev-parse", "HEAD").decode().strip()
+    expected = module_sources(repo, revision)
+    check_module_inputs(repo, selected, revision)
     for module in selected:
         sources = _notification_jvm_test_sources(module, expected.get(module, {}))
-        actual = _notification_jvm_test_sources(module, compiled_sources.get(module, {}))
-        if not sources or actual != sources:
-            raise PortError("Actual JVM compilation omits/changes immutable notification test sources: " + module)
+        actual = compiled_sources.get(module)
+        if not sources or not isinstance(actual, dict) or actual != sources:
+            raise PortError("Actual JVM compilation differs from immutable notification test sources: " + module)
     return {module: expected[module] for module in sorted(selected)}
 
 
-def check_module_tests(repo: Path):
+def check_module_tests(repo: Path, compiled_sources=None, revision=None):
     from .ci_evidence import suite_counts
 
-    expected = module_sources(repo)
-    check_module_inputs(repo, expected)
+    revision = revision or git(repo, "rev-parse", "HEAD").decode().strip()
+    expected = module_sources(repo, revision)
+    check_module_inputs(repo, expected, revision)
     results = {}
     for module, inputs in expected.items():
+        if module in JVM_REMAPS and compiled_sources is not None:
+            validate_remapped_compilation(repo, compiled_sources, [module], revision)
         module_root = repo / "android" / module
         candidates = [
             module_root / relative for relative in REPORT_LOCATIONS
@@ -182,7 +247,7 @@ def check_module_tests(repo: Path):
         if module in JVM_REMAPS and candidates[0].name != JVM_REMAPS[module]["runner"]:
             raise PortError("Wrong actual remapped JVM unit runner: " + module)
         results[module] = suite_counts(candidates[0], 1)
-        require_remapped_cases(repo, module, candidates[0], inputs)
+        require_remapped_cases(repo, module, candidates[0], inputs, compiled_sources, revision)
     return results
 
 

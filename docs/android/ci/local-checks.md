@@ -549,15 +549,17 @@ test sources fail closed. The exact candidate build, production, conventional te
 and approved remapped input blobs are recorded as `remapped_jvm_inputs` in the same
 run log. Tracked changes and untracked additions under those inputs are refused,
 and the actual compiled Kotlin test-source inventory must exactly match candidate
-blobs across both source roots. These are JVM/Robolectric observations, never
-API/device or notification trampoline evidence. A candidate verifier change
-cannot approve itself: trusted reader deployment and admission are separate from
-these source fixtures.
+blobs across both source roots. The default full local pre-push route installs the
+same candidate task-graph collector and requires fresh compiler-source evidence
+before accepting its module results; it does not reconstruct compilation inputs
+from the working tree. These are JVM/Robolectric observations, never API/device or
+notification trampoline evidence. A candidate verifier change cannot approve itself:
+trusted reader deployment and admission are separate from these source fixtures.
 
 Focused source-only remapping and selector regression command (no Gradle lock,
 runtime installation or device execution):
 
 ```powershell
 $env:PYTHONPATH = "$PWD\tools\android-port;$PWD\tools\android-port\tests"
-python -B -c "import unittest; from controller.test_runner import run_suite; raise SystemExit(run_suite(unittest.TestLoader().loadTestsFromNames(['test_module_junit', 'test_local_scope', 'test_ci'])))"
+python -B -c "import unittest; from controller.test_runner import run_suite; raise SystemExit(run_suite(unittest.TestLoader().loadTestsFromNames(['test_module_junit', 'test_local_scope', 'test_repair_acceptance', 'test_ci'])))"
 ```

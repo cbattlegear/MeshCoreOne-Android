@@ -1954,14 +1954,17 @@ class RepairExecutionTests(unittest.TestCase):
         from controller.ci import TASKS
         count = {"discovered": 3, "run": 3, "passed": 3, "failed": 0, "errors": 0, "skipped": 0}
         methods = [{"class": "ProtocolTest", "method": f"case{i}"} for i in range(3)]
+        notification_task = ":platform:notifications:testDebugUnitTest"
         report = {"tasks": TASKS["scaffold"] + TASKS["protocol"], "protocol_suite": count,
                   "unit_test_methods": {"core/protocol": methods}}
+        self.assertIn(notification_task, report["tasks"])
         methods[0]["factory"] = "vectorFamily"
         proof = validate_build_log(build_log([], **report), ["core/protocol"])
         self.assertEqual(proof["methods"]["core/protocol"], methods)
         for change in ({"tasks": TASKS["scaffold"]}, {"protocol_suite": None},
                        {"unit_test_methods": {}},
-                       {"unit_test_methods": {"core/protocol": methods[:1]}}):
+                       {"unit_test_methods": {"core/protocol": methods[:1]}},
+                       {"tasks": report["tasks"] + [":platform:notifications:unsafeTask"]}):
             with self.subTest(change=change), self.assertRaises(PortError):
                 validate_build_log(build_log([], **(report | change)), ["core/protocol"])
 

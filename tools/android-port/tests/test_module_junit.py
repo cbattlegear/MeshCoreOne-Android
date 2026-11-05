@@ -1,7 +1,9 @@
 """AndroidOnly: WP-003 Validate active-module JUnit directly in build outputs."""
 
 import contextlib
+import importlib.util
 import io
+import json
 import subprocess
 import tempfile
 import unittest
@@ -12,7 +14,8 @@ from unittest.mock import patch
 from controller.errors import PortError
 from controller.module_junit import (
     NOTIFICATION_CASES, NOTIFICATION_ROOT, check_module_tests,
-    module_method_inventory, module_sources, remapped_tasks, validate_remapped_compilation,
+    _notification_jvm_test_sources, module_method_inventory, module_sources,
+    remapped_tasks, validate_remapped_compilation,
 )
 from test_ci_evidence import junit_report
 
@@ -33,6 +36,7 @@ def notification_fixture(write):
             NOTIFICATION_FIXTURE_COMMIT + ":android/platform/notifications/" + relative,
         ]).decode("utf-8")
         write("android/platform/notifications/" + relative, content)
+    write("android/platform/notifications/src/test/kotlin/ConventionalFixture.kt", "class ConventionalFixture\n")
     for module, plugin in (("model", "mesh.jvm.library"), ("contracts", "mesh.jvm.library"),
                            ("l10n", "mesh.android.library")):
         write(f"android/core/{module}/build.gradle.kts", f'plugins {{ id("{plugin}") }}\n')
@@ -142,18 +146,27 @@ class ModuleJUnitTests(unittest.TestCase):
         self.command("commit", "--quiet", "-m", "notification mapping")
         notification_report(self.repo)
 
+    def compiled_notification_sources(self):
+        inputs = module_sources(self.repo)["platform/notifications"]
+        return {
+            "platform/notifications": _notification_jvm_test_sources("platform/notifications", inputs),
+        }
+
     def test_exact_mapping_activates_and_binds_all_remapped_inputs(self):
         self.notifications()
         sources = module_sources(self.repo)["platform/notifications"]
         self.assertIn("android/platform/notifications/build.gradle.kts", sources)
-        self.assertEqual(len([path for path in sources if path.endswith(".kt")]), 3)
-        self.assertEqual(check_module_tests(self.repo)["platform/notifications"]["passed"], 6)
+        self.assertEqual(len([path for path in sources if path.endswith(".kt")]), 4)
+        compiled = self.compiled_notification_sources()
+        self.assertEqual(check_module_tests(self.repo, compiled)["platform/notifications"]["passed"], 6)
+        with self.assertRaisesRegex(PortError, "Missing immutable compiled notification test-source inventory"):
+            check_module_tests(self.repo)
         self.assertEqual(remapped_tasks(self.repo), [":platform:notifications:testDebugUnitTest"])
         baseline = self.command("rev-parse", "HEAD")
         self.source("platform/notifications", NOTIFICATION_ROOT + "/NewTest.kt", "uncommitted")
         self.assertEqual(module_sources(self.repo, baseline)["platform/notifications"], sources)
         with self.assertRaisesRegex(PortError, "differ"):
-            check_module_tests(self.repo)
+            check_module_tests(self.repo, compiled, baseline)
 
     def test_missing_changed_dynamic_and_unsafe_mapping_reject(self):
         self.notifications()
@@ -199,21 +212,82 @@ class ModuleJUnitTests(unittest.TestCase):
         self.notifications()
         path = notification_report(self.repo)
         path.unlink()
+        compiled = self.compiled_notification_sources()
         with self.assertRaises(PortError):
-            check_module_tests(self.repo)
+            check_module_tests(self.repo, compiled)
         for identities in (set(), set(NOTIFICATION_CASES) - {min(NOTIFICATION_CASES)},
                            {(classname, method + "Substitute") for classname, method in NOTIFICATION_CASES}):
             with self.subTest(identities=identities):
                 notification_report(self.repo, identities)
                 with self.assertRaises(PortError):
-                    check_module_tests(self.repo)
+                    check_module_tests(self.repo, compiled)
         path = notification_report(self.repo)
         suite = ET.fromstring(path.read_bytes())
         suite.set("skipped", "1")
         ET.SubElement(suite.find("testcase"), "skipped")
         path.write_bytes(ET.tostring(suite))
         with self.assertRaises(PortError):
-            check_module_tests(self.repo)
+            check_module_tests(self.repo, compiled)
+
+    def test_compiled_remapped_methods_use_shared_immutable_lineage_validator(self):
+        from controller.repair_acceptance import validate_hosted_methods
+
+        self.notifications()
+        compiled = self.compiled_notification_sources()
+        report = notification_report(self.repo)
+        with patch("controller.repair_acceptance.validate_hosted_methods") as validate:
+            result = check_module_tests(self.repo, compiled)
+        self.assertEqual(result["platform/notifications"]["passed"], 6)
+        validate.assert_called_once()
+        scope, candidate_tree, repo, executed, actual = validate.call_args.args
+        self.assertEqual(scope["kind"], "whole-wp")
+        remapped = {
+            path for path in compiled["platform/notifications"]
+            if "/src/androidTest/" in path
+        }
+        self.assertTrue(remapped <= candidate_tree.keys())
+        self.assertEqual(repo, self.repo)
+        self.assertEqual(actual, compiled)
+        self.assertEqual(len(executed["platform/notifications"]), 6)
+        self.assertEqual(
+            {coverage["path"] for coverage in scope["coverage"]},
+            remapped,
+        )
+        self.assertEqual(report.parent.name, "testDebugUnitTest")
+
+    def test_default_full_fast_scaffold_requires_fresh_notification_compiler_inventory(self):
+        self.notifications()
+        path = self.root / "gradle-test-sources.jsonl"
+        fast_path = Path(__file__).resolve().parents[1] / "local" / "fast.py"
+        spec = importlib.util.spec_from_file_location("test_local_fast_runner", fast_path)
+        fast = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(fast)
+
+        def write_inventory(sources):
+            path.write_text(json.dumps({
+                "task": ":platform:notifications:testDebugUnitTest",
+                "sources": [{"path": name, "blob": blob} for name, blob in sorted(sources.items())],
+            }) + "\n", encoding="utf-8")
+
+        expected = self.compiled_notification_sources()["platform/notifications"]
+        write_inventory(expected)
+        actual = fast.notification_test_sources(self.repo, path)
+        self.assertEqual(actual["platform/notifications"], expected)
+        self.assertEqual(check_module_tests(self.repo, actual)["platform/notifications"]["passed"], 6)
+
+        path.unlink()
+        with self.assertRaisesRegex(PortError, "Missing or unsafe compiled test source inventory"):
+            fast.notification_test_sources(self.repo, path)
+        write_inventory({**expected, min(expected): "0" * 40})
+        with self.assertRaisesRegex(PortError, "differs from immutable notification test sources"):
+            fast.notification_test_sources(self.repo, path)
+        write_inventory({
+            **expected,
+            "android/platform/notifications/src/androidTest/kotlin/"
+            "com/meshcoreone/android/platform/notifications/native/NativeOnlyTest.kt": "0" * 40,
+        })
+        with self.assertRaisesRegex(PortError, "differs from immutable notification test sources"):
+            fast.notification_test_sources(self.repo, path)
 
     def test_future_candidate_named_case_is_mandatory_not_a_fixed_count(self):
         self.notifications()
@@ -225,12 +299,13 @@ class NewTest { @Test fun newlyRequired() {} }
 """)
         self.command("add", "--all")
         self.command("commit", "--quiet", "-m", "new case")
-        with self.assertRaisesRegex(PortError, "newlyRequired"):
-            check_module_tests(self.repo)
+        compiled = self.compiled_notification_sources()
+        with self.assertRaisesRegex(PortError, "Verification coverage"):
+            check_module_tests(self.repo, compiled)
         notification_report(self.repo, NOTIFICATION_CASES | {
             ("com.meshcoreone.android.platform.notifications.messaging.NewTest", "newlyRequired"),
         })
-        self.assertEqual(check_module_tests(self.repo)["platform/notifications"]["passed"], 7)
+        self.assertEqual(check_module_tests(self.repo, compiled)["platform/notifications"]["passed"], 7)
 
     def test_conventional_notification_case_is_mandatory_and_compiled_exactly(self):
         self.notifications()
@@ -244,23 +319,23 @@ class AdapterTest { @Test fun conventionalRequired() {} }
         self.command("commit", "--quiet", "-m", "conventional notification test")
         source = "android/platform/notifications/" + relative
         inputs = module_sources(self.repo)["platform/notifications"]
+        compiled = self.compiled_notification_sources()
         self.assertIn(source, inputs)
         with self.assertRaisesRegex(PortError, "conventionalRequired"):
-            check_module_tests(self.repo)
+            check_module_tests(self.repo, compiled)
         notification_report(self.repo, NOTIFICATION_CASES | {
             ("com.meshcoreone.android.platform.notifications.messaging.AdapterTest", "conventionalRequired"),
         })
-        self.assertEqual(check_module_tests(self.repo)["platform/notifications"]["passed"], 7)
+        self.assertEqual(check_module_tests(self.repo, compiled)["platform/notifications"]["passed"], 7)
 
-        compiled = {path: blob for path, blob in inputs.items() if path.endswith(".kt")}
         expected = {"platform/notifications": inputs}
         self.assertEqual(validate_remapped_compilation(
-            self.repo, {"platform/notifications": compiled}, ["platform/notifications"],
+            self.repo, compiled, ["platform/notifications"],
         ), expected)
         for actual in (
-            {path: blob for path, blob in compiled.items() if path != source},
-            {**compiled, source: "0" * 40},
-            {**compiled, source + "Extra.kt": "0" * 40},
+            {path: blob for path, blob in compiled["platform/notifications"].items() if path != source},
+            {**compiled["platform/notifications"], source: "0" * 40},
+            {**compiled["platform/notifications"], source + "Extra.kt": "0" * 40},
         ):
             with self.subTest(actual=actual), self.assertRaisesRegex(PortError, "compilation"):
                 validate_remapped_compilation(
@@ -290,7 +365,13 @@ class AdapterTest { @Test fun conventionalRequired() {} }
         ), expected)
         for actual in ({}, dict(list(sources.items())[1:]),
                        {**sources, min(sources): "0" * 40},
-                       {**sources, "android/platform/notifications/" + NOTIFICATION_ROOT + "/Extra.kt": "0" * 40}):
+                       {**sources, "android/platform/notifications/" + NOTIFICATION_ROOT + "/Extra.kt": "0" * 40},
+                       {**sources, "android/platform/notifications/src/androidTest/kotlin/"
+                                  "com/meshcoreone/android/platform/notifications/native/NativeOnlyTest.kt":
+                            "0" * 40},
+                       {**sources, "android/platform/notifications/src/main/kotlin/"
+                                  "com/meshcoreone/android/platform/notifications/Shared.kt":
+                            "0" * 40}):
             with self.subTest(actual=actual), self.assertRaisesRegex(PortError, "compilation"):
                 validate_remapped_compilation(
                     self.repo, {"platform/notifications": actual}, ["platform/notifications"],
@@ -347,7 +428,11 @@ class AdapterTest { @Test fun conventionalRequired() {} }
         self.command("commit", "--quiet", "-m", "notification producer wiring")
         self.assertEqual(self.command("rev-parse", "HEAD:android/platform/notifications/build.gradle.kts"),
                          "1edcfc21437134ff7eb4bc431ffd6358c6967bab")
-        self.assertEqual(check_module_tests(self.repo)["platform/notifications"]["passed"], 6)
+        self.assertEqual(
+            check_module_tests(self.repo, self.compiled_notification_sources())
+            ["platform/notifications"]["passed"],
+            6,
+        )
 
     def test_unsafe_committed_remapped_source_cannot_supply_provenance(self):
         self.notifications()
@@ -389,7 +474,11 @@ class AdapterTest { @Test fun conventionalRequired() {} }
         sources = module_sources(self.repo)["platform/notifications"]
         self.assertNotIn("android/platform/notifications/" + path, sources)
         self.source("platform/notifications", path, "dirty device test")
-        self.assertEqual(check_module_tests(self.repo)["platform/notifications"]["passed"], 6)
+        self.assertEqual(
+            check_module_tests(self.repo, self.compiled_notification_sources())
+            ["platform/notifications"]["passed"],
+            6,
+        )
 
 
 if __name__ == "__main__":

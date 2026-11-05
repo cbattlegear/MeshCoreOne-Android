@@ -15,6 +15,7 @@ TASKS = {
         "verifyScaffoldTests", "verifyRoomSchema", "validateModuleGraph",
         "runtimeDependencyInventory", "resolveScaffoldDependencies",
         ":app:assembleDebug", ":app:compileDebugAndroidTestKotlin", "lintScaffold",
+        ":platform:notifications:testDebugUnitTest",
     ],
     "prepare": ["resolveScaffoldDependencies"],
     "protocol": [":core:protocol:test"],
@@ -194,13 +195,6 @@ def select_paths(paths, requested=None, *, modules=None, graph_error=None):
     selected = required if requested is None else set(requested)
     scopes = [scope for scope in SCOPED_TASKS if scope in selected] + sorted(selected - set(SCOPED_TASKS))
     tasks = [task for scope in scopes if scope in SCOPED_TASKS for task in SCOPED_TASKS[scope]]
-    if "scaffold" in scopes:
-        from .module_junit import JVM_REMAPS
-
-        tasks.extend(
-            ":" + module.replace("/", ":") + ":" + profile["runner"]
-            for module, profile in JVM_REMAPS.items() if module in modules
-        )
     for scope in scopes:
         if scope.startswith("module:"):
             module = scope[len("module:"):]
@@ -291,10 +285,17 @@ def candidate_plan(
         # Unknown graph syntax must widen execution, not turn into omitted tests.
         modules = None
         graph_error = str(error)
+    selection = select_paths(paths, requested, modules=modules, graph_error=graph_error)
+    if "scaffold" in selection["scopes"]:
+        from .module_junit import remapped_tasks
+
+        selection["tasks"] = list(dict.fromkeys([
+            *selection["tasks"], *remapped_tasks(repo, head),
+        ]))
     return {
         "schema_version": 1, "kind": "local-affected-only", "base": base, "head": head,
         "tree": git(repo, "rev-parse", head + "^{tree}"), "paths": paths,
-        **select_paths(paths, requested, modules=modules, graph_error=graph_error),
+        **selection,
     }
 
 
@@ -323,10 +324,11 @@ def validate_plan(repo, plan, *, trusted_base=None, merge_base_only=False):
     return actual
 
 
-def collect_targeted_reports(repo, scopes):
+def collect_targeted_reports(repo, scopes, compiled_sources=None, revision=None):
     from .ci_evidence import suite_counts
     from .module_junit import check_module_inputs, module_sources, require_remapped_cases
 
+    revision = revision or git(repo, "rev-parse", "HEAD")
     suites = {}
     locations = {
         "protocol": (("core/protocol", "test", 84),),
@@ -335,12 +337,12 @@ def collect_targeted_reports(repo, scopes):
     }
     if not isinstance(scopes, list) or not all(isinstance(scope, str) for scope in scopes):
         raise PortError("Malformed report scopes")
-    modules = module_inventory(repo, git(repo, "rev-parse", "HEAD")) if any(
+    modules = module_inventory(repo, revision) if any(
         scope.startswith("module:") for scope in scopes
     ) else {}
     selected = [scope[len("module:"):] for scope in scopes if scope.startswith("module:")]
-    expected = module_sources(repo) if selected else {}
-    check_module_inputs(repo, selected)
+    expected = module_sources(repo, revision) if selected else {}
+    check_module_inputs(repo, selected, revision)
     for scope in scopes:
         if scope.startswith("module:"):
             module = scope[len("module:"):]
@@ -349,7 +351,9 @@ def collect_targeted_reports(repo, scopes):
             if modules[module]["tests"] or module == "app":
                 directory = repo / "android" / module / "build/test-results" / modules[module]["runner"]
                 suites[module] = suite_counts(directory, 1)
-                require_remapped_cases(repo, module, directory, expected.get(module, {}))
+                require_remapped_cases(
+                    repo, module, directory, expected.get(module, {}), compiled_sources, revision,
+                )
             continue
         if scope not in ("scaffold", *locations):
             raise PortError("Unknown report scope: " + str(scope))
@@ -603,17 +607,25 @@ def _run_scaffold(
             "result": "no-duplicate-ci-evidence",
             "phases": graph_summaries,
         },
-        "suites": collect_targeted_reports(repo, plan["scopes"]),
+        "suites": {},
         "lint": {
             module: lint_evidence(repo / "android" / module / "build/reports/lint-results-debug.xml")
             for module in lint
         },
     }
+    from .ci_evidence import read_test_sources
+
+    notification_sources = read_test_sources(
+        sources_path, {"platform/notifications": "testDebugUnitTest"},
+    )
+    report["suites"] = collect_targeted_reports(
+        repo, plan["scopes"], notification_sources, plan["head"],
+    )
     validate_graph_runtime(repo / "android/build/reports/scaffold")
     validate_runtime_scopes(repo, plan)
     if plan["full_scaffold"]:
         report["scaffold_suites"] = collect_suites(repo / "android")
-        report["module_unit_tests"] = check_module_tests(repo)
+        report["module_unit_tests"] = check_module_tests(repo, notification_sources, plan["head"])
         report["lint"] = collect_lint(repo / "android")
         execute([
             sys.executable, str(repo / "android/parity-tests/semantic.py"),

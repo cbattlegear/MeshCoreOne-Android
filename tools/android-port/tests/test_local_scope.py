@@ -18,6 +18,15 @@ from controller.local_scope import (
 from test_module_junit import notification_fixture, notification_report
 
 
+def compiled_notification_sources(repo):
+    from controller.module_junit import _notification_jvm_test_sources, module_sources
+
+    inputs = module_sources(repo)["platform/notifications"]
+    return {
+        "platform/notifications": _notification_jvm_test_sources("platform/notifications", inputs),
+    }
+
+
 class LocalScopeSelectionTests(unittest.TestCase):
     def test_validation_preserves_hosted_and_local_worker_options_without_overriding_them(self):
         for options in (
@@ -250,11 +259,39 @@ class LocalScopeBindingTests(unittest.TestCase):
         with self.assertRaises(PortError):
             collect_targeted_reports(self.repo, plan["scopes"])
         notification_report(self.repo)
-        self.assertEqual(collect_targeted_reports(self.repo, plan["scopes"])["platform/notifications"]["passed"], 6)
+        compiled = compiled_notification_sources(self.repo)
+        self.assertEqual(
+            collect_targeted_reports(self.repo, plan["scopes"], compiled, plan["head"])
+            ["platform/notifications"]["passed"],
+            6,
+        )
         self.write("android/gradle.properties", "build change")
         full = candidate_plan(self.repo, base, self.commit())
         self.assertTrue(full["full_scaffold"])
         self.assertIn(":platform:notifications:testDebugUnitTest", full["tasks"])
+
+    def test_remapped_runner_survives_dependency_parser_full_fallback(self):
+        notification_fixture(self.write)
+        self.write("android/core/model/src/main/kotlin/Model.kt", "base")
+        self.write(
+            "android/core/model/build.gradle.kts",
+            'plugins { id("mesh.jvm.library") }\n'
+            'dependencies { implementation(project(path = ":core:model")) }\n',
+        )
+        base = self.commit()
+        self.git("update-ref", "refs/remotes/origin/main", base)
+        self.write("android/core/model/src/main/kotlin/Model.kt", "changed")
+        head = self.commit()
+        from controller import local_scope
+        scaffold_tasks = [
+            task for task in local_scope.SCOPED_TASKS["scaffold"]
+            if task != ":platform:notifications:testDebugUnitTest"
+        ]
+        with patch.dict(local_scope.SCOPED_TASKS, {"scaffold": scaffold_tasks}):
+            plan = candidate_plan(self.repo, base, head)
+        self.assertTrue(plan["full_scaffold"])
+        self.assertIn("Unclassified project dependency expression", plan["reason"])
+        self.assertIn(":platform:notifications:testDebugUnitTest", plan["tasks"])
 
     def test_remapped_targeted_reports_cannot_be_substituted_or_dirty(self):
         from controller.module_junit import NOTIFICATION_CASES, NOTIFICATION_ROOT
@@ -262,13 +299,14 @@ class LocalScopeBindingTests(unittest.TestCase):
         notification_fixture(self.write)
         self.commit()
         scopes = ["module:platform/notifications"]
+        compiled = compiled_notification_sources(self.repo)
         notification_report(self.repo, {(c, m + "Substitute") for c, m in NOTIFICATION_CASES})
         with self.assertRaisesRegex(PortError, "mandatory remapped"):
-            collect_targeted_reports(self.repo, scopes)
+            collect_targeted_reports(self.repo, scopes, compiled)
         notification_report(self.repo)
         self.write("android/platform/notifications/" + NOTIFICATION_ROOT + "/Dirty.kt", "dirty")
         with self.assertRaisesRegex(PortError, "differ"):
-            collect_targeted_reports(self.repo, scopes)
+            collect_targeted_reports(self.repo, scopes, compiled)
 
     def test_instrumentation_only_module_does_not_select_jvm_runner(self):
         self.write("android/platform/widgets/build.gradle.kts", 'plugins { id("mesh.android.library") }\n')
@@ -288,10 +326,8 @@ class LocalScopeBindingTests(unittest.TestCase):
         build = self.repo / "android/platform/notifications/build.gradle.kts"
         self.write(build, build.read_text(encoding="utf-8").replace('getByName("test")', 'getByName("androidTest")'))
         head = self.commit()
-        plan = candidate_plan(self.repo, base, head)
-        self.assertTrue(plan["full_scaffold"])
         with self.assertRaisesRegex(PortError, "mapping build"):
-            report_inputs(self.repo, plan)
+            candidate_plan(self.repo, base, head)
 
     def test_actual_git_diff_binds_base_head_tree_and_scopes(self):
         plan = candidate_plan(self.repo, self.base, self.head)

@@ -516,7 +516,10 @@ def run_stage(stage: str, state: dict, output: Path, *, local=False, scopes=None
     }
     if "scaffold" in selected:
         report["suites"] = collect_suites(REPO / "android")
-        report["module_unit_tests"] = check_module_tests(REPO)
+        notification_sources = read_test_sources(
+            sources_path, {"platform/notifications": "testDebugUnitTest"},
+        )
+        report["module_unit_tests"] = check_module_tests(REPO, notification_sources)
         execute([sys.executable, str(REPO / "android" / "parity-tests" / "semantic.py"),
                  "--check", "--verify-execution"], environment, output / "parity-family-execution.log")
         report["unit_test_methods"] = module_method_inventory(REPO, report["module_unit_tests"])

@@ -40,6 +40,20 @@ acceptance. This candidate requires its own exact-head hosted verification and
 independent source review; authoritative job logs, not a second result bundle,
 provide execution evidence.
 
+## Cross-writer regression discriminator
+
+Independent review found the existing main WriteBehindOnboardingFlags.load
+writer persists only the Boolean. A completed attempt A followed by the real
+OnboardingState reset and unattributed completion can therefore resurrect A's
+finalized identity. The added OnboardingTipWriterTest uses the real loader,
+OnboardingState, DataStore and settled persisted false/true observations, then
+closes/reopens storage. Its assertions require invalidation and preserve pending
+donation/display behavior and fresh attempt B. A second control requires a
+settled real reset to clear a staged identity without consuming the tip.
+This test-only discriminator intentionally precedes the production correction;
+the immutable 4ffe reference and its already-dispatched run remain preserved.
+No integration is permitted on the older review or green alone.
+
 This supports only the durable-tip portion of WP-305 behavior/boundaries and
 source-test parity. Full onboarding, original Activity/navigation witness #495,
 the held #532 composition, native tip presentation/timing, physical devices,

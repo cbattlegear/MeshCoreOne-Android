@@ -76,7 +76,8 @@ data class RemoveUnfavoritedResult(val removed: Int, val total: Int)
 /**
  * Connected-device edits and bulk node maintenance (ConnectionManager+Pairing "Device Updates"
  * and "Node Management"). Edits share a coroutine mutex through persistence, then publish only their
- * intended fields. Failed/conflicting writes never replace live state.
+ * intended fields. Failed/conflicting writes never replace live state. Radio changes belong to
+ * the session's verified Settings operation; this editor only persists their local representation.
  */
 class ConnectedDeviceEditor(
     private val access: ConnectedDeviceAccess,
@@ -88,7 +89,6 @@ class ConnectedDeviceEditor(
     private val now: () -> Instant,
     private val diagnostics: ConnectivityDiagnostics = ConnectivityDiagnostics.NONE,
     private val onKnownRegionsChanged: (ConnectedDeviceEdit, List<String>) -> Unit = { _, _ -> },
-    private val clearDefaultFloodScope: suspend () -> Unit = {},
 ) {
     private val sessionEdits = Mutex()
     val connectedDevice: DeviceDTO? get() = access.connectedDevice
@@ -220,7 +220,7 @@ class ConnectedDeviceEditor(
         (if (token == null) access.connectedDevice else access.currentDevice(token)) ?: return null
         return scope.launch(start = CoroutineStart.UNDISPATCHED) {
             report("removeKnownRegion") {
-                changeKnownRegion(region, true, token, clearRadio = true)
+                changeKnownRegion(region, true, token)
             }
         }
     }
@@ -236,7 +236,6 @@ class ConnectedDeviceEditor(
         region: String,
         remove: Boolean,
         expectedToken: SessionToken?,
-        clearRadio: Boolean = false,
     ): Boolean = sessionEdits.withLock {
         val original = if (expectedToken == null) access.connectedDevice else access.currentDevice(expectedToken)
         original ?: return@withLock false
@@ -248,7 +247,6 @@ class ConnectedDeviceEditor(
                     it != region && it.utf8Prefix(ProtocolLimits.MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES) == selected
                 }
         }
-        if (clearRadio && original.removesSelectedScope()) clearDefaultFloodScope()
         persistEdit(if (remove) "removeKnownRegion" else "addKnownRegion", expectedToken) { authoritative ->
             authoritative.copy(
                 knownRegions = if (remove) authoritative.knownRegions.filterNot { it == region }.snapshot()

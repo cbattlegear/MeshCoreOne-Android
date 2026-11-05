@@ -252,3 +252,19 @@ fresh CAS-derived survivor decision. Existing assertions remain intact. Source c
 pass; these new controls require their own exact hosted execution and do not inherit the earlier
 34-method result. Radio-to-Room ordering across Settings operations remains the separate
 Settings producer's queue contract, not a guarantee manufactured by this storage guard.
+
+Independent exact `edd4a7f` to `a7fed6eb9` review identified that the optional editor
+`clearDefaultFloodScope` callback sampled the original live regions before a later CAS retry.
+There is no safe compensation for that external radio side effect when a concurrent alias is
+added or removed. Exact-tree call-site search found no supplied implementation (only the
+constructor default and its invocation). The follow-up removes this unused callback and
+`clearRadio` flag rather than offering an unsafe two-authority API. Legacy Job removals and
+awaited removals now share the same persistence-only boundary. A third production-editor/real-Room
+control exercises the legacy Job path with both concurrent alias insertion and removal, requiring
+two actual rejected tickets, correct persisted/live defaults and unchanged live generation.
+All previous controls and assertions remain. This is not a radio test.
+
+The review's actual Settings entry-point mismatch belongs to the Settings producer, and its
+targeted `DeviceRepository.removeDeviceKnownRegion` mismatch belongs to the persistence producer.
+Neither integration is accepted by this editor-only change. The exact `a7fed6eb9` diagnostic
+`41952095327` is preserved, not cancelled or retargeted, and cannot execute this successor.

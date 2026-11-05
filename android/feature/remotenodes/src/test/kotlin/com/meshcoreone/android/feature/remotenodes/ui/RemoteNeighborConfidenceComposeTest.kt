@@ -77,9 +77,11 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [31, 37], qualifiers = "en-rUS-w360dp-h800dp")
+@Config(sdk = [31, 37], qualifiers = "en-rUS-w360dp-h800dp-mdpi")
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 class RemoteNeighborConfidenceComposeTest {
     @get:Rule val compose = createEmptyComposeRule()
     private lateinit var activity: ActivityController<ComponentActivity>
@@ -90,9 +92,13 @@ class RemoteNeighborConfidenceComposeTest {
         previousLocale = Locale.getDefault()
         Locale.setDefault(Locale.US)
         activity = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
+        activity.get().actionBar?.hide()
+        activity.windowFocusChanged(true)
+        assertTrue(activity.get().window.decorView.hasWindowFocus())
     }
 
     @After fun closeWindow() {
+        activity.windowFocusChanged(false)
         activity.pause().stop().destroy()
         scope.cancel()
         Locale.setDefault(previousLocale)

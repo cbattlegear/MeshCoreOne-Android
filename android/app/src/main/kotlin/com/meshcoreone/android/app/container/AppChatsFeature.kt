@@ -752,6 +752,18 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             }
         }
         override val service = object : ChannelSheetService {
+            override suspend fun createChannelWithSecret(radioId: RadioId, maxChannels: UByte, name: String, secret: Bytes): ChannelDTO =
+                try {
+                    session(radioId).channelService.createChannelWithSecret(radioId, maxChannels, name, secret)
+                } catch (_: com.meshcoreone.android.core.services.contacts.ChannelMutationError.NoAvailableSlots) {
+                    throw com.meshcoreone.android.feature.chats.channels.ChannelSheetError.NoAvailableSlots
+                }
+            override suspend fun joinHashtagChannel(radioId: RadioId, maxChannels: UByte, name: String): ChannelDTO =
+                try {
+                    session(radioId).channelService.joinHashtagChannel(radioId, maxChannels, name)
+                } catch (_: com.meshcoreone.android.core.services.contacts.ChannelMutationError.NoAvailableSlots) {
+                    throw com.meshcoreone.android.feature.chats.channels.ChannelSheetError.NoAvailableSlots
+                }
             override suspend fun setChannelWithSecret(radioId: RadioId, index: UByte, name: String, secret: Bytes) =
                 session(radioId).channelService.setChannelWithSecret(radioId, index, name, secret)
             override suspend fun setChannel(radioId: RadioId, index: UByte, name: String, passphrase: String) =

@@ -63,7 +63,6 @@ internal fun AppChatsContent(
     coordinator: NavigationCoordinator,
 ) {
     val state by coordinator.state.collectAsState()
-    AppPendingChannel(feature, coordinator)
     var newChannel by remember { mutableStateOf(false) }
     if (newChannel) AppChannelsContent(feature, coordinator) { newChannel = false }
     val selected = (destination as? NavigationDestination.Chat)?.selection

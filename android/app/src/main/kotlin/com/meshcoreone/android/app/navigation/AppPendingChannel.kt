@@ -14,19 +14,20 @@ import kotlinx.coroutines.launch
 @Composable
 internal fun AppPendingChannel(feature: AppChatsFeature, navigation: NavigationCoordinator) {
     val pending by navigation.state.collectAsState()
-    val link = pending.pendingChannelLink
-    val hashtag = pending.pendingHashtag
-    if (link == null && hashtag == null) return
+    val request = pending.pendingChannelConfirmation ?: pending.pendingHashtagConfirmation ?: return
+    val link = request.link
+    val hashtag = request.hashtag
     val radio by feature.currentRadioId.collectAsState()
-    val holder = remember(feature, radio, link, hashtag) {
+    val linkHolder = remember(feature, radio, pending.pendingChannelConfirmation?.deliveryId) {
         ChannelSheetsStateHolder(radio, feature.maximumChannels(), feature.channels)
     }
+    val hashtagHolder = remember(feature, radio, pending.pendingHashtagConfirmation?.deliveryId) {
+        ChannelSheetsStateHolder(radio, feature.maximumChannels(), feature.channels)
+    }
+    val holder = if (link != null) linkHolder else hashtagHolder
     val state by holder.state.collectAsState()
     val scope = rememberCoroutineScope()
-    val clear = {
-        if (navigation.state.value.pendingChannelLink == link) navigation.clearPendingChannelLink()
-        if (navigation.state.value.pendingHashtag == hashtag) navigation.clearPendingHashtag()
-    }
+    val clear: () -> Unit = { navigation.completeChannelConfirmation(request.deliveryId) }
     LaunchedEffect(holder) { holder.load() }
     AlertDialog(onDismissRequest = clear,
         text = {
@@ -53,7 +54,7 @@ internal fun AppPendingChannel(feature: AppChatsFeature, navigation: NavigationC
                         holder.updateHashtag(requireNotNull(hashtag).id)
                         holder.joinHashtag()
                     }
-                    channel?.let { clear(); navigation.navigateToChannel(it) }
+                    channel?.let { navigation.completeChannelConfirmation(request.deliveryId, it) }
                 }
             }) { Text(stringResource(L.commonOk)) }
         },

@@ -118,9 +118,21 @@ class AppDeepLinkRouterTest {
         }
         override fun navigateToContactDetail(contact: ContactDTO) { mutations++; contactDetail = contact; selectedTab = AppTab.NODES }
         override fun navigateToChannel(channel: ChannelDTO) { mutations++; navigatedChannel = channel; selectedTab = AppTab.CHATS }
-        override fun stageContactConfirmation(link: MeshCoreDeepLink.Contact) { mutations++; pendingContact = link }
-        override fun stageChannelConfirmation(link: MeshCoreDeepLink.Channel) { mutations++; pendingChannel = link }
-        override fun stageHashtagConfirmation(link: MeshCoreDeepLink.Hashtag) { mutations++; pendingHashtag = link }
+        override fun stageContactConfirmation(link: MeshCoreDeepLink.Contact, selectChats: Boolean) {
+            if (selectChats) selectedTab = AppTab.CHATS
+            mutations++
+            pendingContact = link
+        }
+        override fun stageChannelConfirmation(link: MeshCoreDeepLink.Channel, selectChats: Boolean) {
+            if (selectChats) selectedTab = AppTab.CHATS
+            mutations++
+            pendingChannel = link
+        }
+        override fun stageHashtagConfirmation(link: MeshCoreDeepLink.Hashtag, selectChats: Boolean) {
+            if (selectChats) selectedTab = AppTab.CHATS
+            mutations++
+            pendingHashtag = link
+        }
         override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
             contactFailure?.let { throw it }
             return contacts.firstOrNull { it.publicKey == publicKey }

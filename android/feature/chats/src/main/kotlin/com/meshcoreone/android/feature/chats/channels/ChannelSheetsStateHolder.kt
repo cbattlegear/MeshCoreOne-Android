@@ -115,12 +115,8 @@ class ChannelSheetsStateHolder(
     suspend fun joinHashtag(): ChannelDTO? {
         val name = mutableState.value.name
         if (!isValidHashtag(name)) return fail(ChannelSheetError.InvalidHashtag)
-        mutableState.value.channels.firstOrNull { it.name.equals("#$name", ignoreCase = true) }?.let { return it }
-        val slot = firstSlot() ?: return fail(ChannelSheetError.NoAvailableSlots)
         return submit {
-            val radio = requireRadio()
-            dependencies.service.setChannel(radio, slot, "#$name", "#$name")
-            dependencies.data.fetchChannel(radio, slot) ?: throw ChannelSheetError.CreatedChannelMissing
+            dependencies.service.joinHashtagChannel(requireRadio(), maxChannels, "#$name")
         }
     }
 
@@ -143,11 +139,8 @@ class ChannelSheetsStateHolder(
     private suspend fun writeWithSecret(name: String, secret: Bytes, shareAfter: Boolean = false): ChannelDTO? {
         if (name.isEmpty()) return fail(ChannelSheetError.InvalidName)
         if (secret.size != ProtocolLimits.CHANNEL_SECRET_SIZE) return fail(ChannelSheetError.InvalidSecret)
-        val slot = firstSlot() ?: return fail(ChannelSheetError.NoAvailableSlots)
         return submit {
-            val radio = requireRadio()
-            dependencies.service.setChannelWithSecret(radio, slot, name, secret)
-            val channel = dependencies.data.fetchChannel(radio, slot) ?: throw ChannelSheetError.CreatedChannelMissing
+            val channel = dependencies.service.createChannelWithSecret(requireRadio(), maxChannels, name, secret)
             if (shareAfter) {
                 mutableState.update {
                     it.copy(
@@ -178,7 +171,6 @@ class ChannelSheetsStateHolder(
     }
 
     private fun requireRadio(): RadioId = radioId ?: throw ChannelSheetError.NoDeviceConnected
-    private fun firstSlot(): UByte? = mutableState.value.availableSlots.firstOrNull()
     private fun fail(error: ChannelSheetError): ChannelDTO? {
         mutableState.update { it.copy(failure = error) }
         return null

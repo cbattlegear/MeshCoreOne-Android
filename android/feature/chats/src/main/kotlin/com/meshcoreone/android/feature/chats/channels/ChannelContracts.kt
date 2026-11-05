@@ -15,6 +15,8 @@ interface ChannelSheetDataSource {
 }
 
 interface ChannelSheetService {
+    suspend fun createChannelWithSecret(radioId: RadioId, maxChannels: UByte, name: String, secret: Bytes): ChannelDTO
+    suspend fun joinHashtagChannel(radioId: RadioId, maxChannels: UByte, name: String): ChannelDTO
     suspend fun setChannelWithSecret(radioId: RadioId, index: UByte, name: String, secret: Bytes)
     suspend fun setChannel(radioId: RadioId, index: UByte, name: String, passphrase: String)
     suspend fun setupPublicChannel(radioId: RadioId)

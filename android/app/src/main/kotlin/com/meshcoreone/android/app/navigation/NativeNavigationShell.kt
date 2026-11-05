@@ -341,6 +341,9 @@ fun NativeNavigationShell(
                 )
             }
         }
+        if (chats != null && state.selectedTab == AppTab.CHATS) {
+            AppPendingChannel(chats, coordinator)
+        }
     }
 }
 

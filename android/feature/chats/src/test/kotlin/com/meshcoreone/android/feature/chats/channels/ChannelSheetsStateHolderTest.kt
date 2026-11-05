@@ -192,6 +192,22 @@ class ChannelSheetsStateHolderTest {
         }
     }
 
+    @Test
+    fun `join discards holder slot snapshot and existing hashtag is rechecked by service`() = runBlocking {
+        val rig = rig(emptyList(), maxChannels = 4u)
+        rig.holder.load()
+        rig.data.channels += channel(1u, "Written after load")
+        rig.holder.updateName("Private")
+        rig.holder.updateSecret("00112233445566778899AABBCCDDEEFF")
+        assertEquals(2u, assertNotNull(rig.holder.joinPrivate()).index)
+
+        val existing = channel(3u, "#Ops")
+        rig.data.channels += existing
+        rig.holder.updateHashtag("ops")
+        assertEquals(existing, rig.holder.joinHashtag())
+        assertEquals(0, rig.service.passphraseCalls)
+    }
+
     private fun rig(channels: List<ChannelDTO>, maxChannels: UByte): ChannelRig {
         val data = FakeChannelData(channels.toMutableList())
         val service = FakeChannelService(data)
@@ -235,6 +251,21 @@ private class FakeChannelService(private val data: FakeChannelData) : ChannelShe
     var passphraseCalls = 0
     var publicCalls = 0
     var failure: Throwable? = null
+
+    override suspend fun createChannelWithSecret(radioId: RadioId, maxChannels: UByte, name: String, secret: Bytes): ChannelDTO {
+        val index = freeSlot(maxChannels)
+        setChannelWithSecret(radioId, index, name, secret)
+        return requireNotNull(data.fetchChannel(radioId, index))
+    }
+    override suspend fun joinHashtagChannel(radioId: RadioId, maxChannels: UByte, name: String): ChannelDTO {
+        data.channels.firstOrNull { it.name.equals(name, ignoreCase = true) }?.let { return it }
+        val index = freeSlot(maxChannels)
+        setChannel(radioId, index, name, name)
+        return requireNotNull(data.fetchChannel(radioId, index))
+    }
+    private fun freeSlot(maxChannels: UByte): UByte =
+        (1 until maxChannels.toInt()).map(Int::toUByte).firstOrNull { index -> data.channels.none { it.index == index } }
+            ?: throw ChannelSheetError.NoAvailableSlots
 
     override suspend fun setChannelWithSecret(radioId: RadioId, index: UByte, name: String, secret: Bytes) {
         failure?.let { throw it }

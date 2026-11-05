@@ -222,7 +222,7 @@ private fun TracePathContent(
                 Text(stringResource(C.contactsTraceSaved))
             }
         }
-        if (showMap) TracePathMapContent(state, holder, mapPreferences, location, diagnostics, mapSurface)
+        if (showMap) TracePathMapContent(state, holder, mapPreferences, location, diagnostics, connection, mapSurface)
         else TracePathListContent(state, holder, codeInput, connection)
     }
     if (showSaved) {
@@ -517,6 +517,7 @@ internal fun TracePathMapContent(
     preferenceStore: MapPreferenceStore?,
     location: Coordinate?,
     diagnostics: TraceDiagnostics,
+    connection: TracePathScreen.Dependencies,
     mapSurface: TraceMapSurface = { presentation, clusters, labels, camera, marker, overlay ->
         NativeTraceMapSurface(presentation, clusters, labels, camera, marker, overlay)
     },
@@ -531,7 +532,12 @@ internal fun TracePathMapContent(
     var camera by remember(holder) { mutableStateOf<MapCamera?>(null) }
     var cameraCommandRevision by remember(holder) { mutableLongStateOf(0L) }
     var presentation by remember(holder) { mutableStateOf(MapPresentationState()) }
-    var confirmClear by remember { mutableStateOf(false) }
+    val canEdit = {
+        holder.isBoundConnectionCurrent(connection.radioId, connection.generation, connection.originatingToken)
+    }
+    var confirmClear by remember(holder, connection.radioId, connection.generation, connection.originatingToken) {
+        mutableStateOf(false)
+    }
     val locale = LocalConfiguration.current.locales[0]
     val unit = stringResource(com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings.remoteNodesStatusSnrBadgeUnit)
     val badgeFormatter = remember(locale, unit) { TraceMapBadgeFormat(locale, unit) }
@@ -583,6 +589,21 @@ internal fun TracePathMapContent(
                 preferenceError = true
             }
         }
+        val requestClear = { if (canEdit()) confirmClear = true }
+        val clearPath = {
+            if (canEdit()) {
+                map.clearPath()
+                refresh()
+                confirmClear = false
+            }
+        }
+        val runTrace = {
+            if (canEdit()) {
+                requestCamera(map.pathCamera())
+                scope.launch { if (canEdit()) map.runTrace() }
+            }
+            Unit
+        }
     }
     val loaded = settings
     Column(Modifier.fillMaxSize()) {
@@ -628,8 +649,8 @@ internal fun TracePathMapContent(
                     MapColorPreference.LIGHT -> false
                     else -> appIsDark
                 }),
-                loaded?.clustering ?: false, loaded?.labels ?: true, { camera = it },
-                { marker -> if (loaded != null) {
+                loaded?.clustering ?: false, loaded?.labels ?: true, { if (canEdit()) camera = it },
+                { marker -> if (loaded != null && canEdit()) {
                     if (map.handleMapPointTap(marker.id) == PathPinTapResult.REJECTED_MIDDLE_HOP) {
                         haptics.performHapticFeedback(HapticFeedbackType.Reject)
                     }
@@ -638,10 +659,10 @@ internal fun TracePathMapContent(
                 {
                     Column(Modifier.align(Alignment.BottomEnd).padding(12.dp)) {
                         TextButton(
-                            onClick = { requestCamera(map.allPinsCamera()) }, enabled = loaded != null && map.pins.isNotEmpty(),
+                            onClick = { if (canEdit()) requestCamera(map.allPinsCamera()) }, enabled = loaded != null && map.pins.isNotEmpty(),
                             modifier = Modifier.testTag("trace-map:center-all").sizeIn(minHeight = 48.dp),
                         ) { Text(stringResource(M.mapControlsCenterAll)) }
-                        TextButton(onClick = { requestCamera(map.pathCamera()) }, enabled = loaded != null && map.hasPath) {
+                        TextButton(onClick = { if (canEdit()) requestCamera(map.pathCamera()) }, enabled = loaded != null && map.hasPath) {
                             Text(stringResource(C.contactsTraceMapCenterOnPath))
                         }
                     }
@@ -650,12 +671,16 @@ internal fun TracePathMapContent(
         }
         state.errorMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(onClick = { confirmClear = true }, enabled = state.outboundPath.isNotEmpty()) {
+            TextButton(
+                onClick = requestClear, enabled = state.outboundPath.isNotEmpty(),
+                modifier = Modifier.semantics { onClick { requestClear(); true } },
+            ) {
                 Text(stringResource(C.contactsTraceMapClear))
             }
             Button(
-                onClick = { requestCamera(map.pathCamera()); scope.launch { map.runTrace() } },
+                onClick = runTrace,
                 enabled = loaded != null && state.canRunTraceWhenConnected,
+                modifier = Modifier.semantics { onClick { runTrace(); true } },
             ) { Text(stringResource(C.contactsTraceListRunTrace)) }
         }
     }
@@ -664,8 +689,8 @@ internal fun TracePathMapContent(
         title = { Text(stringResource(C.contactsTraceClearPath)) },
         text = { Text(stringResource(C.contactsTraceClearPathMessage)) },
         confirmButton = { TextButton(
-            onClick = { map.clearPath(); refresh(); confirmClear = false },
-            modifier = Modifier.testTag("trace-map:confirm-clear"),
+            onClick = clearPath,
+            modifier = Modifier.testTag("trace-map:confirm-clear").semantics { onClick { clearPath(); true } },
         ) {
             Text(stringResource(C.contactsTraceClearPath))
         } },

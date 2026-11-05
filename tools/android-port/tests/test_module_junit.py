@@ -691,6 +691,96 @@ class AliasedTest { @Test fun required() {} }
         with self.assertRaisesRegex(PortError, "Unsupported Java notification JVM test input"):
             check_module_tests(self.repo)
 
+    def test_package_robolectric_properties_require_explicit_sdk_override(self):
+        self.notifications()
+        module = "platform/notifications"
+        relative = "src/test/kotlin/PackageConfiguredTest.kt"
+        source = """
+package sample.child
+import org.junit.Test
+import org.robolectric.annotation.Config
+class PackageConfiguredTest { @Test fun required() {} }
+"""
+        base = ("sample.child.PackageConfiguredTest", "required")
+        sdk31 = (base[0], base[1] + "[31]")
+        for source_set in ("main", "debug", "test", "testDebug"):
+            with self.subTest(source_set=source_set):
+                properties = f"src/{source_set}/resources/sample/robolectric.properties"
+                self.source(module, properties, "sdk=31,37\n")
+                self.source(module, relative, source)
+                self.command("add", "--all")
+                self.command("commit", "--quiet", "-m", "package SDK family")
+                path = "android/" + module + "/" + properties
+                self.assertEqual(
+                    module_sources(self.repo)[module][path], self.command("rev-parse", "HEAD:" + path),
+                )
+                for cases in ({base}, {base, sdk31}):
+                    notification_report(self.repo, NOTIFICATION_CASES | cases)
+                    with self.assertRaisesRegex(PortError, "Unresolved package Robolectric SDK"):
+                        check_module_tests(self.repo, self.compiled_notification_sources())
+                configured = source.replace(
+                    "class PackageConfiguredTest", "@Config(sdk = [31, 37])\nclass PackageConfiguredTest",
+                )
+                self.source(module, relative, configured)
+                self.command("add", "--all")
+                self.command("commit", "--quiet", "-m", "literal class SDK override")
+                notification_report(self.repo, NOTIFICATION_CASES | {base})
+                with self.assertRaisesRegex(PortError, "SDK cases"):
+                    check_module_tests(self.repo, self.compiled_notification_sources())
+                notification_report(self.repo, NOTIFICATION_CASES | {base, sdk31})
+                self.assertEqual(check_module_tests(
+                    self.repo, self.compiled_notification_sources(),
+                )[module]["passed"], 8)
+                self.source(module, relative, configured.replace(
+                    "@Test fun", "@Config(sdk = [37]) @Test fun",
+                ))
+                self.command("add", "--all")
+                self.command("commit", "--quiet", "-m", "literal method SDK override")
+                notification_report(self.repo, NOTIFICATION_CASES | {base})
+                self.assertEqual(check_module_tests(
+                    self.repo, self.compiled_notification_sources(),
+                )[module]["passed"], 7)
+                (self.repo / "android" / module / properties).unlink()
+                self.command("add", "--all")
+                self.command("commit", "--quiet", "-m", "remove package configuration")
+
+    def test_package_robolectric_properties_respect_hierarchy_and_dirty_inputs(self):
+        self.notifications()
+        module = "platform/notifications"
+        self.source(module, "src/test/kotlin/PackageTest.kt", """
+package sample.child
+import org.junit.Test
+class PackageTest { @Test fun required() {} }
+""")
+        unrelated = "src/test/resources/sample/children/robolectric.properties"
+        self.source(module, unrelated, "sdk=31,37\n")
+        self.command("add", "--all")
+        self.command("commit", "--quiet", "-m", "unrelated package configuration")
+        notification_report(self.repo, NOTIFICATION_CASES | {("sample.child.PackageTest", "required")})
+        self.assertEqual(check_module_tests(
+            self.repo, self.compiled_notification_sources(),
+        )[module]["passed"], 7)
+        applicable = "src/debug/resources/sample/child/robolectric.properties"
+        self.source(module, applicable, "sdk=31,37\n")
+        with self.assertRaisesRegex(PortError, "inputs differ"):
+            check_module_tests(self.repo, self.compiled_notification_sources())
+        self.command("add", "--all")
+        self.command("commit", "--quiet", "-m", "applicable debug package configuration")
+        with self.assertRaisesRegex(PortError, "Unresolved package Robolectric SDK"):
+            check_module_tests(self.repo, self.compiled_notification_sources())
+        self.source(module, applicable, "sdk=37\n")
+        with self.assertRaisesRegex(PortError, "inputs differ"):
+            check_module_tests(self.repo, self.compiled_notification_sources())
+
+    def test_root_robolectric_properties_also_guard_remapped_tests(self):
+        self.notifications()
+        self.source("platform/notifications", "src/test/resources/robolectric.properties", "sdk=31,37\n")
+        self.command("add", "--all")
+        self.command("commit", "--quiet", "-m", "root package SDK family")
+        notification_report(self.repo)
+        with self.assertRaisesRegex(PortError, "Unresolved package Robolectric SDK"):
+            check_module_tests(self.repo, self.compiled_notification_sources())
+
     def test_actual_compilation_requires_exact_remapped_blobs_and_no_extra_sources(self):
         self.notifications()
         inputs = module_sources(self.repo)["platform/notifications"]

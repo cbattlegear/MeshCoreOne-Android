@@ -14,6 +14,9 @@ UNIT_SOURCE = re.compile(r"src/(?:test|testDebug)/(?:java|kotlin)/.+\.(?:java|kt
 SEPARATE_SUITES = {"core/contracts", "core/protocol", "core/testing"}
 REPORT_LOCATIONS = ("build/test-results/test", "build/test-results/testDebugUnitTest")
 NOTIFICATION_ROOT = "src/androidTest/kotlin/com/meshcoreone/android/platform/notifications/messaging"
+NOTIFICATION_RESOURCE_ROOTS = tuple(
+    "src/" + source_set + "/resources" for source_set in ("main", "debug", "test", "testDebug")
+)
 # Complete build profiles subject to trusted review, not a Gradle expression interpreter.
 JVM_REMAPS = {
     "platform/notifications": {
@@ -83,9 +86,11 @@ def module_sources(repo: Path, revision=None):
         if not any(unit_source(relative, roots) for relative in files):
             continue
         inputs = {}
+        resource_roots = NOTIFICATION_RESOURCE_ROOTS if module in JVM_REMAPS else ()
         for relative, (mode, kind, blob) in files.items():
             if relative != "build.gradle.kts" and not relative.startswith(
-                ("src/main/", "src/test/", "src/testDebug/", *(root + "/" for root in roots))
+                ("src/main/", "src/test/", "src/testDebug/", *(root + "/" for root in roots),
+                 *(root + "/" for root in resource_roots))
             ):
                 continue
             path = f"android/{module}/{relative}"
@@ -109,8 +114,10 @@ def check_module_inputs(repo, modules, revision=None):
     for module in modules:
         build = f"android/{module}/build.gradle.kts"
         blob = git(repo, "rev-parse", revision + ":" + build).decode().strip() if module in JVM_REMAPS else None
+        resource_roots = NOTIFICATION_RESOURCE_ROOTS if module in JVM_REMAPS else ()
         paths.extend(f"android/{module}/{relative}" for relative in (
             "build.gradle.kts", "src/main", "src/test", "src/testDebug", *remapped_roots(module, blob),
+            *resource_roots,
         ))
     if paths and (
         git(repo, "diff", "--name-only", revision, "--", *paths).strip()
@@ -176,12 +183,31 @@ def require_remapped_cases(repo, module, directory, inputs, compiled_sources, re
     observed = {(case["class"], case["method"]) for case in records}
     if not required <= observed:
         raise PortError("Missing mandatory remapped JVM named cases: " + str(sorted(required - observed)))
+    resource_packages = set()
+    for root in NOTIFICATION_RESOURCE_ROOTS:
+        prefix = f"android/{module}/{root}/"
+        for path in inputs:
+            if not path.startswith(prefix):
+                continue
+            relative = path[len(prefix):]
+            if relative == "robolectric.properties":
+                resource_packages.add("")
+            elif relative.endswith("/robolectric.properties"):
+                resource_packages.add(relative.rsplit("/", 1)[0])
+
     def require_sdk_cases(path, methods, classes, sdk_configurations, *, remapped):
         expected_cases = set()
         configured_methods = set()
         for method in methods:
             configured_sdks = sdk_configurations[method]
             if configured_sdks is None:
+                package = classes[method].rpartition(".")[0].replace(".", "/")
+                if any(not parent or package == parent or package.startswith(parent + "/")
+                       for parent in resource_packages):
+                    raise PortError(
+                        "Unresolved package Robolectric SDK configuration requires a literal "
+                        "method/class SDK override: " + path + "#" + method
+                    )
                 if not remapped:
                     continue
                 names = {method}

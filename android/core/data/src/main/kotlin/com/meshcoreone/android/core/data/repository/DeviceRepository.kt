@@ -64,9 +64,10 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
         }
     }
 
-    override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean =
-        expected.withAuthority {
-            repeatSnapshotAuthority.withAdmission(dto.id) {
+    override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+        var admissionBusy = false
+        val saved = expected.withAuthority {
+            repeatSnapshotAuthority.tryWithAdmission(dto.id, ifBusy = { admissionBusy = true; false }) {
                 conditionalWrite("saveDeviceIfUnchanged", expected.isCurrent) {
                     val existing = database.devices().byId(dto.id) ?: return@conditionalWrite false
                     if ((context.deviceRevisions[dto.id] ?: 0L) != expected.revision ||
@@ -114,6 +115,13 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
                 }
             }
         }
+        if (admissionBusy) {
+            // Never retain runtime authority while waiting for a send that retirement must cancel.
+            currentCoroutineContext().ensureActive()
+            repeatSnapshotAuthority.withAdmission(dto.id) {}
+        }
+        return saved
+    }
 
     override suspend fun fetchDevice(id: UUID): DeviceDTO? = context.read("fetchDeviceById") {
         database.devices().byId(id)?.toDTO()

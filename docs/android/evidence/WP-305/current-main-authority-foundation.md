@@ -263,6 +263,46 @@ affected exchange/query/match forwarding families were inspected; their trailing
 or named operation/predicate arguments remain correctly bound. Neither the old
 ce5 success nor this compile failure is successor test evidence.
 
+The corrected `4f81071cc6fff23a3f2a77042b8966639bcd178b` diagnostic run
+`42011612615` completed SUCCESS, including Linux `127191879007` and SwiftData
+oracle `127202617875`. Its positive method inventory includes all fourteen actual
+SettingsRepeatPersistenceTest methods (the five new controls plus all nine retained
+controls). The separate unchanged-ce5-production baseline `5a89dfb1c`, run
+`42009886462`, Linux `127186019558`, executed App 2090/4 failures. Inner assertions
+showed: deletion changed the admitted full row to null; delete/reinsert ABA returned
+no conflict; an admitted full save timed out behind the withheld protocol OK; and
+Repeat-off reconnect retained frequency-null bandwidth 125000 instead of null.
+These failures do not prove later parameter families that were not reached after
+the first failed assertion.
+
+### Real editor/disconnect liveness
+
+A further test-only successor, `56728b1fd8ba329f8445c807aa5ed303edea93c2`
+(via c53/549, unchanged 4f production), was independently source-reviewed. Run
+`42014309327`, Linux `127200956996`, executed App 2091/1 failure, solely
+`queuedRealEditorCannotPreventDisconnectFromClosingAnActualSuspendedRestoreSend`.
+Its actual inner assertion was:
+`Timed out waiting for disconnect physically closes the suspended send without a protocol timeout (runtimeHeld=true) (state=READY)`.
+The control holds the actual cancellable transport send, forces the real editor's
+actual runtime-authority entry before disconnect, and requires physical close while
+the test latch remains closed. A sixty-second protocol deadline and zero virtual
+time advancement distinguish the bounded teardown failure from firmware timeout.
+Finally cleanup releases the latch/cancels the editor before joining disconnect.
+The retained post-contention tail reconnects the same device, rejects the retired
+token without row changes and requires a fresh current-token edit to acknowledge.
+
+The repair changes only admission acquisition in conditional device writes.
+Runtime authority performs a nonblocking try-admission. If admission is busy,
+runtime authority is released before a cancellable availability wait; that wait
+acquires and immediately releases admission, then returns false to the existing
+bounded CAS retry. The retry reloads/revalidates Room, identity and token rather
+than carrying its old DTO through the wakeup. A retired authority refusal does not
+wait, because only an actual busy try sets the wait marker. Successful writes keep
+runtime authority through admission, DB commit and callbacks; the try-admission
+unlocks in finally even if a callback throws. No admission is retained while
+reacquiring runtime authority, no atomic try is replaced by check-then-lock, and
+the still-writing protocol child's permit semantics are unchanged.
+
 Independent producer reviews accepted the bounded source seams but found an
 additional actual cancellation gap: a newly committed snapshot could survive
 cancellation before SET, then a later manual RF edit and fresh enable/off would

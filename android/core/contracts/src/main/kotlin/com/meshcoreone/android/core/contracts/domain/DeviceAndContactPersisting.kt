@@ -105,6 +105,12 @@ class RepeatSnapshotAuthority {
         return admission.withLock { action() }
     }
 
+    suspend fun <T> tryWithAdmission(deviceId: UUID, ifBusy: () -> T, action: suspend () -> T): T {
+        val admission = synchronized(this) { admissions.getOrPut(deviceId) { Mutex() } }
+        if (!admission.tryLock()) return ifBusy()
+        return try { action() } finally { admission.unlock() }
+    }
+
     suspend fun <T> withAdmissions(deviceIds: Collection<UUID>, action: suspend () -> T): T {
         val ordered = deviceIds.distinct().sorted()
         suspend fun acquire(index: Int): T =

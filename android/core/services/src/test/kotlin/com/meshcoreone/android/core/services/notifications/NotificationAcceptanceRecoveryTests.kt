@@ -299,7 +299,8 @@ class NotificationAcceptanceRecoveryTests {
         }
         val handler = NotificationActionHandler(store, n.sender, n.service, n.rooms, n.sync)
         val receipt = NotificationActionReceipt()
-        val caller = launch(receipt) { handler.handleMarkAsRead(contact, message) }
+        val progress = NotificationReadReceipt()
+        val caller = launch(receipt + progress) { handler.handleMarkAsRead(contact, message) }
         runCurrent()
         assertTrue(reached.isCompleted)
         assertEquals(NotificationActionReceipt.State.READY, receipt.state)
@@ -308,6 +309,8 @@ class NotificationAcceptanceRecoveryTests {
         caller.join()
         assertTrue(caller.isCancelled)
         assertEquals(NotificationActionReceipt.State.COMMITTED, receipt.state)
+        assertEquals(NotificationReadReceipt.State.COMMITTED, progress.state)
+        assertEquals(2, progress.completedWrites)
         assertEquals(2, n.store.writes.size)
         assertEquals(1, n.sync.notifications)
     }
@@ -316,11 +319,14 @@ class NotificationAcceptanceRecoveryTests {
         val n = NotificationHarness(this)
         n.store.cancelling = "clearUnreadCount"
         val receipt = NotificationActionReceipt()
+        val progress = NotificationReadReceipt()
         assertFailsWith<kotlinx.coroutines.CancellationException> {
-            withContext(receipt) { n.handler.handleMarkAsRead(EntityKey(RADIO_A, UUID.randomUUID()), UUID.randomUUID()) }
+            withContext(receipt + progress) { n.handler.handleMarkAsRead(EntityKey(RADIO_A, UUID.randomUUID()), UUID.randomUUID()) }
         }
 
         assertFalse(receipt.preventsReplay)
+        assertEquals(NotificationReadReceipt.State.UNCERTAIN, progress.state)
+        assertEquals(1, progress.completedWrites)
         assertEquals(2, n.store.writes.size)
         assertEquals(0, n.sync.notifications)
     }

@@ -237,3 +237,27 @@ acceptance claim. No second CI-result bundle is committed or retained.
 `C:\Python312\python.exe android\parity-tests\semantic.py --check` also passed on
 the resumed edits (58 groups, 5133 families); this is not independent behavioral
 acceptance or an executed product regression result.
+
+## Post-publication test corrections
+
+The published review candidate is
+`1633712fc1394d5ceeb86ecf253622a3f47e97cf`, draft #570. Its exact-head hosted
+run is `41964966213`; the hosted logs/result are authoritative. Source inspection
+after publication found two JUnit4 message-last `assertEquals` calls and corrected
+them to JUnit4's message-first signature without changing the assertions.
+
+The original App pre-wire draft-consumption assertion is preserved as its own
+positive control. A distinct App case leaves the restored draft unconsumed across
+the accepted retry, as do the newer/equal-text draft cases. Successful and partial
+service read controls now also assert the independent local-read receipt and
+returned-write count without weakening the original wire-receipt assertions.
+These follow-up edits remain local until the active exact-head run is terminal;
+they do not retroactively alter or validate its candidate.
+
+The producer/storage owners are coordinating a nonactivated unique issued-token
+registry plus atomic admission of exact raw reply text. No current initialization
+witness or visible-copy/full-capacity failure interface has been supplied. Legacy
+UPDATE_CURRENT reissue may change original payload extras; missing payload extras
+also cannot be treated as a legacy-dispatch guard because mutable fill-in can add
+them. The producer's proposed fixed rejecting codec sentinel needs its own actual
+PendingIntent controls. None of these proposed interfaces is activated here.

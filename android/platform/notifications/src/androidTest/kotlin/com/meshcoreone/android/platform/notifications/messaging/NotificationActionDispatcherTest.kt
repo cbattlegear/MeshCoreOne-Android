@@ -209,7 +209,7 @@ class NotificationActionDispatcherTest {
         }
         assertEquals(EnqueueResult.REJECTED_CAPACITY, NotificationActionDispatcher.enqueue(read))
         runCurrent()
-        assertEquals(32, calls, "The uncertain read remains retained while later ready actions can progress")
+        assertEquals("The uncertain read remains retained while later ready actions can progress", 32, calls)
     }
 
     @Test

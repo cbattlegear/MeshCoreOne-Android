@@ -60,11 +60,14 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
     @Test fun channelReplyCancelledBeforeWireCanBeRetriedByReplacementDispatcher() = runTest {
         replyBoundary(channel = true, beforeWire = true)
     }
+    @Test fun acceptedRetryClearsItsUnconsumedActionDraft() = runTest {
+        replyBoundary(channel = false, beforeWire = true, leaveDraftAcrossRetry = true)
+    }
     @Test fun acceptedRetryDoesNotDeleteANewerUserDraft() = runTest {
-        replyBoundary(channel = false, beforeWire = true, newerDraft = "User's newer draft")
+        replyBoundary(channel = false, beforeWire = true, leaveDraftAcrossRetry = true, newerDraft = "User's newer draft")
     }
     @Test fun acceptedRetryDoesNotDeleteANewerEqualTextUserDraft() = runTest {
-        replyBoundary(channel = false, beforeWire = true, newerDraft = "one reply")
+        replyBoundary(channel = false, beforeWire = true, leaveDraftAcrossRetry = true, newerDraft = "one reply")
     }
 
     @Test fun realRoomMarkReadRecordsCommitBeforeReturningToCancelledCaller() = runTest {
@@ -182,7 +185,7 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
             }
             repeat(10) { runCurrent() }
             assertEquals(1, actions)
-            assertEquals(1, clearCalls, "An uncertain unread clear must not be blindly repeated")
+            assertEquals("An uncertain unread clear must not be blindly repeated", 1, clearCalls)
         } finally {
             owner.cancel()
             replacement.cancel()
@@ -195,6 +198,7 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
         channel: Boolean,
         unknown: Boolean = false,
         beforeWire: Boolean = false,
+        leaveDraftAcrossRetry: Boolean = false,
         newerDraft: String? = null,
     ) {
         val context = ApplicationProvider.getApplicationContext<Context>()
@@ -285,8 +289,10 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
                 if (channel) {
                     assertNull(session.notificationService.consumeDraft(contactKey))
                     assertEquals(1, h.delivery.posted.size)
+                } else if (!leaveDraftAcrossRetry) {
+                    assertEquals("one reply", session.notificationService.consumeDraft(contactKey))
                 }
-                // Do not consume the action-owned draft: acceptance must clean up its own copy.
+                // Dedicated recovery cases leave the draft intact; acceptance must clean up its own copy.
                 if (newerDraft != null) session.notificationService.saveDraft(contactKey, newerDraft)
                 assertFalse(requireNotNull(receipt).preventsReplay)
                 assertTrue(h.links.radios.single().sent.none { it[0].toInt() == sendCommand })

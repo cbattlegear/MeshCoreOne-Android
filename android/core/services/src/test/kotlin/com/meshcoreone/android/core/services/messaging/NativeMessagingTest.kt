@@ -21,6 +21,51 @@ import org.junit.jupiter.api.TestFactory
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class NativeMessagingTest {
+    @TestFactory fun queuedFailureInvalidation() =
+        listOf<MessageStatus?>(MessageStatus.PENDING, MessageStatus.SENT, null).map { replacementStatus ->
+            native("conditionalQueuedGuardCommitInvalidatesAfter${replacementStatus ?: "Deletion"}WithoutReadback") {
+                val h = Harness(this, MessageServiceConfig(maxAttempts = 1, floodFallbackOnRetry = false)); h.start()
+                val message = h.message(MessageStatus.PENDING)
+                val unrelated = h.message(MessageStatus.FAILED, text = "unrelated unseen failure")
+                val pending = h.pending(message)
+                val claimID = UUID.randomUUID()
+                h.service.sendPendingClaim(claimID, message.id, h.contact, true, false, pending.id)
+                val events = h.service.statusEvents()
+                val committed = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                val notifying = backgroundScope.async {
+                    assertTrue(h.service.failQueuedDirectClaim(claimID, message.id))
+                    committed.complete(Unit)
+                    release.await()
+                    h.service.notifyMessageFailed(message.id)
+                }
+                try {
+                    committed.await()
+                    assertEquals(MessageStatus.FAILED, h.stored(message.id).status)
+                    assertFalse(h.store.hasPendingSend(EntityKey(RADIO, message.id)))
+                    val replacement = replacementStatus?.let {
+                        message.copy(status = it, text = "new incarnation", failureSeen = false)
+                    }
+                    h.store.deleteMessage(EntityKey(RADIO, message.id))
+                    replacement?.let { h.store.saveMessage(it) }
+                    h.store.before = { operation -> assertNotEquals("fetchMessage", operation) }
+                    release.complete(Unit); notifying.await()
+                    h.store.before = null
+                    val observed = statuses(h.service, events)
+                    assertEquals(listOf(MessageStatusEvent.PersistenceChanged(EntityKey(RADIO, message.id))), observed)
+                    val hint = assertIs<MessageStatusEvent.PersistenceChanged>(observed.single())
+                    assertEquals(replacement, h.store.fetchMessage(hint.key))
+                    assertEquals(unrelated, h.stored(unrelated.id))
+                    assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+                } finally {
+                    release.complete(Unit); notifying.cancelAndJoin()
+                    h.store.before = null
+                    h.service.releaseDirectClaim(claimID)
+                    events.close(); h.close()
+                }
+            }
+        }
+
     @TestFactory fun regressions() = listOf(
         native("conditionalGuardedDirectCommitPublishesOnlyNeutralHintAfterSameKeyReplacement") {
             val h = Harness(this); h.start()
@@ -55,18 +100,16 @@ class NativeMessagingTest {
                 events.close(); h.close()
             }
         },
-        native("queueFailureReadIsOnlyNeutralHintWhenAnIndependentWriteReplacesTheObservedFailedRow") {
+        native("queueFailureHintDoesNotReadOrRequireTheCurrentReplacementStatus") {
             val h = Harness(this); h.start()
             val message = h.message(MessageStatus.FAILED)
             val unrelated = h.message(MessageStatus.FAILED, text = "unrelated")
             val replacement = message.copy(status = MessageStatus.DELIVERED, failureSeen = false)
             val events = h.service.statusEvents()
-            h.store.afterMessageRead = { key, row -> if (key.id == message.id) {
-                assertEquals(MessageStatus.FAILED, row?.status)
-                h.store.messages[EntityKey(RADIO, message.id)] = replacement
-            } }
+            h.store.messages[EntityKey(RADIO, message.id)] = replacement
+            h.store.before = { operation -> assertNotEquals("fetchMessage", operation) }
             h.service.notifyMessageFailed(message.id)
-            h.store.afterMessageRead = null
+            h.store.before = null
             assertEquals(replacement, h.stored(message.id))
             assertEquals(unrelated, h.stored(unrelated.id))
             assertEquals(listOf(MessageStatusEvent.PersistenceChanged(EntityKey(RADIO, message.id))),

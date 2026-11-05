@@ -1302,9 +1302,7 @@ class MessageService(
     }
     suspend fun notifyMessageFailed(messageID: UUID) {
         ownership.check("notifyMessageFailed")
-        val row = dataStore.fetchMessage(key(messageID))
-        ownership.check("notifyMessageFailed.read")
-        if (row?.status == MessageStatus.FAILED) broadcastFailurePersistenceChanged(messageID)
+        broadcastFailurePersistenceChanged(messageID)
     }
 
     internal suspend fun failMessageAndRethrow(

@@ -1520,38 +1520,51 @@ class MessagingRoomIntegrationTest {
         }
     }
 
-    @Test fun queueFailureReadPublishesOnlyNeutralHintAfterActualRoomSameKeyReplacement() = runTest(scheduler) {
+    @Test fun queuedFailureHintSurvivesActualRoomCommitThenPendingReplacement() = runTest(scheduler) {
+        queuedFailureHintAfterRoomFixtureCommit(delete = false)
+    }
+
+    @Test fun queuedFailureHintSurvivesActualRoomCommitThenDeletion() = runTest(scheduler) {
+        queuedFailureHintAfterRoomFixtureCommit(delete = true)
+    }
+
+    private suspend fun TestScope.queuedFailureHintAfterRoomFixtureCommit(delete: Boolean) {
         seed()
         val actual = store
         val message = MessageDTO(radioId = radio, contactID = contact.id, text = "pre-existing failed row",
-            timestamp = 100u, status = MessageStatus.FAILED, failureSeen = false)
-        val unrelated = message.copy(id = UUID.randomUUID(), text = "unrelated unseen failure")
+            timestamp = 100u, status = MessageStatus.PENDING, failureSeen = false)
+        val unrelated = message.copy(id = UUID.randomUUID(), text = "unrelated unseen failure", status = MessageStatus.FAILED)
         actual.saveMessage(message); actual.saveMessage(unrelated)
-        val entered = CompletableDeferred<MessageDTO>()
+        val committed = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         val key = EntityKey(radio, message.id)
         val boundary = object : DirectRoles(actual) {
             override suspend fun fetchMessage(key: EntityKey): MessageDTO? {
-                val row = actual.fetchMessage(key)
-                if (key.id == message.id) {
-                    entered.complete(assertNotNull(row))
-                    release.await()
-                }
-                return row
+                error("Neutral failure publication must not fetch a current row")
             }
         }
         val current = RadioGeneration(169, boundary)
         val events = current.service.statusEvents()
-        val notifying = backgroundScope.async { current.service.notifyMessageFailed(message.id) }
+        val notifying = backgroundScope.async {
+            // Consumer-routing fixture only: strict UNKNOWN forbids a new guarded direct commit.
+            actual.updateMessageStatus(key, MessageStatus.FAILED)
+            committed.complete(Unit)
+            release.await()
+            current.service.notifyMessageFailed(message.id)
+        }
         try {
-            assertEquals(message, entered.await())
-            val replacement = message.copy(contactID = null, channelIndex = 0u, text = "new channel row",
-                status = MessageStatus.PENDING)
-            actual.deleteMessage(key); actual.saveMessage(replacement)
+            committed.await()
+            assertEquals(MessageStatus.FAILED, actual.fetchMessage(key)?.status)
+            val replacement = if (delete) null else message.copy(
+                contactID = null, channelIndex = 0u, text = "new channel row", status = MessageStatus.PENDING)
+            actual.deleteMessage(key)
+            replacement?.let { actual.saveMessage(it) }
             release.complete(Unit); notifying.await()
-            assertEquals(replacement, actual.fetchMessage(key))
+            val observed = completedStatuses(current, events)
+            assertEquals(listOf(MessageStatusEvent.PersistenceChanged(key)), observed)
+            val hint = assertIs<MessageStatusEvent.PersistenceChanged>(observed.single())
+            assertEquals(replacement, actual.fetchMessage(hint.key))
             assertEquals(unrelated, actual.fetchMessage(EntityKey(radio, unrelated.id)))
-            assertEquals(listOf(MessageStatusEvent.PersistenceChanged(key)), completedStatuses(current, events))
         } finally {
             withContext(NonCancellable) {
                 release.complete(Unit); notifying.cancelAndJoin(); events.close(); current.stop()

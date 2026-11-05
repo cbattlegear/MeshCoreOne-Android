@@ -500,7 +500,7 @@ class ChatSendQueueService(
                     complete(id, clearProgress = false)
                     return
                 }
-                failedPersisted = dataStore.fetchMessage(key(id))?.status == MessageStatus.FAILED
+                failedPersisted = true
             } else {
                 val claimID = synchronized(lock) { channelClaimIDs[id] }
                 if (!messageService.failQueuedChannelClaim(claimID, id)) {

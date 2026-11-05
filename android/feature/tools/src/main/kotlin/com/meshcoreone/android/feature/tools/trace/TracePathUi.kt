@@ -123,14 +123,14 @@ object TracePathScreen {
                     override fun sessionToken() = dependencies.feature.sessionToken()
                     override fun savedPaths() = dependencies.feature.savedPaths()
                     override fun connectedDevice() = dependencies.feature.connectedDevice()
-                }, dependencies.originatingToken)
+                })
             }
         }
         DisposableEffect(savedPaths) { onDispose { savedPaths.retireConnection() } }
 
         DisposableEffect(holder, dependencies.generation, dependencies.radioId, dependencies.originatingToken) {
             holder.configure(dependencies.feature)
-            holder.bindConnection(dependencies.radioId, dependencies.generation, dependencies.originatingToken)
+            holder.bindConnection(dependencies.radioId, dependencies.generation)
             holder.startListening()
             onDispose { holder.retireConnection() }
         }

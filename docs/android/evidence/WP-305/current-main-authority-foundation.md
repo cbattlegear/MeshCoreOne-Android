@@ -20,6 +20,26 @@ The coordinator assigned an independent clean-current-main foundation. Runtime/d
 
 ## Source custody and adaptations
 
+### Current-main ancestry integration
+
+Exact beb97a679707730ee51208c0045cae7bffb0528c run
+[41973550183](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41973550183)
+finished SUCCESS, including Linux Android, controller, Swift codec and SwiftData restore/export
+jobs. The actual reported methods include initializationKeepsItsRuntimeLeaseWhileTheActualRoomTransactionIsHeld,
+differentAliasWriterRequiresRadioReadmissionBeforeEditorCanClearTheLastScope, both CLI TX
+readback cases and the queued-successor runtime barrier. CLI/writer/persistence/notification
+and onboarding suites reported SUCCESS. Compiled test source bindings include CLI blob
+2be161afdb35867b87ac86bd21f2713382e222e6 and writer blob
+0351114e0a77c9b110620a366fd8a381186f9ee4, matching that exact committed head.
+Authoritative results remain in the hosted log, not a second retained CI-result bundle.
+
+The owned branch then merges exact current main f93e2012049feb4d6be728f32bd661665d71161c
+through normal ancestry. Git resolved the merge without conflicts: main contributes only its
+notification-enrollment and LOS changes/docs relative to the prior candidate. Foundation and
+CLI controls are preserved. This changed tree requires its own fresh exact-head hosted check;
+beb97's success is not transferred. Settings integration, device and whole-port acceptance
+remain distinct.
+
 ### Follow-up: actual committed CLI observer seam
 
 Exact fd6d50bc3 hosted run 41971269263 executed 2,012 App tests with one failure:

@@ -771,3 +771,44 @@ families, 1,498 candidate comparisons; mapping check only), `portmap.py`
 exited 0, and `git diff --check origin/main...HEAD` passed. No Android tests
 were run locally. Exact-head hosted execution of the corrected candidate is
 required; the 0ada hosted run is superseded and is not counted as a pass.
+
+## Hosted ae3 failure and next bounded repairs
+
+Exact `ae3fd0c4905f7deb0d311c89be2842af543726ec` run
+[41929354176](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41929354176)
+terminated with failure: the declared Gradle command exceeded its 3,600-second
+limit. This is a demonstrated command timeout, not an inference from elapsed
+time. Original logs also contain concrete failures. Shared core UI completed
+215 tests with two failures: font-200 zoom target size at
+`SharedUiComposeTest.kt:721` and touch reveal of the same zoom target at line
+785. Consumer API31/API37 short-window controls failed the zoom size assertion
+at `ContactAvatarFlowTest.kt:1040`. The owner traced these to Slider's inner
+semantics node not inheriting the outer minimum target. Immutable WP-304
+`12b88b1d65263180492ce8235d3b1b7d32dd5d3e`, composed as `fdb43a9ec`,
+gives zoom an actual 49 dp container owning its progress semantics while the
+native Slider fills it. The thresholds and touch-reveal assertions remain;
+an additional real pointer click must change zoom.
+
+Consumer held-open controls reached an unexpected error by completion. Their
+fixture had an independent 60-second open deadline that could manufacture a
+media failure before the control released it. The held open now releases only
+through cancellation or the control's `finally`; pre-exit assertions require
+an active/loading editor with no error. Gated save controls reached the exact
+completed holder error and full save-stage sequence but not a new mounted
+dialog; one still showed stale saving semantics. The consumer now uses the
+existing deterministic frame-clock harness to drive the retained Activity
+composition after dialog focus transitions. The stale/foreign-dialog control
+also failed inside its diagnostic because the selected foreign plain window
+had no Compose root; diagnostics now inspect the Activity root explicitly.
+These are source corrections requiring hosted confirmation, not evidence that
+the production UI passed.
+
+The failed command's available report summary was incomplete (mandatory App,
+nodes and other module JUnit directories were missing); it is not aggregate
+acceptance. Independent exact-head review
+[5777152709](https://github.com/cbattlegear/MeshCoreOne-Android/pull/534#pullrequestreview-5777152709)
+reported no open source issues on ae3, but did not establish runtime acceptance.
+The successor does not rerun unchanged source or bypass the held local runtime.
+Controller validation, portmap, semantic mapping checks and diff whitespace
+checks passed on corrected source `fdb43a9ec`; Android/Kotlin execution remains
+unverified until the successor exact-head hosted run.

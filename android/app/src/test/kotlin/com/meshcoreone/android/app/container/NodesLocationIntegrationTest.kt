@@ -11,7 +11,8 @@ import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.semantics.SemanticsActions
 import com.meshcoreone.android.app.content.LocationManagerLocationProducing
 import com.meshcoreone.android.app.content.LocationPermissionRequesting
 import com.meshcoreone.android.core.contracts.FeatureId
@@ -92,8 +93,15 @@ class NodesLocationIntegrationTest : RoomProcessTest() {
                 compose.onAllNodes(androidx.compose.ui.test.hasText("Alpha"), useUnmergedTree = true)
                     .fetchSemanticsNodes().isNotEmpty()
             }
-            compose.onNodeWithText(host.get().getString(C.contactsListSort)).performClick()
-            compose.onNodeWithText(host.get().getString(NodeSortOrder.DISTANCE.titleRes)).performClick()
+            compose.onNodeWithText(host.get().getString(C.contactsListSort))
+                .performSemanticsAction(SemanticsActions.OnClick) { assertTrue(it()) }
+            val distanceLabel = host.get().getString(NodeSortOrder.DISTANCE.titleRes)
+            compose.waitUntil(5_000) {
+                h.settle(1)
+                compose.onAllNodes(androidx.compose.ui.test.hasText(distanceLabel)).fetchSemanticsNodes().size == 1
+            }
+            compose.onNodeWithText(distanceLabel)
+                .performSemanticsAction(SemanticsActions.OnClick) { assertTrue(it()) }
             fun assertOrder(first: String, second: String) {
                 compose.waitUntil(5_000) {
                     h.settle(1)

@@ -23,6 +23,11 @@ observer follows the current request and may acquire a replacement within its
 original 10-second budget, including when another observer wins an intermediate
 handoff. Provider failures are not retried; cancellation handoffs share the same
 bounded deadline rather than extending it.
+An explicit advert/onboarding request atomically takes over a list-owned slot,
+canceling that retired platform fix and fencing its late callback. Lists then
+observe the explicit request, without owning or canceling it. Competing explicit
+requests retain the existing RequestInProgress behavior. If an explicit owner
+cancels, surviving lists may recover within their unchanged deadline.
 Its existing advert cache and one-shot cancellation/timeout behavior stay intact.
 Authorization is refreshed when the UI resumes collection and on the adapter's
 existing permission/fix callbacks. Denied/revoked access withdraws the phone fix
@@ -58,6 +63,10 @@ Core navigation, list loading and radio commands remain independent of location.
   `lastForegroundObserverFollowsTwoDisposedAcquiringOwnersWithinItsOriginalDeadline`
   holds A/B/C, disposes A then the replacement-owning B, rejects both retired
   callbacks, and requires surviving C to acquire and publish its own callback.
+  The separate handoff deadline control advances 8 seconds, hands over, then
+  advances 2.001 seconds and requires cancellation at the original deadline.
+  Explicit-takeover cancellation recovery is also covered with both retired
+  platform callbacks retained and rejected.
 - `NodesLocationIntegrationTest.actualNodesAdapterPrefersAuthorizedPhoneThenLiveRadioAndWithdrawsDisconnectedFallback`
   exercises the actual AppContainer nodes dependency, live radio-coordinate
   updates, phone precedence, unavailable phone fallback and disconnect withdrawal.
@@ -66,6 +75,11 @@ Core navigation, list loading and radio commands remain independent of location.
   a pending platform one-shot and callback-to-visible-distance-order transition
   without another feature requesting a fix. Its denied control verifies Last
   Heard, no prompt and no pending platform fix.
+- `ShortcutAdvertLocationTest.listFirstForegroundFixCannotStarveExplicitPhoneAdvertOrCancelItsTakeover`
+  starts the real cold list fix before the real PHONE pre-advert path, requires
+  explicit takeover, rejects another explicit request and the old callback,
+  disposes the list without canceling the advert, and requires actual verified
+  location commands before the advert. No cache-shaped success is accepted.
 
 Existing API31/37 mounted controls retain 200% font and RTL. Synthetic service
 graphs and Robolectric LocationManager delivery are not physical location,
@@ -91,3 +105,8 @@ repairs the independent cold-cache, radio-observation and recency-fixture findin
 The `6f549e0` hosted run `42128297934` subsequently failed App test compilation
 on the new test's unsupported generic Robolectric application accessor. The
 successor uses the actual nongeneric API; no App runtime result is inferred.
+The `4f56c79` run `42130151439` executed 2,033 App tests, with 2 new mounted
+failures locating Distance after an injected Sort touch. The successor drives
+the actual mounted OnClick semantics and waits for popup composition; row-order
+expectations and the real callback transition remain unchanged. Other suites'
+results are not transferred to the successor.

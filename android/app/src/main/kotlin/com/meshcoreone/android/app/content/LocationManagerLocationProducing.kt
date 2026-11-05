@@ -22,6 +22,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.flow
@@ -86,16 +88,22 @@ class LocationManagerLocationProducing(
 
     private class Request(
         val continuation: CancellableContinuation<GeoCoordinate>,
+        val foreground: Boolean,
         val signal: CancellationSignal = CancellationSignal(),
     ) {
         val finished = CompletableDeferred<Result<GeoCoordinate>>()
     }
 
+    private class ForegroundFixTakenOver : CancellationException("Explicit location request replaced list-owned fix")
+
     private suspend fun acquireForegroundFix(): GeoCoordinate {
         while (true) {
             var existing: Request? = null
             try {
-                return acquireLocation { existing = it }
+                return acquireLocation(foreground = true) { existing = it }
+            } catch (_: ForegroundFixTakenOver) {
+                currentCoroutineContext().ensureActive()
+                continue
             } catch (error: LocationServiceError) {
                 if (error != LocationServiceError.RequestInProgress) throw error
             }
@@ -159,15 +167,21 @@ class LocationManagerLocationProducing(
     override suspend fun requestLocation(): GeoCoordinate = acquireLocation()
 
     @SuppressLint("MissingPermission")
-    private suspend fun acquireLocation(onBusy: ((Request) -> Unit)? = null): GeoCoordinate {
+    private suspend fun acquireLocation(foreground: Boolean = false, onBusy: ((Request) -> Unit)? = null): GeoCoordinate {
         refreshAuthorization()
         val manager = locationManager
             ?: throw LocationServiceError.RequestFailed("LocationManager system service unavailable")
         return suspendCancellableCoroutine { continuation ->
-            val request = Request(continuation)
+            val request = Request(continuation, foreground)
+            var replaced: Request? = null
             val failure = synchronized(lock) {
                 when {
                     closed -> LocationServiceError.RequestFailed("Location producer is closed")
+                    active?.foreground == true && !foreground && isAuthorized(mutableStatus.value) -> {
+                        replaced = active
+                        active = request
+                        null
+                    }
                     active != null -> {
                         onBusy?.invoke(checkNotNull(active))
                         LocationServiceError.RequestInProgress
@@ -184,6 +198,12 @@ class LocationManagerLocationProducing(
                 return@suspendCancellableCoroutine
             }
             continuation.invokeOnCancellation { cancel(request) }
+            replaced?.let { previous ->
+                val takenOver = ForegroundFixTakenOver()
+                previous.signal.cancel()
+                previous.finished.complete(Result.failure(takenOver))
+                previous.continuation.cancel(takenOver)
+            }
             if (!owns(request)) return@suspendCancellableCoroutine
             try {
                 if (

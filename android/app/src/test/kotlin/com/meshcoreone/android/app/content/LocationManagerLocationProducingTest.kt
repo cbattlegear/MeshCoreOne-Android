@@ -46,6 +46,36 @@ class LocationManagerLocationProducingTest {
 
     @Suppress("DEPRECATION")
     @Test
+    fun explicitTakeoverCancellationLetsTheStillMountedListRecoverWithoutPublishingRetiredFixes() = runTest {
+        shadowOf(locationManager).setProviderEnabled(LocationManager.FUSED_PROVIDER, true)
+        shadowOf(context as android.app.Application).grantPermissions(android.Manifest.permission.ACCESS_COARSE_LOCATION)
+        LocationManagerLocationProducing(context).use { adapter ->
+            val observed = mutableListOf<GeoCoordinate?>()
+            val list = launch { adapter.foregroundLocations().collect { observed += it } }
+            testScheduler.runCurrent()
+            val retiredList = shadowOf(locationManager).getLocationUpdateListeners(LocationManager.FUSED_PROVIDER).single()
+            val explicit = async { adapter.requestLocation() }
+            testScheduler.runCurrent()
+            val retiredExplicit = shadowOf(locationManager).getLocationUpdateListeners(LocationManager.FUSED_PROVIDER).single()
+            assertFalse(retiredList === retiredExplicit)
+            explicit.cancel()
+            assertFailsWith<CancellationException> { explicit.await() }
+            testScheduler.runCurrent()
+            val current = shadowOf(locationManager).getLocationUpdateListeners(LocationManager.FUSED_PROVIDER).single()
+            assertFalse(current === retiredList || current === retiredExplicit)
+            retiredList.onLocationChanged(fix(1.0, 2.0))
+            retiredExplicit.onLocationChanged(fix(3.0, 4.0))
+            assertNull(adapter.currentLocation)
+            shadowOf(locationManager).simulateLocation(fix(10.0, 10.0))
+            testScheduler.runCurrent()
+            assertEquals(GeoCoordinate(10.0, 10.0), observed.last())
+            list.cancel()
+            list.join()
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    @Test
     fun cancellationHandoffDoesNotRestartTheSurvivingObserversTenSecondBudget() = runTest {
         shadowOf(locationManager).setProviderEnabled(LocationManager.FUSED_PROVIDER, true)
         shadowOf(context as android.app.Application).grantPermissions(android.Manifest.permission.ACCESS_COARSE_LOCATION)

@@ -20,6 +20,27 @@ The coordinator assigned an independent clean-current-main foundation. Runtime/d
 
 ## Source custody and adaptations
 
+### Follow-up: actual committed CLI observer seam
+
+Exact `dcfdc5e2ac6672cde8489eae19125847b9d3cec7` hosted run
+[41967846619](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41967846619)
+executed 2,012 App tests with one failure: the typed-TX CliSettingsReadbackTest at line 177.
+DeviceWriterAuthorityRoomTest, DevicePersistenceAuthorityRoomTest and
+DeviceNotificationAuthorityRoomTest each reported END SUCCESS, including the repaired
+initialization witness. This is actual dcfd evidence only, not a successor result.
+
+CLI owner `bd67ff1a-bae4-46aa-a27c-4b31128744ab` supplied test-only
+`ea3c8dcd0c8c32bc94ed3dc763d828bf935f0d7f`, parent exactly 688b5eb19. Its CLI test file is
+transferred byte-identically onto dcfd (direct comparison passed). The previous recorder
+overrode saveDevice, which the versioned editor no longer calls. The corrected recorder
+delegates saveDeviceIfUnchanged to actual Room and records only true committed results;
+explicit eventual checks observe those commits. The positive 17 and negative 22 actual
+readback, wire-command, no-fake-OK and Room assertions remain unchanged. No production or
+CLI consumer behavior is edited. Fresh trusted WP-305 add-or-update-related-test admission
+returned reviewed-support-test and git diff --check passed.
+Independent successor source review and exact-head hosted execution are separate gates;
+the original failed runs and local Gradle hold remain unchanged.
+
 ### Follow-up: held-initialization Room command witness
 
 Exact `688b5eb19f35adf2c9557a86573e077299cbec8a` hosted run

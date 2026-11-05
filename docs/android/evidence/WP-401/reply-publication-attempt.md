@@ -184,3 +184,17 @@ argument types; it changes no storage protocol, tests or expectations. No schema
 tests executed successfully in this failed run and no 336-case acceptance is claimed.
 Classify/controller/Swift codec jobs passed; android-ci failed and the SwiftData job was
 skipped after the Android failure. A new exact successor diagnostic is required.
+
+The typed-array successor `915949e39b0b0db50c6d255cae4bb48982862e29` was composed
+as `664bb77680875790e681d20155317f5acc766497` (parents d59773a10 and 915949e39).
+[41981885876](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41981885876)
+also completed FAILURE: Linux job127093729380 failed
+`:platform:notifications:compileDebugKotlin` at line1001. Explicit element typing
+removed the intersection-type error, but `+` still admitted both the single-element
+and array overloads for `Array<Any?>`. The next repair explicitly selects
+`values.plus(elements = arrayOf<Any?>(...))`, preserving the twelve SQL bind values,
+their order and all test assertions. Neither failed diagnostic executed the notification
+tests or produced 336-case discovery/compiler-input evidence. Classify/controller/Swift
+codec passed; Linux Android and android-ci failed; SwiftData was skipped. All prior source
+refs and runs remain unchanged. This successor requires its own exact hosted execution;
+the explicit overload selection is not itself compilation or behavior evidence.

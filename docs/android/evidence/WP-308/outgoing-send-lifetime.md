@@ -103,6 +103,12 @@ verifies all 45 original DTOs, then mounts the same paging/selection/copy
 flow over the reopened store and a fresh App container. Exact named-file
 cleanup happens after closing the fixture; no retained runtime owner is
 accessed. This additional method is also uncompiled/unexecuted.
+The mounted cancellation family additionally holds after the actual destination
+draft write but before the copy port returns. Cancellation must leave that
+destination text intact, preserve the original recovery row/selection, show no
+completed feedback and perform exactly one copy attempt with no automatic replay.
+This explicitly distinguishes cancelled await from rollback. It is authored,
+not executed, and supplies no durable copy receipt or notification intake proof.
 
 There is no production route registration or scoped-read activation in this
 preparation. Exact Android execution, App disk-reopen acceptance and the existing

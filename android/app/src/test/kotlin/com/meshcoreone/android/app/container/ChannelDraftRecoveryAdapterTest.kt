@@ -126,7 +126,7 @@ class ChannelDraftRecoveryAdapterTest : RoomProcessTest() {
         assertEquals(PersistenceStoreError.MessageNotFound, missing.error)
     }
 
-    private enum class CopyOutcome { COMPLETED, CONFLICT, CANCELLED }
+    private enum class CopyOutcome { COMPLETED, CONFLICT, CANCELLED, CANCELLED_AFTER_WRITE }
 
     @Test fun mountedFont200RecoveryRequiresSelectionAndCopiesIntoAppDraftWithoutSending() =
         mountedRecovery(knownOrigin = false, outcome = CopyOutcome.COMPLETED)
@@ -139,6 +139,9 @@ class ChannelDraftRecoveryAdapterTest : RoomProcessTest() {
 
     @Test fun mountedCancelledCopyKeepsOriginalAndNeverShowsCompletedFeedback() =
         mountedRecovery(knownOrigin = true, outcome = CopyOutcome.CANCELLED)
+
+    @Test fun mountedCopyCommittedBeforeCancelledReturnPreservesDestinationWithoutSuccessOrReplay() =
+        mountedRecovery(knownOrigin = false, outcome = CopyOutcome.CANCELLED_AFTER_WRITE)
 
     @Test fun mountedDiskReopenRecoveryCopiesOldOriginWithoutChangingOrSendingOriginal() =
         mountedRecovery(knownOrigin = true, outcome = CopyOutcome.COMPLETED, reopen = true)
@@ -203,16 +206,21 @@ class ChannelDraftRecoveryAdapterTest : RoomProcessTest() {
         try {
             val drafts = rig.container.chatsFeature.drafts
             val enteredCopy = CompletableDeferred<Unit>()
+            val wroteCopy = CompletableDeferred<Unit>()
             val copyGate = CompletableDeferred<Unit>()
             var copyJob: Job? = null
             val newerDraft = "destination text typed after selection"
             val conflict = IllegalStateException("Destination already has newer draft text")
             val failures = mutableListOf<Throwable>()
+            var copyAttempts = 0
             val adapter = ChannelDraftRecoveryAdapter(radio, store, store) { current, destination ->
+                copyAttempts++
                 enteredCopy.complete(Unit)
                 if (outcome == CopyOutcome.CANCELLED) copyGate.await()
                 val revision = drafts.revision(destination.conversationId)
                 if (!drafts.restoreIfUnchanged(destination.conversationId, revision, current.text)) throw conflict
+                wroteCopy.complete(Unit)
+                if (outcome == CopyOutcome.CANCELLED_AFTER_WRITE) copyGate.await()
             }
             val holder = RecoveredDraftStateHolder(radio, adapter, { _, failure -> failures += failure })
             holder.refresh()
@@ -288,12 +296,19 @@ class ChannelDraftRecoveryAdapterTest : RoomProcessTest() {
                     compose.onNodeWithText(copiedFeedback).assertDoesNotExist()
                     assertEquals(listOf(conflict), failures)
                 }
-                CopyOutcome.CANCELLED -> {
+                CopyOutcome.CANCELLED, CopyOutcome.CANCELLED_AFTER_WRITE -> {
+                    if (outcome == CopyOutcome.CANCELLED_AFTER_WRITE) {
+                        compose.waitUntil(5_000) { wroteCopy.isCompleted }
+                    }
                     assertTrue(holder.state.value.copying)
                     compose.runOnIdle { checkNotNull(copyJob).cancel() }
                     checkNotNull(copyJob).join()
                     compose.waitUntil(5_000) { !holder.state.value.copying }
-                    assertNull(drafts.get(selected.conversationId))
+                    if (outcome == CopyOutcome.CANCELLED_AFTER_WRITE) {
+                        assertEquals(source.text, drafts.get(selected.conversationId))
+                    } else {
+                        assertNull(drafts.get(selected.conversationId))
+                    }
                     assertEquals(EntityKey(radio, source.id), holder.state.value.selected)
                     assertFalse(holder.state.value.copied)
                     assertNull(holder.state.value.failure)
@@ -302,6 +317,7 @@ class ChannelDraftRecoveryAdapterTest : RoomProcessTest() {
                 }
             }
             assertEquals(45, holder.state.value.messages.size)
+            assertEquals(1, copyAttempts)
             originals.forEach { assertEquals(it, store.fetchMessage(EntityKey(radio, it.id))) }
             assertTrue(store.fetchPendingSends(radio).isEmpty())
             assertTrue(rig.links.links.isEmpty())

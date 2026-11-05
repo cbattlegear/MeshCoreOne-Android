@@ -12,6 +12,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -70,7 +71,7 @@ internal fun RemoteNodeHistoryRoute(
     clock: RemoteNodesClock = SystemRemoteNodesClock,
 ) {
     val context = LocalContext.current
-    val locale = Locale.getDefault()
+    val locale = LocalConfiguration.current.locales[0]
     val system = MeasurementSystem.of(locale)
     val zone = ZoneId.systemDefault()
     val holder = remember(publicKey, radioId, store, locale, system, zone, clock) {

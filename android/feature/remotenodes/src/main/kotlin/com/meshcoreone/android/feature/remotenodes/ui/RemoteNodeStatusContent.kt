@@ -1,6 +1,7 @@
 // PortedFrom: MC1/Views/RemoteNodes/Repeaters/RepeaterStatusContent.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/RemoteNodes/Rooms/RoomStatusContent.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/RemoteNodes/SharedNodeStatusViews.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/RemoteNodes/DisappearedNeighborRow.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.feature.remotenodes.ui
 
 import androidx.activity.compose.BackHandler
@@ -147,8 +148,14 @@ internal fun RemoteNodeStatusContent(
                     NeighborRows.disappeared(repeaterState.neighbors, state.previousNeighborSnapshot, repeaterState.neighborKeyDisplayByteCount, context).forEach { row ->
                         key(row.entry.publicKeyPrefix) {
                             val name = remoteText(row.displayName)
-                            RemoteValue(name, stringResource(L.remoteNodesHistoryNotSeen))
-                            if (row.matchKind == NodeNameMatchKind.FALLBACK) RemoteNodePossibleMatch(name)
+                            Column(Modifier.semantics(mergeDescendants = true) {}) {
+                                Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                                    Text(name, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(remoteText(row.snrText), Modifier.fillMaxWidth(), style = MaterialTheme.typography.bodyLarge)
+                                }
+                                Text(stringResource(L.remoteNodesHistoryNotSeen))
+                                if (row.matchKind == NodeNameMatchKind.FALLBACK) RemoteNodePossibleMatch(name)
+                            }
                         }
                     }
                     TextButton({ map = "neighbors" }) { Text(stringResource(L.remoteNodesStatusViewOnMap)) }

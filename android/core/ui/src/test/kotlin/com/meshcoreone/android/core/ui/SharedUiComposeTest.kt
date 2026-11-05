@@ -1,6 +1,7 @@
 // AndroidOnly: WP-304 Real native Compose/Material flows, meaningful PNGs and accessible compact/expanded/resize/font/dialog/tip states.
 package com.meshcoreone.android.core.ui
 
+import com.meshcoreone.android.core.contracts.AppTab
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.view.KeyEvent
@@ -495,7 +496,7 @@ class SharedUiComposeTest {
         try {
             val tips = ShowOnceTips(storage.preferences)
             tips.donateCompletedOnboarding()
-            assertTrue(tips.claim(SharedTip.DEVICE_MENU) { TipHostState(true, true, false) })
+            assertTrue(tips.claim(SharedTip.DEVICE_MENU) { TipHostState(AppTab.CHATS, true, true, false) })
             assertTrue(tips.hasDisplayed(SharedTip.DEVICE_MENU))
             content { MeshCoreTheme(motionScale = 0f) { sample(tip = SharedTip.DEVICE_MENU) } }
             resize(840)

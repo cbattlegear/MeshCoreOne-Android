@@ -394,3 +394,21 @@ parameter case; index lookup still selected the prior case's reset row. The corr
 actual indexed channel, sets its scope through `setChannelFloodScope`, and asserts the exact seeded
 scope before the competing removal. Every original post-removal assertion remains intact.
 Production guard/authority behavior is unchanged; this fixture successor requires fresh execution.
+
+The corrected exact `350eb42a16fd02cf5e8431543a5dceb02f1e99d0` diagnostic
+[41960267581](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41960267581)
+completed with writer **26 START / 26 END SUCCESS / 0 END FAILURE** and persistence
+**16 START / 16 END SUCCESS / 0 END FAILURE** in job `127024809124`, after deduplicating repeated
+log-tail markers by class/method/phase. The different-target production-editor/real-Room/fake-radio
+control now passes with every original positive assertion retained, including both alias orders,
+scoped and disabled baselines, actual CAS rejection, radio readmission and raw channel resets.
+The storage-only different-target control also passes.
+
+Overall workflow status remains failure: App discovered 1,945 tests with only the two known
+`PresetDeviceEventSessionTest` path-hash failures and the known `OnboardingFlagsTest` unavailable
+uncertain-commit readback failure. Controller/workflow policy and Swift codec oracle jobs passed.
+This completes the bounded editor/storage mechanism and its explicit fake-radio readmission
+controls, not the separately owned actual Settings queue integration, clean-main foundation,
+whole candidate, hardware or merge acceptance. The API handoff remains `725495e4`, transferred
+storage control `5d7847b8`, fixture correction `350eb42a`; no active ref was advanced or cancelled.
+Hosted logs remain authoritative and no duplicate CI-result bundle is retained.

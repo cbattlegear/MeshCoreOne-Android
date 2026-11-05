@@ -321,6 +321,7 @@ class SourceDispositionTests(unittest.TestCase):
                 patch.object(ci, "candidate_environment", return_value={}),
                 patch.object(ci, "verify_wrapper"),
                 patch.object(ci, "execute", side_effect=execute) as commands,
+                patch("controller.module_junit.remapped_tasks", return_value=[]),
                 patch.object(ci, "collect_suites", side_effect=AssertionError("Unselected scaffold suites")),
                 patch.object(ci, "check_module_tests", side_effect=AssertionError("Unselected Android module tests")),
                 patch.object(ci, "collect_lint", side_effect=AssertionError("Unselected scaffold lint")),

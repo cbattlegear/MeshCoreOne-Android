@@ -67,6 +67,8 @@ def dependency_blocks(text):
 
 
 def module_inventory(repo, revision):
+    from .module_junit import remapped_roots, unit_source
+
     paths = [
         git_path(path) for path in git(repo, "ls-tree", "-rz", "--name-only", revision, "--", "android").split("\0")
         if path
@@ -79,6 +81,7 @@ def module_inventory(repo, revision):
         if MODULE.fullmatch(module) is None:
             continue
         text = git(repo, "show", revision + ":" + path)
+        roots = remapped_roots(module, git(repo, "rev-parse", revision + ":" + path))
         text = re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.DOTALL)
         dependencies = dependency_blocks(text)
         references = PROJECT.findall(dependencies)
@@ -104,9 +107,9 @@ def module_inventory(repo, revision):
             "runner": "test" if jvm else "testDebugUnitTest",
             "lint": not jvm,
             "tests": any(
-                name.startswith(f"android/{module}/src/{source}/")
-                and name.endswith((".kt", ".java"))
-                for source in ("test", "testDebug") for name in paths
+                name.startswith(f"android/{module}/")
+                and unit_source(name[len(f"android/{module}/"):], roots)
+                for name in paths
             ),
             "dependencies": sorted(
                 {name.lstrip(":").replace(":", "/") for name in references} | convention_dependencies
@@ -191,6 +194,13 @@ def select_paths(paths, requested=None, *, modules=None, graph_error=None):
     selected = required if requested is None else set(requested)
     scopes = [scope for scope in SCOPED_TASKS if scope in selected] + sorted(selected - set(SCOPED_TASKS))
     tasks = [task for scope in scopes if scope in SCOPED_TASKS for task in SCOPED_TASKS[scope]]
+    if "scaffold" in scopes:
+        from .module_junit import JVM_REMAPS
+
+        tasks.extend(
+            ":" + module.replace("/", ":") + ":" + profile["runner"]
+            for module, profile in JVM_REMAPS.items() if module in modules
+        )
     for scope in scopes:
         if scope.startswith("module:"):
             module = scope[len("module:"):]
@@ -315,6 +325,7 @@ def validate_plan(repo, plan, *, trusted_base=None, merge_base_only=False):
 
 def collect_targeted_reports(repo, scopes):
     from .ci_evidence import suite_counts
+    from .module_junit import check_module_inputs, module_sources, require_remapped_cases
 
     suites = {}
     locations = {
@@ -327,6 +338,9 @@ def collect_targeted_reports(repo, scopes):
     modules = module_inventory(repo, git(repo, "rev-parse", "HEAD")) if any(
         scope.startswith("module:") for scope in scopes
     ) else {}
+    selected = [scope[len("module:"):] for scope in scopes if scope.startswith("module:")]
+    expected = module_sources(repo) if selected else {}
+    check_module_inputs(repo, selected)
     for scope in scopes:
         if scope.startswith("module:"):
             module = scope[len("module:"):]
@@ -335,6 +349,7 @@ def collect_targeted_reports(repo, scopes):
             if modules[module]["tests"] or module == "app":
                 directory = repo / "android" / module / "build/test-results" / modules[module]["runner"]
                 suites[module] = suite_counts(directory, 1)
+                require_remapped_cases(repo, module, directory, expected.get(module, {}))
             continue
         if scope not in ("scaffold", *locations):
             raise PortError("Unknown report scope: " + str(scope))
@@ -633,5 +648,10 @@ def _run_scaffold(
             inventory.setdefault(match[1], []).append(case)
     bind_test_lineage(inventory, read_test_lineage(lineage_path), runners)
     report["compiled_test_sources"] = read_test_sources(sources_path, runners)
+    from .module_junit import validate_remapped_compilation
+
+    report["remapped_jvm_inputs"] = validate_remapped_compilation(
+        repo, report["compiled_test_sources"], runners,
+    )
     validate_plan(repo, plan, trusted_base=trusted_base, merge_base_only=merge_base_only)
     return report

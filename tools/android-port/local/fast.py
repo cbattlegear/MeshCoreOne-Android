@@ -105,8 +105,16 @@ def main():
     sys.path.insert(0, str(args.repo / "tools" / "android-port"))
     from controller import ci
     from controller.ci_environment import candidate_environment, verify_wrapper, write_json
-    from controller.ci_evidence import collect_lint, collect_suites, validate_graph_runtime
-    from controller.module_junit import check_module_tests
+    from controller.ci_evidence import (
+        LINT_TARGETS, SUITES, bind_test_lineage, collect_lint, collect_suites,
+        prepare_test_lineage, prepare_test_sources, read_test_lineage,
+        read_test_sources, validate_graph_runtime,
+    )
+    from controller.module_junit import (
+        REPORT_LOCATIONS, bounded_directory, check_module_tests,
+        module_method_inventory, module_sources, remapped_tasks, validate_remapped_compilation,
+    )
+    from controller.errors import PortError
 
     stages = args.stages.split(",")
     plan = affected_request(args.repo, args.affected_plan, args.affected_base, stages, args.advisory)
@@ -146,11 +154,58 @@ def main():
                 print(f"===== PASS: {stage} =====", flush=True)
                 continue
             project = args.repo / "android"
+            tasks = list(dict.fromkeys([*ci.TASKS[stage], *remapped_tasks(args.repo)]))
+            directories = {project / relative for relative, _ in SUITES.values()}
+            for module in module_sources(args.repo):
+                directories.update(project / module / relative for relative in REPORT_LOCATIONS)
+            reports = [
+                project / module / "build/reports/lint-results-debug.xml" for module in LINT_TARGETS
+            ] + [
+                project / "build/reports/scaffold" / name
+                for name in ("module-graph.tsv", "runtime-dependencies.tsv")
+            ]
+            for directory in directories:
+                bounded_directory(directory, args.repo)
+                reports.extend(directory.glob("TEST-*.xml"))
+            for path in reports:
+                bounded_directory(path.parent, args.repo)
+                if path.is_symlink():
+                    raise PortError("Linked previous report cannot become current evidence")
+                path.unlink(missing_ok=True)
+            lineage_path = prepare_test_lineage(args.output)
+            sources_path = prepare_test_sources(args.output)
+            graph_path = args.output / "gradle-scaffold-task-graph.json"
+            if graph_path.is_symlink():
+                raise PortError("Linked resolved task graph")
+            graph_path.unlink(missing_ok=True)
+            task_environment = {
+                **environment, "ANDROID_CI_TEST_LINEAGE": str(lineage_path),
+                "ANDROID_CI_TEST_SOURCES": str(sources_path),
+                "ANDROID_CI_TASK_GRAPH": str(graph_path),
+            }
             execute([str(args.repo / "android" / "gradlew"), "-p", str(project),
-                     *ci.TASKS[stage], *options], args.repo, environment, args.output / f"gradle-{stage}.log")
-            report = {"stage": stage, "result": "success", "tasks": ci.TASKS[stage], "warm_cache": True}
+                     *tasks, *options, "--init-script", str(
+                         args.repo / "tools/android-port/controller/verify_candidate_task_graph.gradle")],
+                    args.repo, task_environment, args.output / f"gradle-{stage}.log")
+            report = {"stage": stage, "result": "success", "tasks": tasks, "warm_cache": True}
+            report["resolved_task_graph"] = ci.validate_candidate_task_graph(graph_path, tasks)
             report["suites"] = collect_suites(args.repo / "android")
             report["module_unit_tests"] = check_module_tests(args.repo)
+            inventory = module_method_inventory(args.repo, report["module_unit_tests"])
+            runners = {}
+            for module in inventory:
+                locations = [
+                    relative for relative in REPORT_LOCATIONS
+                    if any((project / module / relative).glob("TEST-*.xml"))
+                ]
+                if len(locations) != 1:
+                    raise PortError("Missing or ambiguous selected JUnit runner: " + module)
+                runners[module] = Path(locations[0]).name
+            bind_test_lineage(inventory, read_test_lineage(lineage_path), runners)
+            report["unit_test_methods"] = inventory
+            report["compiled_test_sources"] = read_test_sources(sources_path, runners)
+            report["remapped_jvm_inputs"] = validate_remapped_compilation(
+                args.repo, report["compiled_test_sources"], runners)
             report["reports"] = collect_lint(args.repo / "android")
             validate_graph_runtime(args.repo / "android/build/reports/scaffold")
             execute([sys.executable, str(args.repo / "tools/android-port/l10n_convert.py"), "--check",

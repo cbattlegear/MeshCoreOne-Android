@@ -13,6 +13,7 @@ import sys
 import tempfile
 import time
 import unittest
+import xml.etree.ElementTree as ET
 from unittest.mock import patch
 
 try:
@@ -807,6 +808,178 @@ class AffectedRunnerTests(unittest.TestCase):
         self.assertIn("AFFECTED SNAPSHOT CHECKS COMPLETE", text.getvalue())
         self.assertNotIn("AFFECTED LOCAL CHECK PASSED", text.getvalue())
         self.assertNotIn("FAST LOCAL CHECK PASSED", text.getvalue())
+
+
+class FullFastRemappedTests(unittest.TestCase):
+    def setUp(self):
+        from controller.module_junit import NOTIFICATION_ROOT
+
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.repo = self.root / "repo"
+        self.repo.mkdir()
+        self.git("init", "--quiet")
+        self.write(".gitignore", "**/build/\n")
+        source_repo = Path(__file__).resolve().parents[3]
+        # A committed fixture pin, not the producer's mutable branch or worktree.
+        fixture = "1e1ff70345f203b41f9a8b04836c2cc4640500c9"
+        for relative in ["build.gradle.kts", *[
+            NOTIFICATION_ROOT + "/" + name + ".kt" for name in (
+                "AndroidMessagingNotificationDeliveryTest", "NotificationPayloadCodecTest",
+                "NotificationActionDispatcherTest",
+            )
+        ]]:
+            path = "android/platform/notifications/" + relative
+            content = subprocess.check_output(
+                ["git", "-C", str(source_repo), "show", fixture + ":" + path],
+                text=True, timeout=30,
+            )
+            self.write(path, content)
+        for module, plugin in (("model", "mesh.jvm.library"), ("contracts", "mesh.jvm.library"),
+                               ("l10n", "mesh.android.library")):
+            self.write(f"android/core/{module}/build.gradle.kts", f'plugins {{ id("{plugin}") }}\n')
+        self.git("add", "--all")
+        self.git("commit", "--quiet", "-m", "bounded remapped fixture")
+        self.work = self.root / "work"
+        (self.work / "toolchain").mkdir(parents=True)
+        (self.work / "toolchain/environment.json").write_text(
+            json.dumps({"java_home": str(self.root / "fixture-java")}), encoding="utf-8",
+        )
+        self.output = self.root / "output"
+        self.output.mkdir()
+        self.task = ":platform:notifications:testDebugUnitTest"
+        self.calls = []
+
+    def git(self, *arguments):
+        return subprocess.check_output([
+            "git", "-c", "core.autocrlf=false", "-c", "core.hooksPath=" + str(self.root / "hooks"),
+            "-c", "commit.gpgsign=false", "-c", "user.name=Fixture",
+            "-c", "user.email=fixture@example.invalid", "-C", str(self.repo), *arguments,
+        ], text=True, stderr=subprocess.PIPE, timeout=30).strip()
+
+    def write(self, relative, text):
+        path = self.repo / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8", newline="\n")
+        return path
+
+    def notification_report(self, runner="testDebugUnitTest", cases=None):
+        from controller.module_junit import NOTIFICATION_CASES
+
+        return self.junit("platform/notifications", runner, NOTIFICATION_CASES if cases is None else cases)
+
+    def junit(self, module, runner, cases):
+        suite = ET.Element("testsuite", tests=str(len(cases)), failures="0", errors="0", skipped="0")
+        for classname, method in sorted(cases):
+            ET.SubElement(suite, "testcase", classname=classname, name=method)
+        return self.write(
+            f"android/{module}/build/test-results/{runner}/TEST-fixture.xml",
+            ET.tostring(suite, encoding="unicode"),
+        )
+
+    def run_fast(self, *, fresh=True, compiled=True, runner="testDebugUnitTest", cases=None):
+        from controller import ci, ci_environment, ci_evidence
+        from controller.module_junit import NOTIFICATION_ROOT, module_sources
+
+        def execute(command, repo, environment, log):
+            self.calls.append(command)
+            if log.name != "gradle-scaffold.log":
+                return
+            self.assertEqual(repo, self.repo)
+            self.assertEqual(command.count(self.task), 1)
+            self.assertIn("--init-script", command)
+            # The actual caller must remove both old runner directories before launch.
+            self.assertFalse(list((self.repo / "android/platform/notifications/build/test-results").glob(
+                "*/TEST-*.xml")))
+            tasks = [":" + task.lstrip(":") for task in ci.TASKS["scaffold"]]
+            tasks = list(dict.fromkeys([*tasks, self.task]))
+            Path(environment["ANDROID_CI_TASK_GRAPH"]).write_text(json.dumps({
+                "schema_version": 1,
+                "tasks": [{"path": task, "type": "Fixture", "command": []} for task in tasks],
+            }), encoding="utf-8")
+            self.junit("app", "testDebugUnitTest", {("FixtureApp", "test")})
+            self.junit("core/contracts", "test", {("FixtureContracts", "test")})
+            if fresh:
+                self.notification_report(runner, cases)
+            if compiled:
+                inputs = module_sources(self.repo)["platform/notifications"]
+                Path(environment["ANDROID_CI_TEST_SOURCES"]).write_text(json.dumps({
+                    "task": self.task, "sources": [
+                        {"path": path, "blob": blob} for path, blob in inputs.items()
+                        if "/" + NOTIFICATION_ROOT + "/" in path
+                    ],
+                }) + "\n", encoding="utf-8")
+
+        text = io.StringIO()
+        with patch.object(sys, "argv", [
+            "fast.py", "--repo", str(self.repo), "--work", str(self.work),
+            "--output", str(self.output), "--stages", "scaffold",
+        ]), patch.object(fast, "execution_lane", return_value=None), \
+                patch.object(ci_environment, "candidate_environment", return_value={}), \
+                patch.object(ci_environment, "verify_wrapper"), \
+                patch.object(ci_evidence, "collect_suites", return_value={}), \
+                patch.object(ci_evidence, "collect_lint", return_value={}), \
+                patch.object(ci_evidence, "validate_graph_runtime"), \
+                patch.object(fast, "execute", side_effect=execute), contextlib.redirect_stdout(text):
+            fast.main()
+        return text.getvalue()
+
+    def test_stale_xml_without_fresh_results_fails_through_full_caller(self):
+        stale = self.notification_report()
+        wrong = self.notification_report("test")
+        with self.assertRaisesRegex(PortError, "Missing/ambiguous"):
+            self.run_fast(fresh=False)
+        self.assertFalse(stale.exists())
+        self.assertFalse(wrong.exists())
+        self.assertEqual(len(self.calls), 1)
+
+    def test_missing_results_fail_through_full_caller(self):
+        with self.assertRaisesRegex(PortError, "Missing/ambiguous"):
+            self.run_fast(fresh=False)
+
+    def test_fresh_results_and_compilation_pass_with_deduplicated_actual_tasks(self):
+        from controller import ci
+
+        self.notification_report()
+        with patch.dict(ci.TASKS, scaffold=[*ci.TASKS["scaffold"], self.task, self.task]):
+            text = self.run_fast()
+        self.assertIn("FAST LOCAL CHECK PASSED", text)
+        self.assertIn('"remapped_jvm_inputs"', text)
+        self.assertIn('"unit_test_methods"', text)
+        self.assertEqual(len(self.calls), 2)
+
+    def test_old_compilation_log_does_not_satisfy_fresh_results(self):
+        from controller.module_junit import NOTIFICATION_ROOT, module_sources
+
+        inputs = module_sources(self.repo)["platform/notifications"]
+        (self.output / "gradle-test-sources.jsonl").write_text(json.dumps({
+            "task": self.task, "sources": [
+                {"path": path, "blob": blob} for path, blob in inputs.items()
+                if "/" + NOTIFICATION_ROOT + "/" in path
+            ],
+        }) + "\n", encoding="utf-8")
+        with self.assertRaisesRegex(PortError, "Actual JVM compilation"):
+            self.run_fast(compiled=False)
+
+    def test_fresh_wrong_runner_fails(self):
+        with self.assertRaisesRegex(PortError, "Wrong actual remapped"):
+            self.run_fast(runner="test")
+
+    def test_fresh_incomplete_named_cases_fail(self):
+        from controller.module_junit import NOTIFICATION_CASES
+
+        with self.assertRaisesRegex(PortError, "Missing mandatory remapped"):
+            self.run_fast(cases=set(sorted(NOTIFICATION_CASES)[:-1]))
+
+    def test_unapproved_mapping_fails_before_execution(self):
+        path = "android/platform/notifications/build.gradle.kts"
+        self.write(path, (self.repo / path).read_text(encoding="utf-8") + "\n// changed profile\n")
+        self.git("add", "--all")
+        self.git("commit", "--quiet", "-m", "unapproved fixture profile")
+        with self.assertRaisesRegex(PortError, "Missing/unapproved"):
+            self.run_fast()
+        self.assertEqual(self.calls, [])
 
 
 class InstalledRuntimeTests(unittest.TestCase):

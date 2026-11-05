@@ -201,7 +201,23 @@ Combined execution attempts (preserved, not attributed to successors):
   actual root focus delivery to the decor's one-shot attachment callback and
   asserts attachment, root existence and `hasWindowFocus`. It retains the
   no-initial-focus negative control and changes no production consent guard.
-  Successor execution is not yet verified.
+  Its exact run
+  [42009037096](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42009037096)
+  executed 2,060 app tests with 12 failures (six mounted methods at both SDKs).
+  Warning display/descriptor, recording-backend confirmation/dismissal,
+  recreation and no-initial-focus controls no longer failed. Five real-ledger
+  methods still timed out with Android Main continuations queued; the remaining
+  standalone focus-loss method acted before mounted composition was idle.
+  This is not passing real-ledger integration evidence.
+- Reviewed successor `618ed213f5f7bb2d376b3c99a530a91fc8e942e0` waits
+  for mounted idle after the actual start action and pumps the real Main looper
+  while awaiting IO/admission outcomes instead of blocking Main with a latch.
+  The positive control still requires `BoundSnapshot`, exact
+  `STAGED`/`CONSUMED` history and reopened stores; negative controls retain
+  their actual admission barriers and exact ledger assertions. Production
+  source is unchanged. Exact run
+  [42011995652](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42011995652)
+  is pending; no earlier outcome is transferred to it.
 
 Not verified:
 

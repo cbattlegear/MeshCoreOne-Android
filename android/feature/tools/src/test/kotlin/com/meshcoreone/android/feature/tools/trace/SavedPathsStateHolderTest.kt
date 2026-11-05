@@ -2,14 +2,20 @@
 package com.meshcoreone.android.feature.tools.trace
 
 import com.meshcoreone.android.core.contracts.domain.TracePathPersisting
+import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.model.DeviceDTO
+import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import java.io.IOException
+import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 
 class SavedPathsStateHolderTest {
     private object Strings : SavedPathsStrings {
@@ -78,6 +84,113 @@ class SavedPathsStateHolderTest {
         assertEquals("Failed to delete path.", holder.state.value.errorMessage)
         assertEquals(listOf(path), holder.state.value.savedPaths)
         assertEquals(listOf("renamePath", "deletePath"), diagnostics.failures.map { it.first })
+    }
+
+    @Test
+    fun `retired dialog ignores noncooperative load results errors and retained row mutations`() {
+        for (sameRadio in listOf(false, true)) for (failure in listOf(false, true)) {
+            connected = device()
+            val oldPath = savedPath(Bytes.of(1), radioId = RADIO)
+            store.insert(oldPath)
+            val gate = CompletableDeferred<Unit>()
+            val old = SavedPathsStateHolder(Strings, diagnostics).apply {
+                configure(object : SavedPathsDependencies {
+                    override fun connectedDevice() = connected
+                    override fun savedPaths() = object : TracePathPersisting by store {
+                        override suspend fun fetchSavedTracePaths(radioId: RadioId) =
+                            store.fetchSavedTracePaths(radioId).also {
+                                withContext(NonCancellable) { gate.await() }
+                                if (failure) throw IOException("retired fetch")
+                            }
+                    }
+                })
+            }
+            val pending = harness.start { old.loadSavedPaths() }
+            old.retireConnection()
+            val nextRadio = if (sameRadio) RADIO else RadioId(UUID.randomUUID())
+            connected = device().copy(radioId = nextRadio)
+            val fresh = SavedPathsStateHolder(Strings, diagnostics).apply {
+                configure(object : SavedPathsDependencies {
+                    override fun connectedDevice() = connected
+                    override fun savedPaths() = store
+                })
+            }
+            val newPath = savedPath(Bytes.of(2), radioId = nextRadio)
+            store.insert(newPath)
+            harness.complete { fresh.loadSavedPaths() }
+            val current = fresh.state.value
+            gate.complete(Unit)
+            harness.main.runCurrent()
+            assertTrue(pending.isCompleted)
+            assertEquals(SavedPathsState(), old.state.value)
+            assertEquals(current, fresh.state.value)
+            assertFalse(old.isCurrentPath(oldPath))
+            harness.complete { old.renamePath(oldPath, "must not rename") }
+            assertFalse(harness.complete { old.deletePath(oldPath) })
+            assertEquals(oldPath, store.paths[oldPath.id])
+            assertTrue(fresh.isCurrentPath(newPath))
+            assertTrue(harness.complete { fresh.deletePath(newPath) })
+            assertFalse(store.paths.containsKey(newPath.id))
+            assertTrue(store.paths.containsKey(oldPath.id))
+        }
+    }
+
+    @Test
+    fun `committed deletion retires an older snapshot without resurrecting its row`() {
+        val path = savedPath(Bytes.of(1), radioId = RADIO)
+        store.insert(path)
+        harness.complete { holder.loadSavedPaths() }
+        val gate = CompletableDeferred<Unit>()
+        holder.configure(object : SavedPathsDependencies {
+            override fun connectedDevice() = connected
+            override fun savedPaths() = object : TracePathPersisting by store {
+                override suspend fun fetchSavedTracePaths(radioId: RadioId) =
+                    store.fetchSavedTracePaths(radioId).also { gate.await() }
+            }
+        })
+        val load = harness.start { holder.loadSavedPaths() }
+        assertTrue(harness.complete { holder.deletePath(path) })
+        assertTrue(holder.state.value.savedPaths.isEmpty())
+        gate.complete(Unit)
+        harness.main.runCurrent()
+        assertTrue(load.isCompleted)
+        assertTrue(holder.state.value.savedPaths.isEmpty())
+        assertFalse(holder.state.value.isLoading)
+        assertFalse(store.paths.containsKey(path.id))
+    }
+
+    @Test
+    fun `accepted mutation stays durable but cannot change a retired dialog`() {
+        for (delete in listOf(false, true)) {
+            val path = savedPath(Bytes.of(1), radioId = RADIO)
+            store.insert(path)
+            val gate = CompletableDeferred<Unit>()
+            val old = SavedPathsStateHolder(Strings, diagnostics).apply {
+                configure(object : SavedPathsDependencies {
+                    override fun connectedDevice() = connected
+                    override fun savedPaths() = object : TracePathPersisting by store {
+                        override suspend fun deleteSavedTracePath(key: EntityKey) {
+                            withContext(NonCancellable) { gate.await() }
+                            store.deleteSavedTracePath(key)
+                        }
+                        override suspend fun updateSavedTracePathName(key: EntityKey, name: String) {
+                            withContext(NonCancellable) { gate.await() }
+                            store.updateSavedTracePathName(key, name)
+                        }
+                    }
+                })
+            }
+            val mutation = harness.start {
+                if (delete) old.deletePath(path) else old.renamePath(path, "Accepted rename")
+            }
+            old.retireConnection()
+            gate.complete(Unit)
+            harness.main.runCurrent()
+            assertTrue(mutation.isCompleted)
+            assertEquals(SavedPathsState(), old.state.value)
+            if (delete) assertFalse(store.paths.containsKey(path.id))
+            else assertEquals("Accepted rename", store.paths.getValue(path.id).name)
+        }
     }
 
     @Test

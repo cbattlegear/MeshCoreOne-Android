@@ -1,4 +1,5 @@
 // AndroidOnly: WP-314 TS-09 Mounted code/paste actions use the production parser and width policy.
+// AndroidOnly: WP-314 TS-11 Mounted path editing controls drive the real state holder.
 package com.meshcoreone.android.feature.tools.trace
 
 import android.app.Activity
@@ -33,6 +34,7 @@ import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.createLifecycleAwareWindowRecomposer
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsOwner
@@ -54,7 +56,11 @@ import com.meshcoreone.android.core.maps.MapPreferences
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SavedTracePathDTO
+import com.meshcoreone.android.core.contracts.domain.TracePathPersisting
+import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
+import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.event.MessageSentInfo
 import java.time.Duration
 import java.util.UUID
 import kotlin.test.assertEquals
@@ -65,6 +71,8 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
+import kotlin.time.Duration.Companion.seconds
+import kotlinx.coroutines.CompletableDeferred
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
@@ -242,6 +250,421 @@ class TraceCodeInputComposeTest {
         assertTrue(button("No new nodes to add").config.contains(SemanticsProperties.Disabled))
         assertTrue(announcementTexts().isEmpty())
         assertEquals(2, harness.state.outboundPath.size)
+    }
+
+    @Test fun mountedPathControlsReorderWithinBoundariesAndPreserveRemovalInvalidation() {
+        val harness = configured()
+        listOf(
+            contact(0xA1, name = "Alpha"),
+            contact(0xB2, name = "Bravo"),
+            contact(0xC3, name = "Charlie"),
+        ).forEach(harness.holder::addNode)
+        harness.holder.editStateForTesting {
+            it.copy(activeSavedPath = savedPath(Bytes.of(0xA1, 0xB2, 0xC3)), result = result(emptyList()))
+        }
+        mountPathList(harness)
+
+        assertTrue(actionButton(pathActionDescription(C.contactsDetailAvatarCropMoveUp, 1, harness.state.outboundPath[0]))
+            .config.contains(SemanticsProperties.Disabled))
+        assertTrue(actionButton(pathActionDescription(C.contactsDetailAvatarCropMoveDown, 3, harness.state.outboundPath[2]))
+            .config.contains(SemanticsProperties.Disabled))
+        assertTrue(actionButton(pathActionDescription(C.contactsDetailAvatarCropMoveDown, 1, harness.state.outboundPath[0]))
+            .boundsInRoot.height >= 48f)
+
+        clickDescription(pathActionDescription(C.contactsDetailAvatarCropMoveDown, 1, harness.state.outboundPath[0]))
+        assertEquals(listOf("Bravo", "Alpha", "Charlie"), harness.state.outboundPath.map { it.resolvedName })
+        assertNull(harness.state.activeSavedPath)
+        assertNull(harness.state.result)
+
+        clickDescription(pathActionDescription(C.contactsDetailAvatarCropMoveUp, 3, harness.state.outboundPath[2]))
+        assertEquals(listOf("Bravo", "Charlie", "Alpha"), harness.state.outboundPath.map { it.resolvedName })
+        clickDescription(pathActionDescription(L.commonDelete, 2, harness.state.outboundPath[1]))
+        assertEquals(listOf("Bravo", "Alpha"), harness.state.outboundPath.map { it.resolvedName })
+    }
+
+    @Test fun mountedClearPathRequiresConfirmationAndResetsTheTraceHashOverride() {
+        val harness = configured()
+        harness.holder.addNode(contact(0xA1, name = "Alpha"))
+        harness.holder.setTraceHashMode(2u)
+        harness.holder.setAutoReturnPath(false)
+        harness.holder.editStateForTesting {
+            it.copy(activeSavedPath = savedPath(Bytes.of(0xA1)), result = result(emptyList()))
+        }
+        mountPathList(harness)
+
+        click(host.get().getString(C.contactsTraceClearPath))
+        assertTrue(texts().contains(host.get().getString(C.contactsTraceClearPathMessage)))
+        click("Cancel")
+        assertEquals(1, harness.state.outboundPath.size)
+        assertEquals(2u.toUByte(), harness.state.traceHashMode)
+
+        click(host.get().getString(C.contactsTraceClearPath))
+        click(host.get().getString(C.contactsTraceClearPath))
+        assertTrue(harness.state.outboundPath.isEmpty())
+        assertNull(harness.state.traceHashMode)
+        assertEquals(0u.toUByte(), harness.holder.effectiveTraceMode)
+        assertNull(harness.state.activeSavedPath)
+        assertNull(harness.state.result)
+        assertFalse(harness.state.autoReturnPath)
+        assertTrue(texts().contains(host.get().getString(C.contactsTraceListEmptyPath)))
+    }
+
+    @Test fun mountedClearConfirmationRetiresATraceStartedAfterTheDialogOpened() {
+        for (batch in listOf(false, true)) {
+            val harness = configured()
+            harness.holder.addNode(contact(0xA1, name = "Alpha"))
+            harness.holder.setTraceHashMode(2u)
+            harness.holder.setBatchEnabled(batch)
+            val gate = CompletableDeferred<MessageSentInfo>()
+            var tag = 0u
+            harness.deps.sender = TraceSender { sentTag, _, _, _ -> tag = sentTag; gate.await() }
+            mountPathList(harness)
+            click(host.get().getString(C.contactsTraceClearPath))
+            val run = harness.start { harness.holder.runBatchTrace() }
+            assertTrue(harness.state.isRunning)
+            settle()
+            click(host.get().getString(C.contactsTraceClearPath))
+            assertFalse(harness.state.isRunning)
+            assertTrue(harness.state.outboundPath.isEmpty())
+            assertNull(harness.state.traceHashMode)
+            val cleared = harness.state
+            harness.respond(tag, listOf(node(0xA1, 5.0), node(null, 3.0)), RADIO)
+            gate.complete(MessageSentInfo(0u, Bytes.EMPTY, 0u))
+            harness.main.runCurrent()
+            harness.time.advanceBy(60.seconds)
+            harness.respond(tag, listOf(node(0xA1, 5.0), node(null, 3.0)), RADIO)
+            settle()
+            assertTrue(run.isCompleted)
+            assertEquals(cleared, harness.state)
+            assertNull(harness.state.displayedResult)
+            assertTrue(harness.state.completedResults.isEmpty())
+            assertTrue(texts().contains(host.get().getString(C.contactsTraceListEmptyPath)))
+        }
+    }
+
+    @Test fun staleMountedMoveCallbackRetiresPendingSingleAndBatchTraces() {
+        for (batch in listOf(false, true)) {
+            val harness = configured()
+            harness.holder.addNode(contact(0xA1, name = "Alpha"))
+            harness.holder.addNode(contact(0xB2, name = "Bravo"))
+            harness.holder.setBatchEnabled(batch)
+            val gate = CompletableDeferred<MessageSentInfo>()
+            var tag = 0u
+            harness.deps.sender = TraceSender { sentTag, _, _, _ -> tag = sentTag; gate.await() }
+            mountPathList(harness)
+            val oldCallback = assertNotNull(actionButton(
+                pathActionDescription(C.contactsDetailAvatarCropMoveDown, 1, harness.state.outboundPath[0]),
+            ).config[SemanticsActions.OnClick].action)
+            val run = harness.start { harness.holder.runBatchTrace() }
+            assertTrue(harness.state.isRunning)
+            host.get().runOnUiThread { assertTrue(oldCallback()) }
+            settle()
+            assertFalse(harness.state.isRunning)
+            assertEquals(listOf("Bravo", "Alpha"), harness.state.outboundPath.map { it.resolvedName })
+            val edited = harness.state
+            gate.complete(MessageSentInfo(0u, Bytes.EMPTY, 0u))
+            harness.main.runCurrent()
+            harness.respond(tag, listOf(node(0xA1, 5.0), node(null, 3.0)), RADIO)
+            harness.time.advanceBy(60.seconds)
+            settle()
+            assertTrue(run.isCompleted)
+            assertEquals(edited, harness.state)
+            assertNull(harness.state.displayedResult)
+            assertTrue(harness.state.completedResults.isEmpty())
+        }
+    }
+
+    @Test fun retainedHopCallbacksCannotEditOrCancelTheHopNowOccupyingTheOldIndex() {
+        for (removeFirst in listOf(false, true)) {
+            val harness = configured()
+            harness.holder.addNode(contact(0xA1, name = "Alpha"))
+            harness.holder.addNode(contact(0xB2, name = "Bravo"))
+            harness.holder.addNode(contact(0xC3, name = "Charlie"))
+            mountPathList(harness)
+            val alpha = harness.state.outboundPath[0]
+            val moveLabel = pathActionDescription(C.contactsDetailAvatarCropMoveDown, 1, alpha)
+            val deleteLabel = pathActionDescription(L.commonDelete, 1, alpha)
+            val oldMove = assertNotNull(actionButton(moveLabel).config[SemanticsActions.OnClick].action)
+            val oldRemove = assertNotNull(actionButton(deleteLabel).config[SemanticsActions.OnClick].action)
+            clickDescription(if (removeFirst) deleteLabel else moveLabel)
+            assertEquals("Bravo", harness.state.outboundPath[0].resolvedName)
+            val gate = CompletableDeferred<MessageSentInfo>()
+            var tag = 0u
+            harness.deps.sender = TraceSender { sentTag, _, _, _ -> tag = sentTag; gate.await() }
+            val run = harness.start { harness.holder.runTrace() }
+            val running = harness.state
+            host.get().runOnUiThread {
+                assertTrue(oldMove())
+                assertTrue(oldRemove())
+            }
+            settle()
+            assertEquals(running, harness.state, "Old Alpha callbacks must not edit or cancel Bravo's path")
+            assertEquals(tag, harness.holder.pendingTag)
+            gate.complete(MessageSentInfo(0u, Bytes.EMPTY, 0u))
+            harness.main.runCurrent()
+            harness.respond(tag, listOf(node(0xB2, 5.0), node(null, 3.0)), RADIO)
+            settle()
+            assertTrue(run.isCompleted)
+            assertEquals(running.fullPathData, assertNotNull(harness.state.result).tracedPathBytes)
+        }
+    }
+
+    @Test fun mountedAutoReturnSwitchRetiresTheOldTraceAndTheNextRunUsesTheNewWireRoute() {
+        for (batch in listOf(false, true)) {
+            val harness = configured()
+            val recorded = FakeTraceSender()
+            harness.deps.sender = recorded
+            harness.holder.addNode(contact(0xA1, name = "Alpha"))
+            harness.holder.addNode(contact(0xB2, name = "Bravo"))
+            harness.holder.setBatchEnabled(batch)
+            harness.holder.setBatchSize(1)
+            mountPathList(harness)
+            harness.start { harness.holder.runBatchTrace() }
+            assertEquals(Bytes.of(0xA1, 0xB2, 0xA1), recorded.sent.last().path)
+            val oldTag = recorded.sent.last().tag
+            host.get().runOnUiThread {
+                val autoReturn = nodes().first { it.config.getOrElseNullable(SemanticsProperties.Role) { null } == Role.Switch }
+                assertTrue(assertNotNull(autoReturn.config[SemanticsActions.OnClick].action)())
+            }
+            settle()
+            assertFalse(harness.state.autoReturnPath)
+            assertFalse(harness.state.isRunning)
+            val edited = harness.state
+            harness.respond(oldTag, listOf(node(0xA1, 5.0), node(null, 3.0)), RADIO)
+            harness.time.advanceBy(60.seconds)
+            assertEquals(edited, harness.state)
+            val next = harness.start { harness.holder.runBatchTrace() }
+            assertEquals(Bytes.of(0xA1, 0xB2), recorded.sent.last().path)
+            harness.respond(recorded.sent.last().tag, listOf(node(0xB2, 5.0), node(null, 3.0)), RADIO)
+            settle()
+            assertTrue(next.isCompleted)
+            assertEquals(edited.fullPathData, assertNotNull(harness.state.result).tracedPathBytes)
+        }
+    }
+
+    @Test fun retainedMoveDownAtANewBoundaryCannotRetireAnotherTrace() {
+        for (batch in listOf(false, true)) {
+            val harness = configured()
+            harness.holder.addNode(contact(0xA1, name = "Alpha"))
+            harness.holder.addNode(contact(0xB2, name = "Bravo"))
+            harness.holder.addNode(contact(0xC3, name = "Charlie"))
+            harness.holder.setBatchEnabled(batch)
+            harness.holder.setBatchSize(1)
+            mountPathList(harness)
+            val oldMove = assertNotNull(actionButton(
+                pathActionDescription(C.contactsDetailAvatarCropMoveDown, 2, harness.state.outboundPath[1]),
+            ).config[SemanticsActions.OnClick].action)
+            harness.holder.removeRepeater(2)
+            settle()
+            val gate = CompletableDeferred<MessageSentInfo>()
+            var tag = 0u
+            harness.deps.sender = TraceSender { sentTag, _, _, _ -> tag = sentTag; gate.await() }
+            val run = harness.start { harness.holder.runBatchTrace() }
+            val running = harness.state
+            host.get().runOnUiThread { assertTrue(oldMove()) }
+            settle()
+            assertEquals(running, harness.state)
+            assertEquals(tag, harness.holder.pendingTag)
+            gate.complete(MessageSentInfo(0u, Bytes.EMPTY, 0u))
+            harness.main.runCurrent()
+            harness.respond(tag, listOf(node(0xA1, 5.0), node(null, 3.0)), RADIO)
+            settle()
+            assertTrue(run.isCompleted)
+            assertFalse(harness.state.isRunning)
+            assertEquals(running.fullPathData, assertNotNull(harness.state.result).tracedPathBytes)
+        }
+    }
+
+    @Test fun stableFeatureReconnectRetiresHeldLookupAndSendBeforeAFreshMountedRun() {
+        for (sameRadio in listOf(false, true)) for (heldLookup in listOf(false, true)) {
+            val newRadio = if (sameRadio) RADIO else RadioId(UUID.randomUUID())
+            val persistence = InMemoryTracePathStore { T0 }
+            val oldPath = savedPath(Bytes.of(0xAA), radioId = RADIO)
+            persistence.insert(oldPath)
+            val selected = if (sameRadio) oldPath else savedPath(Bytes.of(0xAA), radioId = newRadio).also(persistence::insert)
+            val lookupGate = CompletableDeferred<Unit>()
+            val sendGate = CompletableDeferred<MessageSentInfo>()
+            val oldSends = mutableListOf<UInt>()
+            val freshSender = FakeTraceSender()
+            val oldEvents = TraceResponseBroadcaster()
+            val newEvents = TraceResponseBroadcaster()
+            var events = oldEvents
+            var firstLookup = true
+            val feature = FakeTraceDependencies().apply {
+                device = device()
+                directory = FakeNodeDirectory(contacts = listOf(contact(0xAA, name = "Tower")))
+                responses = { events.subscribe() }
+                store = object : TracePathPersisting by persistence {
+                    override suspend fun fetchSavedTracePaths(radioId: RadioId) =
+                        persistence.fetchSavedTracePaths(radioId).also {
+                            if (firstLookup) {
+                                firstLookup = false
+                                if (heldLookup) lookupGate.await()
+                            }
+                        }
+                }
+                sender = TraceSender { tag, _, _, _ -> oldSends += tag; sendGate.await() }
+            }
+            val connection = mutableStateOf(TracePathScreen.Dependencies(
+                feature, MapRecentsStorage(), RecordingDiagnostics(), RADIO, 1,
+            ))
+            content.setContent { MaterialTheme { TracePathScreen(connection.value) } }
+            settle()
+            click("Tower")
+            scrollToIndex(10)
+            click(host.get().getString(C.contactsTraceListRunTrace))
+            assertEquals(if (heldLookup) 0 else 1, oldSends.size)
+            host.get().runOnUiThread {
+                feature.device = device().copy(radioId = newRadio)
+                feature.sender = freshSender
+                events = newEvents
+                connection.value = connection.value.copy(radioId = newRadio, generation = 2)
+            }
+            settle()
+            lookupGate.complete(Unit)
+            sendGate.complete(MessageSentInfo(0u, Bytes.EMPTY, 0u))
+            oldSends.forEach { tag ->
+                oldEvents.yield(TraceResponse(traceInfo(tag, listOf(node(0xAA, 9.0), node(null, 3.0))), RADIO))
+                newEvents.yield(TraceResponse(traceInfo(tag, listOf(node(0xAA, 9.0), node(null, 3.0))), newRadio))
+            }
+            settle()
+            assertEquals(if (heldLookup) 0 else 1, oldSends.size, "A retired lookup must not reach its captured sender")
+            assertTrue(freshSender.sent.isEmpty())
+            assertTrue(persistence.paths.values.all { it.runs.isEmpty() })
+            assertFalse(texts().any { it.contains("SNR") })
+            scrollToIndex(10)
+            click(host.get().getString(C.contactsTraceListRunTrace))
+            assertEquals(Bytes.of(0xAA), freshSender.sent.single().path, "Reconnect preserves the editable route")
+            newEvents.yield(TraceResponse(
+                traceInfo(freshSender.sent.single().tag, listOf(node(0xAA, 6.0), node(null, 3.0))), newRadio,
+            ))
+            settle()
+            assertEquals(1, persistence.paths.getValue(selected.id).runs.size)
+            assertEquals(1, persistence.paths.values.sumOf { it.runs.size })
+            assertTrue(texts().contains("SNR: 6.0 dB"))
+        }
+    }
+
+    @Test fun savedDialogRetiresVisibleRowsHeldLoadsAndRetainedActionsAcrossConnections() {
+        for (sameRadio in listOf(false, true)) for (heldLoad in listOf(false, true)) {
+            val nextRadio = if (sameRadio) RADIO else RadioId(UUID.randomUUID())
+            val persistence = InMemoryTracePathStore { T0 }
+            val oldPath = savedPath(Bytes.of(0xAA), radioId = RADIO).copy(name = "Radio A route")
+            val newPath = savedPath(Bytes.of(0xBB), radioId = nextRadio).copy(name = "Radio B route")
+            persistence.insert(oldPath)
+            val gate = CompletableDeferred<Unit>()
+            var fetches = 0
+            val recorded = FakeTraceSender()
+            val events = TraceResponseBroadcaster()
+            val feature = FakeTraceDependencies().apply {
+                device = device()
+                directory = FakeNodeDirectory(contacts = listOf(contact(0xAA, name = "Tower"), contact(0xBB, name = "Ridge")))
+                sender = recorded
+                responses = { events.subscribe() }
+                store = object : TracePathPersisting by persistence {
+                    override suspend fun fetchSavedTracePaths(radioId: RadioId) =
+                        persistence.fetchSavedTracePaths(radioId).also {
+                            if (++fetches == 2 && heldLoad) gate.await()
+                        }
+                }
+            }
+            val connection = mutableStateOf(TracePathScreen.Dependencies(
+                feature, MapRecentsStorage(), RecordingDiagnostics(), RADIO, 1,
+            ))
+            content.setContent { MaterialTheme { TracePathScreen(connection.value) } }
+            settle()
+            click(host.get().getString(C.contactsTraceSaved))
+            val oldSelect = assertNotNull(button(oldPath.name).config[SemanticsActions.OnClick].action)
+            val deleteLabel = host.get().getString(L.commonDelete)
+            val oldDelete = assertNotNull(actionButton("$deleteLabel: ${oldPath.name}").config[SemanticsActions.OnClick].action)
+            if (heldLoad) {
+                click(host.get().getString(L.commonDone))
+                click(host.get().getString(C.contactsTraceSaved))
+                assertFalse(texts().contains(oldPath.name))
+            }
+            host.get().runOnUiThread {
+                persistence.insert(newPath)
+                feature.device = device().copy(radioId = nextRadio)
+                connection.value = connection.value.copy(radioId = nextRadio, generation = 2)
+            }
+            settle()
+            assertFalse(ShadowDialog.getLatestDialog()?.isShowing == true)
+            gate.complete(Unit)
+            settle()
+            assertFalse(ShadowDialog.getLatestDialog()?.isShowing == true, "A late load must not reopen an old dialog")
+            click(host.get().getString(C.contactsTraceSaved))
+            assertTrue(texts().contains(newPath.name))
+            host.get().runOnUiThread {
+                assertTrue(oldSelect())
+                assertTrue(oldDelete())
+            }
+            settle()
+            assertTrue(ShadowDialog.getLatestDialog()?.isShowing == true, "Old selection must not dismiss the new dialog")
+            assertTrue(texts().contains(newPath.name))
+            assertTrue(persistence.paths.containsKey(oldPath.id))
+            assertTrue(persistence.paths.containsKey(newPath.id))
+            click(newPath.name)
+            scrollToIndex(11)
+            click(host.get().getString(C.contactsTraceListRunTrace))
+            assertEquals(Bytes.of(0xBB), recorded.sent.single().path)
+            host.get().runOnUiThread {
+                assertTrue(oldSelect())
+                assertTrue(oldDelete())
+            }
+            settle()
+            events.yield(TraceResponse(
+                traceInfo(recorded.sent.single().tag, listOf(node(0xBB, 6.0), node(null, 3.0))), nextRadio,
+            ))
+            settle()
+            assertEquals(1, persistence.paths.getValue(newPath.id).runs.size)
+            assertTrue(persistence.paths.getValue(oldPath.id).runs.isEmpty())
+            click(host.get().getString(C.contactsTraceSaved))
+            clickDescription("$deleteLabel: ${newPath.name}")
+            assertFalse(persistence.paths.containsKey(newPath.id))
+            assertTrue(persistence.paths.containsKey(oldPath.id), "Stale callbacks must never delete radio A's accepted data")
+        }
+    }
+
+    @Test fun mountedBatchSwitchRetiresSingleAndBatchOperationsWithoutExtraSends() {
+        for (initialBatch in listOf(false, true)) {
+            val harness = configured()
+            val recorded = FakeTraceSender()
+            harness.deps.sender = recorded
+            harness.holder.addNode(contact(0xA1, name = "Alpha"))
+            harness.holder.addNode(contact(0xB2, name = "Bravo"))
+            harness.holder.setBatchEnabled(initialBatch)
+            harness.holder.setBatchSize(2)
+            mountPathList(harness)
+            scrollToIndex(9)
+            val execution = harness.start { harness.holder.runBatchTrace() }
+            host.get().runOnUiThread {
+                val batchSwitch = nodes().filter {
+                    it.config.getOrElseNullable(SemanticsProperties.Role) { null } == Role.Switch
+                }.last()
+                assertTrue(assertNotNull(batchSwitch.config[SemanticsActions.OnClick].action)())
+            }
+            settle()
+            assertEquals(!initialBatch, harness.state.batchEnabled)
+            assertFalse(harness.state.isRunning)
+            val changed = harness.state
+            harness.respond(recorded.sent.single().tag, listOf(node(0xA1, 5.0), node(null, 3.0)), RADIO)
+            harness.time.advanceBy(60.seconds)
+            settle()
+            assertTrue(execution.isCompleted)
+            assertEquals(changed, harness.state)
+            assertEquals(1, recorded.sent.size)
+            assertNull(harness.state.result)
+            assertTrue(harness.state.completedResults.isEmpty())
+            harness.holder.setBatchSize(1)
+            val next = harness.start { harness.holder.runBatchTrace() }
+            assertEquals(2, recorded.sent.size)
+            harness.respond(recorded.sent.last().tag, listOf(node(0xA1, 6.0), node(null, 3.0)), RADIO)
+            settle()
+            assertTrue(next.isCompleted)
+            assertFalse(harness.state.isRunning)
+            assertTrue(assertNotNull(harness.state.result).success)
+            assertEquals(if (initialBatch) 0 else 1, harness.state.completedResults.size)
+        }
     }
 
     @Test fun emptyAndWhitespacePasteClearPriorSuccessAndErrorsWithoutChangingDraft() {
@@ -1020,6 +1443,19 @@ class TraceCodeInputComposeTest {
         settle()
     }
 
+    private fun mountPathList(harness: TraceHarness) {
+        content.setContent {
+            key(harness) {
+                val state = harness.holder.state.collectAsStateWithLifecycle().value
+                val codeInput = rememberTraceCodeInputState(harness.holder)
+                CompositionLocalProvider(LocalDensity provides Density(1f, 1f)) {
+                    MaterialTheme { TracePathListContent(state, harness.holder, codeInput) }
+                }
+            }
+        }
+        settle()
+    }
+
     private fun paste(text: String) {
         val clipboard = host.get().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("trace codes", text))
@@ -1056,6 +1492,28 @@ class TraceCodeInputComposeTest {
         assertEquals(1, matches.size, "Expected one action labeled '$label'; visible text: ${texts()}")
         return matches[0]
     }
+
+    private fun actionButton(description: String): SemanticsNode {
+        val matches = nodes().filter {
+            it.config.getOrElse(SemanticsProperties.ContentDescription) { emptyList() }.any { text ->
+                text == description
+            }
+        }
+        assertEquals(1, matches.size, "Expected one action described '$description'")
+        return matches[0]
+    }
+
+    private fun clickDescription(description: String) {
+        host.get().runOnUiThread {
+            val node = actionButton(description)
+            assertFalse(node.config.contains(SemanticsProperties.Disabled), "$description must be enabled")
+            assertTrue(assertNotNull(node.config[SemanticsActions.OnClick].action)())
+        }
+        settle()
+    }
+
+    private fun pathActionDescription(action: Int, index: Int, hop: TracePathHop) =
+        "${host.get().getString(action)}: ${C.contactsTraceListHopLabel(host.get().resources, index, hop.displayText)}"
 
     private fun settle() {
         repeat(12) {

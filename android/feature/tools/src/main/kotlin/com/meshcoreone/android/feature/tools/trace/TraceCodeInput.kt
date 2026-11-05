@@ -28,9 +28,7 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.setText
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
@@ -122,7 +120,6 @@ internal fun TraceCodeInput(
     state: TracePathState,
     holder: TracePathStateHolder,
     entry: TraceCodeInputState = rememberTraceCodeInputState(holder),
-    canEdit: () -> Boolean = { holder.isConnectionCurrent() },
 ) {
     var expanded by entry::expanded
     var input by entry::input
@@ -143,48 +140,17 @@ internal fun TraceCodeInput(
     val addable = classifications.filter { it.willBeAdded }.map { it.code }
 
     fun edit(value: String) {
-        if (!canEdit()) return
         if (value.contains(',')) holder.adoptHashSize(value)
         input = value
         outcome = null
         nextHopAnnouncement = null
     }
 
-    val expand = { if (canEdit()) { requestFocus = true; expanded = true } }
-    val paste = {
-        if (canEdit()) {
-            outcome = null
-            nextHopAnnouncement = null
-            clipboard.getText()?.text?.trim {
-                SwiftText.isWhitespace(it.code) || it in "\n\r\u000B\u000C\u0085\u2028\u2029"
-            }?.takeIf { it.isNotEmpty() }?.let(::edit)
-        }
-    }
-    val add = {
-        if (canEdit()) {
-            val result = holder.addCodes(input)
-            outcome = result
-            nextHopAnnouncement = if (result.added.isNotEmpty()) holder.state.value.outboundPath.size + 1 else null
-            input = ""
-        }
-    }
-    val done = {
-        if (canEdit()) {
-            expanded = false
-            requestFocus = false
-            input = ""
-            outcome = null
-            nextHopAnnouncement = null
-        }
-    }
-
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (!expanded) {
             OutlinedButton(
-                onClick = expand,
-                modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp).semantics {
-                    onClick { expand(); true }
-                },
+                onClick = { requestFocus = true; expanded = true },
+                modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp),
             ) { Text(stringResource(C.contactsPathEditAddHop)) }
         } else {
             OutlinedTextField(
@@ -196,15 +162,17 @@ internal fun TraceCodeInput(
                         Text(stringResource(Strings.string.l10n_app_contacts_contacts_add_hexplaceholder, hashSize * 2))
                     }
                 },
-                modifier = Modifier.fillMaxWidth().focusRequester(focus).semantics {
-                    setText { edit(it.text); true }
-                },
+                modifier = Modifier.fillMaxWidth().focusRequester(focus),
             )
             TextButton(
-                onClick = paste,
-                modifier = Modifier.sizeIn(minHeight = 48.dp).semantics {
-                    onClick { paste(); true }
+                onClick = {
+                    outcome = null
+                    nextHopAnnouncement = null
+                    clipboard.getText()?.text?.trim {
+                        SwiftText.isWhitespace(it.code) || it in "\n\r\u000B\u000C\u0085\u2028\u2029"
+                    }?.takeIf { it.isNotEmpty() }?.let(::edit)
                 },
+                modifier = Modifier.sizeIn(minHeight = 48.dp),
             ) { Text(stringResource(C.contactsPathEditPaste)) }
             classifications.forEach { entry ->
                 val message = when (entry.status) {
@@ -230,11 +198,14 @@ internal fun TraceCodeInput(
                 )
             }
             Button(
-                onClick = add,
-                enabled = addable.isNotEmpty(),
-                modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp).semantics {
-                    onClick { add(); true }
+                onClick = {
+                    val result = holder.addCodes(input)
+                    outcome = result
+                    nextHopAnnouncement = if (result.added.isNotEmpty()) holder.state.value.outboundPath.size + 1 else null
+                    input = ""
                 },
+                enabled = addable.isNotEmpty(),
+                modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp),
             ) {
                 Text(
                     if (waitingForDevice) stringResource(Strings.string.l10n_app_contacts_contacts_add_error_notconnected)
@@ -270,10 +241,14 @@ internal fun TraceCodeInput(
                 }
             }
             TextButton(
-                onClick = done,
-                modifier = Modifier.sizeIn(minHeight = 48.dp).semantics {
-                    onClick { done(); true }
+                onClick = {
+                    expanded = false
+                    requestFocus = false
+                    input = ""
+                    outcome = null
+                    nextHopAnnouncement = null
                 },
+                modifier = Modifier.sizeIn(minHeight = 48.dp),
             ) { Text(stringResource(L.commonDone)) }
             LaunchedEffect(requestFocus) {
                 if (requestFocus) {

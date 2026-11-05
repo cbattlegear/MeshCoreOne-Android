@@ -102,7 +102,6 @@ class ForegroundWitnessAcknowledgmentVerifier internal constructor(
         File(requireNotNull(requestedFile.parentFile).canonicalFile, requestedFile.name)
     }
     private val presentations = ConcurrentHashMap<UUID, ForegroundAcknowledgmentPresentation>()
-    private val allocationInProgress = AtomicBoolean(false)
 
     constructor(context: Context, warning: ForegroundAcknowledgmentWarning) : this(
         File(context.applicationContext.noBackupFilesDir, "notification-enrollment-ack-v1.db"),
@@ -320,10 +319,11 @@ class ForegroundWitnessAcknowledgmentVerifier internal constructor(
     private suspend fun persist(evidence: Evidence, status: Status): ForegroundAcknowledgmentStaging {
         authentication.requireAccessible()
         checkPath()
+        val allocationOwner = Any()
         var ownsAllocation = false
         val staged = try {
             val allocated = initializeIfNeeded {
-                if (!allocationInProgress.compareAndSet(false, true)) {
+                if (allocations.putIfAbsent(file.path, allocationOwner) != null) {
                     throw Invalid(WitnessProblem.STORAGE_UNAVAILABLE)
                 }
                 ownsAllocation = true
@@ -353,7 +353,7 @@ class ForegroundWitnessAcknowledgmentVerifier internal constructor(
                 }
             }
         } finally {
-            if (ownsAllocation) allocationInProgress.set(false)
+            if (ownsAllocation) allocations.remove(file.path, allocationOwner)
         }
         return if (staged == ForegroundAcknowledgmentStaging.Staged) {
             synchronize(file)
@@ -381,8 +381,8 @@ class ForegroundWitnessAcknowledgmentVerifier internal constructor(
     private suspend fun transition(evidence: Evidence, next: Status): Status? {
         authentication.requireAccessible()
         checkPath()
-        // The allocating writer owns schema validation and completes retirement after staging.
-        if (!file.exists() || allocationInProgress.get()) return null
+        // Same-process allocators, including other copy sessions, own schema validation until commit.
+        if (!file.exists() || allocations.containsKey(file.path)) return null
         if (!authentication.hasKey()) throw Invalid(WitnessProblem.MISSING_AUTHENTICATOR)
         val result = open().use { db ->
             configure(db)
@@ -729,6 +729,7 @@ class ForegroundWitnessAcknowledgmentVerifier internal constructor(
     private class Invalid(val problem: WitnessProblem) : Exception()
 
     private companion object {
+        val allocations = ConcurrentHashMap<String, Any>()
         const val DATABASE_VERSION = 1
         const val MAX_RECORD_BYTES = 16 * 1024
         const val MAC_BYTES = 32

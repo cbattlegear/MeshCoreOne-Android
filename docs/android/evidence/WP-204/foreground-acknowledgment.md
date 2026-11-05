@@ -120,17 +120,25 @@ at SDK31/37. Same-host readiness, manifest/ownership validation, portmap and
 No earlier run verifies this repair.
 
 The adjacent `ALLOCATED` control holds the actual empty SQLite file before
-schema creation. Invalidation now defers only while this verifier's live
-allocating writer owns initialization; that writer still validates/commits the
-schema and performs terminal retirement cleanup. Its short in-memory ownership
-flag is cleared in `finally`, including failed allocation. It is not durable
+schema creation. Invalidation defers only while a same-process live
+allocating writer owns initialization of the same canonical ledger path;
+that writer still validates/commits the schema and performs terminal retirement
+cleanup. The process-local registry token is removed in `finally`, including
+failed allocation. It is not durable
 consent, a first-install marker, or proof about another process. The control
 requires no false corruption report and exact `STAGED`/`INVALIDATED` history.
 A separate injected allocation failure leaves an abandoned empty file, clears
-the ownership flag and requires typed corruption on later invalidation and
+the ownership token and requires typed corruption on later invalidation and
 uncertainty after reopen. Genuine abandoned/corrupt storage is not suppressed.
-These controls bring the focused suite to 25 methods at SDK31/37; successor
-execution remains pending.
+The initial instance-local flag was insufficient for copy replacement: a
+retired old-copy verifier can invalidate asynchronously while a new-copy verifier
+allocates the shared file. A two-verifier native-SQLite control holds the new
+writer at `ALLOCATED`, completes old unconfirmed presentation invalidation,
+and requires no false corruption report. The instances use differing warning
+copy and equivalent canonical paths. The old action remains absent; a fresh
+verifier rejects pending new evidence, while only the uninterrupted actual new
+action may consume it once. These controls bring the focused suite to 26 methods
+at SDK31/37; successor execution remains pending.
 
 ## Ownership and advisory state
 

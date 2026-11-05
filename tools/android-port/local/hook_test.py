@@ -10,6 +10,7 @@ from pathlib import Path
 import shlex
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import unittest
@@ -138,11 +139,132 @@ class LocalCheckTests(unittest.TestCase):
                                         execution={"started": False}, affected_plan=plan if affected else None)
                 self.assertEqual((root / "control/jvm_lanes.py").read_bytes(),
                                  Path(jvm_lanes.__file__).read_bytes().replace(b"\r\n", b"\n"))
+                for name in (
+                    "ci_evidence.py", "publication.py", "repair_acceptance.py", "module_junit.py",
+                    "verify_candidate_task_graph.gradle",
+                ):
+                    self.assertEqual((root / "control" / name).read_bytes(),
+                                     Path(jvm_lanes.__file__).with_name(name).read_bytes().replace(b"\r\n", b"\n"))
                 self.assertEqual((root / "control/local_scope.py").exists(), affected)
                 if affected:
                     from controller import local_scope
                     self.assertEqual((root / "control/local_scope.py").read_bytes(),
                                      Path(local_scope.__file__).read_bytes().replace(b"\r\n", b"\n"))
+
+    def test_owned_verifiers_and_collector_support_actual_older_candidate_controller(self):
+        source = Path(jvm_lanes.__file__).resolve().parents[3]
+        revision = "3a292b6498e8dcef0c374022a93c8e30c68f5bd5"
+        archive = subprocess.check_output([
+            "git", "-C", str(source), "archive", revision,
+            "tools/android-port/controller", "tools/android-port/portmap.py",
+        ])
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repo = root / "candidate"
+            with tarfile.open(fileobj=io.BytesIO(archive)) as entries:
+                for entry in entries:
+                    if not entry.isfile():
+                        continue
+                    parts = entry.name.split("/")
+                    self.assertEqual(parts[:2], ["tools", "android-port"])
+                    self.assertIn(parts[2], {"controller", "portmap.py"})
+                    self.assertNotIn("..", parts)
+                    path = repo.joinpath(*parts)
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(entries.extractfile(entry).read())
+            build = repo / "android/core/model/build.gradle.kts"
+            build.parent.mkdir(parents=True)
+            build.write_text('plugins { id("mesh.jvm.library") }\n', encoding="utf-8")
+            subprocess.run(["git", "-C", str(repo), "init", "--quiet"], check=True)
+            subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+            subprocess.run([
+                "git", "-C", str(repo), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                "commit", "--quiet", "-m", "exact old controller fixture",
+            ], check=True)
+            control = root / "control"
+            control.mkdir()
+            (control / "fast.py").write_bytes(Path(fast.__file__).read_bytes())
+            dependencies = (
+                "ci_evidence.py", "publication.py", "repair_acceptance.py", "module_junit.py",
+                "verify_candidate_task_graph.gradle", "local_scope.py",
+            )
+            for name in dependencies:
+                (control / name).write_bytes(Path(jvm_lanes.__file__).with_name(name).read_bytes())
+            script = """
+import importlib.util, json, pathlib, sys
+from unittest.mock import patch
+repo, control, work = map(pathlib.Path, sys.argv[1:4])
+sys.path.insert(0, str(repo / 'tools/android-port'))
+from controller import module_junit as old_module
+assert not hasattr(old_module, 'remapped_tasks')
+spec = importlib.util.spec_from_file_location('owned_fast_fixture', control / 'fast.py')
+fast = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(fast)
+from controller.errors import PortError
+if len(sys.argv) > 4:
+    try:
+        fast.owned_verification(repo)
+    except PortError as error:
+        assert 'owned' in str(error), error
+    else:
+        raise AssertionError('Missing owned dependency fell back to the old candidate')
+    raise SystemExit(0)
+collector = fast.owned_verification(repo)
+assert collector == control / 'verify_candidate_task_graph.gradle'
+from controller import ci, ci_environment, ci_evidence, module_junit, publication, repair_acceptance
+import portmap
+assert pathlib.Path(portmap.__file__) == repo / 'tools/android-port/portmap.py'
+for module in (ci_evidence, module_junit, publication, repair_acceptance):
+    assert pathlib.Path(module.__file__).parent == control, module.__file__
+assert pathlib.Path(ci.__file__).parent == repo / 'tools/android-port/controller'
+assert callable(ci_evidence.read_test_sources)
+assert callable(publication.decode_structured_body)
+assert module_junit.remapped_tasks(repo) == []
+assert module_junit.remapped_roots('platform/notifications', '9c5e1f4f6ed16f68ff629e6768afdd9185d2da61')
+try:
+    module_junit.remapped_roots('platform/notifications', 'a' * 40)
+except PortError:
+    pass
+else:
+    raise AssertionError('Unknown immutable mapping was accepted')
+sdk = {}
+repair_acceptance._kotlin_junit_methods(
+    'package sample; import org.junit.Test; import org.robolectric.annotation.Config;'
+    '@Config(sdk=[31,37,]) class Example { @Test fun required() {} }',
+    sdk_configurations=sdk)
+assert sdk == {'required': (31, 37)}, sdk
+assert fast.owned_scope().module_inventory(repo, 'HEAD')['core/model']['runner'] == 'test'
+(work / 'toolchain').mkdir(parents=True)
+(work / 'toolchain/environment.json').write_text(json.dumps({'java_home': str(work / 'java')}))
+output = work / 'output'
+output.mkdir()
+with patch.object(sys, 'argv', [
+    'fast.py', '--repo', str(repo), '--work', str(work),
+    '--output', str(output), '--stages', 'python,preflight',
+]), patch.object(ci_environment, 'candidate_environment', return_value={}), \
+        patch.object(ci_environment, 'verify_wrapper'), \
+        patch.object(ci, 'python_checks') as python, patch.object(ci, 'preflight') as preflight, \
+        patch.object(fast, 'execute') as execute:
+    fast.main()
+    python.assert_called_once()
+    preflight.assert_called_once()
+    execute.assert_called_once()
+    assert 'gradle' not in ' '.join(map(str, execute.call_args.args[0]))
+"""
+            command = [sys.executable, "-I", "-B", "-c", script, str(repo), str(control), str(root / "work")]
+            result = subprocess.run(command, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            for name in dependencies[:-1]:
+                with self.subTest(missing=name):
+                    path = control / name
+                    content = path.read_bytes()
+                    path.unlink()
+                    try:
+                        result = subprocess.run([*command, name], capture_output=True, text=True)
+                        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    finally:
+                        path.write_bytes(content)
+            subprocess.run(["git", "-C", str(repo), "diff", "--exit-code"], check=True)
 
     def test_real_fast_uses_owned_helper_with_older_candidate_controller(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -793,6 +915,7 @@ class AffectedRunnerTests(unittest.TestCase):
             "--stages", ",".join(plan["stages"]), "--affected-plan", str(self.root / "request.json"),
             "--affected-base", self.base,
         ]), patch.object(fast, "affected_request", return_value=plan), \
+                patch.object(fast, "owned_verification", return_value=self.repo / "owned-collector.gradle"), \
                 patch.object(ci_environment, "candidate_environment", return_value={}), \
                 patch.object(ci_environment, "verify_wrapper"), \
                 patch.object(ci, "python_checks"), patch.object(ci, "preflight"), \

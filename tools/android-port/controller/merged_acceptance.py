@@ -692,11 +692,16 @@ class MergedAcceptance:
                 modules.append("core/protocol")
             if product_changes and not modules:
                 raise PortError("Android product changes have no selected runnable module tests")
+            from .module_junit import notification_instrumentation_candidate
+
             validate_build_log(
                 read_job_log(self, build["id"]), modules,
                 plan_for_scopes=lambda selected: candidate_plan(
                     self.manifest.repo, base, head, selected,
                     trusted_base=base, merge_base_only=True,
+                ),
+                notification_inputs_for_candidate=lambda: notification_instrumentation_candidate(
+                    self.manifest.repo, head,
                 ),
             )
         else:

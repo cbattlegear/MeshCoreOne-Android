@@ -57,6 +57,35 @@ class AvatarCropGeometryTest : SourceCaseProof() {
         assertEquals(1.0, AvatarCropGeometry.cropSize(CropSize(20.0, 20.0), false))
     }
 
+    @Test fun viewportResizePreservesSelectedSourceRectAtEveryZoomAndPanIncludingWindowRotation() {
+        for (image in listOf(CropSize(100.0, 100.0), CropSize(400.0, 100.0), CropSize(100.0, 400.0))) {
+            for (scale in listOf(1.0, 2.0, 4.0)) {
+                for (pan in listOf(CropOffset(75.0, -30.0), CropOffset(-45.0, 60.0),
+                    CropOffset(10000.0, -10000.0))) {
+                    val original = AvatarCropGeometry(300.0, image, scale).panBy(pan)
+                    val expected = original.imageDrawRect()
+                    var resized = original
+                    for (size in listOf(150.0, 480.0, 128.0, 300.0)) {
+                        resized = resized.resized(size)
+                        val actual = resized.imageDrawRect()
+                        assertEquals(expected.x, actual.x, 0.000001)
+                        assertEquals(expected.y, actual.y, 0.000001)
+                        assertEquals(expected.width, actual.width, 0.000001)
+                        assertEquals(expected.height, actual.height, 0.000001)
+                        assertEquals(original.scale, resized.scale)
+                        assertEquals(resized.offset, resized.clampedOffset(resized.offset))
+                    }
+                    assertEquals(original.offset.x, resized.offset.x, 0.000001)
+                    assertEquals(original.offset.y, resized.offset.y, 0.000001)
+                }
+            }
+        }
+        val selected = AvatarCropGeometry(300.0, CropSize(100.0, 100.0), 2.0, CropOffset(75.0, 0.0))
+        assertEquals(CropOffset(37.5, 0.0), selected.resized(150.0).offset)
+        assertFailsWith<IllegalArgumentException> { selected.resized(Double.NaN) }
+        assertFailsWith<IllegalArgumentException> { selected.resized(0.0) }
+    }
+
     @Test fun nativePointerDeltasAccumulateBeforeRecompositionAndExternalResizeRemainsAuthoritative() {
         val initial = AvatarCropGeometry(100.0, CropSize(100.0, 100.0), 2.0)
         val gestures = CropGestureAccumulator(initial)

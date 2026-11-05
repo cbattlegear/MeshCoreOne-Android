@@ -56,6 +56,42 @@ class HistoryFormattingTest {
     }
 
     @Test
+    fun `relative recency preserves subsecond fallback and exact unit boundaries`() {
+        val now = Instant.parse("2024-07-13T07:41:00Z")
+        listOf(-999_999_999L, 0L, 999_999_999L).forEach { nanos ->
+            assertEquals(
+                RelativeTime(0, RelativeTimeUnit.SECONDS, false),
+                LocationReportFormat.relativeTime(now.plusNanos(nanos), now, UTC),
+            )
+        }
+        listOf(
+            59L to RelativeTime(59, RelativeTimeUnit.SECONDS, false),
+            60L to RelativeTime(1, RelativeTimeUnit.MINUTES, false),
+            3_599L to RelativeTime(59, RelativeTimeUnit.MINUTES, false),
+            3_600L to RelativeTime(1, RelativeTimeUnit.HOURS, false),
+            86_400L to RelativeTime(1, RelativeTimeUnit.DAYS, false),
+            604_800L to RelativeTime(1, RelativeTimeUnit.WEEKS, false),
+        ).forEach { (seconds, future) ->
+            assertEquals(future, LocationReportFormat.relativeTime(now.plusSeconds(seconds), now, UTC))
+            assertEquals(future.copy(isPast = true), LocationReportFormat.relativeTime(now.minusSeconds(seconds), now, UTC))
+        }
+    }
+
+    @Test
+    fun `relative recency uses local calendar days across daylight saving transitions`() {
+        val zone = ZoneId.of("America/New_York")
+        listOf(
+            "2024-03-10T16:00:00Z" to "2024-03-09T17:00:00Z",
+            "2024-11-03T17:00:00Z" to "2024-11-02T16:00:00Z",
+        ).forEach { (current, previous) ->
+            val now = Instant.parse(current)
+            val date = Instant.parse(previous)
+            assertEquals(RelativeTime(1, RelativeTimeUnit.DAYS, true), LocationReportFormat.relativeTime(date, now, zone))
+            assertEquals(RelativeTime(1, RelativeTimeUnit.DAYS, false), LocationReportFormat.relativeTime(now, date, zone))
+        }
+    }
+
+    @Test
     fun `altitude rounds to whole metres or feet by measurement system`() {
         assertEquals("138 ft", LocationReportFormat.altitude(42.0, EN_US, MeasurementSystem.US))
         assertEquals("138 ft", LocationReportFormat.altitude(42.0, Locale.UK, MeasurementSystem.UK))
@@ -101,6 +137,8 @@ class HistoryFormattingTest {
         )
         assertEquals(time, line(null, null, 42.0))
         assertEquals(time, line(0.0, 0.0, 42.0))
+        assertEquals(time, line(91.0, -122.401233, 42.0))
+        assertEquals(time, line(37.784712, null, 42.0))
         assertEquals("$time · 37.7847, -122.4012", line(37.784712, -122.401233, null))
         assertEquals("$time · 37.7847, -122.4012 · 0 ft", line(37.784712, -122.401233, 0.0))
         val snapshot = NodeStatusSnapshotDTO(timestamp = date, nodePublicKey = bytes(32, 1))

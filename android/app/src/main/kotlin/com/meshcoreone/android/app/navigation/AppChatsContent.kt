@@ -115,10 +115,12 @@ private fun AppChatConversation(
                 linkFailure = failure
             }
         }
-        linkFailure?.let { failure ->
+        linkFailure?.let {
             androidx.compose.material3.AlertDialog(
                 onDismissRequest = { linkFailure = null },
-                text = { androidx.compose.material3.Text(com.meshcoreone.android.core.ui.uiString(UiErrorMapper().message(failure))) },
+                text = { androidx.compose.material3.Text(stringResource(
+                    com.meshcoreone.android.app.R.string.platform_chat_link_unavailable,
+                )) },
                 confirmButton = { androidx.compose.material3.TextButton(onClick = { linkFailure = null }) {
                     androidx.compose.material3.Text(stringResource(com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings.commonOk))
                 } },

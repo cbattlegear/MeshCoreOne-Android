@@ -17,7 +17,7 @@ internal class ChatExternalLinkOpener(
         try {
             when {
                 ChatMailtoPolicy.isOpenable(url) -> context.startActivity(
-                    Intent(Intent.ACTION_SENDTO, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                    Intent(Intent.ACTION_SENDTO, Uri.parse(url).normalizeScheme()).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                 )
                 LinkOpenPolicy.isOpenable(url) -> openWeb(url)
                 else -> onFailure(IllegalArgumentException("Unsupported chat link"))

@@ -23,7 +23,12 @@ object MessageLinkTokenizer {
 
     fun tokenize(normalized: String, preSpans: List<LinkToken>, context: StyleContext): Result {
         val urls = (LinkDetection.detectUrls(normalized) + mailtoLink.findAll(normalized).mapNotNull { match ->
-            val url = match.value.trimEnd('.', ',', ';', ':', '!', ')')
+            var url = match.value
+            while (url.isNotEmpty()) {
+                val last = url.last()
+                val unbalanced = last == ')' && url.count { it == '(' } < url.count { it == ')' }
+                if (last in ".,;:!" || unbalanced) url = url.dropLast(1) else break
+            }
             if (ChatMailtoPolicy.isOpenable(url)) DetectedUrl(match.range.first, match.range.first + url.length, url) else null
         }).sortedBy { it.start }
         val coordinates = ChatCoordinateDetector.matches(normalized)

@@ -28,6 +28,7 @@ class ChatMailtoPolicyTest {
             "tel:123", "custom://x", "https://example.com", "//example.com",
             "mailto:", "mailto:?subject=x", "mailto://test@example.com", "mailto:test@example.com#fragment",
             "mailto:test%0d%0abcc:other@example.com", "mailto:test%00@example.com", "mailto:bad%ZZ",
+            "mailto:test%3F%0d%0abcc:other@example.com", "mailto:test%3F%00@example.com",
             "mailto:test @example.com",
         )) assertFalse(ChatMailtoPolicy.isOpenable(url), url)
     }
@@ -35,6 +36,8 @@ class ChatMailtoPolicyTest {
     @Test fun `mail tokens skip fragments and web overlaps while bare emails remain unchanged`() {
         val mail = "mailto:test@example.com?subject=Hi%20Mesh"
         assertEquals(listOf(mail), MessageTextFormatter.format("($mail).").links)
+        val balanced = "mailto:test@example.com?subject=Meeting(Ops)"
+        assertEquals(listOf(balanced), MessageTextFormatter.format("($balanced).").links)
         assertEquals(listOf("https://example.com/mailto:test@example.com"),
             MessageTextFormatter.format("https://example.com/mailto:test@example.com").links)
         assertEquals(emptyList(), MessageTextFormatter.format("test@example.com").links)

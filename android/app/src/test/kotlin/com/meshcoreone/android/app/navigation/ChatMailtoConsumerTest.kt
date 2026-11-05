@@ -43,11 +43,11 @@ class ChatMailtoConsumerTest : RoomProcessTest() {
 
     @After fun destroyHost() { host.pause().stop().destroy() }
 
-    @Test fun mountedChatMailtoTapStartsOnlyTheNativeSendToAction() = mountedMailto(false)
+    @Test fun mountedChatMailtoTapStartsOnlyTheNativeSendToAction() = mountedMailto(false, "MAILTO:test@example.com?subject=Hello%20Mesh")
 
     @Test fun mountedChatMailtoWithoutHandlerShowsFailureInsteadOfCrashing() = mountedMailto(true)
 
-    private fun mountedMailto(unavailable: Boolean) = runTest {
+    private fun mountedMailto(unavailable: Boolean, tappedUrl: String = url) = runTest {
         val h = ContainerHarness(this, store)
         h.links.configureRadio = { radio -> radio.knownContacts += contactFrame(key(20), "Mail Peer") }
         val attempts = mutableListOf<Intent>()
@@ -67,7 +67,7 @@ class ChatMailtoConsumerTest : RoomProcessTest() {
             val radio = assertNotNull(h.appState.currentRadioId)
             val peer = store.fetchContacts(radio).single { it.name == "Mail Peer" }
             store.saveMessage(MessageDTO(
-                radioId = radio, contactID = peer.id, text = url, timestamp = 100u,
+                radioId = radio, contactID = peer.id, text = tappedUrl, timestamp = 100u,
                 createdAt = EPOCH, direction = MessageDirection.INCOMING,
             ))
             compose.runOnUiThread {
@@ -82,9 +82,9 @@ class ChatMailtoConsumerTest : RoomProcessTest() {
             }
             compose.waitUntil(10_000) {
                 h.settle()
-                compose.onAllNodesWithText(url, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+                compose.onAllNodesWithText(tappedUrl, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
             }
-            val action = compose.onNodeWithText(url, useUnmergedTree = true).fetchSemanticsNode()
+            val action = compose.onNodeWithText(tappedUrl, useUnmergedTree = true).fetchSemanticsNode()
                 .config[SemanticsActions.CustomActions].single()
             compose.runOnIdle { assertTrue(action.action()) }
             compose.waitForIdle()
@@ -93,8 +93,12 @@ class ChatMailtoConsumerTest : RoomProcessTest() {
             assertEquals(url, intent.dataString)
             assertNull(intent.component)
             assertNull(intent.selector)
-            if (unavailable) compose.onNode(isDialog()).assertExists()
-            else compose.onNode(isDialog()).assertDoesNotExist()
+            if (unavailable) {
+                compose.onNode(isDialog()).assertExists()
+                compose.onNodeWithText(host.get().getString(com.meshcoreone.android.app.R.string.platform_chat_link_unavailable))
+                    .assertIsDisplayed()
+                compose.onNodeWithText("No mail application").assertDoesNotExist()
+            } else compose.onNode(isDialog()).assertDoesNotExist()
         } finally {
             compose.runOnUiThread { host.get().setContent {} }
             h.container.close()

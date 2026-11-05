@@ -12,7 +12,9 @@ object ChatMailtoPolicy {
             return false
         }
         if (!uri.scheme.equals("mailto", ignoreCase = true) || !uri.isOpaque || uri.rawFragment != null) return false
-        val recipient = uri.schemeSpecificPart.substringBefore('?')
+        val rawRecipient = uri.rawSchemeSpecificPart.substringBefore('?')
+        if (rawRecipient.isEmpty()) return false
+        val recipient = URI("mailto:$rawRecipient").schemeSpecificPart
         return recipient.isNotEmpty() && recipient.none { it.isWhitespace() || it.isISOControl() } &&
             !recipient.startsWith("//")
     }

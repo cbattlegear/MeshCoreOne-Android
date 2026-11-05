@@ -882,8 +882,8 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                             h.manager.reconnectionCoordinator.restartTimeout(UUID(0, 9999))
                         } finally {
                             cycleReturned.countDown()
-                        }.apply { isDaemon = true }
-                    }
+                        }
+                    }.apply { isDaemon = true }
                     worker = cycleWorker
                     h.manager.withNavigationCommitBoundary {
                         cycleWorker.start()

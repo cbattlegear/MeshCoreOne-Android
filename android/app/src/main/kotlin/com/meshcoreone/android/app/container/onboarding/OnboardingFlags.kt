@@ -169,12 +169,19 @@ class WriteBehindOnboardingFlags(
                 }
             } finally {
                 val failure = CancellationException("Onboarding preference writer stopped")
-                val abandoned = synchronized(lock) {
+                val (abandoned, completion) = synchronized(lock) {
                     stopped = failure
-                    writes.toList().also { writes.clear(); pendingCompletions.clear() }
+                    val pending = writes.toList()
+                    writes.clear()
+                    pendingCompletions.clear()
+                    (pending to drained).also { drained = CompletableDeferred(Unit) }
                 }
-                wakeups.close(failure)
-                abandoned.forEach { it.persisted?.resumeWithException(failure) }
+                try {
+                    wakeups.close(failure)
+                    abandoned.forEach { it.persisted?.resumeWithException(failure) }
+                } finally {
+                    completion.complete(Unit)
+                }
             }
         }
     }

@@ -1016,6 +1016,9 @@ class ConnectionManager(
         val expectedCoordinator = reconnectionCoordinator.reconnectGeneration
         val expectedRevision = synchronized(lock) { revision }
         val owner = mutateDeviceAuthority {
+            if (closed || revision != expectedRevision ||
+                reconnectionCoordinator.reconnectGeneration != expectedCoordinator
+            ) return
             if (connectionIntent.wantsConnection) rebuildFailures++
             (active ?: retained).also {
                 active = null

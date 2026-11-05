@@ -20,6 +20,35 @@ The coordinator assigned an independent clean-current-main foundation. Runtime/d
 
 ## Source custody and adaptations
 
+### Follow-up: queued reconnection failure authority
+
+The independently reviewed foundation `8344344ff180faa3754928edd42c9e38e69adad1`
+remains immutable. A subsequent bounded repair checks the captured connection revision and
+reconnection coordinator generation, plus closed state, **inside** `deviceCommitAuthority`
+before `handleReconnectionFailure` changes counters, owners, device state or publishes DISCONNECTED.
+A stale waiter returns without claiming or closing any owner; successor connect retains its
+normal captured-predecessor cleanup. Existing accepted-failure cleanup and cancellation paths
+are unchanged. Runtime owner `36c8c079-3643-4bc2-876b-f4c80c3bdf4d` confirmed this repair is
+owned here and has no competing edits.
+
+The added real-manager `RuntimeSeamTest` control holds the actual write authority, queues a
+successor WiFi connect first and an old failure second, then holds successor transport connect.
+It asserts CONNECTING is not overwritten, no DISCONNECTED transition/loss/retry effect occurs,
+predecessor services close once, and the successor reaches READY with a new token/live device
+without closing its services or transport. All previous cases and assertions remain.
+Before the repair, the queued failure would publish DISCONNECTED and increment rebuild failures
+before its later ownership check; this is a source-level discrimination, not an executed result.
+
+Fresh pinned-Python `reserve.py admit` calls admitted ConnectionManager as
+`reviewed-support-consumer`, RuntimeSeamTest as `reviewed-support-test`, and this evidence as
+`wp-owned`. `git diff --check` and
+`C:\Python312\python.exe tools\android-port\controller\validate.py` passed (1,866 reference files,
+64 WPs, 178 edges). These results apply to the follow-up working diff, not Kotlin execution.
+Local Gradle remains held by `local-check:f516a7e271f444dd9cb2efcc8b995a16`;
+no recovery, bypass, Kotlin compilation or test execution occurred. Exact follow-up hosted
+execution and independent review remain required. Settings' separate three-argument removal
+API/ACK guard is neither changed nor claimed integrated.
+
 Selected hunks, not ancestry, were extracted from producer-approved immutable sources:
 
 | Source | Selected behavior |

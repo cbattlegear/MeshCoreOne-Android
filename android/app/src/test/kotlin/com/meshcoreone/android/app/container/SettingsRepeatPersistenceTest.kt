@@ -66,27 +66,29 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                         )
                     }
                 }
-                entered.await()
-                val writer = async(start = CoroutineStart.UNDISPATCHED) {
-                    when (operation) {
-                        "delete" -> store.deleteDevice(before.id)
-                        "delete-all" -> store.deleteDeviceAndData(before.id)
-                        "demote" -> store.demoteDeviceToGhost(before.id)
-                        "reconcile" -> store.reconcileGhostIdentity(before.id, ghost.publicKey)
-                        else -> assertFalse(store.insertDeviceIfAbsent(before))
-                    }
-                }
+                var writer: kotlinx.coroutines.Deferred<Any?>? = null
                 try {
+                    h.eventually("actual restore send entered before identity mutation") { entered.isCompleted }
+                    val contender = async<Any?>(start = CoroutineStart.UNDISPATCHED) {
+                        when (operation) {
+                            "delete" -> store.deleteDevice(before.id)
+                            "delete-all" -> store.deleteDeviceAndData(before.id)
+                            "demote" -> store.demoteDeviceToGhost(before.id)
+                            "reconcile" -> store.reconcileGhostIdentity(before.id, ghost.publicKey)
+                            else -> assertFalse(store.insertDeviceIfAbsent(before))
+                        }
+                    }
+                    writer = contender
                     assertEquals(before, store.fetchDevice(before.id), "$operation must not invalidate an admitted identity")
-                    assertFalse(writer.isCompleted, "$operation must wait outside the DB mutex")
+                    assertFalse(contender.isCompleted, "$operation must wait outside the DB mutex")
                     assertTrue(radio.radioWrites.isEmpty())
                     release.complete(Unit)
                     restore.await().exceptionOrNull()?.let { failure ->
                         assertTrue(failure is kotlinx.coroutines.CancellationException ||
-                            failure is com.meshcoreone.android.core.services.device.SettingsServiceException ||
+                            failure is com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException ||
                             failure is DeviceEditPersistenceConflict, "Unexpected post-send failure: $failure")
                     }
-                    writer.await()
+                    contender.await()
                     assertEquals(1, radio.radioWrites.size)
                     when (operation) {
                         "delete", "delete-all", "demote" -> assertNull(store.fetchDevice(before.id))
@@ -100,7 +102,7 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                     release.complete(Unit)
                     restore.cancel()
                     restore.join()
-                    writer.join()
+                    writer?.join()
                 }
             }
         }

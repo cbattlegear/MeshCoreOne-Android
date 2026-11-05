@@ -481,7 +481,7 @@ class OnboardingFlowCoordinatorTest {
         val deps = Deps(presets = port)
         val flow = OnboardingFlowCoordinator(scope, deps)
         flow.preset.apply("p")
-        assertEquals(listOf(first), received)
+        assertEquals(listOf<OnboardingPresetTarget?>(first), received)
         assertFalse(flow.onboarding.hasCompletedOnboarding)
         assertNull(flow.onboarding.completionReceipt)
         assertFalse(deps.flags.getBoolean(OnboardingState.KEY_HAS_COMPLETED))
@@ -491,7 +491,7 @@ class OnboardingFlowCoordinatorTest {
         flow.preset.apply("p")
         assertTrue(flow.onboarding.hasCompletedOnboarding)
         assertTrue(deps.flags.getBoolean(OnboardingState.KEY_HAS_COMPLETED))
-        assertEquals(listOf(first, port.target), received)
+        assertEquals(listOf<OnboardingPresetTarget?>(first, port.target), received)
         assertEquals(OnboardingCompletionReceipt.Preset("p", port.target), flow.onboarding.completionReceipt)
         assertEquals(1, flow.preset.state.value.commitTick)
     }

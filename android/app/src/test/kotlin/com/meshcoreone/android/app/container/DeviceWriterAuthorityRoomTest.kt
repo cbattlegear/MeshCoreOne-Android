@@ -894,6 +894,87 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
         } finally { release.complete(Unit); h.container.close() }
     }
 
+    @Test fun staleSameSessionObservationCannotReplaceTheOriginalPreRepeatSnapshot() = runTest {
+        val h = ContainerHarness(this, store)
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            val observedBeforeSave = assertNotNull(h.manager.connectedDevice)
+            val token = h.sessions.current!!.token
+            assertNull(observedBeforeSave.preRepeatFrequency)
+            assertTrue(h.container.deviceEditor.savePreRepeatSettings(token))
+            val firstSnapshot = observedBeforeSave.savingPreRepeatSettings()
+            assertEquals(firstSnapshot, store.fetchDevice(observedBeforeSave.id))
+            assertTrue(h.container.deviceEditor.updateDevice(observedBeforeSave.info(910.525), "repeat", token))
+            assertTrue(h.container.deviceEditor.updateClientRepeat(true, token))
+            val repeat = assertNotNull(store.fetchDevice(observedBeforeSave.id))
+            assertNotEquals(repeat.frequency, repeat.preRepeatFrequency)
+            assertEquals(firstSnapshot.preRepeatFrequency, repeat.preRepeatFrequency)
+            assertEquals(token, h.manager.snapshot.value.token)
+            assertNotEquals(repeat, repeat.savingPreRepeatSettings(), "The old unconditional transform loses restoration RF")
+
+            // The same-session UI observation has not received either committed publication.
+            assertNull(observedBeforeSave.preRepeatFrequency)
+            assertFalse(observedBeforeSave.clientRepeat)
+            assertTrue(h.container.deviceEditor.savePreRepeatSettings(token))
+            assertEquals(repeat, store.fetchDevice(observedBeforeSave.id))
+            assertEquals(repeat, h.manager.connectedDevice)
+            assertNotNull(h.container.deviceEditor.savePreRepeatSettings()).join()
+            assertEquals(repeat, store.fetchDevice(observedBeforeSave.id))
+            assertEquals(repeat, h.manager.connectedDevice)
+            assertEquals(token, h.manager.snapshot.value.token)
+        } finally { h.container.close() }
+    }
+
+    @Test fun competingSnapshotCommitPreservesCompleteAndEveryPartialRestorationOnCasRetry() = runTest {
+        val paused = PausedStore(store)
+        val h = ContainerHarness(this, store, persistenceOverride = paused)
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            val original = assertNotNull(h.manager.connectedDevice)
+            val token = h.sessions.current!!.token
+            val complete = original.savingPreRepeatSettings()
+            val snapshots = listOf(
+                complete,
+                original.copy(preRepeatFrequency = complete.preRepeatFrequency),
+                original.copy(preRepeatBandwidth = complete.preRepeatBandwidth),
+                original.copy(preRepeatSpreadingFactor = complete.preRepeatSpreadingFactor),
+                original.copy(preRepeatCodingRate = complete.preRepeatCodingRate),
+            )
+            for ((index, snapshot) in snapshots.withIndex()) {
+                assertTrue(h.container.deviceEditor.clearPreRepeatSettings(token))
+                val absent = assertNotNull(store.fetchDevice(original.id))
+                assertNull(absent.preRepeatFrequency)
+                assertNull(absent.preRepeatBandwidth)
+                assertNull(absent.preRepeatSpreadingFactor)
+                assertNull(absent.preRepeatCodingRate)
+                val winner = snapshot.copy(
+                    frequency = 910_525u, bandwidth = 125_000u, spreadingFactor = 9u,
+                    codingRate = 6u, clientRepeat = true, appliedRadioPresetID = "repeat-$index",
+                )
+                assertNotEquals(winner, winner.savingPreRepeatSettings(), "The old transform must fail family $index")
+                var competingCommit = false
+                val rejectedBefore = paused.rejected
+                paused.beforeSave = {
+                    val ticket = assertNotNull(store.fetchDeviceWriteSnapshot(original.id))
+                    assertEquals(absent, ticket.device)
+                    assertTrue(store.saveDeviceIfUnchanged(winner, ticket))
+                    h.container.deviceEditor.updateDevice(winner)
+                    assertEquals(winner, store.fetchDevice(original.id))
+                    competingCommit = true
+                }
+                assertTrue(h.container.deviceEditor.savePreRepeatSettings(token))
+                assertTrue(competingCommit)
+                assertEquals(rejectedBefore + 1, paused.rejected, "The original absent-snapshot ticket must lose")
+                assertEquals(winner, store.fetchDevice(original.id), "Snapshot family $index must survive the retry")
+                assertEquals(winner, h.manager.connectedDevice)
+                assertEquals(index == 0, winner.hasPreRepeatSettings)
+                assertEquals(token, h.manager.snapshot.value.token)
+            }
+        } finally { h.container.close() }
+    }
+
     private fun DeviceDTO.info(frequency: Double = 915.0) = SelfInfo(
         advertisementType = 0u, txPower = txPower, maxTxPower = maxTxPower, publicKey = publicKey,
         latitude = latitude, longitude = longitude, multiAcks = multiAcks,

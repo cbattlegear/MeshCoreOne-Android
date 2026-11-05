@@ -589,21 +589,21 @@ internal fun TracePathMapContent(
                 preferenceError = true
             }
         }
-        val requestClear = { if (canEdit()) confirmClear = true }
-        val clearPath = {
-            if (canEdit()) {
-                map.clearPath()
-                refresh()
-                confirmClear = false
-            }
+    }
+    val requestClear = { if (canEdit()) confirmClear = true }
+    val clearPath = {
+        if (canEdit()) {
+            map.clearPath()
+            refresh()
+            confirmClear = false
         }
-        val runTrace = {
-            if (canEdit()) {
-                requestCamera(map.pathCamera())
-                scope.launch { if (canEdit()) map.runTrace() }
-            }
-            Unit
+    }
+    val runTrace = {
+        if (canEdit()) {
+            requestCamera(map.pathCamera())
+            scope.launch { if (canEdit()) map.runTrace() }
         }
+        Unit
     }
     val loaded = settings
     Column(Modifier.fillMaxSize()) {

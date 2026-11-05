@@ -1,260 +1,118 @@
 name: Android candidate CI
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-  merge_group:
-    types: [checks_requested]
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
-concurrency:
-  group: android-ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
 jobs:
-  scope:
-    name: Classify candidate scopes
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    outputs:
-      controller: ${{ steps.changed.outputs.controller }}
-      accessibility-suite: ${{ steps.changed.outputs.accessibility-suite }}
-      scaffold: ${{ steps.changed.outputs.scaffold }}
-      protocol: ${{ steps.changed.outputs.protocol }}
-      backup: ${{ steps.changed.outputs.backup }}
-      external-oracle: ${{ steps.changed.outputs['external-oracle'] }}
-    steps:
-      - name: Read-only exact candidate and immutable diff endpoints
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - id: changed
-        name: Classify changed inputs with fail-safe defaults
-        run: |
-          python tools/android-port/oracle/workflow_scope.py --event-name "${{ github.event_name }}" --event-path "${{ github.event_path }}" --output "$GITHUB_OUTPUT"
-          python tools/android-port/controller/test_runner.py --candidate-event-name "${{ github.event_name }}" --candidate-event-path "${{ github.event_path }}" --scope-output "$GITHUB_OUTPUT"
-
-  controller:
-    name: Controller and workflow policy
-    needs: [scope]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - name: Read-only exact candidate
-        if: ${{ needs.scope.outputs.controller == 'true' || needs.scope.outputs.accessibility-suite == 'true' }}
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Setup pinned Python
-        if: ${{ needs.scope.outputs.controller == 'true' || needs.scope.outputs.accessibility-suite == 'true' }}
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: "3.12.4"
-          architecture: x64
-      - name: Install checksum-pinned YAML parser
-        if: ${{ needs.scope.outputs.controller == 'true' || needs.scope.outputs.accessibility-suite == 'true' }}
-        run: >-
-          python -m pip install --disable-pip-version-check --require-hashes
-          --no-deps --only-binary=:all: -r tools/android-port/controller/requirements-ci.txt --quiet
-      - name: Run controller tests once
-        if: ${{ needs.scope.outputs.controller == 'true' || needs.scope.outputs.accessibility-suite == 'true' }}
-        run: |
-          python tools/android-port/controller/test_runner.py --include-tests tools/android-port/local --include-tests android/parity-tests --include-tests tools/android-port/oracle --candidate-event-name "${{ github.event_name }}" --candidate-event-path "${{ github.event_path }}"
-          python tools/android-port/controller/verification_config.py --check
-          python tools/android-port/controller/validate.py
-          python tools/android-port/portmap.py
-          python android/parity-tests/audit.py --check
-          python android/parity-tests/semantic.py --check
-      - name: No controller inputs selected
-        if: ${{ needs.scope.outputs.controller != 'true' && needs.scope.outputs.accessibility-suite != 'true' }}
-        run: echo "Controller suite not selected."
-
-  build:
-    name: One Linux Android build
-    needs: [scope]
-    if: >-
-      ${{
-        needs.scope.outputs.scaffold == 'true' ||
-        needs.scope.outputs.protocol == 'true' ||
-        needs.scope.outputs.backup == 'true'
-      }}
+  ts07:
+    name: Exact TS-07 affected consumers
     runs-on: ubuntu-24.04
     timeout-minutes: 75
-    defaults:
-      run:
-        shell: pwsh
+    env:
+      PRODUCT_SHA: 9066fcc7b4eedffa5edddfdb51e0f4dc208db1c1
+      BASE_SHA: cbd8ea885f334c9e7b90443044cf3f831986555c
     steps:
-      - name: Read-only exact candidate
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Read-only exact product candidate
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: 9066fcc7b4eedffa5edddfdb51e0f4dc208db1c1
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - name: Verify controller bytes against trusted base
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$PRODUCT_SHA"
+          git merge-base --is-ancestor "$BASE_SHA" HEAD
+          git diff --exit-code "$BASE_SHA" HEAD -- tools/android-port android/scaffold .github/workflows
+          git diff --quiet HEAD
+          printf 'PRODUCT_BINDING base=%s head=%s diagnostic=%s\n' "$BASE_SHA" "$PRODUCT_SHA" "$GITHUB_SHA"
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: "3.12.4"
           architecture: x64
-      - name: Install checksum-pinned workflow parser
+      - name: Install checksum-pinned parser
         run: >-
           python -m pip install --disable-pip-version-check --require-hashes
           --no-deps --only-binary=:all: -r tools/android-port/controller/requirements-ci.txt --quiet
-      - name: Declare one toolchain, work and Gradle cache root
+      - name: Declare private ephemeral roots
+        shell: bash
         run: |
-          $root = Join-Path $env:RUNNER_TEMP 'meshcoreone-ci'
-          "ANDROID_CI_WORK=$(Join-Path $root 'work')" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
-          "ANDROID_CI_STATE=$(Join-Path (Join-Path $root 'toolchain') 'environment.json')" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
-          "GRADLE_USER_HOME=$(Join-Path $root 'gradle-home')" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
-      - name: Restore verified Gradle and task-output cache
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+          echo "ANDROID_CI_WORK=$RUNNER_TEMP/ts07/work" >> "$GITHUB_ENV"
+          echo "ANDROID_CI_STATE=$RUNNER_TEMP/ts07/toolchain/environment.json" >> "$GITHUB_ENV"
+          echo "GRADLE_USER_HOME=$RUNNER_TEMP/ts07/gradle-home" >> "$GITHUB_ENV"
+      - name: Restore existing verified Gradle cache
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
         with:
           path: ${{ env.GRADLE_USER_HOME }}
           key: android-gradle-v4-${{ runner.os }}-${{ hashFiles('android/gradle/wrapper/gradle-wrapper.properties', 'android/gradle/wrapper/gradle-wrapper.jar', 'tools/android-port/controller/toolchain-pins.json') }}-${{ hashFiles('android/gradle/libs.versions.toml', 'android/gradle/verification-metadata.xml', 'android/gradle/dependency-locks/*.lockfile', 'android/**/gradle.lockfile') }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             android-gradle-v4-${{ runner.os }}-${{ hashFiles('android/gradle/wrapper/gradle-wrapper.properties', 'android/gradle/wrapper/gradle-wrapper.jar', 'tools/android-port/controller/toolchain-pins.json') }}-${{ hashFiles('android/gradle/libs.versions.toml', 'android/gradle/verification-metadata.xml', 'android/gradle/dependency-locks/*.lockfile', 'android/**/gradle.lockfile') }}-
-            android-gradle-v3-${{ runner.os }}-
-            android-gradle-${{ runner.os }}-
-      - name: Validate frozen source inputs
+      - name: Validate source and trusted workflow boundaries
         run: |
-          python tools/android-port/test_inventory.py --check
-          python tools/android-port/extract_vectors.py --check
-      - name: Run selected Python oracle assertions
-        if: ${{ needs.scope.outputs.scaffold == 'true' }}
-        run: python tools/android-port/oracle/run_tests.py --output (Join-Path $env:RUNNER_TEMP 'oracle-tests.json')
-      - name: Provision exact first-party JDK and SDK archives
-        run: python tools/android-port/controller/ci.py provision --root (Split-Path $env:ANDROID_CI_STATE -Parent) --accept-sdk-license
-      - name: Check worker readiness
+          python tools/android-port/controller/validate.py
+          python tools/android-port/portmap.py > /dev/null
+          python tools/android-port/controller/workflows.py
+      - name: Provision exact first-party JDK and SDK
+        shell: bash
+        run: python tools/android-port/controller/ci.py provision --root "$RUNNER_TEMP/ts07/toolchain" --accept-sdk-license
+      - name: Check exact toolchain readiness
         run: python tools/android-port/controller/ci.py preflight
-      - id: gradle
-        name: Run parallel Gradle validation and Android tasks
-        env:
-          RUN_SCAFFOLD: ${{ needs.scope.outputs.scaffold }}
-          RUN_PROTOCOL: ${{ needs.scope.outputs.protocol }}
-          RUN_BACKUP: ${{ needs.scope.outputs.backup }}
-          RUN_CONTROLLER: ${{ needs.scope.outputs.controller }}
+      - name: Run existing immutable affected-scope executor
+        shell: bash
         run: |
-          $scopes = @()
-          if ($env:RUN_SCAFFOLD -eq 'true') { $scopes += @('--scope', 'scaffold') }
-          if ($env:RUN_PROTOCOL -eq 'true') { $scopes += @('--scope', 'protocol') }
-          if ($env:RUN_BACKUP -eq 'true') { $scopes += @('--scope', 'backup') }
-          $affected = @()
-          if ($env:RUN_CONTROLLER -ne 'true') { $affected = @('--affected-candidate') }
-          & python tools/android-port/controller/ci.py run --stage scaffold @affected @scopes
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Validate localization discovery
-        if: ${{ steps.gradle.outputs.localization == 'true' }}
-        run: >-
-          python tools/android-port/l10n_convert.py --check
-          --verify-android-tests android/core/l10n/build/test-results/testDebugUnitTest
-      - name: Inspect exact APK and static alignment
-        if: ${{ steps.gradle.outputs.full_scaffold == 'true' }}
-        run: python tools/android-port/controller/ci.py inspect
-      - name: Upload inspected debug APK for human testing
-        if: ${{ success() && steps.gradle.outputs.full_scaffold == 'true' }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: debug-apk-${{ github.event.pull_request.head.sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: android/app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-          retention-days: 7
-      - name: Transfer actual backup bytes to the platform oracle
-        if: ${{ needs.scope.outputs.backup == 'true' }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: backup-input-${{ github.run_id }}-${{ github.run_attempt }}
-          path: android/core/data/build/reports/wp203/interop/
-          if-no-files-found: error
-          retention-days: 1
-
-  external-oracle:
-    name: Swift codec oracle
-    needs: [scope]
-    if: ${{ needs.scope.outputs['external-oracle'] == 'true' }}
-    runs-on: macos-26-intel
-    timeout-minutes: 20
-    steps:
-      - name: Read-only exact candidate and frozen source objects
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: "3.12.4"
-      - name: Execute pinned Swift codecs and independent crypto
-        run: >-
-          python tools/android-port/oracle/codec_harness.py run
-          --output "${{ runner.temp }}/codec"
-
-  backup-oracle:
-    name: SwiftData restore and export oracle
-    needs: [scope, build]
-    if: ${{ needs.scope.outputs.backup == 'true' }}
-    runs-on: macos-26-intel
-    timeout-minutes: 40
-    steps:
-      - name: Read-only exact candidate and frozen source objects
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: "3.12.4"
-      - name: Download actual Kotlin-produced backup bytes
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
-        with:
-          name: backup-input-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/kotlin-input
-      - name: Execute real SwiftData restore and export
-        run: >-
-          python tools/android-port/oracle/wp203_interop.py
-          --input "${{ runner.temp }}/kotlin-input"
-          --output "${{ runner.temp }}/swift-output"
-          --stage-root "${{ runner.temp }}/frozen-source"
-
-  android-ci:
-    name: android-ci
-    if: ${{ always() }}
-    needs: [scope, controller, build, external-oracle, backup-oracle]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - name: Require every selected scope to pass
-        env:
-          CONTROLLER_SELECTED: ${{ needs.scope.outputs.controller }}
-          SCAFFOLD_SELECTED: ${{ needs.scope.outputs.scaffold }}
-          PROTOCOL_SELECTED: ${{ needs.scope.outputs.protocol }}
-          BACKUP_SELECTED: ${{ needs.scope.outputs.backup }}
-          EXTERNAL_SELECTED: ${{ needs.scope.outputs['external-oracle'] }}
-          CONTROLLER_RESULT: ${{ needs.controller.result }}
-          BUILD_RESULT: ${{ needs.build.result }}
-          EXTERNAL_RESULT: ${{ needs.external-oracle.result }}
-          BACKUP_RESULT: ${{ needs.backup-oracle.result }}
-        run: |
-          test "$CONTROLLER_RESULT" = "success"
-          if [ "$SCAFFOLD_SELECTED" = "true" ] || [ "$PROTOCOL_SELECTED" = "true" ] || [ "$BACKUP_SELECTED" = "true" ]; then
-            test "$BUILD_RESULT" = "success"
-          else
-            test "$BUILD_RESULT" = "skipped"
-          fi
-          if [ "$EXTERNAL_SELECTED" = "true" ]; then
-            test "$EXTERNAL_RESULT" = "success"
-          else
-            test "$EXTERNAL_RESULT" = "skipped"
-          fi
-          if [ "$BACKUP_SELECTED" = "true" ]; then
-            test "$BACKUP_RESULT" = "success"
-          else
-            test "$BACKUP_RESULT" = "skipped"
-          fi
+          python - <<'PY'
+          import json, os, sys
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+          sys.path.insert(0, str(Path("tools/android-port").resolve()))
+          from controller import ci
+          from controller.ci_environment import REPO, candidate_environment
+          from controller.local_scope import candidate_plan, report_inputs, run_scaffold
+          base, head = os.environ["BASE_SHA"], os.environ["PRODUCT_SHA"]
+          assert ci.git(REPO, "rev-parse", "HEAD").decode().strip() == head
+          state = ci.inputs()
+          output = ci.output_directory()
+          plan = candidate_plan(REPO, base, head, trusted_base=base, checkout=True)
+          print("EXACT_AFFECTED_PLAN", json.dumps(plan, sort_keys=True), flush=True)
+          environment = candidate_environment(state)
+          options = [
+              "--no-daemon", "--console=plain", "--dependency-verification", "strict",
+              "-Dorg.gradle.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=768m",
+              "-Pkotlin.compiler.execution.strategy=in-process", "-PscaffoldTestHeap=512m",
+              "--project-cache-dir", str(Path(state["private_root"]) / "project-root"),
+              "--build-cache", "--parallel", "--max-workers=2",
+          ]
+          def execute(command, cwd, task_environment, log):
+              assert cwd == REPO
+              ci.execute(command, task_environment, log, timeout=3600,
+                         failure_reports=lambda: report_inputs(REPO, plan)[0], stream_output=True)
+          try:
+              wrapper = REPO / "android/gradlew"
+              ci.execute([str(wrapper), "-p", str(REPO / "android"),
+                          ":feature:remotenodes:testDebugUnitTest", "--tests",
+                          "*RemoteNeighborConfidenceComposeTest", *options],
+                         environment, output / "ts07-focused.log", timeout=1800, stream_output=True)
+              report = run_scaffold(REPO, plan, environment, output, execute, options, trusted_base=base)
+          finally:
+              for xml in REPO.glob("android/feature/remotenodes/build/test-results/testDebugUnitTest/TEST-*RemoteNeighborConfidenceComposeTest.xml"):
+                  suite = ET.parse(xml)
+                  for case in suite.iter("testcase"):
+                      for failure in list(case.findall("failure")) + list(case.findall("error")):
+                          print("TS07_FAILURE_DETAIL", case.attrib, failure.attrib, failure.text, flush=True)
+                  for stream in suite.iter("system-out"):
+                      print("TS07_RUNNER_OUTPUT", stream.text, flush=True)
+          selected = [
+              case for case in report["junit_cases"]
+              if case["class"].endswith("RemoteNeighborConfidenceComposeTest")
+          ]
+          assert len(selected) == 10, selected
+          assert all(case["outcome"] == "passed" for case in selected), selected
+          print("TS07_MOUNTED_CASES", json.dumps(selected, sort_keys=True), flush=True)
+          print("EXACT_AFFECTED_RESULT", json.dumps({
+              key: value for key, value in report.items()
+              if key not in ("junit_cases", "test_lineage", "compiled_test_sources")
+          }, sort_keys=True), flush=True)
+          PY

@@ -14,6 +14,7 @@ import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
@@ -51,12 +52,16 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.meshcoreone.android.core.designsystem.NativeThemeMetrics
+import kotlin.math.roundToInt
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 
 fun cropAvatarImage(image: ImageBitmap, geometry: AvatarCropGeometry): ImageBitmap {
@@ -180,12 +185,27 @@ fun AvatarCropView(
                                     style = androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx()))
                             }
                         }
-                        Slider(geometry.scale.toFloat(), onValueChange = {
-                            onGeometryChange(geometry.zoomBy(it - geometry.scale))
-                        }, valueRange = 1f..4f, steps = 11,
-                            modifier = Modifier.fillMaxWidth().sharedTouchTarget()
-                                .padding(horizontal = 16.dp).testTag("avatar-crop-zoom")
-                                .semantics { contentDescription = preview })
+                        Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp)
+                            .height(NativeThemeMetrics.MINIMUM_TOUCH_TARGET.dp)
+                            .testTag("avatar-crop-zoom").clearAndSetSemantics {
+                                contentDescription = preview
+                                progressBarRangeInfo = ProgressBarRangeInfo(
+                                    geometry.scale.toFloat(), 1f..4f, 11,
+                                )
+                                setProgress { value ->
+                                    val snapped = AvatarCropGeometry.MIN_SCALE +
+                                        ((value.toDouble().coerceIn(AvatarCropGeometry.MIN_SCALE,
+                                            AvatarCropGeometry.MAX_SCALE) - AvatarCropGeometry.MIN_SCALE) /
+                                            AvatarCropGeometry.ZOOM_STEP).roundToInt() * AvatarCropGeometry.ZOOM_STEP
+                                    latestChange(latestGeometry.zoomBy(snapped - latestGeometry.scale))
+                                    true
+                                }
+                            }) {
+                            Slider(geometry.scale.toFloat(), onValueChange = {
+                                onGeometryChange(geometry.zoomBy(it - geometry.scale))
+                            }, valueRange = 1f..4f, steps = 11,
+                                modifier = Modifier.fillMaxSize())
+                        }
                         FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
                             TextButton(onClick = { onGeometryChange(geometry.panBy(CropOffset(0.0, -geometry.cropSize / 8))) },
                                 modifier = Modifier.sharedTouchTarget()) { Text(moveUp) }

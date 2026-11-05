@@ -71,6 +71,7 @@ import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.swipe
 import androidx.compose.ui.test.pinch
+import androidx.compose.ui.test.click
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
@@ -787,6 +788,9 @@ class SharedUiComposeTest {
         revealWithTouch("avatar-crop-zoom")
         compose.onNodeWithTag("avatar-crop-zoom").assertIsDisplayed()
             .assertHeightIsAtLeast(49.dp)
+            .performTouchInput { click(androidx.compose.ui.geometry.Offset(size.width * 0.75f, center.y)) }
+        compose.runOnIdle { assertTrue(geometry.value.scale > 1.0, "The native slider must still handle pointer input") }
+        compose.onNodeWithTag("avatar-crop-zoom")
             .performSemanticsAction(SemanticsActions.SetProgress) { it(2f) }
         repeat(8) {
             scroll.performTouchInput { swipeDown(durationMillis = 500) }

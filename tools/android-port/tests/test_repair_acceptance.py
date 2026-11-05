@@ -1731,6 +1731,96 @@ class RepairExecutionTests(unittest.TestCase):
                 self.assertRaisesRegex(PortError, "Ambiguous Kotlin function annotation"):
             validate_hosted_methods(scope, {PATH: "5" * 40, TEST: "4" * 40}, manifest.repo, {})
 
+    def test_kotlin_robolectric_sdk_configuration_is_bound_to_actual_test_methods(self):
+        from controller.repair_acceptance import _kotlin_junit_methods
+
+        source = """
+            package sample
+            import org.junit.Test
+            import org.robolectric.annotation.Config as RoboConfig
+            @RoboConfig(sdk = [31, 37])
+            class ConfiguredTest { @Test fun runsAtEverySdk() {} }
+        """
+        classes, configurations = {}, {}
+        self.assertEqual(
+            _kotlin_junit_methods(
+                source, classes, sdk_configurations=configurations,
+            ),
+            {"runsAtEverySdk": "test"},
+        )
+        self.assertEqual(classes, {"runsAtEverySdk": "sample.ConfiguredTest"})
+        self.assertEqual(configurations, {"runsAtEverySdk": (31, 37)})
+        configurations = {}
+        _kotlin_junit_methods(
+            source.replace("[31, 37]", "[31, 37,]"), sdk_configurations=configurations,
+        )
+        self.assertEqual(configurations, {"runsAtEverySdk": (31, 37)})
+
+        method_source = """
+            import org.junit.Test
+            import org.robolectric.annotation.Config
+            class ConfiguredTest { @Config(sdk = 37) @Test fun oneSdk() {} }
+        """
+        configurations = {}
+        _kotlin_junit_methods(method_source, sdk_configurations=configurations)
+        self.assertEqual(configurations, {"oneSdk": (37,)})
+        for unsupported in (
+            source.replace("[31, 37]", "sdkProvider()"),
+            source.replace("[31, 37]", "[31, 31]"),
+            source.replace("[31, 37]", "[]"),
+            source.replace("[31, 37]", "[31,,]"),
+        ):
+            with self.subTest(source=unsupported), self.assertRaises(PortError):
+                configurations = {}
+                _kotlin_junit_methods(unsupported, sdk_configurations=configurations)
+
+    def test_kotlin_sdk_configuration_preserves_escaped_parameters_and_lexical_scope(self):
+        from controller.repair_acceptance import _kotlin_junit_methods
+
+        source = """
+            package sample
+            import org.junit.Test
+            import org.robolectric.annotation.Config
+            @Config(sdk = [31, 37])
+            class SdkFamilyTest { @Test fun required() {} }
+            class Fixture { @Config(sdk = [37]) class SdkFamilyTest {} }
+        """
+        for configured in (source, source.replace("sdk =", "`sdk` =")):
+            configurations = {}
+            _kotlin_junit_methods(configured, sdk_configurations=configurations)
+            self.assertEqual(configurations, {"required": (31, 37)})
+        for parameter in ("minSdk", "maxSdk", "`minSdk`", "`maxSdk`"):
+            with self.subTest(parameter=parameter), self.assertRaisesRegex(PortError, "SDK range"):
+                _kotlin_junit_methods(
+                    source.replace("sdk = [31, 37]", parameter + " = 31"), sdk_configurations={},
+                )
+        for parameter in ("sdk", "`sdk`"):
+            with self.subTest(parameter=parameter), self.assertRaisesRegex(PortError, "Unresolved SDK-bearing"):
+                _kotlin_junit_methods(
+                    source.replace("@Config(sdk = [31, 37])", "@DeviceConfig(" + parameter + " = [31, 37])"),
+                    sdk_configurations={},
+                )
+        configurations = {}
+        _kotlin_junit_methods(
+            source.replace("@Config(sdk = [31, 37])", "@Unrelated(minSdk) @Config(sdk = [31, 37])"),
+            sdk_configurations=configurations,
+        )
+        self.assertEqual(configurations, {"required": (31, 37)})
+        inherited = """
+            import org.junit.Test
+            import org.robolectric.annotation.Config
+            @Config(sdk = [31, 37]) open class Base {}
+            class Child : Base() { @Test fun required() {} }
+        """
+        with self.assertRaisesRegex(PortError, "inherited Robolectric SDK configuration"):
+            _kotlin_junit_methods(inherited, sdk_configurations={})
+        configurations = {}
+        _kotlin_junit_methods(
+            inherited.replace("class Child", "@Config(sdk = [37]) class Child"),
+            sdk_configurations=configurations,
+        )
+        self.assertEqual(configurations, {"required": (37,)})
+
     def test_grouped_annotations_fail_closed_without_rejecting_literals_or_comments(self):
         from controller.repair_acceptance import _kotlin_junit_methods
 
@@ -1954,14 +2044,17 @@ class RepairExecutionTests(unittest.TestCase):
         from controller.ci import TASKS
         count = {"discovered": 3, "run": 3, "passed": 3, "failed": 0, "errors": 0, "skipped": 0}
         methods = [{"class": "ProtocolTest", "method": f"case{i}"} for i in range(3)]
+        notification_task = ":platform:notifications:testDebugUnitTest"
         report = {"tasks": TASKS["scaffold"] + TASKS["protocol"], "protocol_suite": count,
                   "unit_test_methods": {"core/protocol": methods}}
+        self.assertIn(notification_task, report["tasks"])
         methods[0]["factory"] = "vectorFamily"
         proof = validate_build_log(build_log([], **report), ["core/protocol"])
         self.assertEqual(proof["methods"]["core/protocol"], methods)
         for change in ({"tasks": TASKS["scaffold"]}, {"protocol_suite": None},
                        {"unit_test_methods": {}},
-                       {"unit_test_methods": {"core/protocol": methods[:1]}}):
+                       {"unit_test_methods": {"core/protocol": methods[:1]}},
+                       {"tasks": report["tasks"] + [":platform:notifications:unsafeTask"]}):
             with self.subTest(change=change), self.assertRaises(PortError):
                 validate_build_log(build_log([], **(report | change)), ["core/protocol"])
 

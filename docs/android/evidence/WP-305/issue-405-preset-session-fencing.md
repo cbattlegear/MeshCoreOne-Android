@@ -748,3 +748,21 @@ and no full suite/candidate acceptance follows from absence of another failure.
 The dismissed-dialog and late-readiness primary-action controls remain distinct
 from the corrected dialog-action control. No production code is changed by
 either fixture successor; exact successor compilation/discovery is still needed.
+
+### Exact a61 compilation failure and one-line import correction
+
+Exact `a61f4ad040da7143124e8374b2df5efdd940bab7`, automatic run
+`41953098653` / Linux `127001537369`, failed
+`:app:compileDebugUnitTestKotlin` with `Unresolved reference 'onNode'` at
+OnboardingGateTest line 28. No app tests executed. Classifier/controller passed;
+Swift oracles skipped. The prior source-review concern is therefore an actual
+compilation failure on this head, not an executed dialog-retry result.
+
+Isolated correction `afc67b0fc4a561705e452e5e5573ee33d66a3119` removes only
+the invalid package-level import; `compose.onNode` is the test-rule member.
+The dialog-scoped localized selector, all original assertions and production
+code remain unchanged. Trusted related-test admission and `git diff --check`
+passed. It was kept local until the diagnostic finished and is now published
+with this evidence update. The corrected exact candidate still needs its own
+automatic compilation/test result; no source-review or predecessor success is
+substituted. All #495, dependency-owner, hardware and local Gradle holds remain.

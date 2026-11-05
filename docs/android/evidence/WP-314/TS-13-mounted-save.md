@@ -18,9 +18,14 @@ Its callbacks capture the rendered connection, route and results, recheck curren
 eligibility before launch, and call the existing holder/storage operation.
 Saving disables repeated confirmation; an actual failure keeps the name and
 displays the existing localized save-failure copy for retry. Cancellation and
-route/result/connection replacement discard the dialog. Already accepted writes
+route/connection replacement discard the dialog; same-batch progress retains it.
+Already accepted writes
 remain governed by the holder's existing captured-radio and revision checks.
 Suggested-name formatting now uses the existing generated localization functions.
+Same-batch results arriving during a suspended save are drained before adoption.
+A failed-after-create batch save retains its path/run identities so retry reads
+actual stored runs and appends only missing ones; it also compares the requested
+name with the current stored name. Deleting that partial path clears its receipt.
 
 All five changed paths are admitted by trusted base `wp-owned` capabilities
 (modify production/deviations, test existing mounted class, create per-WP evidence).
@@ -57,8 +62,29 @@ actual fake-radio dispatch/response correlation and persist through
 
 Native Windows `ci.py preflight --local --state $env:ANDROID_CI_STATE --output
 <fresh absolute TEMP directory>` passed with pinned Python 3.12.4. No local
-Gradle build or execution-owner recovery was attempted. Exact normal PR CI and
-actual method discovery are pending; declarations are not runtime evidence.
+Gradle build or execution-owner recovery was attempted. The five declared
+source commands passed: `controller/verification_config.py --check`,
+`controller/validate.py`, `portmap.py`, `test_inventory.py --check` and
+`extract_vectors.py --check`, all under `tools/android-port/` with pinned Python.
+`git diff --check` passed.
+
+The normal exact-head checks and review on
+[PR #593](https://github.com/cbattlegear/MeshCoreOne-Android/pull/593) are the
+authoritative runtime evidence; consult their original hosted reports for
+actual discovery and outcomes. No diagnostic pair or additional runner is used,
+and declarations alone do not establish passing execution.
+
+Preserved failed predecessor `059937a9843c950ac93d7e2cf17955a4b6ed3d3a`,
+run [42123958812](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42123958812),
+discovered 816 Tools tests with three assertion failures: the French 200%-font
+confirmation height, and the two held-save methods selecting a disabled field
+via its intentionally absent SetText action. The successor retains the 48dp
+assertion and explicitly sizes both dialog actions, and checks the disabled
+field's actual EditableText and Disabled semantics without weakening its name
+assertion. App discovered 2016 tests and independently failed the unchanged
+map-preview memory-trim loading-card timeout at line 412. That separate owned
+surface is untouched. Downstream mandatory reports were incomplete; no passing
+aggregate is inferred from this run. Superseded cancelled runs are not passes.
 
 Physical device/radio/firmware, emulator, TalkBack and full-WP-314 acceptance
 remain unverified. Earlier TS-11 diagnostic refs/results and held TS-08 work

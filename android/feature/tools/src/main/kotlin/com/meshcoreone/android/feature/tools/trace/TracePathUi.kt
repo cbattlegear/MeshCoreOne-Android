@@ -589,7 +589,7 @@ private fun TraceSavePathAction(
                 }
             },
             dismissButton = {
-                TextButton(onClick = dismiss, enabled = !saving.value) {
+                TextButton(onClick = dismiss, enabled = !saving.value, modifier = Modifier.sizeIn(minHeight = 48.dp)) {
                     Text(stringResource(L.commonCancel))
                 }
             },
@@ -597,7 +597,7 @@ private fun TraceSavePathAction(
                 TextButton(
                     onClick = confirmSave,
                     enabled = dialog.value.name.isNotBlank() && state.canSavePath && !saving.value,
-                    modifier = Modifier.semantics { onClick { confirmSave(); true } },
+                    modifier = Modifier.sizeIn(minHeight = 48.dp).semantics { onClick { confirmSave(); true } },
                 ) {
                     Text(stringResource(L.commonSave))
                 }

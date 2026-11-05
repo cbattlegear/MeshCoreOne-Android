@@ -345,7 +345,9 @@ class TraceCodeInputComposeTest {
         settle()
         val save = button(host.get().getString(L.commonSave))
         assertTrue(save.config.contains(SemanticsProperties.Disabled))
-        assertEquals("Pending batch route", input().config[SemanticsProperties.EditableText].text)
+        val nameField = nodes().single { it.config.contains(SemanticsProperties.EditableText) }
+        assertTrue(nameField.config.contains(SemanticsProperties.Disabled))
+        assertEquals("Pending batch route", nameField.config[SemanticsProperties.EditableText].text)
         host.get().runOnUiThread { confirm() }
         settle()
         assertEquals(1, creates, "A new batch result must not release an accepted save's submission guard")

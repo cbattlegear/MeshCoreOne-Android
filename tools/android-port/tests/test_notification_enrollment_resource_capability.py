@@ -74,6 +74,21 @@ class NotificationEnrollmentResourceCapabilityTests(unittest.TestCase):
             with self.subTest(path=path), self.assertRaises(PortError):
                 self.engine.admit("WP-303", [], path, OPERATION)
 
+    def test_assignment_admission_is_not_historical_owner_or_lease_authority(self):
+        invariants = " ".join(self.rule["invariants"])
+        for required in (
+            "trusted-main-landing", "legitimate-assignment", "path-operation-admission",
+            "resolved-overlap", "no-new-lease-or-historical-owner-reattestation",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, invariants)
+        self.assertNotIn("fresh-same-owner-admission", invariants)
+        admitted = self.engine.admit("WP-303", [], PATH, OPERATION)
+        self.assertEqual(admitted.capability_id, self.rule["id"])
+        text = (REPO / "docs/android/AUTOMATION.md").read_text(encoding="utf-8")
+        self.assertIn("owner need not re-attest or rebind", text)
+        self.assertIn("Real execution, runtime and protected gates remain in force", text)
+
     def test_previous_capabilities_and_policy_are_unchanged(self):
         base_policy = json.loads(subprocess.check_output(
             ["git", "-C", str(REPO), "show", f"{BASE}:docs/android/automation-policy.json"],

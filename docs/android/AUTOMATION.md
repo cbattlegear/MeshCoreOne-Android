@@ -224,7 +224,10 @@ strings. Immutable resource validation rejects file/key deletion, extra keys, ma
 changes to unrelated notices. Existing Kotlin consumer/test admissions remain separate.
 This is Android-only English source copy; fallback is not reviewed translation or twelve-locale
 acceptance. Frozen reference/generated localization remains unchanged. The support rule must land
-on trusted main and the producer must obtain fresh same-owner admission before editing this resource.
+on trusted main before the legitimately assigned producer obtains WP/path/operation admission and
+resolves actual semantic overlap before editing this resource. The historical advisory reservation
+owner need not re-attest or rebind: this requires no new lease, authorization ceremony, release/recreate,
+ledger rewrite or fabricated terminal identity. Real execution, runtime and protected gates remain in force.
 Admission does not establish displayed consent, verifier/runtime provenance or feature/device acceptance.
 
 WP-503's accessibility source-binding exception is limited to two exact paths and operations:

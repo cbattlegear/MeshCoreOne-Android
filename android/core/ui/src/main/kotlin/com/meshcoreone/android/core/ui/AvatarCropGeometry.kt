@@ -76,8 +76,11 @@ data class AvatarCropGeometry(
     fun panBy(delta: CropOffset): AvatarCropGeometry =
         copy(offset = clampedOffset(CropOffset(offset.x + delta.x, offset.y + delta.y)))
 
-    fun resized(size: Double): AvatarCropGeometry =
-        copy(cropSize = size).let { it.copy(offset = it.clampedOffset(offset)) }
+    fun resized(size: Double): AvatarCropGeometry {
+        val resized = copy(cropSize = size)
+        val ratio = size / cropSize
+        return resized.copy(offset = resized.clampedOffset(CropOffset(offset.x * ratio, offset.y * ratio)))
+    }
 
     companion object {
         const val MIN_SCALE = 1.0

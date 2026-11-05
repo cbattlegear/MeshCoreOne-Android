@@ -67,7 +67,12 @@ class ContactPathCoordinatorRoomTest : RepositoryTest() {
             }
         }
         val preferences = object : ContactPreferenceFlags {
-            override fun bool(key: String): Nothing = error("Contact sync must not read preference flags")
+            override fun bool(key: String): Boolean {
+                check(key.startsWith("contactWriteReconciliation.")) {
+                    "Contact sync read an unexpected preference flag: $key"
+                }
+                return false
+            }
             override fun set(key: String, value: Boolean): Nothing = error("Contact sync must not write preference flags")
         }
         return ContactService(session, store, store, bridge, null, preferences, clock)

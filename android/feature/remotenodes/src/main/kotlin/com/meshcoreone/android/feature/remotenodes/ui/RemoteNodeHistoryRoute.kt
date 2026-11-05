@@ -1,4 +1,6 @@
 // PortedFrom: MC1/Views/RemoteNodes/TelemetryHistoryOverviewView.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/RemoteNodes/Location/LocationReportRow.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/RemoteNodes/Location/LocationReportCallout.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.feature.remotenodes.ui
 
 import androidx.compose.foundation.horizontalScroll
@@ -7,6 +9,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -23,8 +26,29 @@ import com.meshcoreone.android.feature.remotenodes.dependencies.RemoteNodeHistor
 import com.meshcoreone.android.feature.remotenodes.history.*
 import com.meshcoreone.android.feature.remotenodes.map.*
 import com.meshcoreone.android.feature.remotenodes.telemetry.MeasurementSystem
+import java.time.Instant
 import java.time.ZoneId
 import java.util.Locale
+
+@Composable
+private fun LocationReportText(
+    report: NodeStatusSnapshotDTO,
+    now: Instant,
+    locale: Locale,
+    zone: ZoneId,
+    system: MeasurementSystem,
+) {
+    Column(horizontalAlignment = Alignment.Start, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+            LocationReportRowText.relativeTime(report, now, zone).format(locale),
+            style = MaterialTheme.typography.titleSmall,
+        )
+        Text(
+            LocationReportRowText.detailLine(report, locale, zone, system),
+            style = MaterialTheme.typography.bodySmall,
+        )
+    }
+}
 
 @Composable
 internal fun RemoteNodeHistoryRoute(
@@ -106,12 +130,12 @@ internal fun RemoteNodeHistoryRoute(
                             selectedReport = reports.firstOrNull { it.id == report?.id }
                         },
                     )
-                    selectedReport?.let { Text(LocationReportRowText.detailLine(it, locale, zone, system)) }
+                    selectedReport?.let { LocationReportText(it, clock.now, locale, zone, system) }
                     TextButton({ fullMap = true }) { Text(stringResource(L.remoteNodesStatusViewOnMap)) }
                     RemoteHeading(stringResource(L.remoteNodesHistoryLocationReportsHeader))
                     reports.forEach { report ->
                         TextButton({ selectedReport = report; fullMap = true }) {
-                            Text(LocationReportRowText.detailLine(report, locale, zone, system))
+                            LocationReportText(report, clock.now, locale, zone, system)
                         }
                     }
                     if (fullMap) Dialog(
@@ -132,7 +156,7 @@ internal fun RemoteNodeHistoryRoute(
                                             selectedReport = reports.firstOrNull { it.id == fullPath.reports[marker.id]?.id }
                                         },
                                     )
-                                    selectedReport?.let { Text(LocationReportRowText.detailLine(it, locale, zone, system)) }
+                                    selectedReport?.let { LocationReportText(it, clock.now, locale, zone, system) }
                                 }
                             }
                         }

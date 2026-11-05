@@ -3,7 +3,9 @@ package com.meshcoreone.android.feature.tools.trace
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.TracePathPersisting
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.ContactDTO
+import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.RepeaterResolvable
 import com.meshcoreone.android.core.model.SavedTracePathDTO
@@ -47,6 +49,22 @@ class TracePathStateHolder(
 
     private val recents = RecentHopsStore(recentHopsStorage)
     private var currentRadioId: RadioId? = null
+    private var connectionIdentity: Pair<RadioId?, Int>? = null
+    private var connectionRevision = 0L
+    private var sessionToken: SessionToken? = null
+    private var connectionRetired = false
+    private var pathSelectionRevision = 0L
+    private var historyRefreshSequence = 0L
+    private var publishedHistoryRefresh = 0L
+    private data class BatchSaveProgress(
+        val connectionRevision: Long,
+        val pathRevision: Long,
+        val firstResultId: UUID,
+        val path: SavedTracePathDTO,
+        val runs: MutableMap<UUID, TracePathRunDTO>,
+    )
+    private var batchSaveProgress: BatchSaveProgress? = null
+    private val hashModeActionObservers = linkedSetOf<() -> Unit>()
     internal var deps: TracePathFeatureDependencies = TracePathFeatureDependencies.Disconnected
         private set
 
@@ -71,6 +89,69 @@ class TracePathStateHolder(
     /** Each provider is read live at its point of use. */
     fun configure(dependencies: TracePathFeatureDependencies) {
         deps = dependencies
+        if (connectionIdentity == null && !connectionRetired) sessionToken = dependencies.sessionToken()
+    }
+
+    fun bindConnection(radioId: RadioId?, generation: Int, originatingToken: SessionToken? = deps.sessionToken()) {
+        val identity = radioId to generation
+        if (connectionIdentity == identity && sessionToken == originatingToken) return
+        retireConnection()
+        connectionIdentity = identity
+        connectionRetired = false
+        sessionToken = originatingToken
+        currentRadioId = radioId
+    }
+
+    fun retireConnection() {
+        connectionIdentity = null
+        currentRadioId = null
+        connectionRetired = true
+        connectionRevision += 1
+        stopListening()
+        invalidatePathExecution()
+        clearError()
+        update {
+            it.copy(
+                activeSavedPath = null, result = null, resultID = null, batchPresentationActive = false, batchResultsRetired = true,
+                availableRepeaters = emptyList(), availableRooms = emptyList(), discoveredRepeaters = emptyList(),
+            )
+        }
+    }
+
+    internal fun isConnectionCurrent(device: DeviceDTO? = deps.connectedDevice()): Boolean {
+        if (connectionRetired) return false
+        if (connectionIdentity != null && isLocalDraftCurrent(device)) return false
+        val token = sessionToken
+        val identity = connectionIdentity
+        if (token == deps.sessionToken() &&
+            (identity == null || deps.isOriginatingSessionCurrent(identity.second, token)) &&
+            (token == null || token.radioId == device?.radioId &&
+                (identity == null || identity.first == token.radioId))
+        ) return true
+        retireConnection()
+        return false
+    }
+
+    internal fun isBoundConnectionCurrent(radioId: RadioId?, generation: Int, originatingToken: SessionToken?): Boolean =
+        connectionIdentity == (radioId to generation) && sessionToken == originatingToken && isConnectionCurrent()
+
+    private fun isLocalDraftCurrent(device: DeviceDTO?): Boolean =
+        !connectionRetired && sessionToken == null && connectionIdentity?.first == null &&
+            deps.sessionToken() == null && device == null
+
+    internal fun isEditingCurrent(): Boolean =
+        isLocalDraftCurrent(deps.connectedDevice()) || isConnectionCurrent()
+
+    internal fun isBoundEditingCurrent(radioId: RadioId?, generation: Int, originatingToken: SessionToken?): Boolean =
+        connectionIdentity == (radioId to generation) && sessionToken == originatingToken && isEditingCurrent()
+
+    internal fun observeHashModeActions(onAction: () -> Unit): () -> Unit {
+        hashModeActionObservers += onAction
+        return { hashModeActionObservers -= onAction }
+    }
+
+    private fun notifyHashModeAction() {
+        hashModeActionObservers.toList().forEach { it() }
     }
 
     internal fun update(transform: (TracePathState) -> TracePathState) = mutableState.update(transform)
@@ -81,9 +162,12 @@ class TracePathStateHolder(
     fun startListening() {
         traceEventsJob?.cancel()
         val events = deps.traceResponses() ?: return
+        val revision = connectionRevision
         traceEventsJob = scope.launch {
             try {
-                events.collect { handleTraceResponse(it.traceInfo, it.radioId) }
+                events.collect {
+                    if (connectionRevision == revision && isConnectionCurrent()) handleTraceResponse(it.traceInfo, it.radioId)
+                }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -122,12 +206,15 @@ class TracePathStateHolder(
     internal fun resolver(snapshot: TracePathState = current) = TraceNodeResolver(snapshot, deps.bestAvailableLocation())
 
     suspend fun loadContacts(radioId: RadioId) {
+        if (!isConnectionCurrent()) return
+        val revision = connectionRevision
         currentRadioId = radioId
         update { it.copy(recentPublicKeys = recents.load(radioId)) }
         if (deps.connectedDevice()?.supportsTraceHashSizeOverride != true) update { it.copy(traceHashMode = null) }
         val directory = deps.nodeDirectory() ?: return
         try {
             val contacts = directory.fetchContacts(radioId)
+            if (connectionRevision != revision || !isConnectionCurrent()) return
             update { state ->
                 state.copy(
                     availableRepeaters = contacts.filter { it.type == ContactType.REPEATER },
@@ -135,26 +222,51 @@ class TracePathStateHolder(
                 )
             }
             val nodes = directory.fetchDiscoveredNodes(radioId)
+            if (connectionRevision != revision || !isConnectionCurrent()) return
             update { state -> state.copy(discoveredRepeaters = nodes.filter { it.nodeType == ContactType.REPEATER }) }
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
             diagnostics.failure("loadContacts", error)
-            update { it.copy(availableRepeaters = emptyList(), availableRooms = emptyList(), discoveredRepeaters = emptyList()) }
+            if (connectionRevision == revision && isConnectionCurrent()) {
+                update { it.copy(availableRepeaters = emptyList(), availableRooms = emptyList(), discoveredRepeaters = emptyList()) }
+            }
         }
     }
 
     // MARK: - Path editing
 
+    private fun invalidatePathExecution() {
+        pathSelectionRevision += 1
+        batch.cancelBatchTrace()
+    }
+
     fun addNode(node: RepeaterResolvable) {
+        val size = acceptedHashSize() ?: return
+        appendNode(node, size)
+    }
+
+    private fun acceptedHashSize(): Int? {
+        val device = deps.connectedDevice()
+        val size = TraceHashModes.hashSize(current.traceHashMode ?: device?.pathHashMode ?: 0u)
+        return size.takeIf { isConnectionCurrent(device) }
+    }
+
+    private fun appendNode(node: RepeaterResolvable, size: Int) {
         clearError()
-        val hop = TracePathEditing.hopFor(node, hashSize)
-        pendingPathHash = null
+        val hop = TracePathEditing.hopFor(node, size)
+        invalidatePathExecution()
         update { it.copy(outboundPath = it.outboundPath + hop, activeSavedPath = null, result = null, batchPresentationActive = false) }
     }
 
     /** Uniform-width rebuild for a per-trace override; the flags byte declares one size for the path. */
     fun setTraceHashMode(mode: UByte) {
+        notifyHashModeAction()
+        applyTraceHashMode(mode)
+    }
+
+    private fun applyTraceHashMode(mode: UByte) {
+        invalidatePathExecution()
         clearError()
         update { it.copy(traceHashMode = mode) }
         val size = hashSize
@@ -166,13 +278,15 @@ class TracePathStateHolder(
 
     /** Adds every resolvable code; shares [HopCodeParser] with the bulk-add preview. */
     fun addRepeatersFromCodes(input: String): CodeInputResult {
+        val radioId = currentRadioId
+        val size = acceptedHashSize() ?: return CodeInputResult()
         var result = CodeInputResult()
         val appended = ArrayList<TracePathHop>()
-        for (entry in classifyCodes(input)) {
+        for (entry in classifyCodes(input, size)) {
             when (val status = entry.status) {
                 is HopCodeStatus.WillAdd -> {
                     appended += status.hop
-                    status.hop.publicKey?.let(::recordRecent)
+                    status.hop.publicKey?.let { recordRecent(it, radioId) }
                     result = result.copy(added = result.added + entry.code)
                 }
                 HopCodeStatus.AlreadyInPath -> result = result.copy(alreadyInPath = result.alreadyInPath + entry.code)
@@ -184,7 +298,7 @@ class TracePathStateHolder(
         }
         update { it.copy(outboundPath = it.outboundPath + appended) }
         if (result.added.isNotEmpty()) {
-            pendingPathHash = null
+            invalidatePathExecution()
             update { it.copy(activeSavedPath = null, result = null, batchPresentationActive = false) }
             clearError()
         }
@@ -194,17 +308,19 @@ class TracePathStateHolder(
     fun removeRepeater(index: Int) {
         clearError()
         if (index !in current.outboundPath.indices) return
-        pendingPathHash = null
+        invalidatePathExecution()
         update {
             it.copy(outboundPath = it.outboundPath.filterIndexed { i, _ -> i != index }, activeSavedPath = null, result = null, batchPresentationActive = false)
         }
     }
 
     fun moveRepeater(fromOffsets: Set<Int>, toOffset: Int) {
+        val moved = TracePathEditing.move(current.outboundPath, fromOffsets, toOffset)
+        if (moved == current.outboundPath) return
         clearError()
-        pendingPathHash = null
+        invalidatePathExecution()
         update {
-            it.copy(outboundPath = TracePathEditing.move(it.outboundPath, fromOffsets, toOffset), activeSavedPath = null, result = null, batchPresentationActive = false)
+            it.copy(outboundPath = moved, activeSavedPath = null, result = null, batchPresentationActive = false)
         }
     }
 
@@ -213,9 +329,22 @@ class TracePathStateHolder(
     /** "Tower", "Tower → Ridge", "Tower → ... → Ridge", or "Path <hex>" when nothing resolved. */
     fun generatePathName(): String = TracePathEditing.pathName(current.outboundPath, current.fullPathString, strings)
 
-    fun setAutoReturnPath(enabled: Boolean) = update { it.copy(autoReturnPath = enabled) }
+    fun setAutoReturnPath(enabled: Boolean) {
+        if (current.autoReturnPath == enabled) return
+        if (current.fullPathData == current.copy(autoReturnPath = enabled).fullPathData) {
+            update { it.copy(autoReturnPath = enabled) }
+            return
+        }
+        invalidatePathExecution()
+        clearError()
+        update {
+            it.copy(autoReturnPath = enabled, activeSavedPath = null, result = null, batchPresentationActive = false)
+        }
+    }
 
     fun clearPath() {
+        invalidatePathExecution()
+        notifyHashModeAction()
         clearError()
         pendingPathHash = null
         update { it.copy(activeSavedPath = null, outboundPath = emptyList(), result = null, traceHashMode = null, batchPresentationActive = false) }
@@ -225,11 +354,16 @@ class TracePathStateHolder(
 
     /** Restores a saved path at its saved width; a mirrored palindrome turns auto-return on. */
     fun loadSavedPath(savedPath: SavedTracePathDTO) {
+        val device = deps.connectedDevice()
+        if (!isConnectionCurrent(device)) return
+        if (connectionIdentity != null && device?.radioId != savedPath.radioId) return
+        invalidatePathExecution()
+        notifyHashModeAction()
         pendingPathHash = null
         update { it.copy(outboundPath = emptyList(), result = null, batchPresentationActive = false) }
         if (savedPath.pathBytes.isEmpty) return
         val size = savedPath.hashSize.coerceIn(1L, Int.MAX_VALUE.toLong()).toInt()
-        val mode = if (deps.connectedDevice()?.supportsTraceHashSizeOverride == true) {
+        val mode = if (device?.supportsTraceHashSizeOverride == true) {
             java.lang.Long.numberOfTrailingZeros(savedPath.hashSize).toUByte()
         } else {
             null
@@ -248,23 +382,31 @@ class TracePathStateHolder(
     }
 
     fun handleSavedPathDeleted(id: UUID) {
+        if (batchSaveProgress?.path?.id == id) batchSaveProgress = null
         if (current.activeSavedPath?.id != id) return
+        pathSelectionRevision += 1
         update { it.copy(activeSavedPath = null) }
     }
 
     /** Saves the current (or batch's first successful) result; batch mode appends the other runs. */
     suspend fun savePath(name: String): Boolean {
-        val radioId = deps.connectedDevice()?.radioId ?: return false
-        val store = deps.savedPaths() ?: return false
+        val device = deps.connectedDevice() ?: return false
+        val radioId = device.radioId
         val snapshot = current
+        if (!isConnectionCurrent(device)) return false
+        if (snapshot.batchEnabled && snapshot.batchResultsRetired) return false
+        val store = deps.savedPaths() ?: return false
+        val revision = pathSelectionRevision
         if (snapshot.batchEnabled && snapshot.completedResults.isNotEmpty()) {
             val firstSuccess = snapshot.successfulResults.firstOrNull() ?: return false
-            return persistBatch(store, radioId, name, firstSuccess, snapshot.completedResults)
+            return persistBatch(store, radioId, name, firstSuccess, snapshot.completedResults, firstSuccess.hashSize.toLong(), revision)
         }
         val result = snapshot.result?.takeIf { it.success } ?: return false
         return try {
-            val saved = store.createSavedTracePath(radioId, name, result.tracedPathBytes, hashSize.toLong(), run(result, time.now()))
-            update { it.copy(activeSavedPath = saved) }
+            val saved = store.createSavedTracePath(radioId, name, result.tracedPathBytes, result.hashSize.toLong(), run(result, time.now()))
+            if (pathSelectionRevision == revision && isConnectionCurrent() && deps.connectedDevice()?.radioId == radioId) {
+                update { it.copy(activeSavedPath = saved) }
+            }
             true
         } catch (error: CancellationException) {
             throw error
@@ -280,15 +422,56 @@ class TracePathStateHolder(
         name: String,
         firstSuccess: TraceResult,
         results: List<TraceResult>,
+        size: Long,
+        revision: Long,
     ): Boolean = try {
-        val saved = store.createSavedTracePath(radioId, name, firstSuccess.tracedPathBytes, hashSize.toLong(), run(firstSuccess, time.now()))
-        val key = EntityKey(radioId, saved.id)
-        results.forEachIndexed { index, batchResult ->
-            if (batchResult.id != firstSuccess.id) {
-                store.appendTracePathRun(key, run(batchResult, time.now().plusSeconds(index.toLong())))
+        val requestConnection = connectionRevision
+        val previous = batchSaveProgress?.takeIf {
+            it.connectionRevision == requestConnection && it.pathRevision == revision &&
+                it.firstResultId == firstSuccess.id && it.path.radioId == radioId
+        }
+        val progress = previous ?: kotlin.run {
+            val initialRun = run(firstSuccess, time.now())
+            val saved = store.createSavedTracePath(radioId, name, firstSuccess.tracedPathBytes, size, initialRun)
+            BatchSaveProgress(requestConnection, revision, firstSuccess.id, saved, mutableMapOf(firstSuccess.id to initialRun)).also {
+                if (connectionRevision == requestConnection && pathSelectionRevision == revision) batchSaveProgress = it
             }
         }
-        store.fetchSavedTracePath(key)?.let { updated -> update { it.copy(activeSavedPath = updated) } }
+        val key = EntityKey(radioId, progress.path.id)
+        suspend fun storedPath(): SavedTracePathDTO =
+            store.fetchSavedTracePath(key) ?: kotlin.run {
+                if (batchSaveProgress === progress) batchSaveProgress = null
+                error("Created trace path is missing")
+            }
+        val stored = storedPath()
+        if (stored.name != name) store.updateSavedTracePathName(key, name)
+        val persisted = stored.runs.mapTo(mutableSetOf()) { it.id }
+        var acceptedResults = results
+        fun isSameBatch(): Boolean =
+            connectionRevision == requestConnection && pathSelectionRevision == revision &&
+                current.completedResults.take(results.size) == results &&
+                isConnectionCurrent() && deps.connectedDevice()?.radioId == radioId
+        while (true) {
+            if (isSameBatch()) acceptedResults = current.completedResults
+            acceptedResults.forEachIndexed { index, batchResult ->
+                val savedRun = progress.runs.getOrPut(batchResult.id) {
+                    run(batchResult, time.now().plusSeconds(index.toLong()))
+                }
+                if (savedRun.id !in persisted) {
+                    store.appendTracePathRun(key, savedRun)
+                    persisted += savedRun.id
+                }
+            }
+            val updated = storedPath()
+            val storedRunIds = updated.runs.mapTo(mutableSetOf()) { it.id }
+            check(storedRunIds.containsAll(persisted)) { "Saved trace runs are missing" }
+            if (isSameBatch()) {
+                if (current.completedResults.any { it.id !in progress.runs }) continue
+                update { it.copy(activeSavedPath = updated) }
+            }
+            break
+        }
+        if (batchSaveProgress === progress) batchSaveProgress = null
         true
     } catch (error: CancellationException) {
         throw error
@@ -324,14 +507,32 @@ class TracePathStateHolder(
     /** Appends a run to the saved path in the background and refreshes the active reference. */
     internal fun appendRunInBackground(savedPath: SavedTracePathDTO, run: TracePathRunDTO) {
         val store = deps.savedPaths() ?: return
-        scope.launch { appendRun(store, savedPath, run) }
+        val revision = pathSelectionRevision
+        scope.launch { appendRun(store, savedPath, run, revision) }
     }
 
-    internal suspend fun appendRun(store: TracePathPersisting, savedPath: SavedTracePathDTO, run: TracePathRunDTO) {
+    internal suspend fun appendRun(
+        store: TracePathPersisting,
+        savedPath: SavedTracePathDTO,
+        run: TracePathRunDTO,
+        revision: Long = pathSelectionRevision,
+    ) {
         val key = EntityKey(savedPath.radioId, savedPath.id)
         try {
             store.appendTracePathRun(key, run)
-            store.fetchSavedTracePath(key)?.let { updated -> update { it.copy(activeSavedPath = updated) } }
+            val refresh = ++historyRefreshSequence
+            store.fetchSavedTracePath(key)?.let { updated ->
+                if (pathSelectionRevision != revision || !isConnectionCurrent()) return
+                update {
+                    val active = it.activeSavedPath
+                    if (pathSelectionRevision == revision && refresh > publishedHistoryRefresh &&
+                        active != null && active.id == key.id && active.radioId == key.radioId
+                    ) {
+                        publishedHistoryRefresh = refresh
+                        it.copy(activeSavedPath = updated)
+                    } else it
+                }
+            }
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
@@ -356,6 +557,8 @@ class TracePathStateHolder(
 
     /** Turning batch mode off clears batch progress and results (the source's `didSet`). */
     fun setBatchEnabled(enabled: Boolean) {
+        if (current.batchEnabled == enabled) return
+        if (current.isRunning) batch.cancelBatchTrace()
         update { it.copy(batchEnabled = enabled) }
         if (!enabled) clearBatchState()
     }
@@ -372,29 +575,67 @@ class TracePathStateHolder(
     val isPathFull: Boolean get() = false
 
     fun appendHop(node: RepeaterResolvable) {
-        addNode(node)
-        recordRecent(node.publicKey)
+        val radioId = currentRadioId
+        val size = acceptedHashSize() ?: return
+        appendNode(node, size)
+        recordRecent(node.publicKey, radioId)
     }
 
     fun addCodes(input: String): CodeInputResult = addRepeatersFromCodes(input)
 
-    fun classifyCodes(input: String): List<HopCodeClassification> {
+    fun classifyCodes(input: String): List<HopCodeClassification> = classifyCodes(input, hashSize)
+
+    private fun classifyCodes(input: String, size: Int): List<HopCodeClassification> {
         val resolver = resolver()
-        return HopCodeParser.classify(input, hashSize, current.outboundPath.map { it.hashBytes }.toSet(), null) { hash ->
+        return HopCodeParser.classify(input, size, current.outboundPath.map { it.hashBytes }.toSet(), null) { hash ->
             resolver.resolve(hash)?.let { ResolvedHopCode(it.publicKey, it.resolvableName) }
         }
     }
 
-    /** Switches to a pasted uniform width the radio can honor, unless it already matches. */
+    /** Accepts a supported uniform-width paste; rebuilds the path only when its width changes. */
     fun adoptHashSize(forPastedCodes: String) {
-        if (deps.connectedDevice()?.supportsTraceHashSizeOverride != true) return
+        if (!supportsTraceHashOverride) return
         val mode = TraceHashModes.inferredTraceHashMode(forPastedCodes) ?: return
-        if (mode == effectiveTraceMode) return
-        setTraceHashMode(mode)
+        notifyHashModeAction()
+        applySupportedTraceHashMode(mode, preserveOverride = false)
+    }
+
+    internal fun restoreTraceHashMode(mode: UByte, expectedRadioId: RadioId? = null): Boolean {
+        val device = deps.connectedDevice() ?: return false
+        if (expectedRadioId != null && device.radioId != expectedRadioId) return false
+        if (device.supportsTraceHashSizeOverride) {
+            applySupportedTraceHashMode(
+                mode,
+                preserveOverride = true,
+                effectiveMode = current.traceHashMode ?: device.pathHashMode,
+            )
+        }
+        return true
+    }
+
+    private val supportsTraceHashOverride: Boolean
+        get() = deps.connectedDevice()?.supportsTraceHashSizeOverride == true
+
+    private fun applySupportedTraceHashMode(
+        mode: UByte,
+        preserveOverride: Boolean,
+        effectiveMode: UByte = effectiveTraceMode,
+    ) {
+        if (mode != effectiveMode) {
+            applyTraceHashMode(mode)
+        } else if (preserveOverride && current.traceHashMode != mode) {
+            update { it.copy(traceHashMode = mode) }
+        }
     }
 
     fun recordRecent(publicKey: Bytes) {
         val radioId = currentRadioId ?: return
+        if (!isConnectionCurrent()) return
+        recordRecent(publicKey, radioId)
+    }
+
+    private fun recordRecent(publicKey: Bytes, radioId: RadioId?) {
+        if (radioId == null) return
         val updated = recents.record(publicKey, current.recentPublicKeys, radioId)
         update { it.copy(recentPublicKeys = updated) }
     }
@@ -403,6 +644,7 @@ class TracePathStateHolder(
 
     internal fun setPendingTagForTesting(tag: UInt) {
         pendingTag = tag
+        batch.seedPendingModeForTesting()
     }
 
     internal fun setPendingDeviceIdForTesting(radioId: RadioId?) {

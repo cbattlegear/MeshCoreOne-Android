@@ -147,6 +147,7 @@ class CliToolStateHolder(
     }
 
     fun startCountdown(seconds: Int) {
+        stopCountdown()
         update { it.copy(remainingSeconds = seconds) }
         countdownJob = scope.launch {
             var remaining = seconds
@@ -254,6 +255,7 @@ class CliToolStateHolder(
     override fun cancelCurrentCommand() {
         currentCommandJob?.cancel()
         currentCommandJob = null
+        stopCountdown()
         // A pending confirmation has no running job, so it must be cleared here.
         if (state.value.pendingConfirmation != null) {
             update { it.copy(pendingConfirmation = null) }
@@ -265,6 +267,8 @@ class CliToolStateHolder(
             appendOutput(text.string(AppToolsStrings.toolsCliCancelled), CliOutputType.ERROR)
         }
     }
+
+    internal fun ownsCommand(job: Job): Boolean = currentCommandJob === job
 
     /** Only the job still owning the current-command slot may clear the busy flag. */
     private fun clearWaitingIfCurrent(job: Job) {

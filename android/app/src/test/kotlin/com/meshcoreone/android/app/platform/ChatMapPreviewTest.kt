@@ -220,7 +220,10 @@ class ChatMapPreviewTest : RoomProcessTest() {
         }) {
             mount(message)
             compose.onNodeWithTag("chat-map-loading", useUnmergedTree = true).assertIsDisplayed()
-            compose.waitUntil(10_000) { firstStarted.isCompleted }
+            compose.waitUntil(10_000) {
+                compose.waitForIdle()
+                firstStarted.isCompleted
+            }
             assertEquals(1, requests.size)
             compose.runOnIdle { content.trimMemory() }
             compose.onNodeWithTag("chat-map-loading", useUnmergedTree = true).assertIsDisplayed()
@@ -232,6 +235,33 @@ class ChatMapPreviewTest : RoomProcessTest() {
             }
             assertEquals(requests.first(), requests.last())
             compose.onNodeWithTag("chat-map-loading", useUnmergedTree = true).assertDoesNotExist()
+        }
+    }
+
+    @Test fun rendererEntrySynchronizationDoesNotCompleteTheHeldRender() = runTest {
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Bitmap?>()
+        withFixture(render = {
+            started.complete(Unit)
+            release.await()
+        }) {
+            mount(message)
+            compose.waitUntil(10_000) {
+                compose.waitForIdle()
+                started.isCompleted
+            }
+            assertEquals(1, requests.size)
+            assertFalse(release.isCompleted)
+            assertFalse(previews.snapshots.isResolved(requests.single()))
+            compose.onNodeWithTag("chat-map-loading", useUnmergedTree = true).assertIsDisplayed()
+            compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).assertDoesNotExist()
+            compose.runOnIdle { release.complete(bitmap()) }
+            compose.waitUntil(10_000) {
+                compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).isDisplayed()
+            }
+            compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).assertIsDisplayed()
+            compose.onNodeWithTag("chat-map-loading", useUnmergedTree = true).assertDoesNotExist()
+            assertEquals(1, requests.size)
         }
     }
 
@@ -280,6 +310,9 @@ class ChatMapPreviewTest : RoomProcessTest() {
             }
             compose.onNodeWithTag("chat-map-loading", useUnmergedTree = true).assertDoesNotExist()
             compose.onNodeWithContentDescription(retry, useUnmergedTree = true).performClick()
+            compose.waitUntil(10_000) {
+                compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).isDisplayed()
+            }
             compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).assertIsDisplayed()
             assertEquals(2, requests.size)
         }

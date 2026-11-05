@@ -25,6 +25,11 @@ class ChatTextMatchingTest {
             Triple("strasse", "Straße", true), Triple("ａlice", "alice", false), Triple("Alice", "ａ", false),
             Triple("İstanbul", "istanbul", true), Triple("Ångström", "angstrom", true), Triple("Alice", "ALI", true),
             Triple("a b", "a  b", false), Triple("alice", "", false),
+            Triple("straße", "stras", false), Triple("ﬁle", "f", false), Triple("한글", "하", false),
+            Triple("strasse", "straß", true), Triple("ﬁle", "fi", true),
+            Triple("Σίσυφος", "σισυφοσ", true), Triple("１２", "12", true),
+            Triple("👨‍👩‍👧", "👨", true), Triple("ıstanbul", "istanbul", false),
+            Triple("\u1e9e", "ss", true),
         )
         for ((haystack, needle, expected) in cases) assertEquals(expected, ChatTextMatching.standardContains(haystack, needle), "$haystack contains $needle")
     }

@@ -26,6 +26,9 @@ import com.meshcoreone.android.feature.chats.composer.ui.recoveredDraftLabels
 import com.meshcoreone.android.feature.chats.composer.ui.RecoveredDraftList
 import com.meshcoreone.android.feature.chats.composer.ui.RecoveryContinuityLabels
 import com.meshcoreone.android.feature.chats.composer.ui.RecoveryContinuityNotice
+import com.meshcoreone.android.feature.chats.composer.ui.UnboundRecoveryKey
+import com.meshcoreone.android.feature.chats.composer.ui.UnboundRecoveryText
+import com.meshcoreone.android.feature.chats.composer.ui.UnboundRecoveryList
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.ui.UiText
 import java.time.Instant
@@ -60,6 +63,62 @@ class ChannelDraftRecoveryAdapterTest : RoomProcessTest() {
         text = "  original \u4e2d\uD83D\uDE80 $id  ", timestamp = 100u,
         createdAt = Instant.ofEpochSecond(id), channelOccupantID = origin, status = MessageStatus.FAILED,
     )
+
+    @Test fun mountedNoRouteInventoryRequiresExactEntryAndIndependentDestinationBeforeCopy() {
+        val host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
+        host.get().actionBar?.hide()
+        host.windowFocusChanged(true)
+        val storeId = UUID(0, 100)
+        val recordId = UUID(0, 101)
+        val first = UnboundRecoveryText(UnboundRecoveryKey(storeId, recordId, 1), "  original \u4e2d\uD83D\uDE80  ")
+        val second = UnboundRecoveryText(UnboundRecoveryKey(storeId, recordId, 2), "changed text, separate record")
+        val records = mutableStateOf(listOf(first, second))
+        val selected = mutableStateOf<UnboundRecoveryKey?>(null)
+        val destination = mutableStateOf<UiText?>(null)
+        val failure = mutableStateOf<UiText?>(null)
+        val copies = mutableListOf<UnboundRecoveryKey>()
+        try {
+            host.get().setContent {
+                MeshCoreTheme {
+                    CompositionLocalProvider(LocalDensity provides Density(1f, 2f)) {
+                        UnboundRecoveryList(
+                            records = records.value, selected = selected.value,
+                            labels = recoveredDraftLabels(),
+                            unboundWarning = UiText.Verbatim("No authenticated destination. Copy only; delivery may be uncertain."),
+                            destinationLabel = destination.value, working = false, failure = failure.value,
+                            onSelect = { selected.value = it },
+                            onRefresh = {},
+                            onChooseChat = { destination.value = UiText.Verbatim("User-selected chat") },
+                            onCopy = { copies += checkNotNull(selected.value) },
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                }
+            }
+            fun node(text: String): SemanticsNodeInteraction {
+                compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText(text))
+                return compose.onNodeWithText(text)
+            }
+            node("Copy to selected chat").assertIsNotEnabled()
+            node(second.exactText).performClick()
+            assertEquals(second.key, selected.value)
+            node("Copy to selected chat").assertIsNotEnabled()
+            node("Choose chat").performClick()
+            assertTrue(copies.isEmpty())
+            node("Copy to selected chat").performClick()
+            assertEquals(listOf(second.key), copies)
+            assertEquals(listOf(first, second), records.value)
+            compose.runOnIdle {
+                records.value = listOf(first)
+                failure.value = UiText.Verbatim("Selected original no longer available. Refresh before copying.")
+            }
+            node("Copy to selected chat").assertIsNotEnabled()
+            node("Selected original no longer available. Refresh before copying.").assertIsDisplayed()
+            assertEquals(listOf(second.key), copies)
+        } finally {
+            host.pause().stop().destroy()
+        }
+    }
 
     @Test fun mountedLossAwareNoticeRequiresAcknowledgmentAndProducerReadiness() {
         val host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()

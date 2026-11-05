@@ -2,6 +2,26 @@
 
 ## Recovery-list consumer preparation (not activated)
 
+The immutable notification storage source
+`e3f3c451fcb294aae68457e949677ac4a1cfa9b2` supplies a no-route
+`CopyText(storeId, recordId, sequence, exactText)` projection through
+`readCopyOnly()`. It is inspected, not imported or activated here.
+`UnboundRecoveryList` independently presents precisely those display fields
+without a MessageDTO, radio, recipient, issued-token or outgoing-message ID.
+Its full three-part key does not turn an observed store ID into trust.
+Selection must still exist in the supplied inventory, and copy requires a
+separately selected destination. Errors remain visible; storage failures
+must not be supplied as empty-success inventories by the future adapter.
+The feature-local display value is not a canonical persistence contract.
+
+An authored mounted 200%-font content control distinguishes sequence identity,
+preserves exact displayed text, requires independent destination selection and
+explicit copy, leaves the input records unchanged, and disables copy when a
+selected source disappears. Its callbacks are fixture-owned; no actual journal
+read, copy mutation or enrollment is exercised. Android execution is unclaimed.
+The future route must reread the actual whole projection and match full identity
+and content before atomically protecting the destination draft.
+
 `RecoveryContinuityNotice` is separately authored stateless Material content
 for the coordinator-proposed loss-aware new-action-generation acknowledgment.
 It is not a user-selected product decision or an activated enrollment flow.

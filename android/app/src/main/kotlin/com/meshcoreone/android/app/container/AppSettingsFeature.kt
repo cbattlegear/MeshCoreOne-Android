@@ -324,7 +324,6 @@ class AppSettingsFeature private constructor(
     }
 
     internal fun selectSelectionScanDevice(id: UUID) {
-        selectionScanOwned = false
         requireNotNull(container.onboarding?.pairing?.scanFallback).select(id)
     }
 
@@ -332,13 +331,14 @@ class AppSettingsFeature private constructor(
         requestSelectionPermission(SelectionAction.Setup(accessory))
 
     private fun startDeviceSetup(accessory: SystemPairedAccessory) {
+        selectionVisible.value = false
         app.connectionUI.queuedDeviceScanAfterSelectionDismiss = false
         app.connectionUI.queuedSystemPairingSetup =
             com.meshcoreone.android.core.connectivity.pairing.SystemPairingSetupPrompt(
                 listOf(com.meshcoreone.android.core.connectivity.pairing.SystemPairedAccessory(accessory.id, accessory.name)),
             )
         container.connectionPort.isPairingFlowActive = true
-        if (!selectionVisible.value) app.handleDeviceSelectionSheetDismissed()
+        app.handleDeviceSelectionSheetDismissed()
     }
 
     private fun live(): RadioSessionContainer = container.sessions.current?.takeIf {

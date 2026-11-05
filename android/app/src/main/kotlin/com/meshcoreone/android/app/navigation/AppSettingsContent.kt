@@ -231,6 +231,11 @@ internal fun AppSettingsSelectionHost(feature: AppSettingsFeature) {
     val deviceSelection by feature.selectionVisible.collectAsState()
     val wifiConnection by feature.selectionWifiVisible.collectAsState()
     val error by feature.failure.collectAsState()
+    DisposableEffect(feature, deviceSelection) {
+        onDispose {
+            if (deviceSelection) feature.selectionSheetDismissed()
+        }
+    }
     if (error != null) AlertDialog(onDismissRequest = { feature.failure.value = null },
         text = { Text(uiString(UiErrorMapper().message(requireNotNull(error)))) },
         confirmButton = { TextButton(onClick = { feature.failure.value = null }) { Text(stringResource(L.commonOk)) } })
@@ -255,9 +260,6 @@ private fun AppDeviceSelection(feature: AppSettingsFeature, onDismiss: () -> Uni
             feature.report("Saved devices could not load", problem)
             onDismiss()
         }
-    }
-    DisposableEffect(feature) {
-        onDispose { feature.selectionSheetDismissed() }
     }
     val loaded = list
     if (loaded == null) {

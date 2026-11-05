@@ -20,7 +20,9 @@ import com.meshcoreone.android.core.connectivity.permissions.ConnectivityPermiss
 import com.meshcoreone.android.core.connectivity.pairing.BluetoothScanPairingService
 import com.meshcoreone.android.core.connectivity.pairing.BluetoothEndpoint
 import com.meshcoreone.android.core.connectivity.pairing.DeviceEndpointIdentity
+import com.meshcoreone.android.core.connectivity.pairing.EndpointStability
 import com.meshcoreone.android.core.connectivity.pairing.DevicePairingService
+import com.meshcoreone.android.core.connectivity.pairing.InMemoryKnownEndpointStore
 import com.meshcoreone.android.core.connectivity.pairing.KnownEndpointStore
 import com.meshcoreone.android.core.connectivity.ble.BleScanCoordinator
 import com.meshcoreone.android.core.connectivity.ble.BleScanGateway
@@ -58,9 +60,12 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.onStart
 import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
@@ -96,6 +101,37 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         override fun onActivityResult(activity: android.app.Activity, requestCode: Int, resultCode: Int, data: android.content.Intent?) = false
 
         fun takeRequest(): PermissionDialogRequest = requireNotNull(request).also { request = null }
+    }
+
+    private class HeldKnownEndpointStore(
+        private val heldDeviceId: UUID,
+        private val failureAfterRelease: Exception? = null,
+    ) : KnownEndpointStore {
+        private val delegate = InMemoryKnownEndpointStore()
+        val firstWrite = CompletableDeferred<BluetoothEndpoint>()
+        val releaseFirstWrite = CompletableDeferred<Unit>()
+        val rolledBack = CompletableDeferred<Unit>()
+
+        override suspend fun endpoint(deviceId: UUID): BluetoothEndpoint? = delegate.endpoint(deviceId)
+        override suspend fun remember(endpoint: BluetoothEndpoint) =
+            remember(endpoint, DeviceEndpointIdentity.stability(endpoint.address, bonded = false))
+
+        override suspend fun remember(endpoint: BluetoothEndpoint, stability: EndpointStability) {
+            if (endpoint.deviceId == heldDeviceId && firstWrite.complete(endpoint)) {
+                withContext(NonCancellable) {
+                    releaseFirstWrite.await()
+                    delegate.remember(endpoint, stability)
+                    failureAfterRelease?.let { throw it }
+                }
+            } else {
+                delegate.remember(endpoint, stability)
+            }
+        }
+
+        override suspend fun forget(deviceId: UUID) {
+            delegate.forget(deviceId)
+            if (deviceId == heldDeviceId) rolledBack.complete(Unit)
+        }
     }
 
     private var localNetworkDialog: LocalNetworkPermissionDialog? = null
@@ -505,6 +541,9 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             assertNull(h.appState.connectionUI.queuedSystemPairingSetup)
             assertEquals(0, h.pairing.removeCalls)
             assertEquals(setOf(selected, other), h.pairing.registered.keys)
+            h.eventuallyMounted("setup requests CONNECT before showing confirmation") {
+                feature.selectionRequestedPermission.value == OnboardingPermissionKind.BLUETOOTH
+            }
             permissionResult(facts, grant, setOf(ConnectivityPermission.BLUETOOTH_CONNECT))
             if (!grant) {
                 permissionSettingsButton().assertIsDisplayed()
@@ -977,6 +1016,133 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             compose.waitForIdle()
             h.eventually("fallback scan released after selection") { stopped && !h.container.connectionPort.isPairingFlowActive }
             assertEquals(AppTab.SETTINGS, h.container.navigation.state.value.selectedTab)
+        }
+    }
+
+    @Test fun fallbackDiscoverySharesOneScanAcrossConcurrentSettingsCollectors() = runTest {
+        val service = BluetoothScanPairingService()
+        var starts = 0
+        var stops = 0
+        val scans = BleScanCoordinator(object : BleScanGateway {
+            override fun startScan(onDevice: (DiscoveredDevice) -> Unit, onFailure: (Throwable) -> Unit) { starts++ }
+            override fun stopScan() { stops++ }
+        })
+        withSettings(pairingService = service, scans = scans) { h, feature ->
+            mount(h, feature)
+            open(h)
+            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            compose.waitForIdle()
+            h.eventually("first Settings collector starts fallback scan") { starts == 1 }
+
+            val duplicateStarted = CompletableDeferred<Unit>()
+            val duplicate = backgroundScope.launch {
+                requireNotNull(h.container.onboarding?.pairing?.scanFallback).discoveries()
+                    .onStart { duplicateStarted.complete(Unit) }
+                    .collect {}
+            }
+            withTimeout(5_000) { duplicateStarted.await() }
+            h.settle()
+            assertEquals(1, starts)
+
+            duplicate.cancelAndJoin()
+            assertEquals(0, stops)
+            compose.onNodeWithText(compose.activity.getString(L.commonCancel)).performClick()
+            h.eventually("last Settings collector stops fallback scan") {
+                !service.isPresenting.value && stops == 1
+            }
+        }
+    }
+
+    @Test fun cancelledDiscoveryCannotResolveOrCancelItsReplacementAfterHeldWriteFails() = runTest {
+        val service = BluetoothScanPairingService()
+        val firstAddress = "C2:00:00:00:00:01"
+        val firstId = DeviceEndpointIdentity.deviceId(firstAddress)
+        val replacementAddress = "D2:00:00:00:00:02"
+        val replacementId = DeviceEndpointIdentity.deviceId(replacementAddress)
+        val endpoints = HeldKnownEndpointStore(firstId, IllegalStateException("late first write failure"))
+        var starts = 0
+        var stops = 0
+        val scans = BleScanCoordinator(object : BleScanGateway {
+            override fun startScan(onDevice: (DiscoveredDevice) -> Unit, onFailure: (Throwable) -> Unit) {
+                starts++
+                if (starts == 1) onDevice(DiscoveredDevice(firstId, firstAddress, "First radio", -40))
+                else onDevice(DiscoveredDevice(replacementId, replacementAddress, "Replacement radio", -41))
+            }
+            override fun stopScan() { stops++ }
+        })
+        withSettings(pairingService = service, scans = scans, knownEndpoints = endpoints) { h, feature ->
+            mount(h, feature)
+            open(h)
+            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            h.eventuallyMounted("first discovery is selectable") {
+                compose.onAllNodesWithText("First radio").fetchSemanticsNodes().size == 1
+            }
+            compose.onNodeWithText("First radio").performClick()
+            h.eventually("first endpoint write is held") { endpoints.firstWrite.isCompleted }
+            assertEquals(BluetoothEndpoint(firstId, firstAddress, null), endpoints.firstWrite.await())
+
+            compose.onNodeWithText(compose.activity.getString(L.commonCancel)).performClick()
+            h.eventually("first pairing and scan are cancelled") {
+                !service.isPresenting.value && !h.container.connectionPort.isPairingFlowActive &&
+                    stops == 1 && feature.selectionScanJob?.isCompleted == true
+            }
+            open(h)
+            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            h.eventuallyMounted("replacement discovery is active") {
+                service.isPresenting.value &&
+                    compose.onAllNodesWithText("Replacement radio").fetchSemanticsNodes().size == 1
+            }
+            assertEquals(2, starts)
+
+            endpoints.releaseFirstWrite.complete(Unit)
+            h.eventually("late endpoint write rolled back") { endpoints.rolledBack.isCompleted }
+            endpoints.rolledBack.await()
+            h.settle()
+            assertTrue(service.isPresenting.value)
+            assertNull(endpoints.endpoint(firstId))
+            assertTrue(h.links.links.isEmpty())
+            compose.onNodeWithText("Replacement radio").performClick()
+            h.eventually("replacement radio connects") {
+                h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
+            }
+            assertEquals(replacementId, h.manager.connectedDevice?.id)
+            assertEquals(BluetoothEndpoint(replacementId, replacementAddress, null), endpoints.endpoint(replacementId))
+        }
+    }
+
+    @Test fun disposingSettingsHostCancelsHeldFallbackSelectionAndRollsBackItsEndpoint() = runTest {
+        val service = BluetoothScanPairingService()
+        val address = "C2:00:00:00:00:03"
+        val id = DeviceEndpointIdentity.deviceId(address)
+        val endpoints = HeldKnownEndpointStore(id)
+        var stops = 0
+        val scans = BleScanCoordinator(object : BleScanGateway {
+            override fun startScan(onDevice: (DiscoveredDevice) -> Unit, onFailure: (Throwable) -> Unit) {
+                onDevice(DiscoveredDevice(id, address, "Held radio", -40))
+            }
+            override fun stopScan() { stops++ }
+        })
+        withSettings(pairingService = service, scans = scans, knownEndpoints = endpoints) { h, feature ->
+            mount(h, feature)
+            open(h)
+            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            h.eventuallyMounted("held discovery is selectable") {
+                compose.onAllNodesWithText("Held radio").fetchSemanticsNodes().size == 1
+            }
+            compose.onNodeWithText("Held radio").performClick()
+            h.eventually("endpoint write is held") { endpoints.firstWrite.isCompleted }
+            endpoints.firstWrite.await()
+
+            compose.runOnUiThread { compose.activity.setContent {} }
+            h.eventually("host disposal cancels pairing and scan") {
+                !service.isPresenting.value && !h.container.connectionPort.isPairingFlowActive &&
+                    stops == 1 && feature.selectionScanJob?.isCompleted == true
+            }
+            endpoints.releaseFirstWrite.complete(Unit)
+            h.eventually("disposed selection endpoint rolled back") { endpoints.rolledBack.isCompleted }
+            endpoints.rolledBack.await()
+            assertNull(endpoints.endpoint(id))
+            assertTrue(h.links.links.isEmpty())
         }
     }
 

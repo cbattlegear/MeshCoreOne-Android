@@ -7,6 +7,7 @@ import com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt
 import com.meshcoreone.android.core.ui.ShowOnceTips
 import com.meshcoreone.android.feature.onboarding.OnboardingFlagStore
 import com.meshcoreone.android.feature.onboarding.OnboardingState
+import java.io.IOException
 import java.util.logging.Level
 import java.util.logging.Logger
 import kotlinx.coroutines.CancellationException
@@ -21,6 +22,25 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+
+class OnboardingCompletionOutcomeUnknownException(
+    val writeFailure: Exception,
+    val readbackFailure: Exception,
+) : IOException(writeFailure.message, writeFailure) {
+    init {
+        if (writeFailure !== readbackFailure) addSuppressed(readbackFailure)
+    }
+}
+
+class OnboardingCompletionCancellationOutcomeUnknownException(
+    val writeFailure: CancellationException,
+    val readbackFailure: Exception,
+) : CancellationException(writeFailure.message) {
+    init {
+        initCause(writeFailure)
+        if (writeFailure !== readbackFailure) addSuppressed(readbackFailure)
+    }
+}
 
 /**
  * [OnboardingFlagStore] reads are served from a snapshot loaded before the UI exists; ordinary writes update the
@@ -111,8 +131,10 @@ class WriteBehindOnboardingFlags(
                                 val committed = try {
                                     reconcileCompletion(attempt.id.toString())
                                 } catch (readFailure: Exception) {
-                                    if (failure !== readFailure) failure.addSuppressed(readFailure)
-                                    throw failure
+                                    if (failure is CancellationException) {
+                                        throw OnboardingCompletionCancellationOutcomeUnknownException(failure, readFailure)
+                                    }
+                                    throw OnboardingCompletionOutcomeUnknownException(failure, readFailure)
                                 }
                                 if (!committed) throw failure
                                 onFailure(failure)

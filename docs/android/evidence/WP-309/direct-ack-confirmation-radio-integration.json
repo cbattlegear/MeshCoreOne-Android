@@ -7,6 +7,7 @@
   "source_integration_parent": "fabdee22b85660292aed5a50df955f4ba5b34f46",
   "source_fenced_parent": "ceeb75da73363cbdb4d1c8474d954e16998f21d6",
   "source_serial_parent": "bf9bfb0efdb5b4ca1d110a18a7b81fe2494c0c64",
+  "source_room_consumer_parent": "5ef933fe591376436139a3edfc8213e9f03f92bf",
   "reference_pin": "db14559b39d32322b06477c6ae676112f583db50",
   "canonical_observer": "0fb7fec315cb5d76988dfc8ff2eef9240c72092b",
   "canonical_message_snapshot": "b2044bb45727b13c78b59169f4cde4bdcb2c9bfb",
@@ -64,6 +65,11 @@
       "Typed PREAUTHORITY_HISTORY_UNKNOWN notice explains indefinite uncertainty and retains editable composer",
       "Double-font actual failed direct row retains composer and retry reachability"
     ],
+    "mounted_actual_persistence_cases": [
+      "Actual AppChatsContent over genuine Room optional message inspector and radio observer, without persistence delegation or synthetic evidence, must render retained FAILED as unconfirmed and surface actual PREAUTHORITY_HISTORY_UNKNOWN",
+      "Actual AppChatsContent over genuine Room keeps DELIVERED unchanged despite strict prehistory warning; Activity recreation retains the same monitor"
+    ],
+    "mounted_actual_persistence_limit": "Both controls explicitly require separately composed canonical storage capabilities. They are source-only and unexecuted; missing capabilities cannot pass via a fixture or fallback.",
     "aggregate_class": "DirectMessageConfirmationAggregateTest",
     "real_persistence_consumer_class": "DirectMessageConfirmationPersistenceIntegrationTest",
     "real_persistence_consumer_cases": [

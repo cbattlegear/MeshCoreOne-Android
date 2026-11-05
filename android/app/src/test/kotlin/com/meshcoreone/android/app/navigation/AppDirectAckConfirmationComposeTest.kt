@@ -122,12 +122,21 @@ class AppDirectAckConfirmationComposeTest : RoomProcessTest() {
         mount(direct = true, supported = true, recreate = false,
             reason = DirectAckRadioConfirmationWildcardReason.PREAUTHORITY_HISTORY_UNKNOWN)
 
+    @Test fun actualRoomConsumerShowsRetainedFailureAsUnconfirmedWithRealPrehistoryEvidence() =
+        mount(direct = true, supported = true, recreate = false,
+            seedStatus = MessageStatus.FAILED, realPersistence = true)
+
+    @Test fun actualRoomConsumerKeepsDeliveredDespiteRealPrehistoryWarningAndActivityRecreation() =
+        mount(direct = true, supported = true, recreate = true,
+            seedStatus = MessageStatus.DELIVERED, realPersistence = true)
+
     private enum class OwnerChange { SAME_RADIO, DIFFERENT_RADIO, DISCONNECT }
 
     private fun mount(
         direct: Boolean, supported: Boolean, recreate: Boolean, ownerChange: OwnerChange? = null,
         seedStatus: MessageStatus? = null, identicalReplacement: Boolean = false,
         fontScale: Float = 1f,
+        realPersistence: Boolean = false,
         reason: DirectAckRadioConfirmationWildcardReason =
             DirectAckRadioConfirmationWildcardReason.UNTRACKED_LEGACY_ANCESTRY,
     ) = runTest {
@@ -168,7 +177,19 @@ class AppDirectAckConfirmationComposeTest : RoomProcessTest() {
                 awaitCancellation()
             }
         }
-        val persistence = if (supported) observing else object : PersistenceStoreProtocol by store {}
+        val persistence: PersistenceStoreProtocol = when {
+            realPersistence -> store.also {
+                val candidate: PersistenceStoreProtocol = it
+                require(candidate is DirectMessageConfirmationEvidenceInspecting) {
+                    "Compose the genuine canonical message-evidence producer"
+                }
+                require(candidate is DirectAckRadioConfirmationEvidenceObserving) {
+                    "Compose the genuine canonical radio-evidence observer"
+                }
+            }
+            supported -> observing
+            else -> object : PersistenceStoreProtocol by store {}
+        }
         val ownerScheduler = TestCoroutineScheduler()
         val ownerScope = CoroutineScope(SupervisorJob(backgroundScope.coroutineContext[Job]) +
             StandardTestDispatcher(ownerScheduler))
@@ -246,7 +267,9 @@ class AppDirectAckConfirmationComposeTest : RoomProcessTest() {
             }
             compose.onNodeWithText(prompt, useUnmergedTree = true).assertIsDisplayed()
             if (direct) {
-                val expected = resources.getString(if (ownerChange != null ||
+                val monitorBefore = h.container.chatsFeature.directAckConfirmation
+                val expected = resources.getString(if (realPersistence) R.string.direct_ack_confirmation_uncertain
+                    else if (ownerChange != null ||
                     seedStatus == MessageStatus.DELIVERED || identicalReplacement) R.string.direct_ack_confirmation_checked
                     else if (supported) R.string.direct_ack_confirmation_uncertain
                     else R.string.direct_ack_confirmation_missing)
@@ -255,7 +278,7 @@ class AppDirectAckConfirmationComposeTest : RoomProcessTest() {
                     compose.onAllNodesWithText(expected).fetchSemanticsNodes().isNotEmpty()
                 }
                 compose.onNodeWithText(expected).assertIsDisplayed()
-                assertEquals(if (supported) 1 else 0, subscriptions)
+                assertEquals(if (supported && !realPersistence) 1 else 0, subscriptions)
                 val editor = compose.onNodeWithContentDescription(
                     resources.getString(AppChatsStrings.chatsInputAccessibilityLabel) + ", " +
                         resources.getString(AppChatsStrings.chatsInputEncrypted),
@@ -303,7 +326,8 @@ class AppDirectAckConfirmationComposeTest : RoomProcessTest() {
                         compose.mainClock.advanceTimeByFrame()
                         compose.onAllNodesWithText(expected).fetchSemanticsNodes().isEmpty()
                     }
-                    assertEquals(1, subscriptions)
+                    assertEquals(if (realPersistence) 0 else 1, subscriptions)
+                    assertSame(monitorBefore, h.container.chatsFeature.directAckConfirmation)
                     assertEquals(oldToken, h.container.chatsFeature.directAckConfirmation.state.value.observation?.sessionToken)
                     compose.mainClock.autoAdvance = true
                     compose.waitUntil(30_000) {
@@ -322,7 +346,8 @@ class AppDirectAckConfirmationComposeTest : RoomProcessTest() {
                     }
                     render()
                     compose.onNodeWithText(expected).assertIsDisplayed()
-                    assertEquals(1, subscriptions)
+                    assertEquals(if (realPersistence) 0 else 1, subscriptions)
+                    assertSame(monitorBefore, h.container.chatsFeature.directAckConfirmation)
                 }
             } else {
                 compose.onNodeWithText(resources.getString(R.string.direct_ack_confirmation_title)).assertDoesNotExist()
@@ -346,8 +371,22 @@ class AppDirectAckConfirmationComposeTest : RoomProcessTest() {
                     compose.onAllNodesWithContentDescription(
                         resources.getString(AppChatsStrings.chatsMessageStatusFailed), substring = true,
                     ).assertCountEquals(0)
-                    assertTrue((h.container.chatsFeature.directAckConfirmation.state.value.status as
-                        DirectAckConfirmationStatus.Inspected).evidence is DirectAckRadioConfirmationEvidence.NoPersistedWildcard)
+                    if (realPersistence) {
+                        val evidence = (h.container.chatsFeature.directAckConfirmation.state.value.status as
+                            DirectAckConfirmationStatus.Inspected).evidence as
+                            DirectAckRadioConfirmationEvidence.PersistedWildcard
+                        assertTrue(evidence.reasons.contains(
+                            DirectAckRadioConfirmationWildcardReason.PREAUTHORITY_HISTORY_UNKNOWN,
+                        ))
+                        compose.waitUntil(30_000) {
+                            pump()
+                            h.container.chatsFeature.directAckConfirmation.messages.state.value.hasHistoricalUncertainty
+                        }
+                        assertTrue(h.container.chatsFeature.directAckConfirmation.messages.state.value.rowDiagnosticsUnavailable)
+                    } else {
+                        assertTrue((h.container.chatsFeature.directAckConfirmation.state.value.status as
+                            DirectAckConfirmationStatus.Inspected).evidence is DirectAckRadioConfirmationEvidence.NoPersistedWildcard)
+                    }
                     assertEquals(MessageStatus.FAILED, store.fetchMessage(EntityKey(radio, requireNotNull(seeded).id))?.status)
                     compose.onNodeWithText(resources.getString(AppChatsStrings.chatsMessageStatusRetry),
                         useUnmergedTree = true).assertIsEnabled().assertIsDisplayed()

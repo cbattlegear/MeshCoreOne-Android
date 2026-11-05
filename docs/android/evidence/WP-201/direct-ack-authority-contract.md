@@ -331,3 +331,22 @@ this successor, separately from compilation and behavioral execution.
 No local Gradle execution is permitted under the retained
 hold. Seventeen supplemental methods are now authored, not credited as executed
 or passing here. Exact integrated hosted verification remains required.
+
+## Explicit SEND-only inline completion clarification
+
+Parent: `2b885851a60e4317247ac41589dfa7e10f9fb550`. Coordinator review relayed
+by the storage owner identified that "Inline completion only" did not explicitly
+constrain storage dispatch mode. Clarify that `SendCompleted` requires both
+`DirectAckMode.SEND` and current PENDING status; RESEND is ineligible even if
+its row is PENDING. Rejection changes neither product revision nor operation
+journal. This tightens the documented precondition without changing any public
+signature, value type, acceptance binding or retry-exhaustion behavior.
+
+Trusted `wp-owned/modify` admissions succeeded for this contract and evidence
+path. This is a KDoc/evidence-only successor; existing test assertions are
+unchanged. Storage owns the separate implementation and actual-Room negative
+control for RESEND/PENDING, including unchanged row, incarnation revision and
+operation journal. That control is not claimed executed here. The immutable
+combined collision diagnostic candidate `e266620cba6194d0eebc952c31cf3516af89a101`
+is not advanced by this clarification; no collision policy or expiry is added.
+Local compilation and runtime tests remain unexecuted under the retained hold.

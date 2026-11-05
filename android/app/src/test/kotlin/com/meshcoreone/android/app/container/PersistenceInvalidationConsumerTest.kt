@@ -8,6 +8,7 @@ import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.feature.chats.list.ChatListStateHolder
 import com.meshcoreone.android.feature.chats.timeline.ChatViewModel
 import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
+import com.meshcoreone.android.feature.chats.timeline.ChatTimelineDependencies
 import java.util.UUID
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
@@ -17,6 +18,63 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class PersistenceInvalidationConsumerTest : RoomProcessTest() {
+    @Test fun neutralInvalidationRetainsOlderWindowWithoutReactionOrReadWrites() = runTest {
+        val radio = RadioId(UUID(309, 170))
+        store.saveDevice(DeviceDTO(radioId = radio, publicKey = key(7), nodeName = "Saved"))
+        val peer = ContactDTO(radioId = radio, publicKey = key(4), name = "Peer", lastHeardTimestamp = null)
+        store.saveContact(peer)
+        val rows = (0 until 60).map { offset ->
+            MessageDTO(
+                radioId = radio, contactID = peer.id, text = "History $offset",
+                timestamp = (offset + 1).toUInt(), createdAt = EPOCH.plusSeconds(offset.toLong()),
+                status = MessageStatus.DELIVERED,
+            ).also { store.saveMessage(it) }
+        }
+        val h = ContainerHarness(this, store)
+        val screenScope = CoroutineScope(backgroundScope.coroutineContext + SupervisorJob(backgroundScope.coroutineContext[Job]))
+        val conversation = TimelineConversation.Direct(peer)
+        val actual = h.container.chatsFeature.timeline(conversation)
+        var reactionCalls = 0
+        val dependencies = object : ChatTimelineDependencies by actual {
+            override suspend fun prepareMessages(messages: List<MessageDTO>): List<MessageDTO> {
+                reactionCalls++
+                return actual.prepareMessages(messages)
+            }
+        }
+        val vm = ChatViewModel(conversation, dependencies, screenScope)
+        try {
+            vm.start()
+            vm.open()
+            assertTrue(vm.state.value.hasMoreMessages)
+            vm.loadOlder()
+            assertEquals(rows.map { it.id }, vm.state.value.messages.map { it.id })
+            assertFalse(vm.state.value.hasMoreMessages)
+            val beforeCalls = reactionCalls
+            store.saveContact(peer.copy(unreadCount = 4))
+            val changed = rows.last().copy(text = "Persisted new state", status = MessageStatus.FAILED,
+                failureSeen = false, reactionSummary = "X:1")
+            store.saveMessage(changed)
+            h.appState.messageEventStream.send(MessageEvent.MessagePersistenceChanged(EntityKey(radio, changed.id)))
+            h.eventually("neutral update preserves paged-in history and actual persisted summary") {
+                vm.state.value.messages.lastOrNull()?.reactionSummary == "X:1"
+            }
+            assertEquals(rows.map { it.id }, vm.state.value.messages.map { it.id })
+            assertEquals(beforeCalls, reactionCalls)
+            assertEquals(4L, store.fetchContact(EntityKey(radio, peer.id))?.unreadCount)
+            assertFalse(requireNotNull(store.fetchMessage(EntityKey(radio, changed.id))).failureSeen)
+            store.deleteMessage(EntityKey(radio, changed.id))
+            h.appState.messageEventStream.send(MessageEvent.MessagePersistenceChanged(EntityKey(radio, changed.id)))
+            h.eventually("neutral deletion retains every surviving older row") { vm.state.value.messages.size == 59 }
+            assertEquals(rows.dropLast(1).map { it.id }, vm.state.value.messages.map { it.id })
+            assertFalse(vm.state.value.hasMoreMessages)
+            assertEquals(beforeCalls, reactionCalls)
+            assertEquals(4L, store.fetchContact(EntityKey(radio, peer.id))?.unreadCount)
+        } finally {
+            screenScope.cancel()
+            h.container.close()
+        }
+    }
+
     @Test fun delayedDirectCommitPublicationRefetchesReplacementChannelWithoutSeeingItsFailure() =
         consumerFlow(originalChannel = false)
 
@@ -42,8 +100,18 @@ class PersistenceInvalidationConsumerTest : RoomProcessTest() {
         val screenScope = CoroutineScope(backgroundScope.coroutineContext + SupervisorJob(backgroundScope.coroutineContext[Job]))
         val directConversation = TimelineConversation.Direct(peer)
         val channelConversation = TimelineConversation.Channel(channel)
-        val direct = ChatViewModel(directConversation, h.container.chatsFeature.timeline(directConversation), screenScope)
-        val channels = ChatViewModel(channelConversation, h.container.chatsFeature.timeline(channelConversation), screenScope)
+        var reactionHookCalls = 0
+        fun monitored(conversation: TimelineConversation): ChatTimelineDependencies {
+            val actual = h.container.chatsFeature.timeline(conversation)
+            return object : ChatTimelineDependencies by actual {
+                override suspend fun prepareMessages(messages: List<MessageDTO>): List<MessageDTO> {
+                    reactionHookCalls++
+                    return actual.prepareMessages(messages)
+                }
+            }
+        }
+        val direct = ChatViewModel(directConversation, monitored(directConversation), screenScope)
+        val channels = ChatViewModel(channelConversation, monitored(channelConversation), screenScope)
         val list = ChatListStateHolder(h.container.chatsFeature.listFor(radio), screenScope)
         val statuses = Channel<SessionEvent<MessageStatusEvent>>(Channel.UNLIMITED)
         val token = SessionToken(ProcessEpoch(UUID(309, 162)), Generation(1), radio)
@@ -82,15 +150,19 @@ class PersistenceInvalidationConsumerTest : RoomProcessTest() {
             list.start()
             list.requestConversationReload()?.join()
             h.settle()
+            val initialReactionCalls = reactionHookCalls
+            assertTrue(initialReactionCalls > 0)
             visible(originalChannel)
-            store.saveMessage(original.copy(status = MessageStatus.FAILED))
+            store.saveMessage(original.copy(status = MessageStatus.FAILED, reactionSummary = "X:1"))
             publish(key)
             h.eventually("normal persisted failure reloads timeline, preview and visible badge") {
                 current.state.value.messages.singleOrNull()?.status == MessageStatus.FAILED &&
+                    current.state.value.messages.singleOrNull()?.reactionSummary == "X:1" &&
                     list.state.value.lastMessages[originalConversationId]?.status == MessageStatus.FAILED &&
                     originalConversationId in list.state.value.failedSendIds
             }
             assertFalse(requireNotNull(store.fetchMessage(key)).failureSeen)
+            assertEquals(initialReactionCalls, reactionHookCalls)
 
             val committed = CompletableDeferred<Unit>()
             delayedPublication = async {
@@ -105,6 +177,7 @@ class PersistenceInvalidationConsumerTest : RoomProcessTest() {
                 contactID = if (originalChannel) peer.id else null,
                 channelIndex = if (originalChannel) null else channel.index,
                 text = "Actual replacement", status = MessageStatus.FAILED, failureSeen = false,
+                reactionSummary = "X:1",
             )
             store.saveMessage(replacement)
             val unrelated = replacement.copy(
@@ -153,6 +226,11 @@ class PersistenceInvalidationConsumerTest : RoomProcessTest() {
             }
             assertNull(store.fetchMessage(key))
             assertTrue(observed.none { it is MessageEvent.MessageFailed })
+            assertEquals(initialReactionCalls, reactionHookCalls)
+            h.appState.messageEventStream.send(MessageEvent.ChannelHistoryDeleted(radio))
+            h.eventually("ordinary history deletion retains its original reaction-reconciliation hook") {
+                reactionHookCalls > initialReactionCalls
+            }
         } finally {
             releasePublication.complete(Unit)
             delayedPublication?.cancelAndJoin()

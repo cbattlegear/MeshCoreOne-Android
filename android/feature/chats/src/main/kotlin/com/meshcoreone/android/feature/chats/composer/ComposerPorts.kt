@@ -49,8 +49,8 @@ interface ComposerSendPort {
     suspend fun signalDMEnqueued(envelope: DirectMessageEnvelope)
 
     /**
-     * Existing channel enqueue-failure compensation. A direct enqueue exception is not a no-send
-     * certificate: the direct composer must retain the saved row/history and report the original error.
+     * Report uncertain enqueue completion without looking up or mutating a row. A saved UUID is
+     * only a diagnostic hint, not an incarnation grant or a no-send certificate for either target.
      */
     suspend fun recordLocalEnqueueFailure(messageId: UUID)
 }

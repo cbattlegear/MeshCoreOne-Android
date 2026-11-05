@@ -1,0 +1,20 @@
+{
+  "wp": "WP-309",
+  "provenance": "Android-only conservative enqueue uncertainty, coordinator-directed; not copied from the read-only Swift catalog.",
+  "localization_review": "Authored localized copy; no native-speaker or runtime verification claimed.",
+  "key": "enqueue_outcome_unconfirmed",
+  "translations": {
+    "values": "Queueing could not be confirmed. This message may have been sent. Retrying may send it again.",
+    "values-de": "Das Einreihen konnte nicht bestätigt werden. Diese Nachricht wurde möglicherweise gesendet. Ein erneuter Versuch kann sie nochmals senden.",
+    "values-es": "No se pudo confirmar la puesta en cola. Puede que este mensaje se haya enviado. Al reintentarlo, podría enviarse de nuevo.",
+    "values-fr": "La mise en file ne peut pas être confirmée. Ce message a peut-être été envoyé. Réessayer peut l’envoyer à nouveau.",
+    "values-it": "Non è stato possibile confermare l’inserimento in coda. Questo messaggio potrebbe essere stato inviato. Un nuovo tentativo potrebbe inviarlo di nuovo.",
+    "values-ko": "대기열 등록을 확인할 수 없습니다. 이 메시지가 이미 전송되었을 수 있습니다. 다시 시도하면 중복 전송될 수 있습니다.",
+    "values-nl": "Het plaatsen in de wachtrij kon niet worden bevestigd. Dit bericht is mogelijk verzonden. Opnieuw proberen kan het nogmaals verzenden.",
+    "values-pl": "Nie można potwierdzić dodania do kolejki. Ta wiadomość mogła zostać wysłana. Ponowna próba może wysłać ją jeszcze raz.",
+    "values-pt": "Não foi possível confirmar a colocação na fila. Esta mensagem pode ter sido enviada. Tentar novamente pode enviá-la outra vez.",
+    "values-ru": "Не удалось подтвердить добавление в очередь. Возможно, это сообщение уже отправлено. Повторная попытка может отправить его ещё раз.",
+    "values-uk": "Не вдалося підтвердити додавання до черги. Можливо, це повідомлення вже надіслано. Повторна спроба може надіслати його ще раз.",
+    "values-b+zh+Hans": "无法确认是否已加入队列。此消息可能已经发送。重试可能会再次发送此消息。"
+  }
+}

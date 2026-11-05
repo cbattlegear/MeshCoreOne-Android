@@ -3,7 +3,7 @@
 // PortedFrom: MC1/Views/Chats/ViewModel/ChatViewModel+Messages.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/RemoteNodes/Rooms/RoomConversationViewModel.swift@db14559b39d32322b06477c6ae676112f583db50
 // WP-407 native composition binds the existing chat list/timeline/composer to the single process store and live radio graph.
-// AndroidOnly: WP-309 An enqueue exception cannot certify that a saved direct message was not emitted.
+// AndroidOnly: WP-309 An enqueue exception cannot certify that a saved message was not emitted.
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.app.navigation.ChannelLinkRequest
@@ -326,21 +326,11 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
     }
 
     internal suspend fun failPending(message: MessageDTO) {
-        if (!message.isChannelMessage || message.contactID != null) {
-            report("Direct enqueue outcome is unconfirmed; retaining the saved message and pending history", null)
-            return
-        }
-        if (store.updateMessageStatusUnlessDelivered(EntityKey(message.radioId, message.id), MessageStatus.FAILED)) {
-            app.refreshConversations()
-            try {
-                markFailedSendSeenIfVisible(message)
-            } finally {
-                // The failure is already committed even if marking it seen is cancelled.
-                app.refreshConversations()
-                app.messageEventStream.send(MessageEvent.MessageFailed(message.id))
-            }
-        }
+        reportUnconfirmedEnqueue(message.id)
     }
+
+    private fun reportUnconfirmedEnqueue(messageId: UUID) =
+        report("Enqueue outcome for $messageId is unconfirmed; retaining the saved message and pending history", null)
 
     private suspend fun markFailedSendSeenIfVisible(message: MessageDTO) {
         val state = navigation.state.value
@@ -622,7 +612,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                     emptyList()
                 }
                 is MessageEvent.MessagePersistenceChanged -> {
-                    if (event.key.radioId == radio) emit(TimelineEvent.HistoryChanged(conversation.id))
+                    if (event.key.radioId == radio) emit(TimelineEvent.PersistenceInvalidated(conversation.id))
                     emptyList()
                 }
                 is MessageEvent.MessageStatusResolved -> listOf(event.messageID)
@@ -676,7 +666,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         override suspend fun signalDMEnqueued(envelope: DirectMessageEnvelope) =
             sendQueue(radio).signalDMEnqueued(envelope)
         override suspend fun recordLocalEnqueueFailure(messageId: UUID) =
-            failPending(savedMessage(radio, messageId))
+            reportUnconfirmedEnqueue(messageId)
     }
 
     private suspend fun savedMessage(radio: RadioId, id: UUID): MessageDTO =

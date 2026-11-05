@@ -4,6 +4,7 @@
 // PortedFrom: MC1/Views/Chats/Timeline/ChatTimeline+Paging.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Chats/ViewModel/ChatTimelinePopulator.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1Tests/Views/Chats/ChatViewModelAppendRaceTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// AndroidOnly: WP-309 Neutral persistence invalidation reads the current window without reaction/read writes.
 package com.meshcoreone.android.feature.chats.timeline
 
 import com.meshcoreone.android.core.model.MessageDTO
@@ -149,7 +150,9 @@ class ChatViewModel(
      * the next older page still comes from an explicit [loadOlder]. Open-time unread side effects are
      * intentionally not repeated.
      */
-    suspend fun refresh() {
+    suspend fun refresh() = refreshWindow(reconcileReactions = true)
+
+    private suspend fun refreshWindow(reconcileReactions: Boolean) {
         if (!mutableState.isCurrent) return
         mutableState.update { it.copy(passiveError = null) }
         try {
@@ -161,7 +164,8 @@ class ChatViewModel(
                     anchorSortDate,
                     initialPageSize(conversation.unreadCount),
                 )
-                val ordered = normalize(visible(dependencies.prepareMessages(window.messages)))
+                val prepared = if (reconcileReactions) dependencies.prepareMessages(window.messages) else window.messages
+                val ordered = normalize(visible(prepared))
                 mutableState.update {
                     it.copy(
                         messages = ordered,
@@ -311,9 +315,14 @@ class ChatViewModel(
             refresh()
             return
         }
+        if (event is TimelineEvent.PersistenceInvalidated) {
+            refreshWindow(reconcileReactions = false)
+            return
+        }
         mutableState.performWindowOperation {
             when (event) {
                 is TimelineEvent.HistoryChanged -> error("History refresh must run outside the operation mutex")
+                is TimelineEvent.PersistenceInvalidated -> error("Persistence refresh must run outside the operation mutex")
                 is TimelineEvent.MessageReceived -> {
                     val message = event.message
                     if (mutableState.value.messages.any { it.id == message.id }) return@performWindowOperation

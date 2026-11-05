@@ -10,7 +10,7 @@ sealed interface ComposerSendPhase {
     data object Idle : ComposerSendPhase
     data object Sending : ComposerSendPhase
 
-    /** [messageSaved] true means a failed row exists in the timeline and retry happens there. */
+    /** [messageSaved] means creation succeeded, not that the retained row is failed or definitely unsent. */
     data class Failed(val reason: ComposerSendFailure, val messageSaved: Boolean) : ComposerSendPhase
 }
 

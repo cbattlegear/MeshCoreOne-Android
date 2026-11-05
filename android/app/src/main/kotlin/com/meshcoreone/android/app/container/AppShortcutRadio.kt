@@ -1,4 +1,5 @@
 // AndroidOnly: WP-407 Shortcuts use the same process store and connection owner; only confirmed operations enqueue.
+// AndroidOnly: WP-309 A post-creation enqueue exception retains history and reports possible prior transmission.
 // ReferenceInput: MC1/Intents/SendMessageIntent.swift@db14559b39d32322b06477c6ae676112f583db50
 // ReferenceInput: MC1/Intents/SendMessageIntent+Routing.swift@db14559b39d32322b06477c6ae676112f583db50
 // ReferenceInput: MC1/Intents/SendAdvertIntent.swift@db14559b39d32322b06477c6ae676112f583db50
@@ -6,7 +7,6 @@ package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.app.state.MessageEvent
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
-import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueServiceException
 import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceError
@@ -75,12 +75,9 @@ internal class AppShortcutRadio(private val container: AppContainer) : ShortcutR
             }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) {
-            try {
-                container.chatsFeature.failPending(pending)
-            } catch (cleanup: PersistenceStoreException) {
-                Logger.getLogger("com.mc1.Shortcuts").log(Level.WARNING, "Mark shortcut pending send failed", cleanup)
-            }
-            throw sendFailure(failure)
+            container.chatsFeature.failPending(pending)
+            val mapped = sendFailure(failure)
+            throw ShortcutException(ShortcutError.EnqueueUnconfirmed(mapped.error), failure)
         }
         app.refreshConversations()
     }

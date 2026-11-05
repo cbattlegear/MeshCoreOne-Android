@@ -3,6 +3,7 @@
 // PortedFrom: MC1/Intents/SendRoute.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Intents/SendOutcome.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Intents/IntentError.swift@db14559b39d32322b06477c6ae676112f583db50
+// AndroidOnly: WP-309 Retain the original shortcut error category inside explicit enqueue uncertainty.
 package com.meshcoreone.android.platform.shortcuts
 
 import com.meshcoreone.android.core.model.ChannelDTO
@@ -41,6 +42,7 @@ sealed class ShortcutError(val name: String) {
     data object ADVERT_FAILED : ShortcutError("ADVERT_FAILED")
     data object DENIED : ShortcutError("DENIED")
     data class SessionError(val underlying: MeshCoreException) : ShortcutError("SESSION_ERROR")
+    data class EnqueueUnconfirmed(val underlying: ShortcutError) : ShortcutError("ENQUEUE_UNCONFIRMED")
 }
 
 class ShortcutException(

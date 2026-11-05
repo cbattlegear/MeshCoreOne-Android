@@ -90,7 +90,9 @@ fun ComposerBar(
         Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
             (state.sendPhase as? ComposerSendPhase.Failed)?.let { failure ->
                 Text(
-                    sendFailureText(resources, failure.reason),
+                    sendFailureText(resources, failure.reason) + if (failure.messageSaved) {
+                        "\n" + resources.getString(com.meshcoreone.android.core.l10n.R.string.enqueue_outcome_unconfirmed)
+                    } else "",
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier

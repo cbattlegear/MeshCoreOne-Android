@@ -1,8 +1,9 @@
 {
   "wp": "WP-309",
-  "scope": "Direct composer/shortcut enqueue failure and neutral persisted-state consumer invalidation",
+  "scope": "All-target composer/shortcut uncertain enqueue retention and read-only persisted-state consumer invalidation",
   "status": "SOURCE_ONLY_UNCOMPILED_UNEXECUTED",
   "base": "83fc29b14f082ef1806f2d68516668128f63b1d4",
+  "supersedes_source": "83bf9fda4a7a8c74a23c72ecdf00f5455d604a2a",
   "reference": "db14559b39d32322b06477c6ae676112f583db50",
   "assignment": "assignment:fc9361f4-ec03-4739-994b-ddb9b4e4cec9:call_JJRSqpVWPM7PLC0l5SJ6D2jc",
   "contract_dependency": {
@@ -13,31 +14,36 @@
   },
   "finding": "Queue persistence runs independently of the awaiting enqueue caller. A committed pending row can be independently signalled and physically emitted before that caller observes an enqueue error; that error cannot certify no physical send.",
   "repair": [
-    "Original direct composer target does not request generic local enqueue-failure compensation. Original failure, saved draft state and retry ownership remain unchanged.",
-    "Shared App failPending conservatively retains non-channel and contact-bearing ambiguous snapshots without status, pending-row or failure event mutation. Actual shortcut uses this shared guard.",
-    "Frozen neutral EntityKey event maps through the app dispatcher without status application. Same-radio timeline uses actual window refresh, including replacement and missing rows; no failure-seen operation is invoked.",
+    "Composer and shortcut enqueue exceptions retain every saved direct, channel or ambiguous row without status/pending/seen writes or saved-key refetch. Missing-row or replacement races cannot mask the original failure or grant identity.",
+    "Original errors remain observable. Saved composer errors and typed shortcut EnqueueUnconfirmed categories append explicit localized possible-send and duplicate-retry uncertainty. Creation errors and successful sends are unchanged.",
+    "Frozen neutral EntityKey event maps through the app dispatcher without status application. Same-radio timeline uses distinct PersistenceInvalidated and the actual anchored window read, bypassing prepareMessages/reaction indexing/persistence, seen and unread writes. Ordinary history/open/refresh/loadOlder keep their existing behavior.",
     "Same-radio list uses a new neutral kind to request actual conversation/preview/badge reload, including legitimate newly persisted failures. Foreign-radio neutral keys are filtered before list mapping.",
     "Unrelated pre-existing Failed, Resent and status event branches are not reinterpreted."
   ],
   "source_controls": {
-    "new_methods": 8,
-    "direct_adapter_methods": 4,
-    "direct_status_and_channel_positive_methods": 2,
-    "neutral_room_dispatcher_timeline_list_methods": 2,
-    "existing_composer_method_updated": "typed queue failures retain saved pending state and current draft for both targets",
+    "new_methods": 23,
+    "actual_adapter_race_and_channel_success_methods": 14,
+    "all_status_retention_methods": 2,
+    "neutral_room_dispatcher_timeline_list_methods": 3,
+    "presentation_and_localization_methods": 4,
+    "existing_composer_method": "Original both-target callback expectations restored; callback is now diagnostic-only",
     "coverage": [
       "Actual composer and actual shortcut, actual Room insertion commit followed by delayed typed error, independent real queue wake and accepted fake-radio protocol send without delivery ACK",
       "Both actual direct adapters encountering channel replacement at the same message key before the original enqueue error",
       "Every persisted status for stale direct and ambiguous contact-plus-channel snapshots; preserved pending rows",
-      "Existing pure-channel local compensation and delivered protection",
+      "Actual channel composer/shortcut uncertain enqueue, same-key direct/channel replacement, missing row, and successful real protocol send",
+      "All persisted statuses retained for channel snapshots; the uncertainty catch never creates a FAILED claim",
       "Both direct-to-channel and channel-to-direct Room replacement after a committed fixture write but before canonical event publication",
-      "Actual started state-holder timeline/list reload, legitimate visible failed preview/badge, unrelated same-conversation failureSeen retention, delivered state, missing row and foreign-radio same-ID negative"
+      "Actual started state-holder timeline/list reload, legitimate visible failed preview/badge, stored reaction summary, unrelated same-conversation failureSeen retention, delivered state, missing row and foreign-radio same-ID negative",
+      "Reaction preparation hook not called by neutral invalidation; ordinary history deletion still calls it",
+      "Actual sixty-row paged-in window survives neutral replacement/deletion without unread or failureSeen writes",
+      "Actual composer original error plus polite uncertainty at double font; creation-error negative; shortcut category preservation; all supported resource locales"
     ],
     "authority_boundary": "Neutral consumer tests use actual generic Room fixture writes and delayed canonical service-event injection. They do not prove a guarded direct failure can commit under strict UNKNOWN, and do not fabricate an authority receipt or clean-history flag."
   },
   "limitations": [
     "No product build or test ran; authored methods are not execution or passing evidence.",
-    "Legacy pure-channel local compensation still has no creation-bound incarnation handle. It is intentionally not claimed safe against channel-to-direct replacement; contract/storage/service owners own the creation-bound repair.",
+    "Intentional coordinator-selected UX limitation: uncertain channel enqueue exceptions no longer create definite FAILED rows or failure badges, and do not manufacture a retry affordance. A future creation-bound producer seam is needed to restore a safe definite failure path. Retrying may duplicate a previously emitted message.",
     "Guarded service emitters and strict-UNKNOWN storage/schema composition are external dependencies, not included or accepted here.",
     "No device, hardware, signing, migration, whole-WP or release acceptance is claimed.",
     "Warning/UI acceptance remains separate at immutable source freeze 208 and its bounded ambiguous-row successor."
@@ -47,5 +53,11 @@
     "tests_discovered": 0,
     "tests_executed": 0,
     "reason": "User/coordinator forbids local builds/tests under acute host-memory constraint; exact-head hosted composition and authorization remain required."
+  },
+  "resource_generation": {
+    "generator": "tools/android-port/convert_enqueue_outcome.py",
+    "input": "docs/android/evidence/WP-309/enqueue-outcome-copy.json",
+    "output": "android/core/l10n/src/main/res/{supported-locale}/enqueue_outcome.xml",
+    "result": "Generated twelve deterministic source resources; not product execution, runtime localization, native-speaker review or test evidence."
   }
 }

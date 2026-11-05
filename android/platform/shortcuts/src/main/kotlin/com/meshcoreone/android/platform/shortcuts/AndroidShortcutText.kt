@@ -19,7 +19,7 @@ class AndroidShortcutText(private val context: Context) : ShortcutText {
         AdvertReach.ZERO_HOP -> s(R.string.l10n_app_tools_intent_advert_dialog_sentzerohop)
         AdvertReach.FLOOD -> s(R.string.l10n_app_tools_intent_advert_dialog_sentflood)
     }
-    override fun error(error: ShortcutError) = when (error) {
+    override fun error(error: ShortcutError): String = when (error) {
         ShortcutError.NOT_CONNECTED -> s(R.string.l10n_app_localizable_error_intent_notconnected)
         ShortcutError.INVALID_RECIPIENT -> s(R.string.l10n_app_localizable_error_intent_invalidrecipient)
         ShortcutError.MESSAGE_TOO_LONG -> s(R.string.l10n_app_localizable_error_intent_messagetoolong)
@@ -27,6 +27,8 @@ class AndroidShortcutText(private val context: Context) : ShortcutText {
         ShortcutError.SEND_FAILED, ShortcutError.DENIED ->
             s(R.string.l10n_app_localizable_error_intent_sendfailed)
         is ShortcutError.SessionError -> sessionError(error.underlying)
+        is ShortcutError.EnqueueUnconfirmed ->
+            this.error(error.underlying) + "\n" + s(R.string.enqueue_outcome_unconfirmed)
     }
 
     private fun sessionError(error: MeshCoreException): String = when (error) {

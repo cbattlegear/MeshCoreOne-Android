@@ -20,6 +20,29 @@ The coordinator assigned an independent clean-current-main foundation. Runtime/d
 
 ## Source custody and adaptations
 
+### Live-main infrastructure refresh and exact tip outcome
+
+The owned branch merged live main 1a8b406a67d44006f14ac043ac468b6adf07a9d7 by normal
+ancestry as 776d0a8f789f195980863b7fe7648b852b819bbb, with parents d523722b96324eec32293120b7df60044d0ce03d
+and 1a8b406a67d44006f14ac043ac468b6adf07a9d7. The clean merge adds exactly the six
+WP-003 infrastructure/documentation files; no Android product source changed.
+The existing immutable diagnostic references and runs are unchanged. Exact d523 run
+[41985855433](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41985855433)
+was still active at refresh, so no result is transferred to this changed tree.
+
+Exact c3cd86d0e2660574bf89ca5318c82fe84112c971 run
+[41982352370](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41982352370)
+finished SUCCESS. Linux job 127095458810 positively reports named methods and class
+START/END SUCCESS for ShowOnceTipsTest (20), SharedUiComposeTest (22),
+CliSettingsReadbackTest (3), DeviceWriterAuthorityRoomTest (19),
+DevicePersistenceAuthorityRoomTest (16) and DeviceNotificationAuthorityRoomTest (3).
+Actual compiled-source bindings match the exact committed tip/SharedUi test blobs
+e0bff9f5e59cc7b9659f175f4234b42d8fabcda1 and
+5ddbc8df401e2109d0af21f09088fd5b9722a3fa, respectively. The hosted log, not a second
+result bundle, remains authoritative. This accepts the bounded tip prerequisite on c3cd,
+not the later staged writer, token consumers, OCV composition, live-main refresh, native
+device behavior or full onboarding flow.
+
 ### Token-bound preset consumer and OCV publication composition
 
 The successor of b8d23c92df00851dbd3f0d0312066adb13597c5d wires the actual preset

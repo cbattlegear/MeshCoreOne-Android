@@ -496,3 +496,49 @@ is explicitly unequal to the old unconditional transform, making the final asser
 discriminating. This is device-authority/persistence evidence, not execution of the separately
 owned Settings holder or physical radio. Source count is now 32 writer methods / 16 persistence
 methods; fresh exact-candidate execution is required.
+
+### Exact follow-up execution and transfer
+
+The declared `android-ci.yml` workflow was dispatched on fresh, previously unused diagnostic
+refs after verifying their remote SHA. No active ref was advanced, sibling run cancelled,
+local Gradle owner taken over, or CI-result bundle retained. Hosted jobs/logs below are the
+authoritative reproducible execution evidence.
+
+| Exact source head | Run / Linux job | Actual authority discovery |
+| --- | --- | --- |
+| `1d22679c4a757f9dd129f673c3a749a834f74d8e` | [41984161395](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41984161395) / `127101193082` | 30 writer START/END SUCCESS pairs; 16 persistence pairs |
+| `3b8c90fdde293bee98f5cd1db08a8c4b3b0206cc` | [41984721924](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41984721924) / `127104135119` | 30 writer START/END SUCCESS pairs; 16 persistence pairs |
+| `8eb272e06999ca44cbf2c2ca809ec00a1e15709d` | [41986663983](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41986663983) / `127108990550` | 32 writer START/END SUCCESS pairs; 16 persistence pairs |
+
+Counts deduplicate repeated failure-tail output and require both actual markers, not source
+method counts. Exact 8eb positively executed
+`staleSameSessionObservationCannotReplaceTheOriginalPreRepeatSnapshot` and
+`competingSnapshotCommitPreservesCompleteAndEveryPartialRestorationOnCasRetry` with
+END SUCCESS, as well as all previous thirty writer methods and sixteen persistence methods.
+The connectivity unit-test task `:core:connectivity:testDebugUnitTest` also executed without
+a reported failure on 3b and 8eb. That module does not emit individual method markers, so the
+hosted log is not claimed to contain individual discovery of the four-case OCV access control.
+
+All three runs remain **failed whole candidates**: App discovered 1949 tests at 1d/3b and
+1951 at 8eb, with the same three separately owned failures:
+`PresetDeviceEventSessionTest.presetWithPathHashCarriesItsOriginalTokenToBothMutations`,
+`PresetDeviceEventSessionTest.retiredPresetPathHashCannotUseReplacementGeneration`, and
+`OnboardingFlagsTest.unavailable uncertain-commit readback surfaces both errors without claiming rollback`.
+No new authority failure was reported. Controller/workflow policy and pinned Swift codec
+jobs passed on each run; no physical radio, UI flow, APK, signing, or whole-foundation
+acceptance is inferred from these results.
+
+Local source commands `C:\Python312\python.exe .\tools\android-port\controller\validate.py`,
+`C:\Python312\python.exe .\tools\android-port\portmap.py`,
+`C:\Python312\python.exe .\tools\android-port\controller\verification_config.py`, and
+`git diff --check` all exited 0 for 8eb before publication. Same-host readiness preflight
+exited 0 with the existing Windows toolchain state and a fresh absolute output directory;
+it did not start Gradle. Typed admissions for the editor and Room test paths passed.
+
+The coordinator independently reviewed exact 3b -> 8eb and found no consequential issue in
+the bounded guard/controls. Foundation composition
+`5518195270b2a56a01d620b8e236e74798c8a0c5` transfers exactly the two-path 8eb source/test
+delta without ancestry import; producer custody review verified identical added/deleted
+lines and clean diff. This is source custody, not execution transfer: its own exact run is
+separately owned. Settings keeps its consumer/session-target repairs and uses the unchanged
+awaited Boolean APIs; the editor guard does not accept or replace that work.

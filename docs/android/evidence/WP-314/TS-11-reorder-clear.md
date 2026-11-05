@@ -175,6 +175,15 @@ retains only the scalar sent mode and never falls back to live width after a rea
 dispatch. No original assertion was dropped. These are fixture/metadata repairs to
 be evaluated by distinct exact successor/negative runs, not retroactive passes.
 
+Independent exact-c7 review retained the separate unmounted batch-save finding: old
+completed/partial results remained saveable after reconnect because the editable route
+and batch history intentionally survive retirement. Test-only `4a9cc1682078e4a04213e0a391b900985061d9d3`
+adds four completed/partial same/different-radio controls. The following source successor
+retains history while retiring its save eligibility, checks it in both derived state and
+the save API, and restores eligibility only for a newly started batch. Fresh B persistence
+and accepted-before-retirement semantics remain required. This is not a mounted Save
+button claim or a transfer of the still-distinct r20 diagnostic results.
+
 | Check | Result |
 |---|---|
 | Pinned Windows preflight: `python .\\tools\\android-port\\controller\\ci.py preflight --local --state $env:ANDROID_CI_STATE --output $output` with a fresh absolute TEMP output and pinned Python 3.12.4 | PASS (exit 0; readiness only) |

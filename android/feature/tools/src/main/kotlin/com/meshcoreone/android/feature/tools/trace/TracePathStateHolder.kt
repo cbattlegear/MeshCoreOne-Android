@@ -104,7 +104,7 @@ class TracePathStateHolder(
         clearError()
         update {
             it.copy(
-                activeSavedPath = null, result = null, resultID = null, batchPresentationActive = false,
+                activeSavedPath = null, result = null, resultID = null, batchPresentationActive = false, batchResultsRetired = true,
                 availableRepeaters = emptyList(), availableRooms = emptyList(), discoveredRepeaters = emptyList(),
             )
         }
@@ -370,6 +370,7 @@ class TracePathStateHolder(
         val radioId = device.radioId
         val snapshot = current
         if (!isConnectionCurrent(device)) return false
+        if (snapshot.batchEnabled && snapshot.batchResultsRetired) return false
         val store = deps.savedPaths() ?: return false
         val revision = pathSelectionRevision
         if (snapshot.batchEnabled && snapshot.completedResults.isNotEmpty()) {

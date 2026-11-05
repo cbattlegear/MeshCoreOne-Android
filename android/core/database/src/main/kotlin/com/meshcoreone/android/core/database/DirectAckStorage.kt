@@ -146,6 +146,16 @@ interface DirectAckDao {
     @Upsert suspend fun wire(row: DirectAckWireEntity)
     @Query("SELECT * FROM direct_ack_operations WHERE radioId = :radio AND claimId = :claim ORDER BY requestId")
     suspend fun operations(radio: UUID, claim: UUID): List<DirectAckOperationEntity>
+    @Query("""
+        SELECT * FROM direct_ack_operations
+        WHERE radioId = :radio AND claimId = :claim
+          AND kind NOT IN ('RADIO_DELIVERY','EMISSION_TRACKING_REQUIRED')
+          AND substr(kind,1,20) != 'EMISSION_RESOLUTION:'
+        ORDER BY requestId
+    """)
+    suspend fun receiptOperations(radio: UUID, claim: UUID): List<DirectAckOperationEntity>
+    @Query("SELECT EXISTS(SELECT 1 FROM direct_ack_operations WHERE radioId = :radio AND claimId = :claim AND kind = 'PENDING')")
+    suspend fun hasPendingCompletion(radio: UUID, claim: UUID): Boolean
     @Query("SELECT * FROM direct_ack_operations WHERE radioId = :radio AND claimId = :claim AND requestId = :request")
     suspend fun operation(radio: UUID, claim: UUID, request: UUID): DirectAckOperationEntity?
     @Query("SELECT * FROM direct_ack_operations WHERE radioId = :radio AND claimId = :claim AND kind = 'RADIO_DELIVERY' LIMIT 2")

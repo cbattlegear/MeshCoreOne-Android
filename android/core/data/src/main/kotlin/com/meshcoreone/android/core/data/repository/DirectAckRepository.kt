@@ -652,7 +652,7 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         replay(claim, issued, operation)?.let { return@mutate it }
         if (claim.pendingId != pendingSendId) return@mutate DirectAckMutationResult.Rejected(DirectAckRejection.CONFLICT)
         deny(claim, issued)?.let { return@mutate it }
-        if (database.directAcks().operations(claim.radioId, claim.requestId).any { it.kind == "PENDING" }) {
+        if (database.directAcks().hasPendingCompletion(claim.radioId, claim.requestId)) {
             return@mutate DirectAckMutationResult.Rejected(DirectAckRejection.CONFLICT)
         }
         ownWrite(database.pendingSends().delete(claim.radioId, pendingSendId))
@@ -854,7 +854,7 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
             return DirectAckPermission.INVALIDATED
         }
         val pendingId = claim.pendingId
-        if (pendingId != null && dao.operations(claim.radioId, claim.requestId).none { it.kind == "PENDING" }) {
+        if (pendingId != null && !dao.hasPendingCompletion(claim.radioId, claim.requestId)) {
             if (dao.incarnation(claim.radioId, pendingId, "pending")?.incarnation != claim.pendingIncarnation) {
                 return DirectAckPermission.INVALIDATED
             }
@@ -907,19 +907,15 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         issued: Attempt,
         operation: DirectAckOperationEntity,
     ): DirectAckMutationResult? {
-        val previous = database.directAcks().operations(claim.radioId, claim.requestId)
-            .firstOrNull { it.requestId == operation.requestId } ?: return null
+        val previous = database.directAcks().operation(claim.radioId, claim.requestId, operation.requestId) ?: return null
         return if (previous == operation) DirectAckMutationResult.AlreadyApplied(receipt(claim, issued.lease))
         else DirectAckMutationResult.Rejected(DirectAckRejection.CONFLICT)
     }
 
     private suspend fun RepositoryTransaction.receipt(claim: DirectAckClaimEntity, lease: Lease): DirectAckReceipt {
         val dao = database.directAcks()
-        val operations = dao.operations(claim.radioId, claim.requestId)
-        val bookkeeping = operations.filter {
-            it.kind != "PENDING" && it.kind != "RADIO_DELIVERY" && it.kind != "EMISSION_TRACKING_REQUIRED" &&
-                !it.kind.startsWith("EMISSION_RESOLUTION:")
-        }.map {
+        val operations = dao.receiptOperations(claim.radioId, claim.requestId)
+        val bookkeeping = operations.filter { it.kind != "PENDING" }.map {
             val change = when {
                 it.kind.startsWith("SEND_COMPLETED:") -> {
                     val wireId = it.kind.removePrefix("SEND_COMPLETED:")

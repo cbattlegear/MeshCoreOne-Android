@@ -602,6 +602,33 @@ behavior remain unexecuted under the retained local-execution hold. An exact
 coherent candidate must obtain its own hosted compilation, discovered tests and
 Room migration/reopen results; no predecessor aggregate result transfers.
 
+### Bounded internal-journal query repair (source-only successor to dfe)
+
+Independent review of immutable `dfe282e29b42ac8cf1c19270b14ddf4eb46e202b`
+found that receipt filtering occurred after loading every operation for a claim.
+Exact bookkeeping replay also loaded that list to locate one request. Further
+inspection found two pending-completion presence checks with the same problem.
+Uncapped durable resolution history must not become an uncapped receipt working
+set even when there is only one logical wire.
+
+The successor moves internal-kind exclusion into a new SQL `receiptOperations`
+query, preserving request ordering, public bookkeeping and pending receipt
+semantics, and explicit unknown-kind failure. Exact replay uses the existing
+primary-key `operation(radio, claim, request)` query. Both pending-presence paths
+use a SQL EXISTS result. No production path calls the full `operations` list;
+that DAO remains available for existing controls. Public receipt/wire shapes
+are unchanged and no journal fact is removed or capped.
+
+`DirectAckReceiptJournalQueryTest` authors a real Room same-claim fixture with
+4,101 resolution journal entries and one wire, then checks the two public
+bookkeeping/pending records, exact replay, input collision, completed-pending
+permission and exclusion-aware delivery. Its query callback records SQL only:
+it refuses an unfiltered operation-journal SELECT and requires the filtered
+receipt, exact-ID and pending-EXISTS statements. This does not rely on callback
+timing to establish transaction contention. The test is authored, not executed.
+This repair changes no schema/entity metadata and is frozen separately from
+the later optional complete-radio confirmation query.
+
 ### Separate accepted-code mismatch repair
 
 This successor is based on the fixture-only `94af032ee0a7bbe21fee822c86f63edac8745187`

@@ -15,6 +15,7 @@ plugins {
 dependencies {
     implementation(project(":core:maps"))
     implementation(libs.androidx.activity.compose)
+    testImplementation(project(":core:designsystem"))
     testImplementation(libs.androidx.compose.ui.test.junit4)
     testImplementation("androidx.test.espresso:espresso-core:3.7.0")
 }

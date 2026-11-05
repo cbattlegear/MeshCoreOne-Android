@@ -13,6 +13,9 @@ import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.FloodScope
+import com.meshcoreone.android.core.protocol.command.PacketBuilder
+import com.meshcoreone.android.core.model.ChannelDTO
+import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
 import com.meshcoreone.android.core.services.sync.SyncState
 import com.meshcoreone.android.core.ui.UiText
 import com.meshcoreone.android.feature.settings.device.*
@@ -23,6 +26,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
@@ -296,15 +300,13 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
         try {
             withSettings(held, actionScope) { h, holder, failures, radio ->
                 val before = assertNotNull(h.manager.connectedDevice)
-                holder.select("EU868")
-                h.eventually("initial selected scope durable") {
-                    !holder.state.value.isApplying && h.manager.connectedDevice?.defaultFloodScopeName == "EU868"
-                }
                 val session = h.sessions.current!!
                 armed = true
                 val edit = async { h.container.deviceEditor.updatePathHashMode(2u, session.token) }
                 h.eventually("actual editor blocks ordinary read consumption") { entered.isCompleted }
-                assertEquals("EU868", session.settingsService.getDefaultFloodScope())
+                assertEquals("EU868", session.settingsService.setDefaultFloodScopeVerified("EU868"))
+                assertNull(store.fetchDevice(before.id)!!.defaultFloodScopeName, "Original cached-null removal window")
+                assertNull(h.manager.connectedDevice?.defaultFloodScopeName)
                 holder.select(null)
                 h.eventually("radio clear sent while old ordinary read waits") { radio.writes.size == 2 && radio.mode == null }
                 actionJob.cancel()
@@ -380,15 +382,177 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
         }
     }
 
+    @Test fun removingTheExactThirtyByteAliasPreservesItsLongSurvivorUntilTheLastRemoval() = runTest {
+        withSettings { h, holder, failures, radio ->
+            val before = assertNotNull(h.manager.connectedDevice)
+            val session = h.sessions.current!!
+            val prefix = "A".repeat(30)
+            val longer = prefix + "suffix"
+            com.meshcoreone.android.app.navigation.addSettingsKnownRegion(h.container, session, prefix)
+            com.meshcoreone.android.app.navigation.addSettingsKnownRegion(h.container, session, longer)
+            h.eventually("mixed aliases observed") { longer in holder.state.value.sortedKnownRegions }
+            holder.select(prefix)
+            h.eventually("exact-length alias committed") { !holder.state.value.isApplying && holder.state.value.currentScope == prefix }
+            val rows = com.meshcoreone.android.app.navigation.SettingsKnownRegionRows(session, listOf(prefix, longer))
+            removeSettingsKnownRegion(h.container, rows, prefix)
+            assertEquals(prefix, radio.mode)
+            assertEquals(prefix, store.fetchDevice(before.id)!!.defaultFloodScopeName)
+            assertEquals(prefix, h.manager.connectedDevice?.defaultFloodScopeName)
+            assertEquals(listOf<String?>(prefix), radio.writes)
+            assertTrue(longer in store.fetchDevice(before.id)!!.knownRegions)
+            removeSettingsKnownRegion(h.container, session, longer)
+            assertNull(radio.mode)
+            assertEquals(before, store.fetchDevice(before.id))
+            assertEquals(before, h.manager.connectedDevice)
+            assertEquals(listOf(prefix, null), radio.writes)
+            assertTrue(failures.isEmpty())
+        }
+    }
+
+    @Test fun retiredVisibleRegionRowsCannotDeleteOrClearTheSuccessorSession() = runTest {
+        withSettings { h, holder, _, radio ->
+            val first = h.sessions.current!!
+            holder.select("EU868")
+            h.eventually("original scope saved") { !holder.state.value.isApplying && holder.state.value.currentScope == "EU868" }
+            val rows = com.meshcoreone.android.app.navigation.SettingsKnownRegionRows(first, listOf("EU868", "US915"))
+            h.manager.disconnect()
+            h.manager.connect(h.target())
+            h.eventually("successor ready for Settings") {
+                h.sessions.current != null && h.sessions.current !== first && h.appState.canRunSettingsStartupReads
+            }
+            val before = assertNotNull(h.manager.connectedDevice)
+            val writes = radio.writes.toList()
+            kotlin.test.assertFailsWith<SettingsNotConnectedException> {
+                removeSettingsKnownRegion(h.container, rows, "EU868")
+            }
+            assertEquals(writes, radio.writes)
+            assertEquals(before, store.fetchDevice(before.id))
+            assertEquals(before, h.manager.connectedDevice)
+        }
+    }
+
+    @Test fun cancelledInFlightScopeAutomaticallyReconcilesThroughTheReplacementActualConsumerBeforeRouting() = runTest {
+        val job = SupervisorJob(backgroundScope.coroutineContext[Job])
+        val actions = CoroutineScope(backgroundScope.coroutineContext + job)
+        try {
+            withSettings(actionScope = actions) { h, holder, failures, radio ->
+                val before = assertNotNull(h.manager.connectedDevice)
+                val service = h.sessions.current!!.settingsService
+                val retired = service.events()
+                holder.select("EU868")
+                h.eventually("verified scope awaits its unstarted consumer") {
+                    radio.mode == "EU868" && holder.state.value.isApplying &&
+                        h.links.radios.single().sent.any { it[0] == 0x40.toUByte() }
+                }
+                assertNull(store.fetchDevice(before.id)!!.defaultFloodScopeName)
+                job.cancel()
+                h.eventually("original UI waiter is cancelled") { !holder.state.value.isApplying }
+                val route = async {
+                    val channel = ChannelDTO(radioId = before.radioId, index = 0u, name = "Scope control")
+                    h.container.chatsFeature.timeline(TimelineConversation.Channel(channel)).syncChannelFloodScope(channel)
+                }
+                h.settle()
+                assertFalse(route.isCompleted, "Dependent routing cannot observe the old cached default")
+                assertTrue(radio.activeScopes.isEmpty(), "Unacknowledged scope must not reach channel routing")
+                h.appState.wireServicesIfConnected()
+                h.eventually("actual replacement consumer acknowledges reconciliation") {
+                    route.isCompleted && !service.defaultFloodScopeNeedsRecovery
+                }
+                route.await()
+                assertEquals(
+                    listOf(PacketBuilder.setFloodScope(FloodScope.Region("EU868").scopeKey())),
+                    radio.activeScopes,
+                    "The actual channel routing command must use the acknowledged default, not stale cached Disabled",
+                )
+                assertTrue(retired.events.toList().isEmpty())
+                assertEquals(before.copy(defaultFloodScopeName = "EU868"), store.fetchDevice(before.id))
+                assertEquals(before.copy(defaultFloodScopeName = "EU868"), h.manager.connectedDevice)
+                assertEquals(listOf<String?>("EU868"), radio.writes, "Recovery reads actual state; it does not invent a rollback write")
+                assertTrue(failures.isEmpty())
+            }
+        } finally { job.cancel() }
+    }
+
+    @Test fun queuedConcurrentAliasMutationsKeepRadioRoomAndLiveDecisionsInTheSameOrder() = runTest {
+        for (addSurvivor in listOf(false, true)) {
+            val prefix = "A".repeat(30)
+            val longer = prefix + "old"
+            val next = prefix + "new"
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            var armed = false
+            val held = object : PersistenceStoreProtocol by store {
+                override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+                    if (armed && prefix !in dto.knownRegions && longer in dto.knownRegions) {
+                        armed = false
+                        entered.complete(Unit)
+                        release.await()
+                    }
+                    return store.saveDeviceIfUnchanged(dto, expected)
+                }
+            }
+            try {
+                withSettings(held) { h, holder, failures, radio ->
+                    val before = assertNotNull(h.manager.connectedDevice)
+                    val session = h.sessions.current!!
+                    com.meshcoreone.android.app.navigation.addSettingsKnownRegion(h.container, session, prefix)
+                    com.meshcoreone.android.app.navigation.addSettingsKnownRegion(h.container, session, longer)
+                    h.eventually("mixed aliases ready") { longer in holder.state.value.sortedKnownRegions }
+                    holder.select(prefix)
+                    h.eventually("selected prefix committed") { !holder.state.value.isApplying && holder.state.value.currentScope == prefix }
+                    armed = true
+                    val first = async { removeSettingsKnownRegion(h.container, session, prefix) }
+                    h.eventually("first actual removal held at Room CAS") { entered.isCompleted }
+                    val addition = if (addSurvivor) async {
+                        com.meshcoreone.android.app.navigation.addSettingsKnownRegion(h.container, session, next)
+                    } else null
+                    h.settle()
+                    val second = async { removeSettingsKnownRegion(h.container, session, longer) }
+                    h.settle()
+                    assertFalse(second.isCompleted)
+                    if (addition != null) assertFalse(addition.isCompleted)
+                    assertEquals(prefix, radio.mode)
+                    assertEquals(listOf<String?>(prefix), radio.writes)
+                    assertTrue(prefix in store.fetchDevice(before.id)!!.knownRegions)
+                    release.complete(Unit)
+                    h.eventually("all queued alias decisions acknowledged") {
+                        first.isCompleted && second.isCompleted && addition?.isCompleted != false
+                    }
+                    first.await(); addition?.await(); second.await()
+                    if (addSurvivor) {
+                        val expected = before.copy(
+                            knownRegions = (before.knownRegions + next).snapshot(), defaultFloodScopeName = prefix,
+                        )
+                        assertEquals(prefix, radio.mode)
+                        assertEquals(expected, store.fetchDevice(before.id))
+                        assertEquals(expected, h.manager.connectedDevice)
+                        assertEquals(listOf<String?>(prefix), radio.writes)
+                        removeSettingsKnownRegion(h.container, session, next)
+                    }
+                    assertNull(radio.mode)
+                    assertEquals(before, store.fetchDevice(before.id))
+                    assertEquals(before, h.manager.connectedDevice)
+                    assertEquals(listOf(prefix, null), radio.writes)
+                    assertTrue(failures.isEmpty())
+                }
+            } finally { release.complete(Unit) }
+        }
+    }
+
     private class ScopeRadio {
         var mode: String? = null
         var key: Bytes? = null
         var writeTransform: (String?) -> String? = { it }
         val writes = mutableListOf<String?>()
+        val activeScopes = mutableListOf<Bytes>()
         fun configure(radio: FirmwareRadio) {
             radio.firmwareVersion = 11u
             radio.respond = { command ->
                 when (command[0].toInt()) {
+                    PacketBuilder.setFloodScope(Bytes(ByteArray(16)))[0].toInt() -> {
+                        activeScopes += command
+                        listOf(Bytes.of(0))
+                    }
                     0x3f -> {
                         val requested = if (command.size == 1) null else
                             command.slice(1, 32).toByteArray().toString(Charsets.UTF_8).substringBefore('\u0000')
@@ -415,8 +579,7 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
         var holder: DefaultFloodScopeStateHolder? = null
         try {
             h.links.configureRadio = radio::configure
-            h.container.foreground.activityStarted()
-            h.manager.connect(h.target())
+            h.connectForegroundSettings()
             h.eventually("foreground startup and sync finish") {
                 h.sessions.current?.syncCoordinator?.state == SyncState.Synced && h.appState.canRunSettingsStartupReads
             }

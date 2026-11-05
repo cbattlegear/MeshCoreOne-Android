@@ -74,8 +74,7 @@ class SettingsPathHashRecreationTest : RoomProcessTest() {
                     }
                 }
             }
-            h.container.foreground.activityStarted()
-            h.manager.connect(h.target())
+            h.connectForegroundSettings()
             h.eventually("startup completed") {
                 h.sessions.current?.syncCoordinator?.state == SyncState.Synced &&
                     h.appState.canRunSettingsStartupReads

@@ -11,6 +11,7 @@ import com.meshcoreone.android.core.protocol.config.SessionConfiguration
 import com.meshcoreone.android.core.protocol.event.ConnectionState
 import com.meshcoreone.android.core.protocol.event.MeshTransportError
 import com.meshcoreone.android.core.protocol.model.ResponseCode
+import com.meshcoreone.android.core.protocol.model.FloodScope
 import com.meshcoreone.android.core.protocol.session.MeshCoreSession
 import com.meshcoreone.android.core.protocol.session.SessionClock
 import com.meshcoreone.android.core.protocol.session.SessionCorrelationException
@@ -76,7 +77,7 @@ internal fun capabilitiesPacket(
 
 internal fun customVarsPacket(text: String = "") = packet(ResponseCode.CUSTOM_VARS, Bytes.utf8(text))
 internal fun floodScopePacket(name: String?) =
-    packet(ResponseCode.DEFAULT_FLOOD_SCOPE, name?.let { Bytes.utf8(it).paddedOrTruncated(31) + filled(0, 16) } ?: Bytes.EMPTY)
+    packet(ResponseCode.DEFAULT_FLOOD_SCOPE, name?.let { Bytes.utf8(it).paddedOrTruncated(31) + FloodScope.Region(it).scopeKey() } ?: Bytes.EMPTY)
 
 internal class TestSignals(initial: SessionToken = token()) : ConnectionSignals {
     override val snapshot = MutableStateFlow(

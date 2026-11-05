@@ -2,6 +2,7 @@
 package com.meshcoreone.android.feature.settings.device
 
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.ui.UiText
 import kotlinx.coroutines.CancellationException
@@ -18,6 +19,7 @@ data class PathHashModeState(
     val selectedMode: UByte? = null,
     val isApplying: Boolean = false,
     val errorMessage: UiText? = null,
+    val sessionToken: SessionToken? = null,
 ) {
     /** 0 is one-byte, 1 two-byte and 2 three-byte path hashes. */
     val displayedMode: UByte get() = selectedMode ?: device?.pathHashMode ?: 0u
@@ -43,8 +45,9 @@ class PathHashModeStateHolder(
         if (observing != null) return
         observing = env.scope.launch {
             launch { connection.connectionState.collect { s -> mutable.update { it.copy(connectionState = s) } } }
-            connection.connectedDevice.collect { d ->
-                mutable.update { it.copy(device = d, selectedMode = d?.pathHashMode ?: it.selectedMode ?: 0u) }
+            connection.deviceObservations.collect { observed ->
+                val d = observed.device
+                mutable.update { it.copy(device = d, sessionToken = observed.sessionToken, selectedMode = d?.pathHashMode ?: it.selectedMode ?: 0u) }
             }
         }
     }
@@ -58,8 +61,11 @@ class PathHashModeStateHolder(
 
     fun onModeSelected(mode: UByte) {
         if (mutable.value.isApplying) return
+        val expectedToken = mutable.value.sessionToken
         val service = try {
-            settingsService()
+            settingsService().also {
+                if (expectedToken != null && it?.sessionToken != expectedToken) throw SettingsNotConnectedException()
+            }
         } catch (failure: Exception) {
             apply(mode, null, failure)
             return

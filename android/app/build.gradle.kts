@@ -341,6 +341,7 @@ tasks.withType<Test>().configureEach {
         "com.meshcoreone.android.app.container.SettingsPathHashPersistenceTest",
         "com.meshcoreone.android.app.container.SettingsPathHashRecreationTest",
         "com.meshcoreone.android.app.container.SettingsDefaultScopePersistenceTest",
+        "com.meshcoreone.android.app.container.SettingsDefaultScopeRenderingTest",
     )
     val pathRecencyClass = "com.meshcoreone.android.parity.AdvertisementPathRecencyOriginalPredicateTest"
     val rollbackClass = "com.meshcoreone.android.parity.AdvertisementRollbackOriginalPredicateTest"

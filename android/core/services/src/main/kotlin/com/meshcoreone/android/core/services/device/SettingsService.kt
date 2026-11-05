@@ -16,6 +16,7 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.bytes.utf8Prefix
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.event.CoreStats
+import com.meshcoreone.android.core.protocol.event.DefaultFloodScope
 import com.meshcoreone.android.core.protocol.event.PacketStats
 import com.meshcoreone.android.core.protocol.event.RadioStats
 import com.meshcoreone.android.core.protocol.model.*
@@ -28,6 +29,7 @@ import java.util.logging.Logger
 import kotlin.math.abs
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.channels.Channel
@@ -49,6 +51,11 @@ class SettingsService(
     private var eventsFinished = false
     private var pathHashRevision = 0L
     private var persistedPathHashRevision = 0L
+    private var defaultScopeUncertain = false
+    private var defaultScopeRecovery: kotlinx.coroutines.Deferred<Unit>? = null
+    val sessionToken get() = context.token
+    val defaultFloodScopeNeedsRecovery: Boolean
+        get() = synchronized(eventLock) { defaultScopeUncertain }
     val pathHashModeNeedsRecovery: Boolean
         get() = synchronized(eventLock) { pathHashRevision != persistedPathHashRevision }
 
@@ -116,6 +123,7 @@ class SettingsService(
         if (accepted) {
             previous?.finishClose(pending)
             if (previous != null) Logger.getLogger("MeshCore.SettingsService").fine("Replacing settings subscriber")
+            scheduleDefaultScopeRecovery()
         } else next.close()
         return next
     }
@@ -311,6 +319,13 @@ class SettingsService(
         operation { writeDefaultFloodScopeAndVerify(name) }
     }
 
+    /** Dependent channel routing and region edits must not sample an uncertain cached default. */
+    suspend fun <T> withPersistedDefaultFloodScope(action: suspend () -> T): T = defaultScopeOperation {
+        if (defaultFloodScopeNeedsRecovery) readDefaultFloodScopePersisted()
+        context.requireCurrent()
+        action()
+    }
+
     suspend fun setDefaultFloodScopePersisted(name: String?, currentDevice: () -> DeviceDTO?): String? = defaultScopeOperation {
         val device = currentDevice() ?: throw SettingsServiceException(SettingsServiceError.NotConnected)
         if (!name.isNullOrEmpty() && name !in device.knownRegions) {
@@ -328,11 +343,7 @@ class SettingsService(
         val device = currentDevice() ?: throw SettingsServiceException(SettingsServiceError.NotConnected)
         if (device.supportsDefaultFloodScope) {
             // This acknowledged baseline fences older unacknowledged reads even if no clear is needed.
-            val actual = acknowledged { completion, owner ->
-                val value = configuration { getDefaultFloodScope() }
-                publish(SettingsEvent.DefaultFloodScopeUpdated(value?.name, completion), completion, owner)
-                value
-            }
+            val actual = readDefaultFloodScopePersisted()
             val radioRegion = defaultFloodScopeName(region)
             val latest = currentDevice() ?: throw SettingsServiceException(SettingsServiceError.NotConnected)
             val anotherAlias = latest.knownRegions.any { it != region && defaultFloodScopeName(it) == radioRegion }
@@ -354,7 +365,7 @@ class SettingsService(
     private suspend fun <T> defaultScopeOperation(action: suspend () -> T): T {
         currentCoroutineContext().ensureActive()
         val admission = AtomicInteger(0)
-        val task = context.submit {
+        val task = context.submit(start = CoroutineStart.LAZY) {
             val finished = CompletableDeferred<Unit>()
             val previous = synchronized(defaultScopeQueueLock) {
                 defaultScopeTail.also { defaultScopeTail = finished }
@@ -371,22 +382,20 @@ class SettingsService(
                 else previous.invokeOnCompletion { finished.complete(Unit) }
             }
         }
-        try {
-            return context.await(task)
-        } catch (cancelled: CancellationException) {
+        return context.await(task, onCancellation = {
             if (admission.compareAndSet(0, 2)) task.cancel()
             else task.invokeOnCompletion { failure ->
                 if (failure != null && failure !is CancellationException) {
                     Logger.getLogger("MeshCore.SettingsService").log(Level.WARNING, "Detached scope action failed", failure)
                 }
             }
-            throw cancelled
-        }
+        })
     }
 
     private suspend fun persistDefaultFloodScope(name: String?): String? {
         val expected = defaultFloodScopeName(name)
         val actual = acknowledged { completion, owner ->
+            synchronized(eventLock) { defaultScopeUncertain = true }
             configuration {
                 if (expected == null) setDefaultFloodScope("", FloodScope.Disabled)
                 else setDefaultFloodScope(expected, FloodScope.Region(expected))
@@ -395,11 +404,53 @@ class SettingsService(
             publish(SettingsEvent.DefaultFloodScopeUpdated(value?.name, completion), completion, owner)
             value
         }
+        verifyDefaultScopeKey(actual)
+        synchronized(eventLock) { defaultScopeUncertain = false }
         if (actual?.name != expected) verification(expected ?: "(cleared)", actual?.name ?: "(cleared)")
-        if (expected != null && actual?.scopeKey != FloodScope.Region(expected).scopeKey()) {
-            verification("scopeKey(region=$expected)", "different scope key")
-        }
         return actual?.name
+    }
+
+    private suspend fun readDefaultFloodScopePersisted(): DefaultFloodScope? {
+        synchronized(eventLock) { defaultScopeUncertain = true }
+        val actual = acknowledged { completion, owner ->
+            val value = configuration { getDefaultFloodScope() }
+            publish(SettingsEvent.DefaultFloodScopeUpdated(value?.name, completion), completion, owner)
+            value
+        }
+        verifyDefaultScopeKey(actual)
+        synchronized(eventLock) { defaultScopeUncertain = false }
+        return actual
+    }
+
+    private fun verifyDefaultScopeKey(actual: DefaultFloodScope?) {
+        if (actual != null && actual.scopeKey != FloodScope.Region(actual.name).scopeKey()) {
+            verification("scopeKey(region=${actual.name})", "different scope key")
+        }
+    }
+
+    private fun scheduleDefaultScopeRecovery() {
+        var attemptedRevision = 0L
+        val task = synchronized(eventLock) {
+            if (!defaultScopeUncertain || defaultScopeRecovery != null || subscription == null || !context.isCurrent) return
+            attemptedRevision = subscriptionRevision
+            context.submit(start = CoroutineStart.LAZY) {
+                defaultScopeOperation {
+                    attemptedRevision = synchronized(eventLock) { subscriptionRevision }
+                    if (defaultFloodScopeNeedsRecovery) readDefaultFloodScopePersisted()
+                }
+            }.also { defaultScopeRecovery = it }
+        }
+        task.invokeOnCompletion { failure ->
+            val retry = synchronized(eventLock) {
+                defaultScopeRecovery = null
+                defaultScopeUncertain && subscription != null && subscriptionRevision != attemptedRevision
+            }
+            if (failure != null && failure !is CancellationException) {
+                Logger.getLogger("MeshCore.SettingsService").log(Level.WARNING, "Default scope reconciliation failed", failure)
+            }
+            if (retry) scheduleDefaultScopeRecovery()
+        }
+        task.start()
     }
 
     private suspend fun writeDefaultFloodScopeAndVerify(name: String?): String? {
@@ -408,9 +459,11 @@ class SettingsService(
             if (expected == null) setDefaultFloodScope("", FloodScope.Disabled)
             else setDefaultFloodScope(expected, FloodScope.Region(expected))
         }
-        val actual = readDefaultFloodScope()
-        if (actual != expected) verification(expected ?: "(cleared)", actual ?: "(cleared)")
-        return actual
+        val actual = configuration { getDefaultFloodScope() }
+        publish(SettingsEvent.DefaultFloodScopeUpdated(actual?.name))
+        verifyDefaultScopeKey(actual)
+        if (actual?.name != expected) verification(expected ?: "(cleared)", actual?.name ?: "(cleared)")
+        return actual?.name
     }
 
     private fun defaultFloodScopeName(name: String?): String? =

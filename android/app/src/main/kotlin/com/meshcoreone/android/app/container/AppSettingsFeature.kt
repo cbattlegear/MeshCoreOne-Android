@@ -18,6 +18,8 @@ import com.meshcoreone.android.core.services.remote.NodeConfigJson
 import com.meshcoreone.android.core.services.remote.NodeConfigContactSaveFailure
 import com.meshcoreone.android.core.services.remote.NodeConfigService
 import com.meshcoreone.android.core.services.remote.ImportStep
+import com.meshcoreone.android.app.navigation.addSettingsKnownRegion
+import com.meshcoreone.android.app.navigation.removeSettingsKnownRegion
 import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings as S
 import java.time.Instant
 import java.util.UUID
@@ -46,14 +48,16 @@ class AppSettingsFeature private constructor(
     private val changes = combine(
         app.servicesVersion, app.sessionStateChangeCount, container.connectionManager.snapshot, container.deviceAccess.changes,
     ) { _, _, _, _ -> Unit }
-    private val device = changes.flatMapLatest {
-        val current = app.connectedDevice
-        if (current == null) flowOf(null) else storage.devicePreferences.observe(current.id).map { value ->
+    private val deviceObservations = changes.flatMapLatest {
+        val token = container.deviceAccess.connectedDeviceToken
+        val current = if (token == null) app.connectedDevice else container.deviceAccess.currentDevice(token)
+        if (current == null) flowOf(SettingsDeviceObservation(null)) else storage.devicePreferences.observe(current.id).map { value ->
             deviceValues[current.id] = value
-            current
+            SettingsDeviceObservation(current, token)
         }
-    }.catch { report("Device preferences could not load", it); emit(null) }
-        .stateIn(scope, SharingStarted.Eagerly, null)
+    }.catch { report("Device preferences could not load", it); emit(SettingsDeviceObservation(null)) }
+        .stateIn(scope, SharingStarted.Eagerly, SettingsDeviceObservation(null))
+    private val device = deviceObservations.map { it.device }.stateIn(scope, SharingStarted.Eagerly, null)
 
     init {
         scope.launch {
@@ -173,6 +177,7 @@ class AppSettingsFeature private constructor(
     ): SettingsFeatureDependencies = SettingsFeatureDependencies(
         connection = object : SettingsConnection {
             override val connectedDevice = device
+            override val deviceObservations = this@AppSettingsFeature.deviceObservations
             override val connectionState = container.connectionManager.snapshot.map { it.state }
                 .stateIn(scope, SharingStarted.WhileSubscribed(), app.connectionState)
             override val startupReadsAllowed = changes.map { app.canRunSettingsStartupReads }
@@ -231,8 +236,14 @@ class AppSettingsFeature private constructor(
             }
             override fun savePreRepeatSettings() { container.deviceEditor.savePreRepeatSettings() }
             override fun clearPreRepeatSettings() { container.deviceEditor.clearPreRepeatSettings() }
-            override fun addKnownRegion(region: String) { container.deviceEditor.addKnownRegion(region) }
-            override fun removeKnownRegion(region: String) { container.deviceEditor.removeKnownRegion(region) }
+            override fun addKnownRegion(region: String) {
+                val session = container.sessions.current
+                write { addSettingsKnownRegion(container, session ?: throw SettingsNotConnectedException(), region) }
+            }
+            override fun removeKnownRegion(region: String) {
+                val session = container.sessions.current
+                write { removeSettingsKnownRegion(container, session ?: throw SettingsNotConnectedException(), region) }
+            }
         },
         diagnostics = diagnostics,
         identityKeys = object : IdentityKeyPort {
@@ -302,6 +313,7 @@ private class SettingsRadioAdapter(
     private val service: SettingsService,
     private val currentDevice: () -> DeviceDTO?,
 ) : SettingsRadioPort {
+    override val sessionToken get() = service.sessionToken
     override val pathHashModeNeedsRecovery get() = service.pathHashModeNeedsRecovery
     override suspend fun getSelfInfo() = service.getSelfInfo()
     override suspend fun setRadioParamsVerified(frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte,

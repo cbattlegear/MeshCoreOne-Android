@@ -264,8 +264,7 @@ class SettingsPathHashPersistenceTest : RoomProcessTest() {
                     }
                 }
             }
-            h.container.foreground.activityStarted()
-            h.manager.connect(h.target())
+            h.connectForegroundSettings()
             h.eventually("foreground startup and sync finish") {
                 h.sessions.current?.syncCoordinator?.state == SyncState.Synced &&
                     h.appState.canRunSettingsStartupReads

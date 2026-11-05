@@ -9,6 +9,8 @@ import com.meshcoreone.android.core.protocol.command.PacketBuilder
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.FloodScope
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.async
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -16,6 +18,8 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlin.coroutines.CoroutineContext
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -285,19 +289,23 @@ class SettingsDefaultScopePersistenceTest {
             val replacement = fixture.settings.events()
             reply(fixture, 3, PacketBuilder.getDefaultFloodScope(), floodScopePacket("EU868"))
             assertEquals(SettingsServiceError.NotConnected, assertFailsWith<SettingsServiceException> { write.await() }.error)
-            assertEquals(3, fixture.radio.sent.size, "A sent command is not rolled back by subscriber retirement")
+            assertEquals(1, fixture.radio.sent.count { it[0] == 0x3f.toUByte() }, "A sent command is not rolled back by subscriber retirement")
+            val observed = mutableListOf<String?>()
             val collector = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
                 replacement.events.collect {
                     val update = assertIs<SettingsEvent.DefaultFloodScopeUpdated>(it.event)
-                    assertEquals(null, update.name)
+                    observed += update.name
                     assertNotNull(update.persistence).complete(Unit)
                 }
             }
             try {
+                reply(fixture, 4, PacketBuilder.getDefaultFloodScope(), floodScopePacket("EU868"))
+                assertFalse(fixture.settings.defaultFloodScopeNeedsRecovery)
                 val restore = request { fixture.settings.selectScope(null) }
-                reply(fixture, 4, PacketBuilder.setDefaultFloodScope("", FloodScope.Disabled), okPacket())
-                reply(fixture, 5, PacketBuilder.getDefaultFloodScope(), floodScopePacket(null))
+                reply(fixture, 5, PacketBuilder.setDefaultFloodScope("", FloodScope.Disabled), okPacket())
+                reply(fixture, 6, PacketBuilder.getDefaultFloodScope(), floodScopePacket(null))
                 restore.await()
+                assertEquals(listOf("EU868", null), observed)
             } finally { replacement.close(); collector.cancel() }
         } finally { old.close(); fixture.close() }
     }
@@ -348,5 +356,52 @@ class SettingsDefaultScopePersistenceTest {
             assertTrue(removed)
             assertEquals(2, fixture.radio.sent.size, "Only the read, not a radio clear")
         } finally { subscription.close(); collector.cancel(); fixture.close() }
+    }
+
+    @Test fun queuedCancellationWithdrawsBeforeItsCallerDispatcherCanResume() = runTest {
+        val fixture = settingsFixture()
+        val subscription = fixture.settings.events()
+        val events = mutableListOf<SettingsEvent.DefaultFloodScopeUpdated>()
+        val collector = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            subscription.events.collect { events += assertIs<SettingsEvent.DefaultFloodScopeUpdated>(it.event) }
+        }
+        val delegate = StandardTestDispatcher(testScheduler)
+        val waiting = mutableListOf<Pair<CoroutineContext, Runnable>>()
+        var paused = false
+        val caller = object : CoroutineDispatcher() {
+            override fun dispatch(context: CoroutineContext, block: Runnable) {
+                if (paused) waiting += context to block else delegate.dispatch(context, block)
+            }
+        }
+        try {
+            val first = request { fixture.settings.selectScope("EU868") }
+            reply(fixture, 2, PacketBuilder.setDefaultFloodScope("EU868", FloodScope.Region("EU868")), okPacket())
+            reply(fixture, 3, PacketBuilder.getDefaultFloodScope(), floodScopePacket("EU868"))
+            val cancelled = backgroundScope.async(caller) { fixture.settings.selectScope("US915") }
+            runCurrent()
+            paused = true
+            cancelled.cancel()
+            assertNotNull(events.single().persistence).complete(Unit)
+            runCurrent()
+            assertFalse(cancelled.isCompleted, "Cancellation catch is deliberately unable to run")
+            assertEquals(3, fixture.radio.sent.size, "The cancelled queued intent cannot win its turn")
+            assertEquals("EU868", first.await())
+            assertEquals(listOf("EU868"), events.map { it.name })
+        } finally {
+            paused = false
+            waiting.forEach { (context, block) -> delegate.dispatch(context, block) }
+            runCurrent()
+            subscription.close(); collector.cancel(); fixture.close()
+        }
+    }
+
+    @Test fun legacyVerifiedScopeAlsoRejectsAReadbackWithTheWrongKey() = runTest {
+        val fixture = settingsFixture()
+        try {
+            val write = request { fixture.settings.setDefaultFloodScopeVerified("EU868") }
+            reply(fixture, 2, PacketBuilder.setDefaultFloodScope("EU868", FloodScope.Region("EU868")), okPacket())
+            reply(fixture, 3, PacketBuilder.getDefaultFloodScope(), floodScopePacket("EU868", filled(7, 16)))
+            assertIs<SettingsServiceError.VerificationFailed>(assertFailsWith<SettingsServiceException> { write.await() }.error)
+        } finally { fixture.close() }
     }
 }

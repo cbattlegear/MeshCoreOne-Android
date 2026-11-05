@@ -10,13 +10,18 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 class DeviceSettingsContext(
     val token: SessionToken,
@@ -70,7 +75,7 @@ class DeviceSettingsContext(
 
     internal suspend fun <T> operation(action: suspend () -> T): T {
         currentCoroutineContext().ensureActive()
-        val task = submit(action)
+        val task = submit(action = action)
         try {
             return await(task)
         } finally {
@@ -79,9 +84,8 @@ class DeviceSettingsContext(
     }
 
     /** A begun radio mutation belongs to this connection, not its disposable UI waiter. */
-    internal fun <T> submit(action: suspend () -> T): Deferred<T> {
-        requireCurrent()
-        return scope.async {
+    internal fun <T> submit(start: CoroutineStart = CoroutineStart.DEFAULT, action: suspend () -> T): Deferred<T> {
+        return scope.async(start = start) {
             requireCurrent()
             val result = action()
             currentCoroutineContext().ensureActive()
@@ -90,9 +94,18 @@ class DeviceSettingsContext(
         }
     }
 
-    internal suspend fun <T> await(task: Deferred<T>): T {
+    @OptIn(ExperimentalCoroutinesApi::class)
+    internal suspend fun <T> await(task: Deferred<T>, onCancellation: (() -> Unit)? = null): T {
         try {
-            return task.await()
+            if (onCancellation == null) return task.await()
+            return suspendCancellableCoroutine { waiter ->
+                waiter.invokeOnCancellation { onCancellation() }
+                task.invokeOnCompletion { failure ->
+                    if (failure == null) waiter.resume(task.getCompleted())
+                    else waiter.resumeWithException(failure)
+                }
+                task.start()
+            }
         } catch (cancelled: CancellationException) {
             // Our own caller's cancellation still propagates; a context closed under a live caller is NotConnected.
             currentCoroutineContext().ensureActive()

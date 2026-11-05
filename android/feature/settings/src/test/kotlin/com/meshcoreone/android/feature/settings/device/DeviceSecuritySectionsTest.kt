@@ -3,6 +3,9 @@ package com.meshcoreone.android.feature.settings.device
 
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException
+import com.meshcoreone.android.core.contracts.domain.SessionToken
+import com.meshcoreone.android.core.contracts.domain.ProcessEpoch
+import com.meshcoreone.android.core.contracts.domain.Generation
 import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings
 import com.meshcoreone.android.core.model.OCVPreset
@@ -16,6 +19,7 @@ import com.meshcoreone.android.feature.settings.device.support.FakeStore
 import com.meshcoreone.android.feature.settings.device.support.TestScheduler
 import com.meshcoreone.android.feature.settings.device.support.device
 import java.util.Locale
+import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -24,6 +28,7 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.MutableStateFlow
 
 class PathHashModeStateHolderTest {
     private val scheduler = TestScheduler()
@@ -485,6 +490,62 @@ class DefaultFloodScopeStateHolderTest {
         assertTrue(successor.calls.isEmpty())
         assertFalse(bound.state.value.isApplying)
         bound.stop()
+    }
+
+    @Test
+    fun `initial scope click captures its service before the action dispatcher executes`() {
+        val successor = FakeSettingsPort()
+        var current = service
+        val bound = DefaultFloodScopeStateHolder(scheduler.environment(), connection, { current }, discovery, store)
+        bound.start(); scheduler.runCurrent()
+        bound.select("Alpha")
+        current = successor
+        scheduler.runCurrent()
+        assertEquals(listOf("setDefaultFloodScopeVerified(Alpha)"), service.calls)
+        assertTrue(successor.calls.isEmpty())
+        bound.stop()
+    }
+
+    @Test
+    fun `a stale displayed scope cannot acquire a successor even for the same device`() {
+        val first = SessionToken(ProcessEpoch(UUID(0, 1)), Generation(1), connection.deviceFlow.value!!.radioId)
+        val second = first.copy(generation = Generation(2))
+        val observations = MutableStateFlow(SettingsDeviceObservation(connection.deviceFlow.value, first))
+        val observed = object : SettingsConnection by connection {
+            override val deviceObservations = observations
+        }
+        val firstService = object : SettingsRadioPort by service { override val sessionToken = first }
+        val successor = FakeSettingsPort()
+        val secondService = object : SettingsRadioPort by successor { override val sessionToken = second }
+        var current: SettingsRadioPort = firstService
+        val bound = DefaultFloodScopeStateHolder(scheduler.environment(), observed, { current }, discovery, store)
+        bound.start(); scheduler.runCurrent()
+        current = secondService
+        bound.select("Alpha")
+        scheduler.runCurrent()
+        assertTrue(service.calls.isEmpty())
+        assertTrue(successor.calls.isEmpty())
+        assertTrue(bound.state.value.errorMessage != null)
+        observations.value = SettingsDeviceObservation(connection.deviceFlow.value, second)
+        scheduler.runCurrent()
+        bound.select("Alpha", first)
+        scheduler.runCurrent()
+        assertTrue(successor.calls.isEmpty(), "A retained S1 row callback cannot adopt the refreshed S2 observation")
+        bound.select("Alpha")
+        scheduler.runCurrent()
+        assertEquals(listOf("setDefaultFloodScopeVerified(Alpha)"), successor.calls)
+        assertNull(bound.state.value.errorMessage)
+        bound.stop()
+    }
+
+    @Test
+    fun `long and mixed aliases have one radio identity while preserving every full name`() {
+        val prefix = "é".repeat(15)
+        val aliases = listOf(prefix + "two", prefix, prefix + "one")
+        val state = DefaultFloodScopeState(device = device(knownRegions = aliases, defaultFloodScopeName = prefix))
+        assertEquals(mapOf(prefix to listOf(prefix, prefix + "one", prefix + "two")), state.regionGroups)
+        assertEquals(prefix, state.currentScope)
+        assertEquals(aliases.size, state.regionGroups.values.sumOf { it.size })
     }
 
     @Test

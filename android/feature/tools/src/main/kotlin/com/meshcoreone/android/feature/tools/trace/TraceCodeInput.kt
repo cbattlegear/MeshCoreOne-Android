@@ -122,7 +122,7 @@ internal fun TraceCodeInput(
     state: TracePathState,
     holder: TracePathStateHolder,
     entry: TraceCodeInputState = rememberTraceCodeInputState(holder),
-    canEdit: () -> Boolean = { holder.isEditingCurrent() },
+    canEdit: () -> Boolean = { holder.isConnectionCurrent() },
 ) {
     var expanded by entry::expanded
     var input by entry::input

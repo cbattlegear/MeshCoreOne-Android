@@ -126,16 +126,6 @@ class TracePathStateHolder(
     internal fun isBoundConnectionCurrent(radioId: RadioId?, generation: Int, originatingToken: SessionToken?): Boolean =
         connectionIdentity == (radioId to generation) && sessionToken == originatingToken && isConnectionCurrent()
 
-    internal fun isEditingCurrent(): Boolean {
-        if (!connectionRetired && sessionToken == null && connectionIdentity?.first == null &&
-            deps.sessionToken() == null && deps.connectedDevice() == null
-        ) return true
-        return isConnectionCurrent()
-    }
-
-    internal fun isBoundEditingCurrent(radioId: RadioId?, generation: Int, originatingToken: SessionToken?): Boolean =
-        connectionIdentity == (radioId to generation) && sessionToken == originatingToken && isEditingCurrent()
-
     internal fun observeHashModeActions(onAction: () -> Unit): () -> Unit {
         hashModeActionObservers += onAction
         return { hashModeActionObservers -= onAction }
@@ -322,10 +312,6 @@ class TracePathStateHolder(
 
     fun setAutoReturnPath(enabled: Boolean) {
         if (current.autoReturnPath == enabled) return
-        if (current.fullPathData == current.copy(autoReturnPath = enabled).fullPathData) {
-            update { it.copy(autoReturnPath = enabled) }
-            return
-        }
         invalidatePathExecution()
         clearError()
         update {

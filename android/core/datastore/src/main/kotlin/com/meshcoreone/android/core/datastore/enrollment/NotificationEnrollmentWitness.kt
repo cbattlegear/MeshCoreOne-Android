@@ -318,21 +318,6 @@ class NotificationEnrollmentWitness internal constructor(
             db.endTransaction()
         }
 
-        internal object AndroidWitnessDurability {
-            fun synchronize(file: File) {
-                try {
-                    val committed = Os.open(file.absolutePath, OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW, 0)
-                    try { Os.fsync(committed) } finally { Os.close(committed) }
-                    val directory = Os.open(requireNotNull(file.parent), OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW, 0)
-                    try {
-                        if (!OsConstants.S_ISDIR(Os.fstat(directory).st_mode)) throw IOException("Witness parent is not a directory")
-                        Os.fsync(directory)
-                    } finally { Os.close(directory) }
-                } catch (failure: ErrnoException) {
-                    throw IOException("Witness synchronization failed", failure)
-                }
-            }
-        }
     }
 
     private inline fun guarded(
@@ -463,5 +448,21 @@ class NotificationEnrollmentWitness internal constructor(
 
     private companion object {
         val ZERO_MAC = ByteArray(32)
+    }
+}
+
+internal object AndroidWitnessDurability {
+    fun synchronize(file: File) {
+        try {
+            val committed = Os.open(file.absolutePath, OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW, 0)
+            try { Os.fsync(committed) } finally { Os.close(committed) }
+            val directory = Os.open(requireNotNull(file.parent), OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW, 0)
+            try {
+                if (!OsConstants.S_ISDIR(Os.fstat(directory).st_mode)) throw IOException("Witness parent is not a directory")
+                Os.fsync(directory)
+            } finally { Os.close(directory) }
+        } catch (failure: ErrnoException) {
+            throw IOException("Witness synchronization failed", failure)
+        }
     }
 }

@@ -130,6 +130,10 @@ class AppDirectAckConfirmationComposeTest : RoomProcessTest() {
         mount(direct = true, supported = true, recreate = true,
             seedStatus = MessageStatus.DELIVERED, realPersistence = true)
 
+    @Test fun persistedDualKindFailedRowInActualDirectTimelineKeepsUnconfirmedVisibleAndAccessibleLabels() =
+        mount(direct = true, supported = true, recreate = true,
+            seedStatus = MessageStatus.FAILED, realPersistence = true, dualKind = true)
+
     private enum class OwnerChange { SAME_RADIO, DIFFERENT_RADIO, DISCONNECT }
 
     private fun mount(
@@ -137,6 +141,7 @@ class AppDirectAckConfirmationComposeTest : RoomProcessTest() {
         seedStatus: MessageStatus? = null, identicalReplacement: Boolean = false,
         fontScale: Float = 1f,
         realPersistence: Boolean = false,
+        dualKind: Boolean = false,
         reason: DirectAckRadioConfirmationWildcardReason =
             DirectAckRadioConfirmationWildcardReason.UNTRACKED_LEGACY_ANCESTRY,
     ) = runTest {
@@ -222,9 +227,11 @@ class AppDirectAckConfirmationComposeTest : RoomProcessTest() {
                     lastHeardTimestamp = null,
                 )
                 store.saveContact(contact)
+                if (dualKind) store.saveChannel(ChannelDTO(radioId = radio, index = 3u, name = "Ambiguous ancestry"))
                 if (seedStatus != null) {
                     seeded = MessageDTO(
-                        radioId = radio, contactID = contact.id, text = "Retained history fixture",
+                        radioId = radio, contactID = contact.id, channelIndex = if (dualKind) 3u else null,
+                        text = "Retained history fixture",
                         timestamp = 1_700_000_000u, createdAt = Instant.ofEpochSecond(1_700_000_000),
                         status = seedStatus,
                     )
@@ -380,7 +387,10 @@ class AppDirectAckConfirmationComposeTest : RoomProcessTest() {
                         ))
                         compose.waitUntil(30_000) {
                             pump()
-                            h.container.chatsFeature.directAckConfirmation.messages.state.value.hasHistoricalUncertainty
+                            val actual = h.container.chatsFeature.directAckConfirmation.messages.state.value
+                            if (dualKind) actual.status ==
+                                com.meshcoreone.android.feature.chats.actions.DirectMessageConfirmationReadStatus.HistoricalRead
+                            else actual.hasHistoricalUncertainty
                         }
                         assertTrue(h.container.chatsFeature.directAckConfirmation.messages.state.value.rowDiagnosticsUnavailable)
                     } else {

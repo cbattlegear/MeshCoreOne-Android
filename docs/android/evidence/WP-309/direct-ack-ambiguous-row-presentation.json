@@ -1,0 +1,31 @@
+{
+  "wp": "WP-309",
+  "scope": "Conservative presentation of outgoing FAILED contact-bearing rows that also contain a channel index",
+  "status": "SOURCE_ONLY_UNCOMPILED_UNEXECUTED",
+  "parent": "20869240574076390c88b8d3c3babe2791eb9a9d",
+  "reference": "db14559b39d32322b06477c6ae676112f583db50",
+  "finding": "The actual contact timeline filters persisted rows by contactID, not by absence of channelIndex. A dual-kind row can therefore be displayed in a direct conversation.",
+  "repair": [
+    "Outgoing FAILED contact-bearing rows retain unconfirmed visible and accessible wording even if channelIndex is also present.",
+    "The mounted direct conversation registers non-delivered ambiguous contact-bearing keys with the existing historical diagnostic aggregate.",
+    "Normal contact-null channel wording, incoming rows and actual DELIVERED state remain unchanged. No DTO field becomes incarnation proof."
+  ],
+  "source_controls": {
+    "new_methods": 1,
+    "updated_parameter_family": "Every direction, status, contact-presence and channel-presence combination; no DTO mutation",
+    "new_method": "persistedDualKindFailedRowInActualDirectTimelineKeepsUnconfirmedVisibleAndAccessibleLabels",
+    "new_method_uses": "Actual Room contact timeline, actual mounted AppChatsContent, Activity recreation, genuine capability-required producer, visible and accessible labels, registered historical diagnostic read, and enabled composer/retry",
+    "diagnostic_boundary": "A genuine NotEligible read for an ambiguous row is allowed; successful reading is not a positive eligibility, delivery or bound-incarnation assertion."
+  },
+  "verification": {
+    "commands_executed": [],
+    "tests_executed": 0,
+    "reason": "No local product execution authorized. Exact producer/schema/service/UI composition and hosted exact-head validation remain coordinator-owned."
+  },
+  "exclusions": [
+    "No new row identity binding API",
+    "No status, footer-cache, pending-row, send policy or persistence authority changes",
+    "No unpublished file-backed reopen artifact included",
+    "No whole-WP, runtime, device or hardware acceptance"
+  ]
+}

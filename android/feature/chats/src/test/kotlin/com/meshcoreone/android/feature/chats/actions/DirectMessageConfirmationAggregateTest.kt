@@ -31,16 +31,18 @@ class DirectMessageConfirmationAggregateTest {
         }
 
     @Test fun failedWordingIsConservativeAcrossEveryDirectionChannelAndStatusWithoutMutatingTheRow() {
+        for (contact in listOf<UUID?>(null, UUID(309, 73)))
         for (direction in MessageDirection.entries) for (channel in listOf<UByte?>(null, 3u)) {
             for (status in MessageStatus.entries) {
                 val message = MessageDTO(
-                    id = key.id, radioId = radio, contactID = UUID(309, 73), channelIndex = channel,
+                    id = key.id, radioId = radio, contactID = contact, channelIndex = channel,
                     text = "fixture", timestamp = 1_700_000_000u, createdAt = Instant.EPOCH,
                     direction = direction, status = status,
                 )
                 val before = message.copy()
                 assertEquals(
-                    direction == MessageDirection.OUTGOING && channel == null && status == MessageStatus.FAILED,
+                    direction == MessageDirection.OUTGOING && (channel == null || contact != null) &&
+                        status == MessageStatus.FAILED,
                     requiresUnconfirmedDirectFailureLabel(message),
                 )
                 assertEquals(before, message)

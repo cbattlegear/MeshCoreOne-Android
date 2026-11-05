@@ -300,7 +300,7 @@ private fun AppChatConversation(
                     val consumer = remember(monitor, conversation.id) { Any() }
                     val messageKeys = remember(timelineState.messages) {
                         timelineState.messages.filter {
-                            it.isOutgoing && !it.isChannelMessage &&
+                            it.isOutgoing && (!it.isChannelMessage || it.contactID != null) &&
                                 it.status != com.meshcoreone.android.core.model.MessageStatus.DELIVERED
                         }.map { com.meshcoreone.android.core.contracts.domain.EntityKey(it.radioId, it.id) }.toSet()
                     }

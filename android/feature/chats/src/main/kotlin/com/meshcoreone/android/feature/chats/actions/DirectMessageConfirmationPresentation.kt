@@ -8,4 +8,4 @@ import com.meshcoreone.android.core.model.MessageStatus
 /** Conservative wording only; does not change persisted status, retry availability or send policy. */
 fun requiresUnconfirmedDirectFailureLabel(message: MessageDTO): Boolean =
     message.direction == MessageDirection.OUTGOING &&
-        !message.isChannelMessage && message.status == MessageStatus.FAILED
+        (!message.isChannelMessage || message.contactID != null) && message.status == MessageStatus.FAILED

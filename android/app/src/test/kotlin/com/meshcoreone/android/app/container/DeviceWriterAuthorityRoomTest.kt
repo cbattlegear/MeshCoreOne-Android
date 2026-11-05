@@ -39,6 +39,7 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
         var afterSave: suspend () -> Unit = {}
         var beforeRemove: suspend () -> Unit = {}
         var afterActivation: suspend () -> Unit = {}
+        var onWriteAuthority: () -> Unit = {}
         var rejected = 0
         override suspend fun insertDeviceIfAbsent(dto: DeviceDTO): Boolean = room.insertDeviceIfAbsent(dto)
         override suspend fun activateDeviceIfCurrent(id: UUID, isCurrent: () -> Boolean): Boolean {
@@ -65,7 +66,12 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
             val hook = beforeSave
             beforeSave = {}
             hook()
-            val accepted = room.saveDeviceIfUnchanged(dto, expected)
+            val accepted = room.saveDeviceIfUnchanged(dto, expected.copy(withAuthority = { write ->
+                expected.withAuthority {
+                    onWriteAuthority()
+                    write()
+                }
+            }))
             if (!accepted) rejected++
             val committed = afterSave
             afterSave = {}
@@ -500,9 +506,9 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
             val update = async { h.container.deviceEditor.updatePathHashMode(2u, h.sessions.current!!.token) }
             entered.await()
             update.cancel()
-            release.complete(Unit)
             update.join()
             assertTrue(update.isCancelled)
+            release.complete(Unit)
             assertEquals(before, store.fetchDevice(before.id))
             assertEquals(before, h.manager.connectedDevice)
         } finally { release.complete(Unit); h.container.close() }
@@ -521,7 +527,8 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
             val update = async { h.container.deviceEditor.updatePathHashMode(2u, h.sessions.current!!.token) }
             entered.await()
             assertEquals(before.copy(pathHashMode = 2u), store.fetchDevice(before.id))
-            assertEquals(before, h.manager.connectedDevice)
+            assertEquals(before.copy(pathHashMode = 2u), h.manager.connectedDevice,
+                "The committed callback runs before returning from storage")
             update.cancel()
             release.complete(Unit)
             update.join()
@@ -553,6 +560,88 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
             assertEquals(successor, h.manager.connectedDevice)
             assertEquals(successor, store.fetchDevice(successor.id))
         } finally { h.container.close() }
+    }
+
+    @Test fun cancellingAnActualRoomCommitWaitReleasesRuntimeAuthorityBeforeTheBlockingTransactionEnds() = runTest {
+        val paused = PausedStore(store)
+        val h = ContainerHarness(this, store, persistenceOverride = paused)
+        val transactionEntered = CompletableDeferred<Unit>()
+        val authorityEntered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var holder: kotlinx.coroutines.Deferred<Unit>? = null
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            val before = assertNotNull(h.manager.connectedDevice)
+            val token = h.sessions.current!!.token
+            paused.beforeSave = {
+                holder = async(Dispatchers.IO) {
+                    db.withTransaction { transactionEntered.complete(Unit); release.await() }
+                }
+                transactionEntered.await()
+            }
+            paused.onWriteAuthority = { authorityEntered.complete(Unit) }
+            val update = async { h.container.deviceEditor.updatePathHashMode(2u, token) }
+            authorityEntered.await()
+            update.cancel()
+            update.join()
+            assertTrue(update.isCancelled)
+            assertFalse(release.isCompleted, "Cancellation must not wait for the unrelated Room holder")
+            assertTrue(h.container.deviceAccess.withDeviceWriteAuthority(token) { true },
+                "The cancelled write released its runtime lease before Room was unblocked")
+            release.complete(Unit)
+            assertNotNull(holder).await()
+            assertEquals(before, store.fetchDevice(before.id))
+            assertEquals(before, h.manager.connectedDevice)
+        } finally { release.complete(Unit); h.container.close() }
+    }
+
+    @Test fun reconnectStateAndLiveClearCannotCrossAnActualRoomCommitLease() = runTest {
+        val paused = PausedStore(store)
+        val h = ContainerHarness(this, store, persistenceOverride = paused)
+        val transactionEntered = CompletableDeferred<Unit>()
+        val authorityEntered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var holder: kotlinx.coroutines.Deferred<Unit>? = null
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            val before = assertNotNull(h.manager.connectedDevice)
+            val token = h.sessions.current!!.token
+            paused.beforeSave = {
+                holder = async(Dispatchers.IO) {
+                    db.withTransaction { transactionEntered.complete(Unit); release.await() }
+                }
+                transactionEntered.await()
+            }
+            paused.onWriteAuthority = { authorityEntered.complete(Unit) }
+            val update = async { h.container.deviceEditor.updatePathHashMode(2u, token) }
+            authorityEntered.await()
+            val stateSubmitted = CompletableDeferred<Unit>()
+            val stateChange = async {
+                stateSubmitted.complete(Unit)
+                h.manager.setConnectionState(com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.CONNECTING)
+            }
+            val clearSubmitted = CompletableDeferred<Unit>()
+            val clear = async {
+                clearSubmitted.complete(Unit)
+                h.manager.clearConnectedDevice()
+            }
+            stateSubmitted.await()
+            clearSubmitted.await()
+            yield()
+            assertFalse(stateChange.isCompleted)
+            assertFalse(clear.isCompleted)
+            assertTrue(h.manager.connectionState.isConnected)
+            assertEquals(before, h.manager.connectedDevice)
+            release.complete(Unit)
+            assertTrue(update.await())
+            stateChange.await()
+            clear.await()
+            assertNotNull(holder).await()
+            assertEquals(before.copy(pathHashMode = 2u), store.fetchDevice(before.id))
+            assertNull(h.manager.connectedDevice, "The later clear wins only after committed publication")
+        } finally { release.complete(Unit); h.container.close() }
     }
 
     private fun DeviceDTO.info(frequency: Double = 915.0) = SelfInfo(

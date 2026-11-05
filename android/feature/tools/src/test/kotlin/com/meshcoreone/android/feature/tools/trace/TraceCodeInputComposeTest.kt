@@ -282,7 +282,11 @@ class TraceCodeInputComposeTest {
             val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
             assertTrue(assertNotNull(node.config[SemanticsActions.GetTextLayoutResult].action)(layouts))
             val layout = layouts.single()
-            assertFalse(layout.hasVisualOverflow, "Compact 200% text must wrap without clipping")
+            assertFalse(layout.hasVisualOverflow,
+                "Compact 200% text must wrap without clipping: text=${layout.layoutInput.text}, " +
+                    "size=${layout.size}, bounds=${node.boundsInRoot}, " +
+                    "widthOverflow=${layout.didOverflowWidth}, heightOverflow=${layout.didOverflowHeight}, " +
+                    "lines=${layout.lineCount}, paragraph=${layout.multiParagraph.width}x${layout.multiParagraph.height}")
             assertTrue(node.boundsInRoot.width >= layout.size.width - 1f)
             assertTrue(node.boundsInRoot.height >= layout.size.height - 1f)
             assertTrue(node.boundsInRoot.width > 0f)

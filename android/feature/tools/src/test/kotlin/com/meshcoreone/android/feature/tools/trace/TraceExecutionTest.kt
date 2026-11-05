@@ -878,7 +878,10 @@ class TraceExecutionTest {
         h.deps.device = device().copy(radioId = newRadio)
         h.holder.bindConnection(newRadio, 2, token)
         h.main.runCurrent()
+        val sendsBeforeOldWake = recorded.sent.size
+        h.time.advanceBy(500.milliseconds)
         assertTrue(oldRun.isCompleted)
+        assertEquals(sendsBeforeOldWake, recorded.sent.size, "A's retired inter-trace sleep cannot send on B")
         assertEquals(retained, h.state.completedResults, "Retirement retains history, not save authority")
         assertEquals(route, h.state.fullPathData, "The editable route survives")
         assertFalse(h.state.canSavePath, "A's completed or partial results cannot gain B authority")

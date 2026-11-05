@@ -291,3 +291,45 @@ same-radio registry publication before delayed Compose retirement. Its AppContai
 held-persist reproduction and mounted/virtual-time controls require fresh execution and
 independent review. Same-connection rename/delete outcome ordering is independently tested
 across intervening loads without weakening retired-connection fencing.
+
+### r20 list/input lifetime and dispatch-width diagnostic
+
+Exact `c7dbba695373f7f2ae5ba306a61ebe53c8fe7373`, full workflow run
+`42024833684`, passed all six jobs. The authoritative scaffold report discovered
+780 tools and 2012 app tests, all passing with zero failures, errors or skips.
+An in-memory audit of the original hosted log matched candidate-compiled blobs
+and every declared method in the changed classes: 75 mounted, 40 execution,
+4 batch-card, 13 saved-list and 8 actual AppContainer/Room methods (140 total).
+This verifies that head's list/input guards and per-dispatch decoding controls;
+it does not clear the subsequently reviewed batch-save or compact-row findings.
+
+Identical-test negative `3786435e5736abc4cece8b22824fe68cea473ed3`,
+run `42024875535`, restored the four earlier list/input/width production files
+from `897` without changing the corrected fixtures. It discovered 780 tools
+tests and failed 20: all 18 retained list/input same/different-radio controls at
+the fresh-B running assertion, plus the single-success and batch dispatch-width
+controls. Mandatory downstream reports were incomplete. This is negative
+evidence only; the passing single failure/timeout control is not claimed to
+distinguish the old implementation.
+
+### r21 batch-save and compact-row diagnostic (failed)
+
+Exact `8c37d6a60689e8a77e25fba48ffcbc233458b8ef`, run `42027716076`,
+discovered 785 tools tests and failed three: the compact 320dp/200% font row
+reported visual text overflow, and both partial-batch reconnect controls stopped
+at the immediate old-coroutine completion assertion. The latter precedes the
+history/save assertions: the real virtual clock still holds the old inter-trace
+500ms sleep, although generation checks prevent its later send. The successor
+explicitly releases that sleep after retirement and requires completion without
+any old send, retaining all original history/save/fresh-B assertions.
+The compact overflow remains under investigation; no passing layout or full
+candidate acceptance is inferred.
+
+Identical-test negative `36d6546d5a0e3053cf248eb696b4f9050f5f773b`,
+run `42027762009`, restores only `TraceBatchRunner`, `TracePathState`,
+`TracePathStateHolder` and `TracePathUi` byte-for-byte from `c7`. Its 785 tools
+tests failed five: both completed-batch variants reached the stale-save
+eligibility assertion, both partial variants stopped at old completion, and the
+compact control reached the visible-height assertion. Tests are unchanged.
+Both r21 runs have incomplete mandatory downstream reports and remain immutable
+failed diagnostics, not acceptance for any successor.

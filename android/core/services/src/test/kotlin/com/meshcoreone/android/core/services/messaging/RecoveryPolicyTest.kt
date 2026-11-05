@@ -17,6 +17,94 @@ import org.junit.jupiter.api.TestFactory
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class RecoveryPolicyTest {
+    @TestFactory fun uncertainFailedWrites() = listOf("inline", "expiry", "fail-all").flatMap { path ->
+        listOf("commit-then-throw", "throw-before-commit", "already-failed", "competing-writer",
+            "competing-after-read", "replacement", "late")
+            .map { schedule -> native("$path FAILED-write $schedule retains only uncertain ACK authority") {
+                val h = Harness(this); h.start(); h.service.startEventMonitoring()
+                val message = h.message(if (schedule == "already-failed") MessageStatus.FAILED else MessageStatus.SENT)
+                val code = Bytes.of(0xAB, 0xCD, 0xEF, 0x12)
+                h.service.installPendingAck(h.tracking(message, code, age = if (path == "expiry") 3600 else 0))
+                val entered = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                val fault = storageFailure()
+                var writing = false
+                h.store.before = {
+                    if (it == "updateMessageStatusUnlessDelivered" && !writing) {
+                        writing = true
+                        entered.complete(Unit); release.await()
+                        if (schedule != "throw-before-commit" && schedule != "competing-after-read") {
+                            h.store.updateMessageStatusUnlessDelivered(EntityKey(RADIO, message.id), MessageStatus.FAILED)
+                        }
+                        if (schedule != "late") throw fault
+                    }
+                    if (it == "updateMessageAck" && schedule == "competing-after-read") {
+                        h.store.updateMessageStatus(EntityKey(RADIO, message.id), MessageStatus.FAILED)
+                    }
+                }
+                val observed = mutableListOf<MessageStatusEvent>()
+                observe(h, observed)
+                val original = IllegalStateException("inline send failure")
+                val work = backgroundScope.async {
+                    suspend fun cleanup() {
+                        when (path) {
+                            "inline" -> assertSame(original, assertFailsWith<IllegalStateException> {
+                                h.service.failMessageAndRethrow(original, message.id)
+                            })
+                            "expiry" -> h.service.checkExpiredAcks()
+                            else -> h.service.failAllPendingMessages()
+                        }
+                    }
+                    when {
+                        path == "inline" || schedule == "late" -> cleanup()
+                        path == "expiry" && schedule != "replacement" -> cleanup()
+                        else ->
+                            assertSame(fault, assertFailsWith<PersistenceStoreException> { cleanup() })
+                    }
+                }
+                entered.await()
+                if (schedule == "competing-writer") {
+                    h.store.updateMessageStatus(EntityKey(RADIO, message.id), MessageStatus.FAILED)
+                }
+                if (schedule != "late") {
+                    h.transport.pushAck(code, 123u); runCurrent()
+                    assertEquals(code, h.service.pendingAck(message.id)?.acknowledgement?.code)
+                }
+                if (schedule == "replacement") h.signals.set(token(generation = 2), DeviceConnectionState.READY)
+                release.complete(Unit)
+                work.await()
+                if (schedule == "late") h.transport.pushAck(code, 123u)
+                runCurrent()
+                when (schedule) {
+                    "throw-before-commit" -> {
+                        assertEquals(MessageStatus.DELIVERED, h.stored(message.id).status)
+                        assertNull(h.service.pendingAck(message.id))
+                        assertEquals(listOf<MessageStatusEvent>(
+                            MessageStatusEvent.StatusResolved(message.id, MessageStatus.DELIVERED, 123u),
+                        ), observed)
+                        assertTrue(h.service.close().isComplete)
+                    }
+                    "already-failed", "late" -> {
+                        assertEquals(MessageStatus.FAILED, h.stored(message.id).status)
+                        assertNull(h.service.pendingAck(message.id))
+                        assertTrue(observed.none { it is MessageStatusEvent.StatusResolved })
+                    }
+                    else -> {
+                        assertEquals(MessageStatus.FAILED, h.stored(message.id).status)
+                        assertEquals(code, h.service.pendingAck(message.id)?.acknowledgement?.code)
+                        assertTrue(observed.isEmpty())
+                        val report = h.service.close()
+                        assertFalse(report.isComplete)
+                        assertTrue(report.issues.any { it.cause === fault })
+                        assertEquals(0, h.service.pendingAckCount)
+                    }
+                }
+                assertTrue(h.sends(CommandCode.SEND_MESSAGE).isEmpty())
+                if (path == "inline" && schedule != "late") assertTrue(original.suppressed.any { it === fault })
+                h.close()
+            } }
+    }
+
     @TestFactory fun recovery() = listOf(
         native("expiry retains only the failed entry and retries without duplicate failure events") {
             val h = Harness(this); h.start()

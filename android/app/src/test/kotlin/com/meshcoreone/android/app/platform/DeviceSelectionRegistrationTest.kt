@@ -3,6 +3,7 @@ package com.meshcoreone.android.app.platform
 
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.app.ActivityCompat
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.test.*
@@ -70,6 +71,31 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         val demoDefaults = InMemoryDemoModeDefaults()
     }
 
+    private class PermissionDialogRequest(val requestCode: Int, val permissions: Array<String>)
+
+    private class LocalNetworkPermissionDialog(private val host: android.app.Activity) : ActivityCompat.PermissionCompatDelegate {
+        var request: PermissionDialogRequest? = null
+            private set
+        var launches = 0
+            private set
+
+        override fun requestPermissions(activity: android.app.Activity, permissions: Array<String>, requestCode: Int): Boolean {
+            if (activity !== host) return false
+            if (!permissions.contentEquals(arrayOf(ConnectivityPermission.ACCESS_LOCAL_NETWORK.manifestName))) return false
+            check(request == null) { "A permission dialog is already awaiting its result" }
+            launches++
+            request = PermissionDialogRequest(requestCode, permissions.copyOf())
+            return true
+        }
+
+        override fun onActivityResult(activity: android.app.Activity, requestCode: Int, resultCode: Int, data: android.content.Intent?) = false
+
+        fun takeRequest(): PermissionDialogRequest = requireNotNull(request).also { request = null }
+    }
+
+    private var localNetworkDialog: LocalNetworkPermissionDialog? = null
+
+    @android.annotation.SuppressLint("RestrictedApi")
     private suspend fun TestScope.withSettings(
         persistence: PersistenceStoreProtocol = store,
         systemLinks: SystemLinkProbe = NoSystemLinks,
@@ -80,6 +106,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         scans: BleScanCoordinator = newScans(),
         openSettings: () -> Unit = {},
         requests: RequestedPermissions = RequestedPermissions(),
+        controlledLocalNetworkDialog: Boolean = false,
         test: suspend (ContainerHarness, AppSettingsFeature) -> Unit,
     ) {
         DemoModeManager.installStandardDefaults(demoDefaults)
@@ -102,10 +129,21 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             pairingService = pairingService, scans = scans, onboardingPlatform = platform,
         )
         val storage = MeshCoreStorage.get(compose.activity)
+        val previousDelegate = ActivityCompat.getPermissionCompatDelegate()
         try {
+            if (controlledLocalNetworkDialog) {
+                assertEquals(37, android.os.Build.VERSION.SDK_INT)
+                assertNull(previousDelegate)
+                localNetworkDialog = LocalNetworkPermissionDialog(compose.activity)
+                ActivityCompat.setPermissionCompatDelegate(localNetworkDialog)
+            }
             val feature = AppSettingsFeature.create(h.container, storage)
             test(h, feature)
         } finally {
+            if (controlledLocalNetworkDialog) {
+                ActivityCompat.setPermissionCompatDelegate(previousDelegate)
+                localNetworkDialog = null
+            }
             compose.runOnUiThread { compose.activity.setContent {} }
             h.container.close()
             storage.close()
@@ -183,6 +221,10 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             "snapshot=${platform.permissions.snapshot.value}, " +
             "request=${request?.requestCode}:${request?.requestedPermissions?.toList()}"
         assertEquals(context, OnboardingPermissionKind.LOCAL_NETWORK, feature.selectionRequestedPermission.value)
+        localNetworkDialog?.let { dialog ->
+            assertEquals(1, dialog.launches)
+            assertArrayEquals(arrayOf(ConnectivityPermission.ACCESS_LOCAL_NETWORK.manifestName), requireNotNull(dialog.request).permissions)
+        }
     }
 
     private fun ContainerHarness.eventuallyMounted(message: String, condition: () -> Boolean) =
@@ -206,8 +248,9 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         facts: FakePermissionFacts, granted: Boolean,
         permissions: Set<ConnectivityPermission> = setOf(ConnectivityPermission.ACCESS_LOCAL_NETWORK),
     ) {
-        val request = requireNotNull(shadowOf(compose.activity).lastRequestedPermission)
-        assertArrayEquals(permissions.map { it.manifestName }.sorted().toTypedArray(), request.requestedPermissions)
+        val request = localNetworkDialog?.takeRequest() ?: requireNotNull(shadowOf(compose.activity).lastRequestedPermission)
+            .let { PermissionDialogRequest(it.requestCode, it.requestedPermissions) }
+        assertArrayEquals(permissions.map { it.manifestName }.sorted().toTypedArray(), request.permissions)
         if (granted) {
             facts.granted = facts.granted + permissions
             shadowOf(compose.activity.application).grantPermissions(*permissions.map { it.manifestName }.toTypedArray())
@@ -216,8 +259,8 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         }
         compose.runOnUiThread {
             compose.activity.onRequestPermissionsResult(
-                request.requestCode, request.requestedPermissions,
-                IntArray(request.requestedPermissions.size) {
+                request.requestCode, request.permissions,
+                IntArray(request.permissions.size) {
                     if (granted) android.content.pm.PackageManager.PERMISSION_GRANTED else android.content.pm.PackageManager.PERMISSION_DENIED
                 },
             )
@@ -773,10 +816,31 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         }
     }
 
+    @Test @Config(sdk = [37])
+    fun nativeLocalNetworkRequestCompletionWithoutGrantKeepsWifiBlocked() = runTest {
+        val facts = FakePermissionFacts(sdk = 37, granted = ConnectivityPermission.entries.toSet() - ConnectivityPermission.ACCESS_LOCAL_NETWORK)
+        withSettings(permissionFacts = facts) { h, feature ->
+            mount(h, feature)
+            assertLocalNetworkRequestCanStart(h)
+            openManualWifi(h)
+            compose.waitForIdle()
+            h.settle()
+            val request = requireNotNull(shadowOf(compose.activity).lastRequestedPermission)
+            assertArrayEquals(arrayOf(ConnectivityPermission.ACCESS_LOCAL_NETWORK.manifestName), request.requestedPermissions)
+            assertNull(feature.selectionRequestedPermission.value)
+            assertEquals(AppSettingsFeature.SelectionAction.Manual, feature.selectionAction.value)
+            assertTrue(feature.selectionPermissionDenied.value)
+            assertEquals(com.meshcoreone.android.feature.onboarding.PermissionStatus.DENIED,
+                requireNotNull(h.container.onboarding).permissions.snapshot.value.localNetwork)
+            permissionSettingsButton().assertIsDisplayed()
+            assertTrue(h.links.links.isEmpty())
+        }
+    }
+
     private suspend fun TestScope.localNetworkPermissionControl(savedDevice: Boolean, grant: Boolean) {
         val facts = FakePermissionFacts(sdk = 37, granted = ConnectivityPermission.entries.toSet() - ConnectivityPermission.ACCESS_LOCAL_NETWORK)
         var openedSettings = 0
-        withSettings(permissionFacts = facts, openSettings = { openedSettings++ }) { h, feature ->
+        withSettings(permissionFacts = facts, openSettings = { openedSettings++ }, controlledLocalNetworkDialog = true) { h, feature ->
             val device = if (savedDevice) saved(h).also {
                 store.saveDevice(it.copy(connectionMethods = (it.connectionMethods + ConnectionMethod.WiFi("saved-radio.local", 6218u)).snapshot()))
             } else null
@@ -820,6 +884,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
                 h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
             }
             assertEquals(before + 1, h.links.links.size)
+            assertEquals(1, requireNotNull(localNetworkDialog).launches)
         }
     }
 
@@ -846,7 +911,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
     private suspend fun TestScope.savedWifiPermissionResultAcrossNativeTabRemoval(grant: Boolean) {
         val facts = FakePermissionFacts(sdk = 37, granted = ConnectivityPermission.entries.toSet() - ConnectivityPermission.ACCESS_LOCAL_NETWORK)
         var openedSettings = 0
-        withSettings(permissionFacts = facts, openSettings = { openedSettings++ }) { h, feature ->
+        withSettings(permissionFacts = facts, openSettings = { openedSettings++ }, controlledLocalNetworkDialog = true) { h, feature ->
             val device = saved(h)
             store.saveDevice(device.copy(connectionMethods = (device.connectionMethods + ConnectionMethod.WiFi("tab-radio.local", 6219u)).snapshot()))
             val before = h.links.links.size
@@ -885,6 +950,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
                 h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
             }
             assertEquals(before + 1, h.links.links.size)
+            assertEquals(1, requireNotNull(localNetworkDialog).launches)
         }
     }
 

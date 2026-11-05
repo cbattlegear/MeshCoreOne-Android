@@ -44,6 +44,9 @@ class DirectAckConfirmationGraphTest : RoomProcessTest() {
             val feature = harness.container.chatsFeature
             val first = feature.directAckConfirmation
             assertSame(first, feature.directAckConfirmation)
+            assertTrue(reads.isEmpty())
+            first.start()
+            first.start()
             harness.eventually("first persisted confirmation evidence") {
                 first.state.value.status is DirectAckConfirmationStatus.Inspected
             }
@@ -102,6 +105,7 @@ class DirectAckConfirmationGraphTest : RoomProcessTest() {
                 harness.manager.connectionState == DeviceConnectionState.READY
             }
             val monitor = harness.container.chatsFeature.directAckConfirmation
+            monitor.start()
             harness.eventually("historical absence observed") {
                 monitor.state.value.status is DirectAckConfirmationStatus.Inspected
             }
@@ -132,6 +136,7 @@ class DirectAckConfirmationGraphTest : RoomProcessTest() {
                 harness.manager.connectionState == DeviceConnectionState.READY
             }
             val monitor = harness.container.chatsFeature.directAckConfirmation
+            monitor.start()
             harness.eventually("missing capability") {
                 monitor.state.value.status == DirectAckConfirmationStatus.CapabilityUnavailable
             }

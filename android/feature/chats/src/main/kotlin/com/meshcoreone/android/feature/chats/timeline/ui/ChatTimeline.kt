@@ -367,7 +367,11 @@ private fun MessageBubble(
     incomingAvatar: @Composable (MessageDTO) -> Unit,
 ) {
     val outgoing = row.message.direction == MessageDirection.OUTGOING
-    val status = if (outgoing) statusText(row.message) else null
+    val status = if (outgoing) {
+        if (com.meshcoreone.android.feature.chats.actions.requiresUnconfirmedDirectFailureLabel(row.message)) {
+            stringResource(com.meshcoreone.android.core.l10n.R.string.direct_ack_confirmation_message_uncertain)
+        } else statusText(row.message)
+    } else null
     val accessibilityLabel = messageAccessibilityLabel?.invoke(row.message) ?: buildString {
         if (!outgoing && row.message.isChannelMessage && !row.message.senderNodeName.isNullOrBlank()) {
             append(row.message.senderNodeName)
@@ -410,7 +414,12 @@ private fun MessageBubble(
                 messageBody(row.message, outgoing)
                 if (outgoing) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(status.orEmpty(), style = MaterialTheme.typography.labelSmall)
+                        Text(
+                            status.orEmpty(), style = MaterialTheme.typography.labelSmall,
+                            modifier = if (
+                                com.meshcoreone.android.feature.chats.actions.requiresUnconfirmedDirectFailureLabel(row.message)
+                            ) Modifier.weight(1f, fill = false) else Modifier,
+                        )
                         if (row.message.status == MessageStatus.FAILED) {
                             Button(
                                 onClick = onRetry,

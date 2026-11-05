@@ -2,6 +2,7 @@
 // AndroidOnly: WP-310 Bind room body actions to the shared link dispatcher/router and radio-scoped contacts.
 // AndroidOnly: WP-307 Restore pending replies on composer initialization or notification-source replacement.
 // AndroidOnly: WP-308 Bind the frozen conversation-specific prompt to the mounted composer.
+// AndroidOnly: WP-309 Lifecycle-observed graph fencing and explicitly unbound historical diagnostics.
 package com.meshcoreone.android.app.navigation
 
 import android.Manifest
@@ -296,10 +297,27 @@ private fun AppChatConversation(
             confirmationNotice = {
                 if (conversation is TimelineConversation.Direct) {
                     val monitor = remember(feature) { feature.directAckConfirmation }
+                    val consumer = remember(monitor, conversation.id) { Any() }
+                    val messageKeys = remember(timelineState.messages) {
+                        timelineState.messages.filter {
+                            it.isOutgoing && !it.isChannelMessage &&
+                                it.status != com.meshcoreone.android.core.model.MessageStatus.DELIVERED
+                        }.map { com.meshcoreone.android.core.contracts.domain.EntityKey(it.radioId, it.id) }.toSet()
+                    }
+                    SideEffect { monitor.messages.register(consumer, messageKeys) }
+                    DisposableEffect(monitor, consumer) {
+                        onDispose { monitor.messages.unregister(consumer) }
+                    }
+                    LaunchedEffect(monitor) { monitor.start() }
+                    val confirmationGraph by feature.confirmationSessionOwners.collectAsStateWithLifecycle()
+                    val confirmationRadio by feature.currentRadioId.collectAsStateWithLifecycle()
                     val confirmation by monitor.state.collectAsStateWithLifecycle()
+                    val messageConfirmation by monitor.messages.state.collectAsStateWithLifecycle()
                     val observed = confirmation.observation
                     val current = if (observed != null &&
                         observed.radioId == conversation.id.radioId &&
+                        observed.sessionToken == confirmationGraph?.token &&
+                        observed.radioId == (confirmationGraph?.token?.radioId ?: confirmationRadio) &&
                         feature.isConfirmationObservationCurrent(observed)
                     ) confirmation else {
                         com.meshcoreone.android.feature.chats.actions.DirectAckConfirmationState(
@@ -312,8 +330,12 @@ private fun AppChatConversation(
                         onCheckAgain = {
                             if (observed != null && feature.isConfirmationObservationCurrent(observed)) {
                                 monitor.holder.recheck()
+                                monitor.messages.recheck()
                             }
                         },
+                        additionalUncertainty = messageConfirmation.observation == current.observation &&
+                            current.observation != null && messageConfirmation.hasHistoricalUncertainty,
+                        messageDiagnosticsUnavailable = messageKeys.isNotEmpty(),
                     )
                 }
             },

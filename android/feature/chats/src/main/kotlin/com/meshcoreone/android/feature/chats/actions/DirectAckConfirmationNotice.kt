@@ -1,4 +1,4 @@
-// AndroidOnly: WP-309 Localized non-color-only notice; not yet mounted in the application chat flow.
+// AndroidOnly: WP-309 Localized non-color-only notice shared by standalone and App consumers.
 package com.meshcoreone.android.feature.chats.actions
 
 import androidx.compose.foundation.layout.Arrangement
@@ -51,6 +51,8 @@ fun DirectAckConfirmationNotice(
     state: DirectAckConfirmationState,
     onCheckAgain: () -> Unit,
     modifier: Modifier = Modifier,
+    additionalUncertainty: Boolean = false,
+    messageDiagnosticsUnavailable: Boolean = false,
 ) {
     val body = when (val status = state.status) {
         DirectAckConfirmationStatus.NotInspected,
@@ -83,7 +85,7 @@ fun DirectAckConfirmationNotice(
                 modifier = Modifier.semantics { heading() },
                 style = MaterialTheme.typography.titleMedium,
             )
-            val historicalWarning = state.lastKnownPersistedWildcard != null &&
+            val historicalWarning = (state.lastKnownPersistedWildcard != null || additionalUncertainty) &&
                 body != R.string.direct_ack_confirmation_uncertain
             Text(
                 stringResource(if (historicalWarning) R.string.direct_ack_confirmation_uncertain else body),
@@ -93,6 +95,13 @@ fun DirectAckConfirmationNotice(
             if (historicalWarning && state.status != DirectAckConfirmationStatus.Checking) {
                 Text(
                     stringResource(body),
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+            }
+            if (messageDiagnosticsUnavailable) {
+                Text(
+                    stringResource(R.string.direct_ack_confirmation_message_evidence_unavailable),
                     modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                     style = MaterialTheme.typography.bodyLarge,
                 )

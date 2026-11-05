@@ -89,6 +89,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
     val currentRadioId = changes.map { app.currentRadioId }
         .stateIn(scope, SharingStarted.Eagerly, app.currentRadioId)
     private var confirmationObservedGraph: RadioSessionContainer? = null
+    internal val confirmationSessionOwners get() = container.sessions.currentSessions
     internal val directAckConfirmation by lazy {
         var epoch = 0L
         val observations = combine(container.sessions.currentSessions, currentRadioId) { graph, radio ->
@@ -106,6 +107,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         com.meshcoreone.android.feature.chats.actions.DirectAckConfirmationMonitor(
             store as? com.meshcoreone.android.core.contracts.domain.DirectAckRadioConfirmationEvidenceObserving,
             observations, scope, ::report,
+            messageInspector = store as? com.meshcoreone.android.core.contracts.domain.DirectMessageConfirmationEvidenceInspecting,
         )
     }
 

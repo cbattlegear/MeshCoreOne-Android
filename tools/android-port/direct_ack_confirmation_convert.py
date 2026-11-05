@@ -15,6 +15,7 @@ LOCALES = {
 }
 KEYS = {
     "title", "checking", "missing", "unavailable", "uncertain", "checked", "interrupted", "check_again",
+    "message_uncertain", "message_evidence_unavailable",
 }
 
 

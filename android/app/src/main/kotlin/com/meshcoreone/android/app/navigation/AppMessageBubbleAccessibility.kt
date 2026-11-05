@@ -1,6 +1,7 @@
 // PortedFrom: MC1/Views/Chats/Components/UnifiedMessageBubble.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Chats/Components/MessageBubbleConfiguration.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Chats/Components/BubbleFooterRow.swift@db14559b39d32322b06477c6ae676112f583db50
+// AndroidOnly: WP-309 A retained FAILED direct row is not a physical no-send certificate.
 package com.meshcoreone.android.app.navigation
 
 import android.content.res.Resources
@@ -161,8 +162,13 @@ internal fun messageBubbleAccessibilityLabel(
         }
     }
     append(message.text)
-    if (envelope.isOutgoing) {
-        append(", ").append(bubbleStatusText(footer, resources))
+    if (message.isOutgoing) {
+        val status = if (
+            com.meshcoreone.android.feature.chats.actions.requiresUnconfirmedDirectFailureLabel(message)
+        ) {
+            resources.getString(L10nR.string.direct_ack_confirmation_message_uncertain)
+        } else bubbleStatusText(footer, resources, message.status)
+        append(", ").append(status)
     } else {
         if (footer.showHop) append(", ").append(integerText(
             resources, L10nR.string.l10n_app_chats_chats_message_hopcount_accessibilitylabel, footer.hopCount,
@@ -178,7 +184,7 @@ internal fun messageBubbleAccessibilityLabel(
     }
 }
 
-private fun bubbleStatusText(footer: MessageFooter, resources: Resources): String {
+private fun bubbleStatusText(footer: MessageFooter, resources: Resources, currentStatus: MessageStatus): String {
     fun string(id: Int) = resources.getString(id)
     fun sent() = if (footer.sendCount > 1) integerText(
         resources, L10nR.string.l10n_app_chats_chats_message_status_sentmultiple, footer.sendCount,
@@ -186,7 +192,7 @@ private fun bubbleStatusText(footer: MessageFooter, resources: Resources): Strin
     fun repeats() = "${footer.heardRepeats} " + string(if (footer.heardRepeats == 1L) {
         AppChatsStrings.chatsMessageRepeatSingular
     } else AppChatsStrings.chatsMessageRepeatPlural)
-    return when (footer.status) {
+    return when (currentStatus) {
         MessageStatus.PENDING, MessageStatus.SENDING -> string(AppChatsStrings.chatsMessageStatusSending)
         MessageStatus.SENT -> if (!footer.isChannelMessage) string(AppChatsStrings.chatsMessageStatusSending) else
             buildList { if (footer.heardRepeats > 0) add(repeats()); add(sent()) }.joinToString(" \u2022 ")

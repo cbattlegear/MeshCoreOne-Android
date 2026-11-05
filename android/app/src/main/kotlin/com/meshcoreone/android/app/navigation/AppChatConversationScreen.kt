@@ -1,7 +1,10 @@
 // AndroidOnly: WP-407 App composition supplies notification anchors through the public timeline presentation contract.
+// AndroidOnly: WP-309 Scrollable warning viewport cannot consume the composer's reserved space.
 package com.meshcoreone.android.app.navigation
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -96,27 +99,33 @@ internal fun AppChatConversationScreen(
         onRetryLoad = { scope.launch { timeline.open() } },
     )
     Column(Modifier.fillMaxSize().navigationBarsPadding().imePadding()) {
-        confirmationNotice()
-        Box(Modifier.weight(1f)) {
-            ChatTimeline(
-                presented, callbacks,
-                showSenderName = configuration.showSenderName,
-                showsIncomingAvatars = configuration.showsIncomingAvatars,
-                incomingAvatar = incomingAvatar,
-                messageAccessibilityLabel = messageAccessibilityLabel,
-                messageBody = { message, outgoing ->
-                    val item = renderedItems[message.id]
-                    val text = item?.content?.filterIsInstance<com.meshcoreone.android.core.services.rendering.MessageFragment.Text>()
-                        ?.firstOrNull()?.payload
-                    Column {
-                        MessageBody(text?.raw ?: message.text, outgoing, text?.currentUserName ?: currentUserName,
-                            onLink = { dispatcher.dispatch(it) })
-                        attachments(message, outgoing)
-                    }
-                },
-            )
-            MentionSuggestionList(draft.mentionSuggestions, composer::selectMention,
-                Modifier.align(Alignment.BottomCenter).padding(horizontal = 12.dp, vertical = 8.dp))
+        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+            Column {
+                Box(Modifier.heightIn(max = maxHeight / 2).verticalScroll(rememberScrollState())) {
+                    confirmationNotice()
+                }
+                Box(Modifier.weight(1f)) {
+                    ChatTimeline(
+                        presented, callbacks,
+                        showSenderName = configuration.showSenderName,
+                        showsIncomingAvatars = configuration.showsIncomingAvatars,
+                        incomingAvatar = incomingAvatar,
+                        messageAccessibilityLabel = messageAccessibilityLabel,
+                        messageBody = { message, outgoing ->
+                            val item = renderedItems[message.id]
+                            val text = item?.content?.filterIsInstance<com.meshcoreone.android.core.services.rendering.MessageFragment.Text>()
+                                ?.firstOrNull()?.payload
+                            Column {
+                                MessageBody(text?.raw ?: message.text, outgoing, text?.currentUserName ?: currentUserName,
+                                    onLink = { dispatcher.dispatch(it) })
+                                attachments(message, outgoing)
+                            }
+                        },
+                    )
+                    MentionSuggestionList(draft.mentionSuggestions, composer::selectMention,
+                        Modifier.align(Alignment.BottomCenter).padding(horizontal = 12.dp, vertical = 8.dp))
+                }
+            }
         }
         emojiStatus()
         ComposerRoute(composer, placeholder, onPickContact, emojiPicker = emojiPicker)

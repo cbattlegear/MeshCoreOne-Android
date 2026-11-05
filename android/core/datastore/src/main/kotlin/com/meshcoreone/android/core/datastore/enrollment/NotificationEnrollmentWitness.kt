@@ -102,7 +102,8 @@ class NotificationEnrollmentWitness internal constructor(
             if (db.rawQuery("SELECT payload FROM witness_history ORDER BY sequence", null).use { rows ->
                     var reused = false
                     while (rows.moveToNext()) {
-                        val old = decode(rows.getBlob(0))
+                        val payload = rows.getBlob(0) ?: throw Invalid(WitnessProblem.CORRUPT_STORAGE)
+                        val old = decode(payload)
                         if (old.record.operation.operationId == request.operation.operationId ||
                             old.record.operation.storeId == request.operation.storeId ||
                             old.record.operation.creationNonce == request.operation.creationNonce ||
@@ -257,8 +258,9 @@ class NotificationEnrollmentWitness internal constructor(
         var previous: Row? = null
         db.rawQuery("SELECT sequence,payload,mac FROM witness_history ORDER BY sequence", null).use { rows ->
             while (rows.moveToNext()) {
-                val payload = rows.getBlob(1)
-                val row = decode(payload).copy(mac = rows.getBlob(2))
+                val payload = rows.getBlob(1) ?: throw Invalid(WitnessProblem.CORRUPT_STORAGE)
+                val mac = rows.getBlob(2) ?: throw Invalid(WitnessProblem.CORRUPT_STORAGE)
+                val row = decode(payload).copy(mac = mac)
                 if (previous?.sequence == Long.MAX_VALUE || row.sequence != rows.getLong(0) ||
                     row.sequence != (previous?.sequence ?: 0) + 1 ||
                     !MessageDigest.isEqual(row.previousMac, previous?.mac ?: ZERO_MAC) ||
@@ -292,8 +294,13 @@ class NotificationEnrollmentWitness internal constructor(
         }
         val last = previous ?: throw Invalid(WitnessProblem.CORRUPT_STORAGE)
         db.rawQuery("SELECT singleton,sequence,mac FROM witness_head", null).use { head ->
-            if (!head.moveToFirst() || head.getInt(0) != 1 || head.getLong(1) != last.sequence ||
-                !MessageDigest.isEqual(head.getBlob(2), authentication.authenticate(
+            val mac = if (head.moveToFirst()) {
+                head.getBlob(2) ?: throw Invalid(WitnessProblem.CORRUPT_STORAGE)
+            } else {
+                throw Invalid(WitnessProblem.CORRUPT_STORAGE)
+            }
+            if (head.getInt(0) != 1 || head.getLong(1) != last.sequence ||
+                !MessageDigest.isEqual(mac, authentication.authenticate(
                     last.record.witnessId, headBytes(last.sequence, last.mac),
                 )) || head.moveToNext()
             ) throw Invalid(WitnessProblem.AUTHENTICATION_FAILED)

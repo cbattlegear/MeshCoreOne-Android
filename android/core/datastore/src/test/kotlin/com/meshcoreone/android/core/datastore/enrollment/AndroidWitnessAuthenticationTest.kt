@@ -99,10 +99,39 @@ class AndroidWitnessAuthenticationTest {
         assertTrue(keys.specifications.isEmpty())
     }
 
+    @Test
+    fun wrappedKeystoreFailuresKeepTheirTypedStorageCategories() {
+        val keys = TestKeys()
+        val authentication = AndroidWitnessAuthentication({ }, keys)
+        val witness = UUID.randomUUID()
+        authentication.createNew(witness)
+
+        keys.findFailure = java.security.UnrecoverableKeyException("Test-only wrapper").apply {
+            initCause(android.security.keystore.KeyPermanentlyInvalidatedException())
+        }
+        val invalidated = assertFailsWith<StorageFailure> {
+            authentication.authenticate(witness, byteArrayOf())
+        }
+        assertEquals(StorageProblem.KeyPermanentlyInvalidated, invalidated.problem)
+
+        keys.findFailure = java.security.ProviderException(
+            "Test-only wrapper",
+            android.security.keystore.UserNotAuthenticatedException(),
+        )
+        val locked = assertFailsWith<StorageFailure> {
+            authentication.authenticate(witness, byteArrayOf())
+        }
+        assertEquals(StorageProblem.DeviceLocked, locked.problem)
+    }
+
     private class TestKeys : WitnessKeys {
         val keys = mutableMapOf<String, SecretKey>()
         val specifications = mutableListOf<KeyGenParameterSpec>()
-        override fun find(alias: String) = keys[alias]
+        var findFailure: Throwable? = null
+        override fun find(alias: String): SecretKey? {
+            findFailure?.let { throw it }
+            return keys[alias]
+        }
         override fun generate(specification: KeyGenParameterSpec) {
             specifications.add(specification)
             keys[specification.keystoreAlias] = KeyGenerator.getInstance("HmacSHA256").apply { init(256) }.generateKey()

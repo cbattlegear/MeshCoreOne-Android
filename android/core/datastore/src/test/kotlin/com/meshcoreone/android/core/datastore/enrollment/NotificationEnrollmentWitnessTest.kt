@@ -345,6 +345,60 @@ class NotificationEnrollmentWitnessTest {
     }
 
     @Test
+    fun nullableForeignDatabaseBlobsAreTypedCorruptionAndNeverReset() = runBlocking {
+        for ((table, column) in listOf(
+            "witness_history" to "payload",
+            "witness_history" to "mac",
+            "witness_head" to "mac",
+        )) {
+            val f = fixture()
+            f.authorize()
+            f.database { db ->
+                when (table) {
+                    "witness_history" -> {
+                        db.execSQL(
+                            "CREATE TABLE witness_history_nullable(sequence INTEGER PRIMARY KEY, payload BLOB, mac BLOB)",
+                        )
+                        db.execSQL(
+                            "INSERT INTO witness_history_nullable " +
+                                "SELECT sequence,${if (column == "payload") "NULL" else "payload"}," +
+                                "${if (column == "mac") "NULL" else "mac"} FROM witness_history",
+                        )
+                        db.execSQL("DROP TABLE witness_history")
+                        db.execSQL("ALTER TABLE witness_history_nullable RENAME TO witness_history")
+                    }
+                    "witness_head" -> {
+                        db.execSQL(
+                            "CREATE TABLE witness_head_nullable(singleton INTEGER PRIMARY KEY CHECK(singleton=1), sequence INTEGER NOT NULL, mac BLOB)",
+                        )
+                        db.execSQL(
+                            "INSERT INTO witness_head_nullable SELECT singleton,sequence," +
+                                "${if (column == "mac") "NULL" else "mac"} FROM witness_head",
+                        )
+                        db.execSQL("DROP TABLE witness_head")
+                        db.execSQL("ALTER TABLE witness_head_nullable RENAME TO witness_head")
+                    }
+                }
+                db.rawQuery("PRAGMA quick_check", null).use {
+                    assertTrue(it.moveToFirst())
+                    assertEquals("ok", it.getString(0))
+                }
+            }
+
+            assertEquals(
+                WitnessObservation.Failed(WitnessProblem.CORRUPT_STORAGE),
+                f.store().observe(),
+            )
+            assertEquals(
+                WitnessMutation.NotRetained(WitnessProblem.CORRUPT_STORAGE),
+                f.store().authorize(f.request),
+            )
+            assertEquals(1, f.keys.created)
+            assertEquals(1, f.rowCount())
+        }
+    }
+
+    @Test
     fun partialHistoricalLossBlocksEvenIfLatestRecordAndKeySurvive() = runBlocking {
         val f = fixture()
         val old = f.authorize()

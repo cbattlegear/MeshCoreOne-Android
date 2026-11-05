@@ -173,3 +173,16 @@ and the unchanged producer `94493a7248f8ad4a4a72f9751946339418174679` as second
 parent. No production/test conflicts were present. The prior 94493 exact run and
 the earlier f93 composition are not acceptance evidence for this latest-main
 candidate; use its own exact-head hosted run.
+
+## PR review follow-up
+
+The initial PR head received two bounded Copilot review findings: wrapped
+Keystore failures could lose their typed lock/invalidation category, and a
+foreign schema-compatible database could return SQL NULL for witness blobs and
+escape typed corruption handling. The successor source now walks a bounded,
+cycle-safe cause chain for the existing typed Keystore categories and rejects
+null history/head blobs as `CORRUPT_STORAGE`; regressions cover both wrapped
+Keystore causes and nullable payload/MAC columns after SQLite `quick_check`.
+These changes do not add verifier/UI wiring or activation. The successor's
+exact-head CI and review outcomes must be recorded from their actual GitHub
+results; the earlier-head run and review are not evidence for the successor.

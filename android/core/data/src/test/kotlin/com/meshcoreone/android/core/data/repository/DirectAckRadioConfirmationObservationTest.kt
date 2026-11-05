@@ -234,7 +234,12 @@ class DirectAckRadioConfirmationObservationTest {
                 store.observeDirectAckRadioConfirmationEvidence(RADIO_A).collect { closedEvents += it }
             }
             assertIs<PersistenceStoreError.FetchFailed>(closed.error)
-            assertEquals(listOf(DirectAckRadioConfirmationObservation.Inspecting(RADIO_A)), closedEvents)
+            assertEquals(
+                listOf<DirectAckRadioConfirmationObservation>(
+                    DirectAckRadioConfirmationObservation.Inspecting(RADIO_A)
+                ),
+                closedEvents
+            )
             assertEquals(2, reported.size)
         } finally {
             collector?.cancelAndJoin()

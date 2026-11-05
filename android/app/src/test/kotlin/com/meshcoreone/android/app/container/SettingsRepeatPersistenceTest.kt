@@ -2,6 +2,7 @@
 package com.meshcoreone.android.app.container
 
 import android.content.Context
+import androidx.room.Room
 import androidx.room.withTransaction
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.DeviceWriteSnapshot
@@ -9,6 +10,8 @@ import com.meshcoreone.android.core.contracts.domain.PreRepeatSettingsAttempt
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
+import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
+import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -16,6 +19,9 @@ import com.meshcoreone.android.core.services.sync.SyncState
 import com.meshcoreone.android.core.ui.UiText
 import com.meshcoreone.android.feature.settings.device.*
 import java.util.UUID
+import java.util.concurrent.Executor
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -239,39 +245,57 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
     }
 
     @Test fun actualHeldRoomTransactionPreventsRepeatRadioMutationUntilTheSnapshotCommits() = runTest {
+        val worker = Executors.newSingleThreadExecutor()
+        val database = Room.inMemoryDatabaseBuilder(
+            ApplicationProvider.getApplicationContext<Context>(), MeshCoreDatabase::class.java,
+        ).allowMainThreadQueries().setQueryExecutor(Executor { it.run() }).setTransactionExecutor(worker).build()
+        val repository = RoomPersistenceStore(database, backgroundScope)
         val snapshotEntered = CompletableDeferred<Unit>()
         var armed = false
-        val observed = object : PersistenceStoreProtocol by store {
+        val observed = object : PersistenceStoreProtocol by repository {
             override suspend fun fetchDeviceWriteSnapshot(id: UUID): DeviceWriteSnapshot? {
                 if (armed) snapshotEntered.complete(Unit)
-                return store.fetchDeviceWriteSnapshot(id)
+                return repository.fetchDeviceWriteSnapshot(id)
             }
         }
-        withRepeat(observed) { h, holder, _, radio ->
-            val before = assertNotNull(h.manager.connectedDevice)
-            val transactionEntered = CompletableDeferred<Unit>()
-            val transactionRelease = CompletableDeferred<Unit>()
-            val transaction = async(Dispatchers.IO) {
-                db.withTransaction { transactionEntered.complete(Unit); transactionRelease.await() }
-            }
-            try {
-                h.eventually("actual Room transaction entered") { transactionEntered.isCompleted }
-                armed = true
-                holder.onRepeatToggled(true)
-                holder.confirmEnableRepeatMode()
-                h.eventually("editor reaches snapshot boundary while actual Room transaction is held") { snapshotEntered.isCompleted }
-                assertTrue(holder.state.value.isApplyingRepeat)
-                assertTrue(radio.radioWrites.isEmpty())
-                assertEquals(before, h.manager.connectedDevice)
-                transactionRelease.complete(Unit)
-                transaction.await()
-                h.eventually("Room snapshot commits before radio mutation") {
-                    !holder.state.value.isApplyingRepeat && h.manager.connectedDevice?.clientRepeat == true &&
-                        h.manager.connectedDevice?.frequency == radio.frequency
+        try {
+            withRepeat(observed, room = repository) { h, holder, _, radio ->
+                val before = assertNotNull(h.manager.connectedDevice)
+                val transactionEntered = CompletableDeferred<Unit>()
+                val transactionRelease = CompletableDeferred<Unit>()
+                val transaction = async(Dispatchers.IO) {
+                    database.withTransaction {
+                        assertTrue(database.inTransaction(), "The barrier holds an actual open Room transaction")
+                        transactionEntered.complete(Unit)
+                        transactionRelease.await()
+                    }
                 }
-                assertEquals(before.frequency, store.fetchDevice(before.id)!!.preRepeatFrequency)
-                assertEquals(1, radio.radioWrites.size)
-            } finally { transactionRelease.complete(Unit); transaction.await() }
+                try {
+                    h.eventually("actual Room transaction entered") { transactionEntered.isCompleted }
+                    armed = true
+                    holder.onRepeatToggled(true)
+                    holder.confirmEnableRepeatMode()
+                    h.eventually("editor reaches snapshot boundary while actual Room transaction is held") { snapshotEntered.isCompleted }
+                    assertTrue(holder.state.value.isApplyingRepeat)
+                    assertTrue(radio.radioWrites.isEmpty())
+                    assertEquals(before, h.manager.connectedDevice)
+                    transactionRelease.complete(Unit)
+                    transaction.await()
+                    h.eventually("Room snapshot commits before radio mutation") {
+                        !holder.state.value.isApplyingRepeat && h.manager.connectedDevice?.clientRepeat == true &&
+                            h.manager.connectedDevice?.frequency == radio.frequency
+                    }
+                    assertEquals(before.frequency, repository.fetchDevice(before.id)!!.preRepeatFrequency)
+                    assertEquals(1, radio.radioWrites.size)
+                } finally { transactionRelease.complete(Unit); transaction.await() }
+            }
+        } finally {
+            try { repository.close() } finally {
+                try { database.close() } finally {
+                    worker.shutdown()
+                    assertTrue(worker.awaitTermination(10, TimeUnit.SECONDS), "The owned Room transaction worker must finish")
+                }
+            }
         }
     }
 
@@ -313,6 +337,8 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                     h.eventually("old save or clear suspended before conditional write") { entered.isCompleted }
                     val transmitted = radio.radioWrites.size
                     h.manager.disconnect()
+                    // This successor reports Repeat active; an off radio legitimately clears old restoration data at initialization.
+                    radio.repeatOnNextConnection = clear
                     h.manager.connect(h.target(original.id))
                     h.eventually("same-radio successor ready") {
                         h.sessions.current?.token != oldToken && h.appState.canRunSettingsStartupReads
@@ -322,6 +348,10 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                     assertTrue(oldToken != successorToken)
                     val successor = assertNotNull(h.manager.connectedDevice)
                     val durable = store.fetchDevice(successor.id)
+                    if (clear) {
+                        assertTrue(successor.clientRepeat)
+                        assertNotNull(durable?.preRepeatFrequency, "The successor owns a restoration snapshot before old clear resumes")
+                    }
                     release.complete(Unit)
                     h.eventually("retired action reports failure and releases busy state") {
                         !holder.state.value.isApplyingRepeat && failures.isNotEmpty()
@@ -343,6 +373,7 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
         val radioWrites = mutableListOf<Bytes>()
         private var params: Bytes? = null
         private var repeat = false
+        var repeatOnNextConnection = false
         val frequency: UInt?
             get() = radioWrites.lastOrNull()?.let { frame ->
                 (frame[1].toUInt() or (frame[2].toUInt() shl 8) or
@@ -351,7 +382,8 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
 
         fun configure(radio: FirmwareRadio) {
             params = null
-            repeat = false
+            repeat = repeatOnNextConnection
+            repeatOnNextConnection = false
             radio.firmwareVersion = 11u
             radio.respond = { command ->
                 when (command[0].toInt()) {
@@ -362,7 +394,7 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                         listOf(Bytes.of(0))
                     }
                     0x01 -> params?.let { listOf(radio.selfPacket().slice(0, 48) + it + Bytes.utf8("TestNode")) }
-                    0x16 -> if (params != null) listOf(
+                    0x16 -> if (params != null || repeat) listOf(
                         Bytes.of(13, 11, 50, 8) + le32(0) + Bytes.utf8("01 Jan 2025").paddedOrTruncated(12) +
                             Bytes.utf8("T-Deck").paddedOrTruncated(40) +
                             Bytes.utf8("v1.13.0").paddedOrTruncated(20) + Bytes.of(if (repeat) 1 else 0, 0),
@@ -375,9 +407,10 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
 
     private suspend fun TestScope.withRepeat(
         persistence: PersistenceStoreProtocol,
+        room: RoomPersistenceStore = store,
         action: suspend (ContainerHarness, RadioPresetStateHolder, MutableList<Throwable>, RepeatRadio) -> Unit,
     ) {
-        val h = ContainerHarness(this, store, persistenceOverride = persistence)
+        val h = ContainerHarness(this, room, persistenceOverride = persistence)
         val radio = RepeatRadio()
         var holder: RadioPresetStateHolder? = null
         try {

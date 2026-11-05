@@ -158,21 +158,34 @@ suspend fun DevicePersisting.editDevice(
         require(updated.isActive == snapshot.device.isActive && updated.lastConnected == snapshot.device.lastConnected)
         val caller = currentCoroutineContext()
         var commitObserved = false
+        var callbackFailure: Throwable? = null
         val guarded = snapshot.copy(withAuthority = withAuthority, onCommitted = { saved ->
             commitObserved = true
-            onCommitted(saved)
+            try {
+                onCommitted(saved)
+            } catch (failure: Throwable) {
+                if (callbackFailure == null) callbackFailure = failure
+                throw failure
+            }
         }, onCommittedSnapshot = { committed ->
             commitObserved = true
-            onCommittedSnapshot(committed)
+            try {
+                onCommittedSnapshot(committed)
+            } catch (failure: Throwable) {
+                if (callbackFailure == null) callbackFailure = failure
+                throw failure
+            }
         }, isCurrent = {
             caller.ensureActive()
             isCurrent()
         })
         val committed = try {
             persistence.saveDeviceIfUnchanged(updated, guarded)
-        } catch (failure: PersistenceStoreException) {
-            if (commitObserved) throw failure
-            onSaveFailure(failure)
+        } catch (failure: Throwable) {
+            // A dispatcher boundary may recover/copy CancellationException; retain the actual callback object.
+            callbackFailure?.let { throw it }
+            if (failure is PersistenceStoreException && !commitObserved) onSaveFailure(failure)
+            throw failure
         }
         caller.ensureActive()
         if (committed) return updated

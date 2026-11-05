@@ -169,6 +169,16 @@ class RemoteNeighborConfidenceComposeTest {
             Shadows.shadowOf(Looper.getMainLooper()).idle()
             assertTrue(view.hasWindowFocus())
         }
+        repeat(3) { frame ->
+            compose.mainClock.advanceTimeByFrame()
+            compose.runOnUiThread {
+                Shadows.shadowOf(Looper.getMainLooper()).idle()
+                val host = activity.get().window.decorView
+                val dialog = requireNotNull(ShadowDialog.getLatestDialog().window).decorView
+                println("TS07 auth frame=$frame host=${host.width}x${host.height} " +
+                    "dialog=${dialog.width}x${dialog.height} requested=${dialog.isLayoutRequested}")
+            }
+        }
     }
 
     @Test fun statusRouteKeepsExactAndUnknownHopsDistinctAndClosesStaleExplanation() {
@@ -272,7 +282,9 @@ class RemoteNeighborConfidenceComposeTest {
         var cancelled = 0
         activity.get().setContent {
             MeshCoreTheme(motionScale = 0f) {
-                RemoteNodeAuthenticationDialog(target, dependencies, catalog, { cancelled++ }, { error("Must not authenticate") })
+                Box(Modifier.fillMaxSize()) {
+                    RemoteNodeAuthenticationDialog(target, dependencies, catalog, { cancelled++ }, { error("Must not authenticate") })
+                }
             }
         }
         attachAuthenticationWindow()
@@ -389,7 +401,8 @@ class RemoteNeighborConfidenceComposeTest {
                 val layout = layouts.single()
                 println("TS07 overflowing $name at $fontScale: width=${layout.didOverflowWidth}, height=${layout.didOverflowHeight}, " +
                     "paragraph=${layout.multiParagraph.width}x${layout.multiParagraph.height}, size=${layout.size}, " +
-                    "maxLines=${layout.multiParagraph.didExceedMaxLines}; $layout")
+                    "maxLines=${layout.multiParagraph.didExceedMaxLines}, " +
+                    "lineBounds=${(0 until layout.lineCount).map { line -> listOf(layout.getLineLeft(line), layout.getLineTop(line), layout.getLineRight(line), layout.getLineBottom(line)) }}; $layout")
             }
             assertFalse(layouts.single().hasVisualOverflow)
             indicator.performClick()

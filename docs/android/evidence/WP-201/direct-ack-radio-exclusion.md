@@ -752,3 +752,28 @@ failure instead of dropping the row or inventing a legacy/physical emission.
 Structurally malformed physical fields retain their existing typed read/
 settlement failure behavior, distinct from valid-but-inconsistent cross-table
 values. No policy permits a generic API change.
+
+### Legitimate saturation-covered acceptance exception
+
+Coordinator follow-up identified a necessary exception to the preceding
+unsaturated consistency rule. `CoveredBySaturation` intentionally permits
+physical dispatch without a per-emission row/handle, after which the service
+may legitimately record generic wire acceptance. On a radio already sticky
+saturated, an unmatched tracked-wire actual is therefore not automatically
+corrupt or conflicting. Earlier UNSENT/MAY/mismatched physical rows do not
+rule out that additional saturation-covered invocation.
+
+Bounded diagnostics retain SATURATED coverage and actual recorded physical
+rows rather than throwing InvalidData solely for the unmatched wire actual.
+Full radio/message diagnostics retain the saturation reason, without adding
+a conflict solely for that gap. Structural malformed data and independent
+genuine conflicts still keep their prior semantics. New settlement and
+failure remain blocked by saturation; delivery and proven historical replay
+retain precedence. No marker, handle, legacy row or zero-write proof is
+fabricated. Unsaturated missing-match behavior remains as reviewed above.
+
+Storage/service owners were asked for a real public-path
+CoveredBySaturation -> physical send -> generic acceptance -> diagnostic
+control, including earlier UNSENT/MAY/mismatched rows. This successor changes
+KDoc/evidence only; declarations, classifier, generic behavior and existing
+test assertions are unchanged. No execution of those controls is claimed.

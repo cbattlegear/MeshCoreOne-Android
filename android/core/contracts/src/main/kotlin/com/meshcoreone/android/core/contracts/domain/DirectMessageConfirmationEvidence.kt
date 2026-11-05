@@ -72,10 +72,14 @@ sealed interface DirectMessageConfirmationEvidence {
  * target/foreign unresolved, conflicting, legacy and sticky-saturation reasons. Retired leases,
  * erased claim payloads and noncurrent grants must not hide retained positive collision evidence.
  * Use bounded SQL EXISTS/indexed aggregates, not capped samples or unbounded materialized histories.
- * A tracked wire's accepted binding without a valid matching physical ACCEPTED row for that exact
+ * On an unsaturated radio, a tracked wire's accepted binding without a valid physical row for its
  * wire/code contributes the corresponding target/foreign conflicting reason. It is not discarded
  * as an uninvoked wire or blessed by a different valid target wire. Preserve the actual binding
  * as diagnostic code evidence, without upgrading settlement eligibility or repairing any rows.
+ * Sticky saturation can legitimately cover a physical invocation without an emission row/handle
+ * followed by generic wire acceptance. Retain RADIO_HISTORY_SATURATED; the missing physical match
+ * alone is not a conflict or invalid-data failure there, even alongside UNSENT/MAY/mismatched rows.
+ * Structural malformed data and independent genuine conflicts keep their existing semantics.
  *
  * Current storage has no genuine birth/no-write proof. Every Present therefore includes
  * TARGET_PROVENANCE_UNPROVEN, even when other known reasons exist or status is DELIVERED. Empty

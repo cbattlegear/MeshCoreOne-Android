@@ -300,6 +300,16 @@ Published complete candidate: `0ac28eebeee8a7ef2cde353e1e5183871b0d0cfe`.
 Its automatic run is `41939227027`, Linux job `126955530142`; in progress at the
 last observation, not acceptance. PR #532 retains the actual fc7 failures.
 
+That exact run subsequently finished **failure**: `:core:services:test` discovered
+2,807 tests with one failure,
+`SettingsPathHashPersistenceTest.persistenceFailureReachesTheCallerAndTheSameModeCanBeRetried`
+(`AssertionFailedError`, method entry line 53). Its named service records show the
+other five controls passing. The original failure-object identity assertion remains in
+place and was routed to the Settings owner; no app/onboarding or complete-candidate
+acceptance is inferred from this early failure. Classifier/controller passed; the Swift
+oracle was skipped. The exact hosted job/log is authoritative; no second CI-result
+bundle is retained, hashed, uploaded or revalidated.
+
 The core owner subsequently supplied reviewed
 `7cff2cca21bfa906687980bdf653ef0727376352` (parent `b25179d8e`), composed locally
 as `40e428e2af2df9d3be9f05614a22b0e931a1ea22`. The existing RX regression now
@@ -323,6 +333,69 @@ recovery instead of treating cancellation as radio rollback. All five paths were
 trusted-admitted using the same related-consumer/test and validation-evidence operations.
 The owner's new controls are authored, not executed; published 0ac does not include them.
 The current 0ac hosted run is preserved rather than being superseded before its result.
+The local composition remains provisional pending the Settings owner's bounded disposition
+of buffered old-event delivery during same-token AppState collector replacement. `Channel.close`
+retains buffered events, and replacement starts the new collector before cancelling the old one.
+An actual consumer/Room ordering control must distinguish a stale overwrite from protection
+already provided by editor serialization/cancellation. This is a source-review concern, not an
+established defect or executed regression; no new publication is made while awaiting that disposition.
+The same hold includes fresh Settings-holder reentry: the composition-owned holder/scope can be
+discarded after radio verification but before durable acknowledgement. A replacement holder reads
+Room's old mode without the old holder's unresolved-recovery marker, so selecting that displayed
+mode may be ignored despite a different radio mode. The supplied controls retain one holder or
+retry the service directly; they do not establish actual fresh mounted-holder recovery. The
+Settings owner has this source-derived concern for disposition and real radio/Room/reentry controls.
+
+The device-writer owner also has additional conditional authority/delegation/region findings
+for disposition. Both imported owner deltas remain provisional; this evidence does not
+accept those surfaces or substitute predecessor results for the complete successor.
+
+## Follow-up completion and lifecycle review
+
+The independent fc7-to-5e9 review supplied five conditional findings. Production actions
+inspected by that review run through Compose on retained `Dispatchers.Main.immediate`;
+no off-main admission/retirement or production reset caller was established. The following
+repairs preserve the public API contracts without describing these schedules as observed
+user failures:
+
+- Unknown finalization/readback outcomes retain the exact sealed decision and block a second
+  completion, including the synchronous setter. A failed explicit reset remains fenced; only
+  an acknowledged false write reopens admission. A real writer control first commits true,
+  loses its acknowledgement/readback, rejects a competing decision and a failed reset, then
+  proves successful reset and fresh completion. There is no production reset UI or new
+  authoritative reconciliation action in this change; an unresolved retired owner remains
+  fail-closed rather than inventing rollback. A finalizer cancellation with unavailable readback
+  retains the same unknown authority through a typed `CancellationException` subtype and keeps
+  both original exception objects; the process writer still stops rather than swallowing cancellation.
+- Explicit first-run retirement after sealing retains an unavailable, non-owned retired flow
+  until the original writer settles, rather than constructing a fresh active false-snapshot
+  owner. The writer now updates its acknowledged process snapshot before calling the exact
+  result callback, outside its queue lock. The real held-finalizer control reacquires during
+  that callback and requires the replacement to observe durable true, while the retired
+  original has no receipt. `wasCompletedAtLoad` stays false. This supersedes the earlier
+  callback-before-raw ordering above, not the held gate's original-witness requirements.
+- Admission, generation capture, lazy-job registration and invalidation now share the flow's
+  lifecycle lock for preset, no-device, clearing and connection work. No suspending operation
+  is invoked directly in that critical section. Actual preset-target interposition with a
+  concurrent reset and queued dispatcher checks that reset cancels registered old work,
+  does not leave `isApplying` stuck, and allows a genuine fresh apply. A queued no-device
+  control likewise proves no old completion and a successful new attempt.
+- `CompanionPairingService` checks actual coroutine cancellation before each accessory
+  removal. Its actual loop/`CompanionSetupService` control holds the gateway after A was
+  disassociated, cancels, lets A finish, rejects B, then clears B in a fresh call. Already-issued
+  A cannot be undone. This closes the held-A/next-iteration schedule, not a cross-thread
+  cancellation between the per-item check and the platform side effect. No such production
+  caller was found; atomic cross-thread revocation of that side effect remains unproved.
+  The coordinator checked known custody; trusted support/test admission passed before edits.
+- Wi-Fi, pairing/retry and demo jobs retain their initiating generation; invalidation cancels
+  the registered job, and late result publication is checked under the same lifecycle lock.
+  Controls let non-cancellable old Wi-Fi and pairing operations return after reset while a
+  new connection is held: the old result cannot append REGION or clear the new busy state;
+  the new result advances exactly once.
+
+These are authored controls, not Kotlin execution. Source validation, inventory and diff
+checks passed during authoring; the shared local Gradle hold is unchanged. No #495 navigation,
+AppRoot, witness or failure-presenter source/reservation/publication was imported or edited.
 
 ## Authored controls
 

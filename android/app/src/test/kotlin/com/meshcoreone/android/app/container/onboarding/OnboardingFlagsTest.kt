@@ -173,6 +173,74 @@ class OnboardingFlagsTest {
         } finally { release.complete(Unit); scope.cancel() }
     }
 
+    @Test fun `unknown committed finalization fences new decisions until acknowledged reset recovery`() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
+        var durable = false
+        var finalizations = 0
+        var failReset = true
+        try {
+            val flags = WriteBehindOnboardingFlags(
+                emptyMap(), scope, { _, value ->
+                    if (!value && failReset) throw IOException("reset unavailable")
+                    durable = value
+                },
+                persistCompletion = {
+                    finalizations++
+                    durable = true
+                    if (finalizations == 1) throw IOException("lost commit acknowledgement")
+                },
+                reconcileCompletion = { throw IOException("readback unavailable") },
+            )
+            val state = OnboardingState(flags)
+            assertFailsWith<OnboardingCompletionOutcomeUnknownException> { state.completeOnboarding() }
+            assertTrue(durable)
+            assertFalse(flags.hasCompleted.value)
+            assertFalse(state.hasCompletedOnboarding)
+            assertTrue(state.hasUnsettledCompletion)
+            assertFalse(state.canStartCompletion())
+            assertFailsWith<IllegalStateException> { state.completeOnboarding() }
+            assertFailsWith<IllegalStateException> { state.hasCompletedOnboarding = false }
+            assertEquals(1, finalizations)
+            assertFailsWith<IOException> { state.resetOnboarding() }
+            assertFalse(state.canStartCompletion())
+            assertTrue(durable)
+            failReset = false
+            state.resetOnboarding()
+            assertFalse(durable)
+            assertFalse(state.hasUnsettledCompletion)
+            assertTrue(state.canStartCompletion())
+            state.completeOnboarding()
+            assertTrue(durable)
+            assertEquals(2, finalizations)
+            assertEquals(
+                com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt.WithoutDevice,
+                state.completionReceipt,
+            )
+        } finally { scope.cancel() }
+    }
+
+    @Test fun `unavailable readback after finalizer cancellation retains uncertain authority and cancellation`() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
+        val writeFailure = kotlinx.coroutines.CancellationException("cancelled after possible commit")
+        val readFailure = IOException("readback unavailable")
+        try {
+            val flags = WriteBehindOnboardingFlags(
+                emptyMap(), scope, { _, _ -> },
+                persistCompletion = { throw writeFailure },
+                reconcileCompletion = { throw readFailure },
+            )
+            val state = OnboardingState(flags)
+            val failure = assertFailsWith<OnboardingCompletionCancellationOutcomeUnknownException> {
+                state.completeOnboarding()
+            }
+            org.junit.Assert.assertSame(writeFailure, failure.writeFailure)
+            org.junit.Assert.assertSame(readFailure, failure.readbackFailure)
+            assertTrue(state.hasUnsettledCompletion)
+            assertFalse(state.canStartCompletion())
+            assertEquals(null, state.completionReceipt)
+        } finally { scope.cancel() }
+    }
+
     @Test fun `reset after a valid seal preserves ordered false and prevents retired flow publication`() = runTest {
         val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
         val finalizing = CompletableDeferred<Unit>()

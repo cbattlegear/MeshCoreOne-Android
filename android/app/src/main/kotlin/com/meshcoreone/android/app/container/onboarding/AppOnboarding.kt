@@ -198,16 +198,22 @@ class AppOnboarding(
 ) : OnboardingFeatureDependencies {
     val wasCompletedAtLoad: Boolean = hasCompleted.value
     private var firstRunFlowCoordinator: OnboardingFlowCoordinator? = null
+    private var retiringFirstRunFlow: OnboardingFlowCoordinator? = null
     private val rerunDependencies by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { Rerun(this) }
 
     override fun openAppSettings() = settingsOpener()
 
     @Synchronized
-    override fun retainedFlowCoordinator(): OnboardingFlowCoordinator =
-        firstRunFlowCoordinator ?: OnboardingFlowCoordinator(flowScope, this).also {
+    override fun retainedFlowCoordinator(): OnboardingFlowCoordinator {
+        retiringFirstRunFlow?.let {
+            if (it.onboarding.hasUnsettledCompletion) return it
+            retiringFirstRunFlow = null
+        }
+        return firstRunFlowCoordinator ?: OnboardingFlowCoordinator(flowScope, this).also {
             it.restoreStartingPath()
             firstRunFlowCoordinator = it
         }
+    }
 
     @Synchronized
     override fun ownsFlowCoordinator(coordinator: OnboardingFlowCoordinator): Boolean =
@@ -218,6 +224,7 @@ class AppOnboarding(
         if (firstRunFlowCoordinator === coordinator) {
             coordinator.onboarding.retireCompletion()
             firstRunFlowCoordinator = null
+            if (coordinator.onboarding.hasUnsettledCompletion) retiringFirstRunFlow = coordinator
         }
     }
 

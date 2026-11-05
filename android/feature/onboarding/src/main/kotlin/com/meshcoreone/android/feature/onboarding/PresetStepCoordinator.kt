@@ -53,15 +53,26 @@ class PresetStepCoordinator(
     private data class AppliedPreset(val id: String, val target: OnboardingPresetTarget?, val generation: Long)
     private var appliedPreset: AppliedPreset? = null
     private var completionPersistenceJob: Job? = null
+    private var applyJob: Job? = null
+    private val lock = Any()
     private var completionJobGeneration = 0L
     private val currentGeneration: Long get() = lifecycle?.lifecycleGeneration?.value ?: 0L
 
     init {
         lifecycle?.onInvalidation {
+            applyJob?.cancel()
+            completionPersistenceJob?.cancel()
             retryCount = 0
             appliedPreset = null
             mutable.value = PresetStepState()
         }
+    }
+
+    private fun <T> withLifecycle(block: () -> T): T =
+        if (lifecycle != null) lifecycle.withLifecycle(block) else synchronized(lock) { block() }
+
+    private fun updateCurrent(generation: Long, transform: (PresetStepState) -> PresetStepState) = withLifecycle {
+        if (currentGeneration == generation) mutable.update(transform)
     }
 
     fun visiblePresets(): List<OnboardingPresetOption> = regionPort.catalog.presets(regionPort.selection.value)
@@ -76,62 +87,69 @@ class PresetStepCoordinator(
 
     /** Resolves the user's selection against what is actually visible (a stale id is ignored). */
     fun apply(id: String? = mutable.value.selectedId) {
-        if (mutable.value.isApplying || mutable.value.isCompleted || !canStart()) return
-        val option = visiblePresets().firstOrNull { it.id == id } ?: return
-        val target = presets.currentTarget()
-        val generation = currentGeneration
-        if (appliedPreset == AppliedPreset(option.id, target, generation)) {
-            beginCompletionPersistence()
-            return
-        }
-        appliedPreset = null
-        mutable.update {
-            it.copy(isApplying = true, error = null, retryAlert = null, completionNeedsRetry = false)
-        }
-        scope.launch {
-            if (currentGeneration != generation) return@launch
-            val outcome = try {
-                presets.apply(option.id, target)
-            } catch (cancel: CancellationException) {
-                if (currentGeneration == generation) mutable.update { it.copy(isApplying = false) }
-                throw cancel
-            } catch (failure: Exception) {
-                OnboardingPresetOutcome.Failed(UiText.Verbatim(failure.message.orEmpty()))
+        val job = withLifecycle {
+            if (mutable.value.isApplying || mutable.value.isCompleted || !canStart()) return@withLifecycle null
+            val generation = currentGeneration
+            val option = visiblePresets().firstOrNull { it.id == id } ?: return@withLifecycle null
+            val target = presets.currentTarget()
+            if (currentGeneration != generation || !canStart()) return@withLifecycle null
+            if (appliedPreset == AppliedPreset(option.id, target, generation)) {
+                return@withLifecycle beginCompletionPersistence()
             }
-            finish(option.id, target, generation, outcome)
-        }
-    }
-
-    private suspend fun finish(
-        id: String, target: OnboardingPresetTarget?, generation: Long, outcome: OnboardingPresetOutcome,
-    ) {
-        if (currentGeneration != generation) return
-        if (!canStart()) {
-            mutable.update { it.copy(isApplying = false) }
-            return
-        }
-        if (presets.currentTarget() != target) {
             appliedPreset = null
             mutable.update {
-                it.copy(isApplying = false, completionNeedsRetry = false, error = UiText.Resource(O.presetErrorNotConnected))
+                it.copy(isApplying = true, error = null, retryAlert = null, completionNeedsRetry = false)
             }
-            return
+            scope.launch(start = CoroutineStart.LAZY) {
+                if (currentGeneration != generation) return@launch
+                val outcome = try {
+                    presets.apply(option.id, target)
+                } catch (cancel: CancellationException) {
+                    updateCurrent(generation) { it.copy(isApplying = false) }
+                    throw cancel
+                } catch (failure: Exception) {
+                    OnboardingPresetOutcome.Failed(UiText.Verbatim(failure.message.orEmpty()))
+                }
+                finish(option.id, target, generation, outcome)
+            }.also { applyJob = it }
         }
-        when (outcome) {
-            OnboardingPresetOutcome.Applied, OnboardingPresetOutcome.NoRadioToConfigure -> {
-                retryCount = 0
-                appliedPreset = AppliedPreset(id, target, generation)
-                beginCompletionPersistence()
+        job?.start()
+    }
+
+    private fun finish(
+        id: String, target: OnboardingPresetTarget?, generation: Long, outcome: OnboardingPresetOutcome,
+    ) {
+        val job = withLifecycle {
+            if (currentGeneration != generation) return@withLifecycle null
+            if (!canStart()) {
+                mutable.update { it.copy(isApplying = false) }
+                return@withLifecycle null
             }
-            OnboardingPresetOutcome.NotConnected -> mutable.update {
-                it.copy(isApplying = false, error = UiText.Resource(O.presetErrorNotConnected))
+            if (presets.currentTarget() != target) {
+                appliedPreset = null
+                mutable.update {
+                    it.copy(isApplying = false, completionNeedsRetry = false, error = UiText.Resource(O.presetErrorNotConnected))
+                }
+                return@withLifecycle null
             }
-            is OnboardingPresetOutcome.Retryable -> {
-                retryCount += 1
-                mutable.update { it.copy(isApplying = false, retryAlert = PresetRetryAlert(outcome.message, id, retryCount)) }
+            when (outcome) {
+                OnboardingPresetOutcome.Applied, OnboardingPresetOutcome.NoRadioToConfigure -> {
+                    retryCount = 0
+                    appliedPreset = AppliedPreset(id, target, generation)
+                    return@withLifecycle beginCompletionPersistence()
+                }
+                OnboardingPresetOutcome.NotConnected -> mutable.update {
+                    it.copy(isApplying = false, error = UiText.Resource(O.presetErrorNotConnected))
+                }
+                is OnboardingPresetOutcome.Retryable -> {
+                    retryCount += 1
+                    mutable.update { it.copy(isApplying = false, retryAlert = PresetRetryAlert(outcome.message, id, retryCount)) }
+                }
+                is OnboardingPresetOutcome.Failed -> mutable.update { it.copy(isApplying = false, error = outcome.message) }
             }
-            is OnboardingPresetOutcome.Failed -> mutable.update { it.copy(isApplying = false, error = outcome.message) }
+            null
         }
+        job?.start()
     }
 
     private fun AppliedPreset.targetGuard(): () -> Unit {
@@ -155,37 +173,42 @@ class PresetStepCoordinator(
     internal fun completionReceipt(): OnboardingCompletionReceipt.Preset =
         checkNotNull(appliedPreset).let { OnboardingCompletionReceipt.Preset(it.id, it.target) }
 
-    private fun beginCompletionPersistence() {
-        val applied = appliedPreset ?: return
+    private fun beginCompletionPersistence(): Job? {
+        val applied = appliedPreset ?: return null
         val generation = applied.generation
-        if (currentGeneration != generation) return
+        if (currentGeneration != generation) return null
         val completion = OnboardingPresetCompletion(
             OnboardingCompletionReceipt.Preset(applied.id, applied.target), applied.targetGuard(), applied.sealer(),
         )
-        if (completionJobGeneration == generation && completionPersistenceJob?.isActive == true) return
+        if (completionJobGeneration == generation && completionPersistenceJob?.isActive == true) return null
         mutable.update { it.copy(isApplying = true, error = null, retryAlert = null) }
         val job = scope.launch(start = CoroutineStart.LAZY) {
             try {
                 if (currentGeneration != generation) return@launch
                 completion.requireCurrent()
                 onCompleted(completion)
-                if (currentGeneration != generation) return@launch
-                appliedPreset = null
-                mutable.update {
-                    it.copy(isApplying = false, isCompleted = true, completionNeedsRetry = false, commitTick = it.commitTick + 1)
+                withLifecycle {
+                    if (currentGeneration == generation) {
+                        appliedPreset = null
+                        mutable.update {
+                            it.copy(isApplying = false, isCompleted = true, completionNeedsRetry = false, commitTick = it.commitTick + 1)
+                        }
+                    }
                 }
             } catch (_: OnboardingPresetTargetChangedException) {
-                if (currentGeneration != generation) return@launch
-                appliedPreset = null
-                mutable.update {
-                    it.copy(isApplying = false, completionNeedsRetry = false, error = UiText.Resource(O.presetErrorNotConnected))
+                withLifecycle {
+                    if (currentGeneration == generation) {
+                        appliedPreset = null
+                        mutable.update {
+                            it.copy(isApplying = false, completionNeedsRetry = false, error = UiText.Resource(O.presetErrorNotConnected))
+                        }
+                    }
                 }
             } catch (cancelled: CancellationException) {
-                if (currentGeneration == generation) mutable.update { it.copy(isApplying = false) }
+                updateCurrent(generation) { it.copy(isApplying = false) }
                 throw cancelled
             } catch (_: Exception) {
-                if (currentGeneration != generation) return@launch
-                mutable.update {
+                updateCurrent(generation) {
                     it.copy(isApplying = false, error = UiText.Resource(S.alertRetryUnableToSave), completionNeedsRetry = true)
                 }
             }
@@ -193,11 +216,11 @@ class PresetStepCoordinator(
         completionJobGeneration = generation
         completionPersistenceJob = job
         job.invokeOnCompletion { cause ->
-            if (cause is CancellationException && currentGeneration == generation) {
-                mutable.update { it.copy(isApplying = false) }
+            if (cause is CancellationException) {
+                updateCurrent(generation) { it.copy(isApplying = false) }
             }
         }
-        job.start()
+        return job
     }
 
     fun retry() {

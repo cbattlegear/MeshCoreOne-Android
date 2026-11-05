@@ -6,6 +6,8 @@ import com.meshcoreone.android.core.ui.UiText
 import com.meshcoreone.android.core.ui.WiFiAddressValidation
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -28,10 +30,24 @@ class WiFiConnectionCoordinator(
     private val scope: CoroutineScope,
     private val wifi: OnboardingWiFiPort,
     private val canStartConnection: () -> Boolean = { true },
+    private val lifecycle: OnboardingState? = null,
     private val onConnected: () -> Unit,
 ) {
     private val mutable = MutableStateFlow(WiFiSheetState())
     val state: StateFlow<WiFiSheetState> = mutable.asStateFlow()
+    private val lock = Any()
+    private var job: Job? = null
+    private val generation: Long get() = lifecycle?.lifecycleGeneration?.value ?: 0L
+
+    private fun <T> withLifecycle(block: () -> T): T =
+        if (lifecycle != null) lifecycle.withLifecycle(block) else synchronized(lock) { block() }
+
+    init {
+        lifecycle?.onInvalidation {
+            job?.cancel()
+            mutable.update { it.copy(isConnecting = false, error = null) }
+        }
+    }
 
     fun setAddress(value: String) = mutable.update { it.copy(ipAddress = value) }
     fun setPort(value: String) = mutable.update { it.copy(port = value) }
@@ -40,31 +56,40 @@ class WiFiConnectionCoordinator(
     fun reset() { if (!mutable.value.isConnecting) mutable.value = WiFiSheetState() }
 
     fun connect() {
-        val current = mutable.value
-        if (current.isConnecting || !canStartConnection()) return
-        val portNumber = current.port.toIntOrNull()?.takeIf { it in 0..65535 }
-        if (portNumber == null) {
-            mutable.update { it.copy(error = UiText.Resource(O.wifiConnectionErrorInvalidPort)) }
-            return
-        }
-        mutable.update { it.copy(isConnecting = true, error = null) }
-        scope.launch {
-            val outcome = try {
-                wifi.connect(WiFiAddressValidation.normalizedHost(current.ipAddress), portNumber)
-            } catch (cancel: CancellationException) {
-                mutable.update { it.copy(isConnecting = false) }
-                throw cancel
-            } catch (failure: Exception) {
-                OnboardingConnectOutcome.Failed(UiText.Verbatim(failure.message.orEmpty()))
+        val next = withLifecycle {
+            val current = mutable.value
+            if (current.isConnecting || !canStartConnection()) return@withLifecycle null
+            val started = generation
+            val portNumber = current.port.toIntOrNull()?.takeIf { it in 0..65535 }
+            if (portNumber == null) {
+                mutable.update { it.copy(error = UiText.Resource(O.wifiConnectionErrorInvalidPort)) }
+                return@withLifecycle null
             }
-            when (outcome) {
-                OnboardingConnectOutcome.Connected -> {
-                    mutable.update { it.copy(isConnecting = false) }
-                    if (canStartConnection()) onConnected()
+            mutable.update { it.copy(isConnecting = true, error = null) }
+            scope.launch(start = CoroutineStart.LAZY) {
+                if (generation != started) return@launch
+                val outcome = try {
+                    wifi.connect(WiFiAddressValidation.normalizedHost(current.ipAddress), portNumber)
+                } catch (cancel: CancellationException) {
+                    withLifecycle {
+                        if (generation == started) mutable.update { it.copy(isConnecting = false) }
+                    }
+                    throw cancel
+                } catch (failure: Exception) {
+                    OnboardingConnectOutcome.Failed(UiText.Verbatim(failure.message.orEmpty()))
                 }
-                is OnboardingConnectOutcome.Failed -> mutable.update { it.copy(isConnecting = false, error = outcome.message) }
-                else -> mutable.update { it.copy(isConnecting = false) }
-            }
+                withLifecycle {
+                    if (generation == started) when (outcome) {
+                        OnboardingConnectOutcome.Connected -> {
+                            mutable.update { it.copy(isConnecting = false) }
+                            if (canStartConnection()) onConnected()
+                        }
+                        is OnboardingConnectOutcome.Failed -> mutable.update { it.copy(isConnecting = false, error = outcome.message) }
+                        else -> mutable.update { it.copy(isConnecting = false) }
+                    }
+                }
+            }.also { job = it }
         }
+        next?.start()
     }
 }

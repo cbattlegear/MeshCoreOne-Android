@@ -21,6 +21,7 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
         scope, deps.pairing, deps.demo, deps.permissions,
         onConnected = { onboarding.append(OnboardingStep.REGION) },
         canStartConnection = { !completing && onboarding.canStartCompletion() },
+        lifecycle = onboarding,
     )
     val wifi = WiFiConnectionCoordinator(
         scope, deps.wifi,
@@ -29,6 +30,7 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
             onboarding.append(OnboardingStep.REGION)
         },
         canStartConnection = { !completing && onboarding.canStartCompletion() },
+        lifecycle = onboarding,
     )
     val region = RegionStepCoordinator(scope, deps.region, { deps.permissions.snapshot.value.location == PermissionStatus.GRANTED }) {
         onboarding.append(OnboardingStep.PRESET)
@@ -52,11 +54,13 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
     private val completingWithoutDevice = MutableStateFlow(false)
     val isCompletingWithoutDevice: StateFlow<Boolean> = completingWithoutDevice.asStateFlow()
     private var clearingJob: Job? = null
+    private var completionJob: Job? = null
     val currentStep: OnboardingStep get() = onboarding.onboardingPath.lastOrNull() ?: OnboardingStep.WELCOME
 
     init {
         onboarding.onInvalidation {
             clearingJob?.cancel()
+            completionJob?.cancel()
             clearingJob = null
             clearing.value = false
             completing = false
@@ -127,46 +131,61 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
     }
 
     private fun completeWithoutDevice() {
-        if (!canCompleteWithoutDevice()) return
-        completing = true
-        completingWithoutDevice.value = true
-        val generation = onboarding.lifecycleGeneration.value
-        scope.launch {
-            try {
-                if (onboarding.lifecycleGeneration.value != generation) return@launch
-                onboarding.completeOnboarding()
-                if (onboarding.lifecycleGeneration.value != generation) return@launch
-                completionError.value = false
-                deviceScan.dismissSheet()
-            } catch (cancelled: kotlinx.coroutines.CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
-                if (onboarding.lifecycleGeneration.value == generation) completionError.value = true
-            } finally {
-                if (onboarding.lifecycleGeneration.value == generation) {
-                    completing = false
-                    completingWithoutDevice.value = false
+        val job = onboarding.withLifecycle {
+            if (!canCompleteWithoutDevice()) return@withLifecycle null
+            val generation = onboarding.lifecycleGeneration.value
+            completing = true
+            completingWithoutDevice.value = true
+            scope.launch(start = CoroutineStart.LAZY) {
+                try {
+                    onboarding.completeOnboarding {
+                        check(onboarding.lifecycleGeneration.value == generation) { "Onboarding attempt was retired" }
+                    }
+                    onboarding.withLifecycle {
+                        if (onboarding.lifecycleGeneration.value == generation) {
+                            completionError.value = false
+                            deviceScan.dismissSheet()
+                        }
+                    }
+                } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    onboarding.withLifecycle {
+                        if (onboarding.lifecycleGeneration.value == generation) completionError.value = true
+                    }
+                } finally {
+                    onboarding.withLifecycle {
+                        if (onboarding.lifecycleGeneration.value == generation) {
+                            completing = false
+                            completingWithoutDevice.value = false
+                        }
+                    }
                 }
-            }
+            }.also { completionJob = it }
         }
+        job?.start()
     }
 
     fun clearStalePairings() {
-        if (clearing.value || completing || !onboarding.canStartCompletion()) return
-        val generation = onboarding.lifecycleGeneration.value
-        clearing.update { true }
-        val job = scope.launch(start = CoroutineStart.LAZY) {
-            try {
-                if (onboarding.lifecycleGeneration.value != generation || !onboarding.canStartCompletion()) return@launch
-                deps.pairing.clearStalePairings()
-                currentCoroutineContext().ensureActive()
-                if (onboarding.lifecycleGeneration.value != generation) return@launch
-                deviceScan.dismissSheet()
-            } finally {
-                if (onboarding.lifecycleGeneration.value == generation) clearing.update { false }
-            }
+        val job = onboarding.withLifecycle {
+            if (clearing.value || completing || !onboarding.canStartCompletion()) return@withLifecycle null
+            val generation = onboarding.lifecycleGeneration.value
+            clearing.update { true }
+            scope.launch(start = CoroutineStart.LAZY) {
+                try {
+                    if (onboarding.lifecycleGeneration.value != generation || !onboarding.canStartCompletion()) return@launch
+                    deps.pairing.clearStalePairings()
+                    currentCoroutineContext().ensureActive()
+                    onboarding.withLifecycle {
+                        if (onboarding.lifecycleGeneration.value == generation) deviceScan.dismissSheet()
+                    }
+                } finally {
+                    onboarding.withLifecycle {
+                        if (onboarding.lifecycleGeneration.value == generation) clearing.update { false }
+                    }
+                }
+            }.also { clearingJob = it }
         }
-        clearingJob = job
-        job.start()
+        job?.start()
     }
 }

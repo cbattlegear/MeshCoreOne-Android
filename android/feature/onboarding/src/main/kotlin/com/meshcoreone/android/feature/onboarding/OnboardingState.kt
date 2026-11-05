@@ -21,6 +21,9 @@ sealed interface OnboardingCompletionReceipt {
 
 internal class OnboardingCompletionPublication(val receipt: OnboardingCompletionReceipt, val revision: Long)
 
+/** A finalizer may have committed; another decision requires an acknowledged explicit reset. */
+interface OnboardingCompletionOutcomeUnknown
+
 /** Boolean persistence seam mirroring the `UserDefaults` calls the original state makes. */
 interface OnboardingFlagStore {
     fun getBoolean(key: String): Boolean
@@ -81,6 +84,7 @@ data class OnboardingResumeFacts(val pairedAccessoriesCount: Int, val hasLastCon
 class OnboardingState(private val store: OnboardingFlagStore) {
     private val completionLock = Any()
     private var pendingAttempt: OnboardingCompletionAttempt? = null
+    private var settlingAttempt: OnboardingCompletionAttempt? = null
     private var completionRevision = 0L
     private var retired = false
     private var resetRequired = false
@@ -93,6 +97,7 @@ class OnboardingState(private val store: OnboardingFlagStore) {
         if (completed.value) OnboardingCompletionPublication(OnboardingCompletionReceipt.Restored, completionRevision) else null,
     )
     val completionReceipt: OnboardingCompletionReceipt? get() = publication.value?.receipt
+    val hasUnsettledCompletion: Boolean get() = synchronized(completionLock) { settlingAttempt != null }
     internal val completionPublication = publication.asStateFlow()
 
     val hasCompletedOnboardingFlow: StateFlow<Boolean> = completed.asStateFlow()
@@ -103,6 +108,7 @@ class OnboardingState(private val store: OnboardingFlagStore) {
         set(value) {
             synchronized(completionLock) {
                 check(!retired) { "Onboarding flow was retired" }
+                check(settlingAttempt == null && !resetRequired) { "Onboarding requires an acknowledged reset" }
                 invalidateCompletion()
                 store.setBoolean(KEY_HAS_COMPLETED, value)
                 publication.value = if (value) {
@@ -144,6 +150,7 @@ class OnboardingState(private val store: OnboardingFlagStore) {
             check(!completed.value) { "Onboarding completion is awaiting exact-flow settlement" }
             check(pendingAttempt == null) { "An onboarding completion is already pending" }
             pendingAttempt = attempt
+            settlingAttempt = attempt
             ++completionRevision
         }
         val caller = currentCoroutineContext()
@@ -158,8 +165,10 @@ class OnboardingState(private val store: OnboardingFlagStore) {
             validate()
             store.persistBoolean(KEY_HAS_COMPLETED, true, validate, seal, attempt) { result ->
                 synchronized(completionLock) {
+                    val unknown = result.exceptionOrNull() is OnboardingCompletionOutcomeUnknown
+                    if (settlingAttempt === attempt && !unknown) settlingAttempt = null
                     if (pendingAttempt === attempt) {
-                        pendingAttempt = null
+                        if (unknown) resetRequired = true else pendingAttempt = null
                         if (result.isSuccess) {
                             completed.value = true
                             if (completionRevision == revision && !retired && !resetRequired) {
@@ -177,6 +186,7 @@ class OnboardingState(private val store: OnboardingFlagStore) {
             synchronized(completionLock) {
                 attempt.reject(IllegalStateException("Onboarding attempt ended before sealing"))
                 if (!attempt.isSealed && pendingAttempt === attempt) pendingAttempt = null
+                if (!attempt.isSealed && settlingAttempt === attempt) settlingAttempt = null
             }
         }
     }
@@ -191,6 +201,8 @@ class OnboardingState(private val store: OnboardingFlagStore) {
     fun canStartCompletion(): Boolean =
         synchronized(completionLock) { !retired && !resetRequired && !completed.value && pendingAttempt == null }
 
+    internal fun <T> withLifecycle(block: () -> T): T = synchronized(completionLock) { block() }
+
     internal fun onInvalidation(observer: () -> Unit) = synchronized(completionLock) {
         check(!retired) { "Onboarding flow was retired" }
         invalidationObservers += observer
@@ -204,6 +216,7 @@ class OnboardingState(private val store: OnboardingFlagStore) {
     private fun invalidateCompletion(): Long = synchronized(completionLock) {
         pendingAttempt?.reject(IllegalStateException("Onboarding attempt was retired"))
         pendingAttempt = null
+        if (settlingAttempt?.isSealed == false) settlingAttempt = null
         val revision = ++completionRevision
         lifecycle.value = Math.incrementExact(lifecycle.value)
         val observers = invalidationObservers.toList()
@@ -224,6 +237,7 @@ class OnboardingState(private val store: OnboardingFlagStore) {
             publication.value = null
             completed.value = false
             resetRequired = false
+            settlingAttempt = null
             path.value = emptyList()
         }
     }

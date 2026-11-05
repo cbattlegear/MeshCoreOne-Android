@@ -269,6 +269,55 @@ class OnboardingGateTest {
         } finally { release.complete(Unit); processScope.cancel() }
     }
 
+    @Test fun `retiring a sealed first-run owner fences replacement until durable snapshot publication`() = runBlocking {
+        val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val release = CompletableDeferred<Unit>()
+        try {
+            host.setup().visible()
+            val finalizing = CompletableDeferred<Unit>()
+            var durable = false
+            val flags = WriteBehindOnboardingFlags(
+                emptyMap(), processScope, { _, value -> durable = value },
+                persistCompletion = { finalizing.complete(Unit); release.await(); durable = true },
+            )
+            lateinit var dependencies: AppOnboarding
+            var callbackReplacement: com.meshcoreone.android.feature.onboarding.OnboardingFlowCoordinator? = null
+            val observed = object : OnboardingFlagStore by flags {
+                override suspend fun persistBoolean(
+                    key: String, value: Boolean, requireCurrent: () -> Unit,
+                    seal: (com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt) -> Boolean,
+                    attempt: com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt,
+                    onFinished: (Result<Unit>) -> Unit,
+                ) = flags.persistBoolean(key, value, requireCurrent, seal, attempt) { result ->
+                    onFinished(result)
+                    callbackReplacement = dependencies.retainedFlowCoordinator()
+                }
+            }
+            dependencies = onboarding(observed, flags.hasCompleted, processScope)
+            val old = dependencies.retainedFlowCoordinator()
+            val completion = async(start = CoroutineStart.UNDISPATCHED) {
+                runCatching { old.onboarding.completeOnboarding() }
+            }
+            finalizing.await()
+            dependencies.onFlowCompletionHandled(old)
+            assertFalse(dependencies.ownsFlowCoordinator(old))
+            assertSame(old, dependencies.retainedFlowCoordinator())
+            assertFalse(old.onboarding.canStartCompletion())
+            assertFalse(flags.hasCompleted.value)
+            release.complete(Unit)
+            assertTrue(completion.await().isFailure)
+            assertTrue(durable)
+            val fresh = dependencies.retainedFlowCoordinator()
+            assertSame(callbackReplacement, fresh)
+            assertNotSame(old, fresh)
+            assertTrue(dependencies.ownsFlowCoordinator(fresh))
+            assertTrue(fresh.onboarding.hasCompletedOnboarding)
+            assertEquals(null, old.onboarding.completionReceipt)
+            assertFalse(dependencies.wasCompletedAtLoad)
+            assertFalse(fresh.onboarding.canStartCompletion())
+        } finally { release.complete(Unit); processScope.cancel() }
+    }
+
     @Test fun `delivery retry cannot observe a second unsealed preset receipt from a completed flow`() = runBlocking {
         val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
         val releaseSecondStage = CompletableDeferred<Unit>()

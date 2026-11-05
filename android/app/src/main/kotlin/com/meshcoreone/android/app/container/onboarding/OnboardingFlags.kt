@@ -6,6 +6,7 @@ import com.meshcoreone.android.core.datastore.PreferenceStore
 import com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt
 import com.meshcoreone.android.core.ui.ShowOnceTips
 import com.meshcoreone.android.feature.onboarding.OnboardingFlagStore
+import com.meshcoreone.android.feature.onboarding.OnboardingCompletionOutcomeUnknown
 import com.meshcoreone.android.feature.onboarding.OnboardingState
 import java.io.IOException
 import java.util.logging.Level
@@ -26,8 +27,18 @@ import kotlin.coroutines.resumeWithException
 class OnboardingCompletionOutcomeUnknownException(
     val writeFailure: Exception,
     val readbackFailure: Exception,
-) : IOException(writeFailure.message, writeFailure) {
+) : IOException(writeFailure.message, writeFailure), OnboardingCompletionOutcomeUnknown {
     init { addSuppressed(readbackFailure) }
+}
+
+class OnboardingCompletionCancellationOutcomeUnknownException(
+    val writeFailure: CancellationException,
+    val readbackFailure: Exception,
+) : CancellationException(writeFailure.message), OnboardingCompletionOutcomeUnknown {
+    init {
+        initCause(writeFailure)
+        if (writeFailure !== readbackFailure) addSuppressed(readbackFailure)
+    }
 }
 
 /**
@@ -121,8 +132,7 @@ class WriteBehindOnboardingFlags(
                                     reconcileCompletion(attempt.id.toString())
                                 } catch (readFailure: Exception) {
                                     if (failure is CancellationException) {
-                                        if (failure !== readFailure) failure.addSuppressed(readFailure)
-                                        throw failure
+                                        throw OnboardingCompletionCancellationOutcomeUnknownException(failure, readFailure)
                                     }
                                     throw OnboardingCompletionOutcomeUnknownException(failure, readFailure)
                                 }
@@ -130,7 +140,6 @@ class WriteBehindOnboardingFlags(
                                 onFailure(failure)
                             }
                         }
-                        write.onFinished?.invoke(Result.success(Unit))
                         synchronized(lock) {
                             if (write.revision >= (snapshotRevision[write.key] ?: 0L)) {
                                 snapshotRevision[write.key] = write.revision
@@ -138,6 +147,7 @@ class WriteBehindOnboardingFlags(
                                 if (write.key == OnboardingState.KEY_HAS_COMPLETED) completed.value = write.value
                             }
                         }
+                        write.onFinished?.invoke(Result.success(Unit))
                         write.persisted?.resume(Unit)
                     } catch (rejected: RejectedWrite) {
                         write.onFinished?.invoke(Result.failure(rejected.failure))

@@ -41,12 +41,26 @@ class DeviceScanCoordinator(
     private val demo: OnboardingDemoPort,
     private val permissions: OnboardingPermissionPort,
     private val canStartConnection: () -> Boolean = { true },
+    private val lifecycle: OnboardingState? = null,
     private val onConnected: () -> Unit,
 ) {
     private val mutable = MutableStateFlow(DeviceScanState())
     val state: StateFlow<DeviceScanState> = mutable.asStateFlow()
     private var job: Job? = null
     private var titleTaps = 0
+    private val lock = Any()
+    private val generation: Long get() = lifecycle?.lifecycleGeneration?.value ?: 0L
+
+    private fun <T> withLifecycle(block: () -> T): T =
+        if (lifecycle != null) lifecycle.withLifecycle(block) else synchronized(lock) { block() }
+
+    init {
+        lifecycle?.onInvalidation {
+            job?.cancel()
+            titleTaps = 0
+            mutable.update { it.copy(localBusy = false, didInitiatePairing = false, failure = null, showDemoAlert = false) }
+        }
+    }
 
     fun isBusy(connection: OnboardingConnectionSnapshot): Boolean = connection.isBusy || mutable.value.localBusy
 
@@ -63,25 +77,38 @@ class DeviceScanCoordinator(
 
     /** Three taps on the title unlock demo mode (App Store reviewer path, preserved from the original). */
     fun onTitleTap() {
-        if (mutable.value.localBusy || !canStartConnection()) return
-        titleTaps += 1
-        if (titleTaps < TITLE_TAPS_TO_UNLOCK) return
-        titleTaps = 0
-        mutable.update { it.copy(localBusy = true, failure = null) }
-        job = scope.launch(start = CoroutineStart.UNDISPATCHED) {
-            try {
-                currentCoroutineContext().ensureActive()
-                demo.unlockAndAwait()
-                currentCoroutineContext().ensureActive()
-                mutable.update { it.copy(showDemoAlert = true, successTick = it.successTick + 1) }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (failure: Exception) {
-                mutable.update { it.copy(failure = UiErrorMapper().message(failure), failureTick = it.failureTick + 1) }
-            } finally {
-                mutable.update { it.copy(localBusy = false) }
-            }
+        val next = withLifecycle {
+            if (mutable.value.localBusy || !canStartConnection()) return@withLifecycle null
+            titleTaps += 1
+            if (titleTaps < TITLE_TAPS_TO_UNLOCK) return@withLifecycle null
+            val started = generation
+            titleTaps = 0
+            mutable.update { it.copy(localBusy = true, failure = null) }
+            scope.launch(start = CoroutineStart.LAZY) {
+                try {
+                    if (generation != started) return@launch
+                    currentCoroutineContext().ensureActive()
+                    demo.unlockAndAwait()
+                    currentCoroutineContext().ensureActive()
+                    withLifecycle {
+                        if (generation == started) mutable.update { it.copy(showDemoAlert = true, successTick = it.successTick + 1) }
+                    }
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (failure: Exception) {
+                    withLifecycle {
+                        if (generation == started) mutable.update {
+                            it.copy(failure = UiErrorMapper().message(failure), failureTick = it.failureTick + 1)
+                        }
+                    }
+                } finally {
+                    withLifecycle {
+                        if (generation == started) mutable.update { it.copy(localBusy = false) }
+                    }
+                }
+            }.also { job = it }
         }
+        next?.start()
     }
 
     /** Re-evaluates the Bluetooth blocker; the UI calls this after each permission result. */
@@ -109,19 +136,28 @@ class DeviceScanCoordinator(
     fun connectDemo() = run(initiated = true) { demo.connectDemo() }
 
     private fun run(initiated: Boolean, retriedDeviceId: UUID? = null, action: suspend () -> OnboardingConnectOutcome) {
-        if (mutable.value.localBusy || !canStartConnection()) return
-        mutable.update { it.copy(localBusy = true, didInitiatePairing = it.didInitiatePairing || initiated, failure = null) }
-        job = scope.launch {
-            val outcome = try {
-                action()
-            } catch (cancel: CancellationException) {
-                mutable.update { it.copy(localBusy = false) }
-                throw cancel
-            } catch (failure: Exception) {
-                OnboardingConnectOutcome.Failed(UiText.Verbatim(failure.message.orEmpty()))
-            }
-            apply(outcome, retriedDeviceId)
+        val next = withLifecycle {
+            if (mutable.value.localBusy || !canStartConnection()) return@withLifecycle null
+            val started = generation
+            mutable.update { it.copy(localBusy = true, didInitiatePairing = it.didInitiatePairing || initiated, failure = null) }
+            scope.launch(start = CoroutineStart.LAZY) {
+                if (generation != started) return@launch
+                val outcome = try {
+                    action()
+                } catch (cancel: CancellationException) {
+                    withLifecycle {
+                        if (generation == started) mutable.update { it.copy(localBusy = false) }
+                    }
+                    throw cancel
+                } catch (failure: Exception) {
+                    OnboardingConnectOutcome.Failed(UiText.Verbatim(failure.message.orEmpty()))
+                }
+                withLifecycle {
+                    if (generation == started) apply(outcome, retriedDeviceId)
+                }
+            }.also { job = it }
         }
+        next?.start()
     }
 
     private fun apply(outcome: OnboardingConnectOutcome, retriedDeviceId: UUID?) {
@@ -149,7 +185,7 @@ class DeviceScanCoordinator(
 
     /** Continue after an already-connected radio (resume path). */
     fun continueConnected() {
-        if (canStartConnection()) onConnected()
+        withLifecycle { if (canStartConnection()) onConnected() }
     }
 
     private companion object { const val TITLE_TAPS_TO_UNLOCK = 3 }

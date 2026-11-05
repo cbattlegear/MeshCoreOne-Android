@@ -46,7 +46,19 @@ class RecoveryPolicyTest {
                     }
                 }
                 val observed = mutableListOf<MessageStatusEvent>()
-                observe(h, observed)
+                var streamFailure: MessageServiceException? = null
+                val subscription = h.service.statusEvents()
+                backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                    try {
+                        subscription.events.collect {
+                            assertEquals(h.token, it.token)
+                            observed += it.event
+                        }
+                    } catch (failure: MessageServiceException) {
+                        if (schedule != "replacement") throw failure
+                        streamFailure = failure
+                    }
+                }
                 val original = IllegalStateException("inline send failure")
                 val work = backgroundScope.async {
                     suspend fun cleanup() {
@@ -63,7 +75,13 @@ class RecoveryPolicyTest {
                         else -> null
                     }
                     if (expected == null) cleanup()
-                    else assertSame(expected, assertFailsWith<Exception> { cleanup() })
+                    else {
+                        val actual = assertFailsWith<Exception> { cleanup() }
+                        if (cancelling) {
+                            assertIs<CancellationException>(actual)
+                            assertTrue(generateSequence<Throwable>(actual) { it.cause }.any { it === cancellation })
+                        } else assertSame(expected, actual)
+                    }
                 }
                 entered.await()
                 if (schedule == "competing-writer") {
@@ -78,6 +96,9 @@ class RecoveryPolicyTest {
                 work.await()
                 if (schedule == "late") h.transport.pushAck(code, 123u)
                 runCurrent()
+                if (schedule == "replacement") {
+                    assertEquals(MessageServiceError.NotConnected, assertNotNull(streamFailure).error)
+                } else assertNull(streamFailure)
                 when (schedule) {
                     "throw-before-commit", "cancel-before-commit" -> {
                         assertEquals(MessageStatus.DELIVERED, h.stored(message.id).status)

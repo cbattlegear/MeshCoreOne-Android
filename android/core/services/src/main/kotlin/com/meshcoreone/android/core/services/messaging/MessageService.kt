@@ -282,6 +282,7 @@ class MessageService(
         }
         if (row.status == MessageStatus.FAILED && uncertainWrite != null && !restoresOwnFailure) {
             // A failed return cannot identify the writer of this terminal row.
+            remember("ackUncertain.$messageID", uncertainWrite.cause)
             remember("ack.$messageID", uncertainWrite.cause)
             throw uncertainWrite.recoveryFailure
         }
@@ -294,6 +295,7 @@ class MessageService(
         val committed = dataStore.fetchMessage(key(messageID))
         if (!cleanup) ownership.check("commitAcknowledgement.refetched")
         if (committed?.status != MessageStatus.DELIVERED && uncertainWrite != null) {
+            remember("ackUncertain.$messageID", uncertainWrite.cause)
             remember("ack.$messageID", uncertainWrite.cause)
             throw uncertainWrite.recoveryFailure
         }
@@ -478,13 +480,14 @@ class MessageService(
         failure: Exception,
     ) {
         if (wasFailed || tracking == null) return
-        val retained = synchronized(lock) {
-            if (pendingAcks[messageID]?.receipt !== tracking.receipt) false else {
+        val report = synchronized(lock) {
+            val current = pendingAcks[messageID]
+            if (current?.receipt !== tracking.receipt) false else {
                 uncertainFailureWrites[messageID] = UncertainFailureWrite(tracking, failure)
-                true
+                failure !is CancellationException || current.acknowledgement != null
             }
         }
-        if (retained) remember("ackUncertain.$messageID", failure)
+        if (report) remember("ackUncertain.$messageID", failure)
     }
 
     suspend fun stopAndFailAllPending() { stopAckExpiryChecking(); failAllPendingMessages() }

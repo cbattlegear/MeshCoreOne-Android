@@ -279,6 +279,44 @@ class RemoteNodesComposeTest {
         compose.onNodeWithTag("remote-map:retry").assertDoesNotExist()
     }
 
+    @Test fun realRemoteMapReadinessAfterComposeIdleIsObservedWithoutEmissionGates() {
+        val real = requireNotNull(fixture.mapPreferences)
+        val observationEntered = CompletableDeferred<Unit>()
+        val realSnapshotRead = CompletableDeferred<Unit>()
+        val emissionDelivered = CompletableDeferred<Unit>()
+        fixture.mapPreferences = object : MapPreferenceStore by real {
+            override fun observe(host: MapFilterHost) = kotlinx.coroutines.flow.flow {
+                observationEntered.complete(Unit)
+                real.observe(host).collect {
+                    realSnapshotRead.complete(Unit)
+                    emit(it)
+                    emissionDelivered.complete(Unit)
+                }
+            }
+        }
+        fun record(stage: String) {
+            println(
+                "WP312_MAP_READINESS|sdk=${Build.VERSION.SDK_INT}|$stage|" +
+                    "historyReads=${fixture.historyReads}|entered=${observationEntered.isCompleted}|" +
+                    "snapshot=${realSnapshotRead.isCompleted}|emitted=${emissionDelivered.isCompleted}|" +
+                    "write=false|failed=false",
+            )
+        }
+        show(RemoteNodeLaunch(fixture.contact, RemoteNodeLaunchAction.SAVED_HISTORY))
+        record("ungated-show-returned")
+        waitForSyntheticMap()
+        compose.onNodeWithTag("remote-contact-route").assertExists()
+        compose.onNodeWithTag("remote-history-content").assertExists()
+        assertTrue(fixture.historyReads > 0)
+        assertTrue(observationEntered.isCompleted)
+        assertTrue(realSnapshotRead.isCompleted)
+        assertTrue(emissionDelivered.isCompleted)
+        compose.onNodeWithText(
+            text(com.meshcoreone.android.core.l10n.generated.AppMapStrings.mapControlsShowLabels),
+        ).performScrollTo().assertExists()
+        record("ungated-map-and-controls-ready")
+    }
+
     @Test fun historyRouteAndRealPreferenceEmissionHaveIndependentReadinessBoundaries() {
         val real = requireNotNull(fixture.mapPreferences)
         val observationEntered = CompletableDeferred<Unit>()

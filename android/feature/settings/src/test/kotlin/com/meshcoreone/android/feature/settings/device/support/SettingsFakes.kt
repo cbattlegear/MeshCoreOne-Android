@@ -99,9 +99,13 @@ internal class FakeSettingsPort(private val connection: FakeConnection? = null) 
         frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte, codingRate: UByte,
         clientRepeat: Boolean?, appliedRadioPresetID: String?, expectedDevice: DeviceDTO?,
         repeatAttempt: com.meshcoreone.android.core.contracts.domain.PreRepeatSettingsAttempt?,
+        restoreAuthority: com.meshcoreone.android.core.contracts.domain.RepeatSnapshotRestoreAuthority?,
     ): SelfInfo {
         radioExpectations += expectedDevice
-        record("setRadioParamsVerified", "$frequencyKHz,$bandwidthKHz,$spreadingFactor,$codingRate,$clientRepeat,$appliedRadioPresetID")
+        val mutation: suspend () -> Unit = {
+            record("setRadioParamsVerified", "$frequencyKHz,$bandwidthKHz,$spreadingFactor,$codingRate,$clientRepeat,$appliedRadioPresetID")
+        }
+        if (restoreAuthority == null) mutation() else restoreAuthority.withWrite { mutation() }
         return selfInfo()
     }
     override suspend fun setTxPowerVerified(power: Byte): SelfInfo { record("setTxPowerVerified", "$power"); return selfInfo() }

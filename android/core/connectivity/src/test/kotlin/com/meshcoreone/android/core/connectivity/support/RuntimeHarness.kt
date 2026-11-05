@@ -63,6 +63,7 @@ internal class FakePreferences : ProcessConnectionPreferences {
 
 /** Repository double with core:data's ghost-demotion semantics (new surrogate id, inactive, no methods). */
 internal class FakeDevices : DevicePersisting, DeviceEditPersisting {
+    override val repeatSnapshotAuthority = com.meshcoreone.android.core.contracts.domain.RepeatSnapshotAuthority()
     val rows = linkedMapOf<UUID, DeviceDTO>()
     val contacts = mutableListOf<ContactDTO>()
     val messages = mutableListOf<MessageDTO>()
@@ -88,7 +89,10 @@ internal class FakeDevices : DevicePersisting, DeviceEditPersisting {
         setActiveDevice(id)
         return true
     }
-    override suspend fun saveDevice(dto: DeviceDTO) { calls += "save"; rows[dto.id] = dto; deviceRevision++; authorityRevision++ }
+    override suspend fun saveDevice(dto: DeviceDTO) {
+        calls += "save"; rows[dto.id] = dto; deviceRevision++; authorityRevision++
+        repeatSnapshotAuthority.observeCommittedClear(dto)
+    }
     override suspend fun fetchDeviceWriteSnapshot(id: UUID): DeviceWriteSnapshot? =
         rows[id]?.let { DeviceWriteSnapshot(it, deviceRevision, authorityRevision) }
     override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
@@ -100,6 +104,7 @@ internal class FakeDevices : DevicePersisting, DeviceEditPersisting {
                 calls += "save"
                 rows[dto.id] = dto
                 deviceRevision++
+                repeatSnapshotAuthority.observeCommittedClear(dto)
                 expected.onCommitted(dto)
                 true
             }

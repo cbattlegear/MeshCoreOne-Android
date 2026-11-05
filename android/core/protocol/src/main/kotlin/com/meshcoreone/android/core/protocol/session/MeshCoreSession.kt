@@ -110,6 +110,12 @@ class MeshCoreSession private constructor(
     override suspend fun getRepeatFreq(): List<FrequencyRange> = core.exchange {
         query(PacketBuilder.getRepeatFreq(), "repeatFreq") { (it as? MeshEvent.AllowedRepeatFreq)?.ranges }
     }
+    override suspend fun setRadio(
+        frequency: Double, bandwidth: Double, spreadingFactor: UByte, codingRate: UByte, clientRepeat: Boolean?,
+        sendPermit: RadioWritePermit,
+    ) = core.exchange(sendPermit) {
+        simple(PacketBuilder.setRadio(frequency, bandwidth, spreadingFactor, codingRate, clientRepeat), afterSend = sendPermit::release)
+    }
     suspend fun setTuning(rxDelay: UInt, af: UInt) = simple(PacketBuilder.setTuning(rxDelay, af))
     override suspend fun setOtherParams(
         manualAddContacts: Boolean, telemetryModeEnvironment: UByte, telemetryModeLocation: UByte,

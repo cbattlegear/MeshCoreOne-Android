@@ -11,10 +11,13 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.protocol.session.ChannelWriteCancellationDisposition
 import com.meshcoreone.android.core.protocol.session.ChannelWriteDispatch
+import com.meshcoreone.android.core.protocol.session.RadioWritePermit
 import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** A process-owned optimistic write ticket; device writers invalidate it inside their transaction. */
 data class DeviceWriteSnapshot(
@@ -35,6 +38,7 @@ class PreRepeatSettingsAttempt(val token: SessionToken?) {
     private var commitRecorded = false
     private var created: DeviceWriteSnapshot? = null
     private var dispatchEntered = false
+    private var radioWriteCompleted = false
     private var abortClaimed = false
     private val dispatch = ChannelWriteDispatch()
 
@@ -67,6 +71,93 @@ class PreRepeatSettingsAttempt(val token: SessionToken?) {
             dispatch.cancellationDisposition != ChannelWriteCancellationDisposition.DEFINITELY_UNSENT
         ) return null
         return created
+    }
+
+    @Synchronized fun recordRadioWriteCompleted() {
+        check(dispatchEntered)
+        radioWriteCompleted = true
+    }
+
+    @Synchronized fun restorationMayHaveBeenUsed(): Boolean =
+        radioWriteCompleted || (abortClaimed && dispatchEntered &&
+            dispatch.cancellationDisposition == ChannelWriteCancellationDisposition.MAY_HAVE_WRITTEN)
+}
+
+class RepeatSnapshotReconciliationRequired :
+    IllegalStateException("A cancelled Repeat preparation requires an explicit snapshot clear before reuse")
+
+fun interface RepeatSnapshotRestoreAuthority {
+    /** Release after the transport send settles, not after its protocol response arrives. */
+    suspend fun withWrite(write: suspend (permit: RadioWritePermit) -> Unit)
+}
+
+/** Process-store custody shared by all editors and delegating persistence wrappers; not durable across restart. */
+class RepeatSnapshotAuthority {
+    private data class Identity(val id: UUID, val radioId: RadioId, val publicKey: Bytes)
+    private data class Pending(val receipt: DeviceWriteSnapshot, val attempt: PreRepeatSettingsAttempt)
+    private val pending = mutableMapOf<Identity, Pending>()
+    private val admissions = mutableMapOf<UUID, Mutex>()
+    private val identityVersions = mutableMapOf<UUID, Long>()
+    private fun DeviceDTO.identity() = Identity(id, radioId, publicKey)
+
+    suspend fun <T> withAdmission(deviceId: UUID, action: suspend () -> T): T {
+        val admission = synchronized(this) { admissions.getOrPut(deviceId) { Mutex() } }
+        return admission.withLock { action() }
+    }
+
+    suspend fun <T> tryWithAdmission(deviceId: UUID, ifBusy: () -> T, action: suspend () -> T): T {
+        val admission = synchronized(this) { admissions.getOrPut(deviceId) { Mutex() } }
+        if (!admission.tryLock()) return ifBusy()
+        return try { action() } finally { admission.unlock() }
+    }
+
+    suspend fun <T> withAdmissions(deviceIds: Collection<UUID>, action: suspend () -> T): T {
+        val ordered = deviceIds.distinct().sorted()
+        suspend fun acquire(index: Int): T =
+            if (index == ordered.size) action()
+            else withAdmission(ordered[index]) { acquire(index + 1) }
+        return acquire(0)
+    }
+
+    suspend fun <T> withDispatchAdmission(deviceId: UUID, action: suspend (permit: RadioWritePermit) -> T): T {
+        val admission = synchronized(this) { admissions.getOrPut(deviceId) { Mutex() } }
+        admission.lock()
+        val permit = RadioWritePermit { admission.unlock() }
+        return try { action(permit) } finally { permit.releaseIfUnclaimed() }
+    }
+
+    @Synchronized fun observeIdentityChange(before: DeviceDTO, after: DeviceDTO) {
+        if (before.identity() != after.identity()) {
+            invalidateIdentity(before.id)
+            if (before.id != after.id) invalidateIdentity(after.id)
+            pending.remove(before.identity())?.let { pending[after.identity()] = it }
+        }
+    }
+
+    @Synchronized fun identityVersion(deviceId: UUID): Long = identityVersions[deviceId] ?: 0L
+
+    @Synchronized fun invalidateIdentity(deviceId: UUID) {
+        identityVersions[deviceId] = Math.addExact(identityVersion(deviceId), 1L)
+    }
+
+    @Synchronized fun recordCreated(receipt: DeviceWriteSnapshot, attempt: PreRepeatSettingsAttempt) {
+        pending[receipt.device.identity()] = Pending(receipt, attempt)
+    }
+
+    fun requireUsable(device: DeviceDTO) {
+        val identity = device.identity()
+        val entry = synchronized(this) { pending[identity] } ?: return
+        // Never acquire the attempt monitor while holding the registry monitor.
+        if (!entry.attempt.restorationMayHaveBeenUsed()) throw RepeatSnapshotReconciliationRequired()
+        synchronized(this) { if (pending[identity] === entry) pending.remove(identity) }
+    }
+
+    /** Only an actual committed clear resolves an unissued/ambiguous creation, not DTO or revision inequality. */
+    @Synchronized fun observeCommittedClear(device: DeviceDTO) {
+        if (device.preRepeatFrequency == null && device.preRepeatBandwidth == null &&
+            device.preRepeatSpreadingFactor == null && device.preRepeatCodingRate == null) {
+            pending.remove(device.identity())
+        }
     }
 }
 
@@ -194,6 +285,8 @@ suspend fun DevicePersisting.editDevice(
 }
 
 interface DeviceEditPersisting {
+    val repeatSnapshotAuthority: RepeatSnapshotAuthority
+        get() = throw UnsupportedOperationException("Repeat snapshot custody requires a process-owned authority")
     /** Initialization only: atomically create an inactive row, never replace an existing device. */
     suspend fun insertDeviceIfAbsent(dto: DeviceDTO): Boolean
     /** Evaluate connection ownership inside the serialized activation transaction, not before waiting. */

@@ -312,12 +312,15 @@ class RadioPresetStateHolder(
     private suspend fun runDisableRepeat(target: SettingsRadioTarget) {
         try {
             target.service.reconcileRadioSettingsIfNeeded()
+            deviceStore.validatePreRepeatSettings(target.token)
             val device = target.currentDevice(mutable.value.device, mutable.value.sessionToken)
+            val restoreAuthority = deviceStore.preRepeatSettingsRestoreAuthority(target.token, device)
             target.service.setRadioParamsVerified(
                 device.preRepeatFrequency ?: device.frequency, device.preRepeatBandwidth ?: device.bandwidth,
                 device.preRepeatSpreadingFactor ?: device.spreadingFactor, device.preRepeatCodingRate ?: device.codingRate,
                 clientRepeat = false,
                 expectedDevice = device,
+                restoreAuthority = restoreAuthority,
             )
             target.requireCurrent(mutable.value.device, mutable.value.sessionToken)
             deviceStore.clearPreRepeatSettings(target.token)

@@ -4,6 +4,7 @@ package com.meshcoreone.android.core.services.device
 
 import com.meshcoreone.android.core.contracts.domain.SessionEvent
 import com.meshcoreone.android.core.contracts.domain.PreRepeatSettingsAttempt
+import com.meshcoreone.android.core.contracts.domain.RepeatSnapshotRestoreAuthority
 import com.meshcoreone.android.core.contracts.domain.SessionEventSubscription
 import com.meshcoreone.android.core.contracts.domain.KnownRegionRemovalOutcome
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
@@ -205,13 +206,23 @@ class SettingsService(
     private suspend fun writeRadio(
         frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte, codingRate: UByte, clientRepeat: Boolean?,
         repeatAttempt: PreRepeatSettingsAttempt? = null,
+        restoreAuthority: RepeatSnapshotRestoreAuthority? = null,
     ) = configuration {
+        if (restoreAuthority != null) {
+            require(repeatAttempt == null)
+            restoreAuthority.withWrite { permit ->
+                setRadio(frequencyKHz.toDouble() / 1000.0, bandwidthKHz.toDouble() / 1000.0,
+                    spreadingFactor, codingRate, clientRepeat, sendPermit = permit)
+            }
+            return@configuration
+        }
         if (repeatAttempt == null) {
             setRadio(frequencyKHz.toDouble() / 1000.0, bandwidthKHz.toDouble() / 1000.0, spreadingFactor, codingRate, clientRepeat)
         } else {
             require(repeatAttempt.token == context.token)
             setRadio(frequencyKHz.toDouble() / 1000.0, bandwidthKHz.toDouble() / 1000.0, spreadingFactor, codingRate,
                 clientRepeat, repeatAttempt.startRadioDispatch())
+            repeatAttempt.recordRadioWriteCompleted()
         }
     }
 
@@ -592,9 +603,13 @@ class SettingsService(
         clientRepeat: Boolean? = null, appliedRadioPresetID: String? = null,
         expectedDevice: DeviceDTO? = null,
         repeatAttempt: PreRepeatSettingsAttempt? = null,
+        restoreAuthority: RepeatSnapshotRestoreAuthority? = null,
     ): SelfInfo = operation(settleCancellation = repeatAttempt != null) {
         expectedDevice?.let { verifyQueuedRadioBaseline(it) }
-        val actual = writeRadioAndVerify(frequencyKHz, bandwidthKHz, spreadingFactor, codingRate, clientRepeat, repeatAttempt = repeatAttempt)
+        val actual = writeRadioAndVerify(
+            frequencyKHz, bandwidthKHz, spreadingFactor, codingRate, clientRepeat,
+            repeatAttempt = repeatAttempt, restoreAuthority = restoreAuthority,
+        )
         publish(SettingsEvent.DeviceUpdated(actual, appliedRadioPresetID))
         actual
     }
@@ -605,6 +620,7 @@ class SettingsService(
         clientRepeat: Boolean? = null, appliedRadioPresetID: String? = null,
         expectedDevice: DeviceDTO? = null,
         repeatAttempt: PreRepeatSettingsAttempt? = null,
+        restoreAuthority: RepeatSnapshotRestoreAuthority? = null,
     ): SelfInfo = context.operation(settleCancellation = repeatAttempt != null) {
         val repeatCompletion = clientRepeat?.let { CompletableDeferred<Unit>() }
         val (actual, revision) = acknowledged(
@@ -614,6 +630,7 @@ class SettingsService(
             val revision = synchronized(eventLock) { Math.incrementExact(radioRevision).also { radioRevision = it } }
             val actual = writeRadioAndVerify(
                 frequencyKHz, bandwidthKHz, spreadingFactor, codingRate, clientRepeat, repeatCompletion, owner, repeatAttempt,
+                restoreAuthority,
             )
             publish(SettingsEvent.DeviceUpdated(actual, appliedRadioPresetID, completion), completion, owner)
             actual to revision
@@ -657,8 +674,9 @@ class SettingsService(
         repeatCompletion: CompletableDeferred<Unit>? = null,
         owner: Subscription? = null,
         repeatAttempt: PreRepeatSettingsAttempt? = null,
+        restoreAuthority: RepeatSnapshotRestoreAuthority? = null,
     ): SelfInfo {
-        writeRadio(frequency, bandwidth, sf, cr, clientRepeat, repeatAttempt)
+        writeRadio(frequency, bandwidth, sf, cr, clientRepeat, repeatAttempt, restoreAuthority)
         val actual = configuration { sendAppStart() }
         if (!(abs(actual.radioFrequency - frequency.toDouble() / 1000.0) < 0.001) ||
             !(abs(actual.radioBandwidth - bandwidth.toDouble() / 1000.0) < 0.001) ||

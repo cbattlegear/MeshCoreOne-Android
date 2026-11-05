@@ -7,9 +7,11 @@ import com.meshcoreone.android.core.contracts.domain.ConnectedDeviceEdit
 import com.meshcoreone.android.core.contracts.domain.ConnectedDeviceWriteView
 import com.meshcoreone.android.core.contracts.domain.ContactPersisting
 import com.meshcoreone.android.core.contracts.domain.DevicePersisting
+import com.meshcoreone.android.core.contracts.domain.DeviceEditPersisting
 import com.meshcoreone.android.core.contracts.domain.DeviceWriteConflict
 import com.meshcoreone.android.core.contracts.domain.DeviceWriteSnapshot
 import com.meshcoreone.android.core.contracts.domain.PreRepeatSettingsAttempt
+import com.meshcoreone.android.core.contracts.domain.RepeatSnapshotRestoreAuthority
 import com.meshcoreone.android.core.contracts.domain.KnownRegionRemovalOutcome
 import com.meshcoreone.android.core.contracts.domain.editDevice
 import com.meshcoreone.android.core.contracts.domain.preservingChanges
@@ -102,6 +104,9 @@ class ConnectedDeviceEditor(
     private val clearDefaultFloodScope: suspend () -> Unit = {},
 ) {
     private val sessionEdits = Mutex()
+    private val repeatSnapshotAuthority
+        get() = (devices as? DeviceEditPersisting
+            ?: throw UnsupportedOperationException("Repeat snapshots require versioned device persistence")).repeatSnapshotAuthority
     val connectedDevice: DeviceDTO? get() = access.connectedDevice
 
     fun updateDevice(info: SelfInfo, appliedRadioPresetID: String?): Job? {
@@ -241,6 +246,7 @@ class ConnectedDeviceEditor(
         var created = false
         val saved = sessionEdit("prepareRepeat", expectedToken, onCommittedSnapshot = {
             attempt.recordCommitted(it, created)
+            if (created) repeatSnapshotAuthority.recordCreated(it, attempt)
         }) { current ->
             created = current.preRepeatFrequency == null && current.preRepeatBandwidth == null &&
                 current.preRepeatSpreadingFactor == null && current.preRepeatCodingRate == null && !current.clientRepeat
@@ -262,11 +268,54 @@ class ConnectedDeviceEditor(
         return true
     }
 
-    private fun DeviceDTO.preservingOrSavingPreRepeatSettings(): DeviceDTO =
+    private suspend fun currentRepeatDevice(expectedToken: SessionToken): DeviceDTO? {
+        val original = access.currentDevice(expectedToken) ?: return null
+        val actual = devices.fetchDevice(original.id) ?: return null
+        currentCoroutineContext().ensureActive()
+        val current = access.currentDevice(expectedToken) ?: return null
+        return actual.takeIf { it.id == current.id && it.radioId == current.radioId && it.publicKey == current.publicKey }
+    }
+
+    suspend fun validatePreRepeatSettings(expectedToken: SessionToken): Boolean {
+        try {
+            val actual = currentRepeatDevice(expectedToken) ?: return false
+            repeatSnapshotAuthority.requireUsable(actual)
+            return true
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            diagnostics.report("device.restoreRepeat", failure)
+            throw failure
+        }
+    }
+
+    fun preRepeatSettingsRestoreAuthority(expectedToken: SessionToken, expectedDevice: DeviceDTO): RepeatSnapshotRestoreAuthority {
+        val identityVersion = repeatSnapshotAuthority.identityVersion(expectedDevice.id)
+        return RepeatSnapshotRestoreAuthority { write ->
+            repeatSnapshotAuthority.withDispatchAdmission(expectedDevice.id) { permit ->
+                val actual = currentRepeatDevice(expectedToken) ?: throw DeviceEditPersistenceConflict()
+                repeatSnapshotAuthority.requireUsable(actual)
+                if (repeatSnapshotAuthority.identityVersion(expectedDevice.id) != identityVersion ||
+                    actual.id != expectedDevice.id || actual.radioId != expectedDevice.radioId || actual.publicKey != expectedDevice.publicKey ||
+                    actual.frequency != expectedDevice.frequency || actual.bandwidth != expectedDevice.bandwidth ||
+                    actual.spreadingFactor != expectedDevice.spreadingFactor || actual.codingRate != expectedDevice.codingRate ||
+                    actual.clientRepeat != expectedDevice.clientRepeat ||
+                    actual.preRepeatFrequency != expectedDevice.preRepeatFrequency || actual.preRepeatBandwidth != expectedDevice.preRepeatBandwidth ||
+                    actual.preRepeatSpreadingFactor != expectedDevice.preRepeatSpreadingFactor || actual.preRepeatCodingRate != expectedDevice.preRepeatCodingRate) {
+                    throw DeviceEditPersistenceConflict()
+                }
+                write(permit)
+            }
+        }
+    }
+
+    private fun DeviceDTO.preservingOrSavingPreRepeatSettings(): DeviceDTO {
+        repeatSnapshotAuthority.requireUsable(this)
         // Partial imported snapshots retain their native per-field restore fallback.
-        if (preRepeatFrequency != null || preRepeatBandwidth != null ||
+        return if (preRepeatFrequency != null || preRepeatBandwidth != null ||
             preRepeatSpreadingFactor != null || preRepeatCodingRate != null
         ) this else savingPreRepeatSettings()
+    }
 
     fun clearPreRepeatSettings(): Job? = edit("clearPreRepeat") { it.clearingPreRepeatSettings() }
 

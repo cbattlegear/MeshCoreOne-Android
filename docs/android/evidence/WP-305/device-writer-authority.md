@@ -447,3 +447,21 @@ save, force a real SQL failure, and reconnect the same radio with a successor to
 They assert durable/live state and awaited outcomes; actual radio admission remains the Settings
 producer's consumer responsibility. Source validators and diff check pass; the thirty writer
 methods and sixteen persistence methods require a fresh exact hosted diagnostic.
+
+Independent source review of `1d22679c4a757f9dd129f673c3a749a834f74d8e` by the storage and
+foundation producers correctly distinguished two obligations: the real-Room two-write ABA
+control is a preservation/serialization witness, not a discriminating regression for the new
+stamp. Its second A write occurs after the existing actual commit publication, so that final
+A assertion would also pass without the stamp. The existing guarded postcommit foundation
+already closes the older b2 post-save window. No claim is made that Room can commit a second
+write inside the first commit callback's shared database authority.
+
+The follow-up `SessionBoundDeviceEditTest.publicationRevisionDistinguishesEqualOcvAndAbaAtTheActualEditorMerge`
+instead exercises the production editor's actual merge with a bounded live-publication hook.
+It covers an equal-valued accepted A publication and live A -> B -> A while the authoritative
+readalong snapshot is B. Each case also runs a counterfactual access wrapper masking only the
+revision: the same editor then republishes B, demonstrating that positive A assertions
+discriminate the stamp. The repository double separately asserts the intended durable B +
+path-hash edit; these publications are explicitly not claimed to be second Room transactions
+or evidence that a delayed older OCV callback is durably current. The real-Room control retains
+all original assertions and covers actual two-write serialization/live-durable A consistency.

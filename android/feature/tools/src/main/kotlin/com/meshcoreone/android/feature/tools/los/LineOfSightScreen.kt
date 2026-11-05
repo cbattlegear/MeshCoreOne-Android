@@ -43,6 +43,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -245,7 +246,7 @@ private fun LineOfSightMap(
 }
 
 @Composable
-private fun LineOfSightPanel(state: LineOfSightState, holder: LineOfSightStateHolder, modifier: Modifier) {
+internal fun LineOfSightPanel(state: LineOfSightState, holder: LineOfSightStateHolder, modifier: Modifier) {
     Column(
         modifier.verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -293,6 +294,17 @@ private fun PointsSection(state: LineOfSightState, holder: LineOfSightStateHolde
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(stringResource(AppToolsStrings.toolsLineOfSightPoints), style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.weight(1f))
+            val hasClearableState =
+                state.pointA != null || state.pointB != null || state.repeaterPoint != null ||
+                    state.analysisStatus != AnalysisStatus.Idle || state.isAnalyzing || state.elevationFetchFailed
+            if (!state.isRelocating && hasClearableState) {
+                TextButton(
+                    onClick = holder::clear,
+                    modifier = Modifier.heightIn(min = 48.dp).testTag("los-clear-all"),
+                ) {
+                    Text(stringResource(AppToolsStrings.toolsLineOfSightClear))
+                }
+            }
             if (state.isRelocating) {
                 OutlinedButton(
                     onClick = { holder.setRelocatingPoint(null) },

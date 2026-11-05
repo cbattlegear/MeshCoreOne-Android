@@ -582,7 +582,8 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 try {
                     val started = h.container.start()
                     h.eventually("production activation completes") { uiScheduler.runCurrent(); started.isCompleted }
-                    started.await()
+                    started.join()
+                    assertFalse(started.isCancelled)
                     val firstConnect = async { h.manager.connect(h.target(deviceA)) }
                     h.eventually("first graph binds") {
                         uiScheduler.runCurrent()
@@ -732,7 +733,8 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             try {
                 val started = h.container.start()
                 h.eventually("production activation completes") { uiScheduler.runCurrent(); started.isCompleted }
-                started.await()
+                started.join()
+                assertFalse(started.isCancelled)
                 val connecting = async { h.manager.connect(h.target(deviceA)) }
                 h.eventually("the first graph binds") {
                     uiScheduler.runCurrent()
@@ -783,6 +785,127 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 }
                 reconnect.await()
             } finally {
+                val closing = async { h.container.close() }
+                h.eventually("process cleanup drains the controlled UI queue") {
+                    uiScheduler.runCurrent()
+                    closing.isCompleted
+                }
+                closing.await()
+            }
+        }
+    }
+
+    @Test fun offlineOnboardingRejectsCancelledOrSupersededExposedSuccessors() = runTest {
+        for (mode in listOf("cancelled-rebuild", "superseded-rebuild", "cancelled-submission")) {
+            val uiScheduler = TestCoroutineScheduler()
+            val mainScope = CoroutineScope(backgroundScope.coroutineContext + uiScheduler + StandardTestDispatcher(uiScheduler))
+            val h = ContainerHarness(
+                this, store, mainScope = mainScope,
+                sessionConfiguration = SessionConfiguration(contactStreamInactivityTimeout = 60.0),
+            )
+            var worker: Thread? = null
+            try {
+                val started = h.container.start()
+                h.eventually("production activation completes") { uiScheduler.runCurrent(); started.isCompleted }
+                started.join()
+                assertFalse(started.isCancelled)
+                val connecting = async { h.manager.connect(h.target()) }
+                h.eventually("the first graph binds") {
+                    uiScheduler.runCurrent()
+                    connecting.isCompleted && h.container.navigation.currentState.navigationReady
+                }
+                connecting.await()
+                val n = h.container.navigation
+                val retired = assertNotNull(h.sessions.current)
+                val deviceId = assertNotNull(h.manager.connectedDevice).id
+                assertNotNull(h.links.links.last().callbacks).onDisconnected(IllegalStateException("actual link loss"))
+                h.eventually("actual loss retires the graph", virtualBudgetMillis = 0) {
+                    uiScheduler.runCurrent()
+                    h.manager.connectionState == DeviceConnectionState.DISCONNECTED &&
+                        h.sessions.current == null && n.currentState.boundSessionToken == null
+                }
+                val offline = assertNotNull(
+                    h.manager.captureOfflineNavigationLifecycle(h.manager.captureNavigationLifecycle()),
+                )
+                n.selectTab(AppTab.SETTINGS)
+                n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+                val presented = n.publishedNavigation.value
+                val completion = assertNotNull(
+                    n.captureMountedOnboarding(presented, presented.value.activeStack.last().id),
+                )
+                val syncRequested = CompletableDeferred<Unit>()
+                h.links.configureRadio = { radio ->
+                    radio.respond = { frame ->
+                        if (frame[0].toInt() == 0x04) {
+                            syncRequested.complete(Unit)
+                            listOf(Bytes.of(2) + le32(0))
+                        } else null
+                    }
+                }
+                val attempt = backgroundScope.async {
+                    if (mode == "cancelled-submission") h.manager.connect(h.target())
+                    else h.manager.rebuildSession(deviceId)
+                }
+                h.eventually("the successor graph is exposed during held sync", virtualBudgetMillis = 0) {
+                    syncRequested.isCompleted && h.sessions.current?.let { it !== retired } == true &&
+                        h.manager.connectionState == DeviceConnectionState.SYNCING
+                }
+                val successor = assertNotNull(h.sessions.current)
+                assertTrue(h.manager.isFirstNavigationSessionAfterOffline(
+                    offline, successor.token, h.sessions.publicationIdentity, successor,
+                ))
+                val before = n.currentState
+                if (mode != "superseded-rebuild") {
+                    val cancellationReturned = CountDownLatch(1)
+                    val cancellationWorker = Thread {
+                        try { attempt.cancel() } finally { cancellationReturned.countDown() }
+                    }.apply { isDaemon = true }
+                    worker = cancellationWorker
+                    h.manager.withNavigationCommitBoundary {
+                        cancellationWorker.start()
+                        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+                        while (!attempt.isCancelled && System.nanoTime() < deadline) Thread.yield()
+                        assertTrue(attempt.isCancelled, "The attempt must be cancelled before the navigation commit")
+                        assertEquals(1L, cancellationReturned.count, "Cancellation must wait for the lifecycle boundary")
+                        assertSame(successor, h.sessions.current)
+                        assertFalse(n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(successor.token)))
+                        assertEquals(before, n.currentState)
+                    }
+                    assertTrue(cancellationReturned.await(5, TimeUnit.SECONDS))
+                } else {
+                    val cycleStarted = CountDownLatch(1)
+                    val cycleReturned = CountDownLatch(1)
+                    val initialGeneration = h.manager.reconnectionCoordinator.reconnectGeneration
+                    val cycleWorker = Thread {
+                        cycleStarted.countDown()
+                        try {
+                            h.manager.reconnectionCoordinator.restartTimeout(UUID(0, 9999))
+                        } finally {
+                            cycleReturned.countDown()
+                        }.apply { isDaemon = true }
+                    }
+                    worker = cycleWorker
+                    h.manager.withNavigationCommitBoundary {
+                        cycleWorker.start()
+                        assertTrue(cycleStarted.await(5, TimeUnit.SECONDS))
+                        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+                        while (cycleWorker.state != Thread.State.BLOCKED && cycleReturned.count != 0L &&
+                            System.nanoTime() < deadline
+                        ) Thread.yield()
+                        assertEquals(Thread.State.BLOCKED, cycleWorker.state, "Cycle changes must share the lifecycle boundary")
+                        assertEquals(initialGeneration, h.manager.reconnectionCoordinator.reconnectGeneration)
+                    }
+                    assertTrue(cycleReturned.await(5, TimeUnit.SECONDS))
+                    assertNotEquals(initialGeneration, h.manager.reconnectionCoordinator.reconnectGeneration)
+                    assertSame(successor, h.sessions.current)
+                    assertFalse(n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(successor.token)))
+                    assertEquals(before, n.currentState)
+                }
+                h.links.radios.last().push(Bytes.of(4) + le32(0))
+                h.eventually("the invalidated attempt settles") { uiScheduler.runCurrent(); attempt.isCompleted }
+                assertFailsWith<CancellationException> { attempt.await() }
+            } finally {
+                worker?.join(5_000)
                 val closing = async { h.container.close() }
                 h.eventually("process cleanup drains the controlled UI queue") {
                     uiScheduler.runCurrent()

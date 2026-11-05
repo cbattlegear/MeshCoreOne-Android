@@ -68,8 +68,11 @@ class ConnectionManager(
     ) {
         var firstExposure: NavigationExposure? = null
         var interposedOwner = false
+        var callerCancelled = false
+        var settled = false
 
-        fun isRevoked(): Boolean = work.isCancelled || !work.isCompleted && initiatingJob?.isCancelled == true
+        fun isRevoked(): Boolean = work.isCancelled ||
+            !settled && (callerCancelled || initiatingJob?.isCancelled == true)
     }
     internal class NavigationExposure(
         val managerIdentity: Any,
@@ -83,6 +86,13 @@ class ConnectionManager(
         val graph: WeakReference<RuntimePublishableServices>,
         val fence: RuntimePublicationFence,
     )
+    internal class NavigationRebuild(val coordinatorGeneration: Long, val caller: Job?) {
+        var cancelled = false
+        var completed = false
+
+        fun isRevoked(): Boolean = !completed && (cancelled || caller?.isCancelled == true)
+    }
+
     internal class RadioGeneration(
         val number: Long,
         val target: ConnectionTarget,
@@ -107,6 +117,7 @@ class ConnectionManager(
         var physicalClosed: Deferred<TeardownReport>? = null
         var operation: Deferred<Unit>? = null
         var navigationSubmission: NavigationSubmission? = null
+        var navigationRebuild: NavigationRebuild? = null
         var navigationExposure: NavigationExposure? = null
         var sawConnected = false
         var logicalEnded = false
@@ -246,8 +257,10 @@ class ConnectionManager(
                 submission.startGeneration == stamp.lastGeneration && !submission.isRevoked() &&
                 !submission.interposedOwner && submission.firstExposure === exposure
         } else {
+            val rebuild = owner.navigationRebuild ?: return@synchronized false
             stamp.retainedGeneration != null && offline.retainedTarget != null &&
-                owner.target == offline.retainedTarget && revision == stamp.revision
+                owner.target == offline.retainedTarget && revision == stamp.revision &&
+                !rebuild.isRevoked() && rebuild.coordinatorGeneration == reconnectionCoordinator.reconnectGeneration
         }
     }
 
@@ -432,7 +445,9 @@ class ConnectionManager(
             ?: reconnectionCoordinator.reconnectingDeviceId
     val activeReconnectDeviceId: UUID? get() = synchronized(lock) { rebuildDevice }
         ?: reconnectionCoordinator.reconnectingDeviceId
-    val reconnectionCoordinator = BLEReconnectionCoordinator(this, processScope, clock, reporter)
+    val reconnectionCoordinator = BLEReconnectionCoordinator(
+        this, processScope, clock, reporter, lifecycleLock = lock,
+    )
 
     init {
         processJob.invokeOnCompletion { cause ->
@@ -668,6 +683,7 @@ class ConnectionManager(
                 }
             }
             navigationSubmission = NavigationSubmission(task, claimedRevision, startingGeneration, initiatingJob)
+            observeNavigationSubmissionCancellation(navigationSubmission)
             pending = task
             pendingNavigationSubmission = navigationSubmission
             pendingTarget = normalized
@@ -701,6 +717,23 @@ class ConnectionManager(
 
     private fun ownsSubmissionLocked(submission: Submission): Boolean =
         submission.ownsAttempt && !closed && revision == submission.revision && pending === submission.work
+
+    @OptIn(InternalCoroutinesApi::class)
+    private fun observeNavigationSubmissionCancellation(submission: NavigationSubmission) {
+        val cancellation = submission.initiatingJob?.invokeOnCompletion(onCancelling = true, invokeImmediately = true) { cause ->
+            if (cause != null) synchronized(lock) {
+                if (!submission.settled) submission.callerCancelled = true
+            }
+        }
+        submission.work.invokeOnCompletion { cause ->
+            synchronized(lock) {
+                if (cause == null && !submission.callerCancelled && submission.initiatingJob?.isCancelled != true) {
+                    submission.settled = true
+                }
+            }
+            cancellation?.dispose()
+        }
+    }
 
     private suspend fun finishFailedSubmission(submission: Submission, primary: Throwable) {
         if (!submission.ownsAttempt) return
@@ -1185,11 +1218,13 @@ class ConnectionManager(
         expectedCoordinator: Long,
         reentrant: Boolean,
     ) {
+        val navigationRebuild = NavigationRebuild(expectedCoordinator, currentCoroutineContext()[Job])
         synchronized(lock) {
             if (!wantsCurrent(expectedRevision)) throw CancellationException("Superseded rebuild claim")
             if (rebuildDevice != null && rebuildDevice != deviceId) throw CancellationException("Superseded session rebuild")
             rebuildDevice = deviceId
         }
+        val cancellation = observeNavigationRebuildCancellation(navigationRebuild)
         try {
             withOperation(reentrant) {
                 if (!wantsCurrent(expectedRevision) || reconnectionCoordinator.reconnectGeneration != expectedCoordinator) {
@@ -1198,12 +1233,16 @@ class ConnectionManager(
                 // WP-107's retained-link receipt is not a new physical generation: close it before reacquisition.
                 if (old != null) closeGeneration(old, disconnectPhysical = true)
                 synchronized(lock) { if (retained === old) retained = null; if (active === old) active = null }
-                val owner = newGeneration(target, expectedRevision)
+                val owner = newGeneration(target, expectedRevision, navigationRebuild = navigationRebuild)
                 try {
                     establish(owner, (connectionIntent as? ConnectionIntent.WantsConnection)?.forceFullSync == true, reconnecting = true)
-                    requireCurrent(owner)
-                    if (reconnectionCoordinator.reconnectGeneration != expectedCoordinator) throw CancellationException("Stale rebuild completion")
-                    recordConnectionSuccess()
+                    synchronized(lock) {
+                        if (!isCurrent(owner) || navigationRebuild.isRevoked() ||
+                            reconnectionCoordinator.reconnectGeneration != expectedCoordinator
+                        ) throw CancellationException("Stale rebuild completion")
+                        recordConnectionSuccess()
+                        navigationRebuild.completed = true
+                    }
                     stopReconnectionWatchdog()
                 } catch (failure: Exception) {
                     closeGeneration(owner, disconnectPhysical = false, primary = failure)
@@ -1212,9 +1251,18 @@ class ConnectionManager(
                 }
             }
         } finally {
+            cancellation?.dispose()
             synchronized(lock) { if (rebuildDevice == deviceId) rebuildDevice = null }
         }
     }
+
+    @OptIn(InternalCoroutinesApi::class)
+    private fun observeNavigationRebuildCancellation(rebuild: NavigationRebuild): DisposableHandle? =
+        rebuild.caller?.invokeOnCompletion(onCancelling = true, invokeImmediately = true) { cause ->
+            if (cause != null) synchronized(lock) {
+                if (!rebuild.completed) rebuild.cancelled = true
+            }
+        }
 
     override suspend fun disconnectTransport() = disconnectTransport(requireComplete = false)
 
@@ -1531,6 +1579,7 @@ class ConnectionManager(
         target: ConnectionTarget,
         claimedRevision: Long,
         navigationSubmission: NavigationSubmission? = null,
+        navigationRebuild: NavigationRebuild? = null,
     ): RadioGeneration = synchronized(lock) {
         requireRevision(claimedRevision)
         val pendingSubmission = pendingNavigationSubmission?.takeIf {
@@ -1543,6 +1592,7 @@ class ConnectionManager(
             active = it
             it.operation = pending
             it.navigationSubmission = navigationSubmission
+            it.navigationRebuild = navigationRebuild
         }
     }
 

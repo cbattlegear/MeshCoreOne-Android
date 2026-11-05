@@ -6,6 +6,7 @@ import androidx.activity.compose.setContent
 import androidx.lifecycle.Lifecycle
 import android.app.Dialog
 import android.view.View
+import android.os.Looper
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
@@ -50,6 +51,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
+import org.robolectric.Shadows
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
@@ -141,7 +143,10 @@ class NotificationEnrollmentEntryTest {
         compose.runOnUiThread { host.get().setContent { MeshCoreTheme { NotificationEnrollmentEntry(value) } } }
         compose.waitForIdle()
     }
-    private fun start() = compose.onNodeWithText(text(R.string.notification_enrollment_action)).performClick()
+    private fun start() {
+        compose.onNodeWithText(text(R.string.notification_enrollment_action)).performClick()
+        compose.waitForIdle()
+    }
 
     @Test fun productionHoldShowsExplanationAndCannotCreateWarningOrIdentity() {
         mount(null)
@@ -311,9 +316,10 @@ class NotificationEnrollmentEntryTest {
         val real = mountReal()
         val request = shownRequest()
         compose.onNodeWithText(text(R.string.notification_enrollment_confirm)).performClick()
-        compose.waitUntil(30_000) {
-            (producer.state.value as? NotificationEnrollmentProducer.State.Outcome)?.result is Enrollment.Result.BoundSnapshot
-        }
+        awaitRealOutcome()
+        assertIs<Enrollment.Result.BoundSnapshot>(
+            assertIs<NotificationEnrollmentProducer.State.Outcome>(producer.state.value).result,
+        )
         assertEquals(listOf("STAGED", "CONSUMED"), real.statuses())
         val reopened = real.backend(realJournal())
         runBlocking {
@@ -338,7 +344,7 @@ class NotificationEnrollmentEntryTest {
         val real = mountReal("EXPLICIT_ACTION")
         shownRequest()
         compose.onNodeWithText(text(R.string.notification_enrollment_confirm)).performClick()
-        assertTrue(requireNotNull(real.gate).entered.await(10, java.util.concurrent.TimeUnit.SECONDS))
+        awaitAdmission(real)
         retireHost(dispose)
         real.gate?.release?.countDown()
         awaitRealOutcome()
@@ -360,12 +366,12 @@ class NotificationEnrollmentEntryTest {
         val real = mountReal("WITNESS_CONSUMPTION")
         val request = shownRequest()
         compose.onNodeWithText(text(R.string.notification_enrollment_confirm)).performClick()
-        assertTrue(requireNotNull(real.gate).entered.await(10, java.util.concurrent.TimeUnit.SECONDS))
+        awaitAdmission(real)
         assertEquals(listOf("STAGED"), real.statuses())
         retireHost(dispose)
         real.gate?.release?.countDown()
         awaitRealOutcome()
-        compose.waitUntil(30_000) { real.statuses().lastOrNull() == "INVALIDATED" }
+        awaitRealCondition { real.statuses().lastOrNull() == "INVALIDATED" }
         assertEquals(listOf("STAGED", "INVALIDATED"), real.statuses())
         assertFalse(real.witnessFile.exists())
         assertFalse(requireNotNull(generationFile).exists())
@@ -413,7 +419,20 @@ class NotificationEnrollmentEntryTest {
     }
 
     private fun awaitRealOutcome() {
-        compose.waitUntil(30_000) { producer.state.value is NotificationEnrollmentProducer.State.Outcome }
+        awaitRealCondition { producer.state.value is NotificationEnrollmentProducer.State.Outcome }
+    }
+
+    private fun awaitAdmission(real: EnrollmentLedgerFixture) {
+        val gate = requireNotNull(real.gate)
+        awaitRealCondition { gate.entered.count == 0L }
+    }
+
+    private fun awaitRealCondition(condition: () -> Boolean) {
+        compose.waitUntil(30_000) {
+            // Real IO returns through Android Main; polling Compose alone leaves it paused.
+            Shadows.shadowOf(Looper.getMainLooper()).idle()
+            condition()
+        }
     }
 
     private class RecordingBackend : NotificationEnrollmentProducer.Backend {

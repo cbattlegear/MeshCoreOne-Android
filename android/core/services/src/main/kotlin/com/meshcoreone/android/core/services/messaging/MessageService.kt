@@ -438,6 +438,7 @@ class MessageService(
             }
             else {
                 pendingAcks.remove(messageID)
+                failedAckRestorations.remove(messageID)
                 uncertainFailureWrites.remove(messageID)
                 if (retireDirectClaim) {
                     activeDirectClaims[messageID]?.let {
@@ -463,7 +464,13 @@ class MessageService(
     private suspend fun writeFailedStatus(messageID: UUID, wasFailed: Boolean): Boolean {
         val tracking = pendingAck(messageID)
         try {
-            return dataStore.updateMessageStatusUnlessDelivered(key(messageID), MessageStatus.FAILED)
+            val changed = dataStore.updateMessageStatusUnlessDelivered(key(messageID), MessageStatus.FAILED)
+            if (changed && !wasFailed && tracking != null) synchronized(lock) {
+                pendingAcks[messageID]?.takeIf {
+                    it.receipt === tracking.receipt
+                }?.let { failedAckRestorations[messageID] = it }
+            }
+            return changed
         } catch (cancelled: CancellationException) {
             retainUncertainFailureWrite(messageID, tracking, wasFailed, cancelled)
             throw cancelled

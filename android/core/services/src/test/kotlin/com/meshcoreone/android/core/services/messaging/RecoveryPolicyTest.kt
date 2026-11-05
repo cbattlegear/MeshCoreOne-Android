@@ -17,6 +17,73 @@ import org.junit.jupiter.api.TestFactory
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class RecoveryPolicyTest {
+    @TestFactory fun successfulFailedWriteCancellation() = listOf("expiry", "fail-all").flatMap { path ->
+        listOf(false to true, true to true, false to false, true to false).map { (alreadyFailed, ackDuringWrite) ->
+            native("$path records successful FAILED outcome before caller cancellation; prior FAILED=$alreadyFailed; in-write ACK=$ackDuringWrite") {
+                val h = Harness(this); h.start(); h.service.startEventMonitoring()
+                val message = h.message(if (alreadyFailed) MessageStatus.FAILED else MessageStatus.SENT)
+                val later = h.message()
+                val code = Bytes.of(0xAB, 0xCD, 0xEF, 0x12)
+                h.service.installPendingAck(h.tracking(message, code, age = 3600))
+                h.service.installPendingAck(h.tracking(later, Bytes.of(5, 6, 7, 8)))
+                val entered = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                val cancellation = CancellationException("cancel after successful FAILED return")
+                var writing = false
+                var committed = false
+                h.store.before = {
+                    if (it == "updateMessageStatusUnlessDelivered" && !writing) {
+                        writing = true
+                        entered.complete(Unit); release.await()
+                        committed = h.store.updateMessageStatusUnlessDelivered(
+                            EntityKey(RADIO, message.id), MessageStatus.FAILED,
+                        )
+                        currentCoroutineContext().cancel(cancellation)
+                    }
+                }
+                val observed = mutableListOf<MessageStatusEvent>()
+                observe(h, observed)
+                val work = backgroundScope.async {
+                    if (path == "expiry") h.service.checkExpiredAcks() else h.service.failAllPendingMessages()
+                }
+                entered.await()
+                if (ackDuringWrite) {
+                    h.transport.pushAck(code, 123u); runCurrent()
+                    assertEquals(code, h.service.pendingAck(message.id)?.acknowledgement?.code)
+                }
+                release.complete(Unit)
+                work.join(); runCurrent()
+                assertTrue(committed)
+                assertTrue(work.isCancelled)
+                val propagated = assertFailsWith<CancellationException> { work.await() }
+                assertTrue(generateSequence<Throwable>(propagated) { it.cause }.any { it === cancellation })
+                if (!ackDuringWrite) {
+                    assertEquals(MessageStatus.FAILED, h.stored(message.id).status)
+                    assertNotNull(h.service.pendingAck(message.id))
+                    assertTrue(observed.isEmpty())
+                    h.transport.pushAck(code, 123u); runCurrent()
+                }
+                assertEquals(if (alreadyFailed) MessageStatus.FAILED else MessageStatus.DELIVERED,
+                    h.stored(message.id).status)
+                assertNull(h.service.pendingAck(message.id))
+                assertEquals(MessageStatus.SENT, h.stored(later.id).status)
+                assertNotNull(h.service.pendingAck(later.id))
+                if (alreadyFailed) assertTrue(observed.isEmpty())
+                else {
+                    assertEquals(123u, h.stored(message.id).roundTripTime)
+                    assertEquals(code.ackCodeUInt32, h.stored(message.id).ackCode)
+                    assertEquals(listOf<MessageStatusEvent>(
+                        MessageStatusEvent.StatusResolved(message.id, MessageStatus.DELIVERED, 123u),
+                    ), observed)
+                }
+                assertTrue(h.service.isEventMonitoringActive)
+                assertTrue(h.sends(CommandCode.SEND_MESSAGE).isEmpty())
+                assertTrue(h.service.close().isComplete)
+                h.close()
+            }
+        }
+    }
+
     @TestFactory fun uncertainFailedWrites() = listOf("inline", "expiry", "fail-all").flatMap { path ->
         listOf("commit-then-throw", "throw-before-commit", "already-failed", "competing-writer",
             "competing-after-read", "replacement", "late", "commit-then-cancel", "cancel-before-commit")

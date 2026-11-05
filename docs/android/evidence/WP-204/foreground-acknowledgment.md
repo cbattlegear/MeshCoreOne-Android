@@ -257,7 +257,11 @@ Combined execution attempts (preserved, not attributed to successors):
   their actual admission barriers and exact ledger assertions. Production
   source is unchanged. Exact run
   [42011995652](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42011995652)
-  is pending; no earlier outcome is transferred to it.
+  passed all jobs, including SwiftData restore/export. The authoritative Linux
+  log includes actual mounted-suite discovery and all 42 executions of the
+  then-current 21 verifier methods, with no failed/error/skipped results.
+  This verifies the pre-allocation-repair composition only; it does not execute
+  the later 25-method verifier or its new retirement controls.
 
 Not verified:
 

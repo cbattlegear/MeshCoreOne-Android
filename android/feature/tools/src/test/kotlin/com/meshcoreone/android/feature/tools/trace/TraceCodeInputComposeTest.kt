@@ -743,6 +743,7 @@ class TraceCodeInputComposeTest {
         host.get().runOnUiThread { assertTrue(oldOpen()) }
         settle()
         assertFalse(ShadowDialog.getLatestDialog()?.isShowing == true, "A's retained map opener cannot open a B dialog")
+        assertEquals(path, persistence.paths[path.id], "Map edits never mutate the stored A path")
         click(runLabel)
         val pending = recorded.sent.single()
         assertEquals(Bytes.of(0xA1, 0xB2), pending.path)
@@ -774,7 +775,10 @@ class TraceCodeInputComposeTest {
         click(clearLabel)
         click(host.get().getString(C.contactsTraceClearPath))
         assertTrue(presentation.points.none { it.hopIndex != null }, "Fresh B confirmation clears B's route")
-        assertEquals(path, persistence.paths[path.id], "Map edits never mutate the stored A path")
+        val stored = persistence.paths.getValue(path.id)
+        assertEquals(path.copy(runs = stored.runs), stored, "Map edits preserve every saved route field")
+        assertEquals(if (crossRadio) 0 else 1, stored.runs.size, "Only B's accepted same-radio run is persisted")
+        if (!crossRadio) assertTrue(stored.runs.single().success, "B's accepted response records a successful run")
     }
 
     @Test fun savedDialogRetiresVisibleRowsHeldLoadsAndRetainedActionsAcrossConnections() {

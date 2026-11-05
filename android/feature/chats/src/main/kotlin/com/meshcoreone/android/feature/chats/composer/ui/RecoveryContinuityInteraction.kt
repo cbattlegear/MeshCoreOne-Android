@@ -96,11 +96,11 @@ fun <Request : Any, Observation : Any, Presentation : Any> RecoveryContinuityInt
         uiString(labels.copyOnlyExplanation), uiString(labels.acknowledgment),
         uiString(labels.createNewGeneration), uiString(labels.inspectRecoveredText),
     )
-    val interaction = remember(binding, warning, lifecycle) {
+    val interaction = remember(binding.presentation) {
         RecoveryInteractionState()
     }
     val invalidatePresentation by rememberUpdatedState(onInvalidatePresentation)
-    DisposableEffect(interaction, lifecycle, focused) {
+    DisposableEffect(interaction, binding, warning, lifecycle, focused) {
         fun invalidate() {
             interaction.foregroundChanged(false)
             if (!interaction.retired) {

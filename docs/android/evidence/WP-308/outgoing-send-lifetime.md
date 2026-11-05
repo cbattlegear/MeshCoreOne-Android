@@ -33,7 +33,11 @@ Pause/stop/destroy, focus loss, disposal and changed request/observation/warning
 version/rendered copy invalidate the old ephemeral action and invoke
 `onInvalidatePresentation(handle)`. A retired presentation cannot resume through
 the same interaction: the producer must provide a new actual presentation
-handle, followed by fresh user gestures. The invalidation callback must be
+handle, followed by fresh user gestures. Local state is keyed by the opaque presentation handle,
+not the changed evidence: resupplying the same handle with different evidence
+or warning cannot reset a retired interaction. The mounted changed-evidence
+control explicitly checks refusal until a new producer handle is supplied.
+The invalidation callback must remain
 nonblocking/idempotent; durable invalidation and any failure recovery remain
 the producer's responsibility. The action's live validity query is not durable
 consumption, authentication or an atomic cross-process authorization fence.

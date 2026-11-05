@@ -152,9 +152,20 @@ class ChannelDraftRecoveryAdapterTest : RoomProcessTest() {
             node(create).assertIsEnabled()
             if (changeEvidence) {
                 val changed = binding.value.observation.copy(revision = 4, retainedHistory = "changed record fixture")
+                val stalePresentation = binding.value.presentation
                 compose.runOnIdle {
                     binding.value = binding.value.copy(
                         observation = changed, request = request.copy(expectedCurrent = changed),
+                    )
+                }
+                node(create).assertIsNotEnabled()
+                assertEquals(1, invalidated.count { it == stalePresentation })
+                // Changing evidence must not turn the same invalidated handle into a new interaction.
+                compose.waitForIdle()
+                node(create).assertIsNotEnabled()
+                assertTrue(actions.isEmpty())
+                compose.runOnIdle {
+                    binding.value = binding.value.copy(
                         presentation = WarningPresentation(nextPresentation++),
                     )
                 }

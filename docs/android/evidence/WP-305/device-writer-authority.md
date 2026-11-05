@@ -172,3 +172,12 @@ class/method START and END/result type at quiet level. No predicted method count
 task/workflow change, altered assertion or suppressed failure is introduced. This support successor
 is separate from exploratory run `41945162289` at exact
 `fbf12f347754864cc2317e2f43645ccd3a72c2c0`; that run remains unchanged.
+
+The persistence reviewer identified a separate committed-outcome classification defect:
+`editDevice` could send a `PersistenceStoreException` from the already-committed consumer callback
+to the pre-commit `onSaveFailure` mapper. The persistence producer supplied the exact two-hunk
+repair against `2713871`: record commit observation before calling the consumer, then rethrow that
+original exception without invoking the save-failure mapper or retrying. Its added thirteenth
+real-Room method checks exception identity, one transform/callback, no save-failure callback, and
+the committed row/revision. The original twelve methods remain intact. This is transferred source,
+not executed evidence; the running `2713871` diagnostic cannot cover this successor.

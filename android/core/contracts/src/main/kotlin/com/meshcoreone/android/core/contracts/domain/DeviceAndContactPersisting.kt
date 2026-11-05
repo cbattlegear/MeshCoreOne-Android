@@ -101,13 +101,18 @@ suspend fun DevicePersisting.editDevice(
         require(updated.id == snapshot.device.id && updated.radioId == snapshot.device.radioId)
         require(updated.isActive == snapshot.device.isActive && updated.lastConnected == snapshot.device.lastConnected)
         val caller = currentCoroutineContext()
-        val guarded = snapshot.copy(withAuthority = withAuthority, onCommitted = onCommitted, isCurrent = {
+        var commitObserved = false
+        val guarded = snapshot.copy(withAuthority = withAuthority, onCommitted = { saved ->
+            commitObserved = true
+            onCommitted(saved)
+        }, isCurrent = {
             caller.ensureActive()
             isCurrent()
         })
         val committed = try {
             persistence.saveDeviceIfUnchanged(updated, guarded)
         } catch (failure: PersistenceStoreException) {
+            if (commitObserved) throw failure
             onSaveFailure(failure)
         }
         caller.ensureActive()

@@ -6,7 +6,6 @@ import android.provider.Settings
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.view.View
-import android.view.ViewGroup
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
@@ -16,7 +15,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -174,25 +172,17 @@ class RemoteNeighborConfidenceComposeTest {
             Shadows.shadowOf(Looper.getMainLooper()).idle()
             assertTrue(view.hasWindowFocus())
         }
-        repeat(3) { frame ->
+        repeat(3) {
             compose.mainClock.advanceTimeByFrame()
             compose.runOnUiThread {
                 Shadows.shadowOf(Looper.getMainLooper()).idle()
-                val host = activity.get().window.decorView
-                val dialog = view
-                fun pending(view: View): List<Boolean> =
-                    (if (view is ViewRootForTest) listOf(view.hasPendingMeasureOrLayout) else emptyList()) +
-                        (if (view is ViewGroup) (0 until view.childCount).flatMap { pending(view.getChildAt(it)) } else emptyList())
-                val before = pending(dialog)
-                val bitmap = Bitmap.createBitmap(dialog.width, dialog.height, Bitmap.Config.ARGB_8888)
+                // Robolectric's Compose clock does not draw the separate native dialog window.
+                val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
                 try {
-                    dialog.draw(Canvas(bitmap))
+                    view.draw(Canvas(bitmap))
                 } finally {
                     bitmap.recycle()
                 }
-                println("TS07 auth frame=$frame host=${host.width}x${host.height} " +
-                    "dialog=${dialog.width}x${dialog.height} requested=${dialog.isLayoutRequested} " +
-                    "pendingBefore=$before pendingAfter=${pending(dialog)} hostPending=${pending(host)}")
             }
         }
         return view

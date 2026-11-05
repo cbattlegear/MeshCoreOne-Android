@@ -145,6 +145,36 @@ jobs:
           echo "exit_code=$result" >> "$GITHUB_OUTPUT"
           exit "$result"
 
+      - id: diagnostic_chats
+        name: Run chats feature tests independently
+        if: ${{ always() && steps.generate.outcome == 'failure' }}
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          ./android/gradlew -p android :feature:chats:testDebugUnitTest \
+            --write-locks --write-verification-metadata sha256 \
+            --no-daemon --console=plain --no-build-cache --no-parallel --max-workers=2 \
+            --stacktrace -Pkotlin.compiler.execution.strategy=in-process -PscaffoldTestHeap=512m
+          result=$?
+          echo "exit_code=$result" >> "$GITHUB_OUTPUT"
+          exit "$result"
+
+      - id: diagnostic_l10n
+        name: Run localization tests independently
+        if: ${{ always() && steps.generate.outcome == 'failure' }}
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          ./android/gradlew -p android :core:l10n:testDebugUnitTest \
+            --write-locks --write-verification-metadata sha256 \
+            --no-daemon --console=plain --no-build-cache --no-parallel --max-workers=2 \
+            --stacktrace -Pkotlin.compiler.execution.strategy=in-process -PscaffoldTestHeap=512m
+          result=$?
+          echo "exit_code=$result" >> "$GITHUB_OUTPUT"
+          exit "$result"
+
       - id: diagnostics
         name: Capture failed Android test reports
         if: ${{ always() && steps.generate.outcome == 'failure' }}
@@ -228,6 +258,18 @@ jobs:
               "app_diagnostic_exit_code": os.environ.get(
                   "APP_DIAGNOSTIC_EXIT_CODE", "unavailable"
               ),
+              "chats_diagnostic_step_outcome": os.environ.get(
+                  "CHATS_DIAGNOSTIC_OUTCOME", "unknown"
+              ),
+              "chats_diagnostic_exit_code": os.environ.get(
+                  "CHATS_DIAGNOSTIC_EXIT_CODE", "unavailable"
+              ),
+              "l10n_diagnostic_step_outcome": os.environ.get(
+                  "L10N_DIAGNOSTIC_OUTCOME", "unknown"
+              ),
+              "l10n_diagnostic_exit_code": os.environ.get(
+                  "L10N_DIAGNOSTIC_EXIT_CODE", "unavailable"
+              ),
               "generation_command": [
                   "./android/gradlew", "-p", "android",
                   "verifyScaffoldTests", "verifyRoomSchema", "validateModuleGraph",
@@ -258,6 +300,20 @@ jobs:
                       "--max-workers=2", "--stacktrace",
                       "-Pkotlin.compiler.execution.strategy=in-process", "-PscaffoldTestHeap=512m",
                   ],
+                  "chats": [
+                      "./android/gradlew", "-p", "android", ":feature:chats:testDebugUnitTest",
+                      "--write-locks", "--write-verification-metadata", "sha256",
+                      "--no-daemon", "--console=plain", "--no-build-cache", "--no-parallel",
+                      "--max-workers=2", "--stacktrace",
+                      "-Pkotlin.compiler.execution.strategy=in-process", "-PscaffoldTestHeap=512m",
+                  ],
+                  "l10n": [
+                      "./android/gradlew", "-p", "android", ":core:l10n:testDebugUnitTest",
+                      "--write-locks", "--write-verification-metadata", "sha256",
+                      "--no-daemon", "--console=plain", "--no-build-cache", "--no-parallel",
+                      "--max-workers=2", "--stacktrace",
+                      "-Pkotlin.compiler.execution.strategy=in-process", "-PscaffoldTestHeap=512m",
+                  ],
               },
               "junit_report_count": len(junit),
               "reports": copied,
@@ -276,6 +332,10 @@ jobs:
           CORE_SERVICES_DIAGNOSTIC_EXIT_CODE: ${{ steps.diagnostic_core_services.outputs.exit_code }}
           APP_DIAGNOSTIC_OUTCOME: ${{ steps.diagnostic_app.outcome }}
           APP_DIAGNOSTIC_EXIT_CODE: ${{ steps.diagnostic_app.outputs.exit_code }}
+          CHATS_DIAGNOSTIC_OUTCOME: ${{ steps.diagnostic_chats.outcome }}
+          CHATS_DIAGNOSTIC_EXIT_CODE: ${{ steps.diagnostic_chats.outputs.exit_code }}
+          L10N_DIAGNOSTIC_OUTCOME: ${{ steps.diagnostic_l10n.outcome }}
+          L10N_DIAGNOSTIC_EXIT_CODE: ${{ steps.diagnostic_l10n.outputs.exit_code }}
 
       - name: Upload failed Android test reports
         if: ${{ always() && steps.generate.outcome == 'failure' }}

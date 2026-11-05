@@ -6,10 +6,14 @@ package com.meshcoreone.android.feature.remotenodes.ui
 import android.content.res.Configuration
 import android.os.LocaleList
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
@@ -123,6 +127,7 @@ class RemoteLocaleMeasurementComposeTest {
         }
         val context = remember(configuration) { activity.get().createConfigurationContext(configuration) }
         CompositionLocalProvider(
+            LocalActivity provides activity.get(),
             LocalConfiguration provides configuration,
             LocalContext provides context,
             LocalResources provides context.resources,
@@ -403,6 +408,50 @@ class RemoteLocaleMeasurementComposeTest {
         assertNotEquals(identity, remoteNodeHistoryStore(role(NodeSnapshotPersisting::class.java), contacts, discovered).authorityIdentity)
         assertNotEquals(identity, remoteNodeHistoryStore(snapshots, role(ContactPersisting::class.java), discovered).authorityIdentity)
         assertNotEquals(identity, remoteNodeHistoryStore(snapshots, contacts, role(DiscoveredNodePersisting::class.java)).authorityIdentity)
+    }
+
+    @Test fun reopeningHistoryReloadsSnapshotsCapturedWhileItWasClosed() {
+        val showHistory = mutableStateOf(true)
+        var latest = 25.5
+        var reads = 0
+        val store = object : RemoteNodeHistoryStore {
+            override suspend fun fetchNodeStatusSnapshots(nodePublicKey: Bytes, since: Instant?): SnapshotList<NodeStatusSnapshotDTO> {
+                reads++
+                return listOf(
+                    NodeStatusSnapshotDTO(
+                        nodePublicKey = key, timestamp = now.minusSeconds(7_200),
+                        telemetryEntries = listOf(TelemetrySnapshotEntry(1, "Temperature", 20.5)).snapshot(),
+                    ),
+                    NodeStatusSnapshotDTO(
+                        nodePublicKey = key, timestamp = now.minusSeconds(3_600),
+                        telemetryEntries = listOf(TelemetrySnapshotEntry(1, "Temperature", latest)).snapshot(),
+                    ),
+                ).snapshot()
+            }
+            override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? = null
+            override suspend fun fetchContacts(radioId: RadioId) = SnapshotList.empty<ContactDTO>()
+            override suspend fun fetchDiscoveredNodes(radioId: RadioId) = SnapshotList.empty<DiscoveredNodeDTO>()
+        }
+        activity.get().setContent {
+            ResourceLocale {
+                Column(Modifier.fillMaxSize()) {
+                    TextButton({ showHistory.value = !showHistory.value }) { Text("Toggle history") }
+                    if (showHistory.value) RemoteNodeHistoryRoute(
+                        key, RadioId(UUID(0, 1)), false, store, Modifier.weight(1f),
+                        { _, _, _, _, _, _, _ -> }, clock,
+                    )
+                }
+            }
+        }
+        compose.onNode(hasText(": 77.9 \u00b0F", substring = true)).performScrollTo().assertIsDisplayed()
+        compose.runOnIdle { assertEquals(1, reads) }
+        compose.onNodeWithText("Toggle history").performClick()
+        compose.onNode(hasTestTag("remote-history-content")).assertDoesNotExist()
+        compose.runOnIdle { latest = 30.5 }
+        compose.onNodeWithText("Toggle history").performClick()
+        compose.onNode(hasText(": 86.9 \u00b0F", substring = true)).performScrollTo().assertIsDisplayed()
+        compose.onNode(hasText(": 77.9 \u00b0F", substring = true)).assertDoesNotExist()
+        compose.runOnIdle { assertEquals("Genuine re-entry performs exactly one fresh load", 2, reads) }
     }
 
     @Test fun sameTimestampChartsKeepTheirOwnSelectionWhenLocaleReordersThemAndResetForAnotherNode() {

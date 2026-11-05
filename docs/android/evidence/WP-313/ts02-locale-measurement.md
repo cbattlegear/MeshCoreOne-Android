@@ -54,6 +54,9 @@ App wiring uses the existing `SystemRemoteNodesClock` singleton instead of
 allocating an identical system-clock wrapper per service adapter. A pure
 Activity recreation thus keeps both the backing authority and clock dependency
 stable; genuinely different injected clocks still replace the holder.
+Leaving history invalidates its load unless the owning Activity is changing
+configuration. Genuine close/re-entry therefore reloads snapshots captured
+while the route was closed; Activity recreation keeps the loaded state.
 
 ICU's regional `LocaleData.getMeasurementSystem` is retained for normal locales
 and regional `rg` overrides. Its supplemental-region lookup does not implement
@@ -163,6 +166,9 @@ It does not calculate expected values with production helpers.
 6. Exercise the production adapter identity directly: fresh wrappers over the
    same three backing roles compare equal, while replacing any single role
    changes identity without invoking the roles' own equality or read methods.
+7. Mount history, close its composition, change the store's captured latest
+   snapshot, and reopen the same node with unchanged store/clock. Assert exactly
+   one new load and the new latest sample rather than stale cached history.
 
 ## Admission, verification and limits
 

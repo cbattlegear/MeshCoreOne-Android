@@ -3,6 +3,7 @@
 // PortedFrom: MC1/Views/RemoteNodes/Location/LocationReportCallout.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.feature.remotenodes.ui
 
+import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -90,6 +91,11 @@ private class RetainedRemoteHistory(
         store?.let { load(it, publicKey, radioId, refresh = true) }
     }
 
+    fun leave() {
+        loadJob?.cancel()
+        configured = false
+    }
+
     private fun load(
         store: RemoteNodeHistoryStore,
         publicKey: com.meshcoreone.android.core.protocol.bytes.Bytes,
@@ -163,6 +169,12 @@ internal fun RemoteNodeHistoryRoute(
         ViewModelProvider(owner, factory)[historyKey, RetainedRemoteHistory::class.java]
     }
     SideEffect { retained.configure(store, publicKey, radioId, clock, zone, presentation) }
+    val activity = checkNotNull(LocalActivity.current)
+    DisposableEffect(retained, activity) {
+        onDispose {
+            if (!activity.isChangingConfigurations) retained.leave()
+        }
+    }
     val holder = retained.holder
     val state by holder.state.collectAsStateWithLifecycle()
     var fullMap by remember(publicKey, radioId, holder) { mutableStateOf(false) }

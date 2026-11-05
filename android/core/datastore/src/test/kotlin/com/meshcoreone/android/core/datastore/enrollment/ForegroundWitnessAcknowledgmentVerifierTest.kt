@@ -2,6 +2,8 @@
 package com.meshcoreone.android.core.datastore.enrollment
 
 import android.database.sqlite.SQLiteDatabase
+import java.io.ByteArrayInputStream
+import java.io.DataInputStream
 import java.io.File
 import java.io.IOException
 import java.nio.channels.FileChannel
@@ -315,6 +317,123 @@ class ForegroundWitnessAcknowledgmentVerifierTest {
     }
 
     @Test
+    fun stagedConsumedAndInvalidatedHistoryRoundTripsExactCodecAndReopens() = runBlocking {
+        val f = fixture()
+        val consumed = f.verifier.present(f.request)
+        assertEquals(ForegroundAcknowledgmentStaging.Staged, f.verifier.recordExplicitAction(consumed))
+        assertEquals(
+            ForegroundAcknowledgmentResult.Rejected,
+            f.verifier(processId = UUID.randomUUID()).verify(f.request),
+        )
+        assertEquals(ForegroundAcknowledgmentResult.NewlyVerified(f.request), f.verifier.verify(f.request))
+
+        val invalidatedRequest = f.request.copy(
+            operation = WitnessOperation(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID()),
+            acknowledgmentId = UUID.randomUUID(),
+        )
+        val invalidated = f.verifier.present(invalidatedRequest)
+        assertEquals(ForegroundAcknowledgmentStaging.Staged, f.verifier.recordExplicitAction(invalidated))
+        f.verifier.invalidate(invalidated)
+        val reopened = f.verifier(processId = UUID.randomUUID())
+        assertEquals(ForegroundAcknowledgmentResult.AlreadyConsumed, reopened.verify(f.request))
+        assertEquals(ForegroundAcknowledgmentResult.Rejected, reopened.verify(invalidatedRequest))
+
+        f.database { db ->
+            db.rawQuery("SELECT sequence,payload,mac FROM acknowledgment_history ORDER BY sequence", null).use { rows ->
+                val expected = listOf(
+                    f.request to "STAGED", f.request to "CONSUMED",
+                    invalidatedRequest to "STAGED", invalidatedRequest to "INVALIDATED",
+                )
+                var previousMac = ByteArray(32)
+                for ((index, entry) in expected.withIndex()) {
+                    assertTrue(rows.moveToNext())
+                    assertEquals(index + 1L, rows.getLong(0))
+                    DataInputStream(ByteArrayInputStream(rows.getBlob(1))).use { input ->
+                        assertEquals("MeshCoreOne.notification-ack.history.v1", input.readUTF())
+                        assertEquals(index + 1L, input.readLong())
+                        val requestBytes = ByteArray(input.readInt()).also { input.readFully(it) }
+                        DataInputStream(ByteArrayInputStream(requestBytes)).use { request ->
+                            assertEquals("MeshCoreOne.notification-ack.request.v1", request.readUTF())
+                            assertEquals(entry.first.operation.operationId, request.readUuid())
+                            assertEquals(entry.first.operation.storeId, request.readUuid())
+                            assertEquals(entry.first.operation.creationNonce, request.readUuid())
+                            assertEquals(entry.first.acknowledgmentId, request.readUuid())
+                            assertFalse(request.readBoolean())
+                            assertEquals(0, request.available())
+                        }
+                        val warningBytes = ByteArray(input.readInt()).also { input.readFully(it) }
+                        DataInputStream(ByteArrayInputStream(warningBytes)).use { warning ->
+                            assertEquals("MeshCoreOne.notification-ack.warning.v1", warning.readUTF())
+                            assertEquals(f.warning.id, warning.readUTF())
+                            assertEquals(f.warning.version, warning.readInt())
+                            assertEquals(f.warning.renderedCopySha256, warning.readUTF())
+                            assertEquals(0, warning.available())
+                        }
+                        val presentation = if (index < 2) consumed else invalidated
+                        assertEquals(presentation.presentationId, input.readUuid())
+                        assertEquals(presentation.processId, input.readUuid())
+                        assertEquals(entry.second, input.readUTF())
+                        assertEquals(32, input.available())
+                        val rawPreviousMac = ByteArray(32).also { input.readFully(it) }
+                        assertTrue(previousMac.contentEquals(rawPreviousMac))
+                        assertEquals(0, input.available())
+                    }
+                    previousMac = rows.getBlob(2)
+                }
+                assertFalse(rows.moveToNext())
+            }
+        }
+    }
+
+    @Test
+    fun foreignNullableHistoryAndHeadBlobsFailClosedAsTypedCorruption() = runBlocking {
+        for ((table, column) in listOf(
+            "acknowledgment_history" to "payload",
+            "acknowledgment_history" to "mac",
+            "acknowledgment_head" to "mac",
+        )) {
+            val f = fixture()
+            val presentation = f.verifier.present(f.request)
+            assertEquals(ForegroundAcknowledgmentStaging.Staged, f.verifier.recordExplicitAction(presentation))
+            f.database { db ->
+                if (table == "acknowledgment_history") {
+                    db.execSQL("CREATE TABLE altered(sequence INTEGER PRIMARY KEY, payload BLOB, mac BLOB)")
+                    db.execSQL(
+                        "INSERT INTO altered SELECT sequence," +
+                            "${if (column == "payload") "NULL" else "payload"}," +
+                            "${if (column == "mac") "NULL" else "mac"} FROM acknowledgment_history",
+                    )
+                } else {
+                    db.execSQL(
+                        "CREATE TABLE altered(singleton INTEGER PRIMARY KEY CHECK(singleton=1), " +
+                            "sequence INTEGER NOT NULL, mac BLOB)",
+                    )
+                    db.execSQL("INSERT INTO altered SELECT singleton,sequence,NULL FROM acknowledgment_head")
+                }
+                db.execSQL("DROP TABLE $table")
+                db.execSQL("ALTER TABLE altered RENAME TO $table")
+                db.rawQuery("PRAGMA quick_check", null).use {
+                    assertTrue(it.moveToFirst())
+                    assertEquals("ok", it.getString(0))
+                }
+            }
+            assertEquals(ForegroundAcknowledgmentResult.Indeterminate, f.verifier.verify(f.request))
+            assertEquals(StorageProblem.CorruptSecretState, f.failures.last().problem)
+            assertEquals(
+                ForegroundAcknowledgmentResult.Indeterminate,
+                f.verifier(processId = UUID.randomUUID()).verify(f.request),
+            )
+            f.database { db ->
+                db.rawQuery("SELECT COUNT(*) FROM acknowledgment_history", null).use {
+                    assertTrue(it.moveToFirst())
+                    assertEquals(1, it.getInt(0))
+                }
+            }
+            assertEquals(1, f.authentication.creates)
+        }
+    }
+
+    @Test
     fun consumedAcknowledgmentSurvivesIndependentWitnessDatabaseAndKeyLoss() = runBlocking {
         val f = fixture()
         val witnessFile = File(f.root, "witness.db")
@@ -355,6 +474,8 @@ class ForegroundWitnessAcknowledgmentVerifierTest {
     }
 
     private fun fixture() = Fixture(temporary.newFolder())
+
+    private fun DataInputStream.readUuid() = UUID(readLong(), readLong())
 
     private inner class Fixture(val root: File) {
         val file = File(root, "ack.db")

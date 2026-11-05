@@ -442,8 +442,9 @@ class ForegroundWitnessAcknowledgmentVerifier internal constructor(
         db.rawQuery("SELECT sequence,payload,mac FROM acknowledgment_history ORDER BY sequence", null).use { rows ->
             while (rows.moveToNext()) {
                 if (sequence == Long.MAX_VALUE) throw Invalid(WitnessProblem.CORRUPT_STORAGE)
-                val payload = rows.getBlob(1)
-                val event = decode(payload).copy(mac = rows.getBlob(2))
+                val payload = rows.getBlob(1) ?: throw Invalid(WitnessProblem.CORRUPT_STORAGE)
+                val mac = rows.getBlob(2) ?: throw Invalid(WitnessProblem.CORRUPT_STORAGE)
+                val event = decode(payload).copy(mac = mac)
                 val id = acknowledgmentId(event.evidence.request)
                 if (event.sequence != rows.getLong(0) || event.sequence != sequence + 1 ||
                     !MessageDigest.isEqual(event.previousMac, previousMac) ||
@@ -476,9 +477,11 @@ class ForegroundWitnessAcknowledgmentVerifier internal constructor(
             return History(0, ZERO_MAC, latest)
         }
         db.rawQuery("SELECT singleton,sequence,mac FROM acknowledgment_head", null).use { head ->
-            if (!head.moveToFirst() || head.getInt(0) != 1 || head.getLong(1) != sequence ||
+            if (!head.moveToFirst()) throw Invalid(WitnessProblem.CORRUPT_STORAGE)
+            val mac = head.getBlob(2) ?: throw Invalid(WitnessProblem.CORRUPT_STORAGE)
+            if (head.getInt(0) != 1 || head.getLong(1) != sequence ||
                 !MessageDigest.isEqual(
-                    head.getBlob(2),
+                    mac,
                     authentication.authenticate(headBytes(sequence, previousMac)),
                 ) || head.moveToNext()
             ) throw Invalid(WitnessProblem.AUTHENTICATION_FAILED)

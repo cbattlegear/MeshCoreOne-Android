@@ -144,14 +144,15 @@ class NotificationEnrollmentCoordinatorTest {
     @Test
     fun foreignIndeterminateOperationNeverBecomesAnAuthorizedRetry() = runTest {
         val f = Fixture()
-        f.witness.authorizeOverride = WitnessWrite.Indeterminate(Operation(UUID.randomUUID(), UUID.randomUUID()))
+        f.witness.authorizeOverride =
+            WitnessWrite.Indeterminate(Operation(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID()))
         assertEquals(Result.Blocked(Failure.INVALID_RECEIPT), f.coordinator().enroll(f.request))
         assertNull(f.journal.receipt)
     }
 
     @Test
     fun preparingReceiptRequiresExactOperationRevisionPhaseAndNoPriorWitness() = runTest {
-        for (field in listOf("store", "operation", "revision", "phase", "witness")) {
+        for (field in listOf("store", "operation", "revision", "phase", "witness", "nonce")) {
             val test = Fixture()
             val correct = test.preparing()
             val receipt = when (field) {
@@ -159,6 +160,7 @@ class NotificationEnrollmentCoordinatorTest {
                 "operation" -> correct.copy(operation = correct.operation.copy(operationId = UUID.randomUUID()))
                 "revision" -> correct.copy(revision = 2)
                 "phase" -> correct.copy(phase = Phase.BOUND)
+                "nonce" -> correct.copy(creationNonce = UUID.randomUUID())
                 else -> correct.copy(witnessId = UUID.randomUUID())
             }
             test.journal.prepareOverride = JournalResult.Observed(receipt)
@@ -218,7 +220,8 @@ class NotificationEnrollmentCoordinatorTest {
     fun successorWitnessDuringBindFencesOldCompletionWithoutOverwritingSuccessor() = runTest {
         val f = Fixture()
         val successor = f.record(WitnessPhase.AUTHORIZED).copy(
-            operation = Operation(UUID.randomUUID(), UUID.randomUUID()), witnessId = UUID.randomUUID(),
+            operation = Operation(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID()),
+            witnessId = UUID.randomUUID(),
         )
         f.journal.afterBind = { f.witness.current = successor }
         assertEquals(Result.Superseded, f.coordinator().enroll(f.request))
@@ -240,7 +243,7 @@ class NotificationEnrollmentCoordinatorTest {
         val f = Fixture()
         val current = f.record(WitnessPhase.AUTHORIZED)
         f.witness.current = current
-        val stale = f.request.copy(operation = Operation(UUID.randomUUID(), UUID.randomUUID()))
+        val stale = f.request.copy(operation = Operation(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID()))
         assertEquals(Result.Superseded, f.coordinator().enroll(stale))
         assertEquals(current, f.witness.current)
         assertNull(f.journal.receipt)
@@ -313,11 +316,62 @@ class NotificationEnrollmentCoordinatorTest {
         assertEquals(0, f.journal.creations)
     }
 
+    @Test
+    fun lostPrepareReturnThenSameOperationStoreReplacementCannotAdoptObservedNonceOnRestart() = runTest {
+        val f = Fixture()
+        f.lostReturn = Step.PREPARE
+        assertEquals(Result.Indeterminate(f.operation, Step.PREPARE), f.coordinator().enroll(f.request))
+        val replacementOperation = f.operation.copy(creationNonce = UUID.randomUUID())
+        f.journal.receipt = CreationReceipt(
+            replacementOperation, 1, Phase.PREPARING, replacementOperation.creationNonce, null,
+        )
+        val replacement = f.journal.receipt
+        f.lostReturn = null
+        f.events.clear()
+        assertEquals(Result.Blocked(Failure.IDENTITY_MISMATCH), f.coordinator().resume())
+        assertEquals(listOf("reconcile"), f.events)
+        assertEquals(replacement, f.journal.receipt)
+        assertEquals(WitnessPhase.AUTHORIZED, f.witness.current?.phase)
+        assertNull(f.witness.current?.receipt)
+        assertEquals(1, f.journal.creations)
+    }
+
+    @Test
+    fun preparedReplacementObservationIsRejectedEvenWhenPortReturnsItAsObserved() = runTest {
+        val f = Fixture()
+        f.cancelAfter = Step.AUTHORIZE
+        assertFailsWith<CancellationException> { f.coordinator().enroll(f.request) }
+        f.cancelAfter = null
+        val foreign = f.operation.copy(creationNonce = UUID.randomUUID())
+        f.journal.readOverride = JournalResult.Observed(CreationReceipt(foreign, 1, Phase.PREPARING, foreign.creationNonce, null))
+        assertEquals(Result.Blocked(Failure.INVALID_RECEIPT), f.coordinator().resume())
+        assertFalse("accept" in f.events)
+    }
+
+    @Test
+    fun initialPrepareCannotReplaceIndependentlyPredeclaredNonceBeforeWitnessAcceptance() = runTest {
+        val f = Fixture()
+        val replacement = f.operation.copy(creationNonce = UUID.randomUUID())
+        f.journal.prepareOverride =
+            JournalResult.Observed(CreationReceipt(replacement, 1, Phase.PREPARING, replacement.creationNonce, null))
+        assertEquals(Result.Blocked(Failure.INVALID_RECEIPT), f.coordinator().enroll(f.request))
+        assertFalse("accept" in f.events)
+        assertFalse("bind" in f.events)
+    }
+
+    @Test
+    fun authorizedWitnessMustHaveExactInitialRevisionBeforeAnyPreparation() = runTest {
+        val f = Fixture()
+        f.witness.current = f.record(WitnessPhase.AUTHORIZED).copy(revision = 2)
+        assertEquals(Result.Blocked(Failure.INVALID_RECEIPT), f.coordinator().resume())
+        assertTrue(f.events.isEmpty())
+    }
+
     private class Fixture {
-        val operation = Operation(UUID.randomUUID(), UUID.randomUUID())
+        val operation = Operation(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID())
         val request = EnrollmentRequest(operation, UUID.randomUUID(), null)
         val witnessId: UUID = UUID.randomUUID()
-        val nonce: UUID = UUID.randomUUID()
+        val nonce: UUID = operation.creationNonce
         val events = mutableListOf<String>()
         var lostReturn: Step? = null
         var cancelAfter: Step? = null
@@ -420,9 +474,12 @@ class NotificationEnrollmentCoordinatorTest {
                 return observed(Step.BIND_JOURNAL)
             }
 
-            override suspend fun reconcile(operation: Operation, expectedNonce: UUID?): JournalResult {
+            override suspend fun reconcile(operation: Operation, expectedNonce: UUID): JournalResult {
                 events += "reconcile"
-                val result = readOverride ?: receipt?.let { JournalResult.Observed(it) }
+                val result = readOverride ?: receipt?.let {
+                    if (it.operation == operation && it.creationNonce == expectedNonce) JournalResult.Observed(it)
+                    else JournalResult.NotRetained(Failure.IDENTITY_MISMATCH)
+                }
                     ?: JournalResult.NotRetained(Failure.NOT_RETAINED)
                 afterRead?.invoke()
                 return result

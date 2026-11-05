@@ -33,6 +33,10 @@ It must durably retain AUTHORIZED before initial creation, the exact PREPARING
 receipt before journal binding, and the exact BOUND receipt afterward. Every
 witness mutation is conditional on the complete current record. Receipt checks
 include operation ID, store ID, creation nonce, phase, revision and witness ID.
+Operation ID, store ID and creation nonce are a REQUIRED predeclared triple
+independently retained in AUTHORIZED before any preparation. The nonce is not
+discovered from the journal, even after a lost first return. Receipts must repeat
+that exact nonce; witness revisions are exactly AUTHORIZED 1, ACCEPTED 2, BOUND 3.
 
 Only the uninterrupted return from a **newly** retained foreground authorization
 may call `prepare` once. Idempotent acknowledgment replay and restart use
@@ -40,7 +44,7 @@ read-only same-operation reconciliation. If no journal survives, that may be
 lost committed storage, not proof creation never happened: recovery blocks.
 Even a crash immediately before first allocation deliberately requires a later
 explicitly acknowledged new operation rather than automatic recreation.
-Known nonces are always retained and checked. Cancellation propagates; uncertain
+The predeclared nonce is always retained and checked. Cancellation propagates; uncertain
 returns never cause the coordinator to mint another operation or store.
 
 `BoundSnapshot` is an observation, **not an issuance or dispatch capability**.
@@ -52,10 +56,14 @@ journal validation; a final witness read is not a substitute for that authority.
 ## Coordinated storage and recovery dependencies
 
 Storage owner 637 froze the separate, unactivated candidate
-`e3f3c451fcb294aae68457e949677ac4a1cfa9b2`.
+`be849bdd90a7dc6e42c93a5f40f9db1f831a34f6` (successor of
+`e3f3c451fcb294aae68457e949677ac4a1cfa9b2`).
 Its `NotificationReplyEnrollmentStore` models predeclared operation/store IDs,
 PREPARING revision 1, BOUND revision 2, immutable creation nonce and the exact
-accepted witness ID. Its real journal and enrollment checks share schema 4.
+accepted witness ID. The repaired API requires the independently retained
+operation/store/nonce triple on prepare AND reconciliation, rejecting same
+operation/store replacement with a different nonce. Its real journal and
+enrollment checks share schema 4.
 Existing empty/partial/foreign paths are not recreated. This candidate is not
 imported, compiled or activated by this change; local coordinator DTOs are
 explicit adapter ports, not a claim that the storage integration is complete.
@@ -92,12 +100,21 @@ Frozen #495/#518 and other producers' source remain untouched.
 
 ## Verification
 
-`NotificationEnrollmentCoordinatorTest` declares 22 tests using deterministic
+`NotificationEnrollmentCoordinatorTest` declares 26 tests using deterministic
 port doubles, not real SQLite, Keystore or Android process-death evidence. Cases
 include acknowledgment ordering, unknown/lost state, explicit failures, partial
 startup, receipt substitutions, superseding witnesses, lost returns and late
 cancellation at every write, same-operation restart, and refusal to recreate
 missing storage after possible preparation.
+
+Predecessor `740033157da71b1bba1d9c983761c16948caf061` passed hosted run
+[41967981159](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41967981159).
+Independent source review still found that nonce-less AUTHORIZED reconciliation
+could accept replacement storage before retaining the first receipt. This
+successor requires the predeclared nonce and adds lost-prepare-return/restart/
+replacement controls; the earlier passing run does not verify the successor or
+disprove that gap. The completed predecessor run was preserved before publishing
+the repair; fresh exact-head execution is required.
 
 - `python tools/android-port/controller/validate.py`: passed.
 - `python tools/android-port/portmap.py`: passed.

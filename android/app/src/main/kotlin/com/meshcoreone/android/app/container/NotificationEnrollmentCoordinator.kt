@@ -14,7 +14,8 @@ internal class NotificationEnrollmentCoordinator(
     private val witness: Witness,
     private val journal: Journal,
 ) {
-    data class Operation(val operationId: UUID, val storeId: UUID)
+    /** All three values are independently retained by AUTHORIZED before any journal call. */
+    data class Operation(val operationId: UUID, val storeId: UUID, val creationNonce: UUID)
 
     enum class Phase { PREPARING, BOUND }
 
@@ -102,7 +103,7 @@ internal class NotificationEnrollmentCoordinator(
         suspend fun bind(preparing: CreationReceipt, witnessId: UUID): JournalResult
 
         /** Read-only; verifies both operation/store and the already known creation nonce. */
-        suspend fun reconcile(operation: Operation, expectedNonce: UUID?): JournalResult
+        suspend fun reconcile(operation: Operation, expectedNonce: UUID): JournalResult
     }
 
     enum class Step { AUTHORIZE, PREPARE, ACCEPT_WITNESS, BIND_JOURNAL, COMPLETE_WITNESS, INSPECT }
@@ -176,7 +177,7 @@ internal class NotificationEnrollmentCoordinator(
             currentCheck(current)?.let { return it }
             // After a lost return, missing storage may be LOST committed storage, not uncreated.
             val attempt = if (mayPrepare) journal.prepare(current.operation)
-            else journal.reconcile(current.operation, expectedNonce = null)
+            else journal.reconcile(current.operation, expectedNonce = current.operation.creationNonce)
             val preparing = when (val result = attempt) {
                 is JournalResult.Observed -> result.receipt
                 is JournalResult.NotRetained -> return Result.Blocked(result.reason)
@@ -265,7 +266,8 @@ internal class NotificationEnrollmentCoordinator(
             next.operation == previous.operation && next.witnessId == previous.witnessId &&
             next.phase == phase && next.receipt == receipt && valid(next)
 
-    private fun valid(record: WitnessRecord): Boolean = record.revision > 0 && when (record.phase) {
+    private fun valid(record: WitnessRecord): Boolean = record.revision == record.phase.ordinal + 1L &&
+        when (record.phase) {
         WitnessPhase.AUTHORIZED -> record.receipt == null
         WitnessPhase.ACCEPTED -> record.receipt?.let { isPreparing(it) && it.operation == record.operation } == true
         WitnessPhase.BOUND -> record.receipt?.let {
@@ -274,10 +276,12 @@ internal class NotificationEnrollmentCoordinator(
     }
 
     private fun isPreparing(receipt: CreationReceipt): Boolean =
-        receipt.phase == Phase.PREPARING && receipt.revision == 1L && receipt.witnessId == null
+        receipt.phase == Phase.PREPARING && receipt.revision == 1L && receipt.witnessId == null &&
+            receipt.creationNonce == receipt.operation.creationNonce
 
     private fun isBound(receipt: CreationReceipt): Boolean =
-        receipt.phase == Phase.BOUND && receipt.revision == 2L && receipt.witnessId != null
+        receipt.phase == Phase.BOUND && receipt.revision == 2L && receipt.witnessId != null &&
+            receipt.creationNonce == receipt.operation.creationNonce
 
     private fun uncertain(actual: Operation, expected: Operation, step: Step): Result =
         if (actual == expected) Result.Indeterminate(expected, step) else Result.Blocked(Failure.INVALID_RECEIPT)

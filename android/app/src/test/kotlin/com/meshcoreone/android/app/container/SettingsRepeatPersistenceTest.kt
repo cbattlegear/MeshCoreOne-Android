@@ -29,6 +29,7 @@ import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -45,6 +46,194 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class SettingsRepeatPersistenceTest : RoomProcessTest() {
+    @Test fun identityWritersCannotChangeAnAdmittedRestoreBeforeItsActualSet() = runTest {
+        for (operation in listOf("delete", "delete-data", "demote", "reconcile", "insert")) {
+            withRepeat(store) { h, _, _, radio ->
+                val before = assertNotNull(h.manager.connectedDevice)
+                val token = assertNotNull(h.sessions.current).token
+                val ghost = before.copy(id = UUID.randomUUID(), radioId = com.meshcoreone.android.core.model.RadioId(UUID.randomUUID()),
+                    publicKey = key(91), isActive = false, connectionMethods = com.meshcoreone.android.core.model.SnapshotList.empty())
+                store.saveDevice(ghost)
+                val authority = h.container.deviceEditor.preRepeatSettingsRestoreAuthority(token, before)
+                val entered = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                radio.beforeRadioSend = { entered.complete(Unit); release.await() }
+                val restore = async {
+                    assertNotNull(h.sessions.current).settingsService.setRadioParamsVerified(
+                        before.frequency, before.bandwidth, before.spreadingFactor, before.codingRate, false,
+                        expectedDevice = before, restoreAuthority = authority,
+                    )
+                }
+                entered.await()
+                val writer = async(start = CoroutineStart.UNDISPATCHED) {
+                    when (operation) {
+                        "delete" -> store.deleteDevice(before.id)
+                        "delete-data" -> store.deleteDeviceAndData(before.id)
+                        "demote" -> store.demoteDeviceToGhost(before.id)
+                        "reconcile" -> store.reconcileGhostIdentity(before.id, ghost.publicKey)
+                        else -> assertFalse(store.insertDeviceIfAbsent(before))
+                    }
+                }
+                try {
+                    assertEquals(before, store.fetchDevice(before.id), "$operation must not invalidate an admitted identity")
+                    assertFalse(writer.isCompleted, "$operation must wait outside the DB mutex")
+                    assertTrue(radio.radioWrites.isEmpty())
+                    release.complete(Unit)
+                    restore.await()
+                    writer.await()
+                    assertEquals(1, radio.radioWrites.size)
+                } finally {
+                    release.complete(Unit)
+                    restore.cancel()
+                    restore.join()
+                    writer.join()
+                }
+            }
+        }
+    }
+
+    @Test fun capturedRestoreRejectsDeleteReinsertAbaWithoutSending() = runTest {
+        withRepeat(store) { h, _, _, radio ->
+            val before = assertNotNull(h.manager.connectedDevice)
+            val token = assertNotNull(h.sessions.current).token
+            val authority = h.container.deviceEditor.preRepeatSettingsRestoreAuthority(token, before)
+            store.deleteDevice(before.id)
+            assertTrue(store.insertDeviceIfAbsent(before))
+            store.saveDevice(before)
+            assertEquals(before, store.fetchDevice(before.id), "The durable row really returned to the same full DTO")
+            val failure = runCatching {
+                assertNotNull(h.sessions.current).settingsService.setRadioParamsVerified(
+                    before.frequency, before.bandwidth, before.spreadingFactor, before.codingRate, false,
+                    expectedDevice = before, restoreAuthority = authority,
+                )
+            }.exceptionOrNull()
+            assertIs<DeviceEditPersistenceConflict>(failure)
+            assertTrue(radio.radioWrites.isEmpty())
+            assertEquals(before, store.fetchDevice(before.id))
+            assertEquals(before, h.manager.connectedDevice)
+        }
+    }
+
+    @Test fun actualProtocolRestoreReleasesAdmissionAfterSendWhileOkIsWithheld() = runTest {
+        withRepeat(store) { h, holder, failures, radio ->
+            holder.onRepeatToggled(true)
+            holder.confirmEnableRepeatMode()
+            h.eventually("Repeat active before delayed OK") { !holder.state.value.isApplyingRepeat && holder.state.value.device?.clientRepeat == true }
+            radio.withholdNextAck = true
+            holder.onRepeatToggled(false)
+            h.eventually("actual restore SET sent without OK") { radio.radioWrites.size == 2 && radio.hasPendingAck }
+            val before = assertNotNull(store.fetchDevice(assertNotNull(h.manager.connectedDevice).id))
+            val changed = before.copy(lastContactSync = before.lastContactSync + 1u)
+            val writer = async(start = CoroutineStart.UNDISPATCHED) { store.saveDevice(changed) }
+            try {
+                h.eventually("admitted same-device write completes before firmware OK") { writer.isCompleted }
+                writer.await()
+                assertTrue(holder.state.value.isApplyingRepeat, "The real MeshCoreSession is still awaiting the withheld OK")
+                assertTrue(failures.isEmpty())
+                assertEquals(changed, store.fetchDevice(before.id))
+                radio.releaseAck()
+                h.eventually("restore and clear complete after OK") {
+                    !holder.state.value.isApplyingRepeat && h.manager.connectedDevice?.clientRepeat == false &&
+                        h.manager.connectedDevice?.preRepeatFrequency == null
+                }
+                val expected = changed.clearingPreRepeatSettings().copy(
+                    frequency = assertNotNull(changed.preRepeatFrequency), bandwidth = assertNotNull(changed.preRepeatBandwidth),
+                    spreadingFactor = assertNotNull(changed.preRepeatSpreadingFactor), codingRate = assertNotNull(changed.preRepeatCodingRate),
+                    clientRepeat = false,
+                )
+                assertEquals(expected, store.fetchDevice(before.id))
+                assertEquals(expected, h.manager.connectedDevice)
+            } finally { radio.releaseAck(); writer.join() }
+        }
+    }
+
+    @Test fun cancellationCannotReleaseRestoreAdmissionWhileTheActualSendChildCanStillWrite() = runTest {
+        withRepeat(store) { h, _, _, radio ->
+            val before = assertNotNull(h.manager.connectedDevice)
+            val token = assertNotNull(h.sessions.current).token
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            radio.beforeRadioSend = {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                    entered.complete(Unit)
+                    release.await()
+                }
+            }
+            val restore = async {
+                assertNotNull(h.sessions.current).settingsService.setRadioParamsVerified(
+                    before.frequency, before.bandwidth, before.spreadingFactor, before.codingRate, false,
+                    restoreAuthority = h.container.deviceEditor.preRepeatSettingsRestoreAuthority(token, before),
+                )
+            }
+            h.eventually("actual transport send child entered") { entered.isCompleted }
+            restore.cancel()
+            restore.join()
+            val changed = before.copy(lastContactSync = before.lastContactSync + 1u)
+            val writer = async(start = CoroutineStart.UNDISPATCHED) { store.saveDevice(changed) }
+            try {
+                assertEquals(before, store.fetchDevice(before.id))
+                assertFalse(writer.isCompleted, "Caller cancellation does not settle a transport child that can still write")
+                assertTrue(radio.radioWrites.isEmpty())
+                release.complete(Unit)
+                h.eventually("writer proceeds after the actual send child settles") { writer.isCompleted }
+                writer.await()
+                assertEquals(changed, store.fetchDevice(before.id))
+            } finally { release.complete(Unit); writer.join() }
+        }
+    }
+
+    @Test fun persistedPartialSnapshotsAreClearedOnlyByAnActualRepeatOffReconnect() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        for (field in listOf("frequency", "bandwidth", "sf", "cr")) for (active in listOf(false, true)) {
+            val name = "repeat-reopen-${UUID.randomUUID()}.db"
+            fun open() = Room.databaseBuilder(context, MeshCoreDatabase::class.java, name)
+                .allowMainThreadQueries().setQueryExecutor(Executor { it.run() }).setTransactionExecutor(Executor { it.run() }).build()
+            val firstDb = open()
+            val first = RoomPersistenceStore(firstDb, backgroundScope)
+            lateinit var persisted: DeviceDTO
+            try {
+                withRepeat(first, room = first) { h, _, _, _ ->
+                    val token = assertNotNull(h.sessions.current).token
+                    val attempt = PreRepeatSettingsAttempt(token)
+                    assertTrue(h.container.deviceEditor.savePreRepeatSettings(token, attempt))
+                    val created = assertNotNull(h.manager.connectedDevice)
+                    persisted = when (field) {
+                        "frequency" -> created.clearingPreRepeatSettings().copy(preRepeatFrequency = 868_000u)
+                        "bandwidth" -> created.clearingPreRepeatSettings().copy(preRepeatBandwidth = 125_000u)
+                        "sf" -> created.clearingPreRepeatSettings().copy(preRepeatSpreadingFactor = 9u)
+                        else -> created.clearingPreRepeatSettings().copy(preRepeatCodingRate = 6u)
+                    }
+                    first.saveDevice(persisted)
+                    assertIs<DeviceEditPersistenceConflict>(
+                        runCatching { h.container.deviceEditor.abortPreRepeatSettings(token, attempt) }.exceptionOrNull(),
+                    )
+                    assertIs<RepeatSnapshotReconciliationRequired>(
+                        runCatching { first.repeatSnapshotAuthority.requireUsable(persisted) }.exceptionOrNull(),
+                    )
+                }
+                persisted = assertNotNull(first.fetchDevice(persisted.id))
+            } finally { first.close(); firstDb.close() }
+            val reopenedDb = open()
+            val reopened = RoomPersistenceStore(reopenedDb, backgroundScope)
+            try {
+                assertTrue(first.repeatSnapshotAuthority !== reopened.repeatSnapshotAuthority)
+                assertEquals(persisted, reopened.fetchDevice(persisted.id), "Reopening alone must preserve imported/partial rows")
+                withRepeat(reopened, room = reopened, connectExisting = persisted.id, initiallyRepeating = active) { h, _, _, radio ->
+                    val current = assertNotNull(h.manager.connectedDevice)
+                    val actual = assertNotNull(reopened.fetchDevice(persisted.id))
+                    assertEquals(current, actual)
+                    assertEquals(active, actual.clientRepeat)
+                    val expected = if (active) persisted else persisted.clearingPreRepeatSettings()
+                    assertEquals(expected.preRepeatFrequency, actual.preRepeatFrequency, "$field / active=$active")
+                    assertEquals(expected.preRepeatBandwidth, actual.preRepeatBandwidth, "$field / active=$active")
+                    assertEquals(expected.preRepeatSpreadingFactor, actual.preRepeatSpreadingFactor, "$field / active=$active")
+                    assertEquals(expected.preRepeatCodingRate, actual.preRepeatCodingRate, "$field / active=$active")
+                    assertTrue(radio.radioWrites.isEmpty(), "Reconnect cleanup is persistence only")
+                }
+            } finally { reopened.close(); reopenedDb.close(); assertTrue(context.deleteDatabase(name)) }
+        }
+    }
+
     @Test fun restoreDispatchRejectsSiblingUnsentCreationAfterItsEarlyValidation() = runTest {
         val validated = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
@@ -601,6 +790,14 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
         private var params: Bytes? = null
         private var repeat = false
         var repeatOnNextConnection = false
+        var beforeRadioSend: suspend () -> Unit = {}
+        var withholdNextAck = false
+        private var pendingAck: FirmwareRadio? = null
+        val hasPendingAck get() = pendingAck != null
+        fun releaseAck() {
+            pendingAck?.push(Bytes.of(0))
+            pendingAck = null
+        }
         val frequency: UInt?
             get() = radioWrites.lastOrNull()?.let { frame ->
                 (frame[1].toUInt() or (frame[2].toUInt() shl 8) or
@@ -612,13 +809,18 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
             repeat = repeatOnNextConnection
             repeatOnNextConnection = false
             radio.firmwareVersion = 11u
+            radio.beforeSend = { command -> if (command[0] == 0x0b.toUByte()) beforeRadioSend() }
             radio.respond = { command ->
                 when (command[0].toInt()) {
                     0x0b -> {
                         radioWrites += command
                         params = command.slice(1, 11)
                         repeat = command[11] != 0u.toUByte()
-                        listOf(Bytes.of(0))
+                        if (withholdNextAck) {
+                            withholdNextAck = false
+                            pendingAck = radio
+                            emptyList()
+                        } else listOf(Bytes.of(0))
                     }
                     0x01 -> params?.let { listOf(radio.selfPacket().slice(0, 48) + it + Bytes.utf8("TestNode")) }
                     0x16 -> if (params != null || repeat) listOf(
@@ -627,6 +829,7 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                             Bytes.utf8("v1.13.0").paddedOrTruncated(20) + Bytes.of(if (repeat) 1 else 0, 0),
                     ) else null
                     0x3c -> listOf(Bytes.of(0x1a))
+                    0x1f -> listOf(Bytes.of(0x12, command[1].toInt()) + Bytes(ByteArray(48)))
                     else -> null
                 }
             }
@@ -638,6 +841,8 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
         room: RoomPersistenceStore = store,
         afterRestoreValidation: (suspend () -> Unit)? = null,
         beforeRestoreWrite: (suspend () -> Unit)? = null,
+        connectExisting: UUID? = null,
+        initiallyRepeating: Boolean = false,
         action: suspend (ContainerHarness, RadioPresetStateHolder, MutableList<Throwable>, RepeatRadio) -> Unit,
     ) {
         val h = ContainerHarness(this, room, persistenceOverride = persistence)
@@ -645,7 +850,11 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
         var holder: RadioPresetStateHolder? = null
         try {
             h.links.configureRadio = radio::configure
-            h.connectForegroundSettings()
+            radio.repeatOnNextConnection = initiallyRepeating
+            if (connectExisting == null) h.connectForegroundSettings() else {
+                h.container.foreground.activityStarted()
+                h.manager.connect(h.target(connectExisting))
+            }
             h.eventually("foreground startup and sync finish") {
                 h.sessions.current?.syncCoordinator?.state == SyncState.Synced && h.appState.canRunSettingsStartupReads
             }

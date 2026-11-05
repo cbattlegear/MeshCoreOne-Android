@@ -51,6 +51,17 @@ The existing committed-all-null observer alone removes retirement records.
 A genuinely active successor token retains its independently observed restoration
 snapshot; a retired token cannot mark or clear its successor.
 
+The follow-up assignment `call_zQ8R1MzuLby9k36HgDAalPfY` examines a late
+registration race: the send admission ends before readback, so a sibling can
+commit an explicit clear before the verified hook records its captured receipt.
+The shared authority now retains versioned evidence from the actual committed
+all-null observer. Registration and observation use the same short monitor.
+A late receipt is already retired only if the current identity epoch still
+matches, the committed clear's snapshot epoch is newer than the captured epoch,
+and that clear epoch is still current. Every nonempty commit removes the proof.
+Changed/nonempty and equal-value ABA snapshots are therefore still quarantined,
+not admitted through a general version-mismatch bypass.
+
 After a matching clear commits, normal preparation snapshots the current RF.
 Legacy asynchronous preparation refuses the pending retirement through existing
 diagnostics instead of reusing it. The original uncertain-creation custody,
@@ -75,6 +86,13 @@ runtime authority and bounded CAS retry remain in place.
   actual Settings service/protocol for success, cancellation before ACK, RF
   mismatch and Repeat mismatch. The hook precedes both durable publications only
   for verified success.
+- `committedSiblingClearDuringRestoreReadbackCannotResurrectAnObsoleteRetirement`:
+  actual Repeat enable and restore SET, held actual self-info readback, a sibling
+  editor's committed clear before registration, then the real verified callback.
+  The all-null family requires usable fresh preparation and a complete later
+  manual-RF/enable/off cycle. Nonempty and equal-value ABA families require the
+  typed fence, unchanged row and no extra SET until an actual explicit clear,
+  followed by the same positive cycle.
 
 All twenty original Repeat/preset method bodies are retained. The test helper's
 restore-authority decorator forwards the new hook to the actual editor authority.
@@ -113,9 +131,20 @@ No off observation can pass through during the controlled ordering. Test-only
 baseline `b1db04bfe3375fc507546fa616dd269c72793f2c`, parent `d05509a9`, contains
 only that bootstrap correction with unchanged production and assertions.
 The same bootstrap correction is applied to the repaired candidate.
-The three new methods emit `WP305_REPEAT_CLEAR` START and per-family END/SUCCESS
+The new methods emit `WP305_REPEAT_CLEAR` START and per-family END/SUCCESS
 markers after explicit cleanup. These establish reached assertions/cleanup only;
 pair them with the exact hosted JUnit suite result, not standalone test acceptance.
+
+The corrected test-only baseline's exact hosted run is `42062401151`, Android
+job `127367492092`; at writing it remains in progress. The initial dispatch
+returned HTTP 500, and the branch run list contained no run before the successful
+retry returned this receipt. No duplicate dispatch or predecessor acceptance is
+claimed.
+
+Late-registration test-only predecessor
+`f9ee60a45375b214ebda1f554917afedff6199be` retains the earlier repair's production
+and adds only the new actual-readback control/local test hook. Its expected
+failure is a source hypothesis until executed, not reproduced-test credit.
 
 No Kotlin execution, hardware, signing, iOS UI or whole-WP acceptance is claimed
 for the repaired candidate by the source checks or prior #585 greens.

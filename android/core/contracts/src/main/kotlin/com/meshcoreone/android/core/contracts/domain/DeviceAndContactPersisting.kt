@@ -102,8 +102,10 @@ class RepeatSnapshotAuthority {
     private data class Pending(val receipt: DeviceWriteSnapshot, val attempt: PreRepeatSettingsAttempt)
     private data class ClearKey(val identity: Identity, val token: SessionToken?)
     private data class ClearRequest(val device: DeviceDTO, val identityVersion: Long, val snapshotVersion: Long)
+    private data class CommittedClear(val identityVersion: Long, val snapshotVersion: Long)
     private val pending = mutableMapOf<Identity, Pending>()
     private val clearRequests = mutableMapOf<ClearKey, ClearRequest>()
+    private val committedClears = mutableMapOf<Identity, CommittedClear>()
     private val admissions = mutableMapOf<UUID, Mutex>()
     private val identityVersions = mutableMapOf<UUID, Long>()
     private val snapshotVersions = mutableMapOf<UUID, Long>()
@@ -115,6 +117,12 @@ class RepeatSnapshotAuthority {
 
     @Synchronized fun recordRestoreVerified(device: DeviceDTO, token: SessionToken, identityVersion: Long, snapshotVersion: Long) {
         if (device.sameSnapshot(device.clearingPreRepeatSettings())) return
+        val cleared = committedClears[device.identity()]
+        if (cleared != null && cleared.identityVersion == identityVersion &&
+            (identityVersions[device.id] ?: 0L) == identityVersion &&
+            cleared.snapshotVersion > snapshotVersion &&
+            (snapshotVersions[device.id] ?: 0L) == cleared.snapshotVersion
+        ) return
         clearRequests.putIfAbsent(ClearKey(device.identity(), token), ClearRequest(
             device, identityVersion, snapshotVersion,
         ))
@@ -202,9 +210,12 @@ class RepeatSnapshotAuthority {
     @Synchronized fun observeCommittedClear(device: DeviceDTO) {
         if (device.preRepeatFrequency == null && device.preRepeatBandwidth == null &&
             device.preRepeatSpreadingFactor == null && device.preRepeatCodingRate == null) {
+            committedClears[device.identity()] = CommittedClear(
+                identityVersion(device.id), snapshotVersions[device.id] ?: 0L,
+            )
             pending.remove(device.identity())
             clearRequests.keys.removeAll { it.identity == device.identity() }
-        }
+        } else committedClears.remove(device.identity())
     }
 }
 

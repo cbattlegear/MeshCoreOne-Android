@@ -136,6 +136,50 @@ class DirectAckAuthorityTest {
         )
     }
 
+    @Test
+    fun issuedIntentPayloadIsSeparateFromLaterSameKeyReplacement() {
+        val issued = DirectAckIntentReceipt(
+            key, requestId, DirectAckMode.SEND, message, null, null, DirectAckPermission.CURRENT,
+        )
+        val replacement = message.copy(text = "replacement", timestamp = UInt.MAX_VALUE)
+
+        assertSame(message, issued.message)
+        assertEquals("original", issued.message?.text)
+        assertNotEquals(replacement, issued.message)
+        assertNull(issued.pendingSendId)
+        assertNull(issued.pending)
+        assertEquals(DirectAckPermission.CURRENT, issued.permission)
+    }
+
+    @Test
+    fun erasedIntentAndDeliveryKeepOnlyHistoricalIdentityAndTuple() {
+        val erasedIntent = DirectAckIntentReceipt(
+            key, requestId, DirectAckMode.RESEND, null, UUID(0, 12), null, DirectAckPermission.INVALIDATED,
+        )
+        val delivery = DirectAckDelivery(UInt.MAX_VALUE, 123u, null)
+        val history = receipt().copy(
+            phase = DirectAckPhase.DELIVERED,
+            message = null,
+            delivery = delivery,
+            permission = DirectAckPermission.MISSING,
+        )
+
+        assertEquals(key, erasedIntent.key)
+        assertEquals(requestId, erasedIntent.requestId)
+        assertEquals(UUID(0, 12), erasedIntent.pendingSendId)
+        assertNull(erasedIntent.message)
+        assertNull(erasedIntent.pending)
+        assertNull(history.message)
+        assertNull(history.delivery?.message)
+        assertEquals(UInt.MAX_VALUE, history.delivery?.ackCode)
+        assertEquals(123u, history.delivery?.roundTripTime)
+        assertEquals(DirectAckPermission.MISSING, history.permission)
+        for (reason in DirectAckRejection.entries) {
+            assertEquals(reason, DirectAckIntentResult.Rejected(reason).reason)
+            assertEquals(reason, DirectAckIntentObservation.Rejected(reason).reason)
+        }
+    }
+
     private fun receipt(wires: SnapshotList<DirectAckWireReceipt> = SnapshotList.empty()) = DirectAckReceipt(
         key = key,
         requestId = requestId,

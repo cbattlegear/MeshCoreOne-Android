@@ -11,6 +11,7 @@ import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 
@@ -29,18 +30,19 @@ class DirectPendingCompletionAuthorityTest {
     private val receipt = DirectPendingCompletionReceipt(
         captureRequestId = UUID(0, 6), key = key,
         reason = DirectPendingCompletionReason.AlreadyDeliveredSend,
-        message = message, pending = pending, completedRequestId = null,
+        message = message, pendingSendId = pending.id, pending = pending, completedRequestId = null,
         permission = DirectPendingCompletionPermission.CURRENT,
     )
 
     @Test
     fun captureSnapshotDoesNotFabricateDispatchOrCompletion() {
+        val capturedMessage = assertNotNull(receipt.message)
         assertSame(message, receipt.message)
         assertSame(pending, receipt.pending)
         assertNull(receipt.completedRequestId)
-        assertEquals(MessageStatus.DELIVERED, receipt.message.status)
-        assertNull(receipt.message.ackCode)
-        assertEquals(1L, receipt.message.sendCount)
+        assertEquals(MessageStatus.DELIVERED, capturedMessage.status)
+        assertNull(capturedMessage.ackCode)
+        assertEquals(1L, capturedMessage.sendCount)
         assertSame(DirectPendingCompletionReason.AlreadyDeliveredSend, receipt.reason)
     }
 
@@ -80,5 +82,25 @@ class DirectPendingCompletionAuthorityTest {
         val observed = DirectPendingCompletionObservation.Found(receipt)
         assertSame(receipt, observed.receipt)
         assertNotEquals(receipt.captureRequestId, pending.id)
+    }
+
+    @Test
+    fun erasedCompletionRetainsDeletionIdentityWithoutPersistedPendingPayload() {
+        val completed = receipt.copy(
+            pending = null,
+            completedRequestId = UUID(0, 7),
+            permission = DirectPendingCompletionPermission.INVALIDATED,
+        )
+        val erased = completed.copy(message = null, permission = DirectPendingCompletionPermission.MISSING)
+
+        assertEquals(pending.id, completed.pendingSendId)
+        assertEquals(UUID(0, 7), completed.completedRequestId)
+        assertNull(completed.pending)
+        assertSame(message, completed.message)
+        assertNull(erased.message)
+        assertNull(erased.pending)
+        assertEquals(key, erased.key)
+        assertEquals(receipt.captureRequestId, erased.captureRequestId)
+        assertEquals(UUID(0, 7), erased.completedRequestId)
     }
 }

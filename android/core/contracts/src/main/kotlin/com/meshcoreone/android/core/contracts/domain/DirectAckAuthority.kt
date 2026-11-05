@@ -3,11 +3,13 @@ package com.meshcoreone.android.core.contracts.domain
 
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageStatus
+import com.meshcoreone.android.core.model.PendingSendDTO
 import com.meshcoreone.android.core.model.SnapshotList
 import java.util.UUID
 
 /** Storage-issued handles, not reconstructible identity DTOs. Implementations reject foreign issuers. */
 interface DirectAckLease
+interface DirectAckIntent
 interface DirectAckAttempt
 
 enum class DirectAckRejection {
@@ -35,11 +37,11 @@ data class DirectAckWireReceipt(
     val acceptedAckCode: UInt?,
 )
 
-/** The immutable snapshot at delivery commit, never evidence about a later/recreated current row. */
+/** Delivery tuple survives erasure; null message means erased payload, never a fabricated row. */
 data class DirectAckDelivery(
     val ackCode: UInt,
     val roundTripTime: UInt?,
-    val message: MessageDTO,
+    val message: MessageDTO?,
 )
 
 sealed interface DirectAckBookkeeping {
@@ -58,9 +60,40 @@ data class DirectAckBookkeepingReceipt(val requestId: UUID, val change: DirectAc
 data class DirectAckPendingReceipt(val requestId: UUID, val pendingSendId: UUID)
 
 /**
+ * Issued wire inputs, not authority reconstructed from matching public DTO fields. Null message
+ * means erased; null pending means inline only when pendingSendId is null, otherwise erased.
+ * CURRENT requires message and any expected pending payload. Erased history never issues a handle.
+ */
+data class DirectAckIntentReceipt(
+    val key: EntityKey,
+    val requestId: UUID,
+    val mode: DirectAckMode,
+    val message: MessageDTO?,
+    val pendingSendId: UUID?,
+    val pending: PendingSendDTO?,
+    val permission: DirectAckPermission,
+)
+
+sealed interface DirectAckIntentResult {
+    data class Captured(val intent: DirectAckIntent, val receipt: DirectAckIntentReceipt) : DirectAckIntentResult
+    data class AlreadyCaptured(val intent: DirectAckIntent, val receipt: DirectAckIntentReceipt) : DirectAckIntentResult
+    data class Rejected(val reason: DirectAckRejection) : DirectAckIntentResult
+}
+
+sealed interface DirectAckIntentObservation {
+    data class Found(val receipt: DirectAckIntentReceipt) : DirectAckIntentObservation
+    data class Rejected(val reason: DirectAckRejection) : DirectAckIntentObservation
+}
+
+/**
  * Persisted history plus a transaction-bound permission observation. Public values confer no
  * authority. message is the last own committed snapshot, not an unguarded fetch of the current row.
  * Wire and bookkeeping histories survive invalidation for commit-then-throw reconciliation.
+ * Null message/delivery.message explicitly means erased payload; CURRENT requires actual message.
+ * Message deletion/key replacement or payload-bearing message-field updates/redaction atomically
+ * purge message and pending DTO snapshots from all persisted authority histories, retaining only
+ * operation/identity tombstones. Own status/ACK/retry/count writes do not redact payload. Historical
+ * replay never recreates erased payloads, returns fake DTOs or describes a recreated current row.
  */
 data class DirectAckReceipt(
     val key: EntityKey,
@@ -71,7 +104,7 @@ data class DirectAckReceipt(
     val wires: SnapshotList<DirectAckWireReceipt>,
     val bookkeeping: SnapshotList<DirectAckBookkeepingReceipt>,
     val pendingCompletions: SnapshotList<DirectAckPendingReceipt>,
-    val message: MessageDTO,
+    val message: MessageDTO?,
     val delivery: DirectAckDelivery?,
     val permission: DirectAckPermission,
 )
@@ -135,25 +168,44 @@ interface DirectAckAuthority {
     suspend fun activateDirectAckSession(token: SessionToken, requestId: UUID): DirectAckActivationResult
 
     /**
-     * Register a logical claim AND first predicted code before dispatch, binding the actual current
-     * outgoing direct-message incarnation/revision. SEND excludes FAILED/DELIVERED; explicit RESEND
+     * Capture actual outgoing direct-message and optional pending-row incarnations/revisions before
+     * deriving any wire inputs. Complete legitimate timestamp updates, pending preflight bumps and
+     * other generic preparation BEFORE capture. Derive wire text/timestamp/recipient identity from
+     * this issued snapshot, never an earlier unguarded fetch. SEND excludes FAILED/DELIVERED; RESEND
      * preserves existing terminal status while authorizing only this new dispatch's codes. A baseline
-     * DELIVERED row is not this claim's own delivered receipt. Generic external retry remapping happens
-     * before begin and invalidates the previous claim. A new logical claim atomically fences any
-     * previous claim on this incarnation, including a previous explicit resend.
-     * Replay returns a handle only for the same still-current claim; it never recreates invalidated
-     * authority. Logical/wire request tombstones remain until lease revocation/replacement.
-     * A nonnull pendingSendId captures that exact pending-row incarnation/revision before dispatch;
-     * missing or replaced pending state is a non-success, never inferred from matching UUIDs.
+     * DELIVERED row is not this claim's own delivered receipt. A nonnull pendingSendId captures the
+     * actual matching pending row; missing/replaced state is a non-success, not UUID equality proof.
+     * Exact request replay recovers only the original still-current capture, never new row bindings.
+     * Captured/AlreadyCaptured require CURRENT with nonnull message and any expected pending payload;
+     * consumers derive inputs only from that issued snapshot. Erased intent history cannot dispatch.
+     * Pending deletion/replacement/update erases captured pending payload and denies intent replay;
+     * a previously begun attempt is independent and can retain its separately validated late-ACK grant.
      */
-    suspend fun beginDirectAckAttempt(
+    suspend fun captureDirectAckIntent(
         lease: DirectAckLease,
         key: EntityKey,
         requestId: UUID,
-        firstWireRequestId: UUID,
-        predictedAckCode: UInt,
         mode: DirectAckMode,
         pendingSendId: UUID?,
+    ): DirectAckIntentResult
+
+    /** Historical issued inputs only; cannot issue a handle or upgrade permission. */
+    suspend fun inspectDirectAckIntent(lease: DirectAckLease, requestId: UUID): DirectAckIntentObservation
+
+    /**
+     * Register a logical claim AND first predicted code before dispatch by consuming the exact
+     * storage-issued intent. Atomically revalidate its original issuer/lease and message/pending
+     * incarnations/revisions; changed text, same-value UPDATE and identical-DTO delete/recreate
+     * between capture and begin must reject, not bind a new current row. A new logical claim fences
+     * any previous claim on this incarnation. The logical request ID is the intent's request ID.
+     * Replay returns a handle only for the same still-current claim; it never recreates invalidated
+     * authority. Logical/wire request tombstones remain until lease revocation/replacement.
+     * No key-only overload, DTO comparison or post-begin readback can substitute for this capture.
+     */
+    suspend fun beginDirectAckAttempt(
+        intent: DirectAckIntent,
+        firstWireRequestId: UUID,
+        predictedAckCode: UInt,
     ): DirectAckBeginResult
 
     /** Before each additional wire dispatch; preserve all prior codes on this same logical claim. */

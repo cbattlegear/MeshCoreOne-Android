@@ -153,7 +153,9 @@ class RemoteNeighborConfidenceComposeTest {
         compose.onNodeWithText(text(L.remoteNodesStatusPossibleMatchExplanation)).assertDoesNotExist()
     }
 
-    private fun attachAuthenticationWindow() {
+    private fun attachAuthenticationWindow(
+        view: View = requireNotNull(ShadowDialog.getLatestDialog().window).decorView,
+    ): View {
         compose.runOnUiThread {
             Snapshot.sendApplyNotifications()
             Shadows.shadowOf(Looper.getMainLooper()).idle()
@@ -161,7 +163,6 @@ class RemoteNeighborConfidenceComposeTest {
         compose.mainClock.advanceTimeByFrame()
         compose.runOnUiThread {
             val host = activity.get().window.decorView
-            val view = requireNotNull(ShadowDialog.getLatestDialog().window).decorView
             assertTrue(view.isAttachedToWindow)
             view.measure(
                 View.MeasureSpec.makeMeasureSpec(host.width, View.MeasureSpec.AT_MOST),
@@ -178,7 +179,7 @@ class RemoteNeighborConfidenceComposeTest {
             compose.runOnUiThread {
                 Shadows.shadowOf(Looper.getMainLooper()).idle()
                 val host = activity.get().window.decorView
-                val dialog = requireNotNull(ShadowDialog.getLatestDialog().window).decorView
+                val dialog = view
                 fun pending(view: View): List<Boolean> =
                     (if (view is ViewRootForTest) listOf(view.hasPendingMeasureOrLayout) else emptyList()) +
                         (if (view is ViewGroup) (0 until view.childCount).flatMap { pending(view.getChildAt(it)) } else emptyList())
@@ -189,6 +190,7 @@ class RemoteNeighborConfidenceComposeTest {
                 } finally {
                     bitmap.recycle()
                 }
+                return view
                 println("TS07 auth frame=$frame host=${host.width}x${host.height} " +
                     "dialog=${dialog.width}x${dialog.height} requested=${dialog.isLayoutRequested} " +
                     "pendingBefore=$before pendingAfter=${pending(dialog)} hostPending=${pending(host)}")
@@ -302,18 +304,18 @@ class RemoteNeighborConfidenceComposeTest {
                 }
             }
         }
-        attachAuthenticationWindow()
+        val authenticationWindow = attachAuthenticationWindow()
         compose.onNodeWithText("Exact login").performScrollTo().assertIsDisplayed()
         compose.onNodeWithContentDescription("Exact login, ${text(L.remoteNodesStatusPossibleMatch)}").assertDoesNotExist()
         compose.onNodeWithText(text(L.remoteNodesAuthPathHopUnknown)).performScrollTo().assertIsDisplayed()
         openExplanation("Login Alpha")
         dismissExplanation()
         compose.onNodeWithText(text(L.remoteNodesAuthFloodRouting)).performScrollTo().performClick()
-        attachAuthenticationWindow()
+        attachAuthenticationWindow(authenticationWindow)
         compose.onNodeWithText("10 → 20 → 30").assertDoesNotExist()
         compose.onAllNodesWithText(text(L.remoteNodesStatusPossibleMatchTitle)).assertCountEquals(0)
         compose.onNodeWithText(text(L.remoteNodesAuthFloodRouting)).performClick()
-        attachAuthenticationWindow()
+        attachAuthenticationWindow(authenticationWindow)
         assertWarning("Login Alpha")
         compose.onNodeWithText(text(L.remoteNodesCancel)).performClick()
         assertEquals(1, cancelled)

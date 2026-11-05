@@ -447,6 +447,71 @@ class DevicePersistenceAuthorityRoomTest : RoomProcessTest() {
         }
     }
 
+    @Test fun differentAliasRemovalRejectsTheStaleCasBeforeAnExplicitlyReadmittedLastAliasClear() = runTest {
+        var id = 640L
+        for (prefix in listOf("P".repeat(30), "a".repeat(25) + "\u00e9\u754c")) {
+            assertEquals(30, prefix.toByteArray(Charsets.UTF_8).size)
+            val alias = prefix + "-suffix"
+            for ((target, competitor) in listOf(prefix to alias, alias to prefix)) {
+                val original = seedNamedRegions(id++, listOf(prefix, alias, "unrelated"), prefix)
+                val targetChannel = channel(original.radioId, 1, ChannelFloodScope.Region(target))
+                val competitorChannel = channel(original.radioId, 2, ChannelFloodScope.Region(competitor))
+                val unrelatedChannel = channel(original.radioId, 3, ChannelFloodScope.Region("unrelated"))
+                listOf(targetChannel, competitorChannel, unrelatedChannel).forEach { store.saveChannel(it) }
+                val admitted = assertNotNull(store.fetchDeviceWriteSnapshot(original.id))
+                val paused = PausedStore(store)
+                val entered = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                try {
+                    paused.beforeSave = { entered.complete(Unit); release.await() }
+                    val stale = async {
+                        paused.saveDeviceIfUnchanged(
+                            admitted.device.copy(
+                                knownRegions = admitted.device.knownRegions.filterNot { it == target }.snapshot(),
+                            ),
+                            admitted,
+                        )
+                    }
+                    entered.await()
+                    store.removeDeviceKnownRegion(original.radioId, competitor)
+                    val contested = assertNotNull(store.fetchDeviceWriteSnapshot(original.id))
+                    assertEquals(
+                        original.copy(knownRegions = listOf(target, "unrelated").snapshot()),
+                        contested.device,
+                        "The different-target writer must preserve the remaining alias and selected default",
+                    )
+                    assertEquals(admitted.revision + 1, contested.revision)
+                    assertEquals(admitted.authorityRevision, contested.authorityRevision)
+                    release.complete(Unit)
+                    assertFalse(stale.await(), "A stale survivor decision must not pass the atomic Room CAS")
+                    assertEquals(1, paused.rejected)
+                    val unchanged = assertNotNull(store.fetchDeviceWriteSnapshot(original.id))
+                    assertEquals(contested.device, unchanged.device)
+                    assertEquals(contested.revision, unchanged.revision)
+                    assertEquals(contested.authorityRevision, unchanged.authorityRevision)
+                    assertEquals(targetChannel, store.fetchChannel(original.radioId, 1u))
+                    assertEquals(ChannelFloodScope.Inherit, store.fetchChannel(original.radioId, 2u)!!.floodScope)
+                    assertEquals(unrelatedChannel, store.fetchChannel(original.radioId, 3u))
+
+                    // This explicit fresh admission is storage-only, not evidence of a radio ACK.
+                    val readmitted = assertNotNull(store.fetchDeviceWriteSnapshot(original.id))
+                    val cleared = readmitted.device.copy(
+                        knownRegions = listOf("unrelated").snapshot(),
+                        defaultFloodScopeName = null,
+                    )
+                    assertTrue(store.saveDeviceIfUnchanged(cleared, readmitted))
+                    val after = assertNotNull(store.fetchDeviceWriteSnapshot(original.id))
+                    assertEquals(cleared, after.device)
+                    assertEquals(contested.revision + 1, after.revision)
+                    assertEquals(admitted.authorityRevision, after.authorityRevision)
+                    assertEquals(ChannelFloodScope.Inherit, store.fetchChannel(original.radioId, 1u)!!.floodScope)
+                    assertEquals(ChannelFloodScope.Inherit, store.fetchChannel(original.radioId, 2u)!!.floodScope)
+                    assertEquals(unrelatedChannel, store.fetchChannel(original.radioId, 3u))
+                } finally { release.complete(Unit) }
+            }
+        }
+    }
+
     private suspend fun seedNamedRegions(id: Long, regions: List<String>, selected: String): DeviceDTO {
         val original = device(id)
         store.saveDevice(original)

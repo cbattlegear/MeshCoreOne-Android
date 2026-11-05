@@ -358,3 +358,11 @@ All final Room/live/radio/channel values and the original operational token are 
 This tests the editor boundary and explicit caller readmission, not the separately owned actual
 Settings removal queue integration. The Settings producer owns that queue's bounded full replan
 and exact consumer callback wiring. All predecessor assertions and diagnostics remain untouched.
+
+Storage producer `b57abf9d0d5f8e8822fcd5203bb2e19c1c206617` transfers only the new
+`differentAliasRemovalRejectsTheStaleCasBeforeAnExplicitlyReadmittedLastAliasClear` method.
+It proves the existing atomic Room precondition with both different-target alias orders, ASCII
+and mixed thirty-byte UTF-8 prefixes, unchanged rejected-write revision/default/target channel,
+and explicit fresh storage admission. It is not a radio-acknowledgment test. The newer fifteen
+persistence methods are retained unchanged, producing sixteen source methods; the writer class
+has twenty-six source methods. These counts require fresh exact hosted execution.

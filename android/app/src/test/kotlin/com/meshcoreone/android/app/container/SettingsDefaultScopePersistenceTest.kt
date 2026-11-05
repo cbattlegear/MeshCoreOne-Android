@@ -29,6 +29,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.TestScope
@@ -244,7 +245,7 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
             assertEquals("EU868", store.fetchDevice(current.id)!!.defaultFloodScopeName)
             assertEquals("EU868", h.manager.connectedDevice!!.defaultFloodScopeName)
             assertEquals(PacketBuilder.setFloodScope(FloodScope.Region("EU868").scopeKey()), radio.activeScopes.last())
-            assertEquals(listOf("US915", "EU868"), radio.writes, "No invented rollback or successor write")
+            assertEquals(listOf<String?>("US915", "EU868"), radio.writes, "No invented rollback or successor write")
             assertTrue(retired.events.toList().isEmpty())
         }
     }
@@ -252,9 +253,13 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
     @Test fun actualInFlightScopeSubscriberReplacementReconcilesWithoutReportingTheOldActionSuccessful() = runTest {
         withSettings { h, holder, failures, radio ->
             val before = assertNotNull(h.manager.connectedDevice)
+            var rewire: Job? = null
             radio.onWrite = {
                 radio.onWrite = null
-                h.appState.wireServicesIfConnected()
+                // Wiring replaces the Settings subscriber before its first suspension (badge refresh).
+                rewire = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                    h.appState.wireServicesIfConnected()
+                }
             }
             holder.select("EU868")
             h.eventually("replacement consumer acknowledges the actual in-flight radio scope") {
@@ -262,6 +267,7 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
                     !h.sessions.current!!.settingsService.defaultFloodScopeNeedsRecovery &&
                     h.manager.connectedDevice?.defaultFloodScopeName == "EU868"
             }
+            assertNotNull(rewire).join()
             assertNotNull(holder.state.value.errorMessage, "The retired action must not claim success")
             assertEquals("EU868", radio.mode)
             assertEquals(before.copy(defaultFloodScopeName = "EU868"), store.fetchDevice(before.id))
@@ -859,7 +865,7 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
 
     private suspend fun enqueueActualChannel(h: ContainerHarness, device: DeviceDTO, text: String): com.meshcoreone.android.core.model.MessageDTO {
         val sender = h.container.chatsFeature.sender(device.radioId)
-        val message = sender.createPendingChannel(text, 1u, device.radioId, com.meshcoreone.android.core.protocol.model.TextType.PLAIN)
+        val message = sender.createPendingChannel(text, 1u, device.radioId, com.meshcoreone.android.core.model.TextType.PLAIN)
         sender.enqueueChannel(com.meshcoreone.android.core.model.ChannelMessageEnvelope(
             message.id, 1u, false, message.text, message.timestamp, null,
         ))

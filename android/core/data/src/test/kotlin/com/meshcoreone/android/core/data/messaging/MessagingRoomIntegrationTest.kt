@@ -2001,7 +2001,7 @@ class MessagingRoomIntegrationTest {
             phase("stop.end")
             assertEquals(delivered, store.fetchMessage(EntityKey(radio, delivered.id)))
         } catch (failure: Throwable) {
-            phase("failure|${failure.javaClass.name}|${failure.stackTrace.firstOrNull { it.className.startsWith(javaClass.name) }}")
+            phase("failure|${failure.javaClass.name}|${failure.stackTrace.firstOrNull { it.className.startsWith(MessagingRoomIntegrationTest::class.java.name) }}")
             throw failure
         } finally {
             withContext(NonCancellable) {

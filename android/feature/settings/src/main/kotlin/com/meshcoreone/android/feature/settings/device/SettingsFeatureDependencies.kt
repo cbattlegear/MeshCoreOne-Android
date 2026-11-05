@@ -2,6 +2,7 @@
 package com.meshcoreone.android.feature.settings.device
 
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.AdvertLocationPolicy
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RegionSelection
@@ -11,6 +12,8 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.AutoAddConfig
 import com.meshcoreone.android.core.protocol.model.SelfInfo
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 
 /**
  * The connection facts the sections read (Swift `appState.connectedDevice`, `connectionState` and
@@ -19,10 +22,14 @@ import kotlinx.coroutines.flow.StateFlow
 interface SettingsConnection {
     val connectedDevice: StateFlow<DeviceDTO?>
     val connectionState: StateFlow<DeviceConnectionState>
+    val deviceObservations: Flow<SettingsDeviceObservation>
+        get() = connectedDevice.map { SettingsDeviceObservation(it) }
 
     /** `appState.canRunSettingsStartupReads`: false while contact/channel sync still contends for the radio. */
     val startupReadsAllowed: StateFlow<Boolean>
 }
+
+data class SettingsDeviceObservation(val device: DeviceDTO?, val sessionToken: SessionToken? = null)
 
 /** Device GPS capability and switch (mirror of `core:services` `DeviceGPSState`). */
 data class DeviceGpsState(val isSupported: Boolean, val isEnabled: Boolean)
@@ -33,6 +40,9 @@ data class DeviceGpsState(val isSupported: Boolean, val isEnabled: Boolean)
  * `RadioPreset` lives in core:services. Failures stay `SettingsServiceException` (core:contracts).
  */
 interface SettingsRadioPort {
+    val sessionToken: SessionToken? get() = null
+    /** Session-owned uncertainty survives a Settings composition/holder being disposed. */
+    val pathHashModeNeedsRecovery: Boolean get() = false
     suspend fun getSelfInfo(): SelfInfo
     suspend fun setRadioParamsVerified(
         frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte, codingRate: UByte,
@@ -150,6 +160,12 @@ interface DeviceSettingsStorePort {
     suspend fun updateOcvSettings(deviceId: java.util.UUID, preset: String, customArray: String?)
     fun savePreRepeatSettings()
     fun clearPreRepeatSettings()
+    suspend fun savePreRepeatSettings(expectedToken: SessionToken?) {
+        throw UnsupportedOperationException("Awaited Repeat snapshots are not supported")
+    }
+    suspend fun clearPreRepeatSettings(expectedToken: SessionToken?) {
+        throw UnsupportedOperationException("Awaited Repeat snapshots are not supported")
+    }
     fun addKnownRegion(region: String)
     fun removeKnownRegion(region: String)
 }

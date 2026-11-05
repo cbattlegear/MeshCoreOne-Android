@@ -4,6 +4,7 @@ package com.meshcoreone.android.core.services.device
 
 import com.meshcoreone.android.core.contracts.domain.SessionEvent
 import com.meshcoreone.android.core.contracts.domain.SessionEventSubscription
+import com.meshcoreone.android.core.contracts.domain.KnownRegionRemovalOutcome
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException
 import com.meshcoreone.android.core.model.AdvertLocationPolicy
@@ -16,43 +17,78 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.bytes.utf8Prefix
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.event.CoreStats
+import com.meshcoreone.android.core.protocol.event.DefaultFloodScope
 import com.meshcoreone.android.core.protocol.event.PacketStats
 import com.meshcoreone.android.core.protocol.event.RadioStats
 import com.meshcoreone.android.core.protocol.model.*
 import com.meshcoreone.android.core.protocol.session.ConfigurationSessionOps
 import java.time.Instant
-import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.logging.Level
 import java.util.logging.Logger
 import kotlin.math.abs
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 class SettingsService(
     private val session: ConfigurationSessionOps,
     private val context: DeviceSettingsContext,
+    // Observes the admitted boundary outside eventLock, before the first radio command.
+    private val onDefaultScopeAdmission: (() -> Unit)? = null,
 ) {
     private val operationLock = Mutex()
     private val eventLock = Any()
+    private val defaultScopeQueueLock = Any()
+    private var defaultScopeTail = CompletableDeferred(Unit)
     private var subscription: Subscription? = null
+    private var subscriptionRevision = 0L
     private var eventsFinished = false
+    private var pathHashRevision = 0L
+    private var persistedPathHashRevision = 0L
+    private var defaultScopeUncertain = false
+    private var defaultScopeBaselineEstablished = false
+    private var defaultScopeRecovery: kotlinx.coroutines.Deferred<Unit>? = null
+    val sessionToken get() = context.token
+    val defaultFloodScopeNeedsRecovery: Boolean
+        get() = synchronized(eventLock) { defaultScopeUncertain }
+    val pathHashModeNeedsRecovery: Boolean
+        get() = synchronized(eventLock) { pathHashRevision != persistedPathHashRevision }
 
     init {
         context.onClose(::finishEvents)
     }
 
     private inner class Subscription : SessionEventSubscription<SettingsEvent> {
-        val id: UUID = UUID.randomUUID()
         val channel = Channel<SessionEvent<SettingsEvent>>(Channel.UNLIMITED)
+        val pendingPersistence = mutableSetOf<CompletableDeferred<Unit>>()
+        var revision = 0L
         private val collected = AtomicBoolean(false)
         override val events: Flow<SessionEvent<SettingsEvent>> = flow {
             check(collected.compareAndSet(false, true)) { "A settings subscription permits one consumer" }
             try {
                 for (event in channel) {
                     if (!context.isCurrent) break
+                    val persistence = when (val update = event.event) {
+                        is SettingsEvent.PathHashModeUpdated -> update.persistence
+                        is SettingsEvent.DefaultFloodScopeUpdated -> update.persistence
+                        else -> null
+                    }
+                    if (event.event is SettingsEvent.DefaultFloodScopeUpdated &&
+                        synchronized(eventLock) { revision != subscriptionRevision }
+                    ) continue
+                    if (persistence != null && synchronized(eventLock) {
+                            subscription !== this@Subscription || persistence.isCancelled
+                        }) continue
                     emit(event)
                 }
             } finally {
@@ -60,37 +96,69 @@ class SettingsService(
             }
         }
         override fun close() {
-            synchronized(eventLock) {
-                if (subscription?.id == id) subscription = null
-                channel.close()
+            val pending = synchronized(eventLock) { detachLocked() }
+            finishClose(pending)
+        }
+        fun detachLocked(): List<CompletableDeferred<Unit>> {
+            if (subscription === this) subscription = null
+            return pendingPersistence.toList().also { pendingPersistence.clear() }
+        }
+        fun finishClose(pending: List<CompletableDeferred<Unit>>) {
+            channel.close()
+            pending.forEach {
+                it.completeExceptionally(SettingsServiceException(SettingsServiceError.NotConnected))
             }
         }
     }
 
-    fun events(): SessionEventSubscription<SettingsEvent> = synchronized(eventLock) {
+    fun events(): SessionEventSubscription<SettingsEvent> {
         val next = Subscription()
-        if (eventsFinished || !context.isCurrent) {
-            next.channel.close()
-        } else {
-            subscription?.channel?.close()
-            if (subscription != null) Logger.getLogger("MeshCore.SettingsService").fine("Replacing settings subscriber")
-            subscription = next
+        var previous: Subscription? = null
+        var pending = emptyList<CompletableDeferred<Unit>>()
+        val accepted = synchronized(eventLock) {
+            if (eventsFinished || !context.isCurrent) false else {
+                previous = subscription
+                pending = previous?.detachLocked().orEmpty()
+                next.revision = ++subscriptionRevision
+                subscription = next
+                true
+            }
         }
-        next
+        // Closing a channel or completion can resume an unconfined caller that subscribes again.
+        if (accepted) {
+            previous?.finishClose(pending)
+            if (previous != null) Logger.getLogger("MeshCore.SettingsService").fine("Replacing settings subscriber")
+            scheduleDefaultScopeRecovery()
+        } else next.close()
+        return next
     }
 
     fun finishEvents() {
-        synchronized(eventLock) {
+        val (previous, pending) = synchronized(eventLock) {
             eventsFinished = true
-            subscription?.channel?.close()
-            subscription = null
+            val previous = subscription
+            previous to previous?.detachLocked().orEmpty()
         }
+        previous?.finishClose(pending)
     }
 
-    private fun publish(event: SettingsEvent) {
+    private fun publish(
+        event: SettingsEvent,
+        completion: CompletableDeferred<Unit>? = null,
+        owner: Subscription? = null,
+    ) {
         context.requireCurrent()
         synchronized(eventLock) {
-            subscription?.channel?.trySend(SessionEvent(context.token, event))?.getOrThrow()
+            if (completion == null) {
+                subscription?.channel?.trySend(SessionEvent(context.token, event))?.getOrThrow()
+            } else {
+                if (eventsFinished || subscription !== owner) {
+                    throw SettingsServiceException(SettingsServiceError.NotConnected)
+                }
+                val target = checkNotNull(owner)
+                target.pendingPersistence.add(completion)
+                target.channel.trySend(SessionEvent(context.token, event)).getOrThrow()
+            }
         }
     }
 
@@ -195,32 +263,246 @@ class SettingsService(
     suspend fun setPathHashMode(mode: UByte) = operation { configuration { setPathHashMode(mode) } }
     suspend fun setPathHashModeVerified(mode: UByte): UByte = operation { writePathHashAndVerify(mode) }
 
-    private suspend fun writePathHashAndVerify(mode: UByte): UByte {
+    /** Normal Settings awaits the event consumer's durable write, outside the radio-operation lock. */
+    suspend fun setPathHashModePersisted(mode: UByte): UByte = context.operation {
+        val revision = acknowledged { completion, owner ->
+            writePathHashAndVerify(mode, completion, owner)
+            synchronized(eventLock) { pathHashRevision }
+        }
+        synchronized(eventLock) {
+            persistedPathHashRevision = maxOf(persistedPathHashRevision, revision)
+        }
+        mode
+    }
+
+    private suspend fun <T> acknowledged(
+        defaultScope: Boolean = false,
+        action: suspend (CompletableDeferred<Unit>, Subscription) -> T,
+    ): T {
+        val completion = CompletableDeferred<Unit>()
+        val owner = synchronized(eventLock) {
+            subscription?.takeUnless { eventsFinished }
+                ?: throw SettingsServiceException(SettingsServiceError.NotConnected)
+        }
+        try {
+            val result = operation {
+                synchronized(eventLock) {
+                    if (eventsFinished || subscription !== owner) {
+                        throw SettingsServiceException(SettingsServiceError.NotConnected)
+                    }
+                    if (defaultScope) defaultScopeUncertain = true
+                }
+                if (defaultScope) onDefaultScopeAdmission?.invoke()
+                action(completion, owner)
+            }
+            completion.await()
+            context.requireCurrent()
+            return result
+        } finally {
+            synchronized(eventLock) { owner.pendingPersistence.remove(completion) }
+            completion.cancel()
+        }
+    }
+
+    private suspend fun writePathHashAndVerify(
+        mode: UByte,
+        completion: CompletableDeferred<Unit>? = null,
+        owner: Subscription? = null,
+    ): UByte {
+        synchronized(eventLock) { pathHashRevision = Math.incrementExact(pathHashRevision) }
         configuration { setPathHashMode(mode) }
         val actual = configuration { queryDevice() }.pathHashMode
         if (actual != mode) verification("pathHashMode=$mode", "pathHashMode=$actual")
-        publish(SettingsEvent.PathHashModeUpdated(mode))
+        publish(SettingsEvent.PathHashModeUpdated(mode, completion), completion, owner)
         return mode
     }
 
-    suspend fun getDefaultFloodScope(): String? = operation { readDefaultFloodScope() }
+    suspend fun getDefaultFloodScope(): String? = defaultScopeOperation { operation { readDefaultFloodScope() } }
 
     private suspend fun readDefaultFloodScope(): String? {
+        synchronized(eventLock) { defaultScopeBaselineEstablished = false }
         val actual = configuration { getDefaultFloodScope() }?.name
         publish(SettingsEvent.DefaultFloodScopeUpdated(actual))
         return actual
     }
 
-    suspend fun setDefaultFloodScopeVerified(name: String?): String? = operation {
-        val expected = name?.takeIf { it.isNotEmpty() }?.utf8Prefix(ProtocolLimits.MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES)
+    suspend fun setDefaultFloodScopeVerified(name: String?): String? = defaultScopeOperation {
+        operation { writeDefaultFloodScopeAndVerify(name) }
+    }
+
+    /** Dependent channel routing and region edits must not sample an uncertain cached default. */
+    suspend fun <T> withPersistedDefaultFloodScope(action: suspend () -> T): T {
+        val caller = currentCoroutineContext()
+        return defaultScopeOperation {
+            if (!synchronized(eventLock) { defaultScopeBaselineEstablished }) {
+                val supported = operation { configuration { queryDevice() }.firmwareVersion >= 11u }
+                if (supported) readDefaultFloodScopePersisted()
+                else synchronized(eventLock) { defaultScopeBaselineEstablished = true }
+            } else if (defaultFloodScopeNeedsRecovery) readDefaultFloodScopePersisted()
+            // Reconciliation is connection-owned; dependent transmission still belongs to its caller.
+            withContext(caller) {
+                context.requireCurrent()
+                action()
+            }
+        }
+    }
+
+    suspend fun setDefaultFloodScopePersisted(name: String?, currentDevice: () -> DeviceDTO?): String? = defaultScopeOperation {
+        val device = currentDevice() ?: throw SettingsServiceException(SettingsServiceError.NotConnected)
+        if (!name.isNullOrEmpty() && name !in device.knownRegions) {
+            verification("knownRegion=$name", "knownRegions=${device.knownRegions.joinToString()}")
+        }
+        persistDefaultFloodScope(name)
+    }
+
+    /** Queue before sampling live/radio state; never enter the editor until the radio clear is acknowledged. */
+    suspend fun removeKnownRegionPersisted(
+        region: String,
+        currentDevice: () -> DeviceDTO?,
+        remove: suspend (String?) -> KnownRegionRemovalOutcome,
+    ) = defaultScopeOperation {
+        repeat(3) {
+            val device = currentDevice() ?: throw SettingsServiceException(SettingsServiceError.NotConnected)
+            var acknowledgedName: String? = null
+            if (device.supportsDefaultFloodScope) {
+                // Every replan rebases live state from the authoritative row through the radio ACK.
+                val actual = readDefaultFloodScopePersisted()
+                acknowledgedName = actual?.name
+                val radioRegion = defaultFloodScopeName(region)
+                val latest = currentDevice() ?: throw SettingsServiceException(SettingsServiceError.NotConnected)
+                val anotherAlias = latest.knownRegions.any { it != region && defaultFloodScopeName(it) == radioRegion }
+                val matchesRadio = radioRegion != null && actual?.name == radioRegion
+                val retryClear = actual == null &&
+                    (device.defaultFloodScopeName == region || (radioRegion != null && device.defaultFloodScopeName == radioRegion))
+                if (!anotherAlias && (matchesRadio || retryClear)) {
+                    persistDefaultFloodScope(null)
+                    acknowledgedName = null
+                }
+            }
+            context.requireCurrent()
+            when (remove(acknowledgedName)) {
+                KnownRegionRemovalOutcome.Removed -> {
+                    context.requireCurrent()
+                    return@defaultScopeOperation
+                }
+                KnownRegionRemovalOutcome.Retired -> throw SettingsServiceException(SettingsServiceError.NotConnected)
+                KnownRegionRemovalOutcome.NeedsScopeReconciliation -> Unit
+            }
+        }
+        verification("stable region removal", "scope changed during every commit attempt")
+    }
+
+    private suspend fun <T> defaultScopeOperation(action: suspend () -> T): T {
+        currentCoroutineContext().ensureActive()
+        val admission = AtomicInteger(0)
+        val task = context.submit(start = CoroutineStart.LAZY) {
+            val finished = CompletableDeferred<Unit>()
+            val previous = synchronized(defaultScopeQueueLock) {
+                defaultScopeTail.also { defaultScopeTail = finished }
+            }
+            var turnAcquired = false
+            try {
+                previous.await()
+                turnAcquired = true
+                if (!admission.compareAndSet(0, 1)) throw CancellationException("Queued scope action withdrawn")
+                context.requireCurrent()
+                action()
+            } finally {
+                if (turnAcquired || previous.isCompleted) finished.complete(Unit)
+                else previous.invokeOnCompletion { finished.complete(Unit) }
+            }
+        }
+        return context.await(task, onCancellation = {
+            if (admission.compareAndSet(0, 2)) task.cancel()
+            else task.invokeOnCompletion { failure ->
+                if (failure != null && failure !is CancellationException) {
+                    Logger.getLogger("MeshCore.SettingsService").log(Level.WARNING, "Detached scope action failed", failure)
+                }
+            }
+        })
+    }
+
+    private suspend fun persistDefaultFloodScope(name: String?): String? {
+        val expected = defaultFloodScopeName(name)
+        val actual = acknowledged(defaultScope = true) { completion, owner ->
+            configuration {
+                if (expected == null) setDefaultFloodScope("", FloodScope.Disabled)
+                else setDefaultFloodScope(expected, FloodScope.Region(expected))
+            }
+            val value = configuration { getDefaultFloodScope() }
+            publish(SettingsEvent.DefaultFloodScopeUpdated(value?.name, completion), completion, owner)
+            value
+        }
+        verifyDefaultScopeKey(actual)
+        synchronized(eventLock) {
+            defaultScopeUncertain = false
+            defaultScopeBaselineEstablished = true
+        }
+        if (actual?.name != expected) verification(expected ?: "(cleared)", actual?.name ?: "(cleared)")
+        return actual?.name
+    }
+
+    private suspend fun readDefaultFloodScopePersisted(): DefaultFloodScope? {
+        val actual = acknowledged(defaultScope = true) { completion, owner ->
+            val value = configuration { getDefaultFloodScope() }
+            publish(SettingsEvent.DefaultFloodScopeUpdated(value?.name, completion), completion, owner)
+            value
+        }
+        verifyDefaultScopeKey(actual)
+        synchronized(eventLock) {
+            defaultScopeUncertain = false
+            defaultScopeBaselineEstablished = true
+        }
+        return actual
+    }
+
+    private fun verifyDefaultScopeKey(actual: DefaultFloodScope?) {
+        if (actual != null && actual.scopeKey != FloodScope.Region(actual.name).scopeKey()) {
+            verification("scopeKey(region=${actual.name})", "different scope key")
+        }
+    }
+
+    private fun scheduleDefaultScopeRecovery() {
+        var attemptedRevision = 0L
+        val task = synchronized(eventLock) {
+            if (!defaultScopeUncertain || defaultScopeRecovery != null || subscription == null || !context.isCurrent) return
+            attemptedRevision = subscriptionRevision
+            context.submit(start = CoroutineStart.LAZY) {
+                defaultScopeOperation {
+                    attemptedRevision = synchronized(eventLock) { subscriptionRevision }
+                    if (defaultFloodScopeNeedsRecovery) readDefaultFloodScopePersisted()
+                }
+            }.also { defaultScopeRecovery = it }
+        }
+        task.invokeOnCompletion { failure ->
+            val retry = synchronized(eventLock) {
+                defaultScopeRecovery = null
+                defaultScopeUncertain && subscription != null && subscriptionRevision != attemptedRevision
+            }
+            if (failure != null && failure !is CancellationException) {
+                Logger.getLogger("MeshCore.SettingsService").log(Level.WARNING, "Default scope reconciliation failed", failure)
+            }
+            if (retry) scheduleDefaultScopeRecovery()
+        }
+        task.start()
+    }
+
+    private suspend fun writeDefaultFloodScopeAndVerify(name: String?): String? {
+        synchronized(eventLock) { defaultScopeBaselineEstablished = false }
+        val expected = defaultFloodScopeName(name)
         configuration {
             if (expected == null) setDefaultFloodScope("", FloodScope.Disabled)
             else setDefaultFloodScope(expected, FloodScope.Region(expected))
         }
-        val actual = readDefaultFloodScope()
-        if (actual != expected) verification(expected ?: "(cleared)", actual ?: "(cleared)")
-        actual
+        val actual = configuration { getDefaultFloodScope() }
+        publish(SettingsEvent.DefaultFloodScopeUpdated(actual?.name))
+        verifyDefaultScopeKey(actual)
+        if (actual?.name != expected) verification(expected ?: "(cleared)", actual?.name ?: "(cleared)")
+        return actual?.name
     }
+
+    private fun defaultFloodScopeName(name: String?): String? =
+        name?.takeIf { it.isNotEmpty() }?.utf8Prefix(ProtocolLimits.MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES)
 
     suspend fun getStatsCore(): CoreStats = operation { configuration { getStatsCore() } }
     suspend fun getStatsRadio(): RadioStats = operation { configuration { getStatsRadio() } }

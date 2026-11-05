@@ -7,6 +7,8 @@ import com.meshcoreone.android.app.navigation.ChatSelection
 import com.meshcoreone.android.app.navigation.NavigationCoordinator
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
+import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import com.meshcoreone.android.core.model.ChatConversationID
 import com.meshcoreone.android.core.model.ContactDTO
@@ -536,24 +538,60 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
             try {
                 subscription.events.collect { wrapped ->
                     when (val event = wrapped.event) {
-                        is SettingsEvent.DeviceUpdated -> connection.updateDevice(event.info, event.appliedRadioPresetID)
-                        is SettingsEvent.AutoAddConfigUpdated -> {
-                            connection.updateAutoAddConfig(event.config)
-                            // Clear the storage-full flag when overwrite-oldest is enabled.
-                            if ((event.config.bitmask and AutoAddConfig.OVERWRITE_OLDEST_BIT) != 0.toUByte()) {
-                                connectionUI.isNodeStorageFull = false
+                        is SettingsEvent.DeviceUpdated -> {
+                            val presetId = event.appliedRadioPresetID
+                            persistSessionDeviceEdit(if (presetId == null) "device settings" else "radio preset") {
+                                connection.updateDevice(event.info, presetId, wrapped.token)
                             }
                         }
-                        is SettingsEvent.ClientRepeatUpdated -> connection.updateClientRepeat(event.enabled)
-                        is SettingsEvent.PathHashModeUpdated -> connection.updatePathHashMode(event.mode)
-                        is SettingsEvent.AllowedRepeatFreqUpdated -> connection.setAllowedRepeatFreqRanges(event.ranges)
-                        is SettingsEvent.DefaultFloodScopeUpdated -> connection.updateDefaultFloodScopeName(event.name)
+                        is SettingsEvent.AutoAddConfigUpdated -> {
+                            persistSessionDeviceEdit("auto-add") {
+                                val accepted = connection.updateAutoAddConfig(event.config, wrapped.token)
+                                if (accepted && (event.config.bitmask and AutoAddConfig.OVERWRITE_OLDEST_BIT) != 0.toUByte()) {
+                                    connectionUI.isNodeStorageFull = false
+                                }
+                                accepted
+                            }
+                        }
+                        is SettingsEvent.ClientRepeatUpdated -> persistSessionDeviceEdit("client repeat") {
+                            connection.updateClientRepeat(event.enabled, wrapped.token)
+                        }
+                        is SettingsEvent.PathHashModeUpdated -> {
+                            persistSessionDeviceEdit("path hash", event.persistence) {
+                                connection.updatePathHashMode(event.mode, wrapped.token)
+                            }
+                        }
+                        is SettingsEvent.AllowedRepeatFreqUpdated -> connection.setAllowedRepeatFreqRanges(event.ranges, wrapped.token)
+                        is SettingsEvent.DefaultFloodScopeUpdated -> persistSessionDeviceEdit("default scope", event.persistence) {
+                            connection.updateDefaultFloodScopeName(event.name, wrapped.token)
+                        }
                     }
                 }
             } finally {
                 subscription.close()
             }
         })
+    }
+
+    private suspend fun persistSessionDeviceEdit(
+        operation: String,
+        completion: CompletableDeferred<Unit>? = null,
+        edit: suspend () -> Boolean,
+    ) {
+        try {
+            if (edit()) {
+                completion?.complete(Unit)
+            } else {
+                completion?.completeExceptionally(SettingsServiceException(SettingsServiceError.NotConnected))
+                logger.fine("Ignored $operation update from a retired session")
+            }
+        } catch (cancelled: CancellationException) {
+            completion?.completeExceptionally(cancelled)
+            throw cancelled
+        } catch (failure: Exception) {
+            completion?.completeExceptionally(failure)
+            logger.log(Level.WARNING, "Failed to persist $operation update", failure)
+        }
     }
 
     private fun wireDeviceUpdateCallbacks(session: AppSession) {

@@ -3,6 +3,9 @@ package com.meshcoreone.android.feature.settings.device
 
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException
+import com.meshcoreone.android.core.contracts.domain.SessionToken
+import com.meshcoreone.android.core.contracts.domain.ProcessEpoch
+import com.meshcoreone.android.core.contracts.domain.Generation
 import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings
 import com.meshcoreone.android.core.model.OCVPreset
@@ -16,13 +19,16 @@ import com.meshcoreone.android.feature.settings.device.support.FakeStore
 import com.meshcoreone.android.feature.settings.device.support.TestScheduler
 import com.meshcoreone.android.feature.settings.device.support.device
 import java.util.Locale
+import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.MutableStateFlow
 
 class PathHashModeStateHolderTest {
     private val scheduler = TestScheduler()
@@ -30,6 +36,18 @@ class PathHashModeStateHolderTest {
     private val service = FakeSettingsPort()
     private val holder = PathHashModeStateHolder(scheduler.environment(), connection, { service })
     private val state get() = holder.state.value
+
+    @Test
+    fun `teardown acquisition failure cannot escape a path hash click or bind a retry to a successor`() {
+        val bound = PathHashModeStateHolder(scheduler.environment(), connection, { throw SettingsNotConnectedException() })
+        bound.start(); scheduler.runCurrent()
+        bound.onModeSelected(2u)
+        scheduler.runCurrent()
+        assertFalse(bound.state.value.isApplying)
+        assertTrue(bound.state.value.errorMessage != null)
+        assertTrue(service.calls.isEmpty())
+        bound.stop()
+    }
 
     @Test
     fun `shows the radio's mode and writes a new pick verified`() {
@@ -75,6 +93,85 @@ class PathHashModeStateHolderTest {
         scheduler.runCurrent()
         assertEquals(UiText.Verbatim("Device not connected"), orphan.state.value.errorMessage)
         assertEquals(1u.toUByte(), orphan.state.value.selectedMode)
+    }
+
+    @Test
+    fun `persistence failure is visible and reselecting a radio-reported failed mode retries`() {
+        holder.start(); scheduler.runCurrent()
+        service.failNext("setPathHashModeVerified", IllegalStateException("Storage write failed"))
+        holder.onModeSelected(2u)
+        scheduler.runCurrent()
+        assertEquals(UiText.Verbatim("Storage write failed"), state.errorMessage)
+        connection.deviceFlow.value = connection.deviceFlow.value!!.copy(pathHashMode = 2u)
+        scheduler.runCurrent()
+        holder.onModeSelected(2u)
+        scheduler.runCurrent()
+        assertEquals(2, service.calls.size)
+        assertNull(state.errorMessage)
+        assertFalse(state.isApplying)
+    }
+
+    @Test
+    fun `after persistence failure explicitly selecting the previous mode restores the radio`() {
+        holder.start(); scheduler.runCurrent()
+        service.failNext("setPathHashModeVerified", IllegalStateException("Storage write failed"))
+        holder.onModeSelected(2u)
+        scheduler.runCurrent()
+        assertEquals(1u.toUByte(), state.displayedMode)
+        holder.onModeSelected(1u)
+        scheduler.runCurrent()
+        assertEquals(listOf("setPathHashModeVerified(2)", "setPathHashModeVerified(1)"), service.calls)
+        assertNull(state.errorMessage)
+        holder.onModeSelected(1u)
+        scheduler.runCurrent()
+        assertEquals(2, service.calls.size)
+    }
+
+    @Test
+    fun `the action stays busy until persistence acknowledges and ignores another selection`() {
+        val persistence = CompletableDeferred<Unit>()
+        service.onCall = { persistence.await() }
+        holder.start(); scheduler.runCurrent()
+        holder.onModeSelected(2u)
+        scheduler.runCurrent()
+        assertTrue(state.isApplying)
+        holder.onModeSelected(0u)
+        scheduler.runCurrent()
+        assertEquals(1, service.calls.size)
+        persistence.complete(Unit)
+        scheduler.runCurrent()
+        assertFalse(state.isApplying)
+        assertEquals(2u.toUByte(), state.displayedMode)
+    }
+
+    @Test
+    fun `retry retains the original service instead of rebinding to a successor`() {
+        val successor = FakeSettingsPort()
+        var current = service
+        val bound = PathHashModeStateHolder(scheduler.environment(), connection, { current })
+        bound.start(); scheduler.runCurrent()
+        service.failNext("setPathHashModeVerified", SettingsServiceException(SettingsServiceError.SendFailed))
+        bound.onModeSelected(2u)
+        scheduler.runCurrent()
+        current = successor
+        bound.retry.retry()
+        scheduler.runCurrent()
+        assertEquals(2, service.calls.size)
+        assertTrue(successor.calls.isEmpty())
+    }
+
+    @Test
+    fun `cancelled waiting leaves a recoverable selection rather than assuming radio rollback`() {
+        holder.start(); scheduler.runCurrent()
+        service.failNext("setPathHashModeVerified", CancellationException("Waiting cancelled after radio verification"))
+        holder.onModeSelected(2u)
+        scheduler.runCurrent()
+        assertFalse(state.isApplying)
+        assertEquals(1u.toUByte(), state.displayedMode)
+        assertNull(state.errorMessage)
+        holder.onModeSelected(1u)
+        scheduler.runCurrent()
+        assertEquals(listOf("setPathHashModeVerified(2)", "setPathHashModeVerified(1)"), service.calls)
     }
 }
 
@@ -348,6 +445,137 @@ class DefaultFloodScopeStateHolderTest {
         scheduler.runCurrent()
         assertTrue(state.errorMessage != null)
         assertFalse(state.isApplying)
+    }
+
+    @Test
+    fun `scope stays busy through acknowledgment and rejects an overlapping selection`() {
+        val release = CompletableDeferred<Unit>()
+        val calls = mutableListOf<String?>()
+        val held = object : SettingsRadioPort by service {
+            override suspend fun setDefaultFloodScopeVerified(name: String?): String? {
+                calls += name
+                release.await()
+                return name
+            }
+        }
+        val bound = DefaultFloodScopeStateHolder(scheduler.environment(), connection, { held }, discovery, store)
+        bound.start(); scheduler.runCurrent()
+        bound.select("zone 2")
+        scheduler.runCurrent()
+        assertTrue(bound.state.value.isApplying)
+        bound.select(null)
+        scheduler.runCurrent()
+        assertEquals(listOf<String?>("zone 2"), calls)
+        release.complete(Unit)
+        scheduler.runCurrent()
+        assertFalse(bound.state.value.isApplying)
+        assertNull(bound.state.value.errorMessage)
+        bound.stop()
+    }
+
+    @Test
+    fun `scope retry keeps the original service instead of acquiring a successor`() {
+        val successor = FakeSettingsPort()
+        var current = service
+        val bound = DefaultFloodScopeStateHolder(scheduler.environment(), connection, { current }, discovery, store)
+        bound.start(); scheduler.runCurrent()
+        service.failNext("setDefaultFloodScopeVerified", SettingsServiceException(SettingsServiceError.SendFailed))
+        bound.select("Alpha")
+        scheduler.runCurrent()
+        assertTrue(bound.retryAlertState.value.isPresented)
+        current = successor
+        bound.retry.retry()
+        scheduler.runCurrent()
+        assertEquals(2, service.calls.size)
+        assertTrue(successor.calls.isEmpty())
+        assertFalse(bound.state.value.isApplying)
+        bound.stop()
+    }
+
+    @Test
+    fun `initial scope click captures its service before the action dispatcher executes`() {
+        val successor = FakeSettingsPort()
+        var current = service
+        val bound = DefaultFloodScopeStateHolder(scheduler.environment(), connection, { current }, discovery, store)
+        bound.start(); scheduler.runCurrent()
+        bound.select("Alpha")
+        current = successor
+        scheduler.runCurrent()
+        assertEquals(listOf("setDefaultFloodScopeVerified(Alpha)"), service.calls)
+        assertTrue(successor.calls.isEmpty())
+        bound.stop()
+    }
+
+    @Test
+    fun `a stale displayed scope cannot acquire a successor even for the same device`() {
+        val first = SessionToken(ProcessEpoch(UUID(0, 1)), Generation(1), connection.deviceFlow.value!!.radioId)
+        val second = first.copy(generation = Generation(2))
+        val observations = MutableStateFlow(SettingsDeviceObservation(connection.deviceFlow.value, first))
+        val observed = object : SettingsConnection by connection {
+            override val deviceObservations = observations
+        }
+        val firstService = object : SettingsRadioPort by service { override val sessionToken = first }
+        val successor = FakeSettingsPort()
+        val secondService = object : SettingsRadioPort by successor { override val sessionToken = second }
+        var current: SettingsRadioPort = firstService
+        val bound = DefaultFloodScopeStateHolder(scheduler.environment(), observed, { current }, discovery, store)
+        bound.start(); scheduler.runCurrent()
+        current = secondService
+        bound.select("Alpha")
+        scheduler.runCurrent()
+        assertTrue(service.calls.isEmpty())
+        assertTrue(successor.calls.isEmpty())
+        assertTrue(bound.state.value.errorMessage != null)
+        observations.value = SettingsDeviceObservation(connection.deviceFlow.value, second)
+        scheduler.runCurrent()
+        bound.select("Alpha", first)
+        scheduler.runCurrent()
+        assertTrue(successor.calls.isEmpty(), "A retained S1 row callback cannot adopt the refreshed S2 observation")
+        bound.select("Alpha")
+        scheduler.runCurrent()
+        assertEquals(listOf("setDefaultFloodScopeVerified(Alpha)"), successor.calls)
+        assertNull(bound.state.value.errorMessage)
+        bound.stop()
+    }
+
+    @Test
+    fun `long and mixed aliases have one radio identity while preserving every full name`() {
+        val prefix = "é".repeat(15)
+        val aliases = listOf(prefix + "two", prefix, prefix + "one")
+        val state = DefaultFloodScopeState(device = device(knownRegions = aliases, defaultFloodScopeName = prefix))
+        assertEquals(mapOf(prefix to listOf(prefix, prefix + "one", prefix + "two")), state.regionGroups)
+        assertEquals(prefix, state.currentScope)
+        assertEquals(aliases.size, state.regionGroups.values.sumOf { it.size })
+    }
+
+    @Test
+    fun `restored raw defaults select their normalized identity at multibyte boundaries`() {
+        for ((raw, normalized) in listOf(
+            "A".repeat(30) + "suffix" to "A".repeat(30),
+            "é".repeat(15) + "suffix" to "é".repeat(15),
+            "A".repeat(29) + "é-tail" to "A".repeat(29),
+        )) {
+            val restored = DefaultFloodScopeState(device = device(
+                knownRegions = listOf(raw, normalized), defaultFloodScopeName = raw,
+            ))
+            assertEquals(normalized, restored.currentScope)
+            assertEquals(setOf(normalized), restored.regionGroups.keys)
+            assertEquals(raw, restored.device!!.defaultFloodScopeName, "Rendering must not rewrite restored storage")
+        }
+    }
+
+    @Test
+    fun `teardown during service acquisition is routed through the scope action instead of escaping the click`() {
+        val bound = DefaultFloodScopeStateHolder(
+            scheduler.environment(), connection, { throw SettingsNotConnectedException() }, discovery, store,
+        )
+        bound.start(); scheduler.runCurrent()
+        bound.select("Alpha")
+        scheduler.runCurrent()
+        assertFalse(bound.state.value.isApplying)
+        assertTrue(bound.state.value.errorMessage != null)
+        assertTrue(service.calls.isEmpty())
+        bound.stop()
     }
 
     @Test

@@ -33,6 +33,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.toggleableState
 import androidx.compose.ui.state.ToggleableState
@@ -144,11 +145,17 @@ internal fun <T> DropdownRow(
 }
 
 @Composable
-internal fun ActionRow(text: UiText, enabled: Boolean, onClick: () -> Unit, destructive: Boolean = false, detail: UiText? = null) {
+internal fun ActionRow(
+    text: UiText, enabled: Boolean, onClick: () -> Unit, destructive: Boolean = false, detail: UiText? = null,
+    isSelected: Boolean? = null,
+) {
     val label = uiString(text)
     Row(
         Modifier.fillMaxWidth().sharedTouchTarget().clickable(enabled = enabled, role = Role.Button, onClick = onClick)
-            .semantics(mergeDescendants = true) { contentDescription = label },
+            .semantics(mergeDescendants = true) {
+                contentDescription = label
+                isSelected?.let { selected = it }
+            },
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text(label, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge,

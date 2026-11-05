@@ -3,11 +3,14 @@
 package com.meshcoreone.android.feature.settings.device
 
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RegionSelection
 import com.meshcoreone.android.core.ui.UiText
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -29,6 +32,7 @@ data class RadioPresetState(
     val isApplyingRepeat: Boolean = false,
     val showRepeatConfirmation: Boolean = false,
     val errorMessage: UiText? = null,
+    val sessionToken: SessionToken? = null,
 ) {
     /** "Custom" is offered only in repeat mode or while the radio matches no preset. */
     val showsCustomRow: Boolean get() = isRepeatEnabled || currentPresetId == null
@@ -69,8 +73,11 @@ class RadioPresetStateHolder(
         observing = env.scope.launch {
             launch { connection.connectionState.collect { s -> mutable.update { it.copy(connectionState = s) } } }
             launch { runStartupReads() }
-            combine(connection.connectedDevice, regions.selection) { device, region -> device to region }
-                .collect { (device, region) -> onInputs(device, region) }
+            combine(connection.deviceObservations, regions.selection) { observed, region -> observed to region }
+                .collect { (observed, region) ->
+                    mutable.update { it.copy(sessionToken = observed.sessionToken) }
+                    onInputs(observed.device, region)
+                }
         }
     }
 
@@ -141,12 +148,14 @@ class RadioPresetStateHolder(
 
     /** The user picked a preset; "Custom" (null) never writes. */
     fun onPresetSelected(id: String?) {
+        if (mutable.value.isApplying || mutable.value.isApplyingRepeat || writeGate.inFlight.value) return
         mutable.update { it.copy(selectedPresetId = id) }
         if (id != null) applyPreset(id)
     }
 
     /** The user tapped the Repeat Mode switch. Turning it on waits for the confirmation dialog. */
     fun onRepeatToggled(enabled: Boolean) {
+        if (mutable.value.isApplying || mutable.value.isApplyingRepeat || writeGate.inFlight.value) return
         if (enabled) mutable.update { it.copy(showRepeatConfirmation = true) } else disableRepeatMode()
     }
 
@@ -196,32 +205,76 @@ class RadioPresetStateHolder(
     }
 
     private fun enableRepeatMode() {
-        val presetId = mutable.value.device?.let { catalog.nearestRepeatPreset(it.frequency) }?.id ?: return
+        if (mutable.value.isApplying || mutable.value.isApplyingRepeat || writeGate.inFlight.value) return
+        val device = mutable.value.device ?: return
+        val presetId = catalog.nearestRepeatPreset(device.frequency)?.id ?: return
+        withRepeatTarget { service ->
+            startEnableRepeat(device, service, presetId, snapshotSaved = device.preRepeatFrequency != null)
+        }
+    }
+
+    private fun withRepeatTarget(action: (SettingsRadioPort) -> Unit) {
+        try {
+            val service = settingsService() ?: throw SettingsNotConnectedException()
+            val expected = mutable.value.sessionToken
+            if (expected != null && service.sessionToken != expected) throw SettingsNotConnectedException()
+            action(service)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            mutable.update { it.copy(errorMessage = env.describe(failure)) }
+        }
+    }
+
+    private fun startEnableRepeat(device: DeviceDTO, service: SettingsRadioPort, presetId: String, snapshotSaved: Boolean) {
+        mutable.update { it.copy(isApplyingRepeat = true, errorMessage = null) }
         writeGate.set(true)
-        // Persist the current radio settings so Repeat Mode can be undone.
-        deviceStore.savePreRepeatSettings()
-        setRepeatToggle(true)
-        mutable.update { it.copy(selectedPresetId = presetId) }
-        applyPreset(presetId)
+        env.scope.launch {
+            var saved = snapshotSaved
+            try {
+                if (!saved) {
+                    deviceStore.savePreRepeatSettings(service.sessionToken)
+                    saved = true
+                }
+                currentCoroutineContext().ensureActive()
+                setRepeatToggle(true)
+                mutable.update { it.copy(selectedPresetId = presetId) }
+                val frequency = catalog.repeatFrequencyKHz(presetId) ?: throw SettingsNotConnectedException()
+                service.setRadioParamsVerified(
+                    frequency, device.bandwidth, device.spreadingFactor, device.codingRate, clientRepeat = true,
+                )
+                retryAlert.reset()
+            } catch (cancelled: CancellationException) {
+                setRepeatToggle(connection.connectedDevice.value?.clientRepeat ?: false)
+                throw cancelled
+            } catch (failure: Exception) {
+                setRepeatToggle(connection.connectedDevice.value?.clientRepeat ?: false)
+                val message = failures.route(failure) { startEnableRepeat(device, service, presetId, saved) }
+                mutable.update { it.copy(selectedPresetId = currentMatchingPresetId(), errorMessage = message ?: it.errorMessage) }
+            } finally {
+                releaseRepeat()
+            }
+        }
     }
 
     private fun disableRepeatMode() {
         val device = mutable.value.device ?: return
-        // The switch already shows off while the write runs; a failure puts it back.
-        mutable.update { it.copy(isApplyingRepeat = true, isRepeatEnabled = false) }
-        writeGate.set(true)
-        env.scope.launch { runDisableRepeat(device) }
+        withRepeatTarget { service ->
+            // The switch already shows off while the write runs; a failure puts it back.
+            mutable.update { it.copy(isApplyingRepeat = true, isRepeatEnabled = false, errorMessage = null) }
+            writeGate.set(true)
+            env.scope.launch { runDisableRepeat(device, service) }
+        }
     }
 
-    private suspend fun runDisableRepeat(device: DeviceDTO) {
+    private suspend fun runDisableRepeat(device: DeviceDTO, service: SettingsRadioPort) {
         try {
-            val service = settingsService() ?: throw SettingsNotConnectedException()
             service.setRadioParamsVerified(
                 device.preRepeatFrequency ?: device.frequency, device.preRepeatBandwidth ?: device.bandwidth,
                 device.preRepeatSpreadingFactor ?: device.spreadingFactor, device.preRepeatCodingRate ?: device.codingRate,
                 clientRepeat = false,
             )
-            deviceStore.clearPreRepeatSettings()
+            deviceStore.clearPreRepeatSettings(service.sessionToken)
             mutable.update { it.copy(selectedPresetId = it.currentPresetId) }
             retryAlert.reset()
         } catch (cancelled: CancellationException) {
@@ -229,7 +282,11 @@ class RadioPresetStateHolder(
             throw cancelled
         } catch (error: Exception) {
             setRepeatToggle(true)
-            val message = failures.route(error) { disableRepeatMode() }
+            val message = failures.route(error) {
+                mutable.update { it.copy(isApplyingRepeat = true, errorMessage = null) }
+                writeGate.set(true)
+                env.scope.launch { runDisableRepeat(device, service) }
+            }
             mutable.update { it.copy(errorMessage = message ?: it.errorMessage) }
         }
         releaseRepeat()

@@ -2,6 +2,7 @@
 package com.meshcoreone.android.feature.settings.device
 
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.ui.UiText
 import kotlinx.coroutines.CancellationException
@@ -18,6 +19,7 @@ data class PathHashModeState(
     val selectedMode: UByte? = null,
     val isApplying: Boolean = false,
     val errorMessage: UiText? = null,
+    val sessionToken: SessionToken? = null,
 ) {
     /** 0 is one-byte, 1 two-byte and 2 three-byte path hashes. */
     val displayedMode: UByte get() = selectedMode ?: device?.pathHashMode ?: 0u
@@ -34,6 +36,7 @@ class PathHashModeStateHolder(
     private val mutable = MutableStateFlow(PathHashModeState())
     private val failures = SettingsFailureRouter(env, retryAlert)
     private var observing: Job? = null
+    private var failedMode: UByte? = null
     val state: StateFlow<PathHashModeState> = mutable.asStateFlow()
     val retryAlertState: StateFlow<RetryAlertState> = retryAlert.state
     val retry: RetryAlertController get() = retryAlert
@@ -42,8 +45,9 @@ class PathHashModeStateHolder(
         if (observing != null) return
         observing = env.scope.launch {
             launch { connection.connectionState.collect { s -> mutable.update { it.copy(connectionState = s) } } }
-            connection.connectedDevice.collect { d ->
-                mutable.update { it.copy(device = d, selectedMode = d?.pathHashMode ?: it.selectedMode ?: 0u) }
+            connection.deviceObservations.collect { observed ->
+                val d = observed.device
+                mutable.update { it.copy(device = d, sessionToken = observed.sessionToken, selectedMode = d?.pathHashMode ?: it.selectedMode ?: 0u) }
             }
         }
     }
@@ -56,23 +60,36 @@ class PathHashModeStateHolder(
     fun dismissError() = mutable.update { it.copy(errorMessage = null) }
 
     fun onModeSelected(mode: UByte) {
-        if (mode == mutable.value.selectedMode) return
-        mutable.update { it.copy(selectedMode = mode) }
-        apply(mode)
+        if (mutable.value.isApplying) return
+        val expectedToken = mutable.value.sessionToken
+        val service = try {
+            settingsService().also {
+                if (expectedToken != null && it?.sessionToken != expectedToken) throw SettingsNotConnectedException()
+            }
+        } catch (failure: Exception) {
+            apply(mode, null, failure)
+            return
+        }
+        if (mode == mutable.value.selectedMode && failedMode == null && service?.pathHashModeNeedsRecovery != true) return
+        apply(mode, service)
     }
 
-    private fun apply(mode: UByte) {
-        mutable.update { it.copy(isApplying = true) }
+    private fun apply(mode: UByte, service: SettingsRadioPort?, acquisitionFailure: Exception? = null) {
+        if (mutable.value.isApplying) return
+        mutable.update { it.copy(selectedMode = mode, isApplying = true, errorMessage = null) }
         env.scope.launch {
             try {
-                val service = settingsService() ?: throw SettingsNotConnectedException()
-                service.setPathHashModeVerified(mode)
+                acquisitionFailure?.let { throw it }
+                (service ?: throw SettingsNotConnectedException()).setPathHashModeVerified(mode)
+                failedMode = null
                 retryAlert.reset()
             } catch (cancelled: CancellationException) {
-                mutable.update { it.copy(isApplying = false) }
+                failedMode = mode
+                mutable.update { it.copy(isApplying = false, selectedMode = it.device?.pathHashMode ?: 0u) }
                 throw cancelled
             } catch (error: Exception) {
-                val message = failures.route(error) { apply(mode) }
+                failedMode = mode
+                val message = failures.route(error) { apply(mode, service) }
                 mutable.update { it.copy(selectedMode = it.device?.pathHashMode ?: 0u, errorMessage = message ?: it.errorMessage) }
             }
             mutable.update { it.copy(isApplying = false) }

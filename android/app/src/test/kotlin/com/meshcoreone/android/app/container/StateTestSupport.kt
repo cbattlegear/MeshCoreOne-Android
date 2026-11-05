@@ -45,6 +45,11 @@ internal class FakeConnectionPort : AppConnectionPort {
     override val shouldDeferOpportunisticReconnect: Boolean get() = isPairingFlowActive
     override var isPairingFlowActive: Boolean = false
     val calls: MutableList<String> = Collections.synchronizedList(mutableListOf())
+    var presetToken: SessionToken? = null
+    val presetTokens: MutableList<SessionToken> = Collections.synchronizedList(mutableListOf())
+    val ordinaryTokens: MutableList<SessionToken> = Collections.synchronizedList(mutableListOf())
+    var acceptsOrdinaryToken: (SessionToken) -> Boolean = { true }
+    var beforePresetUpdate: () -> Unit = {}
 
     // Pairing registry model.
     val paired = mutableListOf<SystemPairedAccessory>()
@@ -92,13 +97,50 @@ internal class FakeConnectionPort : AppConnectionPort {
         return RemoveUnfavoritedResult(0, 0)
     }
     override fun updateDevice(info: SelfInfo, appliedRadioPresetId: String?) { calls += "updateDeviceInfo" }
+    override suspend fun updateDevice(info: SelfInfo, appliedRadioPresetId: String?, expectedToken: SessionToken): Boolean {
+        if (appliedRadioPresetId == null) {
+            ordinaryTokens += expectedToken
+            if (!acceptsOrdinaryToken(expectedToken)) return false
+            calls += "updateDeviceInfo"
+            return true
+        }
+        presetTokens += expectedToken
+        beforePresetUpdate()
+        if (presetToken != expectedToken) return false
+        calls += "updateDeviceInfo"
+        return true
+    }
     override fun updateDevice(device: DeviceDTO) { calls += "updateDevice" }
     override fun updateOCVSettings(device: DeviceDTO, expectedToken: SessionToken) { calls += "updateDevice" }
     override fun updateAutoAddConfig(config: AutoAddConfig) { calls += "autoAdd" }
+    override suspend fun updateAutoAddConfig(config: AutoAddConfig, expectedToken: SessionToken): Boolean {
+        ordinaryTokens += expectedToken
+        if (!acceptsOrdinaryToken(expectedToken)) return false
+        updateAutoAddConfig(config)
+        return true
+    }
     override fun updateClientRepeat(enabled: Boolean) { calls += "clientRepeat:$enabled" }
+    override suspend fun updateClientRepeat(enabled: Boolean, expectedToken: SessionToken): Boolean {
+        ordinaryTokens += expectedToken
+        if (!acceptsOrdinaryToken(expectedToken)) return false
+        updateClientRepeat(enabled)
+        return true
+    }
     override fun updatePathHashMode(mode: UByte) { calls += "pathHash:$mode" }
     override fun updateDefaultFloodScopeName(name: String?) { calls += "floodScope:$name" }
+    override suspend fun updateDefaultFloodScopeName(name: String?, expectedToken: SessionToken): Boolean {
+        ordinaryTokens += expectedToken
+        if (!acceptsOrdinaryToken(expectedToken)) return false
+        updateDefaultFloodScopeName(name)
+        return true
+    }
     override fun setAllowedRepeatFreqRanges(ranges: SnapshotList<FrequencyRange>) { calls += "repeatRanges" }
+    override fun setAllowedRepeatFreqRanges(ranges: SnapshotList<FrequencyRange>, expectedToken: SessionToken): Boolean {
+        ordinaryTokens += expectedToken
+        if (!acceptsOrdinaryToken(expectedToken)) return false
+        setAllowedRepeatFreqRanges(ranges)
+        return true
+    }
 }
 
 /** Stores the selection as the production JSON text, so a round trip proves the stored form decodes to the same value. */

@@ -33,6 +33,7 @@ class RoomPersistenceStore private constructor(
 ) : PersistenceStoreProtocol,
     DirectAckAuthority by directAcks,
     DirectPendingCompletionAuthority by directAcks,
+    DirectAckRadioExclusionAuthority by directAcks,
     DevicePersisting by devices, ContactPersisting by contacts, ChannelPersisting by channels,
     MessagePersisting by messages, HeardRepeatPersisting by messages, ReactionPersisting by messages,
     FailedSendPersisting by messages, RoomPersisting by rooms, DiscoveredNodePersisting by discovered,

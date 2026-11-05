@@ -122,6 +122,8 @@ interface DirectAckDao {
     suspend fun incarnation(radio: UUID, id: UUID, kind: String): DirectAckIncarnationEntity?
     @Query("SELECT * FROM direct_ack_leases WHERE radioId = :radio")
     suspend fun leases(radio: UUID): List<DirectAckLeaseEntity>
+    @Query("SELECT * FROM direct_ack_leases WHERE radioId = :radio AND requestId = :request")
+    suspend fun lease(radio: UUID, request: UUID): DirectAckLeaseEntity?
     @Upsert suspend fun lease(row: DirectAckLeaseEntity)
     @Query("UPDATE direct_ack_leases SET active = 0 WHERE issuer = :issuer")
     suspend fun revokeIssuer(issuer: UUID): Int
@@ -146,6 +148,8 @@ interface DirectAckDao {
     suspend fun operations(radio: UUID, claim: UUID): List<DirectAckOperationEntity>
     @Query("SELECT * FROM direct_ack_operations WHERE radioId = :radio AND claimId = :claim AND requestId = :request")
     suspend fun operation(radio: UUID, claim: UUID, request: UUID): DirectAckOperationEntity?
+    @Query("SELECT * FROM direct_ack_operations WHERE radioId = :radio AND claimId = :claim AND kind = 'RADIO_DELIVERY' LIMIT 2")
+    suspend fun radioDeliveries(radio: UUID, claim: UUID): List<DirectAckOperationEntity>
     @Upsert suspend fun operation(row: DirectAckOperationEntity)
     @Query("SELECT * FROM direct_pending_completions WHERE radioId = :radio AND captureRequestId = :request")
     suspend fun pendingCompletion(radio: UUID, request: UUID): DirectPendingCompletionEntity?

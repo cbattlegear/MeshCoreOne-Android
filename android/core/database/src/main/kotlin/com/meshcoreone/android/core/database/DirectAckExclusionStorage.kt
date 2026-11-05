@@ -61,8 +61,10 @@ interface DirectAckExclusionDao {
             SELECT 1 FROM direct_ack_wires w
             WHERE w.radioId = :radio AND w.claimId != :claim
               AND (w.acceptedCode IS NOT NULL OR NOT EXISTS(
-                  SELECT 1 FROM direct_ack_emissions e
-                  WHERE e.radioId = w.radioId AND e.claimId = w.claimId AND e.wireId = w.requestId))
+                  SELECT 1 FROM direct_ack_operations o
+                  WHERE o.radioId = w.radioId AND o.claimId = w.claimId AND o.requestId = w.requestId
+                    AND o.kind = 'EMISSION_TRACKING_REQUIRED' AND o.argument = w.predictedCode
+                    AND o.maximum = 1 AND o.pendingId IS NULL))
               AND (w.predictedCode = :code OR w.acceptedCode = :code)
         )
     """)
@@ -75,22 +77,23 @@ interface DirectAckExclusionDao {
               AND (state NOT IN ('ACCEPTED','DEFINITELY_UNSENT') OR (state = 'ACCEPTED' AND actualCode IS NULL))
         ) OR EXISTS(
             SELECT 1 FROM direct_ack_wires w
-            WHERE w.radioId = :radio AND w.claimId != :claim AND w.acceptedCode IS NULL
-              AND NOT EXISTS(SELECT 1 FROM direct_ack_emissions e
-                  WHERE e.radioId = w.radioId AND e.claimId = w.claimId AND e.wireId = w.requestId)
+            WHERE w.radioId = :radio AND w.claimId != :claim
+              AND NOT EXISTS(SELECT 1 FROM direct_ack_operations o
+                  WHERE o.radioId = w.radioId AND o.claimId = w.claimId AND o.requestId = w.requestId
+                    AND o.kind = 'EMISSION_TRACKING_REQUIRED' AND o.argument = w.predictedCode
+                    AND o.maximum = 1 AND o.pendingId IS NULL)
         )
     """)
     suspend fun unresolvedCompetitor(radio: UUID, claim: UUID): Boolean
 
     @Query("""
         SELECT EXISTS(
-            SELECT 1 FROM direct_ack_emissions
-            WHERE radioId = :radio AND claimId = :claim AND state = 'ACCEPTED' AND actualCode = :code
-        ) OR EXISTS(
-            SELECT 1 FROM direct_ack_wires w
-            WHERE w.radioId = :radio AND w.claimId = :claim AND w.acceptedCode = :code
-              AND NOT EXISTS(SELECT 1 FROM direct_ack_emissions e
-                  WHERE e.radioId = w.radioId AND e.claimId = w.claimId AND e.wireId = w.requestId)
+            SELECT 1 FROM direct_ack_emissions e
+            JOIN direct_ack_wires w ON w.radioId = e.radioId AND w.claimId = e.claimId AND w.requestId = e.wireId
+            JOIN direct_ack_operations o ON o.radioId = w.radioId AND o.claimId = w.claimId AND o.requestId = w.requestId
+            WHERE e.radioId = :radio AND e.claimId = :claim AND e.state = 'ACCEPTED' AND e.actualCode = :code
+              AND o.kind = 'EMISSION_TRACKING_REQUIRED' AND o.argument = w.predictedCode
+              AND o.maximum = 1 AND o.pendingId IS NULL
         )
     """)
     suspend fun acceptedCurrentWire(radio: UUID, claim: UUID, code: Long): Boolean
@@ -110,26 +113,32 @@ interface DirectAckExclusionDao {
               AND (state NOT IN ('ACCEPTED','DEFINITELY_UNSENT') OR (state = 'ACCEPTED' AND actualCode IS NULL))
         ) OR EXISTS(
             SELECT 1 FROM direct_ack_wires w
-            WHERE w.radioId = :radio AND w.claimId = :claim AND w.acceptedCode IS NULL
-              AND NOT EXISTS(SELECT 1 FROM direct_ack_emissions e
-                  WHERE e.radioId = w.radioId AND e.claimId = w.claimId AND e.wireId = w.requestId)
+            WHERE w.radioId = :radio AND w.claimId = :claim
+              AND NOT EXISTS(SELECT 1 FROM direct_ack_operations o
+                  WHERE o.radioId = w.radioId AND o.claimId = w.claimId AND o.requestId = w.requestId
+                    AND o.kind = 'EMISSION_TRACKING_REQUIRED' AND o.argument = w.predictedCode
+                    AND o.maximum = 1 AND o.pendingId IS NULL)
         )
     """)
     suspend fun unresolvedCurrentClaim(radio: UUID, claim: UUID): Boolean
 
     @Query("""
         SELECT COUNT(*) FROM direct_ack_wires w
-        LEFT JOIN direct_ack_emissions e
-          ON e.radioId = w.radioId AND e.claimId = w.claimId AND e.wireId = w.requestId
-        WHERE w.radioId = :radio AND e.state IS NULL
+        WHERE w.radioId = :radio AND NOT EXISTS(
+            SELECT 1 FROM direct_ack_operations o
+            WHERE o.radioId = w.radioId AND o.claimId = w.claimId AND o.requestId = w.requestId
+              AND o.kind = 'EMISSION_TRACKING_REQUIRED' AND o.argument = w.predictedCode
+              AND o.maximum = 1 AND o.pendingId IS NULL)
     """)
     suspend fun legacyCount(radio: UUID): Long
 
     @Query("""
         SELECT w.* FROM direct_ack_wires w
-        LEFT JOIN direct_ack_emissions e
-          ON e.radioId = w.radioId AND e.claimId = w.claimId AND e.wireId = w.requestId
-        WHERE w.radioId = :radio AND e.state IS NULL
+        WHERE w.radioId = :radio AND NOT EXISTS(
+            SELECT 1 FROM direct_ack_operations o
+            WHERE o.radioId = w.radioId AND o.claimId = w.claimId AND o.requestId = w.requestId
+              AND o.kind = 'EMISSION_TRACKING_REQUIRED' AND o.argument = w.predictedCode
+              AND o.maximum = 1 AND o.pendingId IS NULL)
         ORDER BY w.claimId,w.requestId LIMIT :maximum
     """)
     suspend fun legacyWires(radio: UUID, maximum: Int): List<DirectAckWireEntity>

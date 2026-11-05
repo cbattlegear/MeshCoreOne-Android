@@ -2,6 +2,7 @@
 package com.meshcoreone.android.core.database
 
 import android.content.Context
+import android.database.sqlite.SQLiteDatabaseLockedException
 import androidx.room.Room
 import androidx.room.withTransaction
 import androidx.sqlite.db.SupportSQLiteDatabase
@@ -12,9 +13,8 @@ import java.io.File
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
-import java.util.concurrent.Executor
-import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -33,6 +33,25 @@ import org.robolectric.annotation.SQLiteMode
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 class DirectAckExclusionStorageTest {
     private val context: Context get() = ApplicationProvider.getApplicationContext()
+
+    private suspend fun trackedWire(db: MeshCoreDatabase, wire: DirectAckWireEntity) = db.withTransaction {
+        db.directAcks().wire(wire)
+        db.directAcks().operation(DirectAckOperationEntity(
+            wire.radioId, wire.claimId, wire.requestId, "EMISSION_TRACKING_REQUIRED", wire.predictedCode, 1, null,
+        ))
+    }
+
+    private fun immediateBusyFailure(db: MeshCoreDatabase) {
+        val sqlite = db.openHelper.writableDatabase
+        sqlite.beginTransaction()
+        try {
+            sqlite.query("PRAGMA busy_timeout=0").use {
+                assertTrue(it.moveToFirst())
+                assertEquals(0, it.getInt(0))
+            }
+            sqlite.setTransactionSuccessful()
+        } finally { sqlite.endTransaction() }
+    }
 
     @Test fun v2MigrationRetainsLegacyUnknownAndKnownCodesAcrossReopen() = runTest {
         val name = "ack-exclusion-migration-${UUID.randomUUID()}.db"
@@ -70,7 +89,7 @@ class DirectAckExclusionStorageTest {
                             for (wire in listOf(unknown, known)) {
                                 old.execSQL(
                                     "INSERT INTO direct_ack_wires VALUES (?,?,?,?,?)",
-                                    arrayOf(wire.radioId.toString().uppercase(), wire.claimId.toString().uppercase(),
+                                    arrayOf<Any?>(wire.radioId.toString().uppercase(), wire.claimId.toString().uppercase(),
                                         wire.requestId.toString().uppercase(), wire.predictedCode, wire.acceptedCode),
                                 )
                             }
@@ -115,7 +134,7 @@ class DirectAckExclusionStorageTest {
         val current = UUID.randomUUID()
         val issuer = UUID.randomUUID()
         try {
-            db.directAcks().wire(DirectAckWireEntity(radio, claim, wire, 123, null))
+            trackedWire(db, DirectAckWireEntity(radio, claim, wire, 123, null))
             val marker = DirectAckEmissionEntity(radio, claim, wire, issuer, UUID.randomUUID(),
                 123, "MAY_HAVE_WRITTEN", null, null)
             val exclusions = db.directAckExclusions()
@@ -136,13 +155,8 @@ class DirectAckExclusionStorageTest {
         val name = "ack-exclusion-handles-${UUID.randomUUID()}.db"
         val first = Room.databaseBuilder(context, MeshCoreDatabase::class.java, name)
             .addCallback(DirectAckStorage.callback).build()
-        val secondBegin = CompletableDeferred<Unit>()
-        val observeSecondBegin = AtomicBoolean(false)
         val second = Room.databaseBuilder(context, MeshCoreDatabase::class.java, name)
-            .addCallback(DirectAckStorage.callback)
-            .setQueryCallback({ sql, _ ->
-                if (observeSecondBegin.get() && sql.startsWith("BEGIN")) secondBegin.complete(Unit)
-            }, Executor { it.run() }).build()
+            .addCallback(DirectAckStorage.callback).build()
         val radio = UUID.randomUUID()
         val claim = UUID.randomUUID()
         val competitor = UUID.randomUUID()
@@ -150,6 +164,7 @@ class DirectAckExclusionStorageTest {
         try {
             first.openHelper.writableDatabase
             second.openHelper.writableDatabase
+            immediateBusyFailure(second)
             assertFalse(first.directAckExclusions().unresolvedCompetitor(radio, claim))
             val entered = CompletableDeferred<Unit>()
             val release = CompletableDeferred<Unit>()
@@ -164,21 +179,20 @@ class DirectAckExclusionStorageTest {
                         }
                     }
                     entered.await()
-                    observeSecondBegin.set(true)
-                    val competingWrite = async(Dispatchers.IO) {
+                    assertFailsWith<SQLiteDatabaseLockedException> {
                         second.withTransaction {
-                            second.directAcks().wire(DirectAckWireEntity(radio, competitor, wire, 123, null))
-                            second.directAckExclusions().emission(DirectAckEmissionEntity(
-                                radio, competitor, wire, UUID.randomUUID(), UUID.randomUUID(),
-                                123, "MAY_HAVE_WRITTEN", null, null,
-                            ))
+                            trackedWire(second, DirectAckWireEntity(radio, competitor, wire, 123, null))
                         }
                     }
-                    secondBegin.await()
-                    assertFalse(competingWrite.isCompleted)
                     release.complete(Unit)
                     heldTransaction.await()
-                    competingWrite.await()
+                    second.withTransaction {
+                        trackedWire(second, DirectAckWireEntity(radio, competitor, wire, 123, null))
+                        second.directAckExclusions().emission(DirectAckEmissionEntity(
+                            radio, competitor, wire, UUID.randomUUID(), UUID.randomUUID(),
+                            123, "MAY_HAVE_WRITTEN", null, null,
+                        ))
+                    }
                 }
             }
             first.withTransaction {
@@ -200,7 +214,7 @@ class DirectAckExclusionStorageTest {
         val wire = UUID.randomUUID()
         val current = UUID.randomUUID()
         try {
-            db.directAcks().wire(DirectAckWireEntity(radio, claim, wire, 123, null))
+            trackedWire(db, DirectAckWireEntity(radio, claim, wire, 123, null))
             val first = DirectAckEmissionEntity(radio, claim, wire, UUID.randomUUID(), UUID.randomUUID(),
                 123, "MAY_HAVE_WRITTEN", null, null)
             val second = first.copy(markRequestId = UUID.randomUUID())

@@ -7,11 +7,12 @@ import com.meshcoreone.android.core.model.*
 import java.util.UUID
 
 internal class DirectAckRepository(private val context: RoomRepositoryContext) :
-    DirectAckAuthority, DirectPendingCompletionAuthority {
+    DirectAckAuthority, DirectPendingCompletionAuthority, DirectAckRadioExclusionAuthority {
     private data class Lease(val issuer: UUID, val token: SessionToken, val request: UUID) : DirectAckLease
     private data class Attempt(val lease: Lease, val request: UUID) : DirectAckAttempt
     private data class Intent(val lease: Lease, val request: UUID) : DirectAckIntent
     private data class PendingCompletion(val lease: Lease, val request: UUID) : DirectPendingCompletion
+    private data class Emission(val attempt: Attempt, val wire: UUID, val request: UUID) : DirectAckEmissionHandle
 
     private suspend fun <T> transaction(
         operation: String,
@@ -105,7 +106,20 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         intent: DirectAckIntent,
         firstWireRequestId: UUID,
         predictedAckCode: UInt,
-    ): DirectAckBeginResult = transaction("beginDirectAckAttempt") {
+    ): DirectAckBeginResult = beginAttempt(intent, firstWireRequestId, predictedAckCode, false)
+
+    override suspend fun beginDirectAckAttemptRequiringEmissionTracking(
+        intent: DirectAckIntent,
+        firstWireRequestId: UUID,
+        predictedAckCode: UInt,
+    ): DirectAckBeginResult = beginAttempt(intent, firstWireRequestId, predictedAckCode, true)
+
+    private suspend fun beginAttempt(
+        intent: DirectAckIntent,
+        firstWireRequestId: UUID,
+        predictedAckCode: UInt,
+        tracked: Boolean,
+    ): DirectAckBeginResult = transaction(if (tracked) "beginDirectAckAttemptRequiringEmissionTracking" else "beginDirectAckAttempt") {
         val issued = intent as? Intent
         if (issued == null || issuedLease(issued.lease) == null) {
             return@transaction DirectAckBeginResult.Rejected(DirectAckRejection.INVALID_HANDLE)
@@ -116,14 +130,21 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         if (captured.leaseId != issued.lease.request) return@transaction DirectAckBeginResult.Rejected(DirectAckRejection.CONFLICT)
         val existing = dao.claim(captured.radioId, captured.requestId)
         if (existing != null) {
-            val first = dao.wires(captured.radioId, captured.requestId).firstOrNull { it.requestId == firstWireRequestId }
-            if (existing.firstWireId != firstWireRequestId || first?.predictedCode != predictedAckCode.toLong()) {
+            val first = dao.wire(captured.radioId, captured.requestId, firstWireRequestId)
+                ?: return@transaction DirectAckBeginResult.Rejected(DirectAckRejection.CONFLICT)
+            if (existing.firstWireId != firstWireRequestId || first.predictedCode != predictedAckCode.toLong()) {
+                return@transaction DirectAckBeginResult.Rejected(DirectAckRejection.CONFLICT)
+            }
+            if (trackingRequired(first) != tracked) {
                 return@transaction DirectAckBeginResult.Rejected(DirectAckRejection.CONFLICT)
             }
             rejection(permission(existing, issued.lease))?.let { return@transaction DirectAckBeginResult.Rejected(it) }
             return@transaction DirectAckBeginResult.AlreadyBegun(Attempt(issued.lease, issued.request), receipt(existing, issued.lease))
         }
         rejection(intentPermission(captured, issued.lease))?.let { return@transaction DirectAckBeginResult.Rejected(it) }
+        if (tracked && dao.operation(captured.radioId, captured.requestId, firstWireRequestId) != null) {
+            return@transaction DirectAckBeginResult.Rejected(DirectAckRejection.CONFLICT)
+        }
         val row = captured.message ?: invalidData("Current direct ACK intent has no message")
         dao.invalidateMessage(captured.radioId, captured.messageId)
         dao.invalidateIntents(captured.radioId, captured.messageId)
@@ -133,7 +154,9 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
             captured.pendingIncarnation, captured.radioId, captured.messageId, row,
         )
         dao.claim(claim)
-        dao.wire(DirectAckWireEntity(captured.radioId, captured.requestId, firstWireRequestId, predictedAckCode.toLong(), null))
+        val wire = DirectAckWireEntity(captured.radioId, captured.requestId, firstWireRequestId, predictedAckCode.toLong(), null)
+        dao.wire(wire)
+        if (tracked) dao.operation(trackingOperation(wire))
         save()
         DirectAckBeginResult.Begun(Attempt(issued.lease, issued.request), receipt(claim, issued.lease))
     }
@@ -173,18 +196,44 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         attempt: DirectAckAttempt,
         wireRequestId: UUID,
         predictedAckCode: UInt,
-    ): DirectAckMutationResult = mutate("registerDirectAckDispatch", attempt) { issued, claim ->
+    ): DirectAckMutationResult = registerDispatch(attempt, wireRequestId, predictedAckCode, false)
+
+    override suspend fun registerDirectAckDispatchRequiringEmissionTracking(
+        attempt: DirectAckAttempt,
+        wireRequestId: UUID,
+        predictedAckCode: UInt,
+    ): DirectAckMutationResult = registerDispatch(attempt, wireRequestId, predictedAckCode, true)
+
+    private suspend fun registerDispatch(
+        attempt: DirectAckAttempt,
+        wireRequestId: UUID,
+        predictedAckCode: UInt,
+        tracked: Boolean,
+    ): DirectAckMutationResult = mutate(
+        if (tracked) "registerDirectAckDispatchRequiringEmissionTracking" else "registerDirectAckDispatch", attempt,
+    ) { issued, claim ->
         val dao = database.directAcks()
-        val existing = dao.wires(claim.radioId, claim.requestId).firstOrNull { it.requestId == wireRequestId }
+        val first = dao.wire(claim.radioId, claim.requestId, claim.firstWireId)
+            ?: invalidData("Direct ACK claim lost its first wire")
+        if (trackingRequired(first) != tracked) {
+            return@mutate DirectAckMutationResult.Rejected(DirectAckRejection.CONFLICT)
+        }
+        val existing = dao.wire(claim.radioId, claim.requestId, wireRequestId)
         if (existing != null) return@mutate if (existing.predictedCode == predictedAckCode.toLong()) {
-            DirectAckMutationResult.AlreadyApplied(receipt(claim, issued.lease))
+            if (trackingRequired(existing) == tracked) DirectAckMutationResult.AlreadyApplied(receipt(claim, issued.lease))
+            else DirectAckMutationResult.Rejected(DirectAckRejection.CONFLICT)
         } else DirectAckMutationResult.Rejected(DirectAckRejection.CONFLICT)
         deny(claim, issued)?.let { return@mutate it }
         if (claim.phase == DirectAckPhase.DELIVERED.name) {
             return@mutate DirectAckMutationResult.AlreadyDelivered(receipt(claim, issued.lease))
         }
         if (claim.phase == DirectAckPhase.FAILED.name) return@mutate DirectAckMutationResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
-        dao.wire(DirectAckWireEntity(claim.radioId, claim.requestId, wireRequestId, predictedAckCode.toLong(), null))
+        if (tracked && dao.operation(claim.radioId, claim.requestId, wireRequestId) != null) {
+            return@mutate DirectAckMutationResult.Rejected(DirectAckRejection.CONFLICT)
+        }
+        val wire = DirectAckWireEntity(claim.radioId, claim.requestId, wireRequestId, predictedAckCode.toLong(), null)
+        dao.wire(wire)
+        if (tracked) dao.operation(trackingOperation(wire))
         save()
         DirectAckMutationResult.Applied(receipt(claim, issued.lease))
     }
@@ -201,11 +250,304 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
             DirectAckMutationResult.AlreadyApplied(receipt(claim, issued.lease))
         } else DirectAckMutationResult.Rejected(DirectAckRejection.CONFLICT)
         deny(claim, issued)?.let { return@mutate it }
-        dao.wire(wire.copy(acceptedCode = ackCode.toLong()))
+        bindAcceptedWire(wire, ackCode)
         val phase = if (claim.phase == DirectAckPhase.REGISTERED.name) DirectAckPhase.ACCEPTED.name else claim.phase
         val updated = renew(claim, phase)
         save()
         DirectAckMutationResult.Applied(receipt(updated, issued.lease))
+    }
+
+    private suspend fun RepositoryTransaction.bindAcceptedWire(wire: DirectAckWireEntity, code: UInt) {
+        database.directAcks().wire(wire.copy(acceptedCode = code.toLong()))
+    }
+
+    private fun trackingOperation(wire: DirectAckWireEntity) = DirectAckOperationEntity(
+        wire.radioId, wire.claimId, wire.requestId, "EMISSION_TRACKING_REQUIRED", wire.predictedCode, 1, null,
+    )
+
+    private suspend fun RepositoryTransaction.trackingRequired(wire: DirectAckWireEntity): Boolean {
+        val operation = database.directAcks().operation(wire.radioId, wire.claimId, wire.requestId) ?: return false
+        if (operation.kind != "EMISSION_TRACKING_REQUIRED") return false
+        if (operation != trackingOperation(wire)) invalidData("Malformed direct ACK wire tracking provenance")
+        return true
+    }
+
+    override suspend fun markDirectAckWireMayHaveWritten(
+        attempt: DirectAckAttempt,
+        wireRequestId: UUID,
+        emissionRequestId: UUID,
+    ): DirectAckEmissionMarkResult = transaction("markDirectAckWireMayHaveWritten") {
+        val issued = issuedAttempt(attempt)
+            ?: return@transaction DirectAckEmissionMarkResult.Rejected(DirectAckRejection.INVALID_HANDLE)
+        val radio = issued.lease.token.radioId.value
+        val claims = database.directAcks()
+        val claim = claims.claim(radio, issued.request)
+            ?: return@transaction DirectAckEmissionMarkResult.Rejected(DirectAckRejection.MISSING)
+        if (claim.leaseId != issued.lease.request) {
+            return@transaction DirectAckEmissionMarkResult.Rejected(DirectAckRejection.CONFLICT)
+        }
+        rejection(permission(claim, issued.lease))?.let {
+            return@transaction DirectAckEmissionMarkResult.Rejected(it)
+        }
+        val dao = database.directAckExclusions()
+        val wire = claims.wire(radio, issued.request, wireRequestId)
+            ?: return@transaction DirectAckEmissionMarkResult.Rejected(DirectAckRejection.MISSING)
+        if (!trackingRequired(wire)) {
+            return@transaction DirectAckEmissionMarkResult.Rejected(DirectAckRejection.CONFLICT)
+        }
+        val previous = dao.emissionRequests(radio, emissionRequestId)
+        if (previous.isNotEmpty()) {
+            val row = previous.singleOrNull()
+            if (row == null || row.claimId != issued.request || row.wireId != wireRequestId ||
+                row.issuer != context.directAckIssuer
+            ) return@transaction DirectAckEmissionMarkResult.Rejected(DirectAckRejection.CONFLICT)
+            return@transaction DirectAckEmissionMarkResult.AlreadyMarked(
+                Emission(issued, wireRequestId, emissionRequestId), emissionReceipt(row),
+            )
+        }
+        if (claim.phase == DirectAckPhase.FAILED.name || claim.phase == DirectAckPhase.DELIVERED.name) {
+            return@transaction DirectAckEmissionMarkResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
+        }
+        if (dao.saturated(radio)) {
+            return@transaction DirectAckEmissionMarkResult.CoveredBySaturation(
+                DirectAckRadioSaturationReceipt(issued.lease.token.radioId),
+            )
+        }
+        val row = DirectAckEmissionEntity(
+            radio, issued.request, wireRequestId, context.directAckIssuer, emissionRequestId,
+            wire.predictedCode, "MAY_HAVE_WRITTEN", null, null,
+        )
+        dao.emission(row)
+        save()
+        DirectAckEmissionMarkResult.Marked(Emission(issued, wireRequestId, emissionRequestId), emissionReceipt(row))
+    }
+
+    override suspend fun inspectDirectAckWireEmission(
+        attempt: DirectAckAttempt,
+        wireRequestId: UUID,
+        emissionRequestId: UUID,
+    ): DirectAckEmissionObservation = transaction("inspectDirectAckWireEmission") {
+        val issued = issuedAttempt(attempt)
+            ?: return@transaction DirectAckEmissionObservation.Rejected(DirectAckRejection.INVALID_HANDLE)
+        val radio = issued.lease.token.radioId.value
+        val claim = database.directAcks().claim(radio, issued.request)
+            ?: return@transaction DirectAckEmissionObservation.Rejected(DirectAckRejection.MISSING)
+        if (claim.leaseId != issued.lease.request) {
+            return@transaction DirectAckEmissionObservation.Rejected(DirectAckRejection.CONFLICT)
+        }
+        val dao = database.directAckExclusions()
+        val requests = dao.emissionRequests(radio, emissionRequestId)
+        if (requests.isNotEmpty()) {
+            val row = requests.singleOrNull()
+            if (row == null || row.claimId != issued.request || row.wireId != wireRequestId ||
+                row.issuer != context.directAckIssuer
+            ) return@transaction DirectAckEmissionObservation.Rejected(DirectAckRejection.CONFLICT)
+            return@transaction DirectAckEmissionObservation.Found(emissionReceipt(row))
+        }
+        if (dao.saturated(radio)) DirectAckEmissionObservation.CoveredBySaturation(
+            DirectAckRadioSaturationReceipt(issued.lease.token.radioId),
+        ) else DirectAckEmissionObservation.NotFound
+    }
+
+    override suspend fun resolveDirectAckWireEmission(
+        handle: DirectAckEmissionHandle,
+        resolutionRequestId: UUID,
+        resolution: DirectAckEmissionResolution,
+    ): DirectAckEmissionMutationResult = transaction("resolveDirectAckWireEmission") {
+        val issued = handle as? Emission
+        if (issued == null) {
+            return@transaction DirectAckEmissionMutationResult.Rejected(DirectAckRejection.INVALID_HANDLE)
+        }
+        val attempt = issued.attempt
+        val radio = attempt.lease.token.radioId.value
+        val claims = database.directAcks()
+        val lease = claims.lease(radio, attempt.lease.request)
+            ?: return@transaction DirectAckEmissionMutationResult.Rejected(DirectAckRejection.MISSING)
+        if (lease.issuer != attempt.lease.issuer || lease.epoch != attempt.lease.token.epoch.value ||
+            lease.generation != attempt.lease.token.generation.value
+        ) return@transaction DirectAckEmissionMutationResult.Rejected(DirectAckRejection.INVALID_HANDLE)
+        val claim = claims.claim(radio, attempt.request)
+            ?: return@transaction DirectAckEmissionMutationResult.Rejected(DirectAckRejection.MISSING)
+        if (claim.leaseId != attempt.lease.request) {
+            return@transaction DirectAckEmissionMutationResult.Rejected(DirectAckRejection.CONFLICT)
+        }
+        val dao = database.directAckExclusions()
+        val row = dao.emission(radio, attempt.request, issued.wire, issued.request)
+            ?: return@transaction DirectAckEmissionMutationResult.Rejected(DirectAckRejection.MISSING)
+        if (row.issuer != attempt.lease.issuer) {
+            return@transaction DirectAckEmissionMutationResult.Rejected(DirectAckRejection.INVALID_HANDLE)
+        }
+        val outcome = emissionEvidence(row).outcome
+        val desired = when (resolution) {
+            DirectAckEmissionResolution.DefinitelyUnsent -> DirectAckRadioWireOutcome.DefinitelyUnsent
+            is DirectAckEmissionResolution.Accepted -> DirectAckRadioWireOutcome.Accepted(resolution.ackCode)
+        }
+        val previous = claims.operation(radio, attempt.request, resolutionRequestId)
+        val inputKind = if (resolution is DirectAckEmissionResolution.Accepted) "ACCEPTED" else "UNSENT"
+        val prefix = "EMISSION_RESOLUTION:${issued.wire}:${issued.request}:$inputKind:"
+        val inputCode = (resolution as? DirectAckEmissionResolution.Accepted)?.ackCode?.toLong()
+        if (previous != null) {
+            if (!previous.kind.startsWith("EMISSION_RESOLUTION:")) {
+                return@transaction DirectAckEmissionMutationResult.Rejected(DirectAckRejection.CONFLICT)
+            }
+            if (previous.kind.startsWith(prefix) && previous.argument == inputCode && previous.pendingId == null) {
+                val originalState = previous.kind.removePrefix(prefix)
+                return@transaction when (originalState) {
+                    "ACCEPTED", "DEFINITELY_UNSENT" ->
+                        DirectAckEmissionMutationResult.AlreadyApplied(emissionReceipt(row))
+                    "CONFLICT", "CONFLICT_UNSENT" -> DirectAckEmissionMutationResult.Conflict(emissionReceipt(row))
+                    else -> invalidData("Unknown journaled emission resolution result")
+                }
+            }
+        }
+        val contradictory = previous != null ||
+            (outcome != DirectAckRadioWireOutcome.MayHaveWritten && outcome != desired)
+        val unsent = outcome == DirectAckRadioWireOutcome.DefinitelyUnsent ||
+            (outcome as? DirectAckRadioWireOutcome.Conflict)?.definitelyUnsentObserved == true ||
+            resolution == DirectAckEmissionResolution.DefinitelyUnsent
+        val accepted = row.actualCode ?: (resolution as? DirectAckEmissionResolution.Accepted)?.ackCode?.toLong()
+        val updated = row.copy(
+            state = when {
+                contradictory && unsent -> "CONFLICT_UNSENT"
+                contradictory -> "CONFLICT"
+                resolution == DirectAckEmissionResolution.DefinitelyUnsent -> "DEFINITELY_UNSENT"
+                else -> "ACCEPTED"
+            },
+            actualCode = accepted,
+            resolutionRequestId = resolutionRequestId,
+        )
+        val wire = claims.wire(radio, attempt.request, issued.wire)
+            ?: invalidData("Persisted emission lost its registered wire")
+        if (!trackingRequired(wire)) invalidData("Persisted emission lacks tracked-wire provenance")
+        if (resolution is DirectAckEmissionResolution.Accepted) {
+            bindAcceptedWire(wire, resolution.ackCode)
+            if (!contradictory && issuedLease(attempt.lease) != null &&
+                permission(claim, attempt.lease) == DirectAckPermission.CURRENT &&
+                claim.phase == DirectAckPhase.REGISTERED.name
+            ) renew(claim, DirectAckPhase.ACCEPTED.name)
+        }
+        dao.emission(updated)
+        if (previous == null) claims.operation(DirectAckOperationEntity(
+            radio, attempt.request, resolutionRequestId, prefix + updated.state, inputCode, updated.actualCode, null,
+        ))
+        save()
+        if (contradictory) DirectAckEmissionMutationResult.Conflict(emissionReceipt(updated))
+        else DirectAckEmissionMutationResult.Applied(emissionReceipt(updated))
+    }
+
+    override suspend fun inspectDirectAckRadioEvidence(radioId: RadioId): DirectAckRadioEvidenceObservation =
+        transaction("inspectDirectAckRadioEvidence") {
+            val dao = database.directAckExclusions()
+            val maximum = DirectAckRadioEvidenceLimits.MAX_DIAGNOSTIC_WIRES_PER_RADIO
+            val markers = dao.emissions(radioId.value, maximum)
+            val legacy = dao.legacyWires(radioId.value, maximum - markers.size)
+            val coverage = when {
+                dao.saturated(radioId.value) -> DirectAckRadioEvidenceCoverage.SATURATED
+                checkedAdd(dao.count(radioId.value), dao.legacyCount(radioId.value)) > maximum ->
+                    DirectAckRadioEvidenceCoverage.TRUNCATED
+                else -> DirectAckRadioEvidenceCoverage.COMPLETE
+            }
+            val evidence = markers.map(::emissionEvidence) + legacy.map {
+                DirectAckRadioWireEvidence(
+                    radioId, it.claimId, it.requestId, null, it.predictedCode.asUInt(),
+                    it.acceptedCode?.let { code -> DirectAckRadioWireOutcome.LegacyAcceptedUnknown(code.asUInt()) }
+                        ?: DirectAckRadioWireOutcome.LegacyUnknown,
+                )
+            }
+            DirectAckRadioEvidenceObservation.Found(DirectAckRadioEvidenceSnapshot(radioId, evidence.snapshot(), coverage))
+        }
+
+    override suspend fun settleDirectAckExcludingRadioHistory(
+        attempt: DirectAckAttempt,
+        ackCode: UInt,
+        roundTripTime: UInt?,
+    ): DirectAckRadioSettlementResult = transaction("settleDirectAckExcludingRadioHistory") {
+        val issued = issuedAttempt(attempt)
+            ?: return@transaction DirectAckRadioSettlementResult.Rejected(DirectAckRejection.INVALID_HANDLE)
+        val radio = issued.lease.token.radioId.value
+        val dao = database.directAcks()
+        val claim = dao.claim(radio, issued.request)
+            ?: return@transaction DirectAckRadioSettlementResult.Rejected(DirectAckRejection.MISSING)
+        if (claim.leaseId != issued.lease.request) {
+            return@transaction DirectAckRadioSettlementResult.Rejected(DirectAckRejection.CONFLICT)
+        }
+        val proofs = dao.radioDeliveries(radio, claim.requestId)
+        if (proofs.size > 1) invalidData("Multiple radio exclusion delivery proofs")
+        val previousOperation = proofs.singleOrNull()
+        val delivered = dao.delivery(radio, claim.requestId)
+        if (delivered != null) {
+            if (previousOperation == null || previousOperation.argument != ackCode.toLong() ||
+                previousOperation.maximum != roundTripTime?.toLong() || previousOperation.pendingId != null ||
+                delivered.ackCode != ackCode.toLong() ||
+                delivered.roundTripTime != roundTripTime?.toLong()
+            ) return@transaction DirectAckRadioSettlementResult.Rejected(DirectAckRejection.CONFLICT)
+            return@transaction DirectAckRadioSettlementResult.Settled(
+                DirectAckRadioSettlementReceipt.AlreadyApplied(receipt(claim, issued.lease)),
+            )
+        }
+        if (previousOperation != null) {
+            return@transaction DirectAckRadioSettlementResult.Rejected(DirectAckRejection.CONFLICT)
+        }
+        rejection(permission(claim, issued.lease))?.let {
+            return@transaction DirectAckRadioSettlementResult.Rejected(it)
+        }
+        val history = database.directAckExclusions()
+        val reasons = linkedSetOf<DirectAckRadioNonsettlingReason>()
+        if (!history.acceptedCurrentWire(radio, claim.requestId, ackCode.toLong())) {
+            reasons += if (history.unresolvedCurrentClaim(radio, claim.requestId)) {
+                DirectAckRadioNonsettlingReason.TARGET_ACCEPTANCE_UNRESOLVED
+            } else DirectAckRadioNonsettlingReason.TARGET_CODE_UNREGISTERED
+        }
+        if (history.competingCode(radio, claim.requestId, ackCode.toLong())) {
+            reasons += DirectAckRadioNonsettlingReason.KNOWN_OTHER_CLAIM_CODE
+        }
+        if (history.unresolvedCompetitor(radio, claim.requestId)) {
+            reasons += DirectAckRadioNonsettlingReason.UNRESOLVED_OTHER_CLAIM_EMISSION
+        }
+        if (history.saturated(radio)) reasons += DirectAckRadioNonsettlingReason.RADIO_HISTORY_SATURATED
+        if (reasons.isNotEmpty()) return@transaction DirectAckRadioSettlementResult.Nonsettling(reasons.snapshotSet())
+        var proofRequest = UUID.randomUUID()
+        while (dao.operation(radio, claim.requestId, proofRequest) != null) proofRequest = UUID.randomUUID()
+        val operation = DirectAckOperationEntity(
+            radio, claim.requestId, proofRequest, "RADIO_DELIVERY", ackCode.toLong(), roundTripTime?.toLong(), null,
+        )
+        ownWrite(dao.deliver(radio, claim.messageId, ackCode.toLong(), roundTripTime?.toLong()))
+        val updated = renew(claim, DirectAckPhase.DELIVERED.name, 1)
+        dao.delivery(DirectAckDeliveryEntity(
+            claim.requestId, ackCode.toLong(), roundTripTime?.toLong(), radio, claim.messageId, updated.snapshot,
+        ))
+        dao.operation(operation)
+        save()
+        DirectAckRadioSettlementResult.Settled(DirectAckRadioSettlementReceipt.Applied(receipt(updated, issued.lease)))
+    }
+
+    private fun issuedAttempt(attempt: DirectAckAttempt): Attempt? =
+        (attempt as? Attempt)?.takeIf { issuedLease(it.lease) != null }
+
+    private fun emissionReceipt(row: DirectAckEmissionEntity) =
+        DirectAckEmissionReceipt(row.markRequestId, row.resolutionRequestId, emissionEvidence(row))
+
+    private fun emissionEvidence(row: DirectAckEmissionEntity): DirectAckRadioWireEvidence {
+        val actual = row.actualCode?.asUInt()
+        val outcome = when (row.state) {
+            "MAY_HAVE_WRITTEN" -> {
+                if (actual != null || row.resolutionRequestId != null) invalidData("Malformed unresolved emission")
+                DirectAckRadioWireOutcome.MayHaveWritten
+            }
+            "DEFINITELY_UNSENT" -> {
+                if (actual != null || row.resolutionRequestId == null) invalidData("Malformed unsent emission")
+                DirectAckRadioWireOutcome.DefinitelyUnsent
+            }
+            "ACCEPTED" -> {
+                if (row.resolutionRequestId == null) invalidData("Accepted emission has no resolution")
+                DirectAckRadioWireOutcome.Accepted(actual ?: invalidData("Accepted emission has no actual code"))
+            }
+            "CONFLICT", "CONFLICT_UNSENT" -> DirectAckRadioWireOutcome.Conflict(actual, row.state == "CONFLICT_UNSENT")
+            else -> invalidData("Unknown persisted emission state")
+        }
+        return DirectAckRadioWireEvidence(
+            RadioId(row.radioId), row.claimId, row.wireId, row.markRequestId, row.predictedCode.asUInt(), outcome,
+        )
     }
 
     override suspend fun recordDirectFailure(attempt: DirectAckAttempt): DirectAckMutationResult =
@@ -574,7 +916,10 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
     private suspend fun RepositoryTransaction.receipt(claim: DirectAckClaimEntity, lease: Lease): DirectAckReceipt {
         val dao = database.directAcks()
         val operations = dao.operations(claim.radioId, claim.requestId)
-        val bookkeeping = operations.filter { it.kind != "PENDING" }.map {
+        val bookkeeping = operations.filter {
+            it.kind != "PENDING" && it.kind != "RADIO_DELIVERY" && it.kind != "EMISSION_TRACKING_REQUIRED" &&
+                !it.kind.startsWith("EMISSION_RESOLUTION:")
+        }.map {
             val change = when {
                 it.kind.startsWith("SEND_COMPLETED:") -> {
                     val wireId = it.kind.removePrefix("SEND_COMPLETED:")

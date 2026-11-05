@@ -379,6 +379,229 @@ remains in force.
 
 ## Unresolved ACK origin boundary
 
+### Persisted cross-generation exclusion prerequisite
+
+The coordinator assigned a separate producer successor after the service owner
+reported an executed cross-generation control: a possibly written, unresolved
+generation-1 send followed by a new graph over the same store can let a raw ACK
+settle a generation-2 message. A lease fences mutation grants, not radio emissions.
+This is not durable ACK ingress or proof that a received ACK originated from a
+specific dispatch.
+
+Isolated schema-only preparation is frozen at
+`3e582bcf25d13412f2b81f4c44b6a36baefbc1bf`, parent
+`fc84a775a4e6a343a24de38e5246074a9cc92fc1`, above the preserved
+`4e25e25ae69d91b313ae704d31864a3d5fb8226b` v2 producer. The intermediate
+`fc84` schema draft was superseded before dispatch after the consumer confirmed
+that pool-backoff calls can reuse a registered wire ID. The corrected marker
+key is `(radioId, claimId, wireId, markRequestId)`: each physical transport call
+requires a fresh marker, so proving a later call definitely unsent cannot clear
+an earlier possibly written call using the same wire ID.
+
+This source adds v3 emission and per-radio sticky-saturation tables and a
+forward 2-to-3 migration, without altering v2 tables, historical wire rows,
+snapshots, journals or trigger fencing. The existing v2 export is retained:
+Git blob `2a1c5c66d5c42b53b146becf2ed085cffee93f68`, SHA-256
+`c8b324628f0ece66967c9ea9025567208bc23c4681f5973f72f7308d5cf732b2`.
+No generated v3 JSON is present or manufactured. Schema-only preparation is
+nonexclusive: current main `c0e9dc862e4b2c9e962e6f0237d0824e23b0d298` still
+publishes v1; other-owner version collisions must be reconciled before promotion.
+The held channel candidates were neither inspected nor modified.
+
+The new optional settlement must validate the current grant and query all
+radio-scoped persisted exclusion facts in the same actual Room transaction as
+delivery. A previously returned public snapshot cannot authorize settlement.
+Unproven legacy wires remain wildcards even with a known accepted code or a
+later definitely-unsent marker. A single legacy accepted code does not prove
+that every earlier physical pool-backoff call was excluded. Known foreign
+predicted/actual code membership is retained independently of that wildcard.
+For the current valid claim, accepted actual codes supersede only
+their own predictions, and earlier accepted same-claim retries remain eligible.
+
+The initial frozen contract caps the new marker budget at 4,096 physical calls
+per radio. Its overflow transaction persists sticky radio saturation before
+reporting coverage, without fabricating an exact-wire marker or handle. This
+does not block sends, but indefinitely suppresses automatic confirmation after
+ordinary known sends fill the budget. The coordinator explicitly rejected
+that liveness behavior as production parity. This historical hard-cap design is
+not accepted or ready for consumer integration. No expiry,
+deletion of old receipt/wire history, or automatic reset may turn unknown
+history into clean evidence.
+
+The coordinator resolved the additional requirement by authorizing the
+schema-unchanged authoritative per-emission journal without a total-row cap,
+consistent with existing durable wire/operation history. The local successor
+does not create saturation from row count, delete known/unsent rows, or erase
+exact handles/replay/conflict facts. Durable storage is not bounded. Radio-wide
+comparison uses SQL aggregates; diagnostic results alone are limited to 4,096
+rows and report TRUNCATED when omitting history. A complete transactional
+comparison can safely settle despite a truncated diagnostic sample. Existing
+persisted saturation, if present, remains a sticky wildcard; it is not cleared
+by restore, reopen or lease replacement.
+
+The canonical contract owner corrected the incompatible total-cap wording from
+`5db00defc6c7ac1e6c22237edd1d48b8d99beb35` in
+`0eea3589d989a905f0d57b2ac1937a3b2732dc5e`. A further tracked-wire provenance
+revision is still required below. New source controls retain 4,100 known
+accepted/definitely-unsent physical markers, replay the earliest exact
+resolution, reopen the file, and settle a disjoint accepted code. A second
+reopen retains a later unknown marker and explicitly prevents settlement.
+These are authored controls, not execution evidence. Persistence errors and
+cancellation propagate before any caller may physically emit; there is no
+storage-failure fallback allowing an unrecorded send.
+
+Only the exact transport invocation's proven definitely-unsent cancellation
+can resolve its marker as unsent. A firmware `DeviceError` is not proof of
+zero command writes. An unresolved earlier call therefore remains a wildcard
+even after a later backoff call succeeds. Late accepted-code refinement must
+identify the exact physical marker and be independent of the product row's
+retired mutation grant; it must never clear another marker or renew authority.
+The old `recordDirectSendAccepted(attempt, wireId, code)` signature cannot
+identify a physical invocation and must not silently resolve every marker
+sharing a wire ID.
+
+Trusted policy/manifest were read through the GitHub API at immutable current
+main under the memory constraint. `wp-owned` covers the repository/tests/evidence;
+`persistence-schemas` admits forward migration and directly required entities/DAO
+changes, with real migration and export comparison required. Source snapshots
+were published through bounded GitHub REST tree/commit creation, not local Git
+decompression, local builds or new worktrees. The genuine KSP export route and
+independent fixture are owned by the infrastructure/oracle lanes. New Room
+migration, same-wire physical-call and separate-handle concurrency controls are
+authored but unexecuted at this stage. Neither schema-only commit establishes
+the optional producer implementation or runtime acceptance.
+
+The later local producer draft integrates the additive contract from
+`5db00defc6c7ac1e6c22237edd1d48b8d99beb35`; it is not in the frozen schema-only
+source. It uses complete SQL aggregates inside the delivery transaction, never
+a diagnostic sample as permission. A `RADIO_DELIVERY` operation discriminator
+prevents a historical legacy settlement receipt from being presented as new
+exclusion-aware settlement evidence. This operation is not product bookkeeping
+and is excluded from that public receipt list. New producer controls cover
+exact physical retries, contradictory resolutions, retired-grant refinement,
+restore/reopen, competing handles, rollback and cancellation. All remain
+unexecuted, and the final canonical provenance and actual execution gates remain open.
+
+The service owner identified a distinct pre-dispatch liveness gap: a newly
+registered logical wire can be cancelled or lose its grant before any physical
+invocation. Absence of a marker cannot distinguish that case from a legacy wire
+that emitted without premarking. The agreed additive seam is
+`beginDirectAckAttemptRequiringEmissionTracking` and
+`registerDirectAckDispatchRequiringEmissionTracking`. They atomically create the
+wire and an immutable `EMISSION_TRACKING_REQUIRED` operation, binding the wire ID,
+prediction and version 1. Generic/tracked mode crossing, old-wire upgrade and
+request-ID collisions are explicit conflicts; no begin-then-tag gap is allowed.
+This uses the existing operation journal and changes no schema metadata.
+
+Premarking requires that tracked provenance. A tracked but unmarked wire is
+absent from emitted-history diagnostics and does not compete before transport.
+All physical invocations still require a committed exact marker first. Legacy
+wire-level evidence has no invented physical ID; unknown ancestry remains
+independently wildcard even when physical marker rows or accepted metadata
+later exist. The new optional source-only legacy-known positive was corrected
+to assert explicit Nonsettling under this requirement; the previously executed
+legacy settlement suite and its successful-ACK assertions are unchanged.
+Additional real Room source controls cover tracked begin rollback, exact mode
+replay/conflict, never-invoked positive selectivity, legacy/unsent plus known
+acceptance across file reopen, and competing atomic registration/settlement.
+None of these new controls has executed.
+
+Independent review found a brace/scope defect in the frozen schema-only
+separate-handle test. The DB-only successor repaired that scope, but its
+query-callback BEGIN observation does not establish an underlying SQLite attempt:
+Room 2.8.5 invokes the callback before delegate.beginTransaction. It is not
+accepted blocking evidence. The frozen source and export overlay remain
+untouched. The live Room boundary comparison is updated locally from schema
+v2/25 entities to v3/27 entities and the four-field physical marker key;
+historical v2 migration inputs remain unchanged. Actual v3 KSP output was
+subsequently obtained as recorded below, not manufactured. Published main subsequently advanced to
+`99f03ad2da235e66c5cbcb58e88ac4d9aa55d2c5`; its published delta contains only
+WP-313 resolver tests/evidence, not a database version change. Later product
+integration must bind and verify a fresh exact candidate against that base.
+
+A separate DB-only successor is frozen at
+`3d2f7177aee225078f5234301721d83cb33b554c`, parent `3e582`, tree
+`a6efbaed5c6e4db0e413b0b57de44a3048974b30`, ref
+`diagnostic/wp202-physical-journal-db-20261105-1225`. Its six database source/test
+paths include the scope repair, live boundary update, complete-history queries,
+exact wire/operation lookups and LF normalization. Entity/migration metadata
+is unchanged; v1/v2 schema blobs remain `0e6ce7706f75e08c4a70555178b2fdebb98f2184`
+and `2a1c5c66d5c42b53b146becf2ed085cffee93f68`, and v3 remains absent.
+It contains no optional data producer or canonical contract integration.
+The earlier exact schema-export diagnostic
+[42078121256 attempt 1](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42078121256)
+failed in its init-script task guard before KSP executed; it produced no
+schema/provenance artifact. That failed run, `3e582` and its `ce176` overlay stay
+immutable. The infrastructure owner is preparing an independently reviewed
+successor route; no old result is transferred.
+
+### Genuine v3 custody and coherent producer successor (unverified)
+
+The corrected dedicated KSP route executed on schema source
+`3d2f7177aee225078f5234301721d83cb33b554c`, diagnostic head `7933`, fixture
+`e602`, in [run 42080209234 attempt 1](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42080209234/job/127431111349).
+Production `:core:database:kspDebugKotlin` actually executed and succeeded;
+collector/upload succeeded after the ordinary Gradle aggregate failed.
+The ordinary failure was `:core:database:compileDebugUnitTestKotlin` at
+`DirectAckExclusionStorageTest.kt:73:37`, where the mixed SQLite bind array
+inferred a reified intersection type. The successor explicitly uses
+`arrayOf<Any?>`; this is a source repair, not a passing compilation claim.
+
+The genuine generated `3.json` is imported byte-for-byte from immutable Git blob
+`e7bf0f62999896bca4d36a2a636096d962b12638`, 132613 bytes, SHA256
+`4661fe56e21ac17c6b088fe794d0890294f01ac92825f321e36d1a067c78f28b`.
+The original artifact is `13441870104`. Independent custody/schema and static
+migration review found all 25 prior entities unchanged, exactly two added
+entities, the four-field physical marker key, and matching migration CREATE
+statements. This is generated-byte custody and static comparison only, not
+Room migration or product acceptance. The failed aggregate remains failed;
+no second CI-result/provenance bundle is committed or substituted.
+
+The canonical optional contract is now exact bytes from
+`7af7eefe319c31e5b96e2749e1e6296ffcd63aa1`, blob
+`886418aa7eaf464b39ae5e3bafc1f83bbe6abae1`. It incorporates the tracked
+registration/legacy-evidence contract and the later durable replay
+clarifications without changing the declarations of those clarifications.
+The producer uses the exact long `RequiringEmissionTracking` names.
+
+Every new resolution ID is atomically journaled in `direct_ack_operations`,
+scoped by radio/claim and bound to the exact logical wire, physical emission,
+input kind/code and committed result. The first entry is immutable.
+`direct_ack_emissions.resolutionRequestId` remains only latest metadata.
+Old exact replay does not replace that metadata, rewind wire acceptance or
+clear later conflicts. Reusing an ID with another code, unsent input or physical
+emission makes that emission sticky Conflict without rewriting the first entry.
+Internal resolution/provenance/proof entries are not public product bookkeeping.
+This evolves no entity or schema metadata.
+
+The new Room source controls exercise r1 Accepted(123), r2 Accepted(123), file
+reopen, r1 AlreadyApplied with latest r2; conflicting code/unsent/cross-emission
+reuse; independent physical IDs; conflict retained over another reopen; and
+resolution-journal insertion failure rolling back emission/wire/claim updates.
+Historical replay requires a retained genuine handle whose original
+issuer/lease/emission is persisted. The receiver's new issuer cannot acquire
+product grant/attempt authority from this historical refinement. No handle is
+reconstructed from a receipt and no restart handle-recovery API is introduced.
+
+A separate unresolved-MAY control closes the old store, cancels its owner scope,
+closes the actual file, then opens a fresh store/scope/ProcessEpoch on that file.
+It checks the exact old wildcard remains before and after the later unrelated
+claim, whose different accepted code must remain Nonsettling without product,
+receipt, incarnation, operation or delivery mutation. Restore also retains the
+wildcard. This is file-backed store-graph recreation, not an observed OS-process
+death or durable ACK-ingress/restart-recovery claim.
+
+Both producer race controls and the DB-only contention control now require an
+actual competing Room transaction to fail with SQLiteDatabaseLockedException
+while the first writer is held, using busy_timeout=0 on the pinned primary
+connection. They release the writer, retry, and assert the committed full-history
+result (unknown competitor blocks; tracked markerless registration does not).
+Query callback ordering and job-incomplete observations are not the oracle.
+These source controls, the replay controls and all current successor runtime
+behavior remain unexecuted under the retained local-execution hold. An exact
+coherent candidate must obtain its own hosted compilation, discovered tests and
+Room migration/reopen results; no predecessor aggregate result transfers.
+
 ### Separate accepted-code mismatch repair
 
 This successor is based on the fixture-only `94af032ee0a7bbe21fee822c86f63edac8745187`

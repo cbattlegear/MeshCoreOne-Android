@@ -388,7 +388,13 @@ real AppContainer/Room/ConnectionManager. Its two same/different-radio controls
 disconnect that manager without changing a Compose connection value, manually
 bumping servicesVersion or resetting content; they require offline editing,
 stale-A/offline callback rejection and fresh B controls with no offline radio
-writes. The implementation supplies the existing manager snapshot flow to
-ToolsEntry and observes withdrawal there, leaving AppState's global counter
-semantics unchanged. This actual mounted boundary needs fresh exact execution;
-the manually published feature-level fixtures do not establish it.
+writes. The snapshot-only predecessor `4b137f443d6410f6ed1172693da385ebe5e4875e`
+was not dispatched: independent review found manager snapshot withdrawal may
+precede actual registry withdrawal. Two additional same/different-radio controls
+hold the real teardown's persistence read, flush Compose while manager token is
+null but registry A is still published, then release teardown and require offline
+editing without resetting content or generation. The successor observes a
+registry-token StateFlow emitted under the existing publication/withdrawal lock,
+not the earlier manager snapshot. It leaves AppState's global counter semantics
+unchanged. This actual mounted boundary needs fresh exact execution; the manually
+published feature-level fixtures do not establish it.

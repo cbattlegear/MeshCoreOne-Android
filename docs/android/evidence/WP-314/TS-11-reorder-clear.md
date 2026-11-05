@@ -493,3 +493,33 @@ explicitly current offline draft without retiring local editing authority.
 Real stale token/device/origin mismatches still retire; unbound legacy adapters
 retain their previous behavior. These new assertions require fresh exact
 execution and do not inherit acceptance from the green f068 head.
+
+### r29 old asynchronous completion and offline draft binding
+
+Exact candidate `9da0e56ed2082d043d91e2f792dffd3a075cfd81`, run
+[42062175599](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42062175599),
+passed all six jobs, including the Swift codec and SwiftData restore/export
+oracles. The authoritative hosted-log audit matched the exact compiled test
+blobs and all 167 selected declarations: 92 mounted, 45 execution, 4
+batch-card, 14 saved-list, 8 AppContainer/Room lifetime and 4 actual Tools-entry
+methods. Tools 803/803 and App 2016/2016 passed with zero failures, errors or
+skips.
+
+Identical-test negative `23a385d4b248093f2cc2f2b3b2ce5ccb2fdf790f`, run
+`42062182812`, restored the two production files from `f068` while retaining
+the exact candidate tests and docs. Tools discovered and ran 803 tests; eight
+old-work/offline methods failed at the offline-bound-edit assertion on line 708:
+`offlineDraftSurvivesAcceptedBatchSaveCompletion`,
+`offlineDraftSurvivesOldLookupCompletion`,
+`offlineDraftSurvivesAcceptedHistoryRefreshCompletion`,
+`offlineDraftSurvivesStrictRunRejection`,
+`offlineDraftSurvivesAcceptedSingleSaveCompletion`,
+`offlineDraftSurvivesUnmatchedLateResponse`,
+`offlineDraftSurvivesOldBatchSleepCompletion` and
+`offlineDraftSurvivesOldSendCompletion`. These are behavioral discriminators
+for the restored production ordering/authority behavior, not compile or fixture
+failures; the required downstream reports were incomplete and the aggregate
+negative run remains failed. The exact positive and negative refs are preserved.
+
+This evidence is for the source-reviewed r29 candidate only. It does not claim
+physical radio, firmware, emulator, TalkBack or whole-WP-314 acceptance.

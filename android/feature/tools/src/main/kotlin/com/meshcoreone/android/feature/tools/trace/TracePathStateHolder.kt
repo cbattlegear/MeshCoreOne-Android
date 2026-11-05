@@ -437,8 +437,9 @@ class TracePathStateHolder(
             }
         }
         val key = EntityKey(radioId, progress.path.id)
-        if (previous != null && previous.path.name != name) store.updateSavedTracePathName(key, name)
-        val persisted = checkNotNull(store.fetchSavedTracePath(key)) { "Created trace path is missing" }.runs.mapTo(mutableSetOf()) { it.id }
+        val stored = checkNotNull(store.fetchSavedTracePath(key)) { "Created trace path is missing" }
+        if (stored.name != name) store.updateSavedTracePathName(key, name)
+        val persisted = stored.runs.mapTo(mutableSetOf()) { it.id }
         var acceptedResults = results
         fun isSameBatch(): Boolean =
             connectionRevision == requestConnection && pathSelectionRevision == revision &&

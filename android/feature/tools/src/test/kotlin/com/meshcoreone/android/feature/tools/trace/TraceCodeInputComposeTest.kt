@@ -252,11 +252,20 @@ class TraceCodeInputComposeTest {
             assertTrue(texts().contains(host.get().getString(C.contactsTraceMapSaveFailedMessage)))
             assertEquals("Retry partial batch", input().config[SemanticsProperties.EditableText].text)
             assertEquals("savePath(batch)", h.diagnostics.failures.single().first)
+            if (!failAfterCommit) {
+                setInput("Retry partial batch B")
+                click(host.get().getString(L.commonSave))
+                assertEquals("Retry partial batch B", store.paths.values.single().name)
+                assertEquals("Retry partial batch B", input().config[SemanticsProperties.EditableText].text)
+                assertTrue(texts().contains(host.get().getString(C.contactsTraceMapSaveFailedMessage)))
+                setInput("Retry partial batch")
+            }
             failAppend = false
             click(host.get().getString(L.commonSave))
             val saved = store.paths.values.single()
             assertEquals(1, creates, "Retry must resume the already-created path")
             assertEquals(partial.id, saved.id)
+            assertEquals("Retry partial batch", saved.name, "A to B to A retries must use the latest requested name")
             assertEquals(partial.runs.map { it.id }, saved.runs.take(partial.runs.size).map { it.id })
             assertEquals(2, saved.runs.size, "An append that committed before reporting failure must not be duplicated")
             assertEquals(listOf(listOf(6.0), listOf(8.0)), saved.runs.map { it.hopsSNR.toList() })
@@ -371,7 +380,13 @@ class TraceCodeInputComposeTest {
 
     private fun mountSaveAction(h: TraceHarness, fontScale: Float = 1f) {
         mountPathList(h, fontScale)
-        scrollToIndex(11)
+        scrollToSaveAction(h)
+    }
+
+    private fun scrollToSaveAction(h: TraceHarness) {
+        val state = h.state
+        val repeaterRows = state.availableRepeaters.let { if (it.isEmpty()) 0 else it.size + 1 }
+        scrollToIndex(7 + state.outboundPath.size + repeaterRows + if (state.errorMessage == null) 0 else 1)
     }
 
     private fun staleSaveAcrossReconnect(crossRadio: Boolean) {
@@ -390,7 +405,7 @@ class TraceCodeInputComposeTest {
             MaterialTheme { TracePathListContent(state, h.holder, entry, connection) }
         }
         settle()
-        scrollToIndex(11)
+        scrollToSaveAction(h)
         click(host.get().getString(C.contactsResultsSavePath))
         val oldConfirm = assertNotNull(button(host.get().getString(L.commonSave)).config[SemanticsActions.OnClick].action)
         val nextRadio = if (crossRadio) RadioId(UUID.randomUUID()) else RADIO
@@ -408,7 +423,7 @@ class TraceCodeInputComposeTest {
         h.complete { h.holder.runTrace() }
         h.respond(sender.sent.last().tag, listOf(TraceNode(Bytes.of(0xAA, 0x11), 9.0), node(null, 5.0)), nextRadio)
         settle()
-        scrollToIndex(11)
+        scrollToSaveAction(h)
         click(host.get().getString(C.contactsResultsSavePath))
         setInput("Fresh B route")
         click(host.get().getString(L.commonSave))
@@ -455,7 +470,7 @@ class TraceCodeInputComposeTest {
         assertEquals("Accepted A", saved.name)
         assertEquals(fresh, h.state, "Old completion must not adopt A's saved path or overwrite B")
         assertNull(h.state.activeSavedPath)
-        scrollToIndex(11)
+        scrollToSaveAction(h)
         click(host.get().getString(C.contactsResultsSavePath))
         assertEquals("Tower", input().config[SemanticsProperties.EditableText].text)
         click(host.get().getString(L.commonCancel))

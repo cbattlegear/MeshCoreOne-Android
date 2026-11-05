@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-303 New-generation warning source copy; not reviewed translation or activation evidence. -->
+<resources>
+    <string name="notification_enrollment_action">Start a new notification generation</string>
+    <string name="notification_enrollment_title">Start a new notification generation?</string>
+    <string name="notification_enrollment_warning">Starting a new notification reply generation does not restore old replies or prove this is a first installation. Missing history may mean lost storage. Existing retained text is not sent or reassociated. Create a separate new generation?</string>
+    <string name="notification_enrollment_confirm">Create new generation</string>
+    <string name="notification_enrollment_cancel">Cancel</string>
+    <string name="notification_enrollment_resume">Reconcile retained generation</string>
+    <string name="notification_enrollment_held">Notification reply generation setup is unavailable until durable storage policy and current-generation safeguards are integrated. Messaging and other notification settings remain available.</string>
+    <string name="notification_enrollment_interrupted">The warning was dismissed or interrupted. No acknowledgment is restored. An attempted action must be reconciled before starting another generation.</string>
+    <string name="notification_enrollment_blocked">Setup is not confirmed or this foreground action is no longer current. Reconcile retained state; do not assume old replies were restored or a new generation was created.</string>
+    <string name="notification_enrollment_bound">The retained generation was observed as bound. This does not restore old replies or enable notification replies or message delivery.</string>
+</resources>

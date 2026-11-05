@@ -83,9 +83,12 @@ send, message delivery or automatic recreation is activated. A BOUND observation
 is not restored historical data, antirollback, RF origin or dispatch authority.
 No native Keystore/device or physically lost-data recovery is claimed.
 
-The app-local XML warning resource is separately held until the WP-000 support
-rule lands on trusted main. Frozen Swift/generated localization inputs are not
-modified; English fallback is not claimed to be reviewed translation.
+The app-local XML warning resource was admitted using
+`reserve.py admit --wp WP-303 --path android/app/src/main/res/values/notification_enrollment.xml
+--operation add-or-update-notification-enrollment-copy` after trusted-main
+merge `5640a3cf238a0c08f57f77fb78175964fdd6cdf6` of PR #577.
+Its exact ten approved keys are present. Frozen Swift/generated localization inputs
+are not modified; English fallback is not claimed to be reviewed translation.
 
 ## Focused evidence (source until executed)
 
@@ -95,7 +98,7 @@ locked/corrupt/mismatched reads, dismissed/rotated callbacks, delayed staging,
 uncertain/rejected returns, explicit later new attempts, delayed failed observation
 after a foreground-owner replacement, and copy field boundaries.
 
-`NotificationEnrollmentEntryTest` declares 14 methods and mounts the real entry and Notifications settings
+`NotificationEnrollmentEntryTest` declares 15 methods and mounts the real entry and Notifications settings
 extension. Controls cover held action, actual displayed descriptor, explicit
 confirm/dismissal, pause, window focus loss, actual Activity recreation and
 disposal/remount. Five integrated

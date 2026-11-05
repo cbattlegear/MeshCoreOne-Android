@@ -79,8 +79,8 @@ Verifier successors `321a82532` and `1bf569fcf` add typed rejection of foreign
 nullable history/head blobs, direct independent decoding assertions for staged,
 consumed and invalidated event layouts (including the raw 32-byte previous MAC),
 reopen controls, and a typed boundary around platform alias lookup. These
-successors require fresh exact-candidate execution beyond the earlier passing
-verifier run.
+successors are covered by the final combined execution below, not by the earlier
+passing verifier run.
 
 The agreed producer contract derives warning
 `notification-enrollment-new-generation`, version 1, from the exact four
@@ -91,7 +91,7 @@ part of that descriptor. The immutable request is predeclared before display;
 neither its UUIDs nor this copy digest is consent. Retirement must synchronously
 fence the opaque presentation before scheduling durable invalidation. An
 already admitted or uncertain action cannot be retried as a fresh presentation
-grant. This is a coordinated interface, not evidence that the UI has executed.
+grant. The mounted execution of this interface is bound to the final run below.
 
 ## Retirement before ledger allocation successor
 
@@ -117,8 +117,8 @@ rejection without a witness file or key allocation. The second injects a
 cleanup row-write failure and requires reported uncertainty and rejection by
 both current and reopened verifiers. These bring the focused suite to 23 methods
 at SDK31/37. Same-host readiness, manifest/ownership validation, portmap and
-`git diff --check` passed; exact successor hosted execution is pending.
-No earlier run verifies this repair.
+`git diff --check` passed. Final exact successor execution is recorded below;
+no earlier run verifies this repair.
 
 The adjacent `ALLOCATED` control holds the actual empty SQLite file before
 schema creation. Invalidation defers only while a same-process live
@@ -139,7 +139,7 @@ and requires no false corruption report. The instances use differing warning
 copy and equivalent canonical paths. The old action remains absent; a fresh
 verifier rejects pending new evidence, while only the uninterrupted actual new
 action may consume it once. These controls bring the focused suite to 26 methods
-at SDK31/37; successor execution remains pending.
+at SDK31/37; final successor execution is recorded below.
 
 Combined candidate `36f3aa83fbbb094a1bbb16e280145b4ff41a6c6e` contained
 the exact `2d4c42d8f` verifier/test bytes plus an actual producer/backend
@@ -153,7 +153,47 @@ the intended cross-copy schedule. Reviewed successor
 callback to the same test gate, without changing production or owned verifier
 source. Exact run
 [42017808137](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42017808137)
-is pending.
+passed all six jobs. Final discovery and scope are recorded below.
+
+## Final combined execution
+
+Exact source: `e8d76e687e3c83ec3041bb15930c7aa2cde456c9`, immutable
+ref `diagnostic-wp303-enrollment-e8d76e687-20261105`.
+Run [42017808137](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42017808137)
+passed classification, controller/workflow policy, Linux Android build,
+Swift codec, SwiftData restore/export and aggregate `android-ci`.
+The verifier/test bytes match owned source `2d4c42d8f` exactly; the typed adapter
+and its six tests are unchanged in the combined source.
+
+The authoritative hosted Linux job log, inspected directly without retaining
+a second CI bundle, reports:
+
+| Module/suite | Discovered/run/passed | Failed/errors/skipped |
+| --- | --- | --- |
+| `:core:datastore:testDebugUnitTest` | 273/273/273 | 0/0/0 |
+| `:app:testDebugUnitTest` | 2062/2062/2062 | 0/0/0 |
+| `:platform:notifications:testDebugUnitTest` | 340/340/340 | 0/0/0 |
+| Focused verifier | 52 (26 methods at SDK31/37) | 0/0/0 |
+| Typed witness adapter | 6 | 0/0/0 |
+| Producer identity/control | 16 | 0/0/0 |
+| Mounted entry and actual producer cross-copy control | 34 (17 methods at SDK31/37) | 0/0/0 |
+| Native journal mapper | 6 (3 methods at SDK31/37) | 0/0/0 |
+
+Actual discovered identities include both SDK executions of the `KEY_CREATED`,
+`ALLOCATED`, abandoned-empty-file, cleanup-failure and distinct-verifier
+regressions. The actual producer/backend control delays old unconfirmed
+invalidation, changes warning copy, holds the new verifier at `ALLOCATED`,
+then finishes old invalidation before releasing staging. It passes without a
+false corruption report and reaches actual consumed acknowledgment and bound
+witness/journal with the original operation tuple. The existing mounted positive
+reopens real storage, and the pause/dispose admission negatives remain passing.
+
+This completes the bounded nonactivated verifier/interaction integration
+evidence. It does not activate the held production entry, notification ingress
+or publication. Host HMAC/fsync and Robolectric native SQLite are not physical
+AndroidKeystore, reboot, process-death, power-loss, restore-device or human-consent
+evidence. Same-device snapshot antirollback is not claimed. Source provenance,
+local execution-owner holds and the frozen Swift pin remain unchanged.
 
 ## Ownership and advisory state
 
@@ -222,8 +262,8 @@ the reported class-companion placement, stale failed-read epoch path and direct
 dialog focus/lifecycle confirmation boundary in `1c463663a`. Its test suite
 adds actual warning actions through the real verifier, witness and journal,
 including native-SQLite pause/dispose barriers before stage and consume.
-These are reviewed source assertions, not passing UI execution evidence.
-One combined exact-candidate hosted run is coordinated with the producer;
+Those initial assertions are now executed by the final combined run above.
+One combined exact-candidate hosted run was coordinated with the producer;
 there is no duplicate verification bundle or transfer of the earlier run.
 
 Combined execution attempts (preserved, not attributed to successors):
@@ -304,7 +344,7 @@ Related baseline evidence, not evidence for this verifier:
   datastore tests and six alias cases. That source predates these uncommitted
   verifier/test files, so the result does not verify their compilation or tests.
 
-The 21 focused verifier methods contain assertions for exact warning-copy hashing,
+The 26 focused verifier methods contain assertions for exact warning-copy hashing,
 request-field mismatch, version/copy changes, lifecycle invalidation, restart,
 concurrent verification, replay, post-commit uncertainty, corrupt/missing
 independent authenticator, independent witness database/key loss, and failure

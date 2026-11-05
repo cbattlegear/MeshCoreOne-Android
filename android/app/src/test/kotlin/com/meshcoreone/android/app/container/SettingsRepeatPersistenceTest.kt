@@ -399,6 +399,7 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                             Bytes.utf8("T-Deck").paddedOrTruncated(40) +
                             Bytes.utf8("v1.13.0").paddedOrTruncated(20) + Bytes.of(if (repeat) 1 else 0, 0),
                     ) else null
+                    0x3c -> listOf(Bytes.of(0x1a))
                     else -> null
                 }
             }

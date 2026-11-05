@@ -309,3 +309,24 @@ The isolated old-base storage successor must not ship by itself; the normalized 
 targeted writer and postcommit publication are composed here. Source count becomes twenty-five
 writer and fifteen persistence methods. Run `41954394380` at exact `9972903c` predates this
 additional control and cannot provide its execution evidence.
+
+Exact successor diagnostic
+[41954394380](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41954394380)
+at `9972903c07f0bd500c1c4c1e74a39b3f73fb331c` completed with overall failure.
+Job `127005770291` has deduplicated paired writer **24 START / 24 END SUCCESS** and persistence
+**15 START / 15 END SUCCESS**, with no authority method failures. This executes the legacy Job
+control and both transferred targeted-writer controls, but not the subsequent combined twenty-fifth
+writer control. App discovered 1,942 tests with only the same three known preset/onboarding failures.
+Controller/workflow policy and Swift codec oracle jobs passed. The separate composed Settings
+candidate `c43f9d5af3b875f470e5044ecc19bbc0e0752463`, run `41955116616`, includes all twenty-five
+writer and fifteen persistence controls; the Settings producer reports all four owned source/test
+files byte-identical to `db3d70453`. Its execution and Settings radio integration remain distinct
+from this predecessor result.
+
+The composed `c43f9d5a` run `41955116616` failed before App scenarios:
+job `127008154093`, `:app:compileDebugUnitTestKotlin`, reports duplicate ambiguous `ChannelDTO`
+imports at `SettingsDefaultScopePersistenceTest.kt:10,17`. Both authority classes have zero actual
+START/END markers in this run; that is absent execution, not passing or failed test methods.
+The Settings producer owns this fixture correction and fresh composed execution. The completed
+run is preserved. The independent owned candidate remains suitable for fresh execution of the
+twenty-fifth combined control without modifying the Settings producer's files.

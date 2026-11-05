@@ -97,6 +97,12 @@ gradle.beforeProject { project ->
             task.path == ":core:data:testDebugUnitTest"
         }
         if (task.path == ":core:data:testDebugUnitTest") {
+            task.beforeTest { descriptor ->
+                task.logger.quiet("WP208_DATA_TEST|${task.path}|${descriptor.className}|${descriptor.name}|START")
+            }
+            task.afterTest { descriptor, result ->
+                task.logger.quiet("WP208_DATA_TEST|${task.path}|${descriptor.className}|${descriptor.name}|END|${result.resultType}")
+            }
             def interopOutput = project.layout.buildDirectory.dir("reports/wp203/interop").get().asFile
             task.outputs.dir(interopOutput)
             def inputPath = project.providers.gradleProperty("wp203InteropInputDir").orNull

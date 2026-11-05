@@ -30,6 +30,19 @@ MIXED = PORTED + (
 
 
 class SourceDispositionTests(unittest.TestCase):
+    def test_data_progress_markers_only_observe_real_test_callbacks(self):
+        guard = ci.TASK_GRAPH_GUARD.read_text(encoding="utf-8")
+        start = guard.index('        if (task.path == ":core:data:testDebugUnitTest") {')
+        end = guard.index("            def interopOutput =", start)
+        self.assertEqual(guard[start:end], '''        if (task.path == ":core:data:testDebugUnitTest") {
+            task.beforeTest { descriptor ->
+                task.logger.quiet("WP208_DATA_TEST|${task.path}|${descriptor.className}|${descriptor.name}|START")
+            }
+            task.afterTest { descriptor, result ->
+                task.logger.quiet("WP208_DATA_TEST|${task.path}|${descriptor.className}|${descriptor.name}|END|${result.resultType}")
+            }
+''')
+
     def test_source_capture_uses_completed_same_project_graph_compilers(self):
         guard = ci.TASK_GRAPH_GUARD.read_text(encoding="utf-8")
         self.assertNotIn("taskDependencies.getDependencies", guard)

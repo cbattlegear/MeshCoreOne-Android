@@ -46,6 +46,12 @@ class CapabilityEngine:
                 or not all(isinstance(wp, str) and wp for wp in rule["work_packages"])
             ):
                 raise PortError(f"Malformed {rule['id']} capability work_packages")
+            if "keys" in rule and (
+                not isinstance(rule["keys"], list) or not rule["keys"]
+                or not all(isinstance(key, str) and key for key in rule["keys"])
+                or len(set(rule["keys"])) != len(rule["keys"])
+            ):
+                raise PortError(f"Malformed {rule['id']} capability keys")
             self._rules[rule["id"]] = rule
 
     @property
@@ -155,6 +161,85 @@ class CapabilityEngine:
             if any(CapabilityEngine._android_copy_comparison(message) == english
                    for path, message in messages.items() if path != paths[0]):
                 raise PortError("Contact import recovery requires explicit localized copy, not English fallback")
+        notification_resources = {
+            path for path, operation in path_operations.items()
+            if operation == "add-or-update-notification-enrollment-copy"
+        }
+        if notification_resources:
+            from .scope_amendment import NOTIFICATION_ENROLLMENT_COPY_CAPABILITY
+
+            paths = NOTIFICATION_ENROLLMENT_COPY_CAPABILITY["path_rules"]
+            if notification_resources - set(paths) or read_blob is None:
+                raise PortError("Notification enrollment copy requires its exact path and immutable blob reader")
+            for path in paths:
+                if path not in candidate_tree:
+                    raise PortError("Notification enrollment copy cannot delete its resource")
+                candidate_structure, candidate = CapabilityEngine._notification_enrollment_resource(
+                    read_blob(candidate_tree[path])
+                )
+                if set(candidate) != set(NOTIFICATION_ENROLLMENT_COPY_CAPABILITY["keys"]):
+                    raise PortError("Notification enrollment resource must contain exactly the approved string keys")
+                if path in base_tree:
+                    original_structure, original = CapabilityEngine._notification_enrollment_resource(
+                        read_blob(base_tree[path])
+                    )
+                    if not set(original).issubset(candidate):
+                        raise PortError("Notification enrollment copy cannot delete an existing string key")
+                    if original_structure != candidate_structure:
+                        raise PortError("Notification enrollment copy cannot change unrelated resource content")
+
+    @staticmethod
+    def _notification_enrollment_resource(data: bytes):
+        from .scope_amendment import NOTIFICATION_ENROLLMENT_COPY_CAPABILITY
+
+        try:
+            text = data.decode("utf-8")
+            if "<!DOCTYPE" in text.upper() or "<!ENTITY" in text.upper():
+                raise PortError("Notification enrollment resource cannot contain DTD or entity declarations")
+            document = minidom.parseString(text)
+        except (UnicodeError, ExpatError) as error:
+            raise PortError("Notification enrollment resource requires valid UTF-8 XML") from error
+
+        root = document.documentElement
+        if (
+            root.tagName != "resources" or root.attributes.length
+            or any(child.nodeType == Node.TEXT_NODE and child.data.strip() for child in root.childNodes)
+        ):
+            raise PortError("Notification enrollment resource requires a plain resources root")
+        allowed = set(NOTIFICATION_ENROLLMENT_COPY_CAPABILITY["keys"])
+        values = {}
+        selected = []
+        for child in root.childNodes:
+            if child.nodeType == Node.TEXT_NODE and not child.data.strip():
+                continue
+            if child.nodeType in (Node.COMMENT_NODE, Node.PROCESSING_INSTRUCTION_NODE):
+                continue
+            if child.nodeType != Node.ELEMENT_NODE or child.tagName != "string":
+                raise PortError("Notification enrollment resource may contain only approved string entries")
+            key = child.getAttribute("name")
+            if key not in allowed or key in values or dict(child.attributes.items()) != {"name": key}:
+                raise PortError("Notification enrollment resource contains an unknown or duplicate string key")
+            if any(value.nodeType != Node.TEXT_NODE for value in child.childNodes):
+                raise PortError("Notification enrollment strings must be plain text")
+            value = "".join(node.data for node in child.childNodes)
+            if not value.strip():
+                raise PortError("Notification enrollment strings must be nonempty")
+            values[key] = value
+            selected.append(child)
+
+        def entry(node):
+            children = [
+                child for child in node.childNodes
+                if not (node is root and (
+                    child in selected
+                    or (child.nodeType == Node.TEXT_NODE and not child.data.strip())
+                ))
+            ]
+            return (node.nodeType, node.nodeName, node.nodeValue,
+                    tuple(sorted(node.attributes.items())) if node.attributes else (),
+                    tuple(entry(child) for child in children))
+
+        return entry(document), values
 
     @staticmethod
     def _android_copy_comparison(message: str):

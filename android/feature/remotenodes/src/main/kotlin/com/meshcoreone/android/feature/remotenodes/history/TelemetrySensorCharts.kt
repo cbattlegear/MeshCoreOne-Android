@@ -40,11 +40,15 @@ object TelemetrySensorCharts {
     fun sections(groups: List<ChannelGroup>, ocvArray: List<Long>, system: MeasurementSystem): List<SensorChartSection> {
         if (groups.size > 1) {
             return groups.map { group ->
-                SensorChartSection(channelHeader(group.channel), group.charts.map { chart(it, ocvArray, system) })
+                SensorChartSection(channelHeader(group.channel), group.charts.map {
+                    chart(it, ocvArray, system).copy(identity = SensorChartIdentity(group.channel, it.key))
+                })
             }
         }
         val single = groups.firstOrNull() ?: return emptyList()
-        return listOf(SensorChartSection(null, single.charts.map { chart(it, ocvArray, system) }))
+        return listOf(SensorChartSection(null, single.charts.map {
+            chart(it, ocvArray, system).copy(identity = SensorChartIdentity(single.channel, it.key))
+        }))
     }
 
     /** Swift `L10n...Status.channel(n)` ("Channel %1$d"). */

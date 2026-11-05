@@ -11,6 +11,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -20,15 +21,14 @@ import com.meshcoreone.android.feature.remotenodes.history.*
 import com.meshcoreone.android.feature.remotenodes.telemetry.ChartAccent
 import com.meshcoreone.android.feature.remotenodes.common.SwiftNumberFormat
 import java.time.ZoneId
-import java.util.Locale
 
 @Composable
 internal fun RemoteMetricChart(chart: MetricChartModel) {
-    val locale = Locale.getDefault()
+    val locale = LocalConfiguration.current.locales[0]
     val zone = ZoneId.systemDefault()
     val title = remoteText(chart.title)
     val dates = remember(chart) { chart.drawnSeries.flatMap { it.dataPoints.map { point -> point.date } }.distinct().sorted() }
-    var selected by remember(chart) { mutableIntStateOf(dates.lastIndex.coerceAtLeast(0)) }
+    var selected by remember(chart.identity ?: chart.title, dates) { mutableIntStateOf(dates.lastIndex.coerceAtLeast(0)) }
     val readout = chart.readout(dates.getOrNull(selected), locale)
     val descriptions = readout?.entries?.map { "${remoteText(it.seriesName)}: ${it.valueText} ${if (readout.isMultiSeries) chart.unit else ""}" }.orEmpty()
     val dateText = readout?.let { HistoryDateFormat.monthDayTime(it.date, locale, zone) }.orEmpty()

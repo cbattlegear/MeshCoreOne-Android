@@ -13,9 +13,11 @@ import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.model.ProtocolLimits
 import com.meshcoreone.android.core.model.VContactIdentity
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.bytes.utf8Prefix
 import com.meshcoreone.android.core.protocol.model.AutoAddConfig
 import com.meshcoreone.android.core.protocol.model.SelfInfo
 import java.time.Instant
@@ -238,12 +240,20 @@ class ConnectedDeviceEditor(
     ): Boolean = sessionEdits.withLock {
         val original = if (expectedToken == null) access.connectedDevice else access.currentDevice(expectedToken)
         original ?: return@withLock false
-        if (clearRadio && original.defaultFloodScopeName == region) clearDefaultFloodScope()
+        fun DeviceDTO.removesSelectedScope(): Boolean {
+            val selected = defaultFloodScopeName?.utf8Prefix(ProtocolLimits.MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES)
+                ?: return false
+            return remove && selected == region.utf8Prefix(ProtocolLimits.MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES) &&
+                knownRegions.none {
+                    it != region && it.utf8Prefix(ProtocolLimits.MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES) == selected
+                }
+        }
+        if (clearRadio && original.removesSelectedScope()) clearDefaultFloodScope()
         persistEdit(if (remove) "removeKnownRegion" else "addKnownRegion", expectedToken) { authoritative ->
             authoritative.copy(
                 knownRegions = if (remove) authoritative.knownRegions.filterNot { it == region }.snapshot()
                 else (authoritative.knownRegions + region).distinct().snapshot(),
-                defaultFloodScopeName = authoritative.defaultFloodScopeName.takeUnless { remove && it == region },
+                defaultFloodScopeName = authoritative.defaultFloodScopeName.takeUnless { authoritative.removesSelectedScope() },
             )
         }
     }

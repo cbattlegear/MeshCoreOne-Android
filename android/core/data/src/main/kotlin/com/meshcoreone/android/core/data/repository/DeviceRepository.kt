@@ -10,6 +10,7 @@ import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.database.*
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.bytes.utf8Prefix
 import java.util.UUID
 
 internal class DeviceRepository(private val context: RoomRepositoryContext) : DevicePersisting, DeviceEditPersisting {
@@ -62,7 +63,13 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
                     dto.id != expected.device.id || dto.radioId != expected.device.radioId) return@conditionalWrite false
                 if (dto.isActive != expected.device.isActive || dto.lastConnected != expected.device.lastConnected) return@conditionalWrite false
                 val removed = existing.knownRegions.toSet() - dto.knownRegions.toSet()
-                if (dto.defaultFloodScopeName != null && dto.defaultFloodScopeName in removed) {
+                val normalizedDefault = dto.defaultFloodScopeName
+                    ?.utf8Prefix(ProtocolLimits.MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES)
+                if (normalizedDefault != null && removed.any {
+                        it.utf8Prefix(ProtocolLimits.MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES) == normalizedDefault
+                    } && dto.knownRegions.none {
+                        it.utf8Prefix(ProtocolLimits.MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES) == normalizedDefault
+                    }) {
                     invalidData("Removing the default region requires clearing its default flood scope")
                 }
                 database.devices().upsert(dto.toEntity())

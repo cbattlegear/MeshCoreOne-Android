@@ -232,3 +232,23 @@ provide hardware/device evidence. No local Gradle execution or retained-owner re
 No existing diagnostic ref, sibling run, draft PR, source pin, #495 hold or historical lease was
 changed. This summary references the authoritative hosted log; no duplicate CI-result bundle
 is committed, uploaded, hashed or substituted.
+
+### Normalized default-scope alias follow-up
+
+The Settings producer's independent review found a coupled editor/storage mismatch: raw region
+`P` at exactly thirty UTF-8 bytes and raw `P+suffix` share one radio scope. Removing `P` must not
+clear the selected scope while the longer alias remains. This follow-up does not import Settings
+service/UI changes or alter the editor API. The editor recomputes normalized selected/removed
+names and surviving aliases from each authoritative CAS snapshot, including after a conflict;
+its legacy radio-clear decision uses the same survivor rule. The persistence producer transferred
+the exact repository validation hunk: normalize both removed names and the selected default,
+permitting a retained default only while a matching normalized survivor exists. Raw channel-scope
+reset semantics are unchanged.
+
+Two new real-Room controls cover mixed short/long multibyte aliases in both removal directions,
+explicit last-alias default-clear rejection, and concurrent alias insertion/removal forcing a
+fresh CAS-derived survivor decision. Existing assertions remain intact. Source controls
+`controller/validate.py`, `portmap.py`, `controller/verification_config.py` and `git diff --check`
+pass; these new controls require their own exact hosted execution and do not inherit the earlier
+34-method result. Radio-to-Room ordering across Settings operations remains the separate
+Settings producer's queue contract, not a guarantee manufactured by this storage guard.

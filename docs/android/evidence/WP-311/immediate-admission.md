@@ -64,6 +64,11 @@ fetch until store includes its identity` uses the real add and list holders and 
 cancellation, an actual same-radio service replacement during a held manual lookup, an actual
 radio/service/store replacement during a held scan add, and reset during a held scan lookup.
 These assert no stale completion, success feedback, replacement-store read or fabricated row.
+Independent review additionally identified a late-error race after Scan again. Failure catches now
+validate the captured review/session before publishing; cleanup can clear only that captured review.
+Four named `old add/lookup table-full/ordinary failure cannot fail or stop a newer scan import`
+controls hold the old failing operation while a new import is actively suspended. They require
+no stale error, announcement, feedback or flag reset, followed by exactly the new stored DTO's success.
 
 Both `ContactsImmediateAdmissionApi31ComposeTest` and
 `ContactsImmediateAdmissionApi37ComposeTest` inherit six mounted tests:

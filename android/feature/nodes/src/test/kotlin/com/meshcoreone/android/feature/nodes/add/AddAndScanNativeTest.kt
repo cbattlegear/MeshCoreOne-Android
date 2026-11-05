@@ -246,6 +246,84 @@ class AddAndScanNativeTest {
     }
 
     @Test
+    fun `old add table-full cannot fail or stop a newer scan import`() = staleScanFailure(failLookup = false, tableFull = true)
+
+    @Test
+    fun `old add ordinary failure cannot fail or stop a newer scan import`() = staleScanFailure(failLookup = false, tableFull = false)
+
+    @Test
+    fun `old lookup table-full cannot fail or stop a newer scan import`() = staleScanFailure(failLookup = true, tableFull = true)
+
+    @Test
+    fun `old lookup ordinary failure cannot fail or stop a newer scan import`() = staleScanFailure(failLookup = true, tableFull = false)
+
+    private fun staleScanFailure(failLookup: Boolean, tableFull: Boolean) = scenario {
+        val harness = Harness(clock).connect()
+        val radio = checkNotNull(harness.session.radioId)
+        val oldKey = Fixtures.repeated(0xAA)
+        val newContact = Fixtures.contact(radioId = radio, publicKey = Fixtures.repeated(0xBB), name = "New")
+        val scan = ScanContactStateHolder(harness.dependencies, scope)
+        scan.handleScanResult(harness.codec.exportContactUri("Old", oldKey, ContactType.CHAT))
+        settle()
+        val oldEntered = CompletableDeferred<Unit>()
+        val oldRelease = CompletableDeferred<Unit>()
+        val newEntered = CompletableDeferred<Unit>()
+        val newRelease = CompletableDeferred<Unit>()
+        val failure = if (tableFull) NodesContactFailure.ContactTableFull() else IllegalStateException("old import failed")
+        var newCommitted = false
+        harness.contactService.addBehavior = { _, frame ->
+            if (frame.publicKey == oldKey) {
+                if (!failLookup) {
+                    oldEntered.complete(Unit)
+                    oldRelease.await()
+                    throw failure
+                }
+            } else {
+                assertEquals(newContact.publicKey, frame.publicKey)
+                newEntered.complete(Unit)
+                newRelease.await()
+                newCommitted = true
+            }
+        }
+        harness.store.fetchContactBehavior = { _, key ->
+            if (key == oldKey) {
+                assertTrue(failLookup)
+                oldEntered.complete(Unit)
+                oldRelease.await()
+                throw failure
+            }
+            if (newCommitted) newContact else null
+        }
+        var oldCompleted = false
+        val oldImport = scope.launch { scan.confirm(); oldCompleted = true }
+        oldEntered.await()
+        scan.resetToScanner()
+        scan.handleScanResult(harness.codec.exportContactUri("New", newContact.publicKey, ContactType.CHAT))
+        settle()
+        assertEquals(newContact.publicKey, scan.state.value.scannedContact?.publicKey)
+        var newOutcome: ScanConfirmOutcome? = null
+        val newImport = scope.launch { newOutcome = scan.confirm() }
+        newEntered.await()
+        val announcements = harness.announcer.messages.toList()
+        oldRelease.complete(Unit)
+        oldImport.join()
+        assertTrue(oldImport.isCancelled)
+        assertFalse(oldCompleted)
+        assertTrue(scan.state.value.isImporting, "The old failure must not stop New's held import")
+        assertNull(scan.state.value.errorMessage)
+        assertEquals(0, scan.state.value.errorFeedback)
+        assertEquals(0, scan.state.value.successFeedback)
+        assertEquals(announcements, harness.announcer.messages, "A stale failure must not be announced")
+        assertNull(newOutcome)
+        newRelease.complete(Unit)
+        newImport.join()
+        assertEquals(ScanConfirmOutcome.Completed(newContact), newOutcome)
+        assertEquals(1, scan.state.value.successFeedback)
+        assertEquals(0, scan.state.value.errorFeedback)
+        assertFalse(scan.state.value.isImporting)
+    }
+
+    @Test
     fun `pasting a contact link fills the form and a bad link shows the row error`() = scenario {
         val harness = Harness(clock)
         val form = AddContactStateHolder(harness.dependencies)

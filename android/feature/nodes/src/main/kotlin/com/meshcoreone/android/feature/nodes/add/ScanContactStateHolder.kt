@@ -171,14 +171,19 @@ class ScanContactStateHolder(
             dependencies.announcer.announce(NodesMessage.res(R.string.l10n_app_contacts_contacts_scan_accessibility_added, contact.name))
             return ScanConfirmOutcome.Completed(added)
         } catch (_: NodesContactFailure.ContactTableFull) {
+            ensureReview(generation, connection, device.radioId)
             presentImportFailure(NodesMessage.res(R.string.l10n_app_contacts_contacts_add_error_nodelistfull, device.maxContacts.toInt()))
         } catch (cancelled: CancellationException) {
-            if (generation == scanGeneration) mutableState.update { it.copy(isImporting = false) }
             throw cancelled
         } catch (error: Exception) {
+            ensureReview(generation, connection, device.radioId)
             presentImportFailure(NodesMessage.res(R.string.l10n_app_contacts_contacts_scan_error_importfailed, dependencies.messages.message(error)))
+        } finally {
+            // Cancelled/retired work may clear its own flag, never a later review's importing state.
+            if (generation == scanGeneration && scanConnection === connection && scanRadioId == device.radioId) {
+                mutableState.update { it.copy(isImporting = false) }
+            }
         }
-        mutableState.update { it.copy(isImporting = false) }
         return ScanConfirmOutcome.Stay
     }
 

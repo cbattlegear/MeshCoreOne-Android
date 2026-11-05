@@ -638,6 +638,24 @@ sealed interface DirectAckRadioFailureResult {
  * provenance proving no physical invocation, or every target emission DefinitelyUnsent, permits
  * the known-safe no-write failure path regardless of unrelated foreign radio history. A later
  * unsent retry cannot clear an older possible emission; a transport error alone is not proof.
+ * Here no-write covers the WHOLE persisted message incarnation, not just this claim. Include
+ * every earlier claim bound to the exact same radio/message/incarnation, even after lease retirement,
+ * payload erasure or a new claim/generation. Do not equate public keys or identical DTO fields with
+ * incarnation identity. An inherited FAILED status is not a no-write certificate. Prior same-
+ * incarnation MAY, conflict, incomplete birth coverage or inconsistent acceptance defeats the
+ * exception even when the new claim is unmarked or all its represented invocations are UNSENT.
+ * Keep distinct claim identities: report that prior claim's applicable existing OTHER_CLAIM reasons,
+ * not a fabricated current-target emission. Truly unrelated foreign MAY alone does not defeat a
+ * genuine whole-target no-write proof; preauthority uncertainty and saturation remain independent.
+ * A prior same-incarnation valid acceptance also defeats the no-invocation premise and requires
+ * ordinary complete foreign-history assessment. Include its valid physical, current wire and
+ * retained generic accepted actuals in the family's collision assessment with their source claim
+ * identities. Compare each actual against distinct competing claims, excluding the queried current
+ * claim and that actual's own source claim; an old accepted source alone is not its own collision.
+ * Thus old A Accepted(K), new same-incarnation B unmarked/UNSENT, and C MAY or known K cannot bypass
+ * the existing unresolved/collision reasons merely because B has no accepted actual. An accepted A
+ * alone is not a new unconditional blocker or a new reason literal. Deleted/recreated incarnations
+ * are not merged into this family; their retained radio evidence still receives ordinary assessment.
  * The proof must reconcile registered-wire acceptance with physical ancestry, not inspect only
  * emission rows. On an unsaturated radio, a tracked wire's retained accepted code requires a valid ACCEPTED
  * physical row for the same wire and actual code. No marker, only UNSENT/MAY rows, or only

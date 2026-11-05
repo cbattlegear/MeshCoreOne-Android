@@ -943,3 +943,48 @@ bootstrap UNKNOWN durability remain separately owned and unverified. UI
 reported an independently frozen conservative aggregate-only integration
 with authored identical-DTO replacement controls; those reports are not
 execution evidence or a claim that row-specific identity binding now exists.
+
+## Same-incarnation prior claims and the whole-message no-write boundary
+
+The coordinator requested this focused successor after storage freeze
+`4f7e747d85fd1a6d4bac29d9977511602b53c189`. Actual producer blob
+`1cb5fadf62289c9c81c0ddd475d8e3cb5af178b3` was source-read through a serial
+authenticated remote request: at 640-651, `otherUnresolved`/conflict/legacy/code
+reasons were assessed only when the current claim was accepted or already had
+target/global reasons. A new fully tracked unmarked/all-UNSENT claim could
+therefore ignore an earlier same-incarnation claim's MAY. The earlier ordinary
+FAILED status did not establish no-write; lease retirement did not undo an invocation.
+
+The agreed correction binds the family by actual persisted radio/message/incarnation,
+including retired claims and erased payload histories. It does not merge a deleted/
+recreated incarnation, infer identity from DTO equality, or turn the prior claim into
+the current claim. Prior MAY, conflicting/malformed physical evidence, incomplete
+birth provenance and inconsistent acceptance defeat the whole-message no-write
+exception. They retain existing OTHER_CLAIM reason mappings: unresolved, conflicting
+or untracked ancestry respectively. No enum or signature is added.
+
+An additional concrete case is old same-incarnation A Accepted(K), new B unmarked/
+all-UNSENT, and C MAY or known K. A proves an invocation for this message, so B cannot
+ignore C using a current-claim-only no-write premise. Storage agreed to include valid
+physical, wire and retained generic family actuals with source claim identity and
+open complete foreign assessment for prior accepted ancestry too. Collision comparison
+excludes the queried current claim and the actual's source claim, preventing A alone
+from becoming its own collision. Valid accepted ancestry alone is not a new unconditional
+failure blocker; ordinary known-safe timeout behavior is preserved when its real
+prerequisites hold. Truly unrelated foreign MAY alone retains the conditional no-write
+positive; durable PREAUTHORITY_HISTORY_UNKNOWN and saturation remain independent blockers.
+No fake clean fixture, TTL, reset or birth certificate is introduced.
+
+Storage reports authored controls for new generations preserving the actual incarnation
+(no save/upsert), new unmarked/all-UNSENT claims, ordinary inherited FAILED/RESEND,
+earlier MAY and accepted-family collision variants. Assertions must independently
+observe the applicable old-claim reason alongside UNKNOWN and verify no FAILED/proof/
+revision/operation write; UNKNOWN must not mask a missing ancestry predicate. These
+are producer reports, not execution or inspection of the uncommitted implementation.
+The conditional accepted-alone projection is not a public clean-radio certificate.
+
+This successor changes only KDoc and this existing WP-201 evidence file under
+`wp-owned/modify` and `record-evidence`; generic APIs, declarations, classifiers and
+all existing assertions remain unchanged. The channel contract/event freezes are
+independent and preserved. Local compilation/tests/controller execution remain held;
+source checks and remote blob/ref/diff identity are not executable acceptance.

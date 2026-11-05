@@ -33,7 +33,7 @@ internal class AndroidWitnessAuthentication(
 
     override fun requireAccessible() = access.requireAccessible(StorageOperation.READ)
 
-    override fun createNew(witnessId: UUID) = platform {
+    override fun createNew(witnessId: UUID) = platform(StorageOperation.WRITE) {
         access.requireAccessible(StorageOperation.WRITE)
         val alias = alias(witnessId)
         // Never wrap createKeyIfAbsent: an occupied identity is a failure, even after a lost return.
@@ -50,7 +50,7 @@ internal class AndroidWitnessAuthentication(
         )
     }
 
-    override fun authenticate(witnessId: UUID, bytes: ByteArray): ByteArray = platform {
+    override fun authenticate(witnessId: UUID, bytes: ByteArray): ByteArray = platform(StorageOperation.READ) {
         requireAccessible()
         val key = keys.find(alias(witnessId))
             ?: throw StorageFailure(StorageProblem.FormerKeyMissing, StorageOperation.READ)
@@ -60,21 +60,37 @@ internal class AndroidWitnessAuthentication(
         }
     }
 
-    private inline fun <T> platform(action: () -> T): T = try {
+    private inline fun <T> platform(operation: StorageOperation, action: () -> T): T = try {
         action()
     } catch (failure: android.security.keystore.UserNotAuthenticatedException) {
-        throw StorageFailure(StorageProblem.DeviceLocked, StorageOperation.READ, failure)
+        throw StorageFailure(StorageProblem.DeviceLocked, operation, failure)
     } catch (failure: android.security.keystore.KeyPermanentlyInvalidatedException) {
-        throw StorageFailure(StorageProblem.KeyPermanentlyInvalidated, StorageOperation.READ, failure)
+        throw StorageFailure(StorageProblem.KeyPermanentlyInvalidated, operation, failure)
     } catch (failure: GeneralSecurityException) {
-        throw StorageFailure(StorageProblem.ProviderFailure, StorageOperation.READ, failure)
+        throw StorageFailure(providerProblem(failure), operation, failure)
     } catch (failure: ProviderException) {
-        throw StorageFailure(StorageProblem.ProviderFailure, StorageOperation.READ, failure)
+        throw StorageFailure(providerProblem(failure), operation, failure)
     } catch (failure: IOException) {
-        throw StorageFailure(StorageProblem.IoFailure, StorageOperation.READ, failure)
+        throw StorageFailure(StorageProblem.IoFailure, operation, failure)
     }
 
     private fun alias(id: UUID): String = "meshcoreone.notification-enrollment-witness.v1.$id"
+
+    private fun providerProblem(failure: Throwable): StorageProblem {
+        var current: Throwable? = failure
+        val visited = java.util.Collections.newSetFromMap(
+            java.util.IdentityHashMap<Throwable, Boolean>(),
+        )
+        while (current != null && visited.size < 16 && visited.add(current)) {
+            when (current) {
+                is android.security.keystore.KeyPermanentlyInvalidatedException ->
+                    return StorageProblem.KeyPermanentlyInvalidated
+                is android.security.keystore.UserNotAuthenticatedException -> return StorageProblem.DeviceLocked
+            }
+            current = current.cause
+        }
+        return StorageProblem.ProviderFailure
+    }
 }
 
 internal interface WitnessKeys {

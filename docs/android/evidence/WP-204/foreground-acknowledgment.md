@@ -39,12 +39,58 @@ WP-308 source-only producer refs are `d1c9944b9598051875b32644bb2d1e09f1248bf8`
 and lifecycle-fence successor `05e31823c883147e25763c91b89153d474341172`.
 The successor contract requires synchronous `onRetirePresentation` before
 scheduling `onInvalidatePresentation`; its pause/dispose tests are fixture
-source, not live integration evidence. The owner has not yet supplied the
-approved typed handoff for wiring the real foreground lifecycle, displayed
-localized warning and explicit action to this verifier. Until that integration
-is handed off and reviewed, this implementation does not prove a real user
-interaction or feature readiness. No same-device snapshot rollback guarantee
-is claimed.
+source, not live integration evidence. The coordinator subsequently assigned
+the actual foreground enrollment producer to session
+`c8e06c81-e88c-429e-97af-e85f06bbfa19`; the composer source is not that producer.
+The real producer's warning/action and lifecycle integration is still pending.
+This implementation does not yet prove a real user interaction or feature
+readiness. No same-device snapshot rollback guarantee is claimed.
+
+## Typed consumer integration successor
+
+The branch integrates trusted main
+`1a8b406a67d44006f14ac043ac468b6adf07a9d7`, including merged #571's
+`NotificationEnrollmentCoordinator`, through merge
+`51c3f1087`. The adapter source is
+`96a2512cae9e359571cde4fc5d343431324abc44`.
+`ForegroundEnrollmentWitnessAdapter` maps every operation/store/nonce,
+acknowledgment, full prior record, receipt, revision, phase and witness identity
+without generating or adopting replacements. It preserves `newlyAuthorized`
+exactly, including false on replay, and never turns a stale, failed or uncertain
+mutation into a successful write. Missing/authentication failures map to the
+coordinator's coarse identity-mismatch category; locked/unavailable storage maps
+to storage-unavailable. Cancellation and unexpected exceptions propagate rather
+than causing retries or fabricated acknowledgment.
+
+The six adapter methods use deterministic port doubles to assert mapping, not
+real consent or journal durability. Constructing the adapter installs no
+notification ingress, publication or default enrollment service.
+
+The witness owner's exact independently reviewed successor
+`b75555a0b22e493a2a9117f25e1fcfde871ee60c` is integrated without editing
+its production/test paths. It prevents a stale acknowledgment expecting a
+previous record from allocating replacement storage after that storage is
+deleted. It also retains nullable-blob corruption and typed platform-failure
+controls. Its source review and execution remain bound to its own PR #576 and
+exact candidate; integration does not relabel those results.
+
+Verifier successors `321a82532` and `1bf569fcf` add typed rejection of foreign
+nullable history/head blobs, direct independent decoding assertions for staged,
+consumed and invalidated event layouts (including the raw 32-byte previous MAC),
+reopen controls, and a typed boundary around platform alias lookup. These
+successors require fresh exact-candidate execution beyond the earlier passing
+verifier run.
+
+The agreed producer contract derives warning
+`notification-enrollment-new-generation`, version 1, from the exact four
+rendered title/body/confirm/cancel strings in that order. Each string contributes
+its UTF-16 `String.length`, a colon and the unchanged string, without trimming
+or normalization. Any additional displayed consent-bearing copy must become
+part of that descriptor. The immutable request is predeclared before display;
+neither its UUIDs nor this copy digest is consent. Retirement must synchronously
+fence the opaque presentation before scheduling durable invalidation. An
+already admitted or uncertain action cannot be retried as a fresh presentation
+grant. This is a coordinated interface, not evidence that the UI has executed.
 
 ## Ownership and advisory state
 
@@ -69,6 +115,12 @@ proceed without a local result as an explicitly unverified candidate. Automatic
 pre-push checks are retired. The separate hard Gradle execution owner was
 preserved and not bypassed.
 
+The adapter production path was separately admitted by trusted
+`app-build-launcher/add-direct-support-wiring`; its new test path was admitted
+by `reviewed-support-test/add-or-update-related-test`. The verifier source/test
+repairs were freshly admitted as `wp-owned/modify`. No resource or composer
+file was copied under the existing-consumer rule.
+
 ## Verification
 
 Passed:
@@ -86,6 +138,15 @@ Passed:
   (249 discovered/run/passed; 0 failed/errors/skipped), and the real SwiftData
   restore/export oracle. The two admission-race test names appear in its test
   discovery output.
+
+In progress, not a passing result:
+
+- Hosted run [41994415358](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41994415358)
+  targets exact adapter candidate
+  `96a2512cae9e359571cde4fc5d343431324abc44` on fresh immutable diagnostic
+  ref `wp204-foreground-adapter-96a2512c-20261105-022557`. It predates the
+  witness successor reconciliation and the new verifier codec/corruption tests.
+  Its inputs and workflow are unchanged; no later source is attributed to it.
 
 Not verified:
 

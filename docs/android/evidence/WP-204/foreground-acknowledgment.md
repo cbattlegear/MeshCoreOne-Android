@@ -120,6 +120,19 @@ at SDK31/37. Same-host readiness, manifest/ownership validation, portmap and
 `git diff --check` passed; exact successor hosted execution is pending.
 No earlier run verifies this repair.
 
+The adjacent `ALLOCATED` control holds the actual empty SQLite file before
+schema creation. Invalidation now defers only while this verifier's live
+allocating writer owns initialization; that writer still validates/commits the
+schema and performs terminal retirement cleanup. Its short in-memory ownership
+flag is cleared in `finally`, including failed allocation. It is not durable
+consent, a first-install marker, or proof about another process. The control
+requires no false corruption report and exact `STAGED`/`INVALIDATED` history.
+A separate injected allocation failure leaves an abandoned empty file, clears
+the ownership flag and requires typed corruption on later invalidation and
+uncertainty after reopen. Genuine abandoned/corrupt storage is not suppressed.
+These controls bring the focused suite to 25 methods at SDK31/37; successor
+execution remains pending.
+
 ## Ownership and advisory state
 
 Trusted `reserve.py admit` returned `wp-owned/create` for the verifier and

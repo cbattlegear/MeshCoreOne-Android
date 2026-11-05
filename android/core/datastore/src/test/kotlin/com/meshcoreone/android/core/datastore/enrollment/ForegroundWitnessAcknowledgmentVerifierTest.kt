@@ -156,23 +156,32 @@ class ForegroundWitnessAcknowledgmentVerifierTest {
     }
 
     @Test
-    fun retirementBeforeLedgerAllocationTerminatesLateStagingWithoutWitnessAuthorization() = runBlocking {
+    fun retirementBeforeLedgerAllocationTerminatesLateStagingWithoutWitnessAuthorization() =
+        assertRetiredAllocation(ForegroundWitnessAcknowledgmentVerifier.WritePoint.KEY_CREATED)
+
+    @Test
+    fun retirementDuringOwnedEmptyAllocationDefersWithoutReportingCorruption() =
+        assertRetiredAllocation(ForegroundWitnessAcknowledgmentVerifier.WritePoint.ALLOCATED)
+
+    private fun assertRetiredAllocation(point: ForegroundWitnessAcknowledgmentVerifier.WritePoint) = runBlocking {
         val f = fixture()
         val presentation = f.verifier.present(f.request)
-        val gate = WriteGate(ForegroundWitnessAcknowledgmentVerifier.WritePoint.KEY_CREATED)
+        val gate = WriteGate(point)
         f.writeGate = gate
         val staging = async(Dispatchers.IO) { f.verifier.recordExplicitAction(presentation) }
         try {
             assertTrue(gate.entered.await(10, TimeUnit.SECONDS))
-            assertFalse(f.file.exists())
+            assertEquals(point == ForegroundWitnessAcknowledgmentVerifier.WritePoint.ALLOCATED, f.file.exists())
             f.verifier.retire(presentation)
             f.verifier.invalidate(presentation)
-            assertFalse(f.file.exists())
+            assertEquals(point == ForegroundWitnessAcknowledgmentVerifier.WritePoint.ALLOCATED, f.file.exists())
+            assertTrue(f.failures.isEmpty())
         } finally {
             gate.release.countDown()
         }
 
         assertEquals(ForegroundAcknowledgmentStaging.Rejected, staging.await())
+        assertTrue(f.failures.isEmpty())
         f.database { db ->
             db.rawQuery("SELECT payload FROM acknowledgment_history ORDER BY sequence", null).use { rows ->
                 for (status in listOf("STAGED", "INVALIDATED")) {
@@ -208,6 +217,25 @@ class ForegroundWitnessAcknowledgmentVerifierTest {
         )
         assertFalse(witnessFile.exists())
         assertEquals(0, authentication.created)
+    }
+
+    @Test
+    fun abandonedEmptyLedgerStillReportsCorruptionWithoutAnAllocatingWriter() = runBlocking {
+        val f = fixture()
+        val presentation = f.verifier.present(f.request)
+        f.failAt = ForegroundWitnessAcknowledgmentVerifier.WritePoint.ALLOCATED
+        assertEquals(ForegroundAcknowledgmentStaging.Indeterminate, f.verifier.recordExplicitAction(presentation))
+        assertTrue(f.file.isFile)
+        assertTrue(f.failures.isNotEmpty())
+        f.failAt = null
+        f.failures.clear()
+        f.verifier.invalidate(presentation)
+        assertEquals(StorageProblem.CorruptSecretState, f.failures.single().problem)
+        assertEquals(
+            ForegroundAcknowledgmentResult.Indeterminate,
+            f.verifier(processId = UUID.randomUUID()).verify(f.request),
+        )
+        assertEquals(1, f.authentication.creates)
     }
 
     @Test

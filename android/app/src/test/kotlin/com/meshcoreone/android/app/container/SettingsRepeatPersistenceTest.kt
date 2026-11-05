@@ -25,6 +25,7 @@ import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
+import com.meshcoreone.android.core.protocol.command.PacketBuilder
 import com.meshcoreone.android.core.protocol.session.RadioWritePermit
 import com.meshcoreone.android.core.services.sync.SyncState
 import com.meshcoreone.android.core.ui.UiText
@@ -54,7 +55,8 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class SettingsRepeatPersistenceTest : RoomProcessTest() {
-    @Test fun txPowerOnlyApplyPreservesVerifiedRestoreAfterRepeatOffProjectionFailure() = runTest {
+    @Test fun advancedApplyPreservesRestoredRfUnlessExplicitlyEditedAfterRepeatOffProjectionFailure() = runTest {
+        for (editAfterFailure in listOf(false, true)) {
         var rejectRepeatOff = false
         val failing = object : PersistenceStoreProtocol by store {
             override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
@@ -74,22 +76,6 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
             h.eventually("Repeat is enabled before the verified-off projection failure") {
                 !holder.state.value.isApplyingRepeat && holder.state.value.device?.clientRepeat == true
             }
-            val repeating = assertNotNull(store.fetchDevice(before.id))
-            assertTrue(repeating.frequency != before.frequency)
-            rejectRepeatOff = true
-            holder.onRepeatToggled(false)
-            h.eventually("verified off failed its first actual Room projection") {
-                !holder.state.value.isApplyingRepeat && failures.isNotEmpty()
-            }
-            assertFalse(rejectRepeatOff)
-            assertFalse(holder.state.value.isRepeatEnabled)
-            assertNotNull(holder.state.value.errorMessage)
-            assertEquals(repeating, store.fetchDevice(before.id))
-            assertEquals(repeating, h.manager.connectedDevice)
-            assertEquals(before.frequency, radio.frequency)
-            assertFalse(session.settingsService.queryDevice().clientRepeat)
-            assertTrue(session.settingsService.radioSettingsNeedsRecovery)
-
             val deps = assertNotNull(dependencies)
             val advancedFailures = mutableListOf<Throwable>()
             val advanced = AdvancedRadioStateHolder(
@@ -98,11 +84,46 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
             )
             advanced.start()
             try {
+                h.eventually("Advanced observes the enabled Repeat device") {
+                    advanced.state.value.hasLoaded && advanced.state.value.device?.clientRepeat == true
+                }
+                advanced.onBandwidthSelected(125_000u)
+                advanced.onSpreadingFactorSelected(9)
+                advanced.onCodingRateSelected(7)
+                advanced.apply(session.token)
+                h.eventually("deliberate Repeat-on RF edits reach radio and Room") {
+                    !advanced.state.value.isApplying && advanced.state.value.showSuccess &&
+                        holder.state.value.device?.bandwidth == 125_000u
+                }
+                assertTrue(advancedFailures.isEmpty())
+                val repeating = assertNotNull(store.fetchDevice(before.id))
+                assertTrue(repeating.frequency != before.frequency)
+                assertEquals(125_000u, repeating.bandwidth)
+                assertEquals(9u.toUByte(), repeating.spreadingFactor)
+                assertEquals(7u.toUByte(), repeating.codingRate)
+                rejectRepeatOff = true
+                holder.onRepeatToggled(false)
+                h.eventually("verified off failed its first actual Room projection") {
+                    !holder.state.value.isApplyingRepeat && failures.isNotEmpty()
+                }
+                assertFalse(rejectRepeatOff)
+                assertFalse(holder.state.value.isRepeatEnabled)
+                assertNotNull(holder.state.value.errorMessage)
+                assertEquals(repeating, store.fetchDevice(before.id))
+                assertEquals(repeating, h.manager.connectedDevice)
+                assertEquals(before.frequency, radio.frequency)
+                assertFalse(session.settingsService.queryDevice().clientRepeat)
+                assertTrue(session.settingsService.radioSettingsNeedsRecovery)
                 h.eventually("Advanced captures the still-pinned old Repeat frequency") {
                     advanced.state.value.hasLoaded && advanced.state.value.device == repeating
                 }
                 assertFalse(advanced.state.value.frequencyEditable)
                 assertEquals(repeating.frequency.toDouble() / 1000.0, advanced.state.value.frequency)
+                if (editAfterFailure) {
+                    advanced.onBandwidthSelected(62_500u)
+                    advanced.onSpreadingFactorSelected(8)
+                    advanced.onCodingRateSelected(6)
+                }
                 advanced.onTxPowerTextChanged("10")
                 advanced.apply(session.token)
                 h.eventually("TX-only Apply completes actual recovery and both durable writes") {
@@ -115,9 +136,12 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                 assertFalse(session.settingsService.radioSettingsNeedsRecovery)
                 val saved = assertNotNull(store.fetchDevice(before.id))
                 assertEquals(before.frequency, saved.frequency)
-                assertEquals(before.bandwidth, saved.bandwidth)
-                assertEquals(before.spreadingFactor, saved.spreadingFactor)
-                assertEquals(before.codingRate, saved.codingRate)
+                val expectedBandwidth = if (editAfterFailure) 62_500u else before.bandwidth
+                val expectedSf = if (editAfterFailure) 8u.toUByte() else before.spreadingFactor
+                val expectedCr = if (editAfterFailure) 6u.toUByte() else before.codingRate
+                assertEquals(expectedBandwidth, saved.bandwidth)
+                assertEquals(expectedSf, saved.spreadingFactor)
+                assertEquals(expectedCr, saved.codingRate)
                 assertEquals(10.toByte(), saved.txPower)
                 assertFalse(saved.clientRepeat)
                 assertEquals(repeating.preRepeatFrequency, saved.preRepeatFrequency)
@@ -125,14 +149,35 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                 assertEquals(repeating.preRepeatSpreadingFactor, saved.preRepeatSpreadingFactor)
                 assertEquals(repeating.preRepeatCodingRate, saved.preRepeatCodingRate)
                 assertEquals(saved, h.manager.connectedDevice)
+                val actual = session.settingsService.getSelfInfo()
+                assertEquals(before.frequency.toDouble() / 1000.0, actual.radioFrequency)
+                assertEquals(expectedBandwidth.toDouble() / 1000.0, actual.radioBandwidth)
+                assertEquals(expectedSf, actual.radioSpreadingFactor)
+                assertEquals(expectedCr, actual.radioCodingRate)
                 h.eventually("Advanced fields reflect the restored frequency and committed power") {
                     advanced.state.value.device == saved && !advanced.state.value.settingsModified
                 }
                 assertEquals(session.token, advanced.state.value.sessionToken)
-                assertEquals(listOf(1, 0, 0), radio.radioWrites.map { it[11].toInt() })
-                assertEquals(1, radio.powerWrites.size)
-                assertEquals(10u.toUByte(), radio.powerWrites.single()[1])
+                assertEquals(listOf(1, 1, 0, 0), radio.radioWrites.map { it[11].toInt() })
+                assertEquals(
+                    PacketBuilder.setRadio(
+                        before.frequency.toDouble() / 1000.0, before.bandwidth.toDouble() / 1000.0,
+                        before.spreadingFactor, before.codingRate, false,
+                    ),
+                    radio.radioWrites[2],
+                    "The actual disable restored every original RF field before its publication failed",
+                )
+                assertEquals(
+                    PacketBuilder.setRadio(
+                        before.frequency.toDouble() / 1000.0, expectedBandwidth.toDouble() / 1000.0,
+                        expectedSf, expectedCr, false,
+                    ),
+                    radio.radioWrites.last(),
+                )
+                assertEquals(2, radio.powerWrites.size)
+                assertEquals(10u.toUByte(), radio.powerWrites.last()[1])
             } finally { advanced.stop() }
+        }
         }
     }
 

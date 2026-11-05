@@ -44,6 +44,15 @@ class NativeMessagingTest {
             assertTrue(h.diagnostics.none { it is MessagingDiagnostic.UnmatchedAcknowledgement })
             assertTrue(h.diagnostics.any { it is MessagingDiagnostic.AckCodeMismatch }); assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size); h.close()
         },
+        native("lateDifferentActualAckRetiresTrackerAndCompletesRetryWithListener") {
+            lateDifferentActualAckCompletes(queued = false, listener = true)
+        },
+        native("lateDifferentActualAckCompletesRetryThroughRawMailbox") {
+            lateDifferentActualAckCompletes(queued = false, listener = false)
+        },
+        native("lateDifferentActualAckRetiresTrackerAndDrainsRealQueue") {
+            lateDifferentActualAckCompletes(queued = true, listener = true)
+        },
         native("bufferedUnrelatedAckIsReportedUnmatchedOnlyAfterActualResponse") {
             val h = Harness(this); h.start(); h.service.startEventMonitoring()
             val gate = CompletableDeferred<Unit>()
@@ -417,6 +426,59 @@ class NativeMessagingTest {
             p.close(); h.close()
         },
     )
+    private suspend fun TestScope.lateDifferentActualAckCompletes(queued: Boolean, listener: Boolean) {
+        val h = Harness(this, MessageServiceConfig(maxAttempts = 1))
+        h.start()
+        if (listener) h.service.startEventMonitoring()
+        val actual = Bytes.of(9, 8, 7, 6)
+        val gate = CompletableDeferred<Unit>()
+        h.transport.acknowledge = false
+        h.transport.expectedAckOverride = actual
+        h.transport.acceptanceGate = gate
+        val queue = if (queued) h.queue() else null
+        val events = h.service.statusEvents()
+        var sending: Deferred<MessageDTO>? = null
+        try {
+            if (queue != null) {
+                val message = h.service.createPendingMessage("late mismatched actual", h.contact)
+                queue.enqueueDM(DirectMessageEnvelope(message.id, CONTACT))
+            } else sending = async { h.service.sendMessageWithRetry("late mismatched actual", h.contact) }
+            runCurrent()
+            val row = h.store.messages.values.single()
+            val initial = assertNotNull(h.service.pendingAck(row.id))
+            assertFalse(actual in initial.ackCodes)
+            gate.complete(Unit); runCurrent()
+            val accepted = assertNotNull(h.service.pendingAck(row.id))
+            assertSame(initial.receipt, accepted.receipt)
+            assertTrue(actual in accepted.ackCodes)
+            assertFalse(initial.receipt.isCompleted)
+            h.transport.pushAck(initial.ackCodes.single(), 999u); runCurrent()
+            assertFalse(initial.receipt.isCompleted)
+            assertFalse(sending?.isCompleted ?: false)
+            assertNotEquals(MessageStatus.DELIVERED, h.stored(row.id).status)
+            assertNull(h.stored(row.id).roundTripTime)
+            h.transport.pushAck(actual, 321u); runCurrent()
+            if (queue != null) queue.awaitDrainCompletion()
+            else assertEquals(h.stored(row.id), assertNotNull(sending).await())
+            assertTrue(initial.receipt.isCompleted)
+            assertEquals(actual, initial.receipt.await().code)
+            assertEquals(MessageStatus.DELIVERED, h.stored(row.id).status)
+            assertEquals(0x06070809u, h.stored(row.id).ackCode)
+            assertEquals(321u, h.stored(row.id).roundTripTime)
+            assertEquals(0, h.service.pendingAckCount)
+            assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+            assertTrue(h.store.fetchPendingSends(RADIO).isEmpty())
+            assertEquals(listOf(MessageStatusEvent.StatusResolved(row.id, MessageStatus.DELIVERED, 321u)),
+                statuses(h.service, events))
+        } finally {
+            withContext(NonCancellable) {
+                gate.complete(Unit)
+                sending?.cancelAndJoin()
+                h.close()
+            }
+        }
+    }
+
     private fun poller(h: Harness) = h.poller()
     private fun contactPacket(text: String, type: UByte = 0u): Bytes {
         val writer = ByteWriter().appendUInt8(ResponseCode.CONTACT_MESSAGE_RECEIVED.rawValue).append(TARGET.prefix(6))

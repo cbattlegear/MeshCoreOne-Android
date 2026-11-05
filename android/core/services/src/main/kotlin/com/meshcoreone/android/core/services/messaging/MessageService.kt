@@ -1360,11 +1360,13 @@ class MessageService(
                 val ackTimeout = timeout ?: maxOf(config.minTimeout, info.suggestedTimeoutMs.toDouble() / 1000.0 * 1.2)
                 val outcome = clock.messagingDeadline(ackTimeout) {
                     while (true) {
-                        val ack = select<MeshAcknowledgement> {
-                            tracking.receipt.onAwait { it }
+                        val ack = select<MeshAcknowledgement?> {
+                            // This exact tracker receipt is already correlated, even after its map entry retires.
+                            tracking.receipt.onAwait { null }
                             mailbox.onReceive { MeshAcknowledgement(it.code, it.tripTime) }
                         }
                         ownership.check("retryDirectMessage.ack")
+                        if (ack == null) return@messagingDeadline true
                         if (ack.code in (pendingAck(id)?.ackCodes ?: tracking.ackCodes)) {
                             handleAcknowledgement(ack.code, ack.tripTime)
                             return@messagingDeadline true

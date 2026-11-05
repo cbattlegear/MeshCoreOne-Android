@@ -67,6 +67,25 @@ from the actually published RF state rather than racing an intentionally queued
 consumer. Cleanup suppression avoids self-suppression if a persistence adapter
 rethrows the identical failure object. Original assertions are retained.
 
+Exact 98aeb22405fd877528b583e51a57a99eb2910997 run 41997060546 failed:
+Linux job 127142812822 reported the missing protocol-test import and App
+2081 tests with three failures. The dual-callback Room control failed its first
+Throwable identity assertion; the held-Room control timed out; the retired-clear
+control found no successor snapshot. These are actual failures, not accepted
+execution or flaky exclusions. The immutable 0273cbaf9fa42c397b39b27bebf49387857f6e3b
+run 41998517882 remains separate and is not advanced or cancelled.
+
+The bounded callback-identity correction captures the first throwing callback's
+actual Throwable inside editDevice before a coroutine dispatcher boundary can
+recover/copy CancellationException. Its save-boundary catch rethrows that captured
+object with the repository's existing suppressed second failure intact. Both
+wrappers still mark commit observed before invoking callers; the original callback
+cannot replace the first captured failure. Without a captured callback failure,
+the original save-boundary failure propagates, with PersistenceStoreException mapped
+only before commit. No committed-success fallback, Room context/runtime lease change
+or identity-assertion weakening is introduced. The other two failures require
+separate repairs; this source correction alone is not Kotlin execution evidence.
+
 Independent producer reviews accepted the bounded source seams but found an
 additional actual cancellation gap: a newly committed snapshot could survive
 cancellation before SET, then a later manual RF edit and fresh enable/off would

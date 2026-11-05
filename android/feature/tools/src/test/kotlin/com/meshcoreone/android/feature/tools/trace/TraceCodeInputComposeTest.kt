@@ -62,6 +62,7 @@ import kotlin.test.assertNotSame
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.CompletableDeferred
 import org.junit.After
 import org.junit.Before
@@ -613,6 +614,117 @@ class TraceCodeInputComposeTest {
     @Test fun productionOriginRetainsOpenDraftOnDisconnectAndDifferentRadioReconnect() = offlineDraftAcrossReconnect(true, true)
     @Test fun offlineRunAttemptPreservesDraftAndSameRadioReconnect() = offlineDraftAcrossReconnect(true, false, true)
     @Test fun offlineRunAttemptPreservesDraftAndDifferentRadioReconnect() = offlineDraftAcrossReconnect(true, true, true)
+
+    @Test fun offlineDraftSurvivesOldLookupCompletion() = offlineDraftAfterOldWork("lookup")
+    @Test fun offlineDraftSurvivesOldSendCompletion() = offlineDraftAfterOldWork("send")
+    @Test fun offlineDraftSurvivesOldBatchSleepCompletion() = offlineDraftAfterOldWork("sleep")
+    @Test fun offlineDraftSurvivesAcceptedSingleSaveCompletion() = offlineDraftAfterOldWork("save")
+    @Test fun offlineDraftSurvivesAcceptedBatchSaveCompletion() = offlineDraftAfterOldWork("batch-save")
+    @Test fun offlineDraftSurvivesAcceptedHistoryRefreshCompletion() = offlineDraftAfterOldWork("history")
+    @Test fun offlineDraftSurvivesUnmatchedLateResponse() = offlineDraftAfterOldWork("response")
+
+    private fun offlineDraftAfterOldWork(stage: String) {
+        val h = configured()
+        val epoch = com.meshcoreone.android.core.contracts.domain.ProcessEpoch(UUID.randomUUID())
+        var token: com.meshcoreone.android.core.contracts.domain.SessionToken? =
+            com.meshcoreone.android.core.contracts.domain.SessionToken(
+                epoch, com.meshcoreone.android.core.contracts.domain.Generation(1), RADIO,
+            )
+        var version = 1
+        val feature = object : TracePathFeatureDependencies by h.deps {
+            override fun sessionToken() = token
+            override fun isOriginatingSessionCurrent(
+                generation: Int, token: com.meshcoreone.android.core.contracts.domain.SessionToken?,
+            ) = token != null && generation == version && token == this.sessionToken()
+        }
+        h.holder.configure(feature)
+        h.holder.bindConnection(RADIO, version, token)
+        h.holder.addNode(contact(0xAA, name = "Tower"))
+        val persistence = InMemoryTracePathStore { h.time.now() }
+        if (stage == "lookup" || stage == "history") {
+            persistence.insert(savedPath(h.state.fullPathData, radioId = RADIO))
+        }
+        val release = CompletableDeferred<Unit>()
+        var entered = false
+        h.deps.store = object : TracePathPersisting by persistence {
+            override suspend fun fetchSavedTracePaths(radioId: RadioId) =
+                persistence.fetchSavedTracePaths(radioId).also {
+                    if (stage == "lookup") { entered = true; release.await() }
+                }
+            override suspend fun fetchSavedTracePath(key: com.meshcoreone.android.core.contracts.domain.EntityKey) =
+                persistence.fetchSavedTracePath(key).also {
+                    if (stage == "history") { entered = true; release.await() }
+                }
+            override suspend fun createSavedTracePath(
+                radioId: RadioId, name: String, pathBytes: Bytes, hashSize: Long,
+                initialRun: com.meshcoreone.android.core.model.TracePathRunDTO?,
+            ): SavedTracePathDTO {
+                entered = true
+                release.await()
+                return persistence.createSavedTracePath(radioId, name, pathBytes, hashSize, initialRun)
+            }
+        }
+        val tags = mutableListOf<UInt>()
+        h.deps.sender = TraceSender { tag, _, _, _ ->
+            tags += tag
+            if (stage == "send") { entered = true; release.await() }
+            MessageSentInfo(0u, Bytes.EMPTY, 0u)
+        }
+        h.holder.setBatchEnabled(stage == "sleep" || stage == "batch-save")
+        h.holder.setBatchSize(if (stage == "sleep") 2 else 1)
+        val run = h.start { h.holder.runBatchTrace() }
+        if (stage in listOf("sleep", "save", "batch-save", "history")) {
+            h.respond(tags.single(), listOf(node(0xAA, 6.0), node(null, 3.0)), RADIO)
+        }
+        var saved: Boolean? = null
+        val save = if (stage == "save" || stage == "batch-save") {
+            assertTrue(run.isCompleted)
+            h.start { saved = h.holder.savePath("Accepted A") }
+        } else null
+        if (stage in listOf("lookup", "send", "save", "batch-save", "history")) assertTrue(entered)
+        if (stage == "sleep") assertFalse(run.isCompleted)
+        token = null
+        h.deps.device = null
+        h.holder.bindConnection(null, version, null)
+        mount(h)
+        click("Add Hop")
+        setInput("Offline before release")
+        val offline = h.state
+        val sends = tags.size
+        release.complete(Unit)
+        h.main.runCurrent()
+        h.time.advanceBy(500.milliseconds)
+        if (stage == "response") h.respond(tags.single(), listOf(node(0xAA, 9.0), node(null, 3.0)), RADIO)
+        h.time.advanceBy(60.seconds)
+        assertTrue(run.isCompleted)
+        assertTrue(save?.isCompleted != false)
+        assertEquals(sends, tags.size, "Retired A work never sends again")
+        assertEquals(offline, h.state, "Old work cannot mutate the rebound offline holder")
+        assertTrue(h.holder.isBoundEditingCurrent(null, version, null))
+        setInput("Offline after release")
+        paste("CC")
+        assertEquals("CC", input().config[SemanticsProperties.EditableText].text)
+        click("Done")
+        assertFalse(nodes().any { it.config.contains(SemanticsActions.SetText) })
+        if (save != null) {
+            assertEquals(true, saved)
+            assertEquals(RADIO, persistence.paths.values.single().radioId)
+        }
+        if (stage == "history") assertEquals(1, persistence.paths.values.single().runs.size)
+        version += 1
+        val nextRadio = RadioId(UUID.randomUUID())
+        token = com.meshcoreone.android.core.contracts.domain.SessionToken(
+            epoch, com.meshcoreone.android.core.contracts.domain.Generation(2), nextRadio,
+        )
+        h.deps.device = device().copy(radioId = nextRadio)
+        h.holder.bindConnection(nextRadio, version, token)
+        h.holder.setContactsForTesting(listOf(contact(0xBB, name = "Ridge")))
+        click("Add Hop")
+        setInput("BB")
+        click("Add nodes: BB")
+        assertEquals(2, h.state.outboundPath.size, "Fresh B can still extend the actual retained route")
+        assertEquals(sends, tags.size)
+    }
 
     private fun offlineDraftAcrossReconnect(disconnectOpenDraft: Boolean, crossRadio: Boolean, retainedRoute: Boolean = false) {
         val epoch = com.meshcoreone.android.core.contracts.domain.ProcessEpoch(UUID.randomUUID())

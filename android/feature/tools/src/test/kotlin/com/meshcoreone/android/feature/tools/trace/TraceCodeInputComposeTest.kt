@@ -589,7 +589,7 @@ class TraceCodeInputComposeTest {
         scrollToIndex(if (action == "up") 3 else 2)
         val label = "${host.get().getString(resource)}: ${
             C.contactsTraceListHopLabel(host.get().resources, if (action == "up") 2 else 1,
-                if (action == "up") "Bravo" else "Alpha")
+                if (action == "up") "Bravo (B2)" else "Alpha (A1)")
         }"
         val oldHop = if (isClear) null else assertNotNull(actionButton(label).config[SemanticsActions.OnClick].action)
         scrollToIndex(5)

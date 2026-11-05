@@ -38,6 +38,13 @@ internal data class SettingsRadioTarget(val device: DeviceDTO, val service: Sett
         ) throw SettingsNotConnectedException()
     }
 
+    fun currentDevice(observedDevice: DeviceDTO?, observedToken: SessionToken?): DeviceDTO {
+        requireCurrent(observedDevice, observedToken)
+        val current = if (token == null) requireNotNull(observedDevice) else service.currentDevice(token)
+        requireCurrent(current, token)
+        return current
+    }
+
     companion object {
         fun capture(
             renderedToken: SessionToken?, device: DeviceDTO?, observedToken: SessionToken?, service: SettingsRadioPort?,
@@ -60,6 +67,8 @@ data class DeviceGpsState(val isSupported: Boolean, val isEnabled: Boolean)
  */
 interface SettingsRadioPort {
     val sessionToken: SessionToken? get() = null
+    fun currentDevice(expectedToken: SessionToken): DeviceDTO =
+        throw UnsupportedOperationException("Session-bound current radio device is not supported")
     /** Session-owned uncertainty survives a Settings composition/holder being disposed. */
     val pathHashModeNeedsRecovery: Boolean get() = false
     suspend fun getSelfInfo(): SelfInfo

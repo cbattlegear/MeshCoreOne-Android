@@ -183,17 +183,15 @@ class RadioPresetStateHolder(
         val openingTarget = repeatConfirmationTarget
         repeatConfirmationTarget = null
         mutable.update { it.copy(showRepeatConfirmation = false) }
-        if (openingTarget != null) {
-            try {
-                if (openingTarget.token != renderedToken) throw SettingsNotConnectedException()
-                openingTarget.requireCurrent(mutable.value.device, mutable.value.sessionToken)
-                enableRepeatMode(openingTarget)
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (failure: Exception) {
-                mutable.update { it.copy(errorMessage = env.describe(failure)) }
-            }
-        } else withRepeatTarget(renderedToken, ::enableRepeatMode)
+        try {
+            if (openingTarget == null || openingTarget.token != renderedToken) throw SettingsNotConnectedException()
+            openingTarget.requireCurrent(mutable.value.device, mutable.value.sessionToken)
+            enableRepeatMode(openingTarget)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            mutable.update { it.copy(errorMessage = env.describe(failure)) }
+        }
     }
 
     private fun applyPreset(id: String, repeat: Boolean, target: SettingsRadioTarget) {
@@ -208,7 +206,7 @@ class RadioPresetStateHolder(
             target.requireCurrent(mutable.value.device, mutable.value.sessionToken)
             val service = target.service
             if (repeat) {
-                val device = target.device
+                val device = target.currentDevice(mutable.value.device, mutable.value.sessionToken)
                 val frequency = catalog.repeatFrequencyKHz(id) ?: throw SettingsNotConnectedException()
                 // Repeat Mode changes only the frequency; bandwidth, SF and CR stay as the radio has them.
                 service.setRadioParamsVerified(frequency, device.bandwidth, device.spreadingFactor, device.codingRate, clientRepeat = true)
@@ -262,12 +260,12 @@ class RadioPresetStateHolder(
                     saved = true
                 }
                 currentCoroutineContext().ensureActive()
-                target.requireCurrent(mutable.value.device, mutable.value.sessionToken)
+                val current = target.currentDevice(mutable.value.device, mutable.value.sessionToken)
                 setRepeatToggle(true)
                 mutable.update { it.copy(selectedPresetId = presetId) }
                 val frequency = catalog.repeatFrequencyKHz(presetId) ?: throw SettingsNotConnectedException()
                 target.service.setRadioParamsVerified(
-                    frequency, target.device.bandwidth, target.device.spreadingFactor, target.device.codingRate, clientRepeat = true,
+                    frequency, current.bandwidth, current.spreadingFactor, current.codingRate, clientRepeat = true,
                 )
                 retryAlert.reset()
             } catch (cancelled: CancellationException) {
@@ -293,8 +291,7 @@ class RadioPresetStateHolder(
 
     private suspend fun runDisableRepeat(target: SettingsRadioTarget) {
         try {
-            target.requireCurrent(mutable.value.device, mutable.value.sessionToken)
-            val device = target.device
+            val device = target.currentDevice(mutable.value.device, mutable.value.sessionToken)
             target.service.setRadioParamsVerified(
                 device.preRepeatFrequency ?: device.frequency, device.preRepeatBandwidth ?: device.bandwidth,
                 device.preRepeatSpreadingFactor ?: device.spreadingFactor, device.preRepeatCodingRate ?: device.codingRate,
@@ -308,7 +305,7 @@ class RadioPresetStateHolder(
             releaseRepeat()
             throw cancelled
         } catch (error: Exception) {
-            setRepeatToggle(true)
+            setRepeatToggle(if (mutable.value.sessionToken == target.token) true else mutable.value.device?.clientRepeat ?: false)
             val message = failures.route(error) { disableRepeatMode(target) }
             mutable.update { it.copy(errorMessage = message ?: it.errorMessage) }
         }

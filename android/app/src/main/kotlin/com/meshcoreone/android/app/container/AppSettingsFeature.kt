@@ -187,7 +187,7 @@ class AppSettingsFeature private constructor(
             container.sessions.current?.takeIf { app.canRunSettingsStartupReads }?.let { session ->
                 SettingsRadioAdapter(session.settingsService) {
                     if (container.sessions.current !== session) throw SettingsNotConnectedException()
-                    app.connectedDevice
+                    container.deviceAccess.currentDevice(session.token)
                 }
             }
         },
@@ -322,6 +322,10 @@ private class SettingsRadioAdapter(
     private val currentDevice: () -> DeviceDTO?,
 ) : SettingsRadioPort {
     override val sessionToken get() = service.sessionToken
+    override fun currentDevice(expectedToken: com.meshcoreone.android.core.contracts.domain.SessionToken): DeviceDTO {
+        if (expectedToken != service.sessionToken) throw SettingsNotConnectedException()
+        return currentDevice() ?: throw SettingsNotConnectedException()
+    }
     override val pathHashModeNeedsRecovery get() = service.pathHashModeNeedsRecovery
     override suspend fun getSelfInfo() = service.getSelfInfo()
     override suspend fun setRadioParamsVerified(frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte,

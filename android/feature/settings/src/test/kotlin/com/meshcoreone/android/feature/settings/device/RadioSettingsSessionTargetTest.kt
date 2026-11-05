@@ -7,6 +7,7 @@ import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.feature.settings.device.support.FakeCatalog
 import com.meshcoreone.android.feature.settings.device.support.FakeConnection
 import com.meshcoreone.android.feature.settings.device.support.FakeRegions
@@ -40,8 +41,20 @@ class RadioSettingsSessionTargetTest {
             }
         }
         val b = FakeSettingsPort()
-        private val aPort = object : SettingsRadioPort by a { override val sessionToken = first }
-        private val bPort = object : SettingsRadioPort by b { override val sessionToken = second }
+        private val aPort = object : SettingsRadioPort by a {
+            override val sessionToken = first
+            override fun currentDevice(expectedToken: SessionToken): DeviceDTO {
+                if (expectedToken != first) throw SettingsNotConnectedException()
+                return currentDeviceFor(expectedToken)
+            }
+        }
+        private val bPort = object : SettingsRadioPort by b {
+            override val sessionToken = second
+            override fun currentDevice(expectedToken: SessionToken): DeviceDTO {
+                if (expectedToken != second) throw SettingsNotConnectedException()
+                return currentDeviceFor(expectedToken)
+            }
+        }
         var current: SettingsRadioPort = aPort
         val store = FakeStore()
         val preset = RadioPresetStateHolder(
@@ -63,6 +76,12 @@ class RadioSettingsSessionTargetTest {
             base.deviceFlow.value = secondDevice
             observations.value = SettingsDeviceObservation(secondDevice, second)
             current = bPort
+        }
+
+        private fun currentDeviceFor(expected: SessionToken): DeviceDTO {
+            val observed = observations.value
+            if (observed.sessionToken != expected) throw SettingsNotConnectedException()
+            return observed.device ?: throw SettingsNotConnectedException()
         }
     }
 
@@ -148,6 +167,75 @@ class RadioSettingsSessionTargetTest {
         assertNotNull(r.preset.state.value.errorMessage)
         assertTrue(r.b.calls.isEmpty())
         assertTrue(r.store.calls.isEmpty())
+    }
+
+    @Test fun consumedOrDismissedConfirmationCannotBeReusedToEnableB() {
+        for (dismiss in listOf(false, true)) {
+            val r = Rig()
+            r.preset.onRepeatToggled(true, r.first)
+            r.switchToB()
+            r.scheduler.runCurrent()
+            val retainedBConfirm = { r.preset.confirmEnableRepeatMode(r.second) }
+            if (dismiss) r.preset.dismissRepeatConfirmation() else retainedBConfirm()
+            retainedBConfirm()
+            retainedBConfirm()
+            r.scheduler.runCurrent()
+            assertNotNull(r.preset.state.value.errorMessage)
+            assertTrue(r.b.calls.isEmpty(), "Repeated/dismissed callback must not create B's confirmation target")
+            assertTrue(r.store.calls.isEmpty())
+            r.preset.onRepeatToggled(true, r.second)
+            r.preset.confirmEnableRepeatMode(r.second)
+            r.scheduler.runCurrent()
+            assertEquals(listOf("savePreRepeat"), r.store.calls)
+            assertEquals(1, r.b.calls.count { it.startsWith("setRadioParamsVerified") })
+        }
+    }
+
+    @Test fun sameTokenQueuedAndRetriedRepeatPresetUsesCurrentUntouchedRadioFields() {
+        for (retry in listOf(false, true)) {
+            val r = Rig(repeat = true)
+            if (retry) r.a.failNext("setRadioParamsVerified", SettingsServiceException(SettingsServiceError.SendFailed))
+            r.preset.onPresetSelected("rep-1", r.first)
+            if (retry) {
+                r.scheduler.runCurrent()
+                assertTrue(r.preset.retryAlertState.value.isPresented)
+            }
+            val current = r.firstDevice.copy(bandwidth = 125_000u, spreadingFactor = 9u, codingRate = 6u)
+            r.base.deviceFlow.value = current
+            r.observations.value = SettingsDeviceObservation(current, r.first)
+            if (retry) r.preset.retry.retry()
+            r.scheduler.runCurrent()
+            assertEquals("setRadioParamsVerified(910525,125000,9,6,true,null)", r.a.calls.last())
+            assertTrue(r.b.calls.isEmpty())
+            assertFalse(r.preset.state.value.isApplying)
+        }
+    }
+
+    @Test fun sameTokenQueuedAndRetriedManualApplyReadsCurrentRepeatConstraint() {
+        for (initialRepeat in listOf(false, true)) for (retry in listOf(false, true)) {
+            val r = Rig(repeat = initialRepeat)
+            r.advanced.onFrequencyTextChanged("868.1")
+            r.advanced.onTxPowerTextChanged("10")
+            if (retry) r.a.failNext("setRadioParamsVerified", SettingsServiceException(SettingsServiceError.SendFailed))
+            r.advanced.apply(r.first)
+            if (retry) {
+                r.scheduler.runCurrent()
+                assertTrue(r.advanced.retryAlertState.value.isPresented)
+            }
+            val current = r.firstDevice.copy(clientRepeat = !initialRepeat, frequency = 910_525u)
+            r.base.deviceFlow.value = current
+            r.observations.value = SettingsDeviceObservation(current, r.first)
+            if (retry) r.advanced.retry.retry()
+            r.scheduler.runCurrent()
+            val expectedFrequency = if (current.clientRepeat) current.frequency else 868_100u
+            assertEquals(
+                "setRadioParamsVerified($expectedFrequency,250000,10,5,${current.clientRepeat},null)",
+                r.a.calls.last { it.startsWith("setRadioParamsVerified") },
+            )
+            assertEquals("setTxPowerVerified(10)", r.a.calls.last())
+            assertTrue(r.b.calls.isEmpty())
+            assertTrue(r.advanced.state.value.showSuccess)
+        }
     }
 
     @Test fun heldHashSelectionAndItsRetryNeverAcquireB() {

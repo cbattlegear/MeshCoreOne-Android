@@ -184,10 +184,9 @@ class AdvancedRadioStateHolder(
 
     private suspend fun runApply(target: SettingsRadioTarget, request: Request) {
         try {
-            target.requireCurrent(mutable.value.device, mutable.value.sessionToken)
-            val device = target.device
+            val device = target.currentDevice(mutable.value.device, mutable.value.sessionToken)
             val service = target.service
-            // Firmware treats an omitted repeat byte as Repeat Mode off; retain the captured radio's values.
+            // Firmware treats an omitted repeat byte as off; read current values only from the captured radio.
             val frequencyToSend = if (device.clientRepeat) device.frequency else request.frequencyKHz
             service.setRadioParamsVerified(
                 frequencyToSend, request.bandwidthHz, request.spreadingFactor, request.codingRate,

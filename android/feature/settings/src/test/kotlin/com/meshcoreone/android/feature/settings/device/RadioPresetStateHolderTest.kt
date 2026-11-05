@@ -38,6 +38,7 @@ class RadioPresetStateHolderTest {
         started()
         val saved = CompletableDeferred<Unit>()
         store.beforeRepeatEdit = { saved.await() }
+        holder.onRepeatToggled(true)
         holder.confirmEnableRepeatMode()
         scheduler.runCurrent()
         assertTrue(state.isApplyingRepeat && gate.inFlight.value)
@@ -55,12 +56,14 @@ class RadioPresetStateHolderTest {
         scheduler.runCurrent()
         store.beforeRepeatEdit = { throw IllegalStateException("snapshot unavailable") }
         val writes = service.calls.size
+        holder.onRepeatToggled(true)
         holder.confirmEnableRepeatMode()
         scheduler.runCurrent()
         assertEquals(writes, service.calls.size)
         assertFalse(state.isRepeatEnabled || state.isApplyingRepeat || gate.inFlight.value)
         assertTrue(state.errorMessage != null)
         store.beforeRepeatEdit = {}
+        holder.onRepeatToggled(true)
         holder.confirmEnableRepeatMode()
         scheduler.runCurrent()
         assertTrue(state.isRepeatEnabled)
@@ -71,6 +74,7 @@ class RadioPresetStateHolderTest {
     fun `cancelled snapshot never transmits and releases repeat gate`() {
         started()
         store.beforeRepeatEdit = { throw CancellationException("snapshot retired") }
+        holder.onRepeatToggled(true)
         holder.confirmEnableRepeatMode()
         scheduler.runCurrent()
         assertEquals(listOf("getSelfInfo"), service.calls)

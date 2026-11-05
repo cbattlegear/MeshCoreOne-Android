@@ -84,6 +84,7 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
                     h.eventually("Repeat observes real ready device") { repeat.state.value.device != null }
                     val before = assertNotNull(h.manager.connectedDevice)
                     armed = true
+                    repeat.onRepeatToggled(true)
                     repeat.confirmEnableRepeatMode()
                     h.eventually("actual pre-Repeat Room write held") { saveEntered.isCompleted }
                     assertTrue(repeat.state.value.isApplyingRepeat)
@@ -96,6 +97,7 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
                     assertTrue(radio.radioWrites.isEmpty())
                     assertNotNull(repeat.state.value.errorMessage)
                     failSave = false
+                    repeat.onRepeatToggled(true)
                     repeat.confirmEnableRepeatMode()
                     h.eventually("actual Repeat radio and snapshot committed") {
                         !repeat.state.value.isApplyingRepeat && h.manager.connectedDevice?.clientRepeat == true

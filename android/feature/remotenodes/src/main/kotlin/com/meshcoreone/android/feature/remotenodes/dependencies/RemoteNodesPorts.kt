@@ -128,6 +128,9 @@ interface ContactOcvPort {
 
 /** The `PersistenceStore` reads behind the history overview and the login sheet's path rows. */
 interface RemoteNodeHistoryStore {
+    /** Equal across adapters over the same backing reads; changes when any backing authority changes. */
+    val authorityIdentity: Any get() = this
+
     suspend fun fetchNodeStatusSnapshots(nodePublicKey: Bytes, since: Instant?): SnapshotList<NodeStatusSnapshotDTO>
     suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO?
     suspend fun fetchContacts(radioId: RadioId): SnapshotList<ContactDTO>
@@ -135,11 +138,28 @@ interface RemoteNodeHistoryStore {
 }
 
 /** Adapts the core:contracts persistence roles (one `PersistenceStore` in production). */
+private class RemoteNodeHistoryAuthority(
+    private val snapshots: NodeSnapshotPersisting,
+    private val contacts: ContactPersisting,
+    private val discoveredNodes: DiscoveredNodePersisting,
+) {
+    override fun equals(other: Any?) = other is RemoteNodeHistoryAuthority &&
+        snapshots === other.snapshots &&
+        contacts === other.contacts &&
+        discoveredNodes === other.discoveredNodes
+
+    override fun hashCode() =
+        31 * (31 * System.identityHashCode(snapshots) + System.identityHashCode(contacts)) +
+            System.identityHashCode(discoveredNodes)
+}
+
 fun remoteNodeHistoryStore(
     snapshots: NodeSnapshotPersisting,
     contacts: ContactPersisting,
     discoveredNodes: DiscoveredNodePersisting,
 ): RemoteNodeHistoryStore = object : RemoteNodeHistoryStore {
+    override val authorityIdentity = RemoteNodeHistoryAuthority(snapshots, contacts, discoveredNodes)
+
     override suspend fun fetchNodeStatusSnapshots(nodePublicKey: Bytes, since: Instant?) =
         snapshots.fetchNodeStatusSnapshots(nodePublicKey, since)
     override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes) = contacts.fetchContact(radioId, publicKey)

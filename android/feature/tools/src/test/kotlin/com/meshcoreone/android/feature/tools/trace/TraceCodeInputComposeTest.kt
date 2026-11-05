@@ -50,6 +50,7 @@ import com.meshcoreone.android.core.model.SavedTracePathDTO
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.event.MessageSentInfo
 import java.time.Duration
 import java.util.UUID
 import kotlin.test.assertEquals
@@ -58,6 +59,8 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNotSame
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
+import kotlinx.coroutines.CompletableDeferred
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
@@ -286,6 +289,71 @@ class TraceCodeInputComposeTest {
         assertNull(harness.state.result)
         assertFalse(harness.state.autoReturnPath)
         assertTrue(texts().contains(host.get().getString(C.contactsTraceListEmptyPath)))
+    }
+
+    @Test fun mountedClearConfirmationRetiresATraceStartedAfterTheDialogOpened() {
+        for (batch in listOf(false, true)) {
+            val harness = configured()
+            harness.holder.addNode(contact(0xA1, name = "Alpha"))
+            harness.holder.setTraceHashMode(2u)
+            harness.holder.setBatchEnabled(batch)
+            val gate = CompletableDeferred<MessageSentInfo>()
+            var tag = 0u
+            harness.deps.sender = TraceSender { sentTag, _, _, _ -> tag = sentTag; gate.await() }
+            mountPathList(harness)
+            click(host.get().getString(C.contactsTraceClearPath))
+            val run = harness.start { harness.holder.runBatchTrace() }
+            assertTrue(harness.state.isRunning)
+            settle()
+            click(host.get().getString(C.contactsTraceClearPath))
+            assertFalse(harness.state.isRunning)
+            assertTrue(harness.state.outboundPath.isEmpty())
+            assertNull(harness.state.traceHashMode)
+            val cleared = harness.state
+            harness.respond(tag, listOf(node(0xA1, 5.0), node(null, 3.0)), RADIO)
+            gate.complete(MessageSentInfo(0u, Bytes.EMPTY, 0u))
+            harness.main.runCurrent()
+            harness.time.advanceBy(60.seconds)
+            harness.respond(tag, listOf(node(0xA1, 5.0), node(null, 3.0)), RADIO)
+            settle()
+            assertTrue(run.isCompleted)
+            assertEquals(cleared, harness.state)
+            assertNull(harness.state.displayedResult)
+            assertTrue(harness.state.completedResults.isEmpty())
+            assertTrue(texts().contains(host.get().getString(C.contactsTraceListEmptyPath)))
+        }
+    }
+
+    @Test fun staleMountedMoveCallbackRetiresPendingSingleAndBatchTraces() {
+        for (batch in listOf(false, true)) {
+            val harness = configured()
+            harness.holder.addNode(contact(0xA1, name = "Alpha"))
+            harness.holder.addNode(contact(0xB2, name = "Bravo"))
+            harness.holder.setBatchEnabled(batch)
+            val gate = CompletableDeferred<MessageSentInfo>()
+            var tag = 0u
+            harness.deps.sender = TraceSender { sentTag, _, _, _ -> tag = sentTag; gate.await() }
+            mountPathList(harness)
+            val oldCallback = assertNotNull(actionButton(
+                pathActionDescription(C.contactsDetailAvatarCropMoveDown, 1, harness.state.outboundPath[0]),
+            ).config[SemanticsActions.OnClick].action)
+            val run = harness.start { harness.holder.runBatchTrace() }
+            assertTrue(harness.state.isRunning)
+            host.get().runOnUiThread { assertTrue(oldCallback()) }
+            settle()
+            assertFalse(harness.state.isRunning)
+            assertEquals(listOf("Bravo", "Alpha"), harness.state.outboundPath.map { it.resolvedName })
+            val edited = harness.state
+            gate.complete(MessageSentInfo(0u, Bytes.EMPTY, 0u))
+            harness.main.runCurrent()
+            harness.respond(tag, listOf(node(0xA1, 5.0), node(null, 3.0)), RADIO)
+            harness.time.advanceBy(60.seconds)
+            settle()
+            assertTrue(run.isCompleted)
+            assertEquals(edited, harness.state)
+            assertNull(harness.state.displayedResult)
+            assertTrue(harness.state.completedResults.isEmpty())
+        }
     }
 
     @Test fun emptyAndWhitespacePasteClearPriorSuccessAndErrorsWithoutChangingDraft() {

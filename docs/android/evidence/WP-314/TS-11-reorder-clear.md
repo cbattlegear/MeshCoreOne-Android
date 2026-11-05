@@ -55,3 +55,21 @@ device.
 No device, firmware, radio reception, or physical accessibility evidence is claimed. This TS-11 UI
 change does not alter radio or firmware behavior. This evidence covers only the TS-11 slice and does
 not complete WP-314 or accept its other original-case families.
+
+## Current-main integration successor
+
+The preserved source/test candidate was composed without rewriting commits onto main
+`1a8b406a67d44006f14ac043ac468b6adf07a9d7`, producing `e5645c5f1f06cbf94f7db8a75f09d35c1e8b96fd`.
+Independent review of that exact head found a real running-edit lifetime defect:
+the holder invalidated path bytes but retained its pending trace tag. No acceptance
+receipt was issued for that candidate.
+
+The successor retires active execution on path edits at the actual holder/runner boundary,
+not only at rendered UI eligibility. It fences outstanding send/lookup/batch continuations
+and saved-history refreshes so old responses, errors and timeouts cannot resurrect edited
+presentation or overwrite a newer run. The explicit native safety adaptation is recorded
+in `docs/android/deviations/WP-314.md`. Added assertions include held-send success/failure,
+late-response and timeout controls, partial-history preservation, a newer execution,
+suspended saved-path work, and stale mounted reorder/clear-confirmation callbacks.
+All existing assertions remain. Successor compile, actual method discovery and execution
+are pending; neither historical passing run nor source inventory proves this successor.

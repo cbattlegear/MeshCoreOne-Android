@@ -159,7 +159,7 @@ class TracePathStateHolder(
     fun addNode(node: RepeaterResolvable) {
         clearError()
         val hop = TracePathEditing.hopFor(node, hashSize)
-        pendingPathHash = null
+        batch.cancelBatchTrace()
         update { it.copy(outboundPath = it.outboundPath + hop, activeSavedPath = null, result = null, batchPresentationActive = false) }
     }
 
@@ -170,6 +170,7 @@ class TracePathStateHolder(
     }
 
     private fun applyTraceHashMode(mode: UByte) {
+        batch.cancelBatchTrace()
         clearError()
         update { it.copy(traceHashMode = mode) }
         val size = hashSize
@@ -199,7 +200,7 @@ class TracePathStateHolder(
         }
         update { it.copy(outboundPath = it.outboundPath + appended) }
         if (result.added.isNotEmpty()) {
-            pendingPathHash = null
+            batch.cancelBatchTrace()
             update { it.copy(activeSavedPath = null, result = null, batchPresentationActive = false) }
             clearError()
         }
@@ -209,7 +210,7 @@ class TracePathStateHolder(
     fun removeRepeater(index: Int) {
         clearError()
         if (index !in current.outboundPath.indices) return
-        pendingPathHash = null
+        batch.cancelBatchTrace()
         update {
             it.copy(outboundPath = it.outboundPath.filterIndexed { i, _ -> i != index }, activeSavedPath = null, result = null, batchPresentationActive = false)
         }
@@ -217,7 +218,7 @@ class TracePathStateHolder(
 
     fun moveRepeater(fromOffsets: Set<Int>, toOffset: Int) {
         clearError()
-        pendingPathHash = null
+        batch.cancelBatchTrace()
         update {
             it.copy(outboundPath = TracePathEditing.move(it.outboundPath, fromOffsets, toOffset), activeSavedPath = null, result = null, batchPresentationActive = false)
         }
@@ -231,6 +232,7 @@ class TracePathStateHolder(
     fun setAutoReturnPath(enabled: Boolean) = update { it.copy(autoReturnPath = enabled) }
 
     fun clearPath() {
+        batch.cancelBatchTrace()
         notifyHashModeAction()
         clearError()
         pendingPathHash = null
@@ -241,6 +243,7 @@ class TracePathStateHolder(
 
     /** Restores a saved path at its saved width; a mirrored palindrome turns auto-return on. */
     fun loadSavedPath(savedPath: SavedTracePathDTO) {
+        batch.cancelBatchTrace()
         notifyHashModeAction()
         pendingPathHash = null
         update { it.copy(outboundPath = emptyList(), result = null, batchPresentationActive = false) }
@@ -348,7 +351,9 @@ class TracePathStateHolder(
         val key = EntityKey(savedPath.radioId, savedPath.id)
         try {
             store.appendTracePathRun(key, run)
-            store.fetchSavedTracePath(key)?.let { updated -> update { it.copy(activeSavedPath = updated) } }
+            store.fetchSavedTracePath(key)?.let { updated ->
+                update { if (it.activeSavedPath?.id == savedPath.id) it.copy(activeSavedPath = updated) else it }
+            }
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {

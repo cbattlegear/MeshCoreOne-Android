@@ -19,15 +19,18 @@ import kotlinx.coroutines.launch
 internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
     private var batchCancelled = false
     private var traceContinuation: CompletableDeferred<Unit>? = null
+    private var generation = 0L
 
     suspend fun runTrace() {
         val sender = holder.deps.traceSender() ?: return
         if (holder.current.outboundPath.isEmpty()) return
-        holder.traceJob?.cancel()
+        cancelBatchTrace()
+        val operation = generation
         holder.update { it.copy(resultID = null) }
         holder.clearError()
-        matchSavedPathIfNeeded()
         holder.update { it.copy(isRunning = true, result = null, batchPresentationActive = false) }
+        matchSavedPathIfNeeded(operation)
+        if (generation != operation) return
         val pathData = holder.current.fullPathData
         holder.pendingPathHash = pathData
         val tag = beginCorrelation()
@@ -35,9 +38,10 @@ internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
             send(sender, tag, pathData)
         } catch (error: CancellationException) {
             // The source's send could not be cancelled; a cancelled caller must not leave it running.
-            if (holder.pendingTag == tag) abandonCorrelation()
+            if (generation == operation && holder.pendingTag == tag) abandonCorrelation()
             throw error
         }
+        if (generation != operation || holder.pendingTag != tag) return
         if (sent == null) {
             holder.setError(holder.strings.sendFailed)
             holder.pendingPathHash = null
@@ -50,15 +54,15 @@ internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
         val timeout = FloodTraceTimeout.sanitized(sent.suggestedTimeoutMs)
         holder.traceJob = holder.scope.launch {
             holder.time.sleep(timeout)
-            if (holder.pendingTag != tag) return@launch
+            if (generation != operation || holder.pendingTag != tag) return@launch
             holder.setError(holder.strings.noResponse)
             holder.pendingPathHash = null
             val savedPath = holder.current.activeSavedPath
             val store = holder.deps.savedPaths()
-            if (savedPath != null && store != null) holder.appendRun(store, savedPath, holder.failedRun())
             holder.update { it.copy(isRunning = false) }
             holder.pendingTag = null
             holder.pendingDeviceId = null
+            if (savedPath != null && store != null) holder.appendRun(store, savedPath, holder.failedRun())
         }
     }
 
@@ -67,40 +71,47 @@ internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
             runTrace()
             return
         }
+        cancelBatchTrace()
+        val operation = generation
         holder.clearBatchState()
         batchCancelled = false
         holder.update { it.copy(resultID = null) }
         holder.clearError()
         val sender = holder.deps.traceSender() ?: return
         if (holder.current.outboundPath.isEmpty()) return
-        matchSavedPathIfNeeded()
         holder.update { it.copy(isRunning = true, result = null, batchPresentationActive = true) }
+        matchSavedPathIfNeeded(operation)
+        if (generation != operation) return
         val batchSize = holder.current.batchSize
         try {
-            runTraces(sender, batchSize)
+            runTraces(sender, batchSize, operation)
         } catch (error: CancellationException) {
             // The source swallowed cancellation of its inter-trace sleep; Kotlin propagates it, so
             // clean up here instead of leaving the batch looking alive.
-            holder.traceJob?.cancel()
-            holder.traceJob = null
-            abandonCorrelation()
+            if (generation == operation) {
+                holder.traceJob?.cancel()
+                holder.traceJob = null
+                abandonCorrelation()
+            }
             throw error
         }
+        if (generation != operation) return
         holder.update { it.copy(isRunning = false, currentTraceIndex = 0) }
         val snapshot = holder.current
         if (snapshot.isBatchComplete && snapshot.successCount == 0) holder.setError(holder.strings.allFailed(batchSize))
     }
 
-    private suspend fun runTraces(sender: TraceSender, batchSize: Int) {
+    private suspend fun runTraces(sender: TraceSender, batchSize: Int, operation: Long) {
         for (traceIndex in 1..batchSize) {
-            if (batchCancelled) break
+            if (generation != operation || batchCancelled) break
             holder.update { it.copy(currentTraceIndex = traceIndex) }
-            executeSingleTrace(sender)
+            executeSingleTrace(sender, operation)
+            if (generation != operation || batchCancelled) break
             publishLatestSuccess()
             if (traceIndex < batchSize) {
-                if (batchCancelled) break
+                if (generation != operation || batchCancelled) break
                 holder.time.sleep(INTER_TRACE_BUFFER)
-                if (batchCancelled) break
+                if (generation != operation || batchCancelled) break
             }
         }
     }
@@ -115,6 +126,7 @@ internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
     }
 
     fun cancelBatchTrace() {
+        generation += 1
         batchCancelled = true
         holder.traceJob?.cancel()
         holder.traceJob = null
@@ -122,6 +134,7 @@ internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
         holder.pendingTag = null
         holder.pendingDeviceId = null
         holder.pendingPathHash = null
+        holder.traceStartTime = null
         resumeContinuation()
     }
 
@@ -154,11 +167,12 @@ internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
         }
     }
 
-    private suspend fun executeSingleTrace(sender: TraceSender) {
+    private suspend fun executeSingleTrace(sender: TraceSender, operation: Long) {
         val pathData = holder.current.fullPathData
         holder.pendingPathHash = pathData
         val tag = beginCorrelation()
         val sent = send(sender, tag, pathData)
+        if (generation != operation || batchCancelled || holder.pendingTag != tag) return
         if (sent == null) {
             val failed = TraceResult.sendFailed(holder.strings.sendFailed, holder.pendingPathHash ?: Bytes.EMPTY, holder.hashSize)
             holder.update { it.copy(completedResults = it.completedResults + failed) }
@@ -169,13 +183,12 @@ internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
         }
         // A cancel or a matching response while the send was suspended already settled this trace;
         // waiting now would never resume (the source leaked its continuation here).
-        if (batchCancelled || holder.pendingTag != tag) return
         val timeout = FloodTraceTimeout.sanitized(sent.suggestedTimeoutMs)
         val continuation = CompletableDeferred<Unit>()
         traceContinuation = continuation
         holder.traceJob = holder.scope.launch {
             holder.time.sleep(timeout)
-            if (traceContinuation == null || holder.pendingTag != tag) return@launch
+            if (generation != operation || traceContinuation == null || holder.pendingTag != tag) return@launch
             val timedOut = TraceResult.timeout(holder.pendingPathHash ?: Bytes.EMPTY, holder.hashSize, holder.strings.noResponse)
             holder.update { it.copy(completedResults = it.completedResults + timedOut) }
             recordFailedRun()
@@ -187,7 +200,7 @@ internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
             continuation.await()
         } catch (error: CancellationException) {
             if (traceContinuation === continuation) traceContinuation = null
-            holder.traceJob?.cancel()
+            if (generation == operation) holder.traceJob?.cancel()
             throw error
         }
     }
@@ -202,9 +215,16 @@ internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
         }
     }
 
-    private suspend fun matchSavedPathIfNeeded() {
+    private suspend fun matchSavedPathIfNeeded(operation: Long) {
         if (holder.current.activeSavedPath != null) return
-        holder.findMatchingSavedPath()?.let { matched -> holder.update { it.copy(activeSavedPath = matched) } }
+        try {
+            holder.findMatchingSavedPath()?.let { matched ->
+                if (generation == operation) holder.update { it.copy(activeSavedPath = matched) }
+            }
+        } catch (error: CancellationException) {
+            if (generation == operation) abandonCorrelation()
+            throw error
+        }
     }
 
     private fun beginCorrelation(): UInt {

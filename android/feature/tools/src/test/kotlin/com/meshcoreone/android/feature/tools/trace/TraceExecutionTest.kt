@@ -2,6 +2,10 @@
 package com.meshcoreone.android.feature.tools.trace
 
 import com.meshcoreone.android.core.model.SnapshotList
+import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.TracePathPersisting
+import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.model.SavedTracePathDTO
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.MessageSentInfo
 import java.io.IOException
@@ -286,6 +290,155 @@ class TraceExecutionTest {
         holder.cancelBatchTrace()
         harness.main.runCurrent()
         assertTrue(answered.isCompleted)
+    }
+
+    @Test
+    fun `path edits retire held sends late responses and timeouts without resurrecting history`() {
+        val edits: List<(TracePathStateHolder) -> Unit> = listOf(
+            { it.clearPath() },
+            { it.moveRepeater(setOf(0), 2) },
+            { it.removeRepeater(0) },
+            { it.addNode(contact(0xC3, name = "Charlie")) },
+            { it.addRepeatersFromCodes("C3"); Unit },
+            { it.setTraceHashMode(2u) },
+            { it.loadSavedPath(savedPath(Bytes.of(0xD4), radioId = RADIO)) },
+        )
+        for (batch in listOf(false, true)) for (held in listOf(false, true)) {
+            for (sendFails in listOf(false, true)) for (edit in edits) {
+                val h = TraceHarness(configureDependencies = true)
+                val persistence = InMemoryTracePathStore { h.time.now() }
+                h.deps.device = device()
+                h.deps.store = persistence
+                h.holder.setContactsForTesting(listOf(contact(0xC3, name = "Charlie")))
+                h.holder.addNode(alpha)
+                h.holder.addNode(bravo)
+                h.holder.setBatchEnabled(batch)
+                h.holder.setBatchSize(3)
+                val saved = savedPath(h.state.fullPathData, radioId = RADIO)
+                persistence.insert(saved)
+                val gate = CompletableDeferred<MessageSentInfo>()
+                val tags = mutableListOf<UInt>()
+                h.deps.sender = TraceSender { tag, _, _, _ ->
+                    tags += tag
+                    if (held && (!batch || tags.size == 2)) gate.await()
+                    else MessageSentInfo(0u, Bytes.EMPTY, 0u)
+                }
+                val job = h.start { h.holder.runBatchTrace() }
+                if (batch) {
+                    h.respond(tags.last(), listOf(node(0xA1, 5.0), node(null, 3.0)), RADIO)
+                    h.time.advanceBy(500.milliseconds)
+                    assertEquals(1, h.state.completedResults.size)
+                }
+                val oldTag = tags.last()
+                val history = h.state.completedResults
+                edit(h.holder)
+                val edited = h.state
+                assertFalse(edited.isRunning)
+                assertNull(edited.displayedResult)
+                assertNull(h.holder.pendingTag)
+                assertNull(h.holder.pendingPathHash)
+                h.respond(oldTag, listOf(node(0xA1, 5.0), node(null, 3.0)), RADIO)
+                if (sendFails) gate.completeExceptionally(IOException("retired send"))
+                else gate.complete(MessageSentInfo(0u, Bytes.EMPTY, 0u))
+                h.main.runCurrent()
+                h.time.advanceBy(60.seconds)
+                h.respond(oldTag, listOf(node(0xA1, 5.0), node(null, 3.0)), RADIO)
+                assertTrue(job.isCompleted)
+                assertEquals(edited, h.state, "Retired work must not change the edited path or presentation")
+                assertEquals(history, h.state.completedResults)
+                assertEquals(if (batch) 1 else 0, persistence.paths.getValue(saved.id).runs.size)
+                assertEquals(if (batch) 2 else 1, tags.size, "No later batch trace may be sent")
+                assertEquals(0, h.time.pendingSleepers)
+            }
+        }
+    }
+
+    @Test
+    fun `retired send completion cannot stop or overwrite a newer single or batch run`() {
+        for (batch in listOf(false, true)) for (sendFails in listOf(false, true)) {
+            val h = TraceHarness(configureDependencies = true)
+            h.deps.device = device()
+            h.holder.addNode(alpha)
+            h.holder.setBatchEnabled(batch)
+            h.holder.setBatchSize(1)
+            val gate = CompletableDeferred<MessageSentInfo>()
+            val tags = mutableListOf<UInt>()
+            h.deps.sender = TraceSender { tag, _, _, _ ->
+                tags += tag
+                if (tags.size == 1) gate.await() else MessageSentInfo(0u, Bytes.EMPTY, 0u)
+            }
+            val old = h.start { h.holder.runBatchTrace() }
+            h.holder.clearPath()
+            h.holder.addNode(bravo)
+            val current = h.start { h.holder.runBatchTrace() }
+            val currentTag = tags.last()
+            val running = h.state
+            if (sendFails) gate.completeExceptionally(IOException("old send failed"))
+            else gate.complete(MessageSentInfo(0u, Bytes.EMPTY, 0u))
+            h.main.runCurrent()
+            assertTrue(old.isCompleted)
+            assertEquals(running, h.state)
+            assertEquals(currentTag, h.holder.pendingTag)
+            h.respond(tags.first(), listOf(node(0xA1, 5.0), node(null, 3.0)), RADIO)
+            assertEquals(running, h.state)
+            h.respond(currentTag, listOf(node(0xB2, 5.0), node(null, 3.0)), RADIO)
+            assertTrue(current.isCompleted)
+            assertEquals(Bytes.of(0xB2), assertNotNull(h.state.result).tracedPathBytes)
+            val finished = h.state
+            h.time.advanceBy(60.seconds)
+            assertEquals(finished, h.state)
+        }
+    }
+
+    @Test
+    fun `path edit during saved path lookup prevents a trace from starting or restoring the old match`() {
+        for (batch in listOf(false, true)) {
+            val h = TraceHarness(configureDependencies = true)
+            val persistence = InMemoryTracePathStore { h.time.now() }
+            val gate = CompletableDeferred<SnapshotList<SavedTracePathDTO>>()
+            val recorded = FakeTraceSender()
+            h.deps.device = device()
+            h.deps.sender = recorded
+            h.deps.store = object : TracePathPersisting by persistence {
+                override suspend fun fetchSavedTracePaths(radioId: RadioId) = gate.await()
+            }
+            h.holder.addNode(alpha)
+            h.holder.setBatchEnabled(batch)
+            val matched = savedPath(h.state.fullPathData, radioId = RADIO)
+            val job = h.start { h.holder.runBatchTrace() }
+            assertTrue(h.state.isRunning)
+            h.holder.clearPath()
+            gate.complete(SnapshotList.of(matched))
+            h.main.runCurrent()
+            assertTrue(job.isCompleted)
+            assertTrue(recorded.sent.isEmpty())
+            assertTrue(h.state.outboundPath.isEmpty())
+            assertNull(h.state.activeSavedPath)
+            assertNull(h.state.result)
+            assertFalse(h.state.isRunning)
+        }
+    }
+
+    @Test
+    fun `a saved run refresh completing after clear never restores the old saved path reference`() {
+        val persistence = InMemoryTracePathStore { harness.time.now() }
+        val gate = CompletableDeferred<Unit>()
+        val saved = savedPath(harness.state.fullPathData, radioId = RADIO)
+        persistence.insert(saved)
+        harness.deps.store = object : TracePathPersisting by persistence {
+            override suspend fun fetchSavedTracePath(key: EntityKey): SavedTracePathDTO? {
+                gate.await()
+                return persistence.fetchSavedTracePath(key)
+            }
+        }
+        harness.complete { holder.runTrace() }
+        answer()
+        holder.clearPath()
+        gate.complete(Unit)
+        harness.main.runCurrent()
+        assertNull(harness.state.activeSavedPath)
+        assertNull(harness.state.result)
+        assertEquals(1, persistence.paths.getValue(saved.id).runs.size, "The already accepted historical run remains")
     }
 
     @Test

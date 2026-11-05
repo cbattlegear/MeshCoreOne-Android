@@ -285,7 +285,7 @@ class ConnectedDeviceEditor(
             if (!reconcilePreRepeatSettingsClear(expectedToken)) return false
             val actual = currentRepeatDevice(expectedToken) ?: return false
             repeatSnapshotAuthority.requireUsable(actual)
-            repeatSnapshotAuthority.requireNoClearRequest(actual, expectedToken)
+            repeatSnapshotAuthority.requireNoClearRequest(actual)
             return true
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -303,7 +303,7 @@ class ConnectedDeviceEditor(
                 repeatSnapshotAuthority.withDispatchAdmission(expectedDevice.id) { permit ->
                     val actual = currentRepeatDevice(expectedToken) ?: throw DeviceEditPersistenceConflict()
                     repeatSnapshotAuthority.requireUsable(actual)
-                    repeatSnapshotAuthority.requireNoClearRequest(actual, expectedToken)
+                    repeatSnapshotAuthority.requireNoClearRequest(actual)
                     if (repeatSnapshotAuthority.identityVersion(expectedDevice.id) != identityVersion ||
                         repeatSnapshotAuthority.snapshotVersion(expectedDevice.id) != snapshotVersion ||
                         actual.id != expectedDevice.id || actual.radioId != expectedDevice.radioId || actual.publicKey != expectedDevice.publicKey ||
@@ -332,7 +332,7 @@ class ConnectedDeviceEditor(
 
     private fun DeviceDTO.preservingOrSavingPreRepeatSettings(): DeviceDTO {
         repeatSnapshotAuthority.requireUsable(this)
-        repeatSnapshotAuthority.requireNoClearRequest(this, access.connectedDeviceToken)
+        repeatSnapshotAuthority.requireNoClearRequest(this)
         // Partial imported snapshots retain their native per-field restore fallback.
         return if (preRepeatFrequency != null || preRepeatBandwidth != null ||
             preRepeatSpreadingFactor != null || preRepeatCodingRate != null
@@ -341,9 +341,9 @@ class ConnectedDeviceEditor(
 
     private suspend fun reconcilePreRepeatSettingsClear(expectedToken: SessionToken): Boolean {
         val device = access.currentDevice(expectedToken) ?: return false
-        if (!repeatSnapshotAuthority.hasClearRequest(device, expectedToken)) return true
+        if (!repeatSnapshotAuthority.hasClearRequest(device)) return true
         return sessionEdit("reconcileRepeatClear", expectedToken) {
-            repeatSnapshotAuthority.reconcilingClearRequest(it, expectedToken)
+            repeatSnapshotAuthority.reconcilingClearRequest(it)
         }
     }
 
@@ -355,8 +355,8 @@ class ConnectedDeviceEditor(
         sessionEdit("clearPreRepeat", expectedToken) { it.retiringPreRepeatSettings() }
 
     private fun DeviceDTO.retiringPreRepeatSettings(): DeviceDTO =
-        if (repeatSnapshotAuthority.hasClearRequest(this, access.connectedDeviceToken))
-            repeatSnapshotAuthority.reconcilingClearRequest(this, access.connectedDeviceToken)
+        if (repeatSnapshotAuthority.hasClearRequest(this))
+            repeatSnapshotAuthority.reconcilingClearRequest(this)
         else clearingPreRepeatSettings()
 
     fun addKnownRegion(region: String): Job? {

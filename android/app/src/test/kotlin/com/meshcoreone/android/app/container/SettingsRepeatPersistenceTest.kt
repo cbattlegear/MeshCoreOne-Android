@@ -990,7 +990,7 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                     )
                     h.eventually("actual restore send settled but readback is held") { entered.isCompleted }
                     assertEquals(2, radio.radioWrites.size)
-                    assertFalse(store.repeatSnapshotAuthority.hasClearRequest(repeating, token))
+                    assertFalse(store.repeatSnapshotAuthority.hasClearRequest(repeating))
                     assertTrue(sibling.clearPreRepeatSettings(token), "The actual sibling clear commits while readback is held")
                     val cleared = assertNotNull(store.fetchDevice(before.id))
                     assertEquals(repeating.clearingPreRepeatSettings(), cleared)

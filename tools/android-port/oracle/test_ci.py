@@ -1,6 +1,8 @@
 """AndroidOnly: WP-004 Fail-closed workflow, helper-discovery and JUnit contract tests."""
 
 import copy
+import hashlib
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -116,6 +118,26 @@ class HelperDiscoveryTests(unittest.TestCase):
 
 
 class FoundationWorkflowTests(unittest.TestCase):
+    ARTIFACT_ACTION = "actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f"
+    CANDIDATE = "${{ github.event.pull_request.head.sha || github.sha }}"
+    RUN = "${{ github.run_id }}-${{ github.run_attempt }}"
+    ROOM_UPLOAD = {
+        "id": "room_upload",
+        "name": "Retain fresh Room v2 export and provenance",
+        "if": "${{ always() && steps.room_schema.outcome == 'success' }}",
+        "uses": ARTIFACT_ACTION,
+        "with": {
+            "name": "room-v2-export-" + CANDIDATE + "-" + RUN,
+            "path": ("${{ runner.temp }}/room-schema-export/2.json\n"
+                     "${{ runner.temp }}/room-schema-export/provenance.json\n"),
+            "if-no-files-found": "error",
+            "retention-days": "7",
+        },
+    }
+    # Exact four-step diagnostic from workflow blob a1813d57b30ff309ea1f07d92a1830ccb2d89692.
+    # Binds executable absence/KSP/provenance/failure checks, not just artifact-looking paths.
+    ROOM_STEPS_SHA256 = "3544d121a7d313a4ea61591fd899f8ef9d930935fb966d85af96ba40989431d0"
+
     @classmethod
     def setUpClass(cls):
         cls.text = (REPO / ".github" / "workflows" / "android-ci.yml").read_text(encoding="utf-8")
@@ -203,22 +225,162 @@ class FoundationWorkflowTests(unittest.TestCase):
                 validate_boundary(value, self.text)
 
     def test_only_actual_backup_bytes_cross_the_job_boundary(self):
-        steps = self.workflow["jobs"]["build"]["steps"]
+        self.assert_artifact_boundary(self.workflow)
+
+    def assert_artifact_boundary(self, workflow):
+        steps = workflow["jobs"]["build"]["steps"]
         uploads = [step for step in steps if step.get("uses", "").startswith("actions/upload-artifact@")]
-        self.assertEqual(len(uploads), 2)
-        self.assertEqual({step["with"]["path"] for step in uploads}, {
-            "android/app/build/outputs/apk/debug/app-debug.apk",
-            "android/core/data/build/reports/wp203/interop/",
-        })
+        room = [
+            step for step in steps
+            if step.get("id") in ("room_absence", "room_schema", "room_upload")
+            or step.get("name") == "Report Room schema diagnostic outcome"
+        ]
+        expected = [
+            {
+                "name": "Upload inspected debug APK for human testing",
+                "if": "${{ success() && steps.gradle.outputs.full_scaffold == 'true' }}",
+                "uses": self.ARTIFACT_ACTION,
+                "with": {
+                    "name": "debug-apk-" + self.CANDIDATE + "-" + self.RUN,
+                    "path": "android/app/build/outputs/apk/debug/app-debug.apk",
+                    "if-no-files-found": "error",
+                    "retention-days": "7",
+                },
+            },
+            {
+                "name": "Transfer actual backup bytes to the platform oracle",
+                "if": "${{ needs.scope.outputs.backup == 'true' }}",
+                "uses": self.ARTIFACT_ACTION,
+                "with": {
+                    "name": "backup-input-" + self.RUN,
+                    "path": "android/core/data/build/reports/wp203/interop/",
+                    "if-no-files-found": "error",
+                    "retention-days": "1",
+                },
+            },
+        ]
+        if room:
+            self.assertEqual(len(room), 4, "A partial schema diagnostic cannot authorize an upload")
+            self.assertEqual(room[2], self.ROOM_UPLOAD)
+            encoded = json.dumps(room, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            self.assertEqual(hashlib.sha256(encoded).hexdigest(), self.ROOM_STEPS_SHA256)
+            gradle = next(step for step in steps if step.get("id") == "gradle")
+            ordered = [room[0], gradle, *expected, *room[1:]]
+            positions = [steps.index(step) for step in ordered]
+            self.assertEqual(positions, sorted(set(positions)))
+            expected.append(self.ROOM_UPLOAD)
+        self.assertEqual(uploads, expected)
+        all_uploads = [
+            step for job in workflow["jobs"].values() for step in job["steps"]
+            if step.get("uses", "").startswith("actions/upload-artifact@")
+        ]
+        self.assertEqual(all_uploads, expected)
         transfers = [
-            step for job in self.workflow["jobs"].values() for step in job["steps"]
+            step for job in workflow["jobs"].values() for step in job["steps"]
             if step.get("uses", "").startswith("actions/download-artifact@")
         ]
-        self.assertEqual(len(transfers), 1)
-        backup = next(step for step in uploads if step["with"]["name"] == transfers[0]["with"]["name"])
-        self.assertEqual(backup["if"], "${{ needs.scope.outputs.backup == 'true' }}")
-        self.assertEqual(backup["with"]["if-no-files-found"], "error")
-        paths = backup["with"]["path"]
-        self.assertIn("wp203/interop", paths)
-        for upload in uploads:
-            self.assertNotIn("ci-result", upload["with"]["path"])
+        self.assertEqual(transfers, [{
+            "name": "Download actual Kotlin-produced backup bytes",
+            "uses": "actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131",
+            "with": {
+                "name": "backup-input-" + self.RUN,
+                "path": "${{ runner.temp }}/kotlin-input",
+            },
+        }])
+
+    def test_artifact_boundary_rejects_missing_changed_and_unexpected_uploads(self):
+        for kind in ("missing-apk", "missing-backup", "extra", "other-job", "reordered",
+                     "apk-path", "backup-path", "condition", "pin", "ignored", "missing-error"):
+            with self.subTest(kind=kind):
+                value = copy.deepcopy(self.workflow)
+                steps = value["jobs"]["build"]["steps"]
+                uploads = [step for step in steps if step.get("uses", "").startswith("actions/upload-artifact@")]
+                apk, backup = uploads[:2]
+                if kind.startswith("missing-"):
+                    if kind == "missing-error":
+                        del backup["with"]["if-no-files-found"]
+                    else:
+                        steps.remove(apk if kind == "missing-apk" else backup)
+                elif kind in ("extra", "other-job"):
+                    job = "build" if kind == "extra" else "backup-oracle"
+                    value["jobs"][job]["steps"].append(copy.deepcopy(apk))
+                elif kind == "reordered":
+                    left, right = steps.index(apk), steps.index(backup)
+                    steps[left], steps[right] = steps[right], steps[left]
+                elif kind in ("apk-path", "backup-path"):
+                    (apk if kind == "apk-path" else backup)["with"]["path"] += "*"
+                elif kind == "condition":
+                    backup["if"] = "${{ always() }}"
+                elif kind == "pin":
+                    apk["uses"] = "actions/upload-artifact@v6"
+                else:
+                    backup["continue-on-error"] = "true"
+                with self.assertRaises((AssertionError, ValueError)):
+                    self.assert_artifact_boundary(value)
+
+    def test_room_diagnostic_rejects_partial_chain_and_mutated_steps(self):
+        partial = copy.deepcopy(self.workflow)
+        partial["jobs"]["build"]["steps"].append(copy.deepcopy(self.ROOM_UPLOAD))
+        with self.assertRaises(AssertionError):
+            self.assert_artifact_boundary(partial)
+        steps = self.workflow["jobs"]["build"]["steps"]
+        for index, step in enumerate(steps):
+            if step.get("id") in ("room_absence", "room_schema", "room_upload") or (
+                step.get("name") == "Report Room schema diagnostic outcome"
+            ):
+                for kind in ("missing", "ignored", "condition", "body"):
+                    with self.subTest(step=step["name"], kind=kind):
+                        value = copy.deepcopy(self.workflow)
+                        changed = value["jobs"]["build"]["steps"]
+                        if kind == "missing":
+                            changed.pop(index)
+                        elif kind == "ignored":
+                            changed[index]["continue-on-error"] = "true"
+                        elif kind == "condition":
+                            changed[index]["if"] = "${{ false }}"
+                        elif "run" in step:
+                            changed[index]["run"] = 'Write-Output "success"'
+                        else:
+                            changed[index]["with"]["path"] = "${{ runner.temp }}/room-schema-export/*"
+                        with self.assertRaises((AssertionError, ValueError)):
+                            self.assert_artifact_boundary(value)
+
+    def test_baseline_without_room_diagnostic_remains_valid(self):
+        value = copy.deepcopy(self.workflow)
+        value["jobs"]["build"]["steps"] = [
+            step for step in value["jobs"]["build"]["steps"]
+            if step.get("id") not in ("room_absence", "room_schema", "room_upload")
+            and step.get("name") != "Report Room schema diagnostic outcome"
+        ]
+        self.assert_artifact_boundary(value)
+
+    def test_room_diagnostic_upload_has_no_wider_artifact_or_failure_allowance(self):
+        for kind in ("extra-file", "missing-provenance", "glob", "identity", "pin", "missing-error",
+                     "retention", "ignored", "condition"):
+            with self.subTest(kind=kind):
+                value = copy.deepcopy(self.workflow)
+                steps = value["jobs"]["build"]["steps"]
+                upload = next((step for step in steps if step.get("id") == "room_upload"), None)
+                if upload is None:
+                    upload = copy.deepcopy(self.ROOM_UPLOAD)
+                    steps.append(upload)
+                if kind == "extra-file":
+                    upload["with"]["path"] += "${{ runner.temp }}/room-schema-export/absence.json\n"
+                elif kind == "missing-provenance":
+                    upload["with"]["path"] = "${{ runner.temp }}/room-schema-export/2.json\n"
+                elif kind == "glob":
+                    upload["with"]["path"] = "${{ runner.temp }}/room-schema-export/*"
+                elif kind == "identity":
+                    upload["with"]["name"] = "room-v2-export"
+                elif kind == "pin":
+                    upload["uses"] = "actions/upload-artifact@v6"
+                elif kind == "missing-error":
+                    del upload["with"]["if-no-files-found"]
+                elif kind == "retention":
+                    upload["with"]["retention-days"] = "90"
+                elif kind == "ignored":
+                    upload["continue-on-error"] = "true"
+                else:
+                    upload["if"] = "${{ always() }}"
+                with self.assertRaises(AssertionError):
+                    self.assert_artifact_boundary(value)

@@ -78,11 +78,11 @@ class JavaCompilerInventoryTest {
             import org.gradle.api.tasks.testing.Test
             plugins { id 'mesh.android.library' }
             ${if (additional) """
-                tasks.named('compileDebugUnitTestJavaWithJavac', JavaCompile) {
+                tasks.withType(JavaCompile).matching { it.name == 'compileDebugUnitTestJavaWithJavac' }.configureEach {
                     source(rootProject.file('$javaRelative'))
                 }
             """.trimIndent() else ""}
-            tasks.named('compileDebugUnitTestKotlin') {
+            tasks.matching { it.name == 'compileDebugUnitTestKotlin' }.configureEach {
                 doLast {
                     def report = new File(project.buildDir, 'control/kotlin-compiler.json')
                     report.parentFile.mkdirs()

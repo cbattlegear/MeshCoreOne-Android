@@ -70,6 +70,11 @@ data class DirectAckRadioEvidenceSnapshot(
 
 data class DirectAckEmissionReceipt(
     val emissionRequestId: UUID,
+    /**
+     * Latest committed resolution metadata, not the identity of every replayed operation.
+     * An AlreadyApplied replay of an older resolution may carry a newer ID here.
+     * Null means no resolution has committed; this field is not a deduplication journal.
+     */
     val resolutionRequestId: UUID?,
     val evidence: DirectAckRadioWireEvidence,
 )
@@ -338,6 +343,16 @@ interface DirectAckRadioExclusionAuthority {
      * and any definitely-unsent fact. Accepted atomically updates only this emission, its
      * registered-wire actual metadata, and the current claim's ACCEPTED phase when its original
      * grant is still valid. It never renews authority or changes delivery status.
+     *
+     * Every resolution operation's identity, exact input and committed result must be durably
+     * retained atomically with the evidence mutation, independently of the emission row's latest
+     * resolutionRequestId. Later resolutions and database/process reopen do not retire earlier
+     * replay identities. After E/r1 Accepted(123) and E/r2 Accepted(123), replaying r1 after reopen
+     * is still AlreadyApplied; reusing r1 with Accepted(456) or DefinitelyUnsent is Conflict.
+     * Replaying r1 neither replaces latest metadata r2 nor restores earlier evidence/authority.
+     * Existing sticky Conflict evidence must never be cleared by replaying an earlier success.
+     * Storage failures/cancellation propagate unchanged; a latest-ID comparison or readback alone
+     * cannot establish whether an older operation committed.
      */
     suspend fun resolveDirectAckWireEmission(
         handle: DirectAckEmissionHandle,

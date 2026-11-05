@@ -13,6 +13,43 @@ class DirectAckRadioExclusionTest {
     private val targetClaim = UUID(0, 2)
 
     @Test
+    fun olderResolutionReplayReceiptCanCarryNewerResolutionMetadata() {
+        val emission = wire(2, 3, 123u, DirectAckRadioWireOutcome.Accepted(123u), emission = 8)
+        val firstResolutionId = UUID(0, 9)
+        val latestResolutionId = UUID(0, 10)
+        val latest = DirectAckEmissionReceipt(UUID(0, 8), latestResolutionId, emission)
+        val olderReplay = DirectAckEmissionMutationResult.AlreadyApplied(latest)
+
+        assertEquals(UUID(0, 8), olderReplay.receipt.emissionRequestId)
+        assertEquals(latestResolutionId, olderReplay.receipt.resolutionRequestId)
+        assertNotEquals(firstResolutionId, olderReplay.receipt.resolutionRequestId)
+        assertEquals(DirectAckRadioWireOutcome.Accepted(123u), olderReplay.receipt.evidence.outcome)
+    }
+
+    @Test
+    fun resolutionIdentityConflictReceiptRetainsFirstAcceptedCodeAndUnsentFact() {
+        val conflict = wire(
+            2,
+            3,
+            123u,
+            DirectAckRadioWireOutcome.Conflict(123u, definitelyUnsentObserved = true),
+            emission = 8,
+        )
+        val receipt = DirectAckEmissionReceipt(UUID(0, 8), UUID(0, 10), conflict)
+        val result = DirectAckEmissionMutationResult.Conflict(receipt)
+
+        assertEquals(receipt, result.receipt)
+        assertEquals(
+            DirectAckRadioWireOutcome.Conflict(123u, definitelyUnsentObserved = true),
+            result.receipt.evidence.outcome,
+        )
+        assertNotEquals<DirectAckEmissionMutationResult>(
+            DirectAckEmissionMutationResult.AlreadyApplied(receipt),
+            result,
+        )
+    }
+
+    @Test
     fun targetPredictionDoesNotSettleUntilItsActualCodeIsAccepted() {
         assertEquals(
             setOf(DirectAckRadioNonsettlingReason.TARGET_ACCEPTANCE_UNRESOLVED),

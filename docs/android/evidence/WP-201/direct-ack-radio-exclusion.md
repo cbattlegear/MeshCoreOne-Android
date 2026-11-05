@@ -148,9 +148,32 @@ does not promise to replay such an ACK after process death. The service owner
 must buffer unresolved pre-response ACKs in process and reconcile only after
 the matching actual code is persisted.
 
+## Resolution operation replay
+
+The emission receipt's `resolutionRequestId` reports latest committed metadata;
+it is not the complete replay history or necessarily the caller's replayed ID.
+Storage must atomically retain each resolution operation's identity, exact input
+and committed result independently of that latest field, without retiring older
+identities when a new resolution commits or the database/process reopens.
+An existing durable operation journal may provide this history; the contract
+does not prescribe a schema change.
+
+Required real-storage sequence: resolve emission E with r1 `Accepted(123)`, then
+r2 `Accepted(123)`, reopen, and replay r1. The replay must be `AlreadyApplied`
+without moving latest metadata back from r2 to r1. Reusing r1 with `Accepted(456)`
+or `DefinitelyUnsent` must return sticky `Conflict`, retaining the first accepted
+actual and any unsent observation. Replaying a prior successful operation must
+not clear that conflict, restore old evidence or renew authority. A lookup of
+only the emission row's latest ID cannot satisfy these cases.
+
+The contract value tests distinguish latest metadata from an older replay's
+operation identity and preserve conflict receipt data. They do not execute this
+storage sequence or prove persistence across reopen. Actual Room/journal/reopen
+controls are requested from the separately owned storage implementation.
+
 ## Validation and limits
 
-Fifteen new pure classifier controls cover target accepted-code matching,
+Fifteen pure classifier controls cover target accepted-code matching,
 same-claim prior wires, both foreign predicted/actual code memberships,
 unknown and conflicting wildcards, legacy accepted-code wildcard retention and
 its preservation alongside a later physical marker,
@@ -161,6 +184,8 @@ wire ID), and a definite-unsent retry that cannot clear an earlier
 possible-emission marker. They specify only the diagnostic candidate;
 they are not evidence of transactional storage enforcement, real service
 routing, radio hardware behavior, or durable ACK ingress.
+Two additional receipt-value controls cover older-replay/latest-metadata
+distinction and sticky-conflict representation, bringing this file to 17 tests.
 
 The wire ACK has no session, graph, claim, or physical-emission origin field.
 Therefore identical actual codes across distinct claims, unresolved possible
@@ -168,7 +193,7 @@ emissions, and sticky saturation are fundamentally nonsettling; the contract
 preserves safety rather than inventing origin or expiry.
 
 No local Gradle/Kotlin build or tests were run because of the explicit local
-Gradle owner hold. Source-only `git diff --check` passed and 15 test annotations were
+Gradle owner hold. Source-only `git diff --check` passed and 17 test annotations were
 present in the contract test file; neither check establishes compilation or
 test execution. Hosted exact-candidate compilation/test discovery is pending.
 Physical radio testing and a real Room implementation of the optional

@@ -2,6 +2,7 @@
 package com.meshcoreone.android.feature.tools.trace
 
 import com.meshcoreone.android.core.contracts.domain.TracePathPersisting
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.Coordinate
 import com.meshcoreone.android.core.model.DeviceDTO
@@ -27,6 +28,8 @@ fun interface TraceSender {
  * observed, never a stale snapshot. `null` mirrors a disconnected state: the call is a no-op.
  */
 interface TracePathFeatureDependencies {
+    /** Read synchronously from the graph registry, independently of Compose publication. */
+    fun sessionToken(): SessionToken? = null
     fun connectedDevice(): DeviceDTO?
     fun bestAvailableLocation(): Coordinate?
     fun nodeDirectory(): TraceNodeDirectory?

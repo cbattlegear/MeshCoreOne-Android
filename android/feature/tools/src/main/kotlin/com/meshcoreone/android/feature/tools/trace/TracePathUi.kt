@@ -135,6 +135,7 @@ object TracePathScreen {
         val savedPaths = remember(dependencies.feature, dependencies.generation, dependencies.radioId) {
             SavedPathsStateHolder(savedStrings, dependencies.diagnostics).also { saved ->
                 saved.configure(object : SavedPathsDependencies {
+                    override fun sessionToken() = dependencies.feature.sessionToken()
                     override fun savedPaths() = dependencies.feature.savedPaths()
                     override fun connectedDevice() = dependencies.feature.connectedDevice()
                 })

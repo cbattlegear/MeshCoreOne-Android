@@ -691,6 +691,82 @@ class TraceExecutionTest {
     }
 
     @Test
+    fun `live graph token changes fence continuations before screen generation is rebound`() {
+        for (stage in listOf("lookup", "send", "timeout", "refresh")) for (batch in listOf(false, true)) for (retainedSelection in listOf(false, true)) {
+            val h = TraceHarness(configureDependencies = true)
+            val epoch = com.meshcoreone.android.core.contracts.domain.ProcessEpoch(UUID.randomUUID())
+            var token: com.meshcoreone.android.core.contracts.domain.SessionToken? =
+                com.meshcoreone.android.core.contracts.domain.SessionToken(
+                    epoch, com.meshcoreone.android.core.contracts.domain.Generation(1), RADIO,
+                )
+            val feature = object : TracePathFeatureDependencies by h.deps {
+                override fun sessionToken() = token
+            }
+            h.holder.configure(feature)
+            h.holder.bindConnection(RADIO, 1)
+            h.deps.device = device()
+            h.holder.addNode(alpha)
+            h.holder.setBatchEnabled(batch)
+            h.holder.setBatchSize(1)
+            val persistence = InMemoryTracePathStore { h.time.now() }
+            val path = savedPath(h.state.fullPathData, radioId = RADIO)
+            persistence.insert(path)
+            val gate = CompletableDeferred<Unit>()
+            val heldSend = CompletableDeferred<MessageSentInfo>()
+            var firstLookup = true
+            var firstRefresh = true
+            h.deps.store = object : TracePathPersisting by persistence {
+                override suspend fun fetchSavedTracePaths(radioId: RadioId) =
+                    persistence.fetchSavedTracePaths(radioId).also {
+                        if (firstLookup) {
+                            firstLookup = false
+                            if (stage == "lookup") gate.await()
+                        }
+                    }
+                override suspend fun fetchSavedTracePath(key: EntityKey) =
+                    persistence.fetchSavedTracePath(key).also {
+                        if (firstRefresh) {
+                            firstRefresh = false
+                            if (stage == "refresh") gate.await()
+                        }
+                    }
+            }
+            val sent = mutableListOf<UInt>()
+            h.deps.sender = TraceSender { tag, _, _, _ ->
+                sent += tag
+                if (stage == "send") heldSend.await() else MessageSentInfo(0u, Bytes.EMPTY, 0u)
+            }
+            val old = h.start { h.holder.runBatchTrace() }
+            if (stage == "refresh") h.respond(sent.single(), listOf(node(0xA1, 5.0), node(null, 3.0)), RADIO)
+            token = null
+            if (retainedSelection) {
+                h.holder.loadSavedPath(path)
+                assertNull(h.state.activeSavedPath)
+            }
+            token = com.meshcoreone.android.core.contracts.domain.SessionToken(
+                epoch, com.meshcoreone.android.core.contracts.domain.Generation(2), RADIO,
+            )
+            gate.complete(Unit)
+            heldSend.complete(MessageSentInfo(0u, Bytes.EMPTY, 0u))
+            h.main.runCurrent()
+            sent.forEach { h.respond(it, listOf(node(0xA1, 9.0), node(null, 3.0)), RADIO) }
+            h.time.advanceBy(60.seconds)
+            h.complete { h.holder.runBatchTrace() }
+            assertTrue(old.isCompleted)
+            assertFalse(h.state.isRunning)
+            assertNull(h.state.result)
+            assertNull(h.state.activeSavedPath)
+            assertEquals(if (stage == "lookup") 0 else 1, sent.size)
+            assertEquals(if (stage == "refresh") 1 else 0, persistence.paths.getValue(path.id).runs.size)
+            h.holder.bindConnection(RADIO, 2)
+            val next = h.start { h.holder.runBatchTrace() }
+            h.respond(sent.last(), listOf(node(0xA1, 6.0), node(null, 3.0)), RADIO)
+            assertTrue(next.isCompleted)
+            assertTrue(assertNotNull(h.state.result).success)
+        }
+    }
+
+    @Test
     fun `changing batch mode retires the pending operation without sending another trace`() {
         for (initialBatch in listOf(false, true)) for (held in listOf(false, true)) {
             val h = TraceHarness(configureDependencies = true)

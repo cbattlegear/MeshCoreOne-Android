@@ -625,6 +625,52 @@ class TraceCodeInputComposeTest {
         }
     }
 
+    @Test fun savedRowActionsRejectANewLiveGraphBeforeTheScreenGenerationChanges() {
+        val epoch = com.meshcoreone.android.core.contracts.domain.ProcessEpoch(UUID.randomUUID())
+        var token = com.meshcoreone.android.core.contracts.domain.SessionToken(
+            epoch, com.meshcoreone.android.core.contracts.domain.Generation(1), RADIO,
+        )
+        val persistence = InMemoryTracePathStore { T0 }
+        val path = savedPath(Bytes.of(0xAA), radioId = RADIO).copy(name = "Retained graph route")
+        persistence.insert(path)
+        val deps = FakeTraceDependencies().apply {
+            device = device()
+            store = persistence
+            directory = FakeNodeDirectory()
+        }
+        val feature = object : TracePathFeatureDependencies by deps {
+            override fun sessionToken() = token
+        }
+        val connection = mutableStateOf(TracePathScreen.Dependencies(
+            feature, MapRecentsStorage(), RecordingDiagnostics(), RADIO, 1,
+        ))
+        content.setContent { MaterialTheme { TracePathScreen(connection.value) } }
+        settle()
+        click(host.get().getString(C.contactsTraceSaved))
+        val oldSelect = assertNotNull(button(path.name).config[SemanticsActions.OnClick].action)
+        val deleteLabel = "${host.get().getString(L.commonDelete)}: ${path.name}"
+        val oldDelete = assertNotNull(actionButton(deleteLabel).config[SemanticsActions.OnClick].action)
+        token = token.copy(generation = com.meshcoreone.android.core.contracts.domain.Generation(2))
+        host.get().runOnUiThread {
+            assertTrue(oldSelect())
+            assertTrue(oldDelete())
+        }
+        settle()
+        assertTrue(ShadowDialog.getLatestDialog()?.isShowing == true)
+        assertEquals(path, persistence.paths[path.id])
+        click(host.get().getString(L.commonDone))
+        assertTrue(texts().contains(host.get().getString(C.contactsTraceListEmptyPath)))
+        host.get().runOnUiThread { connection.value = connection.value.copy(generation = 2) }
+        settle()
+        click(host.get().getString(C.contactsTraceSaved))
+        click(path.name)
+        assertFalse(ShadowDialog.getLatestDialog()?.isShowing == true)
+        assertFalse(texts().contains(host.get().getString(C.contactsTraceListEmptyPath)))
+        click(host.get().getString(C.contactsTraceSaved))
+        clickDescription(deleteLabel)
+        assertFalse(persistence.paths.containsKey(path.id))
+    }
+
     @Test fun mountedBatchSwitchRetiresSingleAndBatchOperationsWithoutExtraSends() {
         for (initialBatch in listOf(false, true)) {
             val harness = configured()

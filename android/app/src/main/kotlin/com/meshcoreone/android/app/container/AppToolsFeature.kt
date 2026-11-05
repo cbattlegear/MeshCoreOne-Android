@@ -36,6 +36,7 @@ fun AppContainer.createToolsFeatureDependencies(
             sessions.current?.dataStore?.fetchDiscoveredNodes(radioId)?.toList().orEmpty()
     }
     val trace = object : TracePathFeatureDependencies {
+        override fun sessionToken() = sessions.current?.token
         override fun connectedDevice() = appState.connectedDevice
         override fun bestAvailableLocation() = this@createToolsFeatureDependencies.bestAvailableLocation
         override fun nodeDirectory() = directory

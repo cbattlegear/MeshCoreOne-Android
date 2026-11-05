@@ -92,6 +92,33 @@ fence the opaque presentation before scheduling durable invalidation. An
 already admitted or uncertain action cannot be retried as a fresh presentation
 grant. This is a coordinated interface, not evidence that the UI has executed.
 
+## Retirement before ledger allocation successor
+
+The coordinator identified a narrower ordering after explicit-action admission:
+hold `KEY_CREATED` before file creation, synchronously retire, await invalidation
+while the ledger is absent, then release staging. Previously the late writer
+could retain a `STAGED` row after invalidation had returned without a file.
+Both same-process and fresh-process verification still reject that presentation;
+this is not evidence of an authorization bypass. Nevertheless the writer must
+complete the retired action's terminal ledger transition rather than relying
+on a second UI invalidation callback after its presentation has been removed.
+
+The staging writer now transitions its exact evidence to `INVALIDATED` after
+durable staging if its lifecycle recheck finds retirement. It returns `Rejected`
+only after confirmed invalidation; a missing/unconfirmed transition or reported
+storage failure is `Indeterminate`, never a fresh grant. IO remains outside the
+lifecycle monitor.
+
+Two new native-SQLite controls cover the pre-file `KEY_CREATED` ordering and
+cleanup write failure. The first independently decodes exact
+`STAGED`/`INVALIDATED` history, reopens the verifier, and requires witness
+rejection without a witness file or key allocation. The second injects a
+cleanup row-write failure and requires reported uncertainty and rejection by
+both current and reopened verifiers. These bring the focused suite to 23 methods
+at SDK31/37. Same-host readiness, manifest/ownership validation, portmap and
+`git diff --check` passed; exact successor hosted execution is pending.
+No earlier run verifies this repair.
+
 ## Ownership and advisory state
 
 Trusted `reserve.py admit` returned `wp-owned/create` for the verifier and

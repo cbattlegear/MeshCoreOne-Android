@@ -716,6 +716,85 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
         } finally { release.complete(Unit); h.container.close() }
     }
 
+    @Test fun removingShortOrLongUtf8AliasPreservesSelectedScopeUntilItsLastNormalizedSurvivorIsRemoved() = runTest {
+        val h = ContainerHarness(this, store)
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            val before = assertNotNull(h.manager.connectedDevice)
+            // Ten three-byte code points fill the actual thirty-byte radio scope field.
+            val short = "\u754c".repeat(10)
+            val long = short + "-suffix"
+            val unrelated = "US915"
+            val token = h.sessions.current!!.token
+            suspend fun seed() {
+                for (name in listOf(short, long, unrelated)) store.addDeviceKnownRegion(before.radioId, name)
+                val ticket = assertNotNull(store.fetchDeviceWriteSnapshot(before.id))
+                val seeded = ticket.device.copy(
+                    knownRegions = listOf(short, long, unrelated).snapshot(), defaultFloodScopeName = short,
+                )
+                assertTrue(store.saveDeviceIfUnchanged(seeded, ticket))
+                h.container.deviceEditor.updateDevice(seeded)
+            }
+            for ((removed, survivor) in listOf(short to long, long to short)) {
+                seed()
+                assertTrue(h.container.deviceEditor.persistKnownRegionRemoval(removed, token))
+                val retained = assertNotNull(store.fetchDevice(before.id))
+                assertEquals(listOf(survivor, unrelated), retained.knownRegions)
+                assertEquals(short, retained.defaultFloodScopeName)
+                assertEquals(retained, h.manager.connectedDevice)
+                val ticket = assertNotNull(store.fetchDeviceWriteSnapshot(before.id))
+                val invalid = runCatching {
+                    store.saveDeviceIfUnchanged(
+                        retained.copy(knownRegions = listOf(unrelated).snapshot()), ticket,
+                    )
+                }.exceptionOrNull()
+                assertTrue(invalid is com.meshcoreone.android.core.contracts.domain.PersistenceStoreException,
+                    "Removing the last normalized alias still requires an explicit default clear")
+                assertEquals(retained, store.fetchDevice(before.id))
+                assertTrue(h.container.deviceEditor.persistKnownRegionRemoval(survivor, token))
+                val cleared = assertNotNull(store.fetchDevice(before.id))
+                assertEquals(listOf(unrelated), cleared.knownRegions)
+                assertNull(cleared.defaultFloodScopeName)
+                assertEquals(cleared, h.manager.connectedDevice)
+            }
+        } finally { h.container.close() }
+    }
+
+    @Test fun normalizedScopeSurvivorDecisionIsRecomputedAfterConcurrentKnownRegionChanges() = runTest {
+        val paused = PausedStore(store)
+        val h = ContainerHarness(this, store, persistenceOverride = paused)
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            val before = assertNotNull(h.manager.connectedDevice)
+            val short = "p".repeat(30)
+            val long = short + "-suffix"
+            val token = h.sessions.current!!.token
+            suspend fun seed(regions: List<String>) {
+                val ticket = assertNotNull(store.fetchDeviceWriteSnapshot(before.id))
+                val seeded = ticket.device.copy(knownRegions = regions.snapshot(), defaultFloodScopeName = short)
+                assertTrue(store.saveDeviceIfUnchanged(seeded, ticket))
+                h.container.deviceEditor.updateDevice(seeded)
+            }
+            seed(listOf(short))
+            paused.beforeSave = { store.addDeviceKnownRegion(before.radioId, long) }
+            assertTrue(h.container.deviceEditor.persistKnownRegionRemoval(short, token))
+            val added = assertNotNull(store.fetchDevice(before.id))
+            assertEquals(listOf(long), added.knownRegions)
+            assertEquals(short, added.defaultFloodScopeName)
+            assertEquals(added, h.manager.connectedDevice)
+            seed(listOf(short, long))
+            paused.beforeSave = { store.removeDeviceKnownRegion(before.radioId, long) }
+            assertTrue(h.container.deviceEditor.persistKnownRegionRemoval(short, token))
+            val removed = assertNotNull(store.fetchDevice(before.id))
+            assertTrue(removed.knownRegions.isEmpty())
+            assertNull(removed.defaultFloodScopeName)
+            assertEquals(removed, h.manager.connectedDevice)
+            assertEquals(2, paused.rejected, "Both intervening writes must force a fresh authoritative transform")
+        } finally { h.container.close() }
+    }
+
     private fun DeviceDTO.info(frequency: Double = 915.0) = SelfInfo(
         advertisementType = 0u, txPower = txPower, maxTxPower = maxTxPower, publicKey = publicKey,
         latitude = latitude, longitude = longitude, multiAcks = multiAcks,

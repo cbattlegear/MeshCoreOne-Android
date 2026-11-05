@@ -20,6 +20,53 @@ The coordinator assigned an independent clean-current-main foundation. Runtime/d
 
 ## Source custody and adaptations
 
+### Exact current-main wired foundation verified
+
+Immutable candidate da8a36741b681954a8cb2c4023263082c353efc7 ran as
+[41988018526](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41988018526),
+attempt 1, and the complete workflow finished SUCCESS. The exact head and all job
+conclusions were independently read: Linux 127113399292, Swift codec 127113399188,
+controller/policy 127113399206, SwiftData restore/export 127121939237 and aggregate
+127123716543 succeeded. Actual remote main was still
+1a8b406a67d44006f14ac043ac468b6adf07a9d7; its merge-base with da8 is that same main
+commit. No historical execution result is transferred to this candidate.
+
+The actual supported command was the repository workflow dispatch:
+`gh workflow run android-ci.yml --repo cbattlegear/MeshCoreOne-Android --ref diagnostic/wp-305-current-main-gate-da8a36741`.
+It was dispatched once after publishing and checking the immutable remote SHA.
+The authoritative Linux log reports the selected Android/Gradle stage SUCCESS.
+App discovered and passed 2074/2074, feature/onboarding 69/69,
+core/connectivity 186/186 and core/ui 223/223, all with zero failures, errors or
+skips. Positive named discovery includes Flags 26, Gate 4, preset adapter 8,
+flow coordinator 11, preset coordinator 8, real-Room writer 26, real-Room
+persistence 17, notification authority 3, session-bound editor 9 and CLI readback 3.
+Flags, Gate, adapter and the three Room authority suites also have actual class
+START/END SUCCESS records.
+
+Named controls include original-token configurator admission/sealing, replacement
+after feature validation with fresh-target positive completion, deferred completion
+acknowledgement/failure/retirement, the actual held-Room authority and cancellation
+boundaries, authoritative stale/complete/four-partial pre-Repeat preservation, and
+the production-editor equal/ABA publication-revision positive/masked control.
+The latter is an access-boundary discrimination, not a second Room commit claim;
+the separate real-Room ABA method remains a serialization/preservation witness.
+All eight individually named test-file compiled bindings were compared against
+the exact da8 Git blobs. The combined OnboardingBoundaryTests.kt,
+OnboardingStateTests.kt and connectivity DeviceFixtures.kt bindings also matched.
+The hosted job and its original log remain authoritative; no duplicate result
+bundle is retained, hashed, committed or uploaded.
+
+Producer 2f independently reviewed the exact Gate bridge with no consequential
+finding, then independently verified this exact run's named discovery and terminal
+workflow success. Runtime producer 36c had already verified the exact two-path
+8eb transfer into 551 against Git objects, without transferring its own run credit.
+This establishes the bounded current-main staged writer, token consumer, OCV and
+snapshot foundation on da8. This later evidence-only commit does not acquire a new
+Kotlin result. Settings successors remain separate candidates. Raw-flag/receipt
+navigation delivery, retained Activity and no-device stale callback schedules,
+native tips, physical radio/device behavior and full WP-305 acceptance are not
+established by this result. No PR or merge was requested or performed.
+
 ### Exact corrected-candidate compile outcomes and Gate test bridge
 
 Exact d523722b96324eec32293120b7df60044d0ce03d run

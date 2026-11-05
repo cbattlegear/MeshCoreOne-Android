@@ -5,6 +5,7 @@ package com.meshcoreone.android.core.data.repository
 
 import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.database.MeshCoreDatabase
+import com.meshcoreone.android.core.database.DirectAckStorage
 import com.meshcoreone.android.core.database.toDTO
 import com.meshcoreone.android.core.database.toEntity
 import com.meshcoreone.android.core.data.backup.snapshotBackupKey
@@ -106,9 +107,7 @@ class RoomPersistenceStore private constructor(
         afterCommit: () -> Unit = {},
         block: suspend (MeshCoreDatabase, Clock) -> T,
     ): T = context.restoreBackup(afterCommit) {
-        database.directAcks().invalidateRestore()
-        database.directAcks().invalidatePendingRestore()
-        database.directAcks().invalidateIntentRestore()
+        DirectAckStorage.eraseRestorePayloads(database.openHelper.writableDatabase)
         block(database, clock)
     }
 

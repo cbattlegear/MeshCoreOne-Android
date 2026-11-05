@@ -302,6 +302,21 @@ object DirectAckStorage {
         check(actual == triggerDefinitions(db)) { "Direct ACK all-writer fencing triggers are missing or changed" }
     }
 
+    fun eraseRestorePayloads(db: SupportSQLiteDatabase) {
+        check(db.inTransaction()) { "Direct ACK restore erasure requires the restore transaction" }
+        verify(db)
+        val messageColumns = columnNames(db, "messages")
+        val pendingColumns = columnNames(db, "pending_sends")
+        fun nulls(prefix: String, columns: List<String>) =
+            columns.joinToString(",") { "`$prefix$it` = NULL" }
+        db.execSQL("UPDATE direct_ack_claims SET current = 0,${nulls("snapshot_", messageColumns)}")
+        db.execSQL("UPDATE direct_ack_deliveries SET ${nulls("snapshot_", messageColumns)}")
+        db.execSQL("UPDATE direct_ack_intents SET current = 0," +
+            "${nulls("message_", messageColumns)},${nulls("pending_", pendingColumns)}")
+        db.execSQL("UPDATE direct_pending_completions SET current = 0," +
+            "${nulls("message_", messageColumns)},${nulls("pending_", pendingColumns)}")
+    }
+
     private fun install(db: SupportSQLiteDatabase) {
         triggerDefinitions(db).values.forEach(db::execSQL)
         db.execSQL("INSERT INTO $IDENTITIES (radioId,id,kind,incarnation,revision) " +

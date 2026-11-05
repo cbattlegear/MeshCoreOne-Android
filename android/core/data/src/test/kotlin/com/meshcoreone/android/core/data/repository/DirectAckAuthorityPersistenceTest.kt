@@ -401,6 +401,92 @@ class DirectAckAuthorityPersistenceTest {
         }
     }
 
+    @Test fun unchangedDuplicateRestoreErasesEveryHistoryWithoutChangingProductRowsOrTombstones() = runTest {
+        val row = message(text = "snapshot retained only until restore").copy(linkPreviewImageData = key(0x74))
+        val queued = pending(messageID = row.id).copy(messageText = row.text)
+        store.upsertPendingSend(queued)
+        val claim = begin(row, pendingId = queued.id)
+        val request = UUID.randomUUID()
+        val completion = assertIs<DirectPendingCaptureResult.Captured>(
+            store.captureDirectPendingCompletion(claim.lease, entity(id = row.id), queued.id, request,
+                DirectPendingCompletionReason.ZeroAttempts(0)),
+        )
+        assertIs<DirectAckMutationResult.Applied>(store.settleDirectAck(claim.attempt, 123u, 7u))
+        val product = assertNotNull(store.fetchMessage(entity(id = row.id)))
+        val before = observed(claim)
+        assertNotNull(before.message)
+        assertNotNull(before.delivery?.message)
+        var skipped = 0
+        store.withBackupRestore { database, _ ->
+            // An unchanged backup row is intentionally skipped: no product DML fires an erasure trigger.
+            if (database.messages().byId(RADIO_A.value, row.id)?.toDTO() == product) skipped++
+            else fail("Expected the duplicate product row")
+            assertPayloadColumnsNull("direct_ack_claims", row.id, "snapshot_")
+            assertPayloadColumnsNull("direct_ack_deliveries", row.id, "snapshot_")
+            assertPayloadColumnsNull("direct_ack_intents", row.id, "message_", "pending_")
+            assertPayloadColumnsNull("direct_pending_completions", row.id, "message_", "pending_")
+        }
+        assertEquals(1, skipped)
+        assertEquals(product, store.fetchMessage(entity(id = row.id)))
+        assertEquals(listOf(queued), store.fetchPendingSendsForMessage(entity(id = row.id)))
+        val after = observed(claim)
+        assertNull(after.message)
+        assertNull(after.delivery?.message)
+        assertEquals(before.copy(message = null, delivery = before.delivery?.copy(message = null),
+            permission = DirectAckPermission.INVALIDATED), after)
+        assertEquals(DirectAckRejection.INVALIDATED, assertIs<DirectAckBeginResult.Rejected>(
+            store.beginDirectAckAttempt(claim.intent, claim.wire, 123u),
+        ).reason)
+        assertIs<DirectPendingCompletionResult.Rejected>(
+            store.completeDirectPendingWithoutDispatch(completion.completion, UUID.randomUUID()),
+        )
+        val historical = assertIs<DirectPendingCompletionObservation.Found>(
+            store.inspectDirectPendingCompletion(claim.lease, request),
+        ).receipt
+        assertNull(historical.message)
+        assertNull(historical.pending)
+        assertEquals(queued.id, historical.pendingSendId)
+        val replay = assertIs<DirectAckMutationResult.AlreadyApplied>(store.settleDirectAck(claim.attempt, 123u, 7u))
+        assertEquals(after, replay.receipt)
+    }
+
+    @Test fun failedOrCancelledRestoreRollsBackEveryHistoryErasureAndPreservesCurrentAuthority() = runTest {
+        val lease = activate()
+        for (cancelled in listOf(false, true)) {
+            val row = message()
+            val queued = pending(messageID = row.id)
+            store.upsertPendingSend(queued)
+            val claim = begin(row, pendingId = queued.id, lease = lease)
+            val request = UUID.randomUUID()
+            store.captureDirectPendingCompletion(lease, entity(id = row.id), queued.id, request,
+                DirectPendingCompletionReason.ZeroAttempts(0))
+            store.settleDirectAck(claim.attempt, 123u, 7u)
+            val claimBefore = db.directAcks().claim(RADIO_A.value, claim.request)
+            val deliveryBefore = db.directAcks().delivery(RADIO_A.value, claim.request)
+            val intentBefore = db.directAcks().intent(RADIO_A.value, claim.request)
+            val completionBefore = db.directAcks().pendingCompletion(RADIO_A.value, request)
+            val productBefore = store.fetchMessage(entity(id = row.id))
+            suspend fun restore(): Unit = store.withBackupRestore { _, _ ->
+                assertPayloadColumnsNull("direct_ack_claims", row.id, "snapshot_")
+                assertPayloadColumnsNull("direct_ack_deliveries", row.id, "snapshot_")
+                assertPayloadColumnsNull("direct_ack_intents", row.id, "message_", "pending_")
+                assertPayloadColumnsNull("direct_pending_completions", row.id, "message_", "pending_")
+                if (cancelled) throw CancellationException("Controlled restore cancellation")
+                throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+            }
+            if (cancelled) assertFailsWith<CancellationException> { restore() }
+            else assertFailsWith<PersistenceStoreException> { restore() }
+            assertEquals(claimBefore, db.directAcks().claim(RADIO_A.value, claim.request))
+            assertEquals(deliveryBefore, db.directAcks().delivery(RADIO_A.value, claim.request))
+            assertEquals(intentBefore, db.directAcks().intent(RADIO_A.value, claim.request))
+            assertEquals(completionBefore, db.directAcks().pendingCompletion(RADIO_A.value, request))
+            assertEquals(productBefore, store.fetchMessage(entity(id = row.id)))
+            assertEquals(listOf(queued), store.fetchPendingSendsForMessage(entity(id = row.id)))
+            assertEquals(DirectAckPermission.CURRENT, observed(claim).permission)
+            assertIs<DirectAckMutationResult.Applied>(store.completeDirectPending(claim.attempt, queued.id, UUID.randomUUID()))
+        }
+    }
+
     @Test fun ownFailureAndMatchingAckCommitAtomicallyWithExactTupleReplay() = runTest {
         val claim = begin()
         assertIs<DirectAckMutationResult.Applied>(store.recordDirectSendAccepted(claim.attempt, claim.wire, 456u))

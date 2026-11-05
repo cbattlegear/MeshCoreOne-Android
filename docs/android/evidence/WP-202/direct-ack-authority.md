@@ -248,3 +248,24 @@ passed on that exact head, but this does not establish full product acceptance.
 The temporary overlay's local fixture executed 18 tests successfully after
 setting its required `tools/android-port` Python module path; its commit prose
 mistakenly said 31. The actual command output, not that prose, is authoritative.
+
+## Restore-entry payload erasure follow-up
+
+Independent exact-head consumer review of
+`3afa654fbd35ceb3baa4f705434508546041c229` confirmed a further privacy gap:
+`withBackupRestore` cleared current flags only. If import skipped an unchanged
+product row, no message/pending DML trigger erased its historical snapshots.
+The sole storage producer now erases all claim, delivery, intent and no-dispatch
+snapshots explicitly at restore entry, inside the existing restore transaction.
+Nonpayload identities, operation journals, phase/code/RTT and ordinary product
+rows remain unchanged. The helper requires an active transaction and verifies
+the managed fencing triggers; it cannot report success outside the transaction.
+No entity, migration, trigger or generated-schema shape changes are needed.
+
+Two actual-Room methods are authored: a duplicate/unchanged-row skip observes
+all four histories already nulled inside the transaction and verifies persisted
+tombstones and unchanged product rows after commit; typed failure and cancellation
+observe the same in-transaction erasure, then assert exact restoration of every
+history, product row and current grant after rollback. These are source assertions,
+not executed or passing evidence. Existing exact-head normal run 41965047472
+predates this follow-up and cannot establish its execution.

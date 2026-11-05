@@ -50,6 +50,8 @@ class ChatSendQueueService(
     private var queryAccounting: QueryAccounting? = null
     private var recoveryPrepared = false
     private val completedDMs = mutableSetOf<UUID>()
+    private data class DirectAttempt(val pending: Attempt, val claimID: UUID = UUID.randomUUID())
+    private val directAttempts = mutableMapOf<UUID, DirectAttempt>()
     private val completedChannels = mutableMapOf<UUID, UInt>()
     private val indexedChannels = mutableSetOf<UUID>()
     private val persistenceSubmissions = mutableSetOf<Deferred<Result<Unit>>>()
@@ -251,31 +253,45 @@ class ChatSendQueueService(
         val id = envelope.messageID
         awaitReady()
         checkSendAdmission()
-        val contact = try {
-            dataStore.fetchContact(key(envelope.contactID)).also { ownership.check("dm.contact") }
-        } catch (failure: PersistenceStoreException) { park(id, failure) }
-        if (contact == null) {
-            dataStore.updateMessageStatusUnlessDelivered(key(id), MessageStatus.FAILED)
-            ownership.check("dm.deletedContact")
-            dataStore.deletePendingSendsForMessage(key(id))
-            ownership.check("dm.deletedPending")
-            complete(id)
-            return
-        }
-        val attempt = try {
-            preflightAndBump(dataStore, key(id)).also { ownership.check("dm.bump") }
-        } catch (failure: PersistenceStoreException) { parkBeforeSend(id, failure) }
-        if (attempt == null) { complete(id); return }
-        checkSendAdmission()
-        synchronized(lock) { directClaimIDs[id] = attempt.pendingID }
         try {
-            if (!synchronized(lock) { id in completedDMs }) {
-                messageService.sendPendingClaim(attempt.pendingID, id, contact, attempt.preserveTimestamp, envelope.isResend)
+            val retained = synchronized(lock) { directAttempts[id] }
+            val attempt = if (synchronized(lock) { id in completedDMs }) {
+                retained ?: throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+            } else {
+                val contact = try {
+                    dataStore.fetchContact(key(envelope.contactID)).also { ownership.check("dm.contact") }
+                } catch (failure: PersistenceStoreException) { park(id, failure) }
+                if (contact == null) {
+                    dataStore.updateMessageStatusUnlessDelivered(key(id), MessageStatus.FAILED)
+                    ownership.check("dm.deletedContact")
+                    dataStore.deletePendingSendsForMessage(key(id))
+                    ownership.check("dm.deletedPending")
+                    complete(id)
+                    return
+                }
+                val current = retained ?: run {
+                    val pending = try {
+                        preflightAndBump(dataStore, key(id)).also { ownership.check("dm.bump") }
+                    } catch (failure: PersistenceStoreException) { parkBeforeSend(id, failure) }
+                    if (pending == null) { complete(id); return }
+                    DirectAttempt(pending).also {
+                        synchronized(lock) {
+                            directAttempts[id] = it
+                            directClaimIDs[id] = it.claimID
+                        }
+                    }
+                }
+                checkSendAdmission()
+                messageService.sendPendingClaim(
+                    current.claimID, id, contact, current.pending.preserveTimestamp, envelope.isResend,
+                    pendingSendID = current.pending.pendingID,
+                )
                 ownership.check("dm.completed")
                 synchronized(lock) { completedDMs += id }
+                current
             }
             ownership.check("dm.sent")
-            dataStore.deletePendingSendsForMessage(key(id))
+            messageService.completeDirectPending(attempt.claimID, id, attempt.pending.pendingID)
             ownership.check("dm.pendingDeleted")
             triggers.clear()
             complete(id)
@@ -285,13 +301,24 @@ class ChatSendQueueService(
             if (!isTransientDirectMessageError(failure)) throw failure
             try { remapPending(id) }
             catch (storage: PersistenceStoreException) { record("remap.$id", storage) }
+            retireDirectAttempt(id)
             park(id, failure)
         } catch (failure: MeshCoreException) {
             if (!isTransientDirectMessageError(failure)) throw failure
             try { remapPending(id) }
             catch (storage: PersistenceStoreException) { record("remap.$id", storage) }
+            retireDirectAttempt(id)
             park(id, failure)
         }
+    }
+
+    private fun retireDirectAttempt(id: UUID) {
+        val claim = synchronized(lock) {
+            directAttempts.remove(id)
+            completedDMs.remove(id)
+            directClaimIDs.remove(id)
+        }
+        claim?.let(messageService::releaseDirectClaim)
     }
 
     private suspend fun sendChannel(envelope: ChannelMessageEnvelope) {
@@ -461,6 +488,7 @@ class ChatSendQueueService(
         synchronized(lock) {
             queued.remove(id)
             completedDMs.remove(id)
+            directAttempts.remove(id)
             completedChannels.remove(id)
             indexedChannels.remove(id)
             failures.remove("park.$id")

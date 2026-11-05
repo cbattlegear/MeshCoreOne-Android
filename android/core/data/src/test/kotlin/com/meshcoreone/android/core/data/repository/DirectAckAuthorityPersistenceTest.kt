@@ -100,6 +100,36 @@ class DirectAckAuthorityPersistenceTest {
         rejected(store.settleDirectAck(claim.attempt, 123u, 43u), DirectAckRejection.CONFLICT)
     }
 
+    @Test fun activationAndBeginReplayRecoverOnlyTheExactStillCurrentLogicalClaim() = runTest {
+        val activation = UUID.randomUUID()
+        val lease = activate(request = activation)
+        assertIs<DirectAckActivationResult.AlreadyActivated>(store.activateDirectAckSession(token, activation))
+        val claim = begin(lease = lease)
+        assertIs<DirectAckBeginResult.AlreadyBegun>(
+            store.beginDirectAckAttempt(lease, entity(id = claim.row.id), claim.request, claim.wire, 123u,
+                DirectAckMode.SEND, null),
+        )
+        assertEquals(DirectAckRejection.CONFLICT, assertIs<DirectAckBeginResult.Rejected>(
+            store.beginDirectAckAttempt(lease, entity(id = claim.row.id), claim.request, claim.wire, 124u,
+                DirectAckMode.SEND, null),
+        ).reason)
+        val successor = assertIs<DirectAckBeginResult.Begun>(
+            store.beginDirectAckAttempt(lease, entity(id = claim.row.id), UUID.randomUUID(), UUID.randomUUID(), 456u,
+                DirectAckMode.SEND, null),
+        )
+        rejected(store.settleDirectAck(claim.attempt, 123u, 1u))
+        assertEquals(DirectAckRejection.INVALIDATED, assertIs<DirectAckBeginResult.Rejected>(
+            store.beginDirectAckAttempt(lease, entity(id = claim.row.id), claim.request, claim.wire, 123u,
+                DirectAckMode.SEND, null),
+        ).reason)
+        assertIs<DirectAckMutationResult.Applied>(store.recordDirectFailure(successor.attempt))
+        assertIs<DirectAckMutationResult.Applied>(store.settleDirectAck(successor.attempt, 456u, 2u))
+        activate(session = token.copy(generation = Generation(2)))
+        assertEquals(DirectAckRejection.STALE_LEASE, assertIs<DirectAckActivationResult.Rejected>(
+            store.activateDirectAckSession(token, activation),
+        ).reason)
+    }
+
     @Test fun competingFailedBeforeOwnFailureAndAfterOwnCommitRemainIndependent() = runTest {
         val lease = activate()
         for (before in listOf(true, false)) {

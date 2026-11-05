@@ -75,7 +75,7 @@ Source-only preparation passed:
 - `python tools/android-port/portmap.py`: exit 0.
 - `git diff --check`: exit 0.
 
-The new source contains 19 repository and four database test methods, including
+The new source contains 20 repository and four database test methods, including
 actual Room migration from the checked-in v1 export, same-value independent
 FAILED controls before/after own commit, cancellation before/after commit,
 explicit rollback failure, nested mutation revision fencing, typed retry codes,

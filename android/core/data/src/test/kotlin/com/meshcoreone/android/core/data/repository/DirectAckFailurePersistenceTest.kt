@@ -2,6 +2,7 @@
 package com.meshcoreone.android.core.data.repository
 
 import androidx.room.Room
+import androidx.room.withTransaction
 import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.sqlite.db.SupportSQLiteOpenHelper
 import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
@@ -165,6 +166,9 @@ class DirectAckFailurePersistenceTest {
         var cancelAtRoomCommit = false
         var cancelAfterSuccessfulReturn = false
         var cancelledAfterCommit = false
+        var holdSuccessfulReturn = false
+        val successfulReturnEntered = CompletableDeferred<Unit>()
+        val releaseSuccessfulReturn = CompletableDeferred<Unit>()
 
         override suspend fun updateMessageStatusUnlessDelivered(key: EntityKey, status: MessageStatus): Boolean {
             if (status != MessageStatus.FAILED) return store.updateMessageStatusUnlessDelivered(key, status)
@@ -181,6 +185,11 @@ class DirectAckFailurePersistenceTest {
             }
             val changed = if (commit) store.updateMessageStatusUnlessDelivered(key, status) else false
             if (commit) committed = changed
+            if (holdSuccessfulReturn) {
+                check(changed) { "Post-commit barrier requires a successful actual Room FAILED return" }
+                successfulReturnEntered.complete(Unit)
+                releaseSuccessfulReturn.await()
+            }
             if (cancelAfterSuccessfulReturn) {
                 check(changed) { "Caller cancellation requires a successful actual Room FAILED return" }
                 requireNotNull(currentCoroutineContext()[Job]).cancel(cancellation)
@@ -457,6 +466,86 @@ class DirectAckFailurePersistenceTest {
         val afterTeardown = assertNotNull(store.fetchMessage(key))
         assertEquals(independentlyFailed.ackCode, afterTeardown.ackCode)
         assertEquals(independentlyFailed.roundTripTime, afterTeardown.roundTripTime)
+        assertTrue(generation.statuses.isEmpty())
+        assertEquals(1, generation.firmware.directSends)
+    }
+
+    @Test fun directDaoSameValueWriteAfterOwnCommitInvalidatesAckRestoration() = runTest(scheduler) {
+        competingMutationAfterOwnCommit(19) { key ->
+            assertEquals(1, db.messages().setStatus(key.radioId.value, key.id, MessageStatus.FAILED.rawValue))
+        }
+    }
+
+    @Test fun directDaoUpsertAfterOwnCommitInvalidatesAckRestoration() = runTest(scheduler) {
+        competingMutationAfterOwnCommit(20) { key ->
+            db.messages().upsert(assertNotNull(db.messages().byId(key.radioId.value, key.id)))
+        }
+    }
+
+    @Test fun directDaoDeleteAndRecreateAfterOwnCommitInvalidatesAckRestoration() = runTest(scheduler) {
+        competingMutationAfterOwnCommit(21) { key ->
+            db.withTransaction {
+                val row = assertNotNull(db.messages().byId(key.radioId.value, key.id))
+                assertEquals(1, db.messages().delete(key.radioId.value, key.id))
+                db.messages().insert(row)
+            }
+        }
+    }
+
+    @Test fun distinctRepositoryContextWriteAfterOwnCommitInvalidatesAckRestoration() = runTest(scheduler) {
+        competingMutationAfterOwnCommit(22) { key ->
+            val other = RoomPersistenceStore(db, process, clock.wallClock)
+            try { other.updateMessageStatus(key, MessageStatus.FAILED) }
+            finally { other.close() }
+        }
+    }
+
+    @Test fun rawSqlSameValueWriteAfterOwnCommitInvalidatesAckRestoration() = runTest(scheduler) {
+        competingMutationAfterOwnCommit(23) { key ->
+            val statement = db.openHelper.writableDatabase.compileStatement(
+                "UPDATE messages SET statusRawValue = ? WHERE radioId = ? AND id = ?",
+            )
+            try {
+                statement.bindLong(1, MessageStatus.FAILED.rawValue)
+                statement.bindString(2, key.radioId.canonicalString)
+                statement.bindString(3, key.id.canonicalString())
+                assertEquals(1, statement.executeUpdateDelete())
+            } finally { statement.close() }
+        }
+    }
+
+    private suspend fun TestScope.competingMutationAfterOwnCommit(
+        number: Long,
+        mutate: suspend (EntityKey) -> Unit,
+    ) {
+        val writer = FailedWriter().apply {
+            throws = false
+            holdSuccessfulReturn = true
+        }
+        val generation = RadioGeneration(number, writer)
+        val message = sent(generation)
+        val key = EntityKey(radio, message.id)
+        val work = async { generation.service.failAllPendingMessages() }
+        runCurrent()
+        registerAckWhileWriterIsHeld(generation, writer)
+        writer.release.complete(Unit)
+        runCurrent()
+        assertTrue(writer.successfulReturnEntered.isCompleted)
+        assertEquals(true, writer.committed)
+        val failed = message.copy(status = MessageStatus.FAILED)
+        assertEquals(failed, store.fetchMessage(key), "Own FAILED commit must precede the competing mutation")
+        mutate(key)
+        assertEquals(failed, store.fetchMessage(key), "The competing mutation deliberately preserves every DTO field")
+        writer.releaseSuccessfulReturn.complete(Unit)
+        work.await()
+        runCurrent()
+        assertEquals(failed, store.fetchMessage(key), "Competing mutation must invalidate restoration even when the DTO is identical")
+        assertTrue(generation.statuses.isEmpty())
+        assertEquals(1, generation.firmware.directSends)
+        assertTrue(generation.service.isEventMonitoringActive)
+        assertNull(generation.statusFailure)
+        generation.stop()
+        assertEquals(failed, store.fetchMessage(key), "Teardown must not reuse authority invalidated by the competing mutation")
         assertTrue(generation.statuses.isEmpty())
         assertEquals(1, generation.firmware.directSends)
     }

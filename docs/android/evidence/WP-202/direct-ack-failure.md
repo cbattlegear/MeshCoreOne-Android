@@ -215,3 +215,71 @@ unavailable if the process dies before the ACK itself reaches durable ingress.
 Without an acknowledged durable journal or firmware replay guarantee, that
 case must remain explicitly unresolved; no process-death or exactly-once
 recovery is claimed.
+
+## Non-schema candidate disposition: unrestricted write boundary
+
+The bounded follow-up preserves immutable `42b2e754d1ba1fe25a88f142881845e757a11a79`,
+`38d9a32d9c5ce0721e0f86f944ced77d0353ff8b`,
+`5c135b28151ba6052ddb829584138cbcdd849b7c` and
+`ae5a24e028a0fb2eb02419a189cdb872c782d7e9`.
+The published-main trace is bound to
+`41552c85b659396111cee6b0e0f70c404ac5a8ee`, verified against the remote main ref.
+It did not inspect historical paused-owner work, prohibited schema candidates
+or the held channel candidate.
+
+No production lease implementation is included. A non-schema lease would need
+an exclusive write boundary, not just a successful conditional transition:
+
+- `RoomRepositoryContext.kt:77,89-158` serializes one context only;
+  `RoomPersistenceStore.kt:37-42` permits another context over the same database.
+- `MeshCoreDatabase.kt:27,44-45` exposes the message DAO and constructs a public
+  Room database. `MessageDaos.kt:53-62` and `RadioDaos.kt:17-20` expose direct
+  status/ACK mutations and generic upserts. These do not traverse a repository
+  lease or context callback.
+- `RoomRepositoryContext.kt:275-276` explicitly directs callers of external
+  Room transactions to the DAOs. A repository-only lease therefore cannot
+  redefine that existing path as intercepted.
+- A caller can retain `db.openHelper.writableDatabase` or a compiled statement,
+  commit a same-value FAILED update after the owning transaction, and leave the
+  entire DTO unchanged. The service's mutation lock does not prevent this.
+  A second Room handle to the same file also bypasses a database-object registry.
+
+Wrapping the open-helper factory is not a demonstrated exclusive boundary:
+the existing Room fixture accepts a caller-supplied factory that itself retains
+the underlying framework helper/database. Wrapping the returned object cannot
+revoke access to that retained delegate. Supporting a typed ACK operation only
+on a newly constrained, exclusively constructed database would need an explicit
+construction/access contract and verification of all entry points. Refusing
+the existing factory-based positive controls is not a repair of their behavior.
+No such exclusivity guarantee or safe refusal has been implemented here.
+
+This is not a proof that every possible same-process solution requires schema.
+It is the exact unsupported path for the proposed repository/context RAM lease.
+Under the currently exposed write boundary, a persisted mutation identity with
+invalidation enforced at the database boundary, or a separately established
+exclusive construction/access boundary, remains necessary. Neither a narrowed
+FAILED predicate nor whole-DTO equality supplies that guarantee. No persistent
+triggers, schema edits, version allocation or data-column repurposing were used.
+
+The owned test fixture now has an optional barrier after the actual Room FAILED
+writer has returned true, before the wrapper returns to the service. Five new
+controls register the matching raw ACK before that commit, then perform a
+competing direct-DAO same-value write, same-row upsert, transactional
+delete/reinsert, distinct-repository-context write, or raw compiled SQL update.
+Each verifies that the competing mutation deliberately leaves the full DTO
+unchanged, then requires terminal FAILED preservation with no delivery event or
+extra send, including teardown. The original positive/cancellation controls
+and their assertions are unchanged.
+
+These five controls are **unexecuted regressions**, not evidence that a lease
+works or that any particular new assertion has failed. Local Gradle ownership
+remains with `local-check:f516a7e271f444dd9cb2efcc8b995a16`; no local runtime or
+hosted dispatch bypass was used. A stopped production candidate does not satisfy
+the requested own-commit/cancellation/restore/reopen/multiple-handle acceptance
+matrix. No durable ACK ingress or successor/restart recovery is claimed.
+
+The active data owner confirmed no live main-bound save/delete/cascade edits
+from its session. Its radio/message isolation, rejected-replay nonmutation,
+terminal-state, redaction/deletion and rollback invariants remain requirements,
+not authority granted by that absence of overlap. The active channel integration
+owner was notified; no candidate was imported or altered.

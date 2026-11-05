@@ -62,11 +62,11 @@ internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
             holder.setError(holder.strings.noResponse)
             holder.pendingPathHash = null
             val savedPath = holder.current.activeSavedPath
-            val store = holder.deps.savedPaths()
+            holder.traceJob = null
             holder.update { it.copy(isRunning = false) }
             holder.pendingTag = null
             holder.pendingDeviceId = null
-            if (savedPath != null && store != null) holder.appendRun(store, savedPath, holder.failedRun())
+            if (savedPath != null) holder.appendRunInBackground(savedPath, holder.failedRun())
         }
     }
 

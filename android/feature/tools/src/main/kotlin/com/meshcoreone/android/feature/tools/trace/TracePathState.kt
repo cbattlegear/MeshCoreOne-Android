@@ -34,6 +34,8 @@ data class TracePathState(
     val completedResults: List<TraceResult> = emptyList(),
     /** AndroidOnly: WP-314 Invalidate presentation on path edits without deleting batch history. */
     val batchPresentationActive: Boolean = false,
+    /** Retained history cannot authorize saving after its connection is retired. */
+    val batchResultsRetired: Boolean = false,
     val activeSavedPath: SavedTracePathDTO? = null,
     /** Per-trace hash size override (path_sz 0/1/2); `null` follows the radio's `pathHashMode`. */
     val traceHashMode: UByte? = null,
@@ -93,6 +95,7 @@ data class TracePathState(
     val canSavePath: Boolean
         get() {
             if (batchEnabled) {
+                if (batchResultsRetired) return false
                 if (completedResults.isEmpty()) return false
                 val firstSuccess = successfulResults.firstOrNull() ?: return false
                 return fullPathData == firstSuccess.tracedPathBytes

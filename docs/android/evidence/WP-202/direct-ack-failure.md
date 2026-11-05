@@ -54,7 +54,7 @@ contract, not inference from these tests.
 
 ## Deterministic real-Room test contract
 
-`DirectAckFailurePersistenceTest` contains nine declared JUnit cases using native
+`DirectAckFailurePersistenceTest` contains ten declared JUnit cases using native
 SQLite-backed in-memory Room on Robolectric SDK31, the actual process store,
 actual `MessageService`, actual `MeshCoreSession`, raw protocol ACK packets and
 a deterministic coroutine clock. This is not device or hardware evidence.
@@ -79,6 +79,7 @@ Room commit and throws the original typed persistence error.
 | `competingFailedWriterCannotBeMistakenForTheThrowingWritersCommit` | Different writer's FAILED remains terminal; uncertainty is not commit authority |
 | `competingDeliveredWriterRemainsDeliveredWhenFailedWriterThrows` | Room refuses FAILED over DELIVERED; matching ACK can reconcile delivery |
 | `replacementSessionCannotBorrowTheOldInstancesUncertaintyOrPendingAck` | Original teardown reports cause and retires tracking; new generation has no inherited authority |
+| `replacementWhileFailedWriterAndRecordedAckAreInFlightCannotMutateSuccessorDelivery` | Replacement starts before the held writer returns; old live reconciliation and teardown cannot turn uncertain FAILED into successor delivery |
 
 These are Android-only race/uncertainty controls, not additional claimed Swift
 original-case acceptance. Existing tests and their provenance remain unchanged.
@@ -100,7 +101,7 @@ Executed successfully with Python 3.12.4:
 - `python .\tools\android-port\portmap.py`: exit 0.
 - `git diff --check`: exit 0.
 
-**Kotlin compilation and all nine runtime cases are unverified.** No passing
+**Kotlin compilation and all ten runtime cases are unverified.** No passing
 test-discovery count is claimed. The retained hard `gradle-execution` owner is
 `local-check:f516a7e271f444dd9cb2efcc8b995a16`; no Gradle/native invocation,
 recovery, runtime deployment or ownership bypass was attempted.
@@ -109,8 +110,12 @@ The existing declared software lane reaches `:core:data:testDebugUnitTest`
 through scaffold verification. Legitimate exact-candidate hosted execution of
 the integrated service-plus-test commit is still required, including positive
 test discovery. Hosted authentication is available; no PR was requested or
-created for this isolated handoff. The coordinator was asked to arrange the
-change-scoped hosted integration run. Its exact-commit job result/log must be
+created for this isolated handoff. The coordinator explicitly authorized an
+`android-ci.yml` workflow dispatch on this unique pushed branch after composing
+the immutable service fix `74529ee8ec743ff78e2512673878183ca3da1255`. That existing
+dispatch selects full scopes and is diagnostic only: a prior app failure may
+prevent the target Room cases from running. Actual task/JUnit discovery is
+required, not just workflow admission. Its exact-commit job result/log must be
 the authority; no duplicate CI result bundle is retained here.
 
 This bounded repair test work does not complete the unresolved original

@@ -4,6 +4,7 @@ package com.meshcoreone.android.core.data.repository
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.*
+import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceException
 import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.ByteWriter
@@ -101,12 +102,15 @@ class DirectAckFailurePersistenceTest {
             reporter = MessagingIssueReporter { diagnostics += it },
         )
         val statuses = mutableListOf<MessageStatusEvent>()
+        var statusFailure: MessageServiceException? = null
         private val subscription = service.statusEvents()
         private val collector = scope.launch(start = CoroutineStart.UNDISPATCHED) {
-            subscription.events.collect {
-                assertEquals(token, it.token)
-                statuses += it.event
-            }
+            try {
+                subscription.events.collect {
+                    assertEquals(token, it.token)
+                    statuses += it.event
+                }
+            } catch (failure: MessageServiceException) { statusFailure = failure }
         }
         init { generations += this }
 
@@ -347,6 +351,39 @@ class DirectAckFailurePersistenceTest {
         assertTrue(replacement.statuses.isEmpty())
         assertTrue(replacement.diagnostics.any { it is MessagingDiagnostic.UnmatchedAcknowledgement })
         assertTrue(replacement.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().none { it.cause === writer.failure })
+        assertTrue(replacement.stop().isComplete)
+    }
+
+    @Test fun replacementWhileFailedWriterAndRecordedAckAreInFlightCannotMutateSuccessorDelivery() = runTest(scheduler) {
+        val writer = FailedWriter()
+        val old = RadioGeneration(11, writer)
+        val message = sent(old)
+        val failure = async { runCatching { old.service.failAllPendingMessages() } }
+        runCurrent()
+        registerAckWhileWriterIsHeld(old, writer)
+        val replacement = RadioGeneration(12)
+        old.signals.replace(replacement.token)
+        replacement.start()
+        assertFalse(writer.release.isCompleted)
+        assertEquals(MessageStatus.SENT, store.fetchMessage(EntityKey(radio, message.id))?.status)
+        writer.release.complete(Unit)
+        assertSame(writer.failure, failure.await().exceptionOrNull())
+        runCurrent()
+        assertEquals(true, writer.committed)
+        assertEquals(message.copy(status = MessageStatus.FAILED), store.fetchMessage(EntityKey(radio, message.id)))
+        assertTrue(old.statuses.isEmpty())
+        assertEquals(0, writer.ackWrites, "Superseded live reconciliation must not persist the old ACK")
+        val report = old.stop()
+        assertTrue(report.issues.any { it.cause === writer.failure })
+        assertEquals(0, old.service.pendingAckCount)
+        assertEquals(0, writer.ackWrites, "Old teardown must not turn uncertainty into write authority")
+        replacement.firmware.pushAck()
+        runCurrent()
+        assertEquals(message.copy(status = MessageStatus.FAILED), store.fetchMessage(EntityKey(radio, message.id)))
+        assertEquals(0, replacement.service.pendingAckCount)
+        assertTrue(replacement.statuses.isEmpty())
+        assertNull(replacement.statusFailure)
+        assertTrue(replacement.diagnostics.any { it is MessagingDiagnostic.UnmatchedAcknowledgement })
         assertTrue(replacement.stop().isComplete)
     }
 

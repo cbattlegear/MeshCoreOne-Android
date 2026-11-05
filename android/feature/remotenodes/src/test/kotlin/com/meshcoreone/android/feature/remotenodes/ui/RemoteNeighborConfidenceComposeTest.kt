@@ -26,6 +26,8 @@ import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertWidthIsAtLeast
 import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasAnyChild
+import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
@@ -122,6 +124,13 @@ class RemoteNeighborConfidenceComposeTest {
     @Test fun currentAndDisappearedFallbacksAreIdentifiedAtDefaultFont() = exercise(1f)
 
     @Test fun currentAndDisappearedFallbacksAreIdentifiedAtDoubleFont() = exercise(2f)
+
+    @Test
+    @Config(qualifiers = "fr-rFR-w360dp-h800dp-mdpi")
+    fun disappearedSnrUsesLocalizedDecimalSeparator() {
+        Locale.setDefault(Locale.FRANCE)
+        exercise(1f, listOf("-2,4", "3,1", "4,9"))
+    }
 
     private fun text(id: Int) = activity.get().getString(id)
 
@@ -311,13 +320,13 @@ class RemoteNeighborConfidenceComposeTest {
         assertEquals(1, cancelled)
     }
 
-    private fun exercise(fontScale: Float) {
+    private fun exercise(fontScale: Float, previousSnr: List<String> = listOf("-2.4", "3.1", "4.9")) {
         val node = session().copy(id = UUID(0, 1))
         val clock = VirtualClock()
         val gone = listOf(
-            NeighborSnapshotEntry(Bytes.of(0x40), 2.0, 60),
-            NeighborSnapshotEntry(Bytes.of(0x50), 3.0, 60),
-            NeighborSnapshotEntry(Bytes.of(0x60), 4.0, 60),
+            NeighborSnapshotEntry(Bytes.of(0x40), -2.375, 60),
+            NeighborSnapshotEntry(Bytes.of(0x50), 3.125, 60),
+            NeighborSnapshotEntry(Bytes.of(0x60), 4.875, 60),
         )
         val previous = NodeStatusSnapshotDTO(
             id = UUID(0, 6),
@@ -390,6 +399,29 @@ class RemoteNeighborConfidenceComposeTest {
         val label = text(L.remoteNodesStatusPossibleMatch)
         val explanation = text(L.remoteNodesStatusPossibleMatchExplanation)
         val title = text(L.remoteNodesStatusPossibleMatchTitle)
+        fun assertDisappearedSnr(names: List<String>) {
+            names.zip(previousSnr).forEach { (name, decimal) ->
+                val row = hasAnyChild(hasText(text(L.remoteNodesHistoryNotSeen))) and
+                    hasAnyDescendant(hasText(name))
+                val snr = L.remoteNodesStatusSnrFormat(activity.get().resources, decimal)
+                compose.onNode(hasText(name) and hasText(snr) and hasText(text(L.remoteNodesHistoryNotSeen)))
+                    .performScrollTo().assertIsDisplayed()
+                val value = compose.onNode(hasText(snr) and hasAnyAncestor(row), useUnmergedTree = true)
+                value.performScrollTo().assertIsDisplayed()
+                val layouts = mutableListOf<TextLayoutResult>()
+                value.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(layouts)) }
+                assertEquals(fontScale, layouts.single().layoutInput.density.fontScale, 0f)
+                val layout = layouts.single()
+                assertFalse(
+                    "$name SNR '$snr': widthOverflow=${layout.didOverflowWidth}, " +
+                        "heightOverflow=${layout.didOverflowHeight}, size=${layout.size}, " +
+                        "paragraph=${layout.multiParagraph.width}x${layout.multiParagraph.height}, " +
+                        "lines=${layout.lineCount}, maxLines=${layout.multiParagraph.didExceedMaxLines}",
+                    layout.hasVisualOverflow,
+                )
+            }
+        }
+        assertDisappearedSnr(listOf("Gone Alpha", "Exact gone", "60"))
         listOf("Current Alpha", "Gone Alpha").forEach { name ->
             val description = "$name, $label"
             val indicator = compose.onNodeWithContentDescription(description)
@@ -425,7 +457,7 @@ class RemoteNeighborConfidenceComposeTest {
         }
         compose.onAllNodesWithText(text(L.remoteNodesHistoryNotSeen)).assertCountEquals(3)
         compose.onAllNodesWithText(text(L.remoteNodesHistoryNew)).assertCountEquals(3)
-        val snr = L.remoteNodesStatusSnrFormat(activity.get().resources, "5.5")
+        val snr = L.remoteNodesStatusSnrFormat(activity.get().resources, if (Locale.getDefault() == Locale.FRANCE) "5,5" else "5.5")
         val lastSeen = L.remoteNodesStatusSecondsAgo(activity.get().resources, 30)
         compose.onNodeWithText("10 / $snr / $lastSeen").performScrollTo().assertIsDisplayed()
         openExplanation("Current Alpha")
@@ -437,6 +469,7 @@ class RemoteNeighborConfidenceComposeTest {
         compose.onNodeWithText("Current Alpha").performScrollTo().assertIsDisplayed()
         compose.onNodeWithText("Gone Alpha").performScrollTo().assertIsDisplayed()
         compose.onAllNodesWithText(text(L.remoteNodesHistoryNotSeen)).assertCountEquals(3)
+        assertDisappearedSnr(listOf("Gone Alpha", "Exact gone", "60"))
         compose.runOnIdle {
             liveCatalog.value = catalog.copy(contacts = catalog.contacts.filterNot { it.name.endsWith("Alpha") || it.name.endsWith("Beta") })
         }
@@ -444,6 +477,7 @@ class RemoteNeighborConfidenceComposeTest {
         compose.onNodeWithText("Gone Alpha").assertDoesNotExist()
         compose.onAllNodesWithText(text(L.remoteNodesStatusUnknown)).assertCountEquals(2)
         compose.onNodeWithText("40").performScrollTo().assertIsDisplayed()
+        assertDisappearedSnr(listOf("40", "Exact gone", "60"))
         compose.onAllNodesWithText(title).assertCountEquals(0)
         compose.runOnIdle { liveCatalog.value = catalog }
         assertWarning("Current Alpha")

@@ -132,6 +132,23 @@ The fresh successor preserves those assertions with exact rendered descriptions
 and composes actual main5012's landed factory-publication fence. A distinct old-UI/
 holder negative will use identical corrected tests and the landed lifecycle baseline.
 
+R17 positive `5e6dbf1c65ac3073ada5417f57ff995f12d9f1c6`, run42017235223, passed
+all six jobs. Original-log audit confirms tools759/759, app2010/2010, zero failed/
+errors/skips and exact compiled blobs for all119 selected methods: mounted57,
+execution37, batch4, saved13, app8. The distinct identical-test negative
+`e5302704542e84acc38ce831d5ebaf1056478d91`, run42017275126, restores only the
+two tools production files from45ac. It fails tools759/6: old dialogs remain at613;
+retained clear confirmations and now-corrected retained hop actions cancel B at619,
+both same/different-radio. The hop loop reaches its first action (up), so the negative
+does not separately reproduce later down/remove branches; the positive executes all.
+Negative app2010/1 is the untouched held ChatMapPreview method at412. No retry,
+test removal or product workaround was applied to that independent failure.
+
+The retained-action production delta received bounded independent source review,
+not full-candidate acceptance. Final integration must bind current main and its own
+exact check/review; these results neither transfer to a combined map candidate nor
+accept physical radio, firmware, TalkBack or the rest of WP-314.
+
 | Check | Result |
 |---|---|
 | Pinned Windows preflight: `python .\\tools\\android-port\\controller\\ci.py preflight --local --state $env:ANDROID_CI_STATE --output $output` with a fresh absolute TEMP output and pinned Python 3.12.4 | PASS (exit 0; readiness only) |

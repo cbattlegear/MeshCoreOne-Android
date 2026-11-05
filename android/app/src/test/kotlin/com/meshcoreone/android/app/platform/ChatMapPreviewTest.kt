@@ -43,6 +43,7 @@ import org.junit.After
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TestName
 import org.robolectric.Robolectric
 import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
@@ -53,6 +54,7 @@ import org.robolectric.annotation.GraphicsMode
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChatMapPreviewTest : RoomProcessTest() {
     @get:Rule val compose = createEmptyComposeRule()
+    @get:Rule val diagnosticTestName = TestName()
     private lateinit var controller: ActivityController<ComponentActivity>
 
     @Before fun attachNativeHost() {
@@ -361,6 +363,94 @@ class ChatMapPreviewTest : RoomProcessTest() {
         } finally { previews.close() }
     }
 
+    @Test fun diagnosticSharedRetryLoadingPrecedesTheRealPreferenceReadAndRendererEntry() = runTest {
+        val secondRead = CompletableDeferred<Unit>()
+        val releaseRead = CompletableDeferred<Unit>()
+        val secondStarted = CompletableDeferred<Unit>()
+        val first = CompletableDeferred<Bitmap?>()
+        val second = CompletableDeferred<Bitmap?>()
+        var reads = 0
+        var calls = 0
+        withFixture(
+            beforePreferenceRead = {
+                if (++reads == 2) {
+                    secondRead.complete(Unit)
+                    releaseRead.await()
+                }
+            },
+            render = {
+                if (++calls == 1) first.await() else {
+                    secondStarted.complete(Unit)
+                    second.await()
+                }
+            },
+        ) {
+            compose.runOnUiThread { host.setContent { MeshCoreTheme(motionScale = 0f) { Column {
+                repeat(2) { AppMessageContent(content, message, ::report, onMap = {}) }
+            } } } }
+            compose.waitUntil(10_000) { requests.size == 1 }
+            compose.onAllNodesWithTag("chat-map-loading", useUnmergedTree = true).assertCountEquals(2)
+            assertEquals(1, calls)
+            compose.runOnIdle { first.complete(null) }
+            compose.waitUntil(10_000) {
+                compose.onAllNodesWithContentDescription(retry, useUnmergedTree = true).fetchSemanticsNodes().size == 2
+            }
+            compose.onAllNodesWithContentDescription(retry, useUnmergedTree = true)[0].performClick()
+            compose.waitUntil(10_000) { secondRead.isCompleted }
+            compose.onAllNodesWithTag("chat-map-loading", useUnmergedTree = true).assertCountEquals(2)
+            assertEquals(1, calls)
+            assertEquals(1, requests.size)
+            assertFalse(secondStarted.isCompleted)
+            compose.runOnIdle { releaseRead.complete(Unit) }
+            compose.waitUntil(10_000) { secondStarted.isCompleted }
+            assertEquals(2, calls)
+            assertEquals(2, requests.size)
+            compose.runOnIdle { second.complete(bitmap()) }
+            compose.waitUntil(10_000) {
+                compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().size == 2
+            }
+            compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).assertCountEquals(2)
+            compose.onAllNodesWithContentDescription(retry, useUnmergedTree = true).assertCountEquals(0)
+        }
+    }
+
+    @Test fun diagnosticExceptionRetryCannotDisplayThePinBeforeTheRealPreferenceReadCompletes() = runTest {
+        val secondRead = CompletableDeferred<Unit>()
+        val releaseRead = CompletableDeferred<Unit>()
+        var reads = 0
+        var calls = 0
+        withFixture(
+            beforePreferenceRead = {
+                if (++reads == 2) {
+                    secondRead.complete(Unit)
+                    releaseRead.await()
+                }
+            },
+            render = {
+                if (++calls == 1) throw IllegalStateException("Synthetic renderer failure") else bitmap()
+            },
+        ) {
+            mount(message)
+            compose.waitUntil(10_000) {
+                compose.onAllNodesWithContentDescription(retry, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithTag("chat-map-loading", useUnmergedTree = true).assertDoesNotExist()
+            compose.onNodeWithContentDescription(retry, useUnmergedTree = true).performClick()
+            compose.waitUntil(10_000) { secondRead.isCompleted }
+            compose.onNodeWithTag("chat-map-loading", useUnmergedTree = true).assertIsDisplayed()
+            compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).assertDoesNotExist()
+            assertEquals(1, calls)
+            assertEquals(1, requests.size)
+            compose.runOnIdle { releaseRead.complete(Unit) }
+            compose.waitUntil(10_000) {
+                compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).assertIsDisplayed()
+            assertEquals(2, calls)
+            assertEquals(2, requests.size)
+        }
+    }
+
     private inner class Fixture(
         val context: Context,
         val host: ComponentActivity,
@@ -389,16 +479,44 @@ class ChatMapPreviewTest : RoomProcessTest() {
     private suspend fun TestScope.withFixture(
         online: () -> Boolean = { true },
         render: suspend (MapSnapshotRequest) -> Bitmap? = { bitmap() },
+        beforePreferenceRead: suspend () -> Unit = {},
         block: suspend Fixture.() -> Unit,
     ) {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val storage = MeshCoreStorage.get(context)
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
         val requests = mutableListOf<MapSnapshotRequest>()
+        val observations = mutableListOf<String>()
+        var preferenceReads = 0
+        fun observe(stage: String) {
+            val observation = synchronized(observations) {
+                "${observations.size}|$stage|thread=${Thread.currentThread().name}".also {
+                    observations += it
+                }
+            }
+            println("WP307_MAP_STAGE|${diagnosticTestName.methodName}|sdk=${Build.VERSION.SDK_INT}|$observation")
+        }
         val renderTile = render
         val previews = AppChatMapPreviews(context, scope, object : MapSnapshotRenderer<Bitmap> {
-            override suspend fun render(request: MapSnapshotRequest) = renderTile(request.also(requests::add))
-        }, online, enabled = { storage.preferences.get(AppStorageKey.showMapPreviewThumbnails) })
+            override suspend fun render(request: MapSnapshotRequest): Bitmap? {
+                observe("renderer-enter")
+                return try {
+                    renderTile(request.also(requests::add)).also {
+                        observe("renderer-result|bitmap=${it != null}")
+                    }
+                } finally {
+                    observe("renderer-leave")
+                }
+            }
+        }, online, enabled = {
+            val read = ++preferenceReads
+            observe("preference-enter-$read")
+            beforePreferenceRead()
+            observe("preference-real-read-$read")
+            storage.preferences.get(AppStorageKey.showMapPreviewThumbnails).also {
+                observe("preference-return-$read=$it")
+            }
+        })
         val http = object : BoundedHttpFetching {
             override suspend fun fetch(url: String, timeoutMs: Long, rangeHeader: String?): HttpFetchAttempt =
                 error("Synthetic map tests must not fetch web/image/malware content")
@@ -410,6 +528,28 @@ class ChatMapPreviewTest : RoomProcessTest() {
             storage.preferences.snapshot(), scope, previews)
         val h = ContainerHarness(this, store, chatContent = content)
         try { Fixture(context, controller.get(), storage, scope, previews, content, h, requests).block() }
+        catch (failure: AssertionError) {
+            observe("assertion-failed|requests=${requests.size}")
+            try {
+                var previousObservation: String? = null
+                compose.waitUntil(10_000) {
+                    val pins = compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().size
+                    val loading = compose.onAllNodesWithTag("chat-map-loading", useUnmergedTree = true).fetchSemanticsNodes().size
+                    val request = requests.lastOrNull()
+                    val observation = "post-failure-raced|requests=${requests.size}|pins=$pins|loading=$loading|" +
+                        "resolved=${request?.let(previews.snapshots::isResolved)}|" +
+                        "cached=${request?.let(previews.snapshots::value) != null}"
+                    if (observation != previousObservation) {
+                        observe(observation)
+                        previousObservation = observation
+                    }
+                    requests.size >= 2 && pins > 0
+                }
+            } catch (diagnosticFailure: Throwable) {
+                failure.addSuppressed(diagnosticFailure)
+            }
+            throw failure
+        }
         finally {
             compose.runOnUiThread { controller.get().setContent {} }
             h.container.close()

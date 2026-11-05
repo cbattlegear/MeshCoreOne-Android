@@ -241,7 +241,7 @@ class RadioSettingsSessionTargetTest {
             assertTrue(r.advanced.state.value.isApplying)
             verificationRelease.complete(Unit)
             r.scheduler.runCurrent()
-            val expectedFrequency = if (current.clientRepeat) current.frequency else 868_100u
+            val expectedFrequency = if (initialRepeat || current.clientRepeat) current.frequency else 868_100u
             assertEquals(
                 "setRadioParamsVerified($expectedFrequency,250000,10,5,${current.clientRepeat},null)",
                 r.a.calls.last { it.startsWith("setRadioParamsVerified") },

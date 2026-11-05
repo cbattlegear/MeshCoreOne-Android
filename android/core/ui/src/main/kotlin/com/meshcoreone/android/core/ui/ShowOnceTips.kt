@@ -56,7 +56,7 @@ class ShowOnceTips(private val preferences: PreferenceStore) {
         preferences.update {
             this[AppStorageKey.hasCompletedOnboarding] = true
             this[SharedTip.DEVICE_MENU.eventKey] = true
-            if (attemptId != null) this[finalizedCompletion] = attemptId
+            if (attemptId != null) this[finalizedCompletion] = attemptId else remove(finalizedCompletion)
             remove(pendingCompletion)
         }
     }

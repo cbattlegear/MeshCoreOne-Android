@@ -850,3 +850,37 @@ Storage owns the actual marker/journal mechanism and controls for new-wire
 atomic creation, rollback/dedup, denied/replayed acceptance, older wire without
 retention provenance, overwrite, deletion and file reopen. These remain
 separate producer evidence; no executable validation is claimed here.
+
+## Historical commit replay versus safety-policy provenance assessment
+
+Coordinator requested assessment of older RADIO_DELIVERY operations that
+may predate physical-prehistory UNKNOWN and complete generic-acceptance
+retention. Candidate persistence on actual devices must not be assumed
+impossible. The current public `DirectAckReceipt` and generic AlreadyApplied
+semantics distinguish historical committed state from current mutation
+authority, but carry no exclusion-policy version or proof-coverage identity.
+`DirectAckRadioSettlementReceipt.AlreadyApplied` wraps that same receipt.
+An operation's existence alone therefore does not identify which stricter
+history policy was applied when it committed.
+
+Three separate propositions must not be conflated: the historical operation
+committed; the product currently has DELIVERED status; the original exclusion
+met the present safety policy. Exact tuple replay can establish the first
+without establishing the third. Preserve actual product DELIVERED and
+ordinary generic idempotency; neither missing newer proof provenance nor a
+later diagnostic UNKNOWN authorizes downgrading or rewriting product state.
+Historical replay must not silently manufacture a current-policy certificate.
+
+The actionable investigation is with the storage owner: identify the actual
+old RADIO_DELIVERY operation fields and replay precedence, then construct a
+persisted old-policy counterexample and reopen under the stricter producer.
+Possible older prehistory or overwritten-acceptance cases are investigation
+targets, not executed counterexamples or verified old-candidate behavior
+claimed here. Determine whether an explicit proof-policy provenance/UNKNOWN
+classification is necessary after that evidence; do not infer a version from
+timestamps, the latest wire, current build or an empty new journal.
+
+No public result, version field, diagnostic reason, replay behavior or
+DELIVERED semantics is changed by this assessment. Actual old-proof source
+and producer controls remain pending; this is not a declaration that all
+historical RADIO_DELIVERY operations are safety-proven or invalid.

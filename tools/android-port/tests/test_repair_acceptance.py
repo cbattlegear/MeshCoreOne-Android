@@ -2060,6 +2060,48 @@ class RepairExecutionTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(PortError):
                 validate_build_log(build_log([], **(report | change)), ["core/protocol"])
 
+    def test_unrelated_affected_plan_does_not_require_notification_instrumentation_proof(self):
+        from controller.module_junit import NOTIFICATION_INSTRUMENTATION_TASK
+
+        counts = {"discovered": 1, "run": 1, "passed": 1, "failed": 0, "errors": 0, "skipped": 0}
+        plan = {
+            "base": BASE, "head": HEAD, "tree": "8" * 40, "scopes": ["module:core/maps"],
+            "tasks": [":core:maps:testDebugUnitTest", "validateModuleGraph", "runtimeDependencyInventory"],
+        }
+        report = {
+            "kind": "local-affected-only", "result": "success", **plan,
+            "resolved_task_graph": {"result": "no-duplicate-ci-evidence"},
+            "suites": {"core/maps": counts},
+            "compiled_test_sources": {"core/maps": {TEST: "4" * 40}},
+            "junit_cases": [{
+                "report": "android/core/maps/build/test-results/testDebugUnitTest/TEST-MapTest.xml",
+                "index": 0, "class": "MapTest", "method": "keepsListReachable", "outcome": "passed",
+            }],
+        }
+        step = "Run parallel Gradle validation and Android tasks"
+
+        def log_for(value):
+            return "\n".join(f"One Linux Android build\t{step}\t2026-10-19T00:00:00Z {line}"
+                             for line in json.dumps(value, indent=2).splitlines())
+
+        candidate = lambda: {"task": NOTIFICATION_INSTRUMENTATION_TASK}
+        self.assertTrue(validate_build_log(
+            log_for(report), ["core/maps"], plan_for_scopes=lambda scopes: plan,
+            notification_inputs_for_candidate=candidate,
+        )["positive_discovery"])
+
+        selected = {**plan, "tasks": [*plan["tasks"], NOTIFICATION_INSTRUMENTATION_TASK]}
+        for kind, value, provider in (
+            ("selected-omits-task-and-proof", report, lambda scopes: selected),
+            ("unrelated-reports-task", {**report, "tasks": selected["tasks"]}, lambda scopes: plan),
+            ("unrelated-reports-proof", {**report, "notification_instrumentation": {}}, lambda scopes: plan),
+        ):
+            with self.subTest(kind=kind), self.assertRaises(PortError):
+                validate_build_log(
+                    log_for(value), ["core/maps"], plan_for_scopes=provider,
+                    notification_inputs_for_candidate=candidate,
+                )
+
     def test_change_scoped_hosted_report_uses_exact_trusted_candidate_plan(self):
         counts = {"discovered": 1, "run": 1, "passed": 1, "failed": 0, "errors": 0, "skipped": 0}
         plan = {

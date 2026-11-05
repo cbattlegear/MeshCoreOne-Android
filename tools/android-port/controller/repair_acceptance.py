@@ -818,7 +818,23 @@ def validate_build_log(log, modules, *, plan_for_scopes=None, notification_input
     else:
         expected_instrumentation = notification_inputs_for_candidate()
     trusted_full_plan = None
-    if expected_instrumentation is not None:
+    affected_only = report.get("kind") == "local-affected-only"
+    if affected_only and expected_instrumentation is not None:
+        scopes = report.get("scopes")
+        if (
+            plan_for_scopes is None or not isinstance(scopes, list) or not scopes
+            or not all(isinstance(scope, str) and scope for scope in scopes)
+            or len(set(scopes)) != len(scopes)
+        ):
+            raise PortError("Affected hosted evidence requires the trusted exact-candidate task plan")
+        selected_plan = plan_for_scopes(scopes)
+        if not isinstance(selected_plan, dict) or not isinstance(selected_plan.get("tasks"), list):
+            raise PortError("Malformed trusted affected candidate task plan")
+        # An unrelated narrow scope selects no notification runner and therefore no proof;
+        # the equality check against this exact plan below still binds the reported tasks.
+        if instrumentation_task not in selected_plan["tasks"]:
+            expected_instrumentation = None
+    elif expected_instrumentation is not None:
         from .ci import SCOPED_TASKS
 
         if plan_for_scopes is None:

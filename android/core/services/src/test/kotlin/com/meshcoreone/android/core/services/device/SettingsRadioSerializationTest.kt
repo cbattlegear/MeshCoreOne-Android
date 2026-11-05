@@ -33,6 +33,7 @@ import kotlinx.coroutines.test.runTest
 @OptIn(ExperimentalCoroutinesApi::class)
 class SettingsRadioSerializationTest {
     @Test fun restoreRetirementRequiresVerifiedRfAndRepeatOffBeforeEitherPublication() = runTest {
+        println("WP305_REPEAT_CLEAR|verified-hook|START")
         for (outcome in listOf("success", "cancel-before-ack", "rf-mismatch", "repeat-mismatch")) {
             val fixture = settingsFixture()
             val events = fixture.settings.events()
@@ -84,6 +85,7 @@ class SettingsRadioSerializationTest {
                 assertEquals(if (outcome == "success") 1 else 0, verified)
                 assertEquals(if (outcome == "success") 2 else 0, published)
             } finally { events.close(); collector.cancel(); fixture.close() }
+            println("WP305_REPEAT_CLEAR|verified-hook|$outcome|END|SUCCESS")
         }
     }
 

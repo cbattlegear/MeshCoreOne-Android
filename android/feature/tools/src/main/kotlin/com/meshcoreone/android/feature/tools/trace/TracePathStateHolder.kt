@@ -123,9 +123,6 @@ class TracePathStateHolder(
         return false
     }
 
-    internal fun isBoundConnectionCurrent(radioId: RadioId?, generation: Int, originatingToken: SessionToken?): Boolean =
-        connectionIdentity == (radioId to generation) && sessionToken == originatingToken && isConnectionCurrent()
-
     internal fun observeHashModeActions(onAction: () -> Unit): () -> Unit {
         hashModeActionObservers += onAction
         return { hashModeActionObservers -= onAction }

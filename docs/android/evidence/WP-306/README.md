@@ -241,3 +241,35 @@ for this local fixture. WP-503 still needs a trusted exact-source App-test
 runner/family binding and actual API31/37 execution of all three methods. No
 WP-503 runner/selector or build configuration was changed, and no device or
 whole-WP acceptance is claimed.
+
+## Explicit mailto tap fallback candidate
+
+Prepared against main `83fc29b14f082ef1806f2d68516668128f63b1d4`, retaining
+source pin `db14559b39d32322b06477c6ae676112f583db50`. This addresses only
+`CHAT-LINK-MAILTO-FALLBACK` in #404. It is not whole-WP completion.
+
+The actual path is explicit mailto body text -> `MessageLinkTokenizer` ->
+`MessageBody` link action -> `MessageLinkDispatcher` -> `ChatLinkRouter`
+declines -> `ChatExternalLinkOpener` -> Android `ACTION_SENDTO`. Both App
+direct/channel and room link bindings use this opener. No arbitrary schemes
+are admitted, and the shared HTTP(S)-only preview/network policy is unchanged.
+
+Intended controls, not execution results:
+
+- `ChatMailtoPolicyTest` retains recipients/query, rejects malformed/unsafe or
+  unsupported links, preserves web-only detection/policy, and checks tokenizer
+  punctuation/overlap and unchanged bare-email behavior.
+- `ChatMailtoConsumerTest.mountedChatMailtoTapStartsOnlyTheNativeSendToAction`
+  mounts the real App conversation and verifies exact action/data at the
+  Android context boundary, with no explicit component/selector.
+- `mountedChatMailtoWithoutHandlerShowsFailureInsteadOfCrashing` activates that
+  same path with an unavailable handler and requires the visible error dialog.
+- `unsafeSchemesNeverReachAnyExternalHandlerAndWebStillUsesItsOwnAction`
+  exercises the actual router/dispatcher/native adapter with negative schemes
+  and a positive HTTPS control.
+
+The App test is configured for Robolectric API31/37, not real Android hardware.
+No new local execution is claimed; the retained local execution-owner hold is
+untouched. Canonical exact-head hosted CI and original discovery logs are the
+authority for compilation and passing software results, not this source map.
+The separate paused #417/#508 work and WP-503 native search work are untouched.

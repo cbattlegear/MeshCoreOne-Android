@@ -2,6 +2,7 @@
 // AndroidOnly: WP-310 Bind room body actions to the shared link dispatcher/router and radio-scoped contacts.
 // AndroidOnly: WP-307 Restore pending replies on composer initialization or notification-source replacement.
 // AndroidOnly: WP-308 Bind the frozen conversation-specific prompt to the mounted composer.
+// AndroidOnly: WP-306 Explicit mailto tap action and visible native-handler failures.
 package com.meshcoreone.android.app.navigation
 
 import android.Manifest
@@ -105,6 +106,24 @@ private fun AppChatConversation(
     coordinator: NavigationCoordinator,
     state: NavigationState,
 ) {
+        val linkContext = LocalContext.current
+        val webHandler = LocalUriHandler.current
+        var linkFailure by remember(selected) { mutableStateOf<Exception?>(null) }
+        val externalLinks = remember(linkContext, webHandler, feature, selected) {
+            ChatExternalLinkOpener(linkContext, webHandler::openUri) { failure ->
+                feature.report("Chat link could not be opened", failure)
+                linkFailure = failure
+            }
+        }
+        linkFailure?.let { failure ->
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { linkFailure = null },
+                text = { androidx.compose.material3.Text(com.meshcoreone.android.core.ui.uiString(UiErrorMapper().message(failure))) },
+                confirmButton = { androidx.compose.material3.TextButton(onClick = { linkFailure = null }) {
+                    androidx.compose.material3.Text(stringResource(com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings.commonOk))
+                } },
+            )
+        }
         val scope = rememberCoroutineScope()
         val connection by feature.connectionState.collectAsState()
         LifecycleResumeEffect(feature, selected, connection) {
@@ -130,15 +149,14 @@ private fun AppChatConversation(
                 }
             }
             val device = remember(feature, radio, scope) { feature.pathDevice(radio, scope) }
-            val uriHandler = LocalUriHandler.current
             val router = remember(feature, scope) { ChatLinkRouter(feature.list.links, scope, feature.list.diagnostics) }
-            val links = remember(contacts, device, radio, router, coordinator, uriHandler) {
+            val links = remember(contacts, device, radio, router, coordinator, externalLinks) {
                 ConversationLinkActions(
                     contacts = { contacts.value },
                     connectedDeviceName = { device.value?.nodeName },
                     radioId = { radio },
                     route = router::route,
-                    openExternal = uriHandler::openUri,
+                    openExternal = externalLinks::open,
                     navigateToContact = coordinator::navigateToContactDetail,
                 )
             }
@@ -271,15 +289,14 @@ private fun AppChatConversation(
                 onReply = { if (conversation is TimelineConversation.Direct) replyTo = it.id },
                 onDismiss = { actionMessage = null })
         }
-        val uriHandler = LocalUriHandler.current
         val router = remember(feature, scope) { ChatLinkRouter(feature.list.links, scope, feature.list.diagnostics) }
-        val links = remember(feature, router, coordinator, uriHandler) {
+        val links = remember(feature, router, coordinator, externalLinks) {
             ConversationLinkActions(
                 contacts = { environment.mentionContacts.value },
                 connectedDeviceName = { environment.device.value?.nodeName },
                 radioId = { conversation.id.radioId },
                 route = router::route,
-                openExternal = uriHandler::openUri,
+                openExternal = externalLinks::open,
                 navigateToContact = coordinator::navigateToContactDetail,
             )
         }

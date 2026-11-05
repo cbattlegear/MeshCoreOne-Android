@@ -2,6 +2,7 @@
 package com.meshcoreone.android.feature.chats.composer
 
 import com.meshcoreone.android.core.model.Coordinate
+import com.meshcoreone.android.feature.chats.list.ChatMailtoPolicy
 import java.util.Locale
 import java.util.regex.Pattern
 
@@ -18,9 +19,13 @@ object MessageLinkTokenizer {
     )
     private const val MESHCORE_TRAILING = ".,;:!?)"
     private val hostOfLink = Regex("""^meshcore://([^/?#]*)""")
+    private val mailtoLink = Regex("""(?i)\bmailto:[^${ChatCoordinateDetector.WHITE_SPACE.removeSurrounding("[", "]")}<>"]+""")
 
     fun tokenize(normalized: String, preSpans: List<LinkToken>, context: StyleContext): Result {
-        val urls = LinkDetection.detectUrls(normalized)
+        val urls = (LinkDetection.detectUrls(normalized) + mailtoLink.findAll(normalized).mapNotNull { match ->
+            val url = match.value.trimEnd('.', ',', ';', ':', '!', ')')
+            if (ChatMailtoPolicy.isOpenable(url)) DetectedUrl(match.range.first, match.range.first + url.length, url) else null
+        }).sortedBy { it.start }
         val coordinates = ChatCoordinateDetector.matches(normalized)
         val hits = ArrayList<LinkToken>(preSpans)
         urls.mapTo(hits) { LinkToken(it.start, it.end, LinkKind.URL, it.url) }

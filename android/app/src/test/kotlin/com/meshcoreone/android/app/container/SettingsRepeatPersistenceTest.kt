@@ -56,21 +56,37 @@ import kotlin.test.assertTrue
 
 class SettingsRepeatPersistenceTest : RoomProcessTest() {
     @Test fun advancedApplyPreservesRestoredRfUnlessExplicitlyEditedAfterRepeatOffProjectionFailure() = runTest {
-        for (editAfterFailure in listOf(false, true)) {
-        var rejectRepeatOff = false
+        for ((baselineBandwidth, editAfterFailure) in listOf(250_000u to false, 250_000u to true, 7_799u to false)) {
+        var rejectRestoreProjections = false
+        var rejectedRepeatOff = false
+        var rejectedRestoredRf = false
         val failing = object : PersistenceStoreProtocol by store {
             override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
-                if (rejectRepeatOff && expected.device.clientRepeat && !dto.clientRepeat) {
-                    rejectRepeatOff = false
-                    throw PersistenceStoreException(PersistenceStoreError.SaveFailed("Repeat off projection unavailable"))
+                if (rejectRestoreProjections && expected.device.clientRepeat &&
+                    (!dto.clientRepeat || dto.frequency != expected.device.frequency)
+                ) {
+                    if (!dto.clientRepeat) rejectedRepeatOff = true
+                    if (dto.frequency != expected.device.frequency) rejectedRestoredRf = true
+                    throw PersistenceStoreException(PersistenceStoreError.SaveFailed("Repeat restore storage unavailable"))
                 }
                 return store.saveDeviceIfUnchanged(dto, expected)
             }
         }
         var dependencies: SettingsFeatureDependencies? = null
         withRepeat(failing, exposeDependencies = { dependencies = it }) { h, holder, failures, radio ->
-            val before = assertNotNull(h.manager.connectedDevice)
             val session = assertNotNull(h.sessions.current)
+            if (baselineBandwidth != 250_000u) {
+                val current = assertNotNull(h.manager.connectedDevice)
+                session.settingsService.setRadioParamsPersisted(
+                    current.frequency, baselineBandwidth, current.spreadingFactor, current.codingRate,
+                    false, expectedDevice = current,
+                )
+                h.eventually("the actual non-option baseline is durable and observed") {
+                    holder.state.value.device?.bandwidth == baselineBandwidth
+                }
+            }
+            val before = assertNotNull(h.manager.connectedDevice)
+            assertEquals(baselineBandwidth, before.bandwidth)
             holder.onRepeatToggled(true)
             holder.confirmEnableRepeatMode()
             h.eventually("Repeat is enabled before the verified-off projection failure") {
@@ -101,16 +117,19 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                 assertEquals(125_000u, repeating.bandwidth)
                 assertEquals(9u.toUByte(), repeating.spreadingFactor)
                 assertEquals(7u.toUByte(), repeating.codingRate)
-                rejectRepeatOff = true
+                rejectRestoreProjections = true
                 holder.onRepeatToggled(false)
                 h.eventually("verified off failed its first actual Room projection") {
                     !holder.state.value.isApplyingRepeat && failures.isNotEmpty()
                 }
-                assertFalse(rejectRepeatOff)
+                h.eventually("both restore publications encounter the actual storage outage") {
+                    rejectedRepeatOff && rejectedRestoredRf
+                }
                 assertFalse(holder.state.value.isRepeatEnabled)
                 assertNotNull(holder.state.value.errorMessage)
                 assertEquals(repeating, store.fetchDevice(before.id))
                 assertEquals(repeating, h.manager.connectedDevice)
+                rejectRestoreProjections = false
                 assertEquals(before.frequency, radio.frequency)
                 assertFalse(session.settingsService.queryDevice().clientRepeat)
                 assertTrue(session.settingsService.radioSettingsNeedsRecovery)
@@ -158,13 +177,14 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                     advanced.state.value.device == saved && !advanced.state.value.settingsModified
                 }
                 assertEquals(session.token, advanced.state.value.sessionToken)
-                assertEquals(listOf(1, 1, 0, 0), radio.radioWrites.map { it[11].toInt() })
+                val initialFrames = if (baselineBandwidth == 250_000u) emptyList() else listOf(0)
+                assertEquals(initialFrames + listOf(1, 1, 0, 0), radio.radioWrites.map { it[11].toInt() })
                 assertEquals(
                     PacketBuilder.setRadio(
                         before.frequency.toDouble() / 1000.0, before.bandwidth.toDouble() / 1000.0,
                         before.spreadingFactor, before.codingRate, false,
                     ),
-                    radio.radioWrites[2],
+                    radio.radioWrites[initialFrames.size + 2],
                     "The actual disable restored every original RF field before its publication failed",
                 )
                 assertEquals(

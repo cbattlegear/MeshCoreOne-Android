@@ -155,7 +155,8 @@ class LocalCheckTests(unittest.TestCase):
         source = Path(jvm_lanes.__file__).resolve().parents[3]
         revision = "3a292b6498e8dcef0c374022a93c8e30c68f5bd5"
         archive = subprocess.check_output([
-            "git", "-C", str(source), "archive", revision, "tools/android-port/controller",
+            "git", "-C", str(source), "archive", revision,
+            "tools/android-port/controller", "tools/android-port/portmap.py",
         ])
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -165,7 +166,8 @@ class LocalCheckTests(unittest.TestCase):
                     if not entry.isfile():
                         continue
                     parts = entry.name.split("/")
-                    self.assertEqual(parts[:3], ["tools", "android-port", "controller"])
+                    self.assertEqual(parts[:2], ["tools", "android-port"])
+                    self.assertIn(parts[2], {"controller", "portmap.py"})
                     self.assertNotIn("..", parts)
                     path = repo.joinpath(*parts)
                     path.parent.mkdir(parents=True, exist_ok=True)
@@ -210,6 +212,8 @@ if len(sys.argv) > 4:
 collector = fast.owned_verification(repo)
 assert collector == control / 'verify_candidate_task_graph.gradle'
 from controller import ci, ci_environment, ci_evidence, module_junit, publication, repair_acceptance
+import portmap
+assert pathlib.Path(portmap.__file__) == repo / 'tools/android-port/portmap.py'
 for module in (ci_evidence, module_junit, publication, repair_acceptance):
     assert pathlib.Path(module.__file__).parent == control, module.__file__
 assert pathlib.Path(ci.__file__).parent == repo / 'tools/android-port/controller'
@@ -247,7 +251,7 @@ with patch.object(sys, 'argv', [
     execute.assert_called_once()
     assert 'gradle' not in ' '.join(map(str, execute.call_args.args[0]))
 """
-            command = [sys.executable, "-B", "-c", script, str(repo), str(control), str(root / "work")]
+            command = [sys.executable, "-I", "-B", "-c", script, str(repo), str(control), str(root / "work")]
             result = subprocess.run(command, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             for name in dependencies[:-1]:

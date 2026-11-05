@@ -561,8 +561,10 @@ Method-level SDK overrides take precedence over top-level class SDKs; an unrelat
 nested class cannot replace that configuration. Escaped parameter names and a
 trailing array comma retain their Kotlin meaning. A test class with a superclass
 must supply a literal method/class SDK override: unresolved inherited SDK settings
-fail closed rather than becoming an unconfigured family. JUnit-free helper
-sources still require immutable lineage proof and an executed compiled consumer.
+fail closed rather than becoming an unconfigured family. JUnit-free conventional
+helpers receive separate immutable compilation and JUnit-free lineage proof;
+positive named module cases remain mandatory. This does not establish a
+helper-to-consumer relationship or prove that an individual helper was executed.
 Dynamic SDK
 expressions, SDK ranges, unsupported families and missing/duplicate/unexpected
 family executions fail closed. These names prove JVM runner discovery, not device

@@ -208,7 +208,7 @@ def require_remapped_cases(repo, module, directory, inputs, compiled_sources, re
         if len(actual_cases) != len(expected_cases) or set(actual_cases) != expected_cases:
             raise PortError("Missing, duplicate, or unexpected notification SDK cases: " + path)
 
-    coverage, helper_consumer = [], None
+    coverage, compiled_helpers = [], []
     for path in sources:
         classes, sdk_configurations = {}, {}
         methods = _kotlin_junit_methods(
@@ -218,8 +218,6 @@ def require_remapped_cases(repo, module, directory, inputs, compiled_sources, re
         if not methods or any(kind != "test" for kind in methods.values()):
             raise PortError("Unsupported remapped notification JVM test family: " + path)
         require_sdk_cases(path, methods, classes, sdk_configurations, remapped=True)
-        if helper_consumer is None:
-            helper_consumer = {"path": path, "blob_sha": inputs[path], "id": next(iter(methods))}
         coverage.append({
             "path": path, "modules": [module],
             "native_methods": [classes[method] + "#" + method for method in methods],
@@ -236,17 +234,19 @@ def require_remapped_cases(repo, module, directory, inputs, compiled_sources, re
         if any(kind != "test" for kind in methods.values()):
             raise PortError("Unsupported conventional notification JVM test family: " + path)
         require_sdk_cases(path, methods, classes, sdk_configurations, remapped=False)
+        if not methods:
+            compiled_helpers.append(path)
+            continue
         coverage.append({
             "path": path, "modules": [module], "native_methods": [],
-            "hosted_methods": (
-                [
-                    {"path": path, "blob_sha": blob, "id": method} for method in methods
-                ] if methods else [helper_consumer]
-            ),
+            "hosted_methods": [
+                {"path": path, "blob_sha": blob, "id": method} for method in methods
+            ],
         })
     validate_hosted_methods(
         {"schema_version": 3, "kind": "whole-wp", "coverage": coverage},
         candidate_source_tree(repo, revision), repo, {module: records}, compiled_sources,
+        compiled_helpers=compiled_helpers,
     )
 
 

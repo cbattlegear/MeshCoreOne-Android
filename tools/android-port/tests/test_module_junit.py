@@ -252,7 +252,11 @@ class ModuleJUnitTests(unittest.TestCase):
         self.assertEqual(len(executed["platform/notifications"]), 6)
         self.assertEqual(
             {coverage["path"] for coverage in scope["coverage"]},
-            set(compiled["platform/notifications"]),
+            remapped,
+        )
+        self.assertEqual(
+            set(validate.call_args.kwargs["compiled_helpers"]),
+            set(compiled["platform/notifications"]) - remapped,
         )
         self.assertEqual(report.parent.name, "testDebugUnitTest")
 
@@ -556,18 +560,40 @@ class InheritedTest : BaseTest() {}
         with self.assertRaisesRegex(PortError, "inherited Kotlin JUnit"):
             check_module_tests(self.repo, self.compiled_notification_sources())
 
-    def test_conventional_junit_free_inherited_helper_has_verified_consumer(self):
+    def test_conventional_unreferenced_junit_free_helper_is_only_compiled_evidence(self):
+        from controller.repair_acceptance import validate_hosted_methods
+
         self.notifications()
-        self.source("platform/notifications", "src/test/kotlin/Helper.kt", """
+        relative = "src/test/kotlin/Helper.kt"
+        self.source("platform/notifications", relative, """
 package sample
 open class HelperBase { fun support() {} }
 class Helper : HelperBase() {}
 """)
         self.command("add", "--all")
         self.command("commit", "--quiet", "-m", "JUnit-free conventional helper")
-        self.assertEqual(check_module_tests(
-            self.repo, self.compiled_notification_sources(),
-        )["platform/notifications"]["passed"], 6)
+        compiled = self.compiled_notification_sources()
+        with patch("controller.repair_acceptance.validate_hosted_methods", wraps=validate_hosted_methods) as validate:
+            self.assertEqual(check_module_tests(self.repo, compiled)["platform/notifications"]["passed"], 6)
+        helper = "android/platform/notifications/" + relative
+        scope = validate.call_args.args[0]
+        self.assertIn(helper, validate.call_args.kwargs["compiled_helpers"])
+        self.assertNotIn(helper, {coverage["path"] for coverage in scope["coverage"]})
+        self.assertFalse(any(coverage["hosted_methods"] for coverage in scope["coverage"]))
+        incomplete = {"platform/notifications": {
+            path: blob for path, blob in compiled["platform/notifications"].items() if path != helper
+        }}
+        with self.assertRaisesRegex(PortError, "compilation"):
+            check_module_tests(self.repo, incomplete)
+        self.source("platform/notifications", relative, """
+package sample
+import org.junit.Test
+class Helper { @Test fun noLongerAHelper() {} }
+""")
+        self.command("add", "--all")
+        self.command("commit", "--quiet", "-m", "helper now declares an unexecuted test")
+        with self.assertRaisesRegex(PortError, "did not actually execute"):
+            check_module_tests(self.repo, self.compiled_notification_sources())
 
     def test_conventional_inherited_sdk_requires_explicit_resolved_configuration(self):
         self.notifications()

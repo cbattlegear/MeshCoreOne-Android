@@ -1671,7 +1671,7 @@ class _KotlinJUnitLineage:
         return names
 
 
-def validate_hosted_methods(scope, candidate_tree, repo, executed, compiled_sources):
+def validate_hosted_methods(scope, candidate_tree, repo, executed, compiled_sources, *, compiled_helpers=()):
     from .staging import object_bytes
 
     verification = verification_only(scope)
@@ -1750,6 +1750,26 @@ def validate_hosted_methods(scope, candidate_tree, repo, executed, compiled_sour
                 candidate_tree, sources, read_source, external_inventory,
             )
         return lineages[module].resolve
+
+    if (
+        not isinstance(compiled_helpers, (list, tuple))
+        or any(not isinstance(path, str) for path in compiled_helpers)
+        or len(set(compiled_helpers)) != len(compiled_helpers)
+    ):
+        raise PortError("Malformed compiled JUnit-free helper inventory")
+    for path in compiled_helpers:
+        git_path(path)
+        blob = candidate_tree.get(path)
+        if (
+            not path.endswith(".kt") or not ("/src/test/" in path or "/src/testDebug/" in path)
+            or not isinstance(blob, str) or SHA.fullmatch(blob) is None
+        ):
+            raise PortError("Compiled JUnit-free helper is not a candidate conventional Kotlin source")
+        require_compiled(path, blob)
+        if _kotlin_junit_methods(
+            object_bytes(repo, blob).decode("utf-8"), reject_inherited=True, inheritance=lineage(path),
+        ):
+            raise PortError("Compiled JUnit-free helper declares JUnit tests: " + path)
 
     for coverage in scope["coverage"]:
         if verification:

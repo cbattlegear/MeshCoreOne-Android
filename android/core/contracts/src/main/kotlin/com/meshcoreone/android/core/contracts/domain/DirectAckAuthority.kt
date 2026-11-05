@@ -46,9 +46,10 @@ data class DirectAckDelivery(
 
 sealed interface DirectAckBookkeeping {
     /**
-     * Inline completion only: promote current PENDING to SENT with this exact persisted wire's
-     * accepted code. Predicted-only, unknown or foreign wires are ineligible; preserve terminal
-     * guards and revision fencing. Acceptance alone never performs this product-status transition.
+     * Inline completion only: require SEND mode and promote current PENDING to SENT with this exact
+     * persisted wire's accepted code. RESEND, predicted-only, unknown or foreign wires are ineligible;
+     * rejection changes neither product revision nor operation journal. Preserve terminal guards and
+     * revision fencing. Acceptance alone never performs this product-status transition.
      */
     data class SendCompleted(val wireRequestId: UUID) : DirectAckBookkeeping
 
@@ -266,6 +267,7 @@ interface DirectAckAuthority {
      * requires the still-current lease/incarnation/revision and never regrants ACK authority.
      * SendCompleted resolves the exact claim-scoped persisted accepted wire, never a caller-supplied
      * code/status or inferred latest dispatch. Reusing an operation ID with another wire is CONFLICT.
+     * It requires SEND mode and current PENDING status; RESEND is ineligible even when PENDING.
      */
     suspend fun applyDirectAckBookkeeping(
         attempt: DirectAckAttempt,

@@ -3,14 +3,84 @@
 package com.meshcoreone.android.core.data.repository
 
 import com.meshcoreone.android.core.contracts.domain.DevicePersisting
+import com.meshcoreone.android.core.contracts.domain.DeviceEditPersisting
+import com.meshcoreone.android.core.contracts.domain.DeviceWriteSnapshot
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.database.*
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.bytes.utf8Prefix
 import java.util.UUID
 
-internal class DeviceRepository(private val context: RoomRepositoryContext) : DevicePersisting {
+internal class DeviceRepository(private val context: RoomRepositoryContext) : DevicePersisting, DeviceEditPersisting {
+    private class RetiredWrite : RuntimeException()
+
+    private fun RepositoryTransaction.changed(id: UUID, authority: Boolean = true) {
+        val nextRevision = checkedIncrement(context.deviceRevisions[id] ?: 0L)
+        val nextAuthority = if (authority) checkedIncrement(context.deviceAuthorityRevisions[id] ?: 0L) else null
+        afterCommit {
+            context.deviceRevisions[id] = nextRevision
+            if (nextAuthority != null) context.deviceAuthorityRevisions[id] = nextAuthority
+        }
+    }
+
+    private suspend fun conditionalWrite(
+        operation: String,
+        isCurrent: () -> Boolean,
+        action: suspend RepositoryTransaction.() -> Boolean,
+    ): Boolean = try {
+        context.write(operation) {
+            if (!isCurrent()) return@write false
+            beforeCommit { if (!isCurrent()) throw RetiredWrite() }
+            action()
+        }
+    } catch (_: RetiredWrite) {
+        false
+    }
+
+    override suspend fun fetchDeviceWriteSnapshot(id: UUID): DeviceWriteSnapshot? = context.read("fetchDeviceWriteSnapshot") {
+        database.devices().byId(id)?.let {
+            DeviceWriteSnapshot(it.toDTO(), context.deviceRevisions[id] ?: 0L, context.deviceAuthorityRevisions[id] ?: 0L)
+        }
+    }
+
+    override suspend fun insertDeviceIfAbsent(dto: DeviceDTO): Boolean = context.write("insertDeviceIfAbsent") {
+        if (database.devices().byId(dto.id) != null) return@write false
+        database.devices().upsert(dto.copy(isActive = false).toEntity())
+        changed(dto.id)
+        save()
+        true
+    }
+
+    override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean =
+        expected.withAuthority {
+            conditionalWrite("saveDeviceIfUnchanged", expected.isCurrent) {
+                val existing = database.devices().byId(dto.id) ?: return@conditionalWrite false
+                if ((context.deviceRevisions[dto.id] ?: 0L) != expected.revision ||
+                    (context.deviceAuthorityRevisions[dto.id] ?: 0L) != expected.authorityRevision ||
+                    existing.toDTO() != expected.device ||
+                    dto.id != expected.device.id || dto.radioId != expected.device.radioId) return@conditionalWrite false
+                if (dto.isActive != expected.device.isActive || dto.lastConnected != expected.device.lastConnected) return@conditionalWrite false
+                val removed = existing.knownRegions.toSet() - dto.knownRegions.toSet()
+                val normalizedDefault = dto.defaultFloodScopeName
+                    ?.utf8Prefix(ProtocolLimits.MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES)
+                if (normalizedDefault != null && removed.any {
+                        it.utf8Prefix(ProtocolLimits.MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES) == normalizedDefault
+                    } && dto.knownRegions.none {
+                        it.utf8Prefix(ProtocolLimits.MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES) == normalizedDefault
+                    }) {
+                    invalidData("Removing the default region requires clearing its default flood scope")
+                }
+                database.devices().upsert(dto.toEntity())
+                resetRemovedRegionScopes(dto.radioId, removed)
+                changed(dto.id, authority = dto.publicKey != expected.device.publicKey)
+                afterCommit { expected.onCommitted(dto) }
+                save()
+                true
+            }
+        }
+
     override suspend fun fetchDevice(id: UUID): DeviceDTO? = context.read("fetchDeviceById") {
         database.devices().byId(id)?.toDTO()
     }
@@ -34,17 +104,32 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
     override suspend fun saveDevice(dto: DeviceDTO) = context.write("saveDevice") {
         val existing = database.devices().byId(dto.id)
         database.devices().upsert(existing?.applying(dto) ?: dto.toEntity())
+        changed(dto.id)
         save()
     }
 
     override suspend fun setActiveDevice(id: UUID) = context.write("setActiveDevice") {
+        activate(id)
+        save()
+    }
+
+    override suspend fun activateDeviceIfCurrent(id: UUID, isCurrent: () -> Boolean): Boolean =
+        conditionalWrite("activateDeviceIfCurrent", isCurrent) {
+            if (database.devices().byId(id) == null) throw PersistenceStoreException(PersistenceStoreError.DeviceNotFound)
+            activate(id)
+            save()
+            true
+        }
+
+    private suspend fun RepositoryTransaction.activate(id: UUID) {
         for (device in database.devices().all()) {
+            if (device.id != id && !device.isActive) continue
             database.devices().upsert(device.copy(
                 isActive = device.id == id,
                 lastConnected = if (device.id == id) StoredInstant.from(clock.instant()) else device.lastConnected,
             ))
+            changed(device.id)
         }
-        save()
     }
 
     override suspend fun updateDeviceLastContactSync(radioId: RadioId, timestamp: UInt) =
@@ -52,6 +137,7 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
             val row = database.devices().forRadio(radioId.value).firstOrNull()
                 ?: throw PersistenceStoreException(PersistenceStoreError.DeviceNotFound)
             database.devices().upsert(row.copy(lastContactSync = timestamp.toLong()))
+            changed(row.id, authority = false)
             save()
         }
 
@@ -61,6 +147,7 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
                 ?: throw PersistenceStoreException(PersistenceStoreError.DeviceNotFound)
             if (region !in row.knownRegions) {
                 database.devices().upsert(row.copy(knownRegions = (row.knownRegions + region).snapshot()))
+                changed(row.id, authority = false)
                 save()
             }
         }
@@ -69,17 +156,35 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
         context.write("removeDeviceKnownRegion") {
             val row = database.devices().forRadio(radioId.value).firstOrNull()
                 ?: throw PersistenceStoreException(PersistenceStoreError.DeviceNotFound)
-            database.devices().upsert(row.copy(knownRegions = row.knownRegions.filterNot { it == region }.snapshot()))
-            for (channel in database.channels().forRadio(radioId.value)) {
-                if (channel.toDTO().floodScope == ChannelFloodScope.Region(region)) {
-                    database.channels().setFloodScope(radioId.value, channel.id, "inherit", null)
-                }
-            }
+            val remaining = row.knownRegions.filterNot { it == region }.snapshot()
+            val normalizedRegion = region.utf8Prefix(ProtocolLimits.MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES)
+            database.devices().upsert(row.copy(
+                knownRegions = remaining,
+                defaultFloodScopeName = row.defaultFloodScopeName.takeUnless { selected ->
+                    selected?.utf8Prefix(ProtocolLimits.MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES) == normalizedRegion &&
+                        remaining.none {
+                            it.utf8Prefix(ProtocolLimits.MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES) == normalizedRegion
+                        }
+                },
+            ))
+            resetRemovedRegionScopes(radioId, setOf(region))
+            changed(row.id, authority = false)
             save()
         }
 
+    private suspend fun RepositoryTransaction.resetRemovedRegionScopes(radioId: RadioId, removed: Set<String>) {
+        if (removed.isEmpty()) return
+        for (channel in database.channels().forRadio(radioId.value)) {
+            val scope = channel.toDTO().floodScope
+            if (scope is ChannelFloodScope.Region && scope.name in removed) {
+                database.channels().setFloodScope(radioId.value, channel.id, "inherit", null)
+            }
+        }
+    }
+
     override suspend fun deleteDevice(id: UUID) = context.write("deleteDevice") {
         database.devices().delete(id)
+        changed(id)
         save()
     }
 
@@ -89,6 +194,7 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
         database.devices().upsert(row.copy(
             id = UUID.randomUUID(), isActive = false, connectionMethods = SnapshotList.empty(),
         ))
+        changed(id)
         save()
     }
 
@@ -106,18 +212,22 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
                 radioId = ghost.radioId, publicKey = newPublicKey, connectionMethods = methods.snapshot(),
             ))
             database.devices().delete(ghost.id)
+            changed(currentDeviceID)
+            changed(ghost.id)
             save()
             RadioId(ghost.radioId)
         }
 
     override suspend fun deleteDeviceData(id: UUID) = context.write("deleteDeviceData") {
         deleteAllDeviceData(id)
+        changed(id)
         save()
     }
 
     override suspend fun deleteDeviceAndData(id: UUID) = context.write("deleteDeviceAndData") {
         deleteAllDeviceData(id)
         database.devices().delete(id)
+        changed(id)
         save()
     }
 

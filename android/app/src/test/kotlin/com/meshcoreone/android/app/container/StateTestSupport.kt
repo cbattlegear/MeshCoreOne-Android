@@ -16,6 +16,7 @@ import com.meshcoreone.android.app.state.StaleCleanupPreferences
 import com.meshcoreone.android.core.connectivity.device.RemoveUnfavoritedResult
 import com.meshcoreone.android.core.connectivity.pairing.SystemPairedAccessory
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RadioId
@@ -92,6 +93,7 @@ internal class FakeConnectionPort : AppConnectionPort {
     }
     override fun updateDevice(info: SelfInfo, appliedRadioPresetId: String?) { calls += "updateDeviceInfo" }
     override fun updateDevice(device: DeviceDTO) { calls += "updateDevice" }
+    override fun updateOCVSettings(device: DeviceDTO, expectedToken: SessionToken) { calls += "updateDevice" }
     override fun updateAutoAddConfig(config: AutoAddConfig) { calls += "autoAdd" }
     override fun updateClientRepeat(enabled: Boolean) { calls += "clientRepeat:$enabled" }
     override fun updatePathHashMode(mode: UByte) { calls += "pathHash:$mode" }

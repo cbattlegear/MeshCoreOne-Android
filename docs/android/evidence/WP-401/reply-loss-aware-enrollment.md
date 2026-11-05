@@ -177,18 +177,42 @@ unknown-token versus explicit copy-only retention; exact UTF-16 duplicates/confl
 count/per-record/total budgets; concurrent admissions; ignored/aborted inserts/accounting;
 old-journal byte preservation/manual-copy projection; malformed rows and policies.
 
-These are authored controls, **not executable acceptance**. The preexisting 81 named journal
-methods remain; expected total is 112 journal/enrollment methods and 224 API-configured
-invocations before baseline/adapter tests. Actual discovery must positively observe all names
-in the exact committed candidate, with compiler-captured source/clean-input proof.
+The nonce-bound successor has **112 named journal/enrollment methods** (28 staging, 16 lifecycle,
+13 installation-admission, 24 issuance, 31 enrollment) and 224 configured method invocations,
+plus six baseline notification tests: 230 total. The exact successor ran in the separately
+authorized discovery composition:
 
-The still-active earlier diagnostic
-[41966642435](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41966642435)
-is bound to `e381b6fc5ff8f4aee904fcc288190ce004eb9cf3`, which contains frozen5cc and excludes
-this successor. No result from it can verify this enrollment/copy implementation.
-No local Gradle, retained-owner recovery, runtime change or active-ref advance is performed.
-Structural validator outcomes are recorded at the immutable source handoff; they cannot
-prove Kotlin compilation, SQLite execution, actual enrollment or human acknowledgment.
+- Composition commit: `3fdd4862f8b93159fdf0285fd5327ae6b6bddf17`
+- Composition parents: `e381b6fc5ff8f4aee904fcc288190ce004eb9cf3` and
+  `be849bdd90a7dc6e42c93a5f40f9db1f831a34f6`
+- Composition tree: `a1816c6c82459f2d6128a3dff805020b0d9b1664`
+- Unique ref: `diagnostic-wp401-enrollment-nonce-3fdd4862`
+- Exact hosted run: [41968603305](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41968603305),
+  terminal **success**, all six jobs successful.
+- Actual module task: `:platform:notifications:testDebugUnitTest`, observed in the Linux Android job
+  without an UP-TO-DATE/FROM-CACHE suffix.
+- Notification suite: **230 discovered, 230 run, 230 passed, zero failed/errors/skipped**.
+- Per-class JUnit identities: StagingStore 28 base methods/56 execution records; Lifecycle
+  16/32; Admission 13/26; Issuance 24/48; Enrollment 31/62; the six unchanged baseline cases
+  add six single executions. The platform test report records the two configured method
+  executions as plain and `[31]` identities (API37 and API31 respectively).
+- `compiled_test_sources` includes the Enrollment test blob
+  `9fdff42727121f0eb6b655a11d9a53fb0bd9082a` and the four existing journal test blobs.
+  `remapped_jvm_inputs` includes exact approved build blob
+  `9c5e1f4f6ed16f68ff629e6768afdd9185d2da61`, all five test blobs, and journal production
+  source. The exact production blobs are EnrollmentStore
+  `f428495ba5ff608eec26eb72cbcffdd08501b10d` and StagingStore
+  `97b2db7706a3023df4036ec75f5879a6f10e5239`. The controller's exact-candidate checks passed.
+- Swift codec oracle, controller/workflow policy, SwiftData restore/export and final `android-ci`
+  jobs all succeeded. The earlier issuance-only run
+  [41966642435](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41966642435)
+  remains bound only to its older `e381b6fc` source and is not counted as evidence for enrollment.
+
+This is actual hosted Kotlin compilation and Robolectric/SQLite execution for the source/test
+blobs in `be849bdd9`; it is not production installation provisioning, authentic acknowledgment,
+hardware/process-kill/power-loss testing, antirollback, reply-capacity guarantee or activated
+recovery. No local Gradle, retained-owner recovery, runtime change or active-ref advance occurred.
+The bounded local structural verification remains separate:
 
 | Command | Result |
 | --- | --- |

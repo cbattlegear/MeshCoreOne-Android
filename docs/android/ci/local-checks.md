@@ -547,7 +547,8 @@ including new candidate methods, plus the six mandatory delivery/payload/dispatc
 identities. Missing, zero, substituted or skipped cases fail. Unsupported Java
 test sources fail closed. Canonical Kotlin declaration IDs remain separate from
 JUnit execution names: conventional tests use the shared hosted-method matcher,
-including suffix-only executions. Approved remapped tests with literal Robolectric
+including suffix-only executions for non-SDK parameter families. Notification
+tests in either root with explicit literal Robolectric
 `@Config(sdk = [31, 37])` require both the unsuffixed API-37 execution and `[31]`;
 an explicit single API-31 or API-37 configuration requires the unsuffixed execution.
 Method-level SDK overrides take precedence over class-level SDKs. Dynamic SDK

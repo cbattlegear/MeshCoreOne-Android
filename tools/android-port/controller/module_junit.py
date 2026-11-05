@@ -176,6 +176,38 @@ def require_remapped_cases(repo, module, directory, inputs, compiled_sources, re
     observed = {(case["class"], case["method"]) for case in records}
     if not required <= observed:
         raise PortError("Missing mandatory remapped JVM named cases: " + str(sorted(required - observed)))
+    def require_sdk_cases(path, methods, classes, sdk_configurations, *, remapped):
+        expected_cases = set()
+        configured_methods = set()
+        for method in methods:
+            configured_sdks = sdk_configurations[method]
+            if configured_sdks is None:
+                if not remapped:
+                    continue
+                names = {method}
+            elif configured_sdks in ((31,), (37,)):
+                names = {method}
+            elif configured_sdks == (31, 37):
+                names = {method, method + "[31]"}
+            else:
+                raise PortError("Unsupported notification SDK family: " + path + "#" + method)
+            configured_methods.add(method)
+            expected_cases.update((classes[method], name) for name in names)
+        actual_cases = [
+            (case["class"], case["method"])
+            for case in records if (
+                remapped and case["class"] in set(classes.values())
+                or not remapped and any(
+                    case["class"] == classes[method] and (
+                        case["method"] == method or case["method"].startswith(method + "[")
+                        or case["method"].startswith(method + "()")
+                    ) for method in configured_methods
+                )
+            )
+        ]
+        if len(actual_cases) != len(expected_cases) or set(actual_cases) != expected_cases:
+            raise PortError("Missing, duplicate, or unexpected notification SDK cases: " + path)
+
     coverage = []
     for path in sources:
         classes, sdk_configurations = {}, {}
@@ -185,24 +217,7 @@ def require_remapped_cases(repo, module, directory, inputs, compiled_sources, re
         )
         if not methods or any(kind != "test" for kind in methods.values()):
             raise PortError("Unsupported remapped notification JVM test family: " + path)
-        expected_cases = set()
-        for method in methods:
-            configured_sdks = sdk_configurations[method]
-            if configured_sdks is None:
-                names = {method}
-            elif configured_sdks in ((31,), (37,)):
-                names = {method}
-            elif configured_sdks == (31, 37):
-                names = {method, method + "[31]"}
-            else:
-                raise PortError("Unsupported remapped notification SDK family: " + path + "#" + method)
-            expected_cases.update((classes[method], name) for name in names)
-        actual_cases = [
-            (case["class"], case["method"])
-            for case in records if case["class"] in set(classes.values())
-        ]
-        if len(actual_cases) != len(expected_cases) or set(actual_cases) != expected_cases:
-            raise PortError("Missing, duplicate, or unexpected remapped notification SDK cases: " + path)
+        require_sdk_cases(path, methods, classes, sdk_configurations, remapped=True)
         coverage.append({
             "path": path, "modules": [module],
             "native_methods": [classes[method] + "#" + method for method in methods],
@@ -211,13 +226,14 @@ def require_remapped_cases(repo, module, directory, inputs, compiled_sources, re
     for path, blob in expected.items():
         if path in sources:
             continue
-        classes = {}
+        classes, sdk_configurations = {}, {}
         methods = _kotlin_junit_methods(
             git(repo, "cat-file", "blob", blob).decode("utf-8"),
-            classes, reject_inherited=True,
+            classes, sdk_configurations=sdk_configurations,
         )
         if any(kind != "test" for kind in methods.values()):
             raise PortError("Unsupported conventional notification JVM test family: " + path)
+        require_sdk_cases(path, methods, classes, sdk_configurations, remapped=False)
         if methods:
             coverage.append({
                 "path": path, "modules": [module], "native_methods": [],
@@ -225,9 +241,6 @@ def require_remapped_cases(repo, module, directory, inputs, compiled_sources, re
                     {"path": path, "blob_sha": blob, "id": method} for method in methods
                 ],
             })
-    if not required <= observed:
-        raise PortError("Missing mandatory remapped JVM named cases: " + str(sorted(required - observed)))
-
     validate_hosted_methods(
         {"schema_version": 3, "kind": "whole-wp", "coverage": coverage},
         candidate_source_tree(repo, revision), repo, {module: records}, compiled_sources,

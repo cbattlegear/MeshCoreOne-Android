@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
@@ -363,6 +364,78 @@ class SdkFamilyTest {
         with self.assertRaisesRegex(PortError, "differs from immutable notification test sources"):
             fast.notification_test_sources(self.repo, path)
 
+    def test_default_full_fast_main_binds_only_current_invocation_compiler_inventory(self):
+        from controller import ci, ci_environment, ci_evidence
+
+        self.notifications()
+        fast_path = Path(__file__).resolve().parents[1] / "local" / "fast.py"
+        spec = importlib.util.spec_from_file_location("test_default_fast_main", fast_path)
+        fast = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(fast)
+        work = self.root / "work"
+        (work / "toolchain").mkdir(parents=True)
+        (work / "toolchain/environment.json").write_text(json.dumps({
+            "java_home": str(self.root / "fixture-java"),
+        }), encoding="utf-8")
+        expected = self.compiled_notification_sources()["platform/notifications"]
+        record = {
+            "task": ":platform:notifications:testDebugUnitTest",
+            "sources": [{"path": path, "blob": blob} for path, blob in sorted(expected.items())],
+        }
+        for mode in ("current", "missing", "stale"):
+            output = self.root / ("fast-" + mode)
+            output.mkdir()
+            inventory_path = output / "gradle-test-sources.jsonl"
+            inventory_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+
+            def execute(command, repo, environment, log):
+                if log.name != "gradle-scaffold.log":
+                    return
+                self.assertIn(":platform:notifications:testDebugUnitTest", command)
+                self.assertEqual(command[-2:], [
+                    "--init-script",
+                    str(self.repo / "tools/android-port/controller/verify_candidate_task_graph.gradle"),
+                ])
+                self.assertEqual(environment["ANDROID_CI_TEST_SOURCES"], str(inventory_path))
+                self.assertEqual(inventory_path.read_text(encoding="utf-8"), "")
+                report_path = (self.repo / "android/platform/notifications/build/test-results/"
+                               "testDebugUnitTest/TEST-notifications.xml")
+                self.assertFalse(report_path.exists())
+                self.report("core/model")
+                self.report("core/database", runner="testDebugUnitTest")
+                self.report("app", runner="testDebugUnitTest")
+                self.report("core/contracts")
+                notification_report(self.repo)
+                if mode != "missing":
+                    actual = json.loads(json.dumps(record))
+                    if mode == "stale":
+                        actual["sources"][0]["blob"] = "0" * 40
+                    inventory_path.write_text(json.dumps(actual) + "\n", encoding="utf-8")
+
+            text = io.StringIO()
+            with self.subTest(mode=mode), \
+                    patch.object(sys, "argv", [
+                        "fast.py", "--repo", str(self.repo), "--work", str(work),
+                        "--output", str(output), "--stages", "scaffold",
+                    ]), patch.object(fast, "execution_lane", return_value=None), \
+                    patch.object(fast, "execute", side_effect=execute), \
+                    patch.object(ci_environment, "candidate_environment", return_value={}), \
+                    patch.object(ci_environment, "verify_wrapper"), \
+                    patch.object(ci, "validate_candidate_task_graph", return_value={"tasks": 1}), \
+                    patch.object(ci_evidence, "collect_suites", return_value={}), \
+                    patch.object(ci_evidence, "collect_lint", return_value={}), \
+                    patch.object(ci_evidence, "validate_graph_runtime"), \
+                    contextlib.redirect_stdout(text):
+                if mode == "current":
+                    fast.main()
+                else:
+                    with self.assertRaisesRegex(PortError, "differs from immutable notification test sources"):
+                        fast.main()
+            self.assertEqual("FAST LOCAL CHECK PASSED" in text.getvalue(), mode == "current")
+            if mode == "current":
+                self.assertIn('"compiled_test_sources"', text.getvalue())
+                self.assertIn('"remapped_jvm_inputs"', text.getvalue())
+
     def test_future_candidate_named_case_is_mandatory_not_a_fixed_count(self):
         self.notifications()
         relative = NOTIFICATION_ROOT + "/NewTest.kt"
@@ -424,6 +497,33 @@ class AdapterTest { @Test fun conventionalRequired() {} }
         self.source("platform/notifications", relative, "changed after commit")
         with self.assertRaisesRegex(PortError, "differ"):
             check_module_tests(self.repo)
+
+    def test_conventional_explicit_sdk_family_requires_all_variants_not_other_parameters(self):
+        self.notifications()
+        self.source("platform/notifications", "src/test/kotlin/ConfiguredAdapterTest.kt", """
+package com.meshcoreone.android.platform.notifications.messaging
+import org.junit.Test
+import org.robolectric.annotation.Config
+@Config(sdk = [31, 37])
+class ConfiguredAdapterTest { @Test fun conventionalRequired() {} }
+class GenericAdapterTest { @Test fun genericParameters() {} }
+""")
+        self.command("add", "--all")
+        self.command("commit", "--quiet", "-m", "conventional explicit SDK family")
+        compiled = self.compiled_notification_sources()
+        classname = "com.meshcoreone.android.platform.notifications.messaging.ConfiguredAdapterTest"
+        generic = (
+            "com.meshcoreone.android.platform.notifications.messaging.GenericAdapterTest",
+            "genericParameters[non-sdk-parameter]",
+        )
+        base = (classname, "conventionalRequired")
+        sdk31 = (classname, "conventionalRequired[31]")
+        for variants in ({base}, {sdk31}):
+            notification_report(self.repo, NOTIFICATION_CASES | {generic} | variants)
+            with self.subTest(variants=variants), self.assertRaisesRegex(PortError, "SDK cases"):
+                check_module_tests(self.repo, compiled)
+        notification_report(self.repo, NOTIFICATION_CASES | {generic, base, sdk31})
+        self.assertEqual(check_module_tests(self.repo, compiled)["platform/notifications"]["passed"], 9)
 
     def test_unsupported_java_notification_test_input_fails_closed(self):
         self.notifications()

@@ -190,12 +190,12 @@ class RemoteNeighborConfidenceComposeTest {
                 } finally {
                     bitmap.recycle()
                 }
-                return view
                 println("TS07 auth frame=$frame host=${host.width}x${host.height} " +
                     "dialog=${dialog.width}x${dialog.height} requested=${dialog.isLayoutRequested} " +
                     "pendingBefore=$before pendingAfter=${pending(dialog)} hostPending=${pending(host)}")
             }
         }
+        return view
     }
 
     @Test fun statusRouteKeepsExactAndUnknownHopsDistinctAndClosesStaleExplanation() {

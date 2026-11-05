@@ -1,5 +1,43 @@
 # WP-215 independent current-main notification action consumer
 
+## App fixture authorization correction
+
+Exact hosted run `41966525445` at `67ac4eb224d2fa1da784fc125a9bc36d5d47838e`
+failed `:app:testDebugUnitTest`: 1,984 tests, two failures. The channel pre-wire
+control expected one failure notification but its `RecordingDelivery` always
+reported DENIED. The assertion stopped before installing the replacement router,
+leaving a retryable process action that contaminated the later equal-text draft
+control (three router attempts instead of two). This is not evidence that the
+equal-text draft was deleted or that a third wire send occurred.
+
+The fixture now explicitly supplies AUTHORIZED delivery for these reply controls,
+refreshes and asserts the service authorization, and retains the original
+one-failure-notification assertion plus an exact channel-failure payload assertion.
+Other harness users still default to DENIED. No production authorization or
+dispatcher behavior changes. The successor must execute both failed controls
+before either can be accepted.
+
+The authoritative same-run reports discovered 18 passing
+`NotificationAcceptanceRecoveryTests` cases and 31 passing
+`NotificationTransactionNativeTests` cases, including the unchanged
+cancel-after-write/remove/badge/notify oracle. The overall run still failed;
+these service results do not accept the App controls or capacity recovery.
+No second CI-result bundle is retained.
+
+Fresh actual admissions for `ContainerTestSupport.kt` and
+`NotificationActionAcceptanceTest.kt`, operation `add-or-update-related-test`,
+returned `reviewed-support-test`. Same-owner scope evolution for the support
+fixture again refused with
+`Capability evolution caller differs from the stored session/branch/worktree`;
+the historical receipt was preserved unchanged under the isolated-authoring
+policy below. The initial mistaken `controller/reserve.py` invocation did not
+run; actual admissions used `tools/android-port/local/reserve.py`.
+
+After these source changes, `validate.py`, `portmap.py` and `git diff --check`
+passed. Local Gradle ownership remains untouched. Full-capacity intake,
+installation continuity, atomic issued admission and visible copy-only failure
+handling remain separate unactivated integration prerequisites.
+
 ## Identity and provenance
 
 - Repository: `cbattlegear/MeshCoreOne-Android`; existing issue: #514.

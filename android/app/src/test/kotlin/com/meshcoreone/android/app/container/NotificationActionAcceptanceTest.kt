@@ -10,6 +10,7 @@ import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.NotificationId
+import com.meshcoreone.android.core.contracts.domain.NotificationAuthorizationStatus
 import com.meshcoreone.android.core.contracts.domain.NotificationPostResult
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.notifications.NotificationAction
@@ -214,7 +215,10 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
                 store.saveMessage(dto)
             }
         }
-        val h = ContainerHarness(this, store, persistenceOverride = persistence)
+        val h = ContainerHarness(
+            this, store, persistenceOverride = persistence,
+            deliveryOverride = RecordingDelivery(NotificationAuthorizationStatus.AUTHORIZED),
+        )
         val peerKey = key(4)
         h.links.configureRadio = { firmware ->
             firmware.knownContacts += contactFrame(peerKey, "Quick reply peer")
@@ -234,6 +238,8 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
             h.settle()
             h.assertReady()
             val session = requireNotNull(h.sessions.current)
+            session.notificationService.checkAuthorizationStatus()
+            assertTrue(session.notificationService.isAuthorized)
             val radio = session.token.radioId
             val contact = requireNotNull(store.fetchContact(radio, peerKey))
             val contactKey = EntityKey(radio, contact.id)
@@ -289,6 +295,10 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
                 if (channel) {
                     assertNull(session.notificationService.consumeDraft(contactKey))
                     assertEquals(1, h.delivery.posted.size)
+                    assertEquals(
+                        NotificationPayload.ChannelQuickReplyFailed(radio, 0u),
+                        h.delivery.posted.single().payload,
+                    )
                 } else if (!leaveDraftAcrossRetry) {
                     assertEquals("one reply", session.notificationService.consumeDraft(contactKey))
                 }

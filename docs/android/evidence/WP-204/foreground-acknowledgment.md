@@ -193,6 +193,15 @@ Combined execution attempts (preserved, not attributed to successors):
   guard was weakened and no earlier outcome is transferred to this attempt.
   Classification, controller policy and Swift codec jobs passed; SwiftData
   restore/export was skipped following the Android job failure.
+- Run [42004265838](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42004265838)
+  on `7401b75380ba8dba4bd3ce8a972cc5e5f3473000` failed in the test-only
+  focus helper: the dialog decor had no `ViewRootImpl` immediately after
+  `Dialog.show`. This attempt did not establish the mounted real-ledger flow.
+  Reviewed successor `10c1d31e5252132b674d46c722dc8b9d32bcd2af` moves
+  actual root focus delivery to the decor's one-shot attachment callback and
+  asserts attachment, root existence and `hasWindowFocus`. It retains the
+  no-initial-focus negative control and changes no production consent guard.
+  Successor execution is not yet verified.
 
 Not verified:
 

@@ -18,6 +18,7 @@ import com.meshcoreone.android.core.contracts.domain.DebugLogRetention
 import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceException
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException
+import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.TransportType
 import com.meshcoreone.android.core.model.snapshot
@@ -208,12 +209,15 @@ class RadioSessionContainer private constructor(
                             channel.floodScope, device.defaultFloodScopeName, device.supportsUnscopedFloodSend,
                         ), force = true)
                     } catch (failure: MeshCoreException) {
+                        if (failure !is MeshCoreException.DeviceError) throw failure
                         // Scope preparation is not a channel write's ERROR 2 or pool-backoff attempt.
                         throw MessageServiceException(MessageServiceError.SendFailed("Channel scope application failed"), failure)
                     }
                     transmit()
                 }
             } catch (failure: SettingsServiceException) {
+                val underlying = (failure.error as? SettingsServiceError.SessionError)?.error
+                if (underlying != null && underlying !is MeshCoreException.DeviceError) throw underlying
                 throw MessageServiceException(MessageServiceError.SendFailed("Channel scope reconciliation failed"), failure)
             }
         },

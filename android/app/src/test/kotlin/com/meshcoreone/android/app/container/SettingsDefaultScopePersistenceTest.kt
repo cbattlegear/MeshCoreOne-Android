@@ -549,15 +549,50 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
                 "ERROR2 from scope preparation must not enter the channel-write query/accounting classifier",
             )
             radio.activeScopeFailure = null
+            for (transient in listOf(
+                com.meshcoreone.android.core.protocol.config.MeshCoreException.Timeout(),
+                com.meshcoreone.android.core.protocol.config.MeshCoreException.ConnectionLost(),
+            )) {
+                val transport = h.links.radios.single()
+                val scopeOpcode = PacketBuilder.setFloodScope(FloodScope.Region("EU868").scopeKey())[0]
+                var encountered = false
+                transport.beforeSend = { command ->
+                    if (command[0] == scopeOpcode) {
+                        encountered = true
+                        throw transient
+                    }
+                }
+                val pending = enqueueActualChannel(h, before, "Transient scope preparation ${transient.javaClass.simpleName}")
+                val pendingKey = com.meshcoreone.android.core.contracts.domain.EntityKey(before.radioId, pending.id)
+                try {
+                    h.eventually("transient scope failure parks the real pending message") {
+                        encountered && kotlinx.coroutines.runBlocking {
+                            store.fetchPendingSendsForMessage(pendingKey).firstOrNull()?.attemptCount?.let { it > 0 } == true &&
+                                store.fetchMessage(pendingKey)?.status == MessageStatus.PENDING
+                        }
+                    }
+                    h.settle()
+                    assertTrue(store.hasPendingSend(pendingKey), "Pre-send transient failures cannot delete the unsent envelope")
+                    assertEquals(MessageStatus.PENDING, store.fetchMessage(pendingKey)?.status)
+                    assertFalse(transport.sent.any { it[0] == 0x1f.toUByte() }, "A scope timeout/lost connection is not a channel ERROR2")
+                } finally { transport.beforeSend = {} }
+                h.sessions.current!!.chatSendQueueService.transportDidOpen()
+                h.eventually("the same parked envelope transmits after scope preparation recovers") {
+                    kotlinx.coroutines.runBlocking {
+                        store.fetchMessage(pendingKey)?.status == MessageStatus.SENT && !store.hasPendingSend(pendingKey)
+                    }
+                }
+            }
+            val sentBefore = radio.channelTransmissions.size
             val sent = enqueueActualChannel(h, before, "scope preparation retried")
             h.eventually("positive actual send follows successful scope application") {
-                radio.channelTransmissions.size == 1 && kotlinx.coroutines.runBlocking {
+                radio.channelTransmissions.size == sentBefore + 1 && kotlinx.coroutines.runBlocking {
                     store.fetchMessage(com.meshcoreone.android.core.contracts.domain.EntityKey(before.radioId, sent.id))
                         ?.status == com.meshcoreone.android.core.model.MessageStatus.SENT
                 }
             }
             val frames = h.links.radios.single().sent
-            assertTrue(frames.indexOf(radio.channelTransmissions.single()) > frames.lastIndexOf(radio.activeScopes.last()))
+            assertTrue(frames.indexOf(radio.channelTransmissions.last()) > frames.lastIndexOf(radio.activeScopes.last()))
             assertEquals("EU868", radio.mode)
         }
     }

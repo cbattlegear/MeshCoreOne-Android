@@ -480,6 +480,39 @@ class TraceExecutionTest {
     }
 
     @Test
+    fun `one hop auto return changes preserve pending and completed single and batch routes`() {
+        for (batch in listOf(false, true)) for (completed in listOf(false, true)) {
+            val h = TraceHarness(configureDependencies = true)
+            val recorded = FakeTraceSender()
+            val persistence = InMemoryTracePathStore { h.time.now() }
+            h.deps.device = device()
+            h.deps.sender = recorded
+            h.deps.store = persistence
+            h.holder.addNode(alpha)
+            val saved = savedPath(h.state.fullPathData, radioId = RADIO)
+            persistence.insert(saved)
+            h.holder.setBatchEnabled(batch)
+            h.holder.setBatchSize(1)
+            val run = h.start { h.holder.runBatchTrace() }
+            val tag = recorded.sent.single().tag
+            if (completed) h.respond(tag, listOf(node(0xA1, 5.0), node(null, 3.0)), RADIO)
+            val before = h.state
+            val pending = h.holder.pendingTag
+            h.holder.setAutoReturnPath(false)
+            assertEquals(before.copy(autoReturnPath = false), h.state,
+                "Unchanged wire bytes retain selection, results, errors and running state")
+            assertEquals(pending, h.holder.pendingTag)
+            assertEquals(Bytes.of(0xA1), h.state.fullPathData)
+            assertNotNull(h.state.activeSavedPath)
+            if (!completed) h.respond(tag, listOf(node(0xA1, 5.0), node(null, 3.0)), RADIO)
+            assertTrue(run.isCompleted)
+            assertTrue(assertNotNull(h.state.result).success)
+            assertEquals(Bytes.of(0xA1), h.state.result?.tracedPathBytes)
+            assertEquals(1, persistence.paths.getValue(saved.id).runs.size)
+        }
+    }
+
+    @Test
     fun `auto return changes retire old routes but unchanged values preserve pending work`() {
         for (batch in listOf(false, true)) {
             val h = TraceHarness(configureDependencies = true)

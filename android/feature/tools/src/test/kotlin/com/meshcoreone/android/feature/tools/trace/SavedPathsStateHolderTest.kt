@@ -256,6 +256,47 @@ class SavedPathsStateHolderTest {
     }
 
     @Test
+    fun `delete preserves overlapping rename reload before and after the actual store read`() {
+        for (holdBeforeRead in listOf(false, true)) {
+            val a = savedPath(Bytes.of(1), radioId = RADIO)
+            val b = savedPath(Bytes.of(2), radioId = RADIO)
+            store.insert(a)
+            store.insert(b)
+            val gate = CompletableDeferred<Unit>()
+            var reads = 0
+            val current = SavedPathsStateHolder(Strings, diagnostics).apply {
+                configure(object : SavedPathsDependencies {
+                    override fun connectedDevice() = connected
+                    override fun savedPaths() = object : TracePathPersisting by store {
+                        override suspend fun fetchSavedTracePaths(radioId: RadioId): List<com.meshcoreone.android.core.model.SavedTracePathDTO> {
+                            val held = ++reads == 2
+                            if (held && holdBeforeRead) gate.await()
+                            val snapshot = store.fetchSavedTracePaths(radioId)
+                            if (held && !holdBeforeRead) gate.await()
+                            return snapshot
+                        }
+                    }
+                })
+            }
+            harness.complete { current.loadSavedPaths() }
+            val rename = harness.start { current.renamePath(a, "Renamed before delete") }
+            assertEquals("Renamed before delete", store.paths.getValue(a.id).name)
+            assertTrue(current.state.value.isLoading)
+            assertTrue(harness.complete { current.deletePath(b) })
+            assertFalse(current.state.value.savedPaths.any { it.id == b.id })
+            gate.complete(Unit)
+            harness.main.runCurrent()
+            assertTrue(rename.isCompleted)
+            assertEquals("Renamed before delete", current.state.value.savedPaths.single { it.id == a.id }.name)
+            assertFalse(current.state.value.savedPaths.any { it.id == b.id }, "A held pre-delete snapshot cannot resurrect B")
+            assertFalse(store.paths.containsKey(b.id))
+            assertNull(current.state.value.errorMessage)
+            assertFalse(current.state.value.isLoading)
+            store.deleteSavedTracePath(EntityKey(a.radioId, a.id))
+        }
+    }
+
+    @Test
     fun `committed deletion retires an older snapshot without resurrecting its row`() {
         val path = savedPath(Bytes.of(1), radioId = RADIO)
         store.insert(path)

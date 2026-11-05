@@ -579,6 +579,121 @@ class TraceCodeInputComposeTest {
         }
     }
 
+    @Test fun mountedOneHopAutoReturnKeepsThePendingWireRoute() = oneHopAutoReturnPreservesRoute(false)
+    @Test fun mountedOneHopAutoReturnKeepsTheCompletedResult() = oneHopAutoReturnPreservesRoute(true)
+
+    private fun oneHopAutoReturnPreservesRoute(completed: Boolean) {
+        val h = configured()
+        val recorded = FakeTraceSender()
+        h.deps.sender = recorded
+        h.holder.addNode(contact(0xA1, name = "Alpha"))
+        h.complete { h.holder.runTrace() }
+        val tag = recorded.sent.single().tag
+        if (completed) h.respond(tag, listOf(node(0xA1, 6.0), node(null, 3.0)), RADIO)
+        mountPathList(h)
+        val before = h.state
+        val pending = h.holder.pendingTag
+        host.get().runOnUiThread {
+            val toggle = nodes().first { it.config.getOrElseNullable(SemanticsProperties.Role) { null } == Role.Switch }
+            assertTrue(assertNotNull(toggle.config[SemanticsActions.OnClick].action)())
+        }
+        settle()
+        assertEquals(before.copy(autoReturnPath = false), h.state)
+        assertEquals(pending, h.holder.pendingTag)
+        if (!completed) h.respond(tag, listOf(node(0xA1, 6.0), node(null, 3.0)), RADIO)
+        settle()
+        assertTrue(assertNotNull(h.state.result).success)
+        assertEquals(Bytes.of(0xA1), h.state.result?.tracedPathBytes)
+        assertEquals(1, recorded.sent.size)
+    }
+
+    @Test fun productionOriginAllowsOfflineDraftEntryAndSameRadioReconnect() = offlineDraftAcrossReconnect(false, false)
+    @Test fun productionOriginAllowsOfflineDraftEntryAndDifferentRadioReconnect() = offlineDraftAcrossReconnect(false, true)
+    @Test fun productionOriginRetainsOpenDraftOnDisconnectAndSameRadioReconnect() = offlineDraftAcrossReconnect(true, false)
+    @Test fun productionOriginRetainsOpenDraftOnDisconnectAndDifferentRadioReconnect() = offlineDraftAcrossReconnect(true, true)
+
+    private fun offlineDraftAcrossReconnect(disconnectOpenDraft: Boolean, crossRadio: Boolean) {
+        val epoch = com.meshcoreone.android.core.contracts.domain.ProcessEpoch(UUID.randomUUID())
+        var token: com.meshcoreone.android.core.contracts.domain.SessionToken? =
+            if (disconnectOpenDraft) com.meshcoreone.android.core.contracts.domain.SessionToken(
+                epoch, com.meshcoreone.android.core.contracts.domain.Generation(1), RADIO,
+            ) else null
+        var version = 1
+        val recorded = FakeTraceSender()
+        val deps = FakeTraceDependencies().apply {
+            device = if (disconnectOpenDraft) device() else null
+            sender = recorded
+            directory = FakeNodeDirectory(contacts = listOf(contact(0xAA, name = "Tower")))
+        }
+        val feature = object : TracePathFeatureDependencies by deps {
+            override fun sessionToken() = token
+            override fun originatingSessionToken(generation: Int) = token.takeIf { generation == version }
+            override fun isOriginatingSessionCurrent(
+                generation: Int,
+                token: com.meshcoreone.android.core.contracts.domain.SessionToken?,
+            ) = token != null && generation == version && token == this.sessionToken()
+        }
+        val connection = mutableStateOf(TracePathScreen.Dependencies(
+            feature, MapRecentsStorage(), RecordingDiagnostics(), token?.radioId, version,
+        ))
+        content.setContent { MaterialTheme { TracePathScreen(connection.value) } }
+        settle()
+        scrollToIndex(3)
+        click("Add Hop")
+        setInput("AA")
+        val oldText = assertNotNull(input().config[SemanticsActions.SetText].action)
+        val oldDone = assertNotNull(button("Done").config[SemanticsActions.OnClick].action)
+        if (disconnectOpenDraft) {
+            host.get().runOnUiThread {
+                token = null
+                deps.device = null
+                version += 1
+                connection.value = connection.value.copy(radioId = null, generation = version)
+            }
+            settle()
+            scrollToIndex(3)
+            assertEquals("AA", input().config[SemanticsProperties.EditableText].text)
+            host.get().runOnUiThread {
+                assertTrue(oldText(AnnotatedString("Retired A")))
+                assertTrue(oldDone())
+            }
+            settle()
+            assertEquals("AA", input().config[SemanticsProperties.EditableText].text)
+        }
+        setInput("BB")
+        paste("CC")
+        assertEquals("CC", input().config[SemanticsProperties.EditableText].text)
+        click("Done")
+        assertFalse(nodes().any { it.config.contains(SemanticsActions.SetText) })
+        click("Add Hop")
+        setInput("AA")
+        val offlineText = assertNotNull(input().config[SemanticsActions.SetText].action)
+        val offlineDone = assertNotNull(button("Done").config[SemanticsActions.OnClick].action)
+        val nextRadio = if (crossRadio) RadioId(UUID.randomUUID()) else RADIO
+        host.get().runOnUiThread {
+            version += 1
+            token = com.meshcoreone.android.core.contracts.domain.SessionToken(
+                epoch, com.meshcoreone.android.core.contracts.domain.Generation(version.toLong()), nextRadio,
+            )
+            deps.device = device().copy(radioId = nextRadio)
+            connection.value = connection.value.copy(radioId = nextRadio, generation = version)
+        }
+        settle()
+        scrollToIndex(3)
+        host.get().runOnUiThread {
+            assertTrue(offlineText(AnnotatedString("Retired offline")))
+            assertTrue(offlineDone())
+        }
+        settle()
+        assertEquals("AA", input().config[SemanticsProperties.EditableText].text)
+        assertTrue(recorded.sent.isEmpty(), "Local drafts never send radio commands")
+        assertTrue(button("Add nodes: AA").boundsInRoot.height >= 48f)
+        click("Add nodes: AA")
+        assertEquals("", input().config[SemanticsProperties.EditableText].text)
+        scrollToIndex(2)
+        assertTrue(texts().any { it.contains("Tower (AA)") }, "Fresh connected Add changes the real route")
+    }
+
     @Test fun sameRadioReconnectRejectsRetainedAutoReturn() = retainedListActionAcrossReconnect(false, "auto")
     @Test fun differentRadioReconnectRejectsRetainedAutoReturn() = retainedListActionAcrossReconnect(true, "auto")
     @Test fun sameRadioReconnectRejectsRetainedBatchToggle() = retainedListActionAcrossReconnect(false, "batch")

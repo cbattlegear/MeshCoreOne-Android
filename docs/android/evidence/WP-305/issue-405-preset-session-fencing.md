@@ -178,6 +178,76 @@ for the held first-run gate: original witness custody and the sealed/stale-witne
 controls still require the admitted WP-302 composition. Distinct setup entries in separate tab
 stacks must not adopt a shared old flow's receipt with a newly captured witness.
 
+## Sealed-winner and explicit-reset producer repair
+
+Parent: `7df38aebc5af58320af543156c5bf6bb49b1d19b` (local successors of published
+`fc7be50b92c275d495932df6e978e95c553ea684`). These controls are authored, not Kotlin
+execution evidence.
+
+The real process-owned writer now reports the final result to the exact pending attempt before
+publishing its raw flag or resuming the initiating child. A successfully sealed write can therefore
+publish its original acknowledged receipt after child cancellation; cancellation does not clear
+the sealed winner's pending identity. Reset/terminal retirement still revoke that exact publication.
+Failed finalization releases admission without a receipt. A second completion cannot replace any
+pending attempt, including a sealed winner. No-device completion also refuses an applying preset.
+This is not a proof of arbitrary ancestor cancellation ordering before the seal.
+
+Explicit reset advances a separate work generation before its false-write suspends. Preset radio
+work captures that generation before applying, and completion passes one immutable captured
+receipt/guard/sealer bundle rather than rereading mutable applied metadata. Old apply results and
+old completion-job handlers cannot finish or clear a newer generation. Reset clears retained preset
+completion, selection, retry count/cache and errors. New completion remains blocked until the false
+write is acknowledged; failure requires an explicit reset retry. Lifecycle observers terminate when
+their exact flow retires instead of accumulating under the process scope.
+
+Clearing stale pairings rejects completed/retired flows, retains the actual clearing Job before
+starting it, cancels it on explicit reset/retirement, and rejects late sheet dismissal. No-device
+completion cannot overtake an in-flight clear. Callback controls hold the actual dependency call,
+including retirement inside that call, and check cancellation plus a successful fresh clear.
+This does not undo a CDM disassociation already accepted before retirement. The platform adapter's
+`CompanionSetupService.removeAccessory` invokes disassociation before suspended record cleanup;
+no atomic rollback or hardware cancellation guarantee is claimed by this feature-level repair.
+
+Additional real-writer controls cover child cancellation after seal, rejection of competing completion,
+failed finalization/recovery, a pre-reset radio apply returning while a new apply is held, and reset of
+an already-completed retained preset followed by a genuine new apply. The held-ack recreation fixture
+now intercepts the result-bearing store overload explicitly (Kotlin delegation would otherwise bypass
+its older overload override). It deliberately holds delivery after raw publication; the production
+writer now publishes the originating receipt before its raw flag. The process-load snapshot and
+original-witness requirements still apply; AppRoot is unchanged.
+
+The first-run error-presenter dependency remains concrete: onboarding replaces the shell, whose
+snackbar is currently the sole navigation-failure consumer. Retrying an occupied failure indefinitely
+cannot clear it while that shell is absent. The held navigation owner must supply an owner-safe
+presenter/dismissal and deferred-versus-superseded disposition, retaining the original receipt/witness.
+A mounted actual-dismissal control is still required. No held #495 source, reservations or publication
+have been imported or changed.
+
+Trusted path/operation admissions passed for all changed feature paths (`modify` / `wp-owned`),
+the app flag writer and additive contracts getter (`modify-related-consumer` /
+`reviewed-support-consumer`), and related app controls (`add-or-update-related-test` /
+`reviewed-support-test`). The historical advisory lease mismatch and local Gradle execution hold
+remain unchanged. Source validator passed (64 WPs / 1,866 references); documented `portmap.py`
+and `test_inventory.py --check` exited zero (5,133 pinned case declarations, not executed tests).
+An initial `portmap.py --check` invocation was rejected as an unsupported option; the documented
+command above was then run. `git diff --check` passed. No local Gradle or manual hosted dispatch ran.
+Published fc7 run `41935019276`, Linux job `126941702081`, subsequently finished **failure**.
+Its actual log records two `PresetDeviceEventSessionTest` failures
+(`presetWithPathHashCarriesItsOriginalTokenToBothMutations`,
+`retiredPresetPathHashCannotUseReplacementGeneration`, both `SettingsServiceException` at
+`SettingsService.kt:374`), plus `OnboardingFlagsTest`'s unavailable-readback assertion
+(expected suppressed `readback unavailable`, received an empty list). The Settings owner received
+the exact failures to reconcile on its bounded surface. Feature onboarding records 87 passed,
+zero failed/error/skipped; that predecessor evidence does not verify these successors.
+
+The readback repair retains both actual exception objects in a typed
+`OnboardingCompletionOutcomeUnknownException`, preserving the write error as cause and readback
+error as suppressed and typed data across coroutine exception transport. The original IOException,
+message and suppressed-error assertions remain; additional assertions require both original object
+identities and the cause. Cancellation remains cancellation rather than being wrapped as an IO error.
+This implementation has not yet been executed. Separate device-writer/Settings handoffs are not
+part of this source delta.
+
 ## Authored controls
 
 - `PresetSessionFencingTest`: disconnected apply and retry; replacement radio and same-radio new

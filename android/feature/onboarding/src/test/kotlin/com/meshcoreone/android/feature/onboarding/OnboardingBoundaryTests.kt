@@ -302,7 +302,7 @@ class PresetStepCoordinatorTest {
     )
 
     private fun coordinator(port: FakePresets, region: FakeRegion = FakeRegion(presets = presets), done: suspend () -> Unit = {}) =
-        PresetStepCoordinator(scope, region, port, onCompleted = done)
+        PresetStepCoordinator(scope, region, port, onCompleted = { done() })
 
     @Test fun visiblePresetsFollowRegionWithLocaleFallback() {
         val region = FakeRegion(presets = presets)
@@ -544,6 +544,78 @@ class PresetStepCoordinatorTest {
 }
 
 class OnboardingFlowCoordinatorTest {
+    @Test fun completedAndRetiredFlowsCannotStartClearingSharedPairings() = kotlinx.coroutines.runBlocking {
+        val pairing = FakePairing()
+        val completed = OnboardingFlowCoordinator(scope, Deps(pairing = pairing))
+        completed.confirmNoDevice()
+        assertTrue(completed.onboarding.hasCompletedOnboarding)
+        completed.clearStalePairings()
+        val retired = OnboardingFlowCoordinator(scope, Deps(pairing = pairing))
+        retired.onboarding.retireCompletion()
+        retired.clearStalePairings()
+        assertEquals(0, pairing.clearCalls)
+        assertEquals(0, pairing.cleared)
+    }
+
+    @Test fun resetAndRetirementCancelTheActualSuspendedClearAndCannotDismissAnotherSheet() =
+        kotlinx.coroutines.runBlocking {
+            for (retire in listOf(false, true)) {
+                val owner = Job()
+                try {
+                    val release = CompletableDeferred<Unit>()
+                    var cancelled = false
+                    val pairing = FakePairing().apply {
+                        beforeClear = {
+                            try { release.await() }
+                            catch (failure: CancellationException) { cancelled = true; throw failure }
+                        }
+                    }
+                    val flow = OnboardingFlowCoordinator(CoroutineScope(Dispatchers.Unconfined + owner), Deps(pairing = pairing))
+                    flow.openPairingSheet(PairSheet.WIFI)
+                    flow.clearStalePairings()
+                    assertTrue(flow.isClearingPairings.value)
+                    assertEquals(1, pairing.clearCalls)
+                    assertFalse(flow.canCompleteWithoutDevice())
+                    if (retire) flow.onboarding.retireCompletion() else flow.onboarding.resetOnboarding()
+                    assertTrue(cancelled)
+                    assertFalse(flow.isClearingPairings.value)
+                    release.complete(Unit)
+                    assertEquals(0, pairing.cleared)
+                    assertEquals(PairSheet.WIFI, flow.deviceScan.state.value.sheet)
+
+                    val fresh = if (retire) {
+                        OnboardingFlowCoordinator(CoroutineScope(Dispatchers.Unconfined + owner), Deps(pairing = pairing))
+                    } else flow
+                    fresh.openPairingSheet(PairSheet.WIFI)
+                    fresh.clearStalePairings()
+                    assertEquals(2, pairing.clearCalls)
+                    assertEquals(1, pairing.cleared)
+                    assertEquals(PairSheet.NONE, fresh.deviceScan.state.value.sheet)
+                } finally { owner.cancel() }
+            }
+        }
+
+    @Test fun retirementInsideTheClearCallbackCancelsTheRegisteredJob() {
+        val owner = Job()
+        try {
+            lateinit var flow: OnboardingFlowCoordinator
+            var cancelled = false
+            val pairing = FakePairing().apply {
+                beforeClear = {
+                    flow.onboarding.retireCompletion()
+                    try { kotlinx.coroutines.awaitCancellation() }
+                    catch (failure: CancellationException) { cancelled = true; throw failure }
+                }
+            }
+            flow = OnboardingFlowCoordinator(CoroutineScope(Dispatchers.Unconfined + owner), Deps(pairing = pairing))
+            flow.clearStalePairings()
+            assertTrue(cancelled)
+            assertEquals(1, pairing.clearCalls)
+            assertEquals(0, pairing.cleared)
+            assertFalse(flow.isClearingPairings.value)
+        } finally { owner.cancel() }
+    }
+
     private class Deps(
         override val flags: OnboardingFlagStore = InMemoryOnboardingFlagStore(),
         override val permissions: FakePermissions = FakePermissions(granted),

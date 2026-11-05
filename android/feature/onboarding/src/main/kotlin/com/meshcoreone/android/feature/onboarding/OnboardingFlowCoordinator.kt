@@ -2,9 +2,16 @@
 package com.meshcoreone.android.feature.onboarding
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -30,12 +37,14 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
         onboarding.append(OnboardingStep.PRESET)
     }
     val preset = PresetStepCoordinator(
-        scope, deps.region, deps.presets, canStart = onboarding::canStartCompletion, onCompleted = ::completePreset,
+        scope, deps.region, deps.presets,
+        canStart = { !completing && onboarding.canStartCompletion() },
+        lifecycle = onboarding, onCompleted = ::completePreset,
     )
 
-    private suspend fun completePreset() {
+    private suspend fun completePreset(completion: OnboardingPresetCompletion) {
         onboarding.completeOnboardingWithReceipt(
-            preset.completionReceipt(), preset.completionTargetGuard(), preset.completionSealer(),
+            completion.receipt, completion.requireCurrent, completion.seal,
         )
     }
 
@@ -45,7 +54,22 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
     val hasCompletionError: StateFlow<Boolean> = completionError.asStateFlow()
     private val completingWithoutDevice = MutableStateFlow(false)
     val isCompletingWithoutDevice: StateFlow<Boolean> = completingWithoutDevice.asStateFlow()
+    private var clearingJob: Job? = null
     val currentStep: OnboardingStep get() = onboarding.onboardingPath.lastOrNull() ?: OnboardingStep.WELCOME
+
+    init {
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            onboarding.lifecycleGeneration.onEach {
+                clearingJob?.cancel()
+                clearingJob = null
+                clearing.value = false
+                completing = false
+                completingWithoutDevice.value = false
+                completionError.value = false
+                pendingPairAfterPermission = false
+            }.takeWhile { !onboarding.isRetired() }.collect()
+        }
+    }
 
     /** Resumes a partially onboarded install above the welcome root (no-op once complete). */
     fun restoreStartingPath() {
@@ -92,7 +116,8 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
     }
 
     fun canCompleteWithoutDevice(): Boolean =
-        onboarding.canStartCompletion() && !completing && !deviceScan.state.value.localBusy &&
+        onboarding.canStartCompletion() && !preset.state.value.isApplying &&
+            !completing && !clearing.value && !deviceScan.state.value.localBusy &&
             !deps.pairing.connection.value.isBusy && !wifi.state.value.isConnecting
 
     fun dismissPairingSheet() {
@@ -110,32 +135,43 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
         if (!canCompleteWithoutDevice()) return
         completing = true
         completingWithoutDevice.value = true
+        val generation = onboarding.lifecycleGeneration.value
         scope.launch {
             try {
+                if (onboarding.lifecycleGeneration.value != generation) return@launch
                 onboarding.completeOnboarding()
+                if (onboarding.lifecycleGeneration.value != generation) return@launch
                 completionError.value = false
                 deviceScan.dismissSheet()
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                 throw cancelled
             } catch (_: Exception) {
-                completionError.value = true
+                if (onboarding.lifecycleGeneration.value == generation) completionError.value = true
             } finally {
-                completing = false
-                completingWithoutDevice.value = false
+                if (onboarding.lifecycleGeneration.value == generation) {
+                    completing = false
+                    completingWithoutDevice.value = false
+                }
             }
         }
     }
 
     fun clearStalePairings() {
-        if (clearing.value) return
+        if (clearing.value || completing || !onboarding.canStartCompletion()) return
+        val generation = onboarding.lifecycleGeneration.value
         clearing.update { true }
-        scope.launch {
+        val job = scope.launch(start = CoroutineStart.LAZY) {
             try {
+                if (onboarding.lifecycleGeneration.value != generation || !onboarding.canStartCompletion()) return@launch
                 deps.pairing.clearStalePairings()
+                currentCoroutineContext().ensureActive()
+                if (onboarding.lifecycleGeneration.value != generation) return@launch
                 deviceScan.dismissSheet()
             } finally {
-                clearing.update { false }
+                if (onboarding.lifecycleGeneration.value == generation) clearing.update { false }
             }
         }
+        clearingJob = job
+        job.start()
     }
 }

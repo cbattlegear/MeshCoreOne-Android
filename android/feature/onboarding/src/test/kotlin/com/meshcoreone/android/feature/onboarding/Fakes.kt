@@ -22,6 +22,8 @@ class FakePairing(var outcome: OnboardingConnectOutcome = OnboardingConnectOutco
     var retryCalls = 0
     var retried: UUID? = null
     var cleared = 0
+    var clearCalls = 0
+    var beforeClear: suspend () -> Unit = {}
     var throwOnPair: Throwable? = null
     var beforeRetry: suspend () -> Unit = {}
     override suspend fun pairNewDevice(): OnboardingConnectOutcome {
@@ -35,7 +37,11 @@ class FakePairing(var outcome: OnboardingConnectOutcome = OnboardingConnectOutco
         beforeRetry()
         return outcome
     }
-    override suspend fun clearStalePairings() { cleared += 1 }
+    override suspend fun clearStalePairings() {
+        clearCalls += 1
+        beforeClear()
+        cleared += 1
+    }
 }
 
 class FakeDemo(var outcome: OnboardingConnectOutcome = OnboardingConnectOutcome.Connected) : OnboardingDemoPort {

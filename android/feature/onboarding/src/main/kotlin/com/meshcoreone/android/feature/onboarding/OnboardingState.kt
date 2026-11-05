@@ -49,6 +49,21 @@ interface OnboardingFlagStore {
         key: String, value: Boolean, requireCurrent: () -> Unit,
         seal: (OnboardingCompletionAttempt) -> Boolean, attempt: OnboardingCompletionAttempt,
     ) = persistBoolean(key, value, requireCurrent) { seal(attempt) }
+
+    /** Process-owned writers notify the exact attempt even when its initiating child has been cancelled. */
+    suspend fun persistBoolean(
+        key: String, value: Boolean, requireCurrent: () -> Unit,
+        seal: (OnboardingCompletionAttempt) -> Boolean, attempt: OnboardingCompletionAttempt,
+        onFinished: (Result<Unit>) -> Unit,
+    ) {
+        try {
+            persistBoolean(key, value, requireCurrent, seal, attempt)
+        } catch (failure: Exception) {
+            onFinished(Result.failure(failure))
+            throw failure
+        }
+        onFinished(Result.success(Unit))
+    }
 }
 
 class InMemoryOnboardingFlagStore(initial: Map<String, Boolean> = emptyMap()) : OnboardingFlagStore {
@@ -68,6 +83,9 @@ class OnboardingState(private val store: OnboardingFlagStore) {
     private var pendingAttempt: OnboardingCompletionAttempt? = null
     private var completionRevision = 0L
     private var retired = false
+    private var resetRequired = false
+    private val lifecycle = MutableStateFlow(0L)
+    val lifecycleGeneration: StateFlow<Long> = lifecycle.asStateFlow()
     private val completed = MutableStateFlow(store.getBoolean(KEY_HAS_COMPLETED))
     private val path = MutableStateFlow<List<OnboardingStep>>(emptyList())
     private val publication = MutableStateFlow(
@@ -90,6 +108,7 @@ class OnboardingState(private val store: OnboardingFlagStore) {
                     OnboardingCompletionPublication(OnboardingCompletionReceipt.Restored, completionRevision)
                 } else null
                 completed.value = value
+                resetRequired = false
             }
         }
 
@@ -117,12 +136,14 @@ class OnboardingState(private val store: OnboardingFlagStore) {
         seal: (OnboardingCompletionAttempt) -> Boolean,
     ) {
         val attempt = OnboardingCompletionAttempt()
-        synchronized(completionLock) {
+        var published = false
+        val revision = synchronized(completionLock) {
             check(!retired) { "Onboarding flow was retired" }
+            check(!resetRequired) { "Onboarding reset requires acknowledgement" }
             check(!completed.value) { "Onboarding completion is awaiting exact-flow settlement" }
-            completionRevision++
-            pendingAttempt?.reject(IllegalStateException("A newer onboarding attempt started"))
+            check(pendingAttempt == null) { "An onboarding completion is already pending" }
             pendingAttempt = attempt
+            ++completionRevision
         }
         val caller = currentCoroutineContext()
         val validate = {
@@ -134,17 +155,27 @@ class OnboardingState(private val store: OnboardingFlagStore) {
         }
         try {
             validate()
-            store.persistBoolean(KEY_HAS_COMPLETED, true, validate, seal, attempt)
+            store.persistBoolean(KEY_HAS_COMPLETED, true, validate, seal, attempt) { result ->
+                synchronized(completionLock) {
+                    if (pendingAttempt === attempt) {
+                        pendingAttempt = null
+                        if (result.isSuccess) {
+                            completed.value = true
+                            if (completionRevision == revision && !retired && !resetRequired) {
+                                published = true
+                                publication.value = OnboardingCompletionPublication(receipt, revision)
+                            }
+                        }
+                    }
+                }
+            }
             synchronized(completionLock) {
-                check(pendingAttempt === attempt) { "Onboarding attempt was retired" }
-                pendingAttempt = null
-                publication.value = OnboardingCompletionPublication(receipt, completionRevision)
-                completed.value = true
+                check(published) { "Onboarding attempt was retired" }
             }
         } finally {
             synchronized(completionLock) {
                 attempt.reject(IllegalStateException("Onboarding attempt ended before sealing"))
-                if (pendingAttempt === attempt) pendingAttempt = null
+                if (!attempt.isSealed && pendingAttempt === attempt) pendingAttempt = null
             }
         }
     }
@@ -156,7 +187,10 @@ class OnboardingState(private val store: OnboardingFlagStore) {
         }
     }
 
-    fun canStartCompletion(): Boolean = synchronized(completionLock) { !retired && !completed.value }
+    fun canStartCompletion(): Boolean =
+        synchronized(completionLock) { !retired && !resetRequired && !completed.value && pendingAttempt == null }
+
+    internal fun isRetired(): Boolean = synchronized(completionLock) { retired }
 
     internal fun ownsCompletion(value: OnboardingCompletionPublication): Boolean =
         synchronized(completionLock) {
@@ -166,12 +200,14 @@ class OnboardingState(private val store: OnboardingFlagStore) {
     private fun invalidateCompletion(): Long = synchronized(completionLock) {
         pendingAttempt?.reject(IllegalStateException("Onboarding attempt was retired"))
         pendingAttempt = null
+        lifecycle.value = Math.incrementExact(lifecycle.value)
         ++completionRevision
     }
 
     suspend fun resetOnboarding() {
         val revision = synchronized(completionLock) {
             check(!retired) { "Onboarding flow was retired" }
+            resetRequired = true
             invalidateCompletion()
         }
         store.persistBoolean(KEY_HAS_COMPLETED, false)
@@ -179,6 +215,7 @@ class OnboardingState(private val store: OnboardingFlagStore) {
             check(completionRevision == revision) { "Onboarding reset was superseded" }
             publication.value = null
             completed.value = false
+            resetRequired = false
             path.value = emptyList()
         }
     }

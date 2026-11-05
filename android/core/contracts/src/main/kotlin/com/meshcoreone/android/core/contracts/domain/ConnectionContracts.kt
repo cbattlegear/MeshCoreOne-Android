@@ -30,6 +30,7 @@ class OnboardingCompletionAttempt {
     }
     private val phase = AtomicReference<Phase>(Phase.Pending)
     fun trySeal(): Boolean = phase.compareAndSet(Phase.Pending, Phase.Sealed)
+    val isSealed: Boolean get() = phase.get() === Phase.Sealed
     fun reject(failure: Exception) { phase.compareAndSet(Phase.Pending, Phase.Rejected(failure)) }
     fun rejection(): Exception? = (phase.get() as? Phase.Rejected)?.failure
 }

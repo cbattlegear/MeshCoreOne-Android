@@ -7,6 +7,7 @@ import com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt
 import com.meshcoreone.android.core.ui.ShowOnceTips
 import com.meshcoreone.android.feature.onboarding.OnboardingFlagStore
 import com.meshcoreone.android.feature.onboarding.OnboardingState
+import java.io.IOException
 import java.util.logging.Level
 import java.util.logging.Logger
 import kotlinx.coroutines.CancellationException
@@ -21,6 +22,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+
+class OnboardingCompletionOutcomeUnknownException(
+    val writeFailure: Exception,
+    val readbackFailure: Exception,
+) : IOException(writeFailure.message, writeFailure) {
+    init { addSuppressed(readbackFailure) }
+}
 
 /**
  * [OnboardingFlagStore] reads are served from a snapshot loaded before the UI exists; ordinary writes update the
@@ -44,6 +52,7 @@ class WriteBehindOnboardingFlags(
         val requireCurrent: (() -> Unit)? = null,
         val attempt: OnboardingCompletionAttempt? = null,
         val seal: ((OnboardingCompletionAttempt) -> Boolean)? = null,
+        val onFinished: ((Result<Unit>) -> Unit)? = null,
     )
 
     private class RejectedWrite(val failure: Exception) : Exception(failure)
@@ -111,13 +120,17 @@ class WriteBehindOnboardingFlags(
                                 val committed = try {
                                     reconcileCompletion(attempt.id.toString())
                                 } catch (readFailure: Exception) {
-                                    if (failure !== readFailure) failure.addSuppressed(readFailure)
-                                    throw failure
+                                    if (failure is CancellationException) {
+                                        if (failure !== readFailure) failure.addSuppressed(readFailure)
+                                        throw failure
+                                    }
+                                    throw OnboardingCompletionOutcomeUnknownException(failure, readFailure)
                                 }
                                 if (!committed) throw failure
                                 onFailure(failure)
                             }
                         }
+                        write.onFinished?.invoke(Result.success(Unit))
                         synchronized(lock) {
                             if (write.revision >= (snapshotRevision[write.key] ?: 0L)) {
                                 snapshotRevision[write.key] = write.revision
@@ -127,11 +140,14 @@ class WriteBehindOnboardingFlags(
                         }
                         write.persisted?.resume(Unit)
                     } catch (rejected: RejectedWrite) {
+                        write.onFinished?.invoke(Result.failure(rejected.failure))
                         write.persisted?.resumeWithException(rejected.failure)
                     } catch (cancelled: CancellationException) {
+                        write.onFinished?.invoke(Result.failure(cancelled))
                         write.persisted?.resumeWithException(cancelled)
                         throw cancelled
                     } catch (failure: Exception) {
+                        write.onFinished?.invoke(Result.failure(failure))
                         try {
                             onFailure(failure)
                         } finally {
@@ -152,7 +168,10 @@ class WriteBehindOnboardingFlags(
                     writes.toList().also { writes.clear(); pendingCompletions.clear() }
                 }
                 wakeups.close(failure)
-                abandoned.forEach { it.persisted?.resumeWithException(failure) }
+                abandoned.forEach {
+                    it.onFinished?.invoke(Result.failure(failure))
+                    it.persisted?.resumeWithException(failure)
+                }
             }
         }
     }
@@ -196,6 +215,12 @@ class WriteBehindOnboardingFlags(
     override suspend fun persistBoolean(
         key: String, value: Boolean, requireCurrent: () -> Unit,
         seal: (OnboardingCompletionAttempt) -> Boolean, attempt: OnboardingCompletionAttempt,
+    ) = persistBoolean(key, value, requireCurrent, seal, attempt) {}
+
+    override suspend fun persistBoolean(
+        key: String, value: Boolean, requireCurrent: () -> Unit,
+        seal: (OnboardingCompletionAttempt) -> Boolean, attempt: OnboardingCompletionAttempt,
+        onFinished: (Result<Unit>) -> Unit,
     ) {
         requireCurrent()
         suspendCancellableCoroutine { continuation ->
@@ -206,7 +231,7 @@ class WriteBehindOnboardingFlags(
             synchronized(lock) {
                 val revision = nextRevision + 1
                 nextRevision = revision
-                enqueue(Write(key, value, revision, continuation, requireCurrent, completion, seal))
+                enqueue(Write(key, value, revision, continuation, requireCurrent, completion, seal, onFinished))
             }
             wakeups.trySend(Unit).getOrThrow()
         }

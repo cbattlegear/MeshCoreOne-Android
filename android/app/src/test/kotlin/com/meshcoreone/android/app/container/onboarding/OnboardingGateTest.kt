@@ -144,10 +144,12 @@ class OnboardingGateTest {
                         key: String, value: Boolean, requireCurrent: () -> Unit,
                         seal: (com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt) -> Boolean,
                         attempt: com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt,
+                        onFinished: (Result<Unit>) -> Unit,
                     ) {
                         flags.persistBoolean(key, value, requireCurrent, seal, attempt)
                         published.complete(Unit)
                         release.await()
+                        onFinished(Result.success(Unit))
                     }
                 }
                 val dependencies = onboarding(delayed, flags.hasCompleted, processScope)
@@ -360,6 +362,102 @@ class OnboardingGateTest {
             assertTrue(dependencies.ownsFlowCoordinator(replacement))
             assertFalse(replacement.onboarding.hasCompletedOnboarding)
         } finally { release.complete(Unit); processScope.cancel() }
+    }
+
+    @Test fun `reset fences a held radio apply without clearing a newer apply or publishing its receipt`() = runBlocking {
+        val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val oldRelease = CompletableDeferred<Unit>()
+        val freshRelease = CompletableDeferred<Unit>()
+        try {
+            host.setup().visible()
+            var applies = 0
+            var completions = 0
+            val durable = mutableListOf<Boolean>()
+            val flags = WriteBehindOnboardingFlags(
+                emptyMap(), processScope, { _, value -> durable += value },
+                persistCompletion = { completions++; durable += true },
+            )
+            val presets = object : OnboardingPresetPort {
+                override val canApply = MutableStateFlow(true)
+                override suspend fun apply(presetId: String): OnboardingPresetOutcome {
+                    when (++applies) {
+                        1 -> oldRelease.await()
+                        2 -> freshRelease.await()
+                    }
+                    return OnboardingPresetOutcome.Applied
+                }
+            }
+            val dependencies = onboarding(flags, flags.hasCompleted, processScope, presets = presets)
+            val flow = dependencies.retainedFlowCoordinator()
+            val id = flow.preset.visiblePresets().first().id
+            flow.preset.apply(id)
+            assertTrue(flow.preset.state.value.isApplying)
+            flow.onboarding.resetOnboarding()
+            assertEquals(listOf(false), durable)
+            assertFalse(flow.preset.state.value.isApplying)
+            flow.preset.select(id)
+            flow.preset.apply()
+            assertEquals(2, applies)
+            assertTrue(flow.preset.state.value.isApplying)
+            oldRelease.complete(Unit)
+            assertTrue(flow.preset.state.value.isApplying)
+            assertEquals(0, completions)
+            assertEquals(null, flow.onboarding.completionReceipt)
+            assertFalse(flags.hasCompleted.value)
+            freshRelease.complete(Unit)
+            assertEquals(1, completions)
+            assertTrue(flow.preset.state.value.isCompleted)
+            assertEquals(1, flow.preset.state.value.commitTick)
+            assertEquals(
+                com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt.Preset(id, null),
+                flow.onboarding.completionReceipt,
+            )
+            assertEquals(listOf(false, true), durable)
+        } finally { oldRelease.complete(Unit); freshRelease.complete(Unit); processScope.cancel() }
+    }
+
+    @Test fun `acknowledged explicit reset unlocks the retained completed preset for a genuine new apply`() = runBlocking {
+        val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val resetRelease = CompletableDeferred<Unit>()
+        try {
+            host.setup().visible()
+            var applies = 0
+            var completions = 0
+            val flags = WriteBehindOnboardingFlags(
+                emptyMap(), processScope, { _, value -> if (!value) resetRelease.await() },
+                persistCompletion = { completions++ },
+            )
+            val presets = object : OnboardingPresetPort {
+                override val canApply = MutableStateFlow(true)
+                override suspend fun apply(presetId: String): OnboardingPresetOutcome {
+                    applies++
+                    return OnboardingPresetOutcome.Applied
+                }
+            }
+            val flow = onboarding(flags, flags.hasCompleted, processScope, presets = presets).retainedFlowCoordinator()
+            val id = flow.preset.visiblePresets().first().id
+            flow.preset.apply(id)
+            val original = flow.onboarding.completionReceipt
+            assertTrue(flow.preset.state.value.isCompleted)
+            val resetting = processScope.async { flow.onboarding.resetOnboarding() }
+            assertFalse(resetting.isCompleted)
+            flow.preset.apply(id)
+            assertEquals(1, applies)
+            assertEquals(1, completions)
+            resetRelease.complete(Unit)
+            resetting.await()
+            assertFalse(flow.preset.state.value.isCompleted)
+            assertEquals(null, flow.preset.state.value.selectedId)
+            assertFalse(flow.preset.state.value.completionNeedsRetry)
+            flow.preset.select(id)
+            assertTrue(flow.preset.canApply(true, flow.preset.state.value))
+            flow.preset.apply()
+            assertEquals(2, applies)
+            assertEquals(2, completions)
+            assertTrue(flow.preset.state.value.isCompleted)
+            assertTrue(flow.onboarding.hasCompletedOnboarding)
+            assertNotSame(original, flow.onboarding.completionReceipt)
+        } finally { resetRelease.complete(Unit); processScope.cancel() }
     }
 
     @Test fun `equal no-device receipts never let old flow settlement retire its replacement`() = runBlocking {

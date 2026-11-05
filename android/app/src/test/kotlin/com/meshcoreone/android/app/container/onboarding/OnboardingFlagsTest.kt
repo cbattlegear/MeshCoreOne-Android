@@ -76,6 +76,41 @@ class OnboardingFlagsTest {
         } finally { scope.cancel() }
     }
 
+    @Test fun `sealed winner publishes its original receipt after initiating child cancellation and rejects another attempt`() =
+        runTest {
+            val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
+            val finalizing = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            var durable = false
+            try {
+                val flags = WriteBehindOnboardingFlags(
+                    emptyMap(), scope, { _, value -> durable = value },
+                    persistCompletion = { finalizing.complete(Unit); release.await(); durable = true },
+                )
+                val state = OnboardingState(flags)
+                val original = com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt.Preset(
+                    "original",
+                    com.meshcoreone.android.feature.onboarding.OnboardingPresetTarget(
+                        java.util.UUID.randomUUID(), 1, java.util.UUID.randomUUID(),
+                    ),
+                )
+                val completion = async { state.completeOnboardingWithReceipt(original, {}) { it.trySeal() } }
+                finalizing.await()
+                completion.cancel()
+                completion.join()
+                assertFalse(state.canStartCompletion())
+                assertFailsWith<IllegalStateException> { state.completeOnboarding() }
+                assertEquals(null, state.completionReceipt)
+                assertFalse(state.hasCompletedOnboarding)
+                release.complete(Unit)
+                runCurrent()
+                assertTrue(durable)
+                assertTrue(flags.hasCompleted.value)
+                assertTrue(state.hasCompletedOnboarding)
+                org.junit.Assert.assertSame(original, state.completionReceipt)
+            } finally { release.complete(Unit); scope.cancel() }
+        }
+
     @Test fun `pending or rejected real writer staging never publishes a completion receipt`() = runTest {
         val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
         val staged = CompletableDeferred<Unit>()
@@ -103,6 +138,37 @@ class OnboardingFlagsTest {
                 com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt.WithoutDevice,
                 state.completionReceipt,
             )
+            assertTrue(state.hasCompletedOnboarding)
+        } finally { release.complete(Unit); scope.cancel() }
+    }
+
+    @Test fun `failed sealed finalization releases admission even after its initiating child was cancelled`() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
+        val finalizing = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var fail = true
+        try {
+            val flags = WriteBehindOnboardingFlags(
+                emptyMap(), scope, { _, _ -> },
+                persistCompletion = {
+                    if (fail) { finalizing.complete(Unit); release.await(); throw IOException("finalize rejected") }
+                },
+            )
+            val state = OnboardingState(flags)
+            val completion = async { state.completeOnboarding() }
+            finalizing.await()
+            completion.cancel()
+            completion.join()
+            assertFalse(state.canStartCompletion())
+            release.complete(Unit)
+            runCurrent()
+            assertFalse(flags.hasCompleted.value)
+            assertFalse(state.hasCompletedOnboarding)
+            assertEquals(null, state.completionReceipt)
+            assertTrue(state.canStartCompletion())
+            fail = false
+            state.completeOnboarding()
+            assertTrue(flags.hasCompleted.value)
             assertTrue(state.hasCompletedOnboarding)
         } finally { release.complete(Unit); scope.cancel() }
     }
@@ -221,15 +287,22 @@ class OnboardingFlagsTest {
     @Test fun `unavailable uncertain-commit readback surfaces both errors without claiming rollback`() = runTest {
         val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
         var committed: String? = null
+        val writeFailure = IOException("unknown commit outcome")
+        val readFailure = IOException("readback unavailable")
         try {
             val flags = WriteBehindOnboardingFlags(
                 emptyMap(), scope, { _, _ -> error("Use the attempt-bound finalizer") },
-                persistCompletion = { id -> committed = id; throw IOException("unknown commit outcome") },
-                reconcileCompletion = { throw IOException("readback unavailable") },
+                persistCompletion = { id -> committed = id; throw writeFailure },
+                reconcileCompletion = { throw readFailure },
             )
             val failure = assertFailsWith<IOException> { OnboardingState(flags).completeOnboarding() }
             assertEquals("unknown commit outcome", failure.message)
             assertEquals(listOf("readback unavailable"), failure.suppressed.map { it.message })
+            assertTrue(failure is OnboardingCompletionOutcomeUnknownException)
+            val uncertain = failure as OnboardingCompletionOutcomeUnknownException
+            org.junit.Assert.assertSame(writeFailure, uncertain.writeFailure)
+            org.junit.Assert.assertSame(readFailure, uncertain.readbackFailure)
+            org.junit.Assert.assertSame(writeFailure, failure.cause)
             assertTrue(committed != null)
             assertFalse(flags.hasCompleted.value)
         } finally { scope.cancel() }
@@ -277,6 +350,11 @@ class OnboardingFlagsTest {
             assertTrue(completion.isCancelled)
             assertTrue(durable)
             assertTrue(flags.hasCompleted.value)
+            assertTrue(state.hasCompletedOnboarding)
+            assertEquals(
+                com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt.WithoutDevice,
+                state.completionReceipt,
+            )
         } finally { scope.cancel() }
     }
 

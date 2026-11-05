@@ -58,7 +58,7 @@ class SettingsDefaultScopePersistenceTest {
             try {
                 reply(fixture, 4, PacketBuilder.getDefaultFloodScope(), floodScopePacket("EU868"))
                 assertFalse(fixture.settings.defaultFloodScopeNeedsRecovery)
-                assertEquals(listOf("EU868"), observed)
+                assertEquals(listOf<String?>("EU868"), observed)
                 assertEquals(1, fixture.radio.sent.count { it[0] == 0x3f.toUByte() }, "Recovery never invents rollback")
             } finally { collector.cancel() }
         } finally { old.close(); replacement?.close(); fixture.close() }

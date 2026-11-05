@@ -185,3 +185,75 @@ type argument, preserving both operands and the inequality assertion. Trusted
 The failing run did not execute Room tests and supplied no schema artifact.
 This surgical source repair is not a successful compiler rerun; hosted
 verification of the integrated successor remains required.
+
+## P1 issued intent and payload-erasure successor
+
+Parent: `35780232cdd4190889297e0497c8b94d61ac6db5`. Coordinator-assigned
+consumer review identified a real gap: a generic fetch could cache payload A,
+then a competing upsert or identical-DTO delete/recreate could install B before
+key-only begin. Begin granting current B would not authenticate dispatching A.
+Post-begin DTO comparison cannot prove the earlier incarnation.
+
+Storage/service owners agreed two-phase issuance. `captureDirectAckIntent`
+atomically captures the true message and optional pending incarnations/revisions
+and their immutable snapshots under the lease. Complete legitimate timestamp,
+preflight and preparation writes first; this capture is the **first authoritative
+wire selection**, not validation of an older DTO. Derive wire text/timestamp and
+contact ID/radio from its issued snapshot. Resolve contact using those captured
+identities and retain existing consumer identity checks; no new contact-revision
+enforcement is claimed.
+
+The only begin signature is now
+`beginDirectAckAttempt(intent, firstWireRequestId, predictedAckCode)`. It consumes
+and revalidates the opaque issued intent, retaining the same logical request ID.
+Text-changing writes, same-value updates, identical-DTO ABA and pending replacement
+between capture and begin must reject, not bind new current rows. Replay never
+recaptures changed state. `inspectDirectAckIntent` returns historical evidence
+without handles. The unsafe key-only begin overload is removed, with no default
+implementation or equality fallback; receiving concrete implementations and
+consumers must explicitly update.
+
+The coupled privacy finding concerned full snapshots surviving supported
+deletion/redaction. Historical `DirectAckReceipt.message`,
+`DirectAckDelivery.message`, intent message/pending and no-dispatch message/pending
+are nullable: null means **erased payload**, never a fabricated success DTO.
+Intent retains optional `pendingSendId` so inline absence differs from erased
+pending data. No-dispatch receipts retain required `pendingSendId` independently
+of payload, along with completion request identity.
+
+Message deletion/key replacement or payload-bearing message-field updates/
+redaction atomically purge message and pending DTO snapshots across persisted
+authority histories; pending deletion/replacement/update purges intent and
+no-dispatch pending payload, including on own completion. Identity/code/RTT/
+operation tombstones remain, with non-CURRENT permission and no handle reissue.
+Own pending completion retains its commit ID and message snapshot unless the
+message was erased, but never retains the deleted pending DTO snapshot.
+The ACK claim never stores pending payload; a previously begun attempt remains
+independent, so typed own pending completion can preserve its validated late-ACK
+grant. Own status/ACK/retry/count changes do not redact message payload.
+Fresh CURRENT captures require actual nonnull message and any expected pending
+payload. Historical erased commit does not authorize dispatch, describe a
+replacement row, or justify fallback readback/success.
+
+Trusted `wp-owned/modify` admissions cover both domain contract surfaces and this
+evidence; both related test surfaces retain actual
+`reviewed-support-test/add-or-update-related-test` admission. Existing assertions
+are preserved (the new nullable no-dispatch message gets an explicit nonnull
+assertion before its original field assertions). Three additional value tests
+cover issued inputs versus later replacement and erased identity/tuple retention.
+These are not actual-Room race or privacy tests: the storage owner must exercise
+text-changing and identical-DTO/pending ABA at before-begin barriers, supported
+deletion/redaction and raw persisted snapshot removal, while service tests prove
+wire inputs derive only from the issued snapshot and original positives survive.
+
+The source-only manifest, verification-configuration and staged diff checks
+passed for this successor. The full provenance command hit a host `MemoryError`
+while reading an unchanged scope amendment; its JSON consumer consequently failed.
+This is not a passing provenance result or a Kotlin test failure. A standalone
+retry without the concurrent JSON-consumer process remained running without output
+after its 120-second initial wait and was explicitly stopped; no passing result
+is credited. Provenance validation remains unverified for this successor.
+Kotlin compilation and all fourteen authored
+methods across the handoffs remain unexecuted in this worktree under the retained
+execution hold. No integrated hosted result, migration, erasure enforcement or
+consumer parity acceptance is claimed here.

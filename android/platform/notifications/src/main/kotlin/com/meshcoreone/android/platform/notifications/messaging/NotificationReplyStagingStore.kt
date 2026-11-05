@@ -41,6 +41,7 @@ data class NotificationReplyLimits(
 class NotificationReplyStagingStore internal constructor(
     private val databaseFile: File,
     private val limits: NotificationReplyLimits,
+    private val expectedEnrollment: NotificationReplyEnrollmentStore.CreationReceipt? = null,
     private val afterIssuanceCommit: (() -> Unit)? = null,
     private val afterAdmissionCommit: (() -> Unit)? = null,
     private val afterLifecycleCommit: (() -> Unit)? = null,
@@ -141,6 +142,13 @@ class NotificationReplyStagingStore internal constructor(
         data class Failed(val reason: Failure) : ReadResult
     }
 
+    /** Observed storage coordinates only, never continuity, route, draft or dispatch authority. */
+    data class CopyText(val storeId: UUID, val recordId: UUID, val sequence: Long, val exactText: String)
+    sealed interface CopyInventory {
+        data class Retained(val records: List<CopyText>) : CopyInventory
+        data class Failed(val reason: Failure) : CopyInventory
+    }
+
     sealed interface InitializeResult {
         data object Ready : InitializeResult
         data class Failed(val reason: Failure) : InitializeResult
@@ -168,6 +176,7 @@ class NotificationReplyStagingStore internal constructor(
         IDENTITY_MISMATCH,
         ISSUANCE_NOT_INITIALIZED, INVALID_ISSUANCE_LIMITS, ISSUANCE_RECORD_CAPACITY,
         ISSUANCE_PRIVATE_DATA_CAPACITY, ISSUANCE_CONFLICT, ISSUED_TOKEN_NOT_FOUND,
+        ENROLLMENT_NOT_BOUND, ENROLLMENT_MISMATCH,
     }
 
     // Neither the current payload nor a display-time full key proves the radio's prefix destination.
@@ -409,6 +418,30 @@ class NotificationReplyStagingStore internal constructor(
     /** Read-only recovery view bound to externally retained installation identity; never adopts a replacement. */
     suspend fun read(expectedStoreId: UUID): ReadResult = readBound(expectedStoreId)
 
+    /** Loss-aware manual-copy projection of surviving old rows; never adopts its observed store ID. */
+    suspend fun readCopyOnly(): CopyInventory = withContext(Dispatchers.IO) {
+        if (!limits.isValid()) return@withContext CopyInventory.Failed(Failure.INVALID_LIMITS)
+        try {
+            database { db -> transaction(db) {
+                val state = load(db, enforceEnrollment = false)
+                val copies = state.rows.map {
+                    CopyText(state.storeId, it.recordId, it.sequence, decodeText(it.text))
+                }
+                CopyInventory.Retained(copies + if (db.version == 4) {
+                    NotificationReplyEnrollmentStore.copyProjection(db, state.storeId)
+                } else emptyList())
+            } }
+        } catch (error: StoreFailure) {
+            CopyInventory.Failed(error.reason)
+        } catch (_: SQLiteDatabaseCorruptException) {
+            CopyInventory.Failed(Failure.CORRUPT_STORAGE)
+        } catch (_: SQLiteException) {
+            CopyInventory.Failed(Failure.STORAGE_UNAVAILABLE)
+        } catch (_: SecurityException) {
+            CopyInventory.Failed(Failure.STORAGE_UNAVAILABLE)
+        }
+    }
+
     private suspend fun readBound(expectedStoreId: UUID?): ReadResult = withContext(Dispatchers.IO) {
         if (!limits.isValid()) return@withContext ReadResult.Failed(Failure.INVALID_LIMITS)
         try {
@@ -483,12 +516,15 @@ class NotificationReplyStagingStore internal constructor(
         else StageResult.Staged(identity, requireNotNull(row.outgoingId))
     }
 
-    private fun load(db: SQLiteDatabase): State {
+    private fun load(db: SQLiteDatabase, enforceEnrollment: Boolean = true): State {
         val expected = when (db.version) {
             1 -> setOf("reply_metadata", "reply_records")
             2 -> setOf("reply_metadata", "reply_records", "reply_custody", "reply_custody_policy")
             3 -> setOf("reply_metadata", "reply_records", "reply_custody", "reply_custody_policy",
                 "reply_issued_actions", "reply_issuance_policy")
+            4 -> setOf("reply_metadata", "reply_records", "reply_custody", "reply_custody_policy",
+                "reply_issued_actions", "reply_issuance_policy", "reply_enrollment",
+                "reply_unbound_policy", "reply_unbound_text")
             else -> corrupt()
         }
         if (userTables(db) != expected) corrupt()
@@ -514,6 +550,23 @@ class NotificationReplyStagingStore internal constructor(
             ) corrupt()
             if (storedLimits != limits) throw StoreFailure(Failure.LIMITS_MISMATCH)
             State(storeId, count, bytes, mutableListOf())
+        }
+        if (db.version == 4) {
+            val receipt = try {
+                NotificationReplyEnrollmentStore.validate(db, state.storeId)
+            } catch (_: NotificationReplyEnrollmentStore.Invalid) {
+                corrupt()
+            }
+            if (enforceEnrollment) {
+                if (receipt.state != NotificationReplyEnrollmentStore.Phase.BOUND) {
+                    throw StoreFailure(Failure.ENROLLMENT_NOT_BOUND)
+                }
+                if (expectedEnrollment == null || receipt != expectedEnrollment) {
+                    throw StoreFailure(Failure.ENROLLMENT_MISMATCH)
+                }
+            }
+        } else if (expectedEnrollment != null) {
+            throw StoreFailure(Failure.ENROLLMENT_MISMATCH)
         }
         var totalBytes = 0L
         val roots = mutableMapOf<Pair<NotificationReplyPost, UUID?>, Row>()
@@ -571,6 +624,81 @@ class NotificationReplyStagingStore internal constructor(
         if (state.count != state.rows.size.toLong() || state.contentBytes != totalBytes) corrupt()
         if (db.version >= 2) readCustody(db, state)
         return state
+    }
+
+    internal fun validateGeneration(db: SQLiteDatabase) {
+        try {
+            load(db, enforceEnrollment = false)
+        } catch (error: StoreFailure) {
+            throw NotificationReplyEnrollmentStore.Invalid(
+                if (error.reason == Failure.LIMITS_MISMATCH) NotificationReplyEnrollmentStore.Failure.POLICY_MISMATCH
+                else NotificationReplyEnrollmentStore.Failure.CORRUPT_STORAGE,
+            )
+        }
+    }
+
+    /** Called only in the distinct enrollment creation transaction, never as a freshness inference. */
+    internal fun createGeneration(
+        db: SQLiteDatabase,
+        storeId: UUID,
+        receiptBudget: Long,
+        policy: IssuanceLimits,
+    ) {
+        if (db.version != 0 || hasUserSchema(db)) {
+            throw NotificationReplyEnrollmentStore.Invalid(
+                NotificationReplyEnrollmentStore.Failure.EXISTING_UNATTRIBUTED_STORAGE,
+            )
+        }
+        db.execSQL(
+            """CREATE TABLE reply_metadata(
+               singleton INTEGER PRIMARY KEY CHECK(singleton=1), store_id TEXT NOT NULL,
+               record_count INTEGER NOT NULL, content_bytes INTEGER NOT NULL,
+               max_records INTEGER NOT NULL, max_record_bytes INTEGER NOT NULL,
+               max_total_bytes INTEGER NOT NULL)""",
+        )
+        db.execSQL(
+            """CREATE TABLE reply_records(
+               sequence INTEGER PRIMARY KEY, record_id TEXT UNIQUE NOT NULL,
+               post_id TEXT NOT NULL, version INTEGER NOT NULL, action TEXT NOT NULL,
+               parent_id TEXT, outgoing_id TEXT UNIQUE, payload BLOB NOT NULL,
+               reply_text BLOB NOT NULL, content_bytes INTEGER NOT NULL, digest BLOB NOT NULL,
+               issued_token TEXT,
+               CHECK((parent_id IS NULL AND outgoing_id IS NOT NULL) OR
+                     (parent_id IS NOT NULL AND outgoing_id IS NULL)))""",
+        )
+        db.execSQL("CREATE INDEX reply_post ON reply_records(post_id)")
+        db.execSQL(
+            "INSERT INTO reply_metadata VALUES(1,?,0,0,?,?,?)",
+            arrayOf<Any>(storeId.toString(), limits.maxRecords, limits.maxRecordBytes, limits.maxTotalRecordBytes),
+        )
+        db.execSQL(
+            """CREATE TABLE reply_custody_policy(
+               singleton INTEGER PRIMARY KEY CHECK(singleton=1), max_bytes INTEGER NOT NULL, digest BLOB NOT NULL)""",
+        )
+        db.execSQL("INSERT INTO reply_custody_policy VALUES(1,?,?)",
+            arrayOf<Any>(receiptBudget, policyDigest(storeId, receiptBudget)))
+        db.execSQL(
+            """CREATE TABLE reply_custody(
+               record_id TEXT PRIMARY KEY NOT NULL, revision INTEGER NOT NULL,
+               state TEXT NOT NULL, claim_id TEXT UNIQUE, owner_id TEXT, uncertainty TEXT, digest BLOB NOT NULL)""",
+        )
+        db.execSQL(
+            """CREATE TABLE reply_issuance_policy(
+               singleton INTEGER PRIMARY KEY CHECK(singleton=1), record_count INTEGER NOT NULL,
+               content_bytes INTEGER NOT NULL, max_records INTEGER NOT NULL,
+               max_record_bytes INTEGER NOT NULL, max_total_bytes INTEGER NOT NULL, digest BLOB NOT NULL)""",
+        )
+        db.execSQL(
+            "INSERT INTO reply_issuance_policy VALUES(1,0,0,?,?,?,?)",
+            arrayOf<Any>(policy.maxRecords, policy.maxRecordBytes, policy.maxTotalRecordBytes,
+                issuancePolicyDigest(storeId, policy, 0, 0)),
+        )
+        db.execSQL(
+            """CREATE TABLE reply_issued_actions(
+               sequence INTEGER PRIMARY KEY, token TEXT UNIQUE NOT NULL,
+               post_id TEXT NOT NULL, version INTEGER NOT NULL, action TEXT NOT NULL,
+               logical_id BLOB NOT NULL, payload BLOB NOT NULL, content_bytes INTEGER NOT NULL, digest BLOB NOT NULL)""",
+        )
     }
 
     /**

@@ -325,8 +325,8 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
             val harness = Harness().connect()
             val radio = checkNotNull(harness.session.radioId)
             harness.store.contacts += listOf(
-                Fixtures.contact(radioId = radio, name = "Alpha", latitude = 10.0, longitude = 10.0, lastAdvertTimestamp = 1u),
-                Fixtures.contact(radioId = radio, name = "Zulu", latitude = 20.0, longitude = 20.0, lastAdvertTimestamp = 2u),
+                Fixtures.contact(radioId = radio, name = "Alpha", latitude = 10.0, longitude = 10.0, lastModified = 1u),
+                Fixtures.contact(radioId = radio, name = "Zulu", latitude = 20.0, longitude = 20.0, lastModified = 2u),
             )
             harness.store.discovered += listOf(
                 Fixtures.node(radioId = radio, publicKey = Fixtures.repeated(0x11), name = "Alpha", latitude = 10.0, longitude = 10.0, lastHeard = java.time.Instant.ofEpochSecond(1)),

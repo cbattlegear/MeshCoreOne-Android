@@ -44,6 +44,55 @@ class LocationManagerLocationProducingTest {
         elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
     }
 
+    @Suppress("DEPRECATION")
+    @Test
+    fun coldForegroundFixIsBoundedAndCollectorCancellationCannotPublishItsLateCallback() = runTest {
+        shadowOf(locationManager).setProviderEnabled(LocationManager.FUSED_PROVIDER, true)
+        shadowOf(context as android.app.Application).grantPermissions(android.Manifest.permission.ACCESS_COARSE_LOCATION)
+        LocationManagerLocationProducing(context).use { adapter ->
+            val observed = mutableListOf<GeoCoordinate?>()
+            val collecting = launch { adapter.foregroundLocations().collect { observed += it } }
+            testScheduler.runCurrent()
+            val late = shadowOf(locationManager).getLocationUpdateListeners(LocationManager.FUSED_PROVIDER).single()
+            collecting.cancel()
+            collecting.join()
+            assertTrue(shadowOf(locationManager).getLocationUpdateListeners(LocationManager.FUSED_PROVIDER).isEmpty())
+            late.onLocationChanged(fix(1.0, 2.0))
+            assertNull(adapter.currentLocation)
+            val retry = launch { adapter.foregroundLocations().collect { observed += it } }
+            testScheduler.runCurrent()
+            assertEquals(1, shadowOf(locationManager).getLocationUpdateListeners(LocationManager.FUSED_PROVIDER).size)
+            testScheduler.advanceTimeBy(10_001)
+            testScheduler.runCurrent()
+            assertTrue(shadowOf(locationManager).getLocationUpdateListeners(LocationManager.FUSED_PROVIDER).isEmpty())
+            assertTrue(observed.isNotEmpty())
+            assertTrue(observed.all { it == null })
+            assertNull(adapter.currentLocation)
+            retry.cancel()
+            retry.join()
+        }
+    }
+
+    @Test
+    fun foregroundCollectorObservesButDoesNotCancelAnotherOwnersExistingOneShot() = runTest {
+        shadowOf(locationManager).setProviderEnabled(LocationManager.FUSED_PROVIDER, true)
+        shadowOf(context as android.app.Application).grantPermissions(android.Manifest.permission.ACCESS_COARSE_LOCATION)
+        LocationManagerLocationProducing(context).use { adapter ->
+            val owner = async { adapter.requestLocation() }
+            testScheduler.runCurrent()
+            val original = shadowOf(locationManager).getLocationUpdateListeners(LocationManager.FUSED_PROVIDER).single()
+            val collecting = launch { adapter.foregroundLocations().collect() }
+            testScheduler.runCurrent()
+            assertEquals(original, shadowOf(locationManager).getLocationUpdateListeners(LocationManager.FUSED_PROVIDER).single())
+            collecting.cancel()
+            collecting.join()
+            assertFalse(owner.isCompleted, "List disposal must not cancel an advert/onboarding request")
+            shadowOf(locationManager).simulateLocation(fix(10.0, 10.0))
+            assertEquals(GeoCoordinate(10.0, 10.0), owner.await())
+            assertEquals(GeoCoordinate(10.0, 10.0), adapter.currentLocation)
+        }
+    }
+
     @Test
     fun foregroundLocationsObserveExistingOneShotFixesAndWithdrawOnRevokeWithoutPromptingOrTracking() = runTest {
         val application = context as android.app.Application
@@ -53,7 +102,7 @@ class LocationManagerLocationProducingTest {
             val observed = mutableListOf<GeoCoordinate?>()
             val collecting = launch { adapter.foregroundLocations().collect { observed += it } }
             testScheduler.runCurrent()
-            assertEquals(listOf(null), observed)
+            assertEquals(listOf<GeoCoordinate?>(null), observed)
             assertEquals(0, prompts)
             assertTrue(shadowOf(locationManager).getLocationUpdateListeners(LocationManager.FUSED_PROVIDER).isEmpty())
             shadowOf(application).grantPermissions(android.Manifest.permission.ACCESS_COARSE_LOCATION)

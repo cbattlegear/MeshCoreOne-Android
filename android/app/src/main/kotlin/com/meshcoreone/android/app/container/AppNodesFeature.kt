@@ -93,7 +93,8 @@ private class AppNodesSession(private val container: AppContainer) : NodesSessio
         container.connectionManager.snapshot,
         container.appState.servicesVersion,
         container.appState.sessionStateChangeCount,
-    ) { graph, _, _, _ ->
+        container.deviceAccess.changes,
+    ) { graph, _, _, _, _ ->
         NodesConnectionSnapshot(currentRadioId(), graph, connectedDevice(), connectionState())
     }.distinctUntilChanged()
 

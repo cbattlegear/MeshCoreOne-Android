@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationManager
 import android.os.CancellationSignal
+import android.util.Log
 import com.meshcoreone.android.core.services.content.GeoCoordinate
 import com.meshcoreone.android.core.services.content.LocationAuthorizationStatus
 import com.meshcoreone.android.core.services.content.LocationProducing
@@ -19,10 +20,14 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.collectLatest
 
 interface LocationPermissionResultReporting {
     fun reportPermissionResult(granted: Boolean)
@@ -51,12 +56,31 @@ class LocationManagerLocationProducing(
     override val authorizationStatus: StateFlow<LocationAuthorizationStatus> = mutableStatus.asStateFlow()
     val currentLocation: GeoCoordinate? get() = synchronized(lock) { lastCoordinate }
 
-    /** Observe existing one-shot results, never start tracking or request permission from a list. */
+    /** A resumed list may acquire one missing authorized fix, never tracking or prompting. */
     fun foregroundLocations() = flow {
         refreshAuthorization()
-        emitAll(combine(authorizationStatus, coordinates) { status, coordinate ->
-            coordinate.takeIf { isAuthorized(status) && synchronized(lock) { !closed } }
-        })
+        coroutineScope {
+            launch {
+                authorizationStatus.collectLatest { status ->
+                    if (isAuthorized(status) && synchronized(lock) { !closed && lastCoordinate == null }) {
+                        try {
+                            if (withTimeoutOrNull(10_000L) { requestLocation() } == null) {
+                                Log.w("NodesLocation", "Foreground location fix timed out; proximity unavailable")
+                            }
+                        } catch (error: LocationServiceError) {
+                            if (error == LocationServiceError.RequestInProgress) {
+                                Log.d("NodesLocation", "Observing the existing location request")
+                            } else {
+                                Log.w("NodesLocation", "Foreground location unavailable", error)
+                            }
+                        }
+                    }
+                }
+            }
+            emitAll(combine(authorizationStatus, coordinates) { status, coordinate ->
+                coordinate.takeIf { isAuthorized(status) && synchronized(lock) { !closed } }
+            })
+        }
     }.distinctUntilChanged()
 
     private class Request(

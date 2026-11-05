@@ -162,3 +162,14 @@ mutation, and alias retargeting on an existing instance without touching either
 the retained archive or replacement directory. These run on the hosted Linux
 filesystem at SDK31/37; they do not prove an Android device uses such aliases.
 Their execution outcome must be bound to the exact successor hosted run.
+
+## Latest-main composition
+
+The fresh review candidate is based on actual trusted `main`
+`1a8b406a67d44006f14ac043ac468b6adf07a9d7`, which advances `f93e201` only with
+the six WP-003 CI/docs paths. Merge commit
+`2767a9744a76143056d013bb966f17c2023aaf68` has that main commit as first parent
+and the unchanged producer `94493a7248f8ad4a4a72f9751946339418174679` as second
+parent. No production/test conflicts were present. The prior 94493 exact run and
+the earlier f93 composition are not acceptance evidence for this latest-main
+candidate; use its own exact-head hosted run.

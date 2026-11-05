@@ -30,6 +30,8 @@ fun interface TraceSender {
 interface TracePathFeatureDependencies {
     /** Read synchronously from the graph registry, independently of Compose publication. */
     fun sessionToken(): SessionToken? = null
+    /** Identity actually published for the UI's generation, not a later live graph. */
+    fun originatingSessionToken(generation: Int): SessionToken? = sessionToken()
     fun connectedDevice(): DeviceDTO?
     fun bestAvailableLocation(): Coordinate?
     fun nodeDirectory(): TraceNodeDirectory?

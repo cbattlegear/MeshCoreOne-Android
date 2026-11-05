@@ -48,9 +48,9 @@ class SavedPathsStateHolder(
     private var mutationRevision = 0L
     private var sessionToken: SessionToken? = null
 
-    fun configure(dependencies: SavedPathsDependencies) {
+    fun configure(dependencies: SavedPathsDependencies, originatingToken: SessionToken? = dependencies.sessionToken()) {
         deps = dependencies
-        sessionToken = dependencies.sessionToken()
+        sessionToken = originatingToken
     }
 
     fun retireConnection() {

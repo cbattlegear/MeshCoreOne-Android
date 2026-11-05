@@ -58,6 +58,16 @@ adapters and previously accepted A writes. This is a new unverified successor, n
 transferred from r11. Its actual positive and unchanged-production controls are required;
 the public PR and #402 hold remain unchanged.
 
+A further source-review hypothesis concerns delayed effect execution adopting a live B token
+for earlier A screen inputs. The origin successor captures the version-bound token before
+effects/configuration, using an atomic AppState publication and a generation-specific lookup.
+It preserves public reload bumps, loss clearing and same-graph rewiring idempotence; an old
+asynchronous wire cannot associate itself with the replacement graph's version. Two real
+AppContainer/Room effect-boundary controls and two mounted controls distinguish same- and
+different-radio successors, stale saved-row rejection and valid fresh B actions. Their source
+declarations are not passing evidence or a runtime reproduction. All older refs, failed runs,
+the public PR head and the unrelated held map test remain intact.
+
 | Check | Result |
 |---|---|
 | Pinned Windows preflight: `python .\\tools\\android-port\\controller\\ci.py preflight --local --state $env:ANDROID_CI_STATE --output $output` with a fresh absolute TEMP output and pinned Python 3.12.4 | PASS (exit 0; readiness only) |

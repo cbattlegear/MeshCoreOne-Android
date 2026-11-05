@@ -20,6 +20,7 @@ import com.meshcoreone.android.feature.tools.trace.SystemTraceTimeSource
 import com.meshcoreone.android.feature.tools.trace.TraceDiagnostics
 import com.meshcoreone.android.feature.tools.trace.TracePathFeatureDependencies
 import com.meshcoreone.android.feature.tools.trace.TracePathStateHolder
+import com.meshcoreone.android.feature.tools.trace.TracePathScreen
 import com.meshcoreone.android.feature.tools.trace.TracePathStrings
 import com.meshcoreone.android.feature.tools.trace.TraceSender
 import java.util.concurrent.CountDownLatch
@@ -46,6 +47,100 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class TraceSessionLifetimeTest : RoomProcessTest() {
+    @Test
+    fun delayedSameRadioUiBindingCannotAcquireTheReplacementGraph() = delayedUiBinding(crossRadio = false)
+
+    @Test
+    fun delayedDifferentRadioUiBindingCannotAcquireTheReplacementGraph() = delayedUiBinding(crossRadio = true)
+
+    private fun delayedUiBinding(crossRadio: Boolean) = runTest {
+        var replacing = false
+        val h = ContainerHarness(this, store, identity = { if (replacing && crossRadio) key(9) else key(7) })
+        try {
+            val target = h.target()
+            h.manager.connect(target)
+            h.settle()
+            h.assertReady()
+            val recents = object : RecentHopsStorage {
+                override fun stringList(key: String): List<String>? = null
+                override fun setStringList(key: String, value: List<String>) = Unit
+            }
+            val diagnostics = TraceDiagnostics { _, error -> throw AssertionError(error) }
+            val actual = h.container.createToolsFeatureDependencies(
+                recents, h.container.createToolsDiagnosticsDependencies(),
+            ).trace
+            val tokenA = assertNotNull(actual.sessionToken())
+            var sends = 0
+            val feature = object : TracePathFeatureDependencies by actual {
+                override fun traceSender() = TraceSender { _, _, _, _ ->
+                    sends += 1
+                    MessageSentInfo(0u, Bytes.EMPTY, 0u)
+                }
+            }
+            val oldVersion = h.appState.servicesVersion.value
+            val captured = TracePathScreen.Dependencies(feature, recents, diagnostics, tokenA.radioId, oldVersion)
+            assertEquals(tokenA, captured.originatingToken)
+            h.appState.bumpServicesVersion()
+            val reloadVersion = h.appState.servicesVersion.value
+            assertEquals(oldVersion + 1, reloadVersion)
+            assertNull(actual.originatingSessionToken(oldVersion), "Old reload version cannot acquire a fresh origin")
+            assertEquals(tokenA, actual.originatingSessionToken(reloadVersion))
+            h.appState.wireServicesIfConnected()
+            assertEquals(reloadVersion, h.appState.servicesVersion.value, "Same graph rewiring stays idempotent")
+            h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            h.settle()
+            assertNull(actual.originatingSessionToken(reloadVersion))
+            replacing = true
+            h.manager.connect(if (crossRadio) h.target() else target)
+            h.settle()
+            h.assertReady()
+            val tokenB = assertNotNull(actual.sessionToken())
+            assertNotEquals(tokenA, tokenB)
+            assertEquals(crossRadio, tokenA.radioId != tokenB.radioId)
+            assertNull(actual.originatingSessionToken(oldVersion))
+            val pathB = store.createSavedTracePath(tokenB.radioId, "Replacement row", Bytes.of(0xBB), 1, null)
+            val dependencies = object : SavedPathsDependencies {
+                override fun sessionToken() = actual.sessionToken()
+                override fun connectedDevice() = actual.connectedDevice()
+                override fun savedPaths() = actual.savedPaths()
+            }
+            val liveCaptureControl = SavedPathsStateHolder(SavedCopy, diagnostics).apply { configure(dependencies) }
+            liveCaptureControl.loadSavedPaths()
+            assertTrue(liveCaptureControl.isCurrentPath(pathB), "A fresh live capture demonstrates the old delayed-configure eligibility")
+            val saved = SavedPathsStateHolder(SavedCopy, diagnostics).apply {
+                configure(dependencies, captured.originatingToken)
+            }
+            saved.loadSavedPaths()
+            assertFalse(saved.isCurrentPath(pathB))
+            assertFalse(saved.deletePath(pathB))
+            saved.renamePath(pathB, "Stale UI")
+            val trace = TracePathStateHolder(backgroundScope, SystemTraceTimeSource, Copy, recents, diagnostics)
+            trace.configure(captured.feature)
+            trace.bindConnection(captured.radioId, captured.generation, captured.originatingToken)
+            trace.loadSavedPath(pathB)
+            trace.runTrace()
+            assertNull(trace.state.value.activeSavedPath)
+            assertFalse(trace.state.value.isRunning)
+            assertEquals(0, sends)
+            assertEquals("Replacement row", store.fetchSavedTracePath(EntityKey(tokenB.radioId, pathB.id))?.name)
+            val fresh = TracePathScreen.Dependencies(
+                feature, recents, diagnostics, tokenB.radioId, h.appState.servicesVersion.value,
+            )
+            assertEquals(tokenB, fresh.originatingToken)
+            trace.bindConnection(fresh.radioId, fresh.generation, fresh.originatingToken)
+            trace.loadSavedPath(pathB)
+            trace.runTrace()
+            assertEquals(1, sends, "Explicitly published B binding can run")
+            val current = SavedPathsStateHolder(SavedCopy, diagnostics).apply {
+                configure(dependencies, fresh.originatingToken)
+            }
+            current.loadSavedPaths()
+            assertTrue(current.deletePath(pathB))
+        } finally {
+            h.container.close()
+        }
+    }
+
     @Test
     fun reconciledDeviceCannotAuthorizeActionsAgainstThePreviousGraph() = runTest {
         val memory = MemoryConnectionPreferences()

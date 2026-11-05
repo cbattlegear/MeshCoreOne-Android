@@ -16,6 +16,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 sealed interface DirectMessageConfirmationReadStatus {
     data object NoMessages : DirectMessageConfirmationReadStatus
@@ -52,6 +54,7 @@ class DirectMessageConfirmationAggregate(
     private var request: Any? = null
     private var job: Job? = null
     private var historicalRadio: RadioId? = null
+    private val reads = Mutex()
 
     fun observe(owner: DirectAckConfirmationObservation?) {
         if (observation == owner) return
@@ -114,7 +117,10 @@ class DirectMessageConfirmationAggregate(
                     for (key in keys) {
                         coroutineContext.ensureActive()
                         if (request !== ticket) return@launch
-                        val evidence = source.inspectDirectMessageConfirmationEvidence(key)
+                        val evidence = reads.withLock {
+                            coroutineContext.ensureActive()
+                            source.inspectDirectMessageConfirmationEvidence(key)
+                        }
                         coroutineContext.ensureActive()
                         if (request !== ticket) return@launch
                         check(evidence.key == key) { "Message confirmation evidence returned a different key" }

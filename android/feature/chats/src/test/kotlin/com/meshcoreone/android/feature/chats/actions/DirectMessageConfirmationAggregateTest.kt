@@ -157,6 +157,42 @@ class DirectMessageConfirmationAggregateTest {
         scope.cancel()
     }
 
+    @Test fun repeatedReplacementAndRecheckCannotOverlapANoncancellableOldRead() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        var calls = 0
+        var active = 0
+        var maximum = 0
+        val aggregate = DirectMessageConfirmationAggregate(inspector { requested ->
+            calls++
+            active++
+            maximum = maxOf(maximum, active)
+            try {
+                if (calls == 1) withContext(NonCancellable) { gate.await() }
+                DirectMessageConfirmationEvidence.Missing(requested)
+            } finally { active-- }
+        }, backgroundScope)
+        aggregate.register(owner, setOf(key))
+        aggregate.observe(observation())
+        runCurrent()
+        repeat(3) { epoch ->
+            aggregate.observe(observation(epoch = epoch.toLong() + 2))
+            runCurrent()
+            aggregate.recheck()
+            runCurrent()
+        }
+        assertEquals(1, calls)
+        assertEquals(1, active)
+        assertEquals(DirectMessageConfirmationReadStatus.Checking, aggregate.state.value.status)
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals(2, calls)
+        assertEquals(1, maximum)
+        assertEquals(0, active)
+        assertFalse(aggregate.state.value.hasHistoricalUncertainty)
+        assertEquals(DirectMessageConfirmationReadStatus.HistoricalRead, aggregate.state.value.status)
+        aggregate.invalidate()
+    }
+
     @Test fun severalMountedConsumersShareOneSerialKeyReadAndReleaseOnlyTheirOwnRegistration() = runTest {
         val gate = CompletableDeferred<Unit>()
         var count = 0

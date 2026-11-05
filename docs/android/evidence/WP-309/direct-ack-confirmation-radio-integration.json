@@ -5,6 +5,7 @@
   "base": "f8b1d31190f3e02370df147eb95428c9611de2c3",
   "source_component_parent": "276dea26172ad8f4b9d583b9d63c62ccfc530007",
   "source_integration_parent": "fabdee22b85660292aed5a50df955f4ba5b34f46",
+  "source_fenced_parent": "ceeb75da73363cbdb4d1c8474d954e16998f21d6",
   "reference_pin": "db14559b39d32322b06477c6ae676112f583db50",
   "canonical_observer": "0fb7fec315cb5d76988dfc8ff2eef9240c72092b",
   "canonical_message_snapshot": "b2044bb45727b13c78b59169f4cde4bdcb2c9bfb",
@@ -20,6 +21,7 @@
     "lifetime": "Child SupervisorJob of existing UI/process scope, graph identity/token/radio/epoch replacement and cancellation",
     "unexpected_failure": "Original uncaught observer cause reaches CoroutineExceptionHandler and existing AppChatsFeature.report; unrelated graph children remain supervised",
     "freshness": "Radio observer and one graph-owned serial message-query worker poll only while their current ownership/registrations are active. Each message batch waits 1000ms after completion. No per-commit or latency-bound guarantee.",
+    "serial_cancellation": "One shared coroutine Mutex encloses each complete message inspector call, including suspension. Rapid rechecks/replacements cannot overlap a noncancellable retired call; current-ticket and cancellation checks discard its late result. Waiting successors are cancellable and only the latest can query.",
     "copy": "Some messages may have been sent; confirmation for some new messages may remain unavailable indefinitely and sending remains possible. All 12 locales generated from attributed Android-only copy.",
     "layout": "Scrollable notice uses at most half the weighted conversation viewport; composer and its IME/navigation inset space are measured separately. No truncation or fixed text height.",
     "held_graph_producer_contract": "Uses existing main currentSessions, preserves publication and registry implementations",
@@ -47,12 +49,14 @@
     "cases": [
       "Actual ContainerHarness App feature shares monitor across consumers and replaces graph ownership",
       "Unexpected graph observer exception marks unavailable, logs original cause and preserves sibling work",
+      "Actual graph message inspector unexpected exception logs original cause, preserves radio observer and unrelated sibling work",
       "Missing actual store capability stays explicit without fake NoWildcard"
     ],
     "mounted_app_class": "AppDirectAckConfirmationComposeTest",
     "mounted_app_cases": [
       "Actual direct warning, missing capability, channel non-subscription and Activity recreation",
       "Mounted same-radio new-token, different-radio and disconnected owner with the monitor dispatcher frozen at old NoWildcard and replacement read gated; replacement skips the disconnected frame",
+      "Different-radio fixture changes actual radio public-key identity, not merely Bluetooth pairing identity",
       "Actual stored FAILED direct visible/fallback semantics, unchanged DELIVERED and unchanged FAILED channel",
       "Identical-field actual Room delete/recreate while diagnostic fixture query is paused: no diagnostic identity can be attached to a row, only aggregate uncertainty and explicit row-unavailable copy",
       "Custom cached FAILED footer never overrides conservative FAILED wording or actual DTO DELIVERED; cached item and DTO unchanged",
@@ -65,6 +69,7 @@
       "Missing capability, serial radio-filtered known-code query and 1000ms post-batch delay",
       "Missing/NotEligible, same-radio disconnect and typed errors retain known historical uncertainty",
       "Late noncancellable old-radio read cannot affect replacement graph",
+      "Repeated same-radio epoch replacements and rechecks cannot overlap a paused noncancellable old inspector",
       "Unknown failure escapes unchanged under supervisor and preserves unrelated sibling",
       "Overlapping mounted registrations share one serial read and release only their own keys"
     ],

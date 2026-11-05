@@ -4,6 +4,7 @@ package com.meshcoreone.android.app.container
 import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SnapshotSet
+import java.util.UUID
 import com.meshcoreone.android.feature.chats.actions.DirectAckConfirmationStatus
 import java.util.logging.Handler
 import java.util.logging.LogRecord
@@ -117,6 +118,66 @@ class DirectAckConfirmationGraphTest : RoomProcessTest() {
                 it.message == "Delivery confirmation observation unavailable"
             }.thrown)
             assertTrue(harness.container.uiScope.isActive)
+            var siblingFinished = false
+            harness.container.uiScope.launch { siblingFinished = true }.join()
+            assertTrue(siblingFinished)
+            assertEquals(DeviceConnectionState.READY, harness.manager.connectionState)
+        } finally {
+            harness.container.close()
+            logger.removeHandler(handler)
+        }
+    }
+
+    @Test fun messageInspectorFailureUsesTheActualGraphHandlerAndPreservesRadioMonitorAndSibling() = runTest {
+        val failure = IllegalStateException("unexpected message inspector fixture")
+        val gate = CompletableDeferred<Unit>()
+        val records = mutableListOf<LogRecord>()
+        val logger = Logger.getLogger("com.mc1.AppChatsFeature")
+        val handler = object : Handler() {
+            override fun publish(record: LogRecord) { records += record }
+            override fun flush() {}
+            override fun close() {}
+        }
+        val observing = object : PersistenceStoreProtocol by store,
+            DirectAckRadioConfirmationEvidenceObserving, DirectMessageConfirmationEvidenceInspecting {
+            override fun observeDirectAckRadioConfirmationEvidence(radioId: RadioId) = flow {
+                emit(DirectAckRadioConfirmationObservation.Snapshot(
+                    DirectAckRadioConfirmationEvidence.NoPersistedWildcard(radioId),
+                ))
+                awaitCancellation()
+            }
+            override suspend fun inspectDirectMessageConfirmationEvidence(key: EntityKey): DirectMessageConfirmationEvidence {
+                gate.await()
+                throw failure
+            }
+        }
+        logger.addHandler(handler)
+        val harness = ContainerHarness(this, store, persistenceOverride = observing)
+        try {
+            harness.manager.connect(harness.target())
+            harness.eventually("message failure graph ready") {
+                harness.manager.connectionState == DeviceConnectionState.READY
+            }
+            val monitor = harness.container.chatsFeature.directAckConfirmation
+            val radio = requireNotNull(harness.sessions.current).token.radioId
+            monitor.messages.register(this, setOf(EntityKey(radio, UUID(309, 99))))
+            monitor.start()
+            harness.eventually("message query and independent radio snapshot") {
+                monitor.messages.state.value.status ==
+                    com.meshcoreone.android.feature.chats.actions.DirectMessageConfirmationReadStatus.Checking &&
+                    monitor.state.value.status is DirectAckConfirmationStatus.Inspected
+            }
+            gate.complete(Unit)
+            harness.eventually("message failure explicitly unavailable") {
+                monitor.messages.state.value.status ==
+                    com.meshcoreone.android.feature.chats.actions.DirectMessageConfirmationReadStatus.UnexpectedUnavailable
+            }
+            assertSame(failure, records.single {
+                it.message == "Delivery confirmation observation unavailable"
+            }.thrown)
+            assertTrue(monitor.state.value.status is DirectAckConfirmationStatus.Inspected)
+            assertTrue(monitor.messages.state.value.rowDiagnosticsUnavailable)
+            assertFalse(monitor.messages.state.value.hasHistoricalUncertainty)
             var siblingFinished = false
             harness.container.uiScope.launch { siblingFinished = true }.join()
             assertTrue(siblingFinished)

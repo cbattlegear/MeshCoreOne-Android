@@ -172,14 +172,20 @@ class AppDirectAckConfirmationComposeTest : RoomProcessTest() {
         val ownerScheduler = TestCoroutineScheduler()
         val ownerScope = CoroutineScope(SupervisorJob(backgroundScope.coroutineContext[Job]) +
             StandardTestDispatcher(ownerScheduler))
-        val h = ContainerHarness(this, store, persistenceOverride = persistence, mainScope = ownerScope)
+        val pairing = UUID.randomUUID()
+        val h = ContainerHarness(
+            this, store, persistenceOverride = persistence, mainScope = ownerScope,
+            identity = { target ->
+                val value = if ((target as ConnectionTarget.Bluetooth).deviceId == pairing) 7 else 8
+                Bytes(ByteArray(32) { value.toByte() })
+            },
+        )
         fun pump() {
             h.settle()
             ownerScheduler.runCurrent()
             h.settle()
         }
         try {
-            val pairing = UUID.randomUUID()
             h.manager.connect(h.target(pairing))
             h.eventually("mounted App initial owner ready") {
                 ownerScheduler.runCurrent()

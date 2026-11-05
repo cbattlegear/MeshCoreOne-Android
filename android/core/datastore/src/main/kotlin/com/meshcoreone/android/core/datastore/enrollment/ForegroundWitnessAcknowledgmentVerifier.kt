@@ -65,6 +65,7 @@ class ForegroundAcknowledgmentPresentation internal constructor(
     internal val presentationId: UUID,
     internal val processId: UUID,
 ) {
+    internal val lifecycleLock = Any()
     internal val invalidated = AtomicBoolean(false)
     internal val actionAttempted = AtomicBoolean(false)
     internal val staged = AtomicBoolean(false)
@@ -84,6 +85,7 @@ sealed interface ForegroundAcknowledgmentStaging {
  * calls [recordExplicitAction] only from its explicit create-generation action. The digest binds
  * that copy identity but does not prove rendering or consent by itself. The action is staged against
  * the complete request and consumed durably by [verify] before the witness can receive NewlyVerified.
+ * A non-suspending lifecycle callback must call [retire] before scheduling [invalidate].
  */
 class ForegroundWitnessAcknowledgmentVerifier internal constructor(
     file: File,
@@ -122,6 +124,13 @@ class ForegroundWitnessAcknowledgmentVerifier internal constructor(
         return presentation
     }
 
+    fun retire(presentation: ForegroundAcknowledgmentPresentation) {
+        synchronized(presentation.lifecycleLock) {
+            presentation.invalidated.set(true)
+            presentations.remove(presentation.request.acknowledgmentId, presentation)
+        }
+    }
+
     suspend fun recordExplicitAction(
         presentation: ForegroundAcknowledgmentPresentation,
     ): ForegroundAcknowledgmentStaging = withContext(Dispatchers.IO) {
@@ -139,9 +148,17 @@ class ForegroundWitnessAcknowledgmentVerifier internal constructor(
             acknowledgmentId = presentation.request.acknowledgmentId,
         )
         try {
-            persist(evidence, Status.STAGED).also {
-                if (it == ForegroundAcknowledgmentStaging.Staged) presentation.staged.set(true)
-                else presentation.invalidated.set(true)
+            val result = persist(evidence, Status.STAGED)
+            if (result == ForegroundAcknowledgmentStaging.Staged) {
+                val stillActive = synchronized(presentation.lifecycleLock) {
+                    if (isActive(presentation)) presentation.staged.set(true)
+                    isActive(presentation)
+                }
+                if (stillActive) ForegroundAcknowledgmentStaging.Staged
+                else ForegroundAcknowledgmentStaging.Rejected
+            } else {
+                presentation.invalidated.set(true)
+                result
             }
         } catch (failure: Invalid) {
             report(failure.problem)
@@ -171,8 +188,7 @@ class ForegroundWitnessAcknowledgmentVerifier internal constructor(
     }
 
     suspend fun invalidate(presentation: ForegroundAcknowledgmentPresentation) {
-        presentation.invalidated.set(true)
-        presentations.remove(presentation.request.acknowledgmentId, presentation)
+        retire(presentation)
         val evidence = Evidence(
             request = requestBytes(presentation.request),
             warning = warningBytes(presentation.warning),
@@ -238,10 +254,12 @@ class ForegroundWitnessAcknowledgmentVerifier internal constructor(
                     }
                     val consumed = transition(expected, Status.CONSUMED)
                     if (consumed == Status.CONSUMED) {
-                        val uninterrupted = isActive(handle)
-                        presentations.remove(request.acknowledgmentId, handle)
-                        if (uninterrupted) ForegroundAcknowledgmentResult.NewlyVerified(request)
-                        else ForegroundAcknowledgmentResult.Indeterminate
+                        synchronized(handle.lifecycleLock) {
+                            if (isActive(handle)) {
+                                presentations.remove(request.acknowledgmentId, handle)
+                                ForegroundAcknowledgmentResult.NewlyVerified(request)
+                            } else ForegroundAcknowledgmentResult.Indeterminate
+                        }
                     } else {
                         ForegroundAcknowledgmentResult.Indeterminate
                     }

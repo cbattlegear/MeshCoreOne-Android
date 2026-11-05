@@ -6,6 +6,8 @@ import java.io.File
 import java.io.IOException
 import java.nio.channels.FileChannel
 import java.nio.file.StandardOpenOption
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.UUID
 import javax.crypto.KeyGenerator
 import javax.crypto.Mac
@@ -127,6 +129,42 @@ class ForegroundWitnessAcknowledgmentVerifierTest {
         assertEquals(
             ForegroundAcknowledgmentResult.Rejected,
             f.verifier(processId = UUID.randomUUID()).verify(request),
+        )
+    }
+
+    @Test
+    fun synchronousRetirementDuringStagingPreventsAnActionGrant() = runBlocking {
+        val f = fixture()
+        val presentation = f.verifier.present(f.request)
+        val gate = SynchronizationGate()
+        f.synchronizationGate = gate
+        val staging = async(Dispatchers.IO) { f.verifier.recordExplicitAction(presentation) }
+        assertTrue(gate.entered.await(10, TimeUnit.SECONDS))
+
+        f.verifier.retire(presentation)
+        gate.release.countDown()
+
+        assertEquals(ForegroundAcknowledgmentStaging.Rejected, staging.await())
+        assertEquals(ForegroundAcknowledgmentResult.Rejected, f.verifier.verify(f.request))
+    }
+
+    @Test
+    fun synchronousRetirementDuringConsumptionNeverReturnsFreshAuthorization() = runBlocking {
+        val f = fixture()
+        val presentation = f.verifier.present(f.request)
+        assertEquals(ForegroundAcknowledgmentStaging.Staged, f.verifier.recordExplicitAction(presentation))
+        val gate = SynchronizationGate()
+        f.synchronizationGate = gate
+        val verification = async(Dispatchers.IO) { f.verifier.verify(f.request) }
+        assertTrue(gate.entered.await(10, TimeUnit.SECONDS))
+
+        f.verifier.retire(presentation)
+        gate.release.countDown()
+
+        assertEquals(ForegroundAcknowledgmentResult.Indeterminate, verification.await())
+        assertEquals(
+            ForegroundAcknowledgmentResult.AlreadyConsumed,
+            f.verifier(processId = UUID.randomUUID()).verify(f.request),
         )
     }
 
@@ -285,6 +323,7 @@ class ForegroundWitnessAcknowledgmentVerifierTest {
         )
         val authentication = TestAcknowledgmentAuthentication()
         var failAt: ForegroundWitnessAcknowledgmentVerifier.WritePoint? = null
+        @Volatile var synchronizationGate: SynchronizationGate? = null
         val failures = mutableListOf<StorageFailure>()
         val verifier = verifier()
 
@@ -302,6 +341,13 @@ class ForegroundWitnessAcknowledgmentVerifierTest {
         )
 
         fun synchronize(file: File) {
+            synchronizationGate?.let { gate ->
+                gate.entered.countDown()
+                if (!gate.release.await(10, TimeUnit.SECONDS)) {
+                    throw IOException("timed out waiting for acknowledgment synchronization release")
+                }
+                synchronizationGate = null
+            }
             FileChannel.open(file.toPath(), StandardOpenOption.READ).use { it.force(true) }
             FileChannel.open(file.parentFile.toPath(), StandardOpenOption.READ).use { it.force(true) }
         }
@@ -310,6 +356,11 @@ class ForegroundWitnessAcknowledgmentVerifierTest {
             SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READWRITE).use(action)
 
         fun record() = EnrollmentWitnessRecord(operation, UUID.randomUUID(), 1, WitnessPhase.AUTHORIZED, null)
+    }
+
+    private class SynchronizationGate {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
     }
 
     private class TestAcknowledgmentAuthentication : AcknowledgmentAuthentication {

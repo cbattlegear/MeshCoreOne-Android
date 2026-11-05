@@ -1,0 +1,110 @@
+# Direct-ACK producer contract repair
+
+## Binding and scope
+
+- Repository: `cbattlegear/MeshCoreOne-Android`; WP-201 contract-only repair.
+- Base: `41552c85b659396111cee6b0e0f70c404ac5a8ee`, clean at assignment.
+- Source: `db14559b39d32322b06477c6ae676112f583db50`; not advanced.
+- Trusted manifest SHA-256:
+  `11120a20d04408b3d21fac09180412df0490cabf1dafb8a3c98fe83e0fad31e4`.
+- Trusted manifest Git blob: `e81605857f5aa7b893dcd63224fb27a45d7b0f3a`;
+  policy Git blob: `b12794157978d6d90ab7508d4e2852fdc2d5e4a4`.
+- Actual session: `9d271f61-91db-4576-ab7f-129c1019f33b`.
+- Storage coordination: `f8058663-e138-4456-9d4d-6ad11522824c`;
+  service coordination: `13a03908-afb8-42bd-9c96-57a27920076e`.
+
+The immutable handoff is the commit containing this document and the two new
+Kotlin files. It changes no existing interface, consumer, assertion, DAO, schema,
+migration, build configuration or source inventory. It is not completion of the
+storage repair or WP-201 as a whole. No held candidate was inspected or imported.
+
+## Actual admission and reservation result
+
+The trusted `origin/HEAD` and `origin/main` both resolved to the base above.
+`python tools\android-port\local\reserve.py admit --wp WP-201 --path <path>
+--operation <operation>` returned these actual admissions:
+
+| Path | Operation | Capability |
+| --- | --- | --- |
+| `android/core/contracts/src/main/kotlin/com/meshcoreone/android/core/contracts/domain/DirectAckAuthority.kt` | `create` | `wp-owned` |
+| `android/core/contracts/src/test/kotlin/com/meshcoreone/android/core/contracts/domain/DirectAckAuthorityTest.kt` | `add-or-update-related-test` | `reviewed-support-test` |
+| `docs/android/evidence/WP-201/direct-ack-authority-contract.md` | `create` | `wp-owned` |
+| `docs/android/deviations/WP-201.md` | `modify` | `wp-owned` |
+
+The initial WP-201 claim, with the actual session/base and contract/evidence paths,
+returned `BLOCKED: Existing WP lease is bound to different source/base/manifest/backend`.
+No lease was transferred, released, recreated, inspected for custody or edited.
+The current local-authoring rule in `AUTOMATION.md` permits isolated admitted
+authoring after recording this historical advisory mismatch. The assignment
+identifies this worktree as the sole new contract producer; storage and service
+owners retain their distinct implementations. Admission is not merge acceptance.
+
+## Agreed API and behavioral boundary
+
+`DirectAckAuthority` is a separate capability, not a default implementation or a
+new parent of `MessagePersisting`. Its opaque lease/attempt markers have no public
+identity fields. The storage producer must privately issue and authenticate them.
+
+Activation uses caller-known request identity, monotonic same-epoch generation,
+retired-epoch fencing and atomic revocation. Logical begin registers the first
+wire request and predicted ACK before dispatch, binding the actual message
+incarnation/revision and optional exact pending-row incarnation/revision.
+Additional wire requests retain prior codes; actual acceptance adds its code to
+that same registered wire identity. Settlement can use a predicted early ACK,
+without waiting for the send call to return.
+
+Own failure, atomic ACK settlement, idempotent retry bookkeeping and exact pending
+completion validate persisted ownership in the write transaction. Generic
+message/queue writes, even same-value writes, invalidate authority across raw
+DAOs, retained delegates and other Room handles. Restore entries invalidate even
+when import skips the row. The three bookkeeping variants are `RetryStarted`,
+`RetryExhausted` and `ResendCountIncrement`; request-ID journaling prevents double
+increments after commit-then-throw. Pending completion must not delete a
+replacement row; a generic delete affecting zero rows does not mutate a row.
+
+Explicit `SEND`/`RESEND` mode preserves existing resend entry behavior for
+DELIVERED/FAILED baselines. Initial status is distinct from this claim's own
+phase/delivery receipt. Acceptance and retry bookkeeping do not relabel a terminal
+baseline SENT. A matching new resend ACK can settle its tuple; own failure cannot
+downgrade preexisting DELIVERED. A fresh logical claim fences its predecessor.
+
+The actual pinned `PersistenceStore+Messages.swift` and current-main
+`MessageDaos.kt` both preserve retry counters in `clearRetryingToSent`; this is
+not the counter-reset behavior reported from a consumer fake. No fake-store
+semantics or original assertions were adopted or changed here.
+
+Typed outcomes distinguish applied, exact already-applied history,
+already-delivered, invalid handle, stale lease, invalidated, missing, ineligible
+and conflicting operations. Immutable receipts retain wire bindings, bookkeeping
+and pending-completion operation identities, committed message snapshots and the
+historical delivered tuple separately from current permission. Historical delivery
+does not describe a replacement/current row or restore mutation authority.
+Inspection never issues a handle. Real storage exceptions and cancellation escape;
+neither is converted into fake success or an invented uncertain receipt.
+
+## Validation and limits
+
+Executed with Python **3.12.4** on native Windows, without Gradle:
+
+| Command | Actual outcome |
+| --- | --- |
+| `python tools\android-port\controller\validate.py` | Passed: 1,866 reference files, 64 WPs, 178 dependency edges; source/ownership/DAG validation |
+| `python tools\android-port\controller\verification_config.py --check` | Passed; feature verification remains unconfigured, not dependency/human acceptance |
+| `python tools\android-port\portmap.py` | Passed: 2,035 Kotlin dispositions, including both new files as WP-201 Android-only; headers are not feature acceptance |
+| `git diff --cached --check` | Passed: no whitespace errors in the staged handoff |
+| `git diff --quiet db14559b39d32322b06477c6ae676112f583db50 -- MC1Services\Sources\MC1Services\Services\MessageService+ACK.swift MC1Services\Sources\MC1Services\Services\MessageService+SendDM.swift MC1Services\Tests\MC1ServicesTests\Services\MessageServiceACKTests.swift` | Passed: these inspected ACK inputs match the source pin |
+
+Seven new test methods assert receipt-value semantics: unsigned predicted/actual
+codes, immutable wire/operation histories, exact RTT distinctions, historical
+delivery versus replacement/current authority, resend baseline versus own delivery,
+pending/operation identities and typed outcome payloads. These are supplemental
+contract tests, not original-case credit or a storage implementation oracle.
+
+**Compilation and test execution were not run.** The retained local execution owner
+`local-check:f516a7e271f444dd9cb2efcc8b995a16` was not bypassed or recovered.
+No readiness result, discovered/executed Kotlin test count, hosted check, generated
+Room export, migration, hardware or iOS execution is claimed. Seven methods authored
+does not mean seven tests discovered/passed. The receiving owners must compile and
+exercise the actual database/service/queue interleavings against this exact handoff.
+There is no durable-ingress promise for an ACK held only in RAM during storage
+failure followed by process death.

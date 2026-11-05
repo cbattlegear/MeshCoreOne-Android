@@ -38,6 +38,11 @@ class SourceDispositionTests(unittest.TestCase):
         self.assertIn("candidate.outputs.files.files.any { classDirs.contains(it.canonicalFile) }", guard)
         self.assertIn("Overlapping Kotlin test compiler outputs", guard)
         self.assertIn("!it.state.executed || it.state.failure != null", guard)
+        outside = 'task.path == ":platform:notifications:testDebugUnitTest" &&'
+        self.assertIn(outside, guard)
+        self.assertIn('source.isFile() && source.name.endsWith(".kt") && !absolute.startsWith(androidRoot)', guard)
+        self.assertLess(guard.index(outside), guard.index('if (absolute.startsWith(androidRoot)'))
+        self.assertIn("Notification Kotlin test source is outside android/", guard)
         self.assertIn('":app:testDebugUnitTest", ":core:ui:testDebugUnitTest"', guard)
         for marker in ('observe("START")', 'observe("DEPENDENCIES")',
                        'observe("SOURCES")', 'observe("END")', "WP003_TEST_SUITE|"):

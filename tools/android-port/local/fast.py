@@ -116,8 +116,10 @@ def execute(command, repo, environment, log):
 
 def notification_test_sources(repo, path):
     from controller.ci_evidence import read_test_sources
-    from controller.module_junit import validate_remapped_compilation
+    from controller.module_junit import module_sources, validate_remapped_compilation
 
+    if "platform/notifications" not in module_sources(repo):
+        return {}
     sources = read_test_sources(path, {"platform/notifications": "testDebugUnitTest"})
     validate_remapped_compilation(repo, sources, ["platform/notifications"])
     return sources

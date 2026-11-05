@@ -1397,9 +1397,10 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
         found, cursor, nesting = [], 0, []
         while cursor < len(arguments):
             value = arguments[cursor].strip("`")
-            if not nesting and value in ("minSdk", "maxSdk"):
+            named = not nesting and cursor + 1 < len(arguments) and arguments[cursor + 1] == "="
+            if named and value in ("minSdk", "maxSdk"):
                 raise PortError("Unsupported Robolectric SDK range in hosted test source")
-            if not nesting and value == "sdk" and cursor + 1 < len(arguments) and arguments[cursor + 1] == "=":
+            if named and value == "sdk":
                 cursor += 2
                 if cursor >= len(arguments):
                     raise PortError("Incomplete Robolectric SDK configuration in hosted test source")
@@ -1488,8 +1489,12 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
                         if not stack or stack.pop() != {")": "(", "]": "[", "}": "{"}[value]:
                             raise PortError("Unbalanced Kotlin annotation in hosted test source")
                         if not stack:
-                            if config_annotation and sdk_configurations is not None:
-                                configured_sdk = parse_sdk_values(tokens[argument_start:index])
+                            if sdk_configurations is not None:
+                                annotation_sdk = parse_sdk_values(tokens[argument_start:index])
+                                if config_annotation:
+                                    configured_sdk = annotation_sdk
+                                elif annotation_sdk is not None:
+                                    raise PortError("Unresolved SDK-bearing annotation in hosted test source: " + name)
                             index += 1
                             break
                     index += 1

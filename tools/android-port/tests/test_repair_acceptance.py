@@ -1794,6 +1794,18 @@ class RepairExecutionTests(unittest.TestCase):
                 _kotlin_junit_methods(
                     source.replace("sdk = [31, 37]", parameter + " = 31"), sdk_configurations={},
                 )
+        for parameter in ("sdk", "`sdk`"):
+            with self.subTest(parameter=parameter), self.assertRaisesRegex(PortError, "Unresolved SDK-bearing"):
+                _kotlin_junit_methods(
+                    source.replace("@Config(sdk = [31, 37])", "@DeviceConfig(" + parameter + " = [31, 37])"),
+                    sdk_configurations={},
+                )
+        configurations = {}
+        _kotlin_junit_methods(
+            source.replace("@Config(sdk = [31, 37])", "@Unrelated(minSdk) @Config(sdk = [31, 37])"),
+            sdk_configurations=configurations,
+        )
+        self.assertEqual(configurations, {"required": (31, 37)})
         inherited = """
             import org.junit.Test
             import org.robolectric.annotation.Config

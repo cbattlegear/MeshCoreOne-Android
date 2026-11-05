@@ -367,11 +367,15 @@ class SdkFamilyTest {
         })
         with self.assertRaisesRegex(PortError, "differs from immutable notification test sources"):
             fast.notification_test_sources(self.repo, path)
+        write_inventory({**expected, "shared/Outside.kt": "0" * 40})
+        with self.assertRaisesRegex(PortError, "Malformed or duplicate compiled test source"):
+            fast.notification_test_sources(self.repo, path)
 
-    def test_default_full_fast_main_binds_only_current_invocation_compiler_inventory(self):
+    def test_default_full_fast_main_binds_only_current_invocation_compiler_inventory(self, notifications=True):
         from controller import ci, ci_environment, ci_evidence
 
-        self.notifications()
+        if notifications:
+            self.notifications()
         fast_path = Path(__file__).resolve().parents[1] / "local" / "fast.py"
         spec = importlib.util.spec_from_file_location("test_default_fast_main", fast_path)
         fast = importlib.util.module_from_spec(spec)
@@ -381,12 +385,17 @@ class SdkFamilyTest {
         (work / "toolchain/environment.json").write_text(json.dumps({
             "java_home": str(self.root / "fixture-java"),
         }), encoding="utf-8")
-        expected = self.compiled_notification_sources()["platform/notifications"]
+        expected = (
+            self.compiled_notification_sources()["platform/notifications"] if notifications else {
+                path: blob for path, blob in module_sources(self.repo)["core/model"].items()
+                if "/src/test/" in path
+            }
+        )
         record = {
-            "task": ":platform:notifications:testDebugUnitTest",
+            "task": ":platform:notifications:testDebugUnitTest" if notifications else ":core:model:test",
             "sources": [{"path": path, "blob": blob} for path, blob in sorted(expected.items())],
         }
-        for mode in ("current", "missing", "stale"):
+        for mode in (("current", "missing", "stale") if notifications else ("current",)):
             output = self.root / ("fast-" + mode)
             output.mkdir()
             inventory_path = output / "gradle-test-sources.jsonl"
@@ -395,7 +404,7 @@ class SdkFamilyTest {
             def execute(command, repo, environment, log):
                 if log.name != "gradle-scaffold.log":
                     return
-                self.assertIn(":platform:notifications:testDebugUnitTest", command)
+                self.assertEqual(":platform:notifications:testDebugUnitTest" in command, notifications)
                 self.assertEqual(command[-2:], [
                     "--init-script",
                     str(self.repo / "tools/android-port/controller/verify_candidate_task_graph.gradle"),
@@ -409,7 +418,8 @@ class SdkFamilyTest {
                 self.report("core/database", runner="testDebugUnitTest")
                 self.report("app", runner="testDebugUnitTest")
                 self.report("core/contracts")
-                notification_report(self.repo)
+                if notifications:
+                    notification_report(self.repo)
                 if mode != "missing":
                     actual = json.loads(json.dumps(record))
                     if mode == "stale":
@@ -428,6 +438,12 @@ class SdkFamilyTest {
                     patch.object(ci_environment, "candidate_environment", return_value={}), \
                     patch.object(ci_environment, "verify_wrapper"), \
                     patch.object(ci, "validate_candidate_task_graph", return_value={"tasks": 1}), \
+                    patch.object(ci, "TASKS", {
+                        **ci.TASKS, "scaffold": [
+                            task for task in ci.TASKS["scaffold"]
+                            if notifications or task != ":platform:notifications:testDebugUnitTest"
+                        ],
+                    }), \
                     patch.object(ci_evidence, "collect_suites", return_value={}), \
                     patch.object(ci_evidence, "collect_lint", return_value={}), \
                     patch.object(ci_evidence, "validate_graph_runtime"), \
@@ -441,6 +457,12 @@ class SdkFamilyTest {
             if mode == "current":
                 self.assertIn('"compiled_test_sources"', text.getvalue())
                 self.assertIn('"remapped_jvm_inputs"', text.getvalue())
+                if not notifications:
+                    self.assertIn('"remapped_jvm_inputs": {}', text.getvalue())
+                    self.assertNotIn("platform:notifications", text.getvalue())
+
+    def test_default_full_fast_main_does_not_require_absent_notification_module(self):
+        self.test_default_full_fast_main_binds_only_current_invocation_compiler_inventory(notifications=False)
 
     def test_future_candidate_named_case_is_mandatory_not_a_fixed_count(self):
         self.notifications()
@@ -626,6 +648,39 @@ class ChildTest : ConfiguredBase() { @Test fun inheritedSdk() {} }
         self.assertEqual(check_module_tests(
             self.repo, self.compiled_notification_sources(),
         )["platform/notifications"]["passed"], 7)
+
+    def test_cross_file_sdk_alias_cannot_hide_missing_execution(self):
+        self.notifications()
+        self.source("platform/notifications", "src/test/kotlin/DeviceConfig.kt", """
+package sample
+typealias DeviceConfig = org.robolectric.annotation.Config
+""")
+        relative = "src/test/kotlin/AliasedTest.kt"
+        source = """
+package sample
+import org.junit.Test
+@DeviceConfig(sdk = [31, 37])
+class AliasedTest { @Test fun required() {} }
+"""
+        self.source("platform/notifications", relative, source)
+        self.command("add", "--all")
+        self.command("commit", "--quiet", "-m", "unresolved cross-file SDK alias")
+        notification_report(self.repo, NOTIFICATION_CASES | {("sample.AliasedTest", "required")})
+        with self.assertRaisesRegex(PortError, "Unresolved SDK-bearing annotation"):
+            check_module_tests(self.repo, self.compiled_notification_sources())
+        self.source("platform/notifications", relative, source.replace(
+            "@DeviceConfig", "@org.robolectric.annotation.Config",
+        ))
+        self.command("add", "--all")
+        self.command("commit", "--quiet", "-m", "explicit canonical SDK annotation")
+        with self.assertRaisesRegex(PortError, "SDK cases"):
+            check_module_tests(self.repo, self.compiled_notification_sources())
+        notification_report(self.repo, NOTIFICATION_CASES | {
+            ("sample.AliasedTest", "required"), ("sample.AliasedTest", "required[31]"),
+        })
+        self.assertEqual(check_module_tests(
+            self.repo, self.compiled_notification_sources(),
+        )["platform/notifications"]["passed"], 8)
 
     def test_unsupported_java_notification_test_input_fails_closed(self):
         self.notifications()

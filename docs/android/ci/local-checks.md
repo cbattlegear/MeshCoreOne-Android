@@ -374,6 +374,9 @@ compiler-source collector. Both default and affected local routes load these
 owned readers and use that collector, rather than importing older candidate
 helpers or changing candidate product bytes. A missing owned dependency fails
 closed before execution; it never falls back to a candidate copy.
+An older candidate without the notification module has no notification runner
+or notification-specific inventory obligation; selection still comes from its
+immutable committed module inputs.
 The actual resolved production graph is checked against the selected consumer
 closure too: a consumer missed by static declaration inspection fails the
 affected run and explicitly requires full scaffold, never a passing partial result.
@@ -565,14 +568,18 @@ fail closed rather than becoming an unconfigured family. JUnit-free conventional
 helpers receive separate immutable compilation and JUnit-free lineage proof;
 positive named module cases remain mandatory. This does not establish a
 helper-to-consumer relationship or prove that an individual helper was executed.
-Dynamic SDK
+Unresolved SDK-bearing annotations (including cross-file Config aliases) also
+fail closed rather than becoming unconfigured tests. Dynamic SDK
 expressions, SDK ranges, unsupported families and missing/duplicate/unexpected
 family executions fail closed. These names prove JVM runner discovery, not device
 coverage. The exact candidate build, production, conventional test
 and approved remapped input blobs are recorded as `remapped_jvm_inputs` in the same
 run log. Tracked changes and untracked additions under those inputs are refused,
 and the actual compiled Kotlin test-source inventory must exactly match candidate
-blobs across both source roots. The default full local pre-push route installs the
+blobs across both source roots.
+Notification Kotlin compiler inputs outside `android/` are rejected by the
+collector before source filtering, rather than omitted from the equality proof.
+The default full local pre-push route installs the
 same candidate task-graph collector and requires fresh compiler-source evidence
 before accepting its module results; it does not reconstruct compilation inputs
 from the working tree. These are JVM/Robolectric observations, never API/device or

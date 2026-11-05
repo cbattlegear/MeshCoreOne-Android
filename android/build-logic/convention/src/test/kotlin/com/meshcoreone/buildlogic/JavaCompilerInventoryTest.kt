@@ -78,8 +78,9 @@ class JavaCompilerInventoryTest {
             import org.gradle.api.tasks.testing.Test
             plugins { id 'mesh.android.library' }
             ${if (additional) """
-                tasks.withType(JavaCompile).matching { it.name == 'compileDebugUnitTestJavaWithJavac' }.configureEach {
-                    source(rootProject.file('$javaRelative'))
+                gradle.projectsEvaluated {
+                    tasks.named('compileDebugUnitTestJavaWithJavac', JavaCompile).get()
+                        .source(rootProject.file('$javaRelative'))
                 }
             """.trimIndent() else ""}
             tasks.matching { it.name == 'compileDebugUnitTestKotlin' }.configureEach {

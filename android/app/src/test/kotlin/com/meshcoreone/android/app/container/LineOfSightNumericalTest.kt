@@ -214,12 +214,14 @@ class LineOfSightNumericalTest {
     fun asymmetricObstructionAndOffsetSegmentReachTheActualAppAdapter() {
         val profile = listOf(
             ElevationSample(sanFrancisco, 100.0, 0.0),
+            ElevationSample(testRepeaterCoordinate, 109.0, 1500.0),
             ElevationSample(testRepeaterCoordinate, 160.0, 3000.0),
             ElevationSample(oakland, 130.0, 6000.0),
         )
         val direct = AppLineOfSightPathAnalyzer.analyzePath(profile, 10.0, 15.0, 906.0, 1.33)
         val offset = profile.map { ElevationSample(it.coordinate, it.elevation, it.distanceFromAMeters + 9000.0) }
         val segment = AppLineOfSightPathAnalyzer.analyzePathSegment(offset, 10.0, 15.0, 906.0, 1.33)
+        val reversed = AppLineOfSightPathAnalyzer.analyzePath(profile, 15.0, 10.0, 906.0, 1.33)
         for (result in listOf(direct, segment)) {
             assertEquals(6000.0, result.distanceMeters)
             assertNear(107.1555889612, result.freeSpacePathLoss)
@@ -229,12 +231,15 @@ class LineOfSightNumericalTest {
             assertEquals(ClearanceStatus.BLOCKED, result.clearanceStatus)
             assertEquals(906.0, result.frequencyMHz)
             assertEquals(1.33, result.refractionK)
-            val obstruction = result.obstructionPoints.single()
-            assertNear(33.0310718328, obstruction.obstructionHeightMeters)
-            assertNear(-148.2623174854, obstruction.fresnelClearancePercent)
+            assertEquals(2, result.obstructionPoints.size)
+            assertNear(-9.3516961254, result.obstructionPoints[0].obstructionHeightMeters)
+            assertNear(48.4694255457, result.obstructionPoints[0].fresnelClearancePercent)
+            assertNear(33.0310718328, result.obstructionPoints[1].obstructionHeightMeters)
+            assertNear(-148.2623174854, result.obstructionPoints[1].fresnelClearancePercent)
         }
-        assertEquals(3000.0, direct.obstructionPoints.single().distanceFromAMeters)
-        assertEquals(12000.0, segment.obstructionPoints.single().distanceFromAMeters)
+        assertEquals(listOf(1500.0, 3000.0), direct.obstructionPoints.map { it.distanceFromAMeters })
+        assertEquals(listOf(10500.0, 12000.0), segment.obstructionPoints.map { it.distanceFromAMeters })
+        assertEquals(listOf(3000.0), reversed.obstructionPoints.map { it.distanceFromAMeters })
 
         val clear = AppLineOfSightPathAnalyzer.analyzePath(
             profile.map { ElevationSample(it.coordinate, 100.0, it.distanceFromAMeters) }, 50.0, 50.0, 906.0, 1.33,

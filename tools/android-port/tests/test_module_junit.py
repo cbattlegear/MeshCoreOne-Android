@@ -682,6 +682,53 @@ class AliasedTest { @Test fun required() {} }
             self.repo, self.compiled_notification_sources(),
         )["platform/notifications"]["passed"], 8)
 
+    def test_compiled_base_lifecycle_annotations_work_in_both_notification_roots(self):
+        self.notifications()
+        module = "platform/notifications"
+        base = "src/test/kotlin/LifecycleBase.kt"
+        self.source(module, base, "package sample\nopen class LifecycleBase {}\n")
+        cases = set(NOTIFICATION_CASES)
+        for root, name in (("src/test/kotlin", "ConventionalLifecycleTest"),
+                           (NOTIFICATION_ROOT, "RemappedLifecycleTest")):
+            with self.subTest(root=root):
+                self.source(module, root + "/" + name + ".kt", f"""
+package sample
+import org.junit.Test
+import org.junit.Before
+import org.junit.After
+@org.robolectric.annotation.Config(sdk = [31, 37])
+class {name} : LifecycleBase() {{
+    @Before fun prepare() {{}}
+    @After fun finish() {{}}
+    @Test fun required() {{}}
+}}
+""")
+                self.command("add", "--all")
+                self.command("commit", "--quiet", "-m", "compiled base and lifecycle annotations")
+                identities = {("sample." + name, "required"), ("sample." + name, "required[31]")}
+                cases.update(identities)
+                notification_report(self.repo, cases)
+                compiled = self.compiled_notification_sources()
+                self.assertEqual(check_module_tests(self.repo, compiled)[module]["passed"], len(cases))
+                notification_report(self.repo, cases - {("sample." + name, "required[31]")})
+                with self.assertRaisesRegex(PortError, "SDK cases"):
+                    check_module_tests(self.repo, compiled)
+                notification_report(self.repo, cases)
+                broken = {module: dict(compiled[module])}
+                del broken[module]["android/" + module + "/" + base]
+                with self.assertRaisesRegex(PortError, "compilation"):
+                    check_module_tests(self.repo, broken)
+        self.source(module, base, """
+package sample
+import org.junit.Test
+open class LifecycleBase { @Test fun inheritedRequired() {} }
+""")
+        self.command("add", "--all")
+        self.command("commit", "--quiet", "-m", "inherited JUnit declarations remain unsupported")
+        notification_report(self.repo, cases | {("sample.LifecycleBase", "inheritedRequired")})
+        with self.assertRaisesRegex(PortError, "inherited Kotlin JUnit declarations"):
+            check_module_tests(self.repo, self.compiled_notification_sources())
+
     def test_unsupported_java_notification_test_input_fails_closed(self):
         self.notifications()
         relative = "src/test/java/com/meshcoreone/android/platform/notifications/messaging/AdapterTest.java"

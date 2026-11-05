@@ -170,7 +170,7 @@ def require_remapped_cases(repo, module, directory, inputs, compiled_sources, re
     if module not in JVM_REMAPS:
         return
     from .ci_evidence import suite_case_ids
-    from .repair_acceptance import _kotlin_junit_methods, validate_hosted_methods
+    from .repair_acceptance import _kotlin_junit_lineage, _kotlin_junit_methods, validate_hosted_methods
 
     sources = _notification_remapped_sources(module, inputs)
     expected = _notification_jvm_test_sources(module, inputs)
@@ -179,6 +179,8 @@ def require_remapped_cases(repo, module, directory, inputs, compiled_sources, re
         raise PortError("Missing immutable compiled notification test-source inventory")
     if not sources or not expected or compiled_sources[module] != expected:
         raise PortError("Actual JVM compilation differs from immutable notification test sources: " + module)
+    candidate_tree = candidate_source_tree(repo, revision)
+    lineage = _kotlin_junit_lineage(candidate_tree, repo, compiled_sources)
     records = suite_case_ids(directory)
     observed = {(case["class"], case["method"]) for case in records}
     if not required <= observed:
@@ -239,7 +241,7 @@ def require_remapped_cases(repo, module, directory, inputs, compiled_sources, re
         classes, sdk_configurations = {}, {}
         methods = _kotlin_junit_methods(
             git(repo, "cat-file", "blob", inputs[path]).decode("utf-8"),
-            classes, sdk_configurations=sdk_configurations,
+            classes, sdk_configurations=sdk_configurations, inheritance=lineage(path),
         )
         if not methods or any(kind != "test" for kind in methods.values()):
             raise PortError("Unsupported remapped notification JVM test family: " + path)
@@ -255,7 +257,7 @@ def require_remapped_cases(repo, module, directory, inputs, compiled_sources, re
         classes, sdk_configurations = {}, {}
         methods = _kotlin_junit_methods(
             git(repo, "cat-file", "blob", blob).decode("utf-8"),
-            classes, sdk_configurations=sdk_configurations,
+            classes, sdk_configurations=sdk_configurations, inheritance=lineage(path),
         )
         if any(kind != "test" for kind in methods.values()):
             raise PortError("Unsupported conventional notification JVM test family: " + path)
@@ -271,7 +273,7 @@ def require_remapped_cases(repo, module, directory, inputs, compiled_sources, re
         })
     validate_hosted_methods(
         {"schema_version": 3, "kind": "whole-wp", "coverage": coverage},
-        candidate_source_tree(repo, revision), repo, {module: records}, compiled_sources,
+        candidate_tree, repo, {module: records}, compiled_sources,
         compiled_helpers=compiled_helpers,
     )
 

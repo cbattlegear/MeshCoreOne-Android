@@ -1676,19 +1676,11 @@ class _KotlinJUnitLineage:
         return names
 
 
-def validate_hosted_methods(scope, candidate_tree, repo, executed, compiled_sources, *, compiled_helpers=()):
+def _kotlin_junit_lineage(candidate_tree, repo, compiled_sources):
     from .staging import object_bytes
 
-    verification = verification_only(scope)
     lineages = {}
     external_sources = None
-
-    def require_compiled(path, blob):
-        module = re.match(r"android/((?:core|feature|platform)/[^/]+|app)/", path)
-        if (module is None or not isinstance(compiled_sources, dict)
-                or not isinstance(compiled_sources.get(module[1]), dict)
-                or compiled_sources[module[1]].get(path) != blob):
-            raise PortError("Hosted test source was not compiled for the selected test task")
 
     def external_inventory():
         nonlocal external_sources
@@ -1755,6 +1747,22 @@ def validate_hosted_methods(scope, candidate_tree, repo, executed, compiled_sour
                 candidate_tree, sources, read_source, external_inventory,
             )
         return lineages[module].resolve
+
+    return lineage
+
+
+def validate_hosted_methods(scope, candidate_tree, repo, executed, compiled_sources, *, compiled_helpers=()):
+    from .staging import object_bytes
+
+    verification = verification_only(scope)
+    lineage = _kotlin_junit_lineage(candidate_tree, repo, compiled_sources)
+
+    def require_compiled(path, blob):
+        module = re.match(r"android/((?:core|feature|platform)/[^/]+|app)/", path)
+        if (module is None or not isinstance(compiled_sources, dict)
+                or not isinstance(compiled_sources.get(module[1]), dict)
+                or compiled_sources[module[1]].get(path) != blob):
+            raise PortError("Hosted test source was not compiled for the selected test task")
 
     if (
         not isinstance(compiled_helpers, (list, tuple))

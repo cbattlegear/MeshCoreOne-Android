@@ -575,6 +575,10 @@ by the dirty-input guard. JUnit-free conventional
 helpers receive separate immutable compilation and JUnit-free lineage proof;
 positive named module cases remain mandatory. This does not establish a
 helper-to-consumer relationship or prove that an individual helper was executed.
+Both preliminary SDK-family scans and final method validation use the same
+immutable compiled-source lineage resolver. Supported lifecycle annotations on
+tests extending a compiled JUnit-free base remain recognizable; missing base
+compilation and inherited JUnit declarations still fail closed.
 Unresolved SDK-bearing annotations (including cross-file Config aliases) also
 fail closed rather than becoming unconfigured tests. Dynamic SDK
 expressions, SDK ranges, unsupported families and missing/duplicate/unexpected

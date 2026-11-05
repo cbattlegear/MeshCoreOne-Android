@@ -22,9 +22,6 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.R
 import com.meshcoreone.android.app.container.AppSettingsFeature
-import com.meshcoreone.android.app.container.onboarding.AppOnboardingWiFiPort
-import com.meshcoreone.android.app.container.onboarding.AppStateOnboardingHost
-import com.meshcoreone.android.app.container.onboarding.OnboardingConnectionHost
 import com.meshcoreone.android.app.platform.*
 import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.core.model.*
@@ -43,8 +40,11 @@ import com.meshcoreone.android.feature.settings.app.backup.ui.*
 import com.meshcoreone.android.feature.settings.app.diagnostics.*
 import com.meshcoreone.android.feature.settings.app.diagnostics.ui.*
 import com.meshcoreone.android.feature.settings.app.nodeconfig.*
-import com.meshcoreone.android.feature.onboarding.WiFiConnectionCoordinator
+import com.meshcoreone.android.feature.onboarding.OnboardingPermissionKind
+import com.meshcoreone.android.feature.onboarding.ui.DeviceScannerSheetContent
 import com.meshcoreone.android.feature.onboarding.ui.WiFiConnectionSheetContent
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import com.meshcoreone.android.feature.settings.device.*
 import com.meshcoreone.android.feature.settings.device.ui.*
 import com.meshcoreone.android.feature.settings.device.SettingsDetail as Page
@@ -74,7 +74,7 @@ internal fun AppSettingsContent(
     var about by remember { mutableStateOf(false) }
     var rendering by remember { mutableStateOf(false) }
     var deviceSelection by remember { mutableStateOf(false) }
-    var wifiConnection by remember { mutableStateOf(false) }
+    val wifiConnection by feature.selectionWifiVisible.collectAsState()
     val close = { external = null; publicKey = null; licenses = false; about = false; rendering = false; configPage = null }
     BackHandler(external != null || publicKey != null || licenses || about || rendering || configPage != null, close)
     val navigator = remember(coordinator) {
@@ -227,8 +227,9 @@ internal fun AppSettingsContent(
         else -> error("Unregistered Settings page: $page")
     }
     if (deviceSelection) AppDeviceSelection(feature, onDismiss = { deviceSelection = false },
-        onWifi = { wifiConnection = true })
-    if (wifiConnection) AppSelectionWifi(feature) { wifiConnection = false }
+        onWifi = feature::showSelectionWifi)
+    if (wifiConnection) AppSelectionWifi(feature)
+    AppSelectionPlatform(feature)
 }
 
 @Composable
@@ -255,7 +256,7 @@ private fun AppDeviceSelection(feature: AppSettingsFeature, onDismiss: () -> Uni
         AlertDialog(onDismissRequest = onDismiss, text = { CircularProgressIndicator() },
             confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(L.commonCancel)) } })
     } else DeviceSelectionSheet(loaded, elsewhere,
-        onSelect = { device -> onDismiss(); feature.connectSavedDevice(device) },
+        onSelect = { device -> onDismiss(); feature.selectSavedDevice(device) },
         onSetUp = { accessory -> feature.queueDeviceSetup(accessory); onDismiss() },
         onScan = { feature.queueDeviceScan(); onDismiss() },
         onConnectViaWifi = { onDismiss(); onWifi() },
@@ -265,23 +266,56 @@ private fun AppDeviceSelection(feature: AppSettingsFeature, onDismiss: () -> Uni
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AppSelectionWifi(feature: AppSettingsFeature, onDismiss: () -> Unit) {
-    val holder = remember(feature) {
-        WiFiConnectionCoordinator(
-            feature.container.uiScope,
-            AppOnboardingWiFiPort(
-                object : OnboardingConnectionHost by AppStateOnboardingHost(feature.container) {
-                    override suspend fun connectWiFi(host: String, port: UShort) =
-                        feature.container.appState.connectViaWiFi(host, port, forceFullSync = true)
-                },
-            ), onDismiss,
+private fun AppSelectionWifi(feature: AppSettingsFeature) {
+    val holder = feature.selectionWifi
+    val state by holder.state.collectAsState()
+    val sheet = rememberModalBottomSheetState(
+        confirmValueChange = { it != SheetValue.Hidden || !holder.state.value.isConnecting },
+    )
+    ModalBottomSheet(onDismissRequest = feature::dismissSelectionWifi, sheetState = sheet) {
+        WiFiConnectionSheetContent(
+            state, holder::setAddress, holder::setPort, feature::submitSelectionWifi, feature::dismissSelectionWifi,
         )
     }
-    val state by holder.state.collectAsState()
-    ModalBottomSheet(onDismissRequest = { if (!state.isConnecting) onDismiss() }) {
-        WiFiConnectionSheetContent(
-            state, holder::setAddress, holder::setPort, holder::connect, onDismiss,
-        )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AppSelectionPlatform(feature: AppSettingsFeature) {
+    val platform = feature.container.onboarding ?: return
+    val action by feature.selectionWifiAction.collectAsState()
+    val denied by feature.selectionPermissionDenied.collectAsState()
+    val requester = platform.rememberPermissionRequester(feature::selectionPermissionResult)
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { feature.refreshSelectionPermission() }
+    LaunchedEffect(action) {
+        if (feature.beginSelectionPermissionRequest()) requester(OnboardingPermissionKind.LOCAL_NETWORK)
+    }
+    if (action != null && denied) AlertDialog(
+        onDismissRequest = feature::cancelSelectionPermission,
+        text = {
+            Text(uiString(UiErrorMapper().connectionIssue(
+                com.meshcoreone.android.core.contracts.domain.ConnectionIssue.PermissionDenied(
+                    com.meshcoreone.android.core.contracts.domain.Capability.LOCAL_NETWORK,
+                ),
+            )))
+        },
+        confirmButton = {
+            TextButton(onClick = platform::openAppSettings) {
+                Text(stringResource(com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings.permissionsOpenSettings))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = feature::cancelSelectionPermission) { Text(stringResource(L.commonCancel)) }
+        },
+    )
+    val fallback = platform.pairing.scanFallback
+    val requested by (fallback?.isRequested ?: remember { MutableStateFlow(false) }).collectAsState()
+    val permissions by platform.permissions.snapshot.collectAsState()
+    if (fallback != null && requested) {
+        ModalBottomSheet(fallback::cancel, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+            val discoveries by remember(fallback) { fallback.discoveries() }.collectAsState(emptyList())
+            DeviceScannerSheetContent(discoveries, permissions, fallback::select, fallback::cancel)
+        }
     }
 }
 

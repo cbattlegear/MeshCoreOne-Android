@@ -301,7 +301,7 @@ internal class FixedNotificationPreferences : NotificationPreferencesPort {
 }
 
 internal fun newConnectivity(
-    pairing: HarnessPairingService = HarnessPairingService(),
+    pairing: com.meshcoreone.android.core.connectivity.pairing.DevicePairingService = HarnessPairingService(),
     currentLink: () -> com.meshcoreone.android.core.connectivity.ble.BleLinkSnapshot? = { null },
     onForeground: (Boolean) -> Unit = {},
     systemLinks: SystemLinkProbe = NoSystemLinks,

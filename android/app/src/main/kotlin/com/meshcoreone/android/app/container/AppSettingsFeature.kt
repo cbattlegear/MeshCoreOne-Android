@@ -19,6 +19,12 @@ import com.meshcoreone.android.core.services.remote.NodeConfigContactSaveFailure
 import com.meshcoreone.android.core.services.remote.NodeConfigService
 import com.meshcoreone.android.core.services.remote.ImportStep
 import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings as S
+import com.meshcoreone.android.app.container.onboarding.AppOnboardingWiFiPort
+import com.meshcoreone.android.app.container.onboarding.AppStateOnboardingHost
+import com.meshcoreone.android.app.container.onboarding.OnboardingConnectionHost
+import com.meshcoreone.android.feature.onboarding.OnboardingPermissionKind
+import com.meshcoreone.android.feature.onboarding.PermissionStatus
+import com.meshcoreone.android.feature.onboarding.WiFiConnectionCoordinator
 import java.time.Instant
 import java.util.UUID
 import java.util.logging.Level
@@ -90,6 +96,92 @@ class AppSettingsFeature private constructor(
             (device.connectionMethods.isEmpty() || device.connectionMethods.any { !it.isWiFi }) &&
                 container.isDeviceConnectedToOtherApp(device.id)
         }.map { it.id }.toSet()
+
+    internal val selectionWifiVisible = MutableStateFlow(false)
+    internal val selectionWifi = WiFiConnectionCoordinator(
+        scope, AppOnboardingWiFiPort(object : OnboardingConnectionHost by AppStateOnboardingHost(container) {
+            override suspend fun connectWiFi(host: String, port: UShort) =
+                app.connectViaWiFi(host, port, forceFullSync = true)
+        }),
+    ) { selectionWifiVisible.value = false }
+
+    internal sealed interface WifiAction {
+        data class Saved(val device: DeviceDTO) : WifiAction
+        data object Manual : WifiAction
+    }
+
+    internal val selectionWifiAction = MutableStateFlow<WifiAction?>(null)
+    internal val selectionPermissionDenied = MutableStateFlow(false)
+    internal var selectionPermissionRequested = false
+        private set
+
+    internal fun showSelectionWifi() {
+        selectionWifi.reset()
+        selectionWifiVisible.value = true
+    }
+
+    internal fun dismissSelectionWifi() {
+        if (!selectionWifi.state.value.isConnecting) {
+            if (selectionWifiAction.value == WifiAction.Manual) cancelSelectionPermission()
+            selectionWifiVisible.value = false
+        }
+    }
+
+    internal fun selectSavedDevice(device: DeviceDTO) {
+        if (device.connectionMethods.any { it.isWiFi }) requestSelectionWifi(WifiAction.Saved(device))
+        else connectSavedDevice(device)
+    }
+
+    internal fun submitSelectionWifi() = requestSelectionWifi(WifiAction.Manual)
+
+    private fun requestSelectionWifi(action: WifiAction) {
+        if (selectionWifiAction.value != null || selectionWifi.state.value.isConnecting) return
+        selectionWifiAction.value = action
+        refreshSelectionPermission()
+    }
+
+    internal fun refreshSelectionPermission() {
+        if (selectionWifiAction.value == null) return
+        val platform = container.onboarding
+        if (platform == null) {
+            cancelSelectionPermission()
+            report("Wi-Fi permission requester is unavailable", IllegalStateException("Wi-Fi permission requester is unavailable"))
+            return
+        }
+        val permissions = platform.permissions
+        permissions.refresh()
+        when (permissions.snapshot.value.localNetwork) {
+            PermissionStatus.GRANTED -> {
+                val action = selectionWifiAction.value
+                cancelSelectionPermission()
+                when (action) {
+                    is WifiAction.Saved -> connectSavedDevice(action.device)
+                    WifiAction.Manual -> selectionWifi.connect()
+                    null -> Unit
+                }
+            }
+            PermissionStatus.DENIED -> selectionPermissionDenied.value = true
+            PermissionStatus.NOT_DETERMINED -> Unit
+        }
+    }
+
+    internal fun beginSelectionPermissionRequest(): Boolean {
+        if (selectionWifiAction.value == null || selectionPermissionRequested || selectionPermissionDenied.value) return false
+        selectionPermissionRequested = true
+        return true
+    }
+
+    internal fun selectionPermissionResult() {
+        requireNotNull(container.onboarding).permissions.onRequestFinished(OnboardingPermissionKind.LOCAL_NETWORK)
+        selectionPermissionRequested = false
+        refreshSelectionPermission()
+    }
+
+    internal fun cancelSelectionPermission() {
+        selectionWifiAction.value = null
+        selectionPermissionDenied.value = false
+        selectionPermissionRequested = false
+    }
 
     internal fun connectSavedDevice(device: DeviceDTO): Job = scope.launch {
         try {

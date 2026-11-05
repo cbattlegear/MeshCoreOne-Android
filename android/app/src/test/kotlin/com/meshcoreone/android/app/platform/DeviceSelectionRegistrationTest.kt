@@ -9,6 +9,15 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import com.meshcoreone.android.MainActivity
 import com.meshcoreone.android.app.container.*
 import com.meshcoreone.android.app.container.onboarding.SystemPairingSetupHost
+import com.meshcoreone.android.app.container.onboarding.OnboardingPlatform
+import com.meshcoreone.android.app.container.onboarding.WriteBehindOnboardingFlags
+import com.meshcoreone.android.app.container.onboarding.FakePermissionFacts
+import com.meshcoreone.android.core.connectivity.permissions.ConnectivityPermission
+import com.meshcoreone.android.core.connectivity.pairing.BluetoothScanPairingService
+import com.meshcoreone.android.core.connectivity.pairing.DevicePairingService
+import com.meshcoreone.android.core.connectivity.ble.BleScanCoordinator
+import com.meshcoreone.android.core.connectivity.ble.BleScanGateway
+import com.meshcoreone.android.core.connectivity.ble.DiscoveredDevice
 import com.meshcoreone.android.app.navigation.AppSettingsContent
 import com.meshcoreone.android.app.state.PairingFailureKind
 import com.meshcoreone.android.core.ble.BleError
@@ -41,6 +50,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowDialog
+import org.robolectric.Shadows.shadowOf
 
 @Config(sdk = [31], qualifiers = "en-rUS-w360dp-h900dp")
 class DeviceSelectionRegistrationTest : RoomProcessTest() {
@@ -49,9 +59,22 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
     private suspend fun TestScope.withSettings(
         persistence: PersistenceStoreProtocol = store,
         systemLinks: SystemLinkProbe = NoSystemLinks,
+        permissionFacts: FakePermissionFacts = FakePermissionFacts(
+            sdk = android.os.Build.VERSION.SDK_INT, granted = ConnectivityPermission.entries.toSet(),
+        ),
+        pairingService: DevicePairingService? = null,
+        scans: BleScanCoordinator = newScans(),
+        openSettings: () -> Unit = {},
         test: suspend (ContainerHarness, AppSettingsFeature) -> Unit,
     ) {
-        val h = ContainerHarness(this, store, persistenceOverride = persistence, systemLinks = systemLinks)
+        val platform = OnboardingPlatform(
+            WriteBehindOnboardingFlags(emptyMap(), backgroundScope, { _, _ -> }),
+            permissionFacts, scans = scans, openAppSettings = openSettings, sdkInt = permissionFacts.sdk,
+        )
+        val h = ContainerHarness(
+            this, store, persistenceOverride = persistence, systemLinks = systemLinks,
+            pairingService = pairingService, scans = scans, onboardingPlatform = platform,
+        )
         val storage = MeshCoreStorage.get(compose.activity)
         try {
             val feature = AppSettingsFeature.create(h.container, storage)
@@ -97,6 +120,219 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
 
     private fun selectionTitle() =
         compose.onNode(hasText(compose.activity.getString(S.deviceSelectionTitle)) and !hasClickAction())
+
+    private fun openManualWifi(h: ContainerHarness) {
+        open(h)
+        compose.onNodeWithText(compose.activity.getString(S.deviceSelectionConnectViaWifi)).performClick()
+        compose.onNode(hasSetTextAction() and hasText(compose.activity.getString(O.wifiConnectionIpAddressPlaceholder)))
+            .performScrollTo().performTextReplacement("manual-radio.local")
+        compose.onNode(hasSetTextAction() and hasText(compose.activity.getString(O.wifiConnectionPortPlaceholder)))
+            .performScrollTo().performTextReplacement("6217")
+        compose.onNode(hasText(compose.activity.getString(O.wifiConnectionConnect)) and hasClickAction())
+            .performScrollTo().performClick()
+    }
+
+    private fun permissionResult(facts: FakePermissionFacts, granted: Boolean) {
+        val request = requireNotNull(shadowOf(compose.activity).lastRequestedPermission)
+        assertArrayEquals(arrayOf(ConnectivityPermission.ACCESS_LOCAL_NETWORK.manifestName), request.requestedPermissions)
+        if (granted) facts.granted = facts.granted + ConnectivityPermission.ACCESS_LOCAL_NETWORK
+        compose.runOnUiThread {
+            compose.activity.onRequestPermissionsResult(
+                request.requestCode, request.requestedPermissions,
+                intArrayOf(if (granted) android.content.pm.PackageManager.PERMISSION_GRANTED else android.content.pm.PackageManager.PERMISSION_DENIED),
+            )
+        }
+        compose.waitForIdle()
+    }
+
+    @Test fun fallbackScanMountsActualPickerAndCancellationTerminatesThePairingAttempt() = runTest {
+        val service = BluetoothScanPairingService()
+        var starts = 0
+        var stops = 0
+        val scans = BleScanCoordinator(object : BleScanGateway {
+            override fun startScan(onDevice: (DiscoveredDevice) -> Unit, onFailure: (Throwable) -> Unit) { starts++ }
+            override fun stopScan() { stops++ }
+        })
+        withSettings(pairingService = service, scans = scans) { h, feature ->
+            mount(h, feature)
+            open(h)
+            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            compose.waitForIdle()
+            h.eventually("fallback picker requested") { service.isPresenting.value }
+            compose.onNodeWithText(compose.activity.getString(O.deviceScannerTitle)).assertIsDisplayed()
+            h.eventually("fallback scan started") { starts == 1 }
+            selectionTitle().assertDoesNotExist()
+            compose.onNodeWithText(compose.activity.getString(L.commonCancel)).performClick()
+            compose.waitForIdle()
+            h.eventually("fallback cancelled and scan released") {
+                !service.isPresenting.value && !h.container.connectionPort.isPairingFlowActive && stops == 1
+            }
+            assertTrue(h.links.links.isEmpty())
+            assertFalse(h.appState.connectionUI.showingConnectionFailedAlert)
+        }
+    }
+
+    @Test fun fallbackScanSelectionConnectsTheAdvertisedIdentityThroughTheRealPairingService() = runTest {
+        val service = BluetoothScanPairingService()
+        val id = UUID.randomUUID()
+        var stopped = false
+        val scans = BleScanCoordinator(object : BleScanGateway {
+            override fun startScan(onDevice: (DiscoveredDevice) -> Unit, onFailure: (Throwable) -> Unit) {
+                onDevice(DiscoveredDevice(id, syntheticAddress(id), "Fallback radio", -40))
+            }
+            override fun stopScan() { stopped = true }
+        })
+        withSettings(pairingService = service, scans = scans) { h, feature ->
+            mount(h, feature)
+            open(h)
+            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            compose.waitForIdle()
+            h.eventually("fallback discovery rendered") {
+                compose.onAllNodesWithText("Fallback radio").fetchSemanticsNodes().size == 1
+            }
+            compose.onNodeWithText("Fallback radio").performClick()
+            h.eventually("fallback selected radio ready") {
+                h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
+            }
+            assertEquals(id, (h.links.links.single().target as ConnectionTarget.Bluetooth).deviceId)
+            assertEquals(id, h.manager.connectedDevice?.id)
+            assertFalse(service.isPresenting.value)
+            compose.waitForIdle()
+            h.eventually("fallback scan released after selection") { stopped && !h.container.connectionPort.isPairingFlowActive }
+            assertEquals(AppTab.SETTINGS, h.container.navigation.state.value.selectedTab)
+        }
+    }
+
+    @Test fun pendingWifiFailureReattachesToTheRecreatedActivityWithoutRepeatingTheConnection() = runTest {
+        withSettings { h, feature ->
+            val gate = CompletableDeferred<Unit>()
+            h.links.configureRadio = { it.connectGate = gate; it.connectFailure = IllegalStateException("Wi-Fi test failure") }
+            mount(h, feature)
+            openManualWifi(h)
+            h.eventually("manual attempt entered before recreation") { h.links.links.size == 1 }
+            compose.activityRule.scenario.recreate()
+            mount(h, feature)
+            compose.onNodeWithText(compose.activity.getString(O.wifiConnectionTitle)).assertIsDisplayed()
+            compose.onNode(hasSetTextAction() and hasText("manual-radio.local")).assertExists()
+            compose.onNodeWithText(compose.activity.getString(L.commonCancel)).assertIsNotEnabled()
+            gate.complete(Unit)
+            h.eventually("retained manual attempt failed") { feature.selectionWifi.state.value.error != null }
+            compose.onNodeWithText(requireNotNull(feature.selectionWifi.state.value.error).resolve(compose.activity.resources))
+                .assertIsDisplayed()
+            assertEquals(1, h.links.links.size)
+            assertTrue(feature.selectionWifiVisible.value)
+            compose.onNodeWithText(compose.activity.getString(L.commonCancel)).assertIsEnabled().performClick()
+            compose.onNodeWithText(compose.activity.getString(O.wifiConnectionTitle)).assertDoesNotExist()
+        }
+    }
+
+    @Test fun pendingWifiSuccessDismissesTheRecreatedActivityFormExactlyOnce() = runTest {
+        withSettings { h, feature ->
+            val gate = CompletableDeferred<Unit>()
+            h.links.configureRadio = { it.connectGate = gate }
+            mount(h, feature)
+            openManualWifi(h)
+            h.eventually("manual success pending before recreation") { h.links.links.size == 1 }
+            compose.activityRule.scenario.recreate()
+            mount(h, feature)
+            compose.onNodeWithText(compose.activity.getString(O.wifiConnectionTitle)).assertIsDisplayed()
+            gate.complete(Unit)
+            h.eventually("retained manual success dismissed") { !feature.selectionWifiVisible.value }
+            compose.onNodeWithText(compose.activity.getString(O.wifiConnectionTitle)).assertDoesNotExist()
+            assertEquals(1, h.links.links.size)
+            h.assertReady()
+        }
+    }
+
+    @Test fun pendingWifiVetoesSwipeScrimAndBackUntilItsInlineFailureCanBeShown() = runTest {
+        withSettings { h, feature ->
+            val gate = CompletableDeferred<Unit>()
+            h.links.configureRadio = { it.connectGate = gate; it.connectFailure = IllegalStateException("Visible inline failure") }
+            mount(h, feature)
+            openManualWifi(h)
+            h.eventually("manual attempt pending during dismissal") { h.links.links.size == 1 }
+            compose.onNodeWithText(compose.activity.getString(O.wifiConnectionTitle)).performTouchInput {
+                swipeDown(endY = 1_000f)
+            }
+            compose.onNodeWithText(compose.activity.getString(O.wifiConnectionTitle)).assertIsDisplayed()
+            compose.onNode(isDialog()).performTouchInput { click(androidx.compose.ui.geometry.Offset(2f, 2f)) }
+            compose.onNodeWithText(compose.activity.getString(O.wifiConnectionTitle)).assertIsDisplayed()
+            compose.runOnUiThread { requireNotNull(ShadowDialog.getLatestDialog()).onBackPressed() }
+            compose.onNodeWithText(compose.activity.getString(O.wifiConnectionTitle)).assertIsDisplayed()
+            assertTrue(feature.selectionWifiVisible.value)
+            assertTrue(feature.selectionWifi.state.value.isConnecting)
+            gate.complete(Unit)
+            h.eventually("manual failure after attempted dismissal") { feature.selectionWifi.state.value.error != null }
+            compose.onNodeWithText(requireNotNull(feature.selectionWifi.state.value.error).resolve(compose.activity.resources))
+                .assertIsDisplayed()
+            assertEquals(1, h.links.links.size)
+            compose.onNodeWithText(compose.activity.getString(L.commonCancel)).assertIsEnabled().performClick()
+            compose.onNodeWithText(compose.activity.getString(O.wifiConnectionTitle)).assertDoesNotExist()
+        }
+    }
+
+    private suspend fun TestScope.localNetworkPermissionControl(savedDevice: Boolean, grant: Boolean) {
+        val facts = FakePermissionFacts(sdk = 37, granted = ConnectivityPermission.entries.toSet() - ConnectivityPermission.ACCESS_LOCAL_NETWORK)
+        var openedSettings = 0
+        withSettings(permissionFacts = facts, openSettings = { openedSettings++ }) { h, feature ->
+            val device = if (savedDevice) saved(h).also {
+                store.saveDevice(it.copy(connectionMethods = (it.connectionMethods + ConnectionMethod.WiFi("saved-radio.local", 6218u)).snapshot()))
+            } else null
+            val before = h.links.links.size
+            val gate = CompletableDeferred<Unit>()
+            h.links.configureRadio = { it.connectGate = gate }
+            mount(h, feature)
+            if (device != null) {
+                open(h)
+                compose.onNodeWithText(device.nodeName).performClick()
+            } else openManualWifi(h)
+            compose.waitForIdle()
+            h.settle()
+            assertEquals(before, h.links.links.size)
+            assertNotNull(feature.selectionWifiAction.value)
+            permissionResult(facts, grant)
+            if (!grant) {
+                assertEquals(before, h.links.links.size)
+                compose.onNodeWithText(compose.activity.getString(O.permissionsOpenSettings)).assertIsDisplayed().performClick()
+                assertEquals(1, openedSettings)
+                facts.granted = facts.granted + ConnectivityPermission.ACCESS_LOCAL_NETWORK
+                compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+                compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+            }
+            h.eventually("permission grant resumes one requested Wi-Fi operation") { h.links.links.size == before + 1 }
+            assertEquals(
+                if (savedDevice) ConnectionTarget.WiFi("saved-radio.local", 6218u) else ConnectionTarget.WiFi("manual-radio.local", 6217u),
+                h.links.links.last().target,
+            )
+            assertEquals(ConnectionIntent.WantsConnection(forceFullSync = true), h.manager.connectionIntent)
+            assertNull(feature.selectionWifiAction.value)
+            gate.complete(Unit)
+            h.eventually("permitted Wi-Fi ready") {
+                h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
+            }
+            assertEquals(before + 1, h.links.links.size)
+        }
+    }
+
+    @Test @Config(sdk = [37])
+    fun savedWifiRequestsLocalNetworkPermissionAndResumesOnlyAfterGrant() = runTest {
+        localNetworkPermissionControl(savedDevice = true, grant = true)
+    }
+
+    @Test @Config(sdk = [37])
+    fun savedWifiDeniedLocalNetworkPermissionOffersSettingsAndResumesAfterRecovery() = runTest {
+        localNetworkPermissionControl(savedDevice = true, grant = false)
+    }
+
+    @Test @Config(sdk = [37])
+    fun manualWifiRequestsLocalNetworkPermissionAndResumesOnlyAfterGrant() = runTest {
+        localNetworkPermissionControl(savedDevice = false, grant = true)
+    }
+
+    @Test @Config(sdk = [37])
+    fun manualWifiDeniedLocalNetworkPermissionOffersSettingsAndResumesAfterRecovery() = runTest {
+        localNetworkPermissionControl(savedDevice = false, grant = false)
+    }
 
     @Test fun settingsEntrySelectsTheSavedBleIdentityWithFullSyncAndForceReconnect() = runTest {
         withSettings { h, feature ->

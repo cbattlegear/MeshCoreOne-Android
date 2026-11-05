@@ -531,7 +531,9 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
     @Test fun failedScopeApplicationIsNotMistakenForAChannelErrorTwoOrAChannelTransmission() = runTest {
         withSettings { h, holder, _, radio ->
             val before = assertNotNull(h.manager.connectedDevice)
-            store.saveChannel(ChannelDTO(radioId = before.radioId, index = 1u, name = "Scope control"))
+            val channel = ChannelDTO(radioId = before.radioId, index = 1u, name = "Scope control")
+            store.saveChannel(channel)
+            radio.channel = channel
             holder.select("EU868")
             h.eventually("default acknowledged") { !holder.state.value.isApplying && holder.state.value.currentScope == "EU868" }
             radio.activeScopeFailure = 2u
@@ -1314,6 +1316,7 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
         val writes = mutableListOf<String?>()
         val activeScopes = mutableListOf<Bytes>()
         val channelTransmissions = mutableListOf<Bytes>()
+        var channel: ChannelDTO? = null
         var onChannelWrite: (() -> Unit)? = null
         var defaultReads = 0
         var onWrite: (() -> Unit)? = null
@@ -1351,6 +1354,9 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
                         channelTransmissions += command
                         onChannelWrite?.invoke()
                         listOf(Bytes.of(0))
+                    }
+                    0x1f -> channel?.takeIf { it.index == command[1] }?.let {
+                        listOf(Bytes.of(0x12, it.index.toInt()) + Bytes.utf8(it.name).paddedOrTruncated(32) + it.secret)
                     }
                     PacketBuilder.setFloodScope(Bytes(ByteArray(16)))[0].toInt() -> {
                         activeScopes += command

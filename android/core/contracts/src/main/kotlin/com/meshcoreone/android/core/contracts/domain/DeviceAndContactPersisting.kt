@@ -99,7 +99,10 @@ fun interface RepeatSnapshotRestoreAuthority {
 /** Process-store custody shared by all editors and delegating persistence wrappers; not durable across restart. */
 class RepeatSnapshotAuthority {
     private data class Identity(val id: UUID, val radioId: RadioId, val publicKey: Bytes)
-    private data class Pending(val receipt: DeviceWriteSnapshot, val attempt: PreRepeatSettingsAttempt)
+    private data class Pending(
+        val receipt: DeviceWriteSnapshot, val attempt: PreRepeatSettingsAttempt,
+        val identityVersion: Long, val snapshotVersion: Long,
+    )
     private data class ClearRequest(val device: DeviceDTO, val token: SessionToken, val identityVersion: Long, val snapshotVersion: Long)
     private data class CommittedClear(val identityVersion: Long, val snapshotVersion: Long)
     private val pending = mutableMapOf<Identity, Pending>()
@@ -190,7 +193,22 @@ class RepeatSnapshotAuthority {
     }
 
     @Synchronized fun recordCreated(receipt: DeviceWriteSnapshot, attempt: PreRepeatSettingsAttempt) {
-        pending[receipt.device.identity()] = Pending(receipt, attempt)
+        pending[receipt.device.identity()] = Pending(
+            receipt, attempt, identityVersion(receipt.device.id), snapshotVersion(receipt.device.id),
+        )
+    }
+
+    /** The caller already consumed this attempt's definitely-unsent creation receipt. */
+    @Synchronized fun abortingUnsentSnapshot(
+        device: DeviceDTO, receipt: DeviceWriteSnapshot, attempt: PreRepeatSettingsAttempt,
+    ): DeviceDTO {
+        val created = pending[receipt.device.identity()] ?: throw DeviceWriteConflict()
+        if (created.attempt !== attempt || created.receipt !== receipt ||
+            attempt.token?.radioId != device.radioId || device.identity() != receipt.device.identity() ||
+            device.clientRepeat || !device.sameSnapshot(receipt.device) ||
+            identityVersion(device.id) != created.identityVersion || snapshotVersion(device.id) != created.snapshotVersion
+        ) throw DeviceWriteConflict()
+        return device.clearingPreRepeatSettings()
     }
 
     fun requireUsable(device: DeviceDTO) {

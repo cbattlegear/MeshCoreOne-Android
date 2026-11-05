@@ -307,10 +307,10 @@ private class ToolsSettingsAdapter(private val resolve: () -> RadioSessionContai
     override suspend fun setNodeNameVerified(name: String) = service.setNodeNameVerified(name)
     override suspend fun setManualLocationVerified(latitude: Double, longitude: Double) =
         service.setManualLocationVerified(latitude, longitude)
-    override suspend fun setTxPowerVerified(power: Byte) = service.setTxPowerVerified(power)
+    override suspend fun setTxPowerVerified(power: Byte) = service.setTxPowerPersisted(power)
     override suspend fun setRadioParamsVerified(
         frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte, codingRate: UByte,
-    ) = service.setRadioParamsVerified(frequencyKHz, bandwidthKHz, spreadingFactor, codingRate)
+    ) = service.setRadioParamsPersisted(frequencyKHz, bandwidthKHz, spreadingFactor, codingRate)
     override suspend fun setOtherParamsVerified(device: com.meshcoreone.android.core.model.DeviceDTO, multiAcks: UByte) =
         service.setOtherParamsVerified(device, multiAcks = multiAcks)
     override suspend fun setPathHashModeVerified(mode: UByte) = service.setPathHashModeVerified(mode)

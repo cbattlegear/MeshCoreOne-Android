@@ -32,6 +32,102 @@ import kotlinx.coroutines.test.runTest
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class SettingsRadioSerializationTest {
+    @Test fun omittedRepeatPreservesTheQueriedModeAcrossEverySettingsRadioEntryPoint() = runTest {
+        for (entry in listOf("raw", "verified", "persisted", "preset-raw", "preset-verified", "preset-persisted")) {
+            val fixture = settingsFixture()
+            val subscription = fixture.settings.events()
+            val published = mutableListOf<SettingsEvent>()
+            val collector = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                subscription.events.collect {
+                    published += it.event
+                    when (val event = it.event) {
+                        is SettingsEvent.ClientRepeatUpdated -> event.persistence?.complete(Unit)
+                        is SettingsEvent.DeviceUpdated -> event.persistence?.complete(Unit)
+                        else -> error("Unexpected RF event $event")
+                    }
+                }
+            }
+            try {
+                val preset = RadioPresets.all.first { it.id == "us-ca" }
+                val isPreset = entry.startsWith("preset-")
+                val frequency = if (isPreset) preset.frequencyKHz else 915_000u
+                val bandwidth = if (isPreset) preset.bandwidthHz else 125_000u
+                val sf: UByte = if (isPreset) preset.spreadingFactor else 7u
+                val cr: UByte = if (isPreset) preset.codingRate else 5u
+                val write = request {
+                    when (entry) {
+                        "raw" -> fixture.settings.setRadioParams(frequency, bandwidth, sf, cr)
+                        "verified" -> fixture.settings.setRadioParamsVerified(frequency, bandwidth, sf, cr)
+                        "persisted" -> fixture.settings.setRadioParamsPersisted(frequency, bandwidth, sf, cr)
+                        "preset-raw" -> fixture.settings.applyRadioPreset(preset)
+                        "preset-verified" -> fixture.settings.applyRadioPresetVerified(preset)
+                        else -> fixture.settings.applyRadioPresetPersisted(preset)
+                    }
+                }
+                reply(fixture, 2, PacketBuilder.deviceQuery(), capabilitiesPacket(repeat = true))
+                reply(fixture, 3, PacketBuilder.setRadio(
+                    frequency.toDouble() / 1000, bandwidth.toDouble() / 1000, sf, cr, true,
+                ), okPacket())
+                if (entry != "raw" && entry != "preset-raw") {
+                    reply(fixture, 4, PacketBuilder.appStart("MCore"), selfPacket(frequency = frequency, bandwidth = bandwidth, sf = sf, cr = cr))
+                    reply(fixture, 5, PacketBuilder.deviceQuery(), capabilitiesPacket(repeat = true))
+                }
+                write.await()
+                runCurrent()
+                assertEquals(listOf(true), published.filterIsInstance<SettingsEvent.ClientRepeatUpdated>().map { it.enabled }, entry)
+                assertEquals(1, fixture.radio.sent.single { it[0] == 0x0b.toUByte() }[11].toInt(), entry)
+                if (entry.endsWith("persisted")) assertFalse(fixture.settings.radioSettingsNeedsRecovery, entry)
+            } finally { subscription.close(); collector.cancel(); fixture.close() }
+        }
+    }
+
+    @Test fun repeatBaselineMismatchReconcilesAndPermitsAFreshRadioAction() = runTest {
+        val fixture = settingsFixture()
+        val subscription = fixture.settings.events()
+        val modes = mutableListOf<Boolean>()
+        val collector = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            subscription.events.collect {
+                when (val event = it.event) {
+                    is SettingsEvent.ClientRepeatUpdated -> { modes += event.enabled; event.persistence?.complete(Unit) }
+                    is SettingsEvent.DeviceUpdated -> event.persistence?.complete(Unit)
+                    else -> error("Unexpected RF event $event")
+                }
+            }
+        }
+        try {
+            val stale = DeviceDTO(
+                radioId = RADIO, publicKey = filled(1), nodeName = "Test",
+                frequency = 915_000u, bandwidth = 125_000u, spreadingFactor = 7u, codingRate = 5u, clientRepeat = true,
+            )
+            val rejected = request { runCatching {
+                fixture.settings.setRadioParamsPersisted(868_100u, 125_000u, 7u, 5u, false, expectedDevice = stale)
+            } }
+            reply(fixture, 2, PacketBuilder.appStart("MCore"), selfPacket())
+            reply(fixture, 3, PacketBuilder.deviceQuery(), capabilitiesPacket(repeat = false))
+            assertIs<SettingsServiceException>(rejected.await().exceptionOrNull())
+            assertTrue(fixture.settings.radioSettingsNeedsRecovery)
+            assertFalse(fixture.radio.sent.any { it[0] == 0x0b.toUByte() })
+            val recovery = request { fixture.settings.reconcileRadioSettingsIfNeeded() }
+            reply(fixture, 4, PacketBuilder.appStart("MCore"), selfPacket())
+            reply(fixture, 5, PacketBuilder.deviceQuery(), capabilitiesPacket(repeat = false))
+            recovery.await()
+            assertEquals(listOf(false), modes)
+            assertFalse(fixture.settings.radioSettingsNeedsRecovery)
+            val fresh = request {
+                fixture.settings.setRadioParamsPersisted(
+                    868_100u, 125_000u, 7u, 5u, false, expectedDevice = stale.copy(clientRepeat = false),
+                )
+            }
+            reply(fixture, 6, PacketBuilder.appStart("MCore"), selfPacket())
+            reply(fixture, 7, PacketBuilder.deviceQuery(), capabilitiesPacket(repeat = false))
+            reply(fixture, 8, PacketBuilder.setRadio(868.1, 125.0, 7u, 5u, false), okPacket())
+            reply(fixture, 9, PacketBuilder.appStart("MCore"), selfPacket(frequency = 868_100u))
+            reply(fixture, 10, PacketBuilder.deviceQuery(), capabilitiesPacket(repeat = false))
+            assertEquals(868.1, fresh.await().radioFrequency)
+            assertFalse(fixture.settings.radioSettingsNeedsRecovery)
+        } finally { subscription.close(); collector.cancel(); fixture.close() }
+    }
+
     @Test fun restoreRetirementRequiresVerifiedRfAndRepeatOffBeforeEitherPublication() = runTest {
         println("WP305_REPEAT_CLEAR|verified-hook|START")
         for (outcome in listOf("success", "cancel-before-ack", "rf-mismatch", "repeat-mismatch")) {
@@ -410,6 +506,7 @@ class SettingsRadioSerializationTest {
                     assertFailsWith<SettingsServiceException> { queued.await() }.error,
                 )
                 assertEquals("radio settings changed while the operation was queued", failure.actual)
+                assertTrue(fixture.settings.radioSettingsNeedsRecovery, "A fresh action must reconcile the mismatched baseline")
                 assertEquals(1, fixture.radio.sent.count { it[0] == 0x0b.toUByte() })
                 assertEquals(token(), fixture.signals.snapshot.value.token)
                 events.close()

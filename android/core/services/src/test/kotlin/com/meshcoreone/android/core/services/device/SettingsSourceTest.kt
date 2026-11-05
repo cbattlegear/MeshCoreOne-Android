@@ -158,11 +158,13 @@ class SettingsSourceTest {
                     subscription.events.collect { events += it.event }
                 }
                 val write = request { fixture.settings.applyRadioPresetVerified(preset("hu")) }
-                reply(fixture, 2, PacketBuilder.setRadio(869.618, 62.5, 7u, 5u), okPacket())
-                reply(fixture, 3, PacketBuilder.appStart("MCore"), selfPacket(frequency = 869_618u, bandwidth = 62_500u))
-                reply(fixture, 4, PacketBuilder.deviceQuery(), capabilitiesPacket(version = 10u))
-                reply(fixture, 5, PacketBuilder.setPathHashMode(1u), okPacket())
-                reply(fixture, 6, PacketBuilder.deviceQuery(), capabilitiesPacket(version = 10u, hash = 1u))
+                reply(fixture, 2, PacketBuilder.deviceQuery(), capabilitiesPacket(version = 10u))
+                reply(fixture, 3, PacketBuilder.setRadio(869.618, 62.5, 7u, 5u), okPacket())
+                reply(fixture, 4, PacketBuilder.appStart("MCore"), selfPacket(frequency = 869_618u, bandwidth = 62_500u))
+                reply(fixture, 5, PacketBuilder.deviceQuery(), capabilitiesPacket(version = 10u))
+                reply(fixture, 6, PacketBuilder.deviceQuery(), capabilitiesPacket(version = 10u))
+                reply(fixture, 7, PacketBuilder.setPathHashMode(1u), okPacket())
+                reply(fixture, 8, PacketBuilder.deviceQuery(), capabilitiesPacket(version = 10u, hash = 1u))
                 write.await()
                 runCurrent()
                 val hash = events.indexOfFirst { it == SettingsEvent.PathHashModeUpdated(1u) }
@@ -182,14 +184,16 @@ class SettingsSourceTest {
                     subscription.events.collect { events += it.event }
                 }
                 val write = request { fixture.settings.applyRadioPresetVerified(preset("hu")) }
-                reply(fixture, 2, PacketBuilder.setRadio(869.618, 62.5, 7u, 5u), okPacket())
-                reply(fixture, 3, PacketBuilder.appStart("MCore"), selfPacket(frequency = 869_618u, bandwidth = 62_500u))
-                reply(fixture, 4, PacketBuilder.deviceQuery(), capabilitiesPacket(version = 10u))
-                reply(fixture, 5, PacketBuilder.setPathHashMode(1u),
+                reply(fixture, 2, PacketBuilder.deviceQuery(), capabilitiesPacket(version = 10u))
+                reply(fixture, 3, PacketBuilder.setRadio(869.618, 62.5, 7u, 5u), okPacket())
+                reply(fixture, 4, PacketBuilder.appStart("MCore"), selfPacket(frequency = 869_618u, bandwidth = 62_500u))
+                reply(fixture, 5, PacketBuilder.deviceQuery(), capabilitiesPacket(version = 10u))
+                reply(fixture, 6, PacketBuilder.deviceQuery(), capabilitiesPacket(version = 10u))
+                reply(fixture, 7, PacketBuilder.setPathHashMode(1u),
                     packet(ResponseCode.ERROR, Bytes.of(ErrorCode.ILLEGAL_ARGUMENT.rawValue.toInt())))
                 assertFailsWith<SettingsServiceException> { write.await() }
                 val refresh = request { fixture.settings.refreshDeviceInfo() }
-                reply(fixture, 6, PacketBuilder.appStart("MCore"), selfPacket(frequency = 869_618u, bandwidth = 62_500u))
+                reply(fixture, 8, PacketBuilder.appStart("MCore"), selfPacket(frequency = 869_618u, bandwidth = 62_500u))
                 refresh.await()
                 runCurrent()
                 assertTrue(events.filterIsInstance<SettingsEvent.DeviceUpdated>().all { it.appliedRadioPresetID == null })
@@ -203,12 +207,14 @@ class SettingsSourceTest {
             try {
                 val subscription = fixture.settings.events()
                 val write = request { fixture.settings.applyRadioPresetVerified(preset("us-ca")) }
-                reply(fixture, 2, PacketBuilder.setRadio(910.525, 62.5, 7u, 5u), okPacket())
-                reply(fixture, 3, PacketBuilder.appStart("MCore"), selfPacket(frequency = 910_525u, bandwidth = 62_500u))
+                reply(fixture, 2, PacketBuilder.deviceQuery(), capabilitiesPacket())
+                reply(fixture, 3, PacketBuilder.setRadio(910.525, 62.5, 7u, 5u), okPacket())
+                reply(fixture, 4, PacketBuilder.appStart("MCore"), selfPacket(frequency = 910_525u, bandwidth = 62_500u))
+                reply(fixture, 5, PacketBuilder.deviceQuery(), capabilitiesPacket())
                 write.await()
                 subscription.close()
                 val events = subscription.events.toList().map { it.event }
-                assertEquals(3, fixture.radio.sent.size)
+                assertEquals(5, fixture.radio.sent.size)
                 assertEquals(listOf("us-ca"), events.filterIsInstance<SettingsEvent.DeviceUpdated>().map { it.appliedRadioPresetID })
             } finally { fixture.close() }
         },
@@ -216,11 +222,13 @@ class SettingsSourceTest {
             val fixture = settingsFixture()
             try {
                 val write = request { fixture.settings.applyRadioPresetVerified(preset("hu")) }
-                reply(fixture, 2, PacketBuilder.setRadio(869.618, 62.5, 7u, 5u), okPacket())
-                reply(fixture, 3, PacketBuilder.appStart("MCore"), selfPacket(frequency = 869_618u, bandwidth = 62_500u))
-                reply(fixture, 4, PacketBuilder.deviceQuery(), capabilitiesPacket(version = 9u))
+                reply(fixture, 2, PacketBuilder.deviceQuery(), capabilitiesPacket(version = 9u))
+                reply(fixture, 3, PacketBuilder.setRadio(869.618, 62.5, 7u, 5u), okPacket())
+                reply(fixture, 4, PacketBuilder.appStart("MCore"), selfPacket(frequency = 869_618u, bandwidth = 62_500u))
+                reply(fixture, 5, PacketBuilder.deviceQuery(), capabilitiesPacket(version = 9u))
+                reply(fixture, 6, PacketBuilder.deviceQuery(), capabilitiesPacket(version = 9u))
                 write.await()
-                assertEquals(4, fixture.radio.sent.size)
+                assertEquals(6, fixture.radio.sent.size)
             } finally { fixture.close() }
         },
     )

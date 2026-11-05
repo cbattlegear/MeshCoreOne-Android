@@ -46,6 +46,63 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
+    @Test fun reopeningAdvancedAfterFailedTxPersistenceReconcilesPowerBeforeAnUnrelatedRfEdit() = runTest {
+        var rejectPower = false
+        val rejected = object : PersistenceStoreProtocol by store {
+            override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+                if (rejectPower && dto.txPower == 10.toByte()) {
+                    throw com.meshcoreone.android.core.contracts.domain.PersistenceStoreException(
+                        com.meshcoreone.android.core.contracts.domain.PersistenceStoreError.SaveFailed("Power persistence unavailable"),
+                    )
+                }
+                return store.saveDeviceIfUnchanged(dto, expected)
+            }
+        }
+        var dependencies: SettingsFeatureDependencies? = null
+        withSettings(rejected, exposeDependencies = { dependencies = it }) { h, _, _, radio ->
+            val d = assertNotNull(dependencies)
+            val failures = mutableListOf<Throwable>()
+            fun advanced() = AdvancedRadioStateHolder(
+                SettingsEnvironment(backgroundScope, describe = { failures += it; UiText.Verbatim("Power failed") }),
+                d.connection, d.settingsService, RadioWriteGate(),
+            )
+            val first = advanced()
+            first.start()
+            try {
+                h.eventually("first Advanced observes current power") { first.state.value.hasLoaded }
+                val before = assertNotNull(h.manager.connectedDevice)
+                rejectPower = true
+                first.onTxPowerTextChanged("10")
+                first.apply()
+                h.eventually("actual verified TX persistence failure reaches Settings") {
+                    failures.isNotEmpty() && !first.state.value.isApplying
+                }
+                assertTrue(h.sessions.current!!.settingsService.radioSettingsNeedsRecovery)
+                assertEquals(before.txPower, store.fetchDevice(before.id)?.txPower)
+                assertEquals(before.txPower, h.manager.connectedDevice?.txPower)
+                assertFalse(first.state.value.showSuccess)
+                first.stop()
+                rejectPower = false
+                val reopened = advanced()
+                reopened.start()
+                try {
+                    h.eventually("fresh Advanced initially captures the stale stored power") { reopened.state.value.hasLoaded }
+                    assertEquals(before.txPower.toInt(), reopened.state.value.txPower)
+                    reopened.onSpreadingFactorSelected(9)
+                    reopened.apply()
+                    h.eventually("RF-only fresh action preserves the reconciled actual power") { reopened.state.value.showSuccess }
+                    val saved = assertNotNull(store.fetchDevice(before.id))
+                    assertEquals(10.toByte(), saved.txPower)
+                    assertEquals(9.toUByte(), saved.spreadingFactor)
+                    assertEquals(saved, h.manager.connectedDevice)
+                    assertEquals(listOf(PacketBuilder.setTxPower(10), PacketBuilder.setTxPower(10)), radio.powerWrites)
+                    assertFalse(h.sessions.current!!.settingsService.radioSettingsNeedsRecovery)
+                    assertNull(reopened.state.value.errorMessage)
+                } finally { reopened.stop() }
+            } finally { first.stop(); rejectPower = false }
+        }
+    }
+
     @Test fun failedActualRfPersistenceReconcilesBeforeTheSameSessionActionRetryDerivesItsBaseline() = runTest {
         var failRf = false
         val rejected = object : PersistenceStoreProtocol by store {
@@ -526,6 +583,66 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
                 }
             }
         } finally { release.complete(Unit) }
+    }
+
+    @Test fun olderFirmwareKeepsInheritedChannelSendsButRejectsUnsupportedScopedSends() = runTest {
+        for (version in listOf<UByte>(7u, 8u)) {
+            withSettings(firmwareVersion = version) { h, _, _, radio ->
+                val device = assertNotNull(h.manager.connectedDevice)
+                val channel = ChannelDTO(radioId = device.radioId, index = 1u, name = "Legacy scope control")
+                store.saveChannel(channel)
+                val inherited = enqueueActualChannel(h, device, "inherited v$version")
+                h.eventually("inherited send remains supported on firmware $version") {
+                    kotlinx.coroutines.runBlocking {
+                        store.fetchMessage(com.meshcoreone.android.core.contracts.domain.EntityKey(device.radioId, inherited.id))
+                            ?.status == MessageStatus.SENT
+                    }
+                }
+                assertEquals(if (version < 8u) 0 else 1, radio.activeScopes.size)
+                store.saveChannel(channel.withFloodScope(com.meshcoreone.android.core.model.ChannelFloodScope.Region("EU868")))
+                val scoped = enqueueActualChannel(h, device, "scoped v$version")
+                val scopedKey = com.meshcoreone.android.core.contracts.domain.EntityKey(device.radioId, scoped.id)
+                h.eventually("unsupported scope is explicit, supported scope transmits") {
+                    kotlinx.coroutines.runBlocking {
+                        store.fetchMessage(scopedKey)?.status == if (version < 8u) MessageStatus.FAILED else MessageStatus.SENT
+                    }
+                }
+                assertFalse(store.hasPendingSend(scopedKey))
+                assertEquals(if (version < 8u) 1 else 2, radio.channelTransmissions.size)
+                assertEquals(if (version < 8u) 0 else 2, radio.activeScopes.size)
+            }
+        }
+    }
+
+    @Test fun inheritedChannelScopeUsesTheConnectedTransportRowNotTheFirstMatchingRadioIdentity() = runTest {
+        var inactive: DeviceDTO? = null
+        val ambiguous = object : PersistenceStoreProtocol by store {
+            override suspend fun fetchDevice(radioId: com.meshcoreone.android.core.model.RadioId): DeviceDTO? =
+                inactive?.takeIf { it.radioId == radioId } ?: store.fetchDevice(radioId)
+        }
+        withSettings(ambiguous) { h, holder, _, radio ->
+            val before = assertNotNull(h.manager.connectedDevice)
+            inactive = before.copy(id = java.util.UUID.randomUUID(), isActive = false, defaultFloodScopeName = "US915")
+            store.saveDevice(assertNotNull(inactive))
+            store.saveChannel(ChannelDTO(radioId = before.radioId, index = 1u, name = "Active transport scope"))
+            holder.select("EU868")
+            h.eventually("active transport scope acknowledged") {
+                !holder.state.value.isApplying && h.manager.connectedDevice?.defaultFloodScopeName == "EU868"
+            }
+            val message = enqueueActualChannel(h, before, "active transport default")
+            h.eventually("active transport inherited send finishes") {
+                kotlinx.coroutines.runBlocking {
+                    store.fetchMessage(com.meshcoreone.android.core.contracts.domain.EntityKey(before.radioId, message.id))
+                        ?.status == MessageStatus.SENT
+                }
+            }
+            assertEquals(
+                listOf(PacketBuilder.setFloodScope(FloodScope.Region("EU868").scopeKey())),
+                radio.activeScopes,
+            )
+            assertEquals("US915", store.fetchDevice(assertNotNull(inactive).id)?.defaultFloodScopeName)
+            assertEquals("EU868", store.fetchDevice(before.id)?.defaultFloodScopeName)
+        }
     }
 
     @Test fun failedScopeApplicationIsNotMistakenForAChannelErrorTwoOrAChannelTransmission() = runTest {
@@ -1305,6 +1422,7 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
     }
 
     private class ScopeRadio {
+        var firmwareVersion: UByte = 11u
         val radioWrites = mutableListOf<Bytes>()
         val powerWrites = mutableListOf<Bytes>()
         private var radioParams: Bytes? = null
@@ -1322,7 +1440,7 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
         var onWrite: (() -> Unit)? = null
         var activeScopeFailure: UByte? = null
         fun configure(radio: FirmwareRadio) {
-            radio.firmwareVersion = 11u
+            radio.firmwareVersion = firmwareVersion
             radio.respond = { command ->
                 when (command[0].toInt()) {
                     0x0b -> {
@@ -1386,10 +1504,11 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
         persistence: PersistenceStoreProtocol = store,
         actionScope: CoroutineScope? = null,
         exposeDependencies: (SettingsFeatureDependencies) -> Unit = {},
+        firmwareVersion: UByte = 11u,
         action: suspend (ContainerHarness, DefaultFloodScopeStateHolder, MutableList<Throwable>, ScopeRadio) -> Unit,
     ) {
         val h = ContainerHarness(this, store, persistenceOverride = persistence)
-        val radio = ScopeRadio()
+        val radio = ScopeRadio().also { it.firmwareVersion = firmwareVersion }
         var holder: DefaultFloodScopeStateHolder? = null
         try {
             h.links.configureRadio = radio::configure

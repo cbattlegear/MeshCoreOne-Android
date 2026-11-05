@@ -868,7 +868,9 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
     }
 
     @Test fun conflictedUnsentSnapshotCannotRestoreOldRfAfterAnInterveningWriteAndFreshEnable() = runTest {
-        for (aba in listOf(false, true)) {
+        for (intervention in listOf("watermark", "watermark-aba", "snapshot-aba")) {
+            val aba = intervention == "watermark-aba"
+            val snapshotAba = intervention == "snapshot-aba"
             val committed = CompletableDeferred<Job>()
             val hold = CompletableDeferred<Unit>()
             var armed = false
@@ -894,16 +896,26 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                     val created = assertNotNull(store.fetchDeviceWriteSnapshot(before.id))
                     store.updateDeviceLastContactSync(before.radioId, created.device.lastContactSync + 1u)
                     if (aba) store.updateDeviceLastContactSync(before.radioId, created.device.lastContactSync)
+                    if (snapshotAba) {
+                        store.saveDevice(created.device.copy(preRepeatFrequency = assertNotNull(created.device.preRepeatFrequency) + 1u))
+                        store.saveDevice(created.device)
+                    }
                     val intervened = assertNotNull(store.fetchDeviceWriteSnapshot(before.id))
                     assertTrue(intervened.revision > created.revision)
                     if (aba) assertEquals(created.device, intervened.device, "Equal DTOs do not restore creation authority")
                     committed.await().cancel()
-                    h.eventually("strict unsent cleanup conflict is reported") {
-                        !holder.state.value.isApplyingRepeat && failures.isNotEmpty()
+                    h.eventually("definitely-unsent cleanup settles with lifecycle authority") {
+                        !holder.state.value.isApplyingRepeat
                     }
                     assertTrue(radio.radioWrites.isEmpty(), "The abandoned attempt never sent SET")
-                    assertEquals(intervened.device, store.fetchDevice(before.id), "Conflicting cleanup must not rebase or clear")
-                    assertNotNull(holder.state.value.errorMessage)
+                    if (snapshotAba) {
+                        assertEquals(intervened.device, store.fetchDevice(before.id), "Snapshot ABA cannot restore creation authority")
+                        assertNotNull(holder.state.value.errorMessage)
+                    } else {
+                        assertEquals(intervened.device.clearingPreRepeatSettings(), store.fetchDevice(before.id))
+                        assertTrue(failures.isEmpty(), "Unrelated watermark revisions must not strand an unsent snapshot")
+                        assertNull(holder.state.value.errorMessage)
+                    }
                     val service = assertNotNull(h.sessions.current).settingsService
                     service.setRadioParamsVerified(868_000u, 125_000u, 9u, 6u, false)
                     h.eventually("later manual RF is live and observed on the original token") {
@@ -920,6 +932,7 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                                 h.manager.connectedDevice?.frequency == radio.frequency && holder.state.value.device?.frequency == radio.frequency))
                     }
                     if (h.manager.connectedDevice?.clientRepeat == true) {
+                        assertFalse(snapshotAba, "A newer snapshot lifecycle must stay fenced")
                         holder.onRepeatToggled(false)
                         h.eventually("fresh Repeat off finishes") {
                             !holder.state.value.isApplyingRepeat && h.manager.connectedDevice?.clientRepeat == false &&
@@ -931,6 +944,7 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                         assertEquals(manual.spreadingFactor, restored.spreadingFactor)
                         assertEquals(manual.codingRate, restored.codingRate)
                     } else {
+                        assertTrue(snapshotAba, "A watermark-only conflict must recover through the actual Repeat action")
                         assertNotNull(holder.state.value.errorMessage)
                         assertEquals(1, radio.radioWrites.size, "A fenced fresh enable cannot send SET")
                         assertEquals(manual, store.fetchDevice(before.id))

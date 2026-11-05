@@ -20,6 +20,7 @@ import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceExcept
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.model.ChannelFloodScope
 import com.meshcoreone.android.core.model.TransportType
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.protocol.model.BatteryInfo
@@ -202,14 +203,23 @@ class RadioSessionContainer private constructor(
             var transmissionAccepted = false
             try {
                 settingsService.withPersistedDefaultFloodScope {
-                    val device = dataStore.fetchDevice(radioId)
+                    val device = dataStore.fetchDevice(inputs.device.id)
                         ?: throw MessageServiceException(MessageServiceError.NotConnected)
                     val channel = dataStore.fetchChannel(radioId, index)
                         ?: throw MessageServiceException(MessageServiceError.ChannelNotFound)
+                    val snapshot = inputs.connection.signals.snapshot.value
+                    if (snapshot.token != token || !snapshot.state.isConnected ||
+                        device.radioId != radioId || device.publicKey != inputs.device.publicKey
+                    ) throw MessageServiceException(MessageServiceError.NotConnected)
+                    val floodScope = ChannelFloodScopeResolver.resolve(
+                        channel.floodScope, device.defaultFloodScopeName, device.supportsUnscopedFloodSend,
+                    )
+                    if (device.firmwareVersion < 8u && (channel.floodScope is ChannelFloodScope.Region ||
+                            floodScope != ResolvedFloodScope.Scope(com.meshcoreone.android.core.protocol.model.FloodScope.Disabled))) {
+                        throw MessageServiceException(MessageServiceError.SendFailed("Flood scope is not supported by this firmware"))
+                    }
                     try {
-                        applyChannelFloodScope(ChannelFloodScopeResolver.resolve(
-                            channel.floodScope, device.defaultFloodScopeName, device.supportsUnscopedFloodSend,
-                        ), force = true)
+                        if (device.firmwareVersion >= 8u) applyChannelFloodScope(floodScope, force = true)
                     } catch (failure: MeshCoreException) {
                         if (failure !is MeshCoreException.DeviceError) throw failure
                         // Scope preparation is not a channel write's ERROR 2 or pool-backoff attempt.

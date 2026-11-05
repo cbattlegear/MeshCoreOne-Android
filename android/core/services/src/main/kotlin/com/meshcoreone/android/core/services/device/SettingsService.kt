@@ -191,7 +191,9 @@ class SettingsService(
     }
 
     suspend fun applyRadioPreset(preset: RadioPreset): Unit = operation {
-        writeRadio(preset.frequencyKHz, preset.bandwidthHz, preset.spreadingFactor, preset.codingRate, null)
+        nextRadioRevision()
+        val repeat = writeRadio(preset.frequencyKHz, preset.bandwidthHz, preset.spreadingFactor, preset.codingRate, null)
+        publish(SettingsEvent.ClientRepeatUpdated(repeat))
         preset.pathHashMode?.let { mode ->
             if (configuration { queryDevice() }.supportsPathHashMode) configuration { setPathHashMode(mode) }
         }
@@ -201,32 +203,48 @@ class SettingsService(
     suspend fun setRadioParams(
         frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte, codingRate: UByte,
         clientRepeat: Boolean? = null,
-    ) = operation { writeRadio(frequencyKHz, bandwidthKHz, spreadingFactor, codingRate, clientRepeat) }
+    ) = operation {
+        nextRadioRevision()
+        val repeat = writeRadio(frequencyKHz, bandwidthKHz, spreadingFactor, codingRate, clientRepeat)
+        publish(SettingsEvent.ClientRepeatUpdated(repeat))
+    }
+
+    private fun nextRadioRevision(): Long = synchronized(eventLock) {
+        Math.incrementExact(radioRevision).also { radioRevision = it }
+    }
 
     private suspend fun writeRadio(
         frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte, codingRate: UByte, clientRepeat: Boolean?,
         repeatAttempt: PreRepeatSettingsAttempt? = null,
         restoreAuthority: RepeatSnapshotRestoreAuthority? = null,
-    ) = configuration {
-        if (restoreAuthority != null) {
-            require(repeatAttempt == null)
-            restoreAuthority.withWrite { permit ->
-                setRadio(frequencyKHz.toDouble() / 1000.0, bandwidthKHz.toDouble() / 1000.0,
-                    spreadingFactor, codingRate, clientRepeat, sendPermit = permit)
+    ): Boolean {
+        val repeat = clientRepeat ?: configuration { queryDevice() }.clientRepeat
+        val wireRepeat = clientRepeat ?: repeat.takeIf { it }
+        configuration {
+            if (restoreAuthority != null) {
+                require(repeatAttempt == null)
+                restoreAuthority.withWrite { permit ->
+                    setRadio(frequencyKHz.toDouble() / 1000.0, bandwidthKHz.toDouble() / 1000.0,
+                        spreadingFactor, codingRate, wireRepeat, sendPermit = permit)
+                }
+                return@configuration
             }
-            return@configuration
+            if (repeatAttempt == null) {
+                setRadio(frequencyKHz.toDouble() / 1000.0, bandwidthKHz.toDouble() / 1000.0, spreadingFactor, codingRate, wireRepeat)
+            } else {
+                require(repeatAttempt.token == context.token)
+                setRadio(frequencyKHz.toDouble() / 1000.0, bandwidthKHz.toDouble() / 1000.0, spreadingFactor, codingRate,
+                    wireRepeat, repeatAttempt.startRadioDispatch())
+                repeatAttempt.recordRadioWriteCompleted()
+            }
         }
-        if (repeatAttempt == null) {
-            setRadio(frequencyKHz.toDouble() / 1000.0, bandwidthKHz.toDouble() / 1000.0, spreadingFactor, codingRate, clientRepeat)
-        } else {
-            require(repeatAttempt.token == context.token)
-            setRadio(frequencyKHz.toDouble() / 1000.0, bandwidthKHz.toDouble() / 1000.0, spreadingFactor, codingRate,
-                clientRepeat, repeatAttempt.startRadioDispatch())
-            repeatAttempt.recordRadioWriteCompleted()
-        }
+        return repeat
     }
 
-    suspend fun setTxPower(power: Byte) = operation { configuration { setTxPower(power) } }
+    suspend fun setTxPower(power: Byte) = operation {
+        nextRadioRevision()
+        configuration { setTxPower(power) }
+    }
     suspend fun getTime(): Instant = operation { configuration { getTime() } }
     suspend fun setTime(date: Instant) = operation { configuration { setTime(date) } }
     suspend fun setNodeName(name: String) = operation {
@@ -606,6 +624,7 @@ class SettingsService(
         restoreAuthority: RepeatSnapshotRestoreAuthority? = null,
     ): SelfInfo = operation(settleCancellation = repeatAttempt != null) {
         expectedDevice?.let { verifyQueuedRadioBaseline(it) }
+        nextRadioRevision()
         val actual = writeRadioAndVerify(
             frequencyKHz, bandwidthKHz, spreadingFactor, codingRate, clientRepeat,
             repeatAttempt = repeatAttempt, restoreAuthority = restoreAuthority,
@@ -622,12 +641,12 @@ class SettingsService(
         repeatAttempt: PreRepeatSettingsAttempt? = null,
         restoreAuthority: RepeatSnapshotRestoreAuthority? = null,
     ): SelfInfo = context.operation(settleCancellation = repeatAttempt != null) {
-        val repeatCompletion = clientRepeat?.let { CompletableDeferred<Unit>() }
+        val repeatCompletion = CompletableDeferred<Unit>()
         val (actual, revision) = acknowledged(
-            additionalCompletions = listOfNotNull(repeatCompletion), settleCancellation = repeatAttempt != null,
+            additionalCompletions = listOf(repeatCompletion), settleCancellation = repeatAttempt != null,
         ) { completion, owner ->
             expectedDevice?.let { verifyQueuedRadioBaseline(it) }
-            val revision = synchronized(eventLock) { Math.incrementExact(radioRevision).also { radioRevision = it } }
+            val revision = nextRadioRevision()
             val actual = writeRadioAndVerify(
                 frequencyKHz, bandwidthKHz, spreadingFactor, codingRate, clientRepeat, repeatCompletion, owner, repeatAttempt,
                 restoreAuthority,
@@ -678,7 +697,10 @@ class SettingsService(
             !(abs(actual.radioBandwidth - expected.bandwidth.toDouble() / 1000.0) < 0.0005) ||
             actual.radioSpreadingFactor != expected.spreadingFactor || actual.radioCodingRate != expected.codingRate ||
             repeat != expected.clientRepeat
-        ) verification("unchanged radio settings", "radio settings changed while the operation was queued")
+        ) {
+            nextRadioRevision()
+            verification("unchanged radio settings", "radio settings changed while the operation was queued")
+        }
     }
 
     private suspend fun writeRadioAndVerify(
@@ -688,7 +710,7 @@ class SettingsService(
         repeatAttempt: PreRepeatSettingsAttempt? = null,
         restoreAuthority: RepeatSnapshotRestoreAuthority? = null,
     ): SelfInfo {
-        writeRadio(frequency, bandwidth, sf, cr, clientRepeat, repeatAttempt, restoreAuthority)
+        val expectedRepeat = writeRadio(frequency, bandwidth, sf, cr, clientRepeat, repeatAttempt, restoreAuthority)
         val actual = configuration { sendAppStart() }
         if (!(abs(actual.radioFrequency - frequency.toDouble() / 1000.0) < 0.001) ||
             !(abs(actual.radioBandwidth - bandwidth.toDouble() / 1000.0) < 0.001) ||
@@ -698,16 +720,15 @@ class SettingsService(
             "freq=${sourceDoubleDescription(actual.radioFrequency)}, bw=${sourceDoubleDescription(actual.radioBandwidth)}, " +
                 "sf=${actual.radioSpreadingFactor}, cr=${actual.radioCodingRate}",
         )
-        if (clientRepeat != null) {
-            val actualRepeat = configuration { queryDevice() }.clientRepeat
-            if (actualRepeat != clientRepeat) verification("clientRepeat=$clientRepeat", "clientRepeat=$actualRepeat")
-            if (!clientRepeat) restoreAuthority?.onRestoreVerified()
-            publish(SettingsEvent.ClientRepeatUpdated(clientRepeat, repeatCompletion), repeatCompletion, owner)
-        }
+        val actualRepeat = configuration { queryDevice() }.clientRepeat
+        if (actualRepeat != expectedRepeat) verification("clientRepeat=$expectedRepeat", "clientRepeat=$actualRepeat")
+        if (!expectedRepeat) restoreAuthority?.onRestoreVerified()
+        publish(SettingsEvent.ClientRepeatUpdated(actualRepeat, repeatCompletion), repeatCompletion, owner)
         return actual
     }
 
     suspend fun applyRadioPresetVerified(preset: RadioPreset): SelfInfo = operation {
+        nextRadioRevision()
         val actual = writeRadioAndVerify(
             preset.frequencyKHz, preset.bandwidthHz, preset.spreadingFactor, preset.codingRate, null,
         )
@@ -721,12 +742,13 @@ class SettingsService(
     /** A preset settles RF and its optional hash projection only after both durable acknowledgements. */
     suspend fun applyRadioPresetPersisted(preset: RadioPreset): SelfInfo = context.operation {
         val hashCompletion = CompletableDeferred<Unit>()
+        val repeatCompletion = CompletableDeferred<Unit>()
         val (actual, revision, hashRevision) = acknowledged(
-            additionalCompletions = listOf(hashCompletion),
+            additionalCompletions = listOf(hashCompletion, repeatCompletion),
         ) { completion, owner ->
-            val revision = synchronized(eventLock) { Math.incrementExact(radioRevision).also { radioRevision = it } }
+            val revision = nextRadioRevision()
             val actual = writeRadioAndVerify(
-                preset.frequencyKHz, preset.bandwidthHz, preset.spreadingFactor, preset.codingRate, null,
+                preset.frequencyKHz, preset.bandwidthHz, preset.spreadingFactor, preset.codingRate, null, repeatCompletion, owner,
             )
             val hashRevision = preset.pathHashMode?.let { mode ->
                 if (configuration { queryDevice() }.supportsPathHashMode) {
@@ -746,17 +768,25 @@ class SettingsService(
     }
 
     suspend fun setTxPowerVerified(power: Byte): SelfInfo = operation {
+        nextRadioRevision()
         val actual = writeTxPowerAndVerify(power)
         publish(SettingsEvent.DeviceUpdated(actual, null))
         actual
     }
 
     suspend fun setTxPowerPersisted(power: Byte): SelfInfo = context.operation {
-        acknowledged { completion, owner ->
+        val (actual, previousRevision, revision) = acknowledged { completion, owner ->
+            val previousRevision = synchronized(eventLock) { radioRevision }
+            val revision = nextRadioRevision()
             val actual = writeTxPowerAndVerify(power)
             publish(SettingsEvent.DeviceUpdated(actual, null, completion), completion, owner)
-            actual
+            Triple(actual, previousRevision, revision)
         }
+        synchronized(eventLock) {
+            // TX readback cannot acknowledge an earlier unresolved Repeat publication.
+            if (persistedRadioRevision == previousRevision) persistedRadioRevision = revision
+        }
+        actual
     }
 
     private suspend fun writeTxPowerAndVerify(power: Byte): SelfInfo {

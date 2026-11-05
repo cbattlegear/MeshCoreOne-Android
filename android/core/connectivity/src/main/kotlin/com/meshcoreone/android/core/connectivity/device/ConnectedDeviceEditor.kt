@@ -263,7 +263,9 @@ class ConnectedDeviceEditor(
     suspend fun abortPreRepeatSettings(expectedToken: SessionToken, attempt: PreRepeatSettingsAttempt): Boolean {
         require(attempt.token == expectedToken)
         val receipt = attempt.takeAbortSnapshot() ?: return true
-        val saved = sessionEdit("abortRepeat", expectedToken, expectedSnapshot = receipt) { it.clearingPreRepeatSettings() }
+        val saved = sessionEdit("abortRepeat", expectedToken) {
+            repeatSnapshotAuthority.abortingUnsentSnapshot(it, receipt, attempt)
+        }
         if (!saved) {
             val failure = DeviceEditPersistenceConflict()
             diagnostics.report("device.abortRepeat", failure)

@@ -288,7 +288,10 @@ class AppDirectAckConfirmationComposeTest : RoomProcessTest() {
                     if (ownerChange != OwnerChange.DISCONNECT) {
                         val nextPairing = if (ownerChange == OwnerChange.SAME_RADIO) pairing else UUID.randomUUID()
                         h.manager.connect(h.target(nextPairing))
-                        h.settle()
+                        h.eventually("mounted replacement owner ready without monitor progress") {
+                            h.manager.connectionState == DeviceConnectionState.READY &&
+                                h.sessions.current?.token != null && h.sessions.current?.token != oldToken
+                        }
                         h.assertReady()
                         assertNotEquals(oldToken, requireNotNull(h.sessions.current).token)
                         if (ownerChange == OwnerChange.SAME_RADIO) assertEquals(radio, h.sessions.current?.token?.radioId)

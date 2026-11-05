@@ -6,6 +6,7 @@
   "source_component_parent": "276dea26172ad8f4b9d583b9d63c62ccfc530007",
   "source_integration_parent": "fabdee22b85660292aed5a50df955f4ba5b34f46",
   "source_fenced_parent": "ceeb75da73363cbdb4d1c8474d954e16998f21d6",
+  "source_serial_parent": "bf9bfb0efdb5b4ca1d110a18a7b81fe2494c0c64",
   "reference_pin": "db14559b39d32322b06477c6ae676112f583db50",
   "canonical_observer": "0fb7fec315cb5d76988dfc8ff2eef9240c72092b",
   "canonical_message_snapshot": "b2044bb45727b13c78b59169f4cde4bdcb2c9bfb",
@@ -64,6 +65,13 @@
       "Double-font actual failed direct row retains composer and retry reachability"
     ],
     "aggregate_class": "DirectMessageConfirmationAggregateTest",
+    "real_persistence_consumer_class": "DirectMessageConfirmationPersistenceIntegrationTest",
+    "real_persistence_consumer_cases": [
+      "Genuine composed Room optional inspector, no delegation/fake identity: retained FAILED has unproven and strict-prehistory reasons; second store handle preserves diagnostic identity; reconstructed aggregate never binds a row or changes status",
+      "Actual public Room deletion and identical DTO recreation yields a different stored incarnation while every DTO field remains equal; Missing is distinct during deletion",
+      "Actual composed radio observer after all message rows are deleted and a new store handle is opened reports PREAUTHORITY_HISTORY_UNKNOWN for the original and a never-seen radio"
+    ],
+    "real_persistence_consumer_limit": "These source controls require the separately composed immutable storage producer and fail explicitly if capability is absent. A new store handle over the same in-memory Room database is NOT a database/process restart or migration test. No execution or coverage success is claimed.",
     "aggregate_cases": [
       "All direction/channel/status combinations for conservative failure text without DTO mutation",
       "Missing capability, serial radio-filtered known-code query and 1000ms post-batch delay",

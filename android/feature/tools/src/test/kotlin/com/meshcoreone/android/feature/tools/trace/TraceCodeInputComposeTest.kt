@@ -356,6 +356,41 @@ class TraceCodeInputComposeTest {
         }
     }
 
+    @Test fun retainedHopCallbacksCannotEditOrCancelTheHopNowOccupyingTheOldIndex() {
+        for (removeFirst in listOf(false, true)) {
+            val harness = configured()
+            harness.holder.addNode(contact(0xA1, name = "Alpha"))
+            harness.holder.addNode(contact(0xB2, name = "Bravo"))
+            harness.holder.addNode(contact(0xC3, name = "Charlie"))
+            mountPathList(harness)
+            val alpha = harness.state.outboundPath[0]
+            val moveLabel = pathActionDescription(C.contactsDetailAvatarCropMoveDown, 1, alpha)
+            val deleteLabel = pathActionDescription(L.commonDelete, 1, alpha)
+            val oldMove = assertNotNull(actionButton(moveLabel).config[SemanticsActions.OnClick].action)
+            val oldRemove = assertNotNull(actionButton(deleteLabel).config[SemanticsActions.OnClick].action)
+            clickDescription(if (removeFirst) deleteLabel else moveLabel)
+            assertEquals("Bravo", harness.state.outboundPath[0].resolvedName)
+            val gate = CompletableDeferred<MessageSentInfo>()
+            var tag = 0u
+            harness.deps.sender = TraceSender { sentTag, _, _, _ -> tag = sentTag; gate.await() }
+            val run = harness.start { harness.holder.runTrace() }
+            val running = harness.state
+            host.get().runOnUiThread {
+                assertTrue(oldMove())
+                assertTrue(oldRemove())
+            }
+            settle()
+            assertEquals(running, harness.state, "Old Alpha callbacks must not edit or cancel Bravo's path")
+            assertEquals(tag, harness.holder.pendingTag)
+            gate.complete(MessageSentInfo(0u, Bytes.EMPTY, 0u))
+            harness.main.runCurrent()
+            harness.respond(tag, listOf(node(0xB2, 5.0), node(null, 3.0)), RADIO)
+            settle()
+            assertTrue(run.isCompleted)
+            assertEquals(running.fullPathData, assertNotNull(harness.state.result).tracedPathBytes)
+        }
+    }
+
     @Test fun emptyAndWhitespacePasteClearPriorSuccessAndErrorsWithoutChangingDraft() {
         listOf("", " \n\t\r ", "\u200B\n \r\u200B").forEach { blank ->
             val harness = configured()

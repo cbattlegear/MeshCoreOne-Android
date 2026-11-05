@@ -344,15 +344,26 @@ class TracePathStateHolder(
     /** Appends a run to the saved path in the background and refreshes the active reference. */
     internal fun appendRunInBackground(savedPath: SavedTracePathDTO, run: TracePathRunDTO) {
         val store = deps.savedPaths() ?: return
-        scope.launch { appendRun(store, savedPath, run) }
+        val revision = batch.revision
+        scope.launch { appendRun(store, savedPath, run, revision) }
     }
 
-    internal suspend fun appendRun(store: TracePathPersisting, savedPath: SavedTracePathDTO, run: TracePathRunDTO) {
+    internal suspend fun appendRun(
+        store: TracePathPersisting,
+        savedPath: SavedTracePathDTO,
+        run: TracePathRunDTO,
+        revision: Long = batch.revision,
+    ) {
         val key = EntityKey(savedPath.radioId, savedPath.id)
         try {
             store.appendTracePathRun(key, run)
             store.fetchSavedTracePath(key)?.let { updated ->
-                update { if (it.activeSavedPath?.id == savedPath.id) it.copy(activeSavedPath = updated) else it }
+                update {
+                    val active = it.activeSavedPath
+                    if (batch.revision == revision && active != null && active.id == key.id && active.radioId == key.radioId) {
+                        it.copy(activeSavedPath = updated)
+                    } else it
+                }
             }
         } catch (error: CancellationException) {
             throw error

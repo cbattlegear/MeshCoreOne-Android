@@ -282,7 +282,11 @@ internal fun TracePathListContent(state: TracePathState, holder: TracePathStateH
                             Text(hop.hashHex, style = MaterialTheme.typography.bodySmall)
                         }
                         OutlinedButton(
-                            onClick = { holder.moveRepeater(setOf(index), index - 1) },
+                            onClick = {
+                                if (holder.state.value.outboundPath.getOrNull(index)?.id == hop.id) {
+                                    holder.moveRepeater(setOf(index), index - 1)
+                                }
+                            },
                             enabled = index > 0,
                             modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics {
                                 contentDescription = "$moveUpLabel: $hopLabel"
@@ -291,7 +295,11 @@ internal fun TracePathListContent(state: TracePathState, holder: TracePathStateH
                             Text("↑")
                         }
                         OutlinedButton(
-                            onClick = { holder.moveRepeater(setOf(index), index + 2) },
+                            onClick = {
+                                if (holder.state.value.outboundPath.getOrNull(index)?.id == hop.id) {
+                                    holder.moveRepeater(setOf(index), index + 2)
+                                }
+                            },
                             enabled = index < state.outboundPath.lastIndex,
                             modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics {
                                 contentDescription = "$moveDownLabel: $hopLabel"
@@ -300,7 +308,11 @@ internal fun TracePathListContent(state: TracePathState, holder: TracePathStateH
                             Text("↓")
                         }
                         OutlinedButton(
-                            onClick = { holder.removeRepeater(index) },
+                            onClick = {
+                                if (holder.state.value.outboundPath.getOrNull(index)?.id == hop.id) {
+                                    holder.removeRepeater(index)
+                                }
+                            },
                             modifier = Modifier.sizeIn(minHeight = 48.dp).semantics {
                                 contentDescription = "$deleteLabel: $hopLabel"
                             },

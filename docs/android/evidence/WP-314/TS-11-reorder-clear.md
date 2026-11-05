@@ -71,5 +71,7 @@ presentation or overwrite a newer run. The explicit native safety adaptation is 
 in `docs/android/deviations/WP-314.md`. Added assertions include held-send success/failure,
 late-response and timeout controls, partial-history preservation, a newer execution,
 suspended saved-path work, and stale mounted reorder/clear-confirmation callbacks.
+Retained row callbacks additionally bind the captured hop UUID at its index, and history
+refresh binds the full radio/path key and execution revision, including clear/reselect.
 All existing assertions remain. Successor compile, actual method discovery and execution
 are pending; neither historical passing run nor source inventory proves this successor.

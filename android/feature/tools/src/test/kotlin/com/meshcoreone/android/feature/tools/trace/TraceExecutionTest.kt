@@ -9,6 +9,7 @@ import com.meshcoreone.android.core.model.SavedTracePathDTO
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.MessageSentInfo
 import java.io.IOException
+import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -439,6 +440,40 @@ class TraceExecutionTest {
         assertNull(harness.state.activeSavedPath)
         assertNull(harness.state.result)
         assertEquals(1, persistence.paths.getValue(saved.id).runs.size, "The already accepted historical run remains")
+    }
+
+    @Test
+    fun `held history refresh cannot overwrite another radio or a reselected saved path`() {
+        for (differentRadio in listOf(false, true)) {
+            val h = TraceHarness(configureDependencies = true)
+            val persistence = InMemoryTracePathStore { h.time.now() }
+            val gate = CompletableDeferred<Unit>()
+            val recorded = FakeTraceSender()
+            h.deps.device = device()
+            h.deps.sender = recorded
+            h.holder.addNode(alpha)
+            val saved = savedPath(h.state.fullPathData, radioId = RADIO)
+            persistence.insert(saved)
+            h.deps.store = object : TracePathPersisting by persistence {
+                override suspend fun fetchSavedTracePath(key: EntityKey): SavedTracePathDTO? {
+                    gate.await()
+                    return persistence.fetchSavedTracePath(key)
+                }
+            }
+            h.complete { h.holder.runTrace() }
+            h.respond(recorded.sent.single().tag, listOf(node(0xA1, 5.0), node(null, 3.0)), RADIO)
+            h.holder.clearPath()
+            val selected = saved.copy(
+                radioId = if (differentRadio) RadioId(UUID.fromString("00000000-0000-0000-0000-0000000000b2")) else RADIO,
+                name = "New selection",
+            )
+            h.holder.loadSavedPath(selected)
+            gate.complete(Unit)
+            h.main.runCurrent()
+            assertEquals(selected, h.state.activeSavedPath)
+            assertNull(h.state.result)
+            assertEquals(1, persistence.paths.getValue(saved.id).runs.size)
+        }
     }
 
     @Test

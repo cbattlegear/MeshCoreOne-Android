@@ -57,12 +57,17 @@ import kotlin.test.assertTrue
 class SettingsRepeatPersistenceTest : RoomProcessTest() {
     @Test fun advancedApplyPreservesRestoredRfUnlessExplicitlyEditedAfterRepeatOffProjectionFailure() = runTest {
         for ((baselineBandwidth, editAfterFailure) in listOf(250_000u to false, 250_000u to true, 7_799u to false)) {
-        var rejectRepeatOff = false
+        var rejectRestoreProjections = false
+        var rejectedRepeatOff = false
+        var rejectedRestoredRf = false
         val failing = object : PersistenceStoreProtocol by store {
             override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
-                if (rejectRepeatOff && expected.device.clientRepeat && !dto.clientRepeat) {
-                    rejectRepeatOff = false
-                    throw PersistenceStoreException(PersistenceStoreError.SaveFailed("Repeat off projection unavailable"))
+                if (rejectRestoreProjections && expected.device.clientRepeat &&
+                    (!dto.clientRepeat || dto.frequency != expected.device.frequency)
+                ) {
+                    if (!dto.clientRepeat) rejectedRepeatOff = true
+                    if (dto.frequency != expected.device.frequency) rejectedRestoredRf = true
+                    throw PersistenceStoreException(PersistenceStoreError.SaveFailed("Repeat restore storage unavailable"))
                 }
                 return store.saveDeviceIfUnchanged(dto, expected)
             }
@@ -112,16 +117,19 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                 assertEquals(125_000u, repeating.bandwidth)
                 assertEquals(9u.toUByte(), repeating.spreadingFactor)
                 assertEquals(7u.toUByte(), repeating.codingRate)
-                rejectRepeatOff = true
+                rejectRestoreProjections = true
                 holder.onRepeatToggled(false)
                 h.eventually("verified off failed its first actual Room projection") {
                     !holder.state.value.isApplyingRepeat && failures.isNotEmpty()
                 }
-                assertFalse(rejectRepeatOff)
+                h.eventually("both restore publications encounter the actual storage outage") {
+                    rejectedRepeatOff && rejectedRestoredRf
+                }
                 assertFalse(holder.state.value.isRepeatEnabled)
                 assertNotNull(holder.state.value.errorMessage)
                 assertEquals(repeating, store.fetchDevice(before.id))
                 assertEquals(repeating, h.manager.connectedDevice)
+                rejectRestoreProjections = false
                 assertEquals(before.frequency, radio.frequency)
                 assertFalse(session.settingsService.queryDevice().clientRepeat)
                 assertTrue(session.settingsService.radioSettingsNeedsRecovery)

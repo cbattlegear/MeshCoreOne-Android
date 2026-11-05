@@ -6,8 +6,11 @@ import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.LifecycleStage
 import com.meshcoreone.android.core.contracts.domain.MessagingDiagnostic
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.contracts.domain.TeardownReport
+import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceError
+import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceException
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.MessageDTO
@@ -514,6 +517,156 @@ class SessionLifecycleTest : RoomProcessTest() {
                 if (cleanup !== failure) failure.addSuppressed(cleanup)
             }
         }
+    }
+
+    @Test
+    fun unsolicitedErrorTwoDuringChannelScopeSetupDoesNotBecomeAChannelQueryFailure() = runTest {
+        val radioId = RadioId(UUID.fromString("B0000000-0000-0000-0000-000000000001"))
+        val deviceId = UUID.fromString("B0000000-0000-0000-0000-000000000002")
+        val messageId = UUID.fromString("B0000000-0000-0000-0000-000000000004")
+        val pendingId = UUID.fromString("B0000000-0000-0000-0000-000000000005")
+        val scopeCommands = ConcurrentLinkedQueue<Bytes>()
+        val channelWrites = ConcurrentLinkedQueue<Bytes>()
+        val initialChannelRequests = ConcurrentLinkedQueue<UByte>()
+        val postScopeChannelRequests = ConcurrentLinkedQueue<UByte>()
+        val attemptCounts = ConcurrentLinkedQueue<Long>()
+        val accountingReceipts = ConcurrentLinkedQueue<ChannelQueryAccountingEvent>()
+        val scopeErrorDelivered = AtomicBoolean(false)
+        val observedStore = object : PersistenceStoreProtocol by store {
+            override suspend fun incrementPendingSendAttemptCount(key: EntityKey): Long? {
+                val count = store.incrementPendingSendAttemptCount(key)
+                count?.let(attemptCounts::add)
+                return count
+            }
+        }
+        val h = ContainerHarness(
+            this,
+            store,
+            runtimeClock = SystemRuntimeClock(),
+            runtimeContext = Dispatchers.Default,
+            sessionConfiguration = SessionConfiguration(defaultTimeout = 0.2),
+            messageServiceConfig = MessageServiceConfig(
+                poolBackoff = PoolBackoffConfig(attemptCap = 2, baseDelay = 0.01),
+            ),
+            chatSendQueueConfig = ChatSendQueueConfig(maxConsecutiveFetchChannelFailures = QUERY_FAILURE_CAP),
+            mainScope = CoroutineScope(backgroundScope.coroutineContext + Dispatchers.Default.limitedParallelism(1)),
+            onChannelQueryAccounting = { accountingReceipts += it },
+            persistenceOverride = observedStore,
+        )
+        h.links.configureRadio = { radio ->
+            radio.respond = { command ->
+                when (command[0].toInt()) {
+                    0x36 -> {
+                        scopeCommands += command
+                        if (scopeErrorDelivered.compareAndSet(false, true)) {
+                            radio.push(Bytes.of(1, 2))
+                        }
+                        listOf(Bytes.of(0))
+                    }
+                    3 -> {
+                        channelWrites += command
+                        listOf(Bytes.of(0))
+                    }
+                    31 -> {
+                        val index = command[1]
+                        if (scopeErrorDelivered.get()) postScopeChannelRequests += index
+                        else initialChannelRequests += index
+                        listOf(
+                            Bytes.of(0x12, index.toInt()) +
+                                Bytes.utf8(if (index == 0.toUByte()) "Test" else "").paddedOrTruncated(32) +
+                                Bytes(ByteArray(16) { if (index == 0.toUByte()) 0xaa.toByte() else 0 }),
+                        )
+                    }
+                    else -> null
+                }
+            }
+        }
+        val channel = ChannelDTO(
+            id = UUID.fromString("B0000000-0000-0000-0000-000000000003"),
+            radioId = radioId,
+            index = 0u,
+            name = "Test",
+            secret = Bytes.fromHex("aa".repeat(16)),
+        )
+        val message = MessageDTO(
+            id = messageId,
+            radioId = radioId,
+            channelIndex = 0u,
+            text = "Scope setup control",
+            timestamp = 1_704_067_200u,
+            createdAt = EPOCH,
+            sortDate = EPOCH,
+            direction = MessageDirection.OUTGOING,
+            status = MessageStatus.PENDING,
+        )
+        store.saveDevice(DeviceDTO(
+            id = deviceId,
+            radioId = radioId,
+            publicKey = key(7),
+            nodeName = "Stored Node",
+            isActive = false,
+        ))
+        store.saveChannel(channel)
+        store.saveMessage(message)
+        store.upsertPendingSend(PendingSendDTO(
+            id = pendingId,
+            radioId = radioId,
+            messageID = messageId,
+            kind = PendingSendKind.CHANNEL,
+            contactID = null,
+            channelIndex = 0u,
+            isResend = false,
+            messageText = message.text,
+            messageTimestamp = message.timestamp,
+            localNodeName = "Stored Node",
+            sequence = 1,
+            enqueuedAt = EPOCH,
+            attemptCount = 2,
+        ))
+
+        var transportOpenTrigger: Job? = null
+        try {
+            assertTrue(h.container.foreground.activityStarted())
+            h.appState.handleBecameActive()
+            h.appState.handleReturnToForeground()
+            h.connect(h.target(deviceId))
+            h.eventually("initial channel sync before the scope-error control") {
+                initialChannelRequests.toSet() == (0 until 8).map { it.toUByte() }.toSet()
+            }
+            transportOpenTrigger = backgroundScope.launch(Dispatchers.Default) {
+                while (isActive) {
+                    h.sessions.current?.chatSendQueueService?.transportDidOpen()
+                    delay(50.milliseconds)
+                }
+            }
+            h.eventually("B's pre-send scope failure to become terminal") {
+                store.fetchMessage(EntityKey(radioId, messageId))?.status == MessageStatus.FAILED &&
+                    store.fetchPendingSends(radioId).none { it.messageID == messageId } &&
+                    synchronized(h.messagingDiagnostics) {
+                        h.messagingDiagnostics.filterIsInstance<MessagingDiagnostic.Failure>()
+                            .any { it.operation == "terminal.$messageId" }
+                    }
+            }
+        } finally {
+            transportOpenTrigger?.cancel()
+            h.container.close()
+        }
+
+        assertTrue(scopeErrorDelivered.get(), "the deterministic ERROR 2 must arrive during SET_FLOOD_SCOPE")
+        assertEquals(1, scopeCommands.size)
+        assertEquals(0x36, scopeCommands.single()[0].toInt())
+        assertEquals(listOf(3L), attemptCounts.toList(), "the actual pending B attempt advances from 2 to 3")
+        assertTrue(channelWrites.isEmpty(), "scope setup must fail before SEND_CHANNEL")
+        assertTrue(postScopeChannelRequests.isEmpty(), "scope ERROR 2 must not trigger GET_CHANNEL")
+        assertTrue(accountingReceipts.isEmpty(), "no genuine queue query means no query-accounting receipt")
+        assertEquals(MessageStatus.FAILED, store.fetchMessage(EntityKey(radioId, messageId))?.status)
+        assertFalse(store.fetchPendingSends(radioId).any { it.messageID == messageId })
+        val terminal = synchronized(h.messagingDiagnostics) {
+            h.messagingDiagnostics.filterIsInstance<MessagingDiagnostic.Failure>()
+                .single { it.operation == "terminal.$messageId" }
+        }
+        val failure = assertIs<MessageServiceException>(terminal.cause)
+        assertIs<MessageServiceError.SendFailed>(failure.error)
     }
 
     @Test

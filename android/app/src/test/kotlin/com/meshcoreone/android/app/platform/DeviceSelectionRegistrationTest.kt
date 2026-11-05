@@ -87,10 +87,14 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
 
     private fun open(h: ContainerHarness) {
         compose.onNodeWithText(compose.activity.getString(S.deviceConnect)).performScrollTo().performClick()
+        compose.waitForIdle()
         h.settle()
-        compose.onNodeWithText(compose.activity.getString(S.deviceSelectionTitle)).assertIsDisplayed()
+        selectionTitle().assertIsDisplayed()
         assertEquals(AppTab.SETTINGS, h.container.navigation.state.value.selectedTab)
     }
+
+    private fun selectionTitle() =
+        compose.onNode(hasText(compose.activity.getString(S.deviceSelectionTitle)) and !hasClickAction())
 
     @Test fun settingsEntrySelectsTheSavedBleIdentityWithFullSyncAndForceReconnect() = runTest {
         withSettings { h, feature ->
@@ -104,7 +108,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             h.links.configureRadio = { it.connectGate = gate }
             compose.onNodeWithText(device.nodeName).performClick()
             h.eventually("selected BLE connection entered") { h.links.links.size == linksBefore + 1 }
-            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionTitle)).assertDoesNotExist()
+            selectionTitle().assertDoesNotExist()
             assertEquals(device.id, (h.links.links.last().target as ConnectionTarget.Bluetooth).deviceId)
             assertEquals(ConnectionIntent.WantsConnection(forceFullSync = true), h.manager.connectionIntent)
             gate.complete(Unit)
@@ -226,7 +230,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             compose.onNodeWithText(device.nodeName).assertIsNotEnabled().performClick()
             h.settle()
             assertEquals(linksBefore, h.links.links.size)
-            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionTitle)).assertIsDisplayed()
+            selectionTitle().assertIsDisplayed()
             assertFalse(h.appState.connectionUI.showingConnectionFailedAlert)
             assertEquals(0, h.pairing.removeCalls)
         }
@@ -292,7 +296,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             compose.onNodeWithText("Needs setup").performClick()
             compose.waitForIdle()
             h.settle()
-            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionTitle)).assertDoesNotExist()
+            selectionTitle().assertDoesNotExist()
             val prompt = requireNotNull(h.appState.connectionUI.pendingSystemPairingSetup)
             assertEquals(listOf(first), prompt.accessories.map { it.id })
             assertNull(h.appState.connectionUI.queuedSystemPairingSetup)
@@ -316,7 +320,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
             compose.waitForIdle()
             h.eventually("scan picker completed once") { pickerCalls == 1 && !h.container.connectionPort.isPairingFlowActive }
-            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionTitle)).assertDoesNotExist()
+            selectionTitle().assertDoesNotExist()
             assertFalse(h.appState.connectionUI.queuedDeviceScanAfterSelectionDismiss)
             assertNull(h.appState.connectionUI.queuedSystemPairingSetup)
             assertEquals(AppTab.SETTINGS, h.container.navigation.state.value.selectedTab)
@@ -332,7 +336,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             open(h)
             compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
             compose.waitForIdle()
-            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionTitle)).assertDoesNotExist()
+            selectionTitle().assertDoesNotExist()
             assertFalse(h.container.connectionPort.isPairingFlowActive)
             assertTrue(h.links.radios.isEmpty())
             open(h)
@@ -345,7 +349,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             open(h)
             compose.onNodeWithText(compose.activity.getString(S.deviceSelectionConnectViaWifi)).performClick()
             compose.waitForIdle()
-            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionTitle)).assertDoesNotExist()
+            selectionTitle().assertDoesNotExist()
             compose.onNodeWithText(compose.activity.getString(O.wifiConnectionTitle)).assertIsDisplayed()
             compose.onNodeWithText(compose.activity.getString(L.commonCancel)).performClick()
             compose.onNodeWithText(compose.activity.getString(O.wifiConnectionTitle)).assertDoesNotExist()
@@ -379,7 +383,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             }
             compose.waitForIdle()
             compose.onNodeWithText(compose.activity.getString(O.wifiConnectionTitle)).assertDoesNotExist()
-            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionTitle)).assertDoesNotExist()
+            selectionTitle().assertDoesNotExist()
             assertEquals(AppTab.SETTINGS, h.container.navigation.state.value.selectedTab)
             assertFalse(h.appState.connectionUI.showingConnectionFailedAlert)
             assertFalse(h.container.connectionPort.isPairingFlowActive)
@@ -394,11 +398,12 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         withSettings(persistence) { h, feature ->
             mount(h, feature)
             compose.onNodeWithText(compose.activity.getString(S.deviceConnect)).performScrollTo().performClick()
+            compose.waitForIdle()
             h.eventually("saved-device read failure surfaced") { feature.failure.value != null }
             compose.waitForIdle()
             assertEquals("saved-device read failed", feature.failure.value?.message)
             compose.onNodeWithText(compose.activity.getString(S.deviceSelectionNoPairedDevices)).assertDoesNotExist()
-            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionTitle)).assertDoesNotExist()
+            selectionTitle().assertDoesNotExist()
             assertTrue(h.links.radios.isEmpty())
             assertFalse(h.container.connectionPort.isPairingFlowActive)
         }

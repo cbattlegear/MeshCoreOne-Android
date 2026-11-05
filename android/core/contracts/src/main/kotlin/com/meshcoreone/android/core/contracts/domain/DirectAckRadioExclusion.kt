@@ -436,6 +436,13 @@ sealed interface DirectAckRadioSettlementResult {
 
 sealed interface DirectAckRadioSettlementReceipt {
     data class Applied(val receipt: DirectAckReceipt) : DirectAckRadioSettlementReceipt
+    /**
+     * Exact historical committed delivery/idempotency, not a certificate that the original
+     * exclusion met today's policy. Older operation records do not encode prehistory or acceptance
+     * coverage qualifications. Preserve actual DELIVERED without upgrading proof or authority.
+     * Replay requires a genuine valid opaque attempt; a new store after reopen cannot reconstruct
+     * that attempt from inspection/DTOs and rejects the old issuer-context handle.
+     */
     data class AlreadyApplied(val receipt: DirectAckReceipt) : DirectAckRadioSettlementReceipt
 }
 
@@ -644,7 +651,8 @@ sealed interface DirectAckRadioFailureResult {
  * Retain nonpayload binding evidence across product deletion, lease retirement and file reopen;
  * preserve existing payload erasure. Denied acceptance creates no accepted fact, and exact replay
  * preserves the original operation's meaning without renewing permission or fabricating history.
- * Existing genuine delivery/proven replay precedence and sticky-saturation exceptions still apply.
+ * Existing committed delivery/exact historical replay precedence and saturation exceptions apply;
+ * an old committed operation is not thereby a certificate of today's stricter exclusion policy.
  * Strict completeness requires BOTH original emission-tracking provenance and independent
  * acceptance-history-required provenance established atomically at new tracked-wire birth. An
  * older tracked wire without the latter remains legacy/unproven even if its latest actual matches

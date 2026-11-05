@@ -884,3 +884,38 @@ No public result, version field, diagnostic reason, replay behavior or
 DELIVERED semantics is changed by this assessment. Actual old-proof source
 and producer controls remain pending; this is not a declaration that all
 historical RADIO_DELIVERY operations are safety-proven or invalid.
+
+### Actual producer proof fields and supported replay boundary
+
+Storage owner subsequently reported the actual persisted proof shape:
+RADIO_DELIVERY uses a fresh unused operation UUID, kind literal, ACK-code
+argument, nullable RTT maximum and null pending ID; the delivery row carries
+code/RTT, claim/message identity and own DTO snapshot subject to erasure.
+Neither record carries an exclusion-policy version, prehistory qualification
+or acceptance-birth coverage. The older source gap permits a preauthority
+old ACK -> new accepted K -> committed RADIO_DELIVERY sequence. This is
+owner-reported source evidence, not an executed device/migration counterexample
+or an assumption that older candidates never persisted.
+
+Consequently strict AlreadyApplied is explicitly historical commit/idempotency,
+not proof that an older exclusion satisfied today's policy. Preserve
+DELIVERED rows, actual receipt permission, payload erasure and generic public
+semantics. Existing always-unproven message diagnostics and independently
+observed UNKNOWN remain diagnostic; do not silently certify the old decision
+from current metadata or downgrade product status. No speculative public
+proof-version/result change is required for this bounded clarification.
+
+There is an important actual reopen limit: DirectAckAttempt is opaque and
+issuer-context bound. A real new store context rejects the old attempt as
+INVALID_HANDLE; inspection never reissues or reconstructs it. Persisted
+delivery survives, but this is not support for invoking strict settlement
+with a reconstructed historical attempt after restart. Same-context exact
+replay remains read-only, with actual permission and relevant tuple/proof
+mismatch rejected as CONFLICT, never a new strict proof or mutation.
+
+Storage is authoring public Room controls for historical commit followed by
+foreign malformed evidence, exact read-only replay, conflicting tuple and
+relevant proof corruption. These and an actual reopen/old-handle rejection
+control remain separately owned and unexecuted here. This successor changes
+only contract KDoc/evidence; no declarations, replay implementation, public
+version, schema, generic behavior or test expectations are changed.

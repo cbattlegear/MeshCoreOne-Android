@@ -94,7 +94,7 @@ internal class FakeDevices : DevicePersisting, DeviceEditPersisting {
     override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
         beforeConditionalSave()
         conditionalSaveFailure?.let { throw it }
-        if (deviceRevision != expected.revision || authorityRevision != expected.authorityRevision || rows[dto.id] != expected.device) return false
+        if (!expected.isCurrent() || deviceRevision != expected.revision || authorityRevision != expected.authorityRevision || rows[dto.id] != expected.device) return false
         calls += "save"
         rows[dto.id] = dto
         deviceRevision++

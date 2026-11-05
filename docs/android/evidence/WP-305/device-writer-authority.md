@@ -61,3 +61,42 @@ successful production save for an absent row.
 No physical radio, mounted Compose/device, hardware, signing, release or complete WP acceptance is
 claimed. The region controls invoke the same real consumer functions used by the composable but
 do not claim a mounted Settings UI run.
+
+## Review-driven authority follow-up
+
+The exact `7cff2cca21bfa906687980bdf653ef0727376352` hosted run
+<https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41939043733> failed.
+Its app suite discovered 1,915 tests with 14 failures; these are not acceptance evidence.
+Confirmed causes included delegated stores losing the versioned-persistence interface, region
+fixtures seeding a field intentionally preserved by legacy full-row saves, and a suspended
+Room-transaction fixture timing out. Independently owned preset/onboarding fixes must compose
+with this repair; no assertions were removed to hide their failures.
+
+Shared contract prerequisites are `40e6c1e98ac7c4b9499bb2524378c9a9b3f6b4ab` and
+`bd9e98e9d8ba53d4e11046cb67e8853b0d7c15f8`. The storage producer's immutable
+`90cd18e789673209219c912a382963047b50fc5c` was composed here as
+`0e3fbadd3` without importing that producer's ongoing work. It scopes revisions per device,
+shares authority across stores using the same database instance, persists generic region edits
+exactly, resets only removed region channel scopes atomically, and enforces the ticket's
+suspending authority lease around the actual transaction. Its twelve separate real-Room
+`DevicePersistenceAuthorityRoomTest` methods are authored controls, not executed results.
+
+The runtime/editor follow-up uses the same coroutine mutex for activation commits, token-bound
+editor commits and owner-retiring state transitions. A Boolean guard is not claimed to fence
+retirement by itself. Lock ordering is runtime authority before the database mutex; no JVM monitor
+spans suspension and teardown waits occur outside the authority mutex. Ordinary Settings events
+retain their originating tokens. Post-commit caller cancellation still reconciles live fields and
+the actual RX region consumer for the original token; pre-commit cancellation does not write.
+The strengthened retired-region control asserts both the old Room row and channel scopes remain
+unchanged after a successor loads, rather than merely checking that stale live publication fails.
+
+The Settings owner retained service/hash lifecycle ownership. Its bounded default-scope
+acknowledgment and selection/removal queue follow-up is explicitly outstanding; the new awaited
+default editor method is its prerequisite, not evidence that radio verification awaits persistence.
+
+Fresh Windows readiness and the actual `controller\validate.py`, `portmap.py`, and
+`controller\verification_config.py` source commands passed without Kotlin execution. An earlier
+mistaken `tools\android-port\validate.py` path and `portmap.py validate` invocation were rejected
+and were corrected; neither is test evidence. Local Gradle ownership and all user holds remain
+untouched. Hosted exact-candidate jobs/logs remain authoritative; no second CI-result bundle is
+retained, committed, uploaded, hashed or substituted for the hosted result.

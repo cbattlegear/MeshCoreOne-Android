@@ -85,7 +85,7 @@ internal class TestDevices : DevicePersisting, DeviceEditPersisting {
         fetchDevice(id)?.let { DeviceWriteSnapshot(it, revision, authorityRevision) }
     override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
         failure?.let { throw it }
-        if (revision != expected.revision || authorityRevision != expected.authorityRevision || rows[dto.id] != expected.device) return false
+        if (!expected.isCurrent() || revision != expected.revision || authorityRevision != expected.authorityRevision || rows[dto.id] != expected.device) return false
         calls += "save"
         rows[dto.id] = dto
         revision++

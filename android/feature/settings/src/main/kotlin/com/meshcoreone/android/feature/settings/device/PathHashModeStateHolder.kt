@@ -70,7 +70,8 @@ class PathHashModeStateHolder(
                 failedMode = null
                 retryAlert.reset()
             } catch (cancelled: CancellationException) {
-                mutable.update { it.copy(isApplying = false) }
+                failedMode = mode
+                mutable.update { it.copy(isApplying = false, selectedMode = it.device?.pathHashMode ?: 0u) }
                 throw cancelled
             } catch (error: Exception) {
                 failedMode = mode

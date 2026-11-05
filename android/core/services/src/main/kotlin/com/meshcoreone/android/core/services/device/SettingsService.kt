@@ -21,7 +21,6 @@ import com.meshcoreone.android.core.protocol.event.RadioStats
 import com.meshcoreone.android.core.protocol.model.*
 import com.meshcoreone.android.core.protocol.session.ConfigurationSessionOps
 import java.time.Instant
-import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.logging.Logger
 import kotlin.math.abs
@@ -46,7 +45,6 @@ class SettingsService(
     }
 
     private inner class Subscription : SessionEventSubscription<SettingsEvent> {
-        val id: UUID = UUID.randomUUID()
         val channel = Channel<SessionEvent<SettingsEvent>>(Channel.UNLIMITED)
         val pendingPersistence = mutableSetOf<CompletableDeferred<Unit>>()
         private val collected = AtomicBoolean(false)
@@ -62,36 +60,48 @@ class SettingsService(
             }
         }
         override fun close() {
-            synchronized(eventLock) {
-                if (subscription?.id == id) subscription = null
-                val pending = pendingPersistence.toList()
-                pendingPersistence.clear()
-                pending.forEach {
-                    it.completeExceptionally(SettingsServiceException(SettingsServiceError.NotConnected))
-                }
-                channel.close()
+            val pending = synchronized(eventLock) { detachLocked() }
+            finishClose(pending)
+        }
+        fun detachLocked(): List<CompletableDeferred<Unit>> {
+            if (subscription === this) subscription = null
+            return pendingPersistence.toList().also { pendingPersistence.clear() }
+        }
+        fun finishClose(pending: List<CompletableDeferred<Unit>>) {
+            channel.close()
+            pending.forEach {
+                it.completeExceptionally(SettingsServiceException(SettingsServiceError.NotConnected))
             }
         }
     }
 
-    fun events(): SessionEventSubscription<SettingsEvent> = synchronized(eventLock) {
+    fun events(): SessionEventSubscription<SettingsEvent> {
         val next = Subscription()
-        if (eventsFinished || !context.isCurrent) {
-            next.channel.close()
-        } else {
-            if (subscription != null) Logger.getLogger("MeshCore.SettingsService").fine("Replacing settings subscriber")
-            subscription?.close()
-            subscription = next
+        var previous: Subscription? = null
+        var pending = emptyList<CompletableDeferred<Unit>>()
+        val accepted = synchronized(eventLock) {
+            if (eventsFinished || !context.isCurrent) false else {
+                previous = subscription
+                pending = previous?.detachLocked().orEmpty()
+                subscription = next
+                true
+            }
         }
-        next
+        // Closing a channel or completion can resume an unconfined caller that subscribes again.
+        if (accepted) {
+            previous?.finishClose(pending)
+            if (previous != null) Logger.getLogger("MeshCore.SettingsService").fine("Replacing settings subscriber")
+        } else next.close()
+        return next
     }
 
     fun finishEvents() {
-        synchronized(eventLock) {
+        val (previous, pending) = synchronized(eventLock) {
             eventsFinished = true
-            subscription?.close()
-            subscription = null
+            val previous = subscription
+            previous to previous?.detachLocked().orEmpty()
         }
+        previous?.finishClose(pending)
     }
 
     private fun publish(event: SettingsEvent) {
@@ -216,6 +226,7 @@ class SettingsService(
             mode
         } finally {
             synchronized(eventLock) { owner.pendingPersistence.remove(completion) }
+            completion.cancel()
         }
     }
 

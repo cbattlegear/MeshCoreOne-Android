@@ -3,15 +3,19 @@ package com.meshcoreone.android.core.services.device
 
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException
+import com.meshcoreone.android.core.contracts.domain.SessionEventSubscription
 import com.meshcoreone.android.core.protocol.command.PacketBuilder
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -143,6 +147,97 @@ class SettingsPathHashPersistenceTest {
             kotlin.test.assertFailsWith<SettingsServiceException> { write.await() }
         } finally {
             subscription.close()
+            collector.cancel()
+            fixture.close()
+        }
+    }
+
+    @Test fun unconfinedFailureReentryKeepsOnlyTheNewestSubscriberAndItsAcknowledgment() = runTest {
+        val fixture = settingsFixture()
+        val dispatcher = UnconfinedTestDispatcher(testScheduler)
+        val context = DeviceSettingsContext(fixture.context.token, fixture.signals, backgroundScope, dispatcher)
+        val service = SettingsService(fixture.session, context)
+        val first = service.events()
+        val received = CompletableDeferred<SettingsEvent.PathHashModeUpdated>()
+        val firstCollector = backgroundScope.launch(dispatcher) {
+            first.events.collect { received.complete(assertIs<SettingsEvent.PathHashModeUpdated>(it.event)) }
+        }
+        var reentered: SessionEventSubscription<SettingsEvent>? = null
+        try {
+            val write = backgroundScope.async(dispatcher) {
+                try {
+                    service.setPathHashModePersisted(2u)
+                    error("Replacement must not acknowledge persistence")
+                } catch (failure: SettingsServiceException) {
+                    reentered = service.events()
+                    failure
+                }
+            }
+            reply(fixture, 2, PacketBuilder.setPathHashMode(2u), okPacket())
+            reply(fixture, 3, PacketBuilder.deviceQuery(), capabilitiesPacket(hash = 2u))
+            assertNotNull(received.await().persistence)
+            assertFalse(write.isCompleted)
+            val replaced = service.events()
+            assertEquals(SettingsServiceError.NotConnected, write.await().error)
+            assertTrue(firstCollector.isCompleted)
+            val replacedCollector = backgroundScope.async(dispatcher) { replaced.events.toList() }
+            assertTrue(replacedCollector.isCompleted, "Reentrant subscriber must retire the outer replacement")
+            assertTrue(replacedCollector.await().isEmpty())
+            val latest = assertNotNull(reentered)
+            val latestCollector = backgroundScope.launch(dispatcher) {
+                latest.events.collect {
+                    assertEquals(context.token, it.token)
+                    assertNotNull(assertIs<SettingsEvent.PathHashModeUpdated>(it.event).persistence).complete(Unit)
+                }
+            }
+            assertFalse(latestCollector.isCompleted)
+            val retry = request { service.setPathHashModePersisted(0u) }
+            reply(fixture, 4, PacketBuilder.setPathHashMode(0u), okPacket())
+            reply(fixture, 5, PacketBuilder.deviceQuery(), capabilitiesPacket(hash = 0u))
+            assertEquals(0u.toUByte(), retry.await())
+            service.finishEvents()
+            assertTrue(latestCollector.isCompleted)
+        } finally {
+            first.close()
+            reentered?.close()
+            firstCollector.cancel()
+            context.close()
+            fixture.close()
+        }
+    }
+
+    @Test fun cancellingPendingPersistenceDoesNotAcknowledgeOrUndoRadioAndReentryCanRestoreIt() = runTest {
+        val fixture = settingsFixture()
+        val first = fixture.settings.events()
+        val received = CompletableDeferred<SettingsEvent.PathHashModeUpdated>()
+        val collector = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            first.events.collect { received.complete(assertIs<SettingsEvent.PathHashModeUpdated>(it.event)) }
+        }
+        try {
+            val write = backgroundScope.async { fixture.settings.setPathHashModePersisted(2u) }
+            reply(fixture, 2, PacketBuilder.setPathHashMode(2u), okPacket())
+            reply(fixture, 3, PacketBuilder.deviceQuery(), capabilitiesPacket(hash = 2u))
+            val pending = assertNotNull(received.await().persistence)
+            assertFalse(write.isCompleted)
+            write.cancel()
+            runCurrent()
+            kotlin.test.assertFailsWith<CancellationException> { write.await() }
+            assertTrue(pending.isCancelled, "Cancelled waiting is not a successful persistence acknowledgment")
+            assertEquals(3, fixture.radio.sent.size, "Cancellation must not invent a radio rollback write")
+            val next = fixture.settings.events()
+            val nextCollector = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                next.events.collect {
+                    assertNotNull(assertIs<SettingsEvent.PathHashModeUpdated>(it.event).persistence).complete(Unit)
+                }
+            }
+            val retry = request { fixture.settings.setPathHashModePersisted(0u) }
+            reply(fixture, 4, PacketBuilder.setPathHashMode(0u), okPacket())
+            reply(fixture, 5, PacketBuilder.deviceQuery(), capabilitiesPacket(hash = 0u))
+            assertEquals(0u.toUByte(), retry.await())
+            next.close()
+            nextCollector.cancel()
+        } finally {
+            first.close()
             collector.cancel()
             fixture.close()
         }

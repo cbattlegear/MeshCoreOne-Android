@@ -33,6 +33,8 @@ data class DeviceGpsState(val isSupported: Boolean, val isEnabled: Boolean)
  * `RadioPreset` lives in core:services. Failures stay `SettingsServiceException` (core:contracts).
  */
 interface SettingsRadioPort {
+    /** Session-owned uncertainty survives a Settings composition/holder being disposed. */
+    val pathHashModeNeedsRecovery: Boolean get() = false
     suspend fun getSelfInfo(): SelfInfo
     suspend fun setRadioParamsVerified(
         frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte, codingRate: UByte,

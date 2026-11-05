@@ -39,6 +39,10 @@ class SettingsService(
     private val eventLock = Any()
     private var subscription: Subscription? = null
     private var eventsFinished = false
+    private var pathHashRevision = 0L
+    private var persistedPathHashRevision = 0L
+    val pathHashModeNeedsRecovery: Boolean
+        get() = synchronized(eventLock) { pathHashRevision != persistedPathHashRevision }
 
     init {
         context.onClose(::finishEvents)
@@ -53,6 +57,10 @@ class SettingsService(
             try {
                 for (event in channel) {
                     if (!context.isCurrent) break
+                    val persistence = (event.event as? SettingsEvent.PathHashModeUpdated)?.persistence
+                    if (persistence != null && synchronized(eventLock) {
+                            subscription !== this@Subscription || persistence.isCancelled
+                        }) continue
                     emit(event)
                 }
             } finally {
@@ -220,9 +228,15 @@ class SettingsService(
                 ?: throw SettingsServiceException(SettingsServiceError.NotConnected)
         }
         try {
-            operation { writePathHashAndVerify(mode, completion, owner) }
+            val revision = operation {
+                writePathHashAndVerify(mode, completion, owner)
+                synchronized(eventLock) { pathHashRevision }
+            }
             completion.await()
             context.requireCurrent()
+            synchronized(eventLock) {
+                persistedPathHashRevision = maxOf(persistedPathHashRevision, revision)
+            }
             mode
         } finally {
             synchronized(eventLock) { owner.pendingPersistence.remove(completion) }
@@ -235,6 +249,7 @@ class SettingsService(
         completion: CompletableDeferred<Unit>? = null,
         owner: Subscription? = null,
     ): UByte {
+        synchronized(eventLock) { pathHashRevision = Math.incrementExact(pathHashRevision) }
         configuration { setPathHashMode(mode) }
         val actual = configuration { queryDevice() }.pathHashMode
         if (actual != mode) verification("pathHashMode=$mode", "pathHashMode=$actual")

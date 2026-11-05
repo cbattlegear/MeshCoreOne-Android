@@ -290,6 +290,7 @@ class AppSettingsFeature private constructor(
 }
 
 private class SettingsRadioAdapter(private val service: SettingsService) : SettingsRadioPort {
+    override val pathHashModeNeedsRecovery get() = service.pathHashModeNeedsRecovery
     override suspend fun getSelfInfo() = service.getSelfInfo()
     override suspend fun setRadioParamsVerified(frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte,
         codingRate: UByte, clientRepeat: Boolean?, appliedRadioPresetID: String?) =

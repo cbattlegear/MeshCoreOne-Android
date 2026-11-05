@@ -19,9 +19,12 @@ import com.meshcoreone.android.feature.settings.device.PathHashModeStateHolder
 import com.meshcoreone.android.feature.settings.device.SettingsEnvironment
 import com.meshcoreone.android.feature.settings.device.SettingsNavigator
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import org.junit.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -167,6 +170,77 @@ class SettingsPathHashPersistenceTest : RoomProcessTest() {
             assertEquals(row, db.devices().byId(before.id))
             assertTrue(h.links.radios.single().sent.drop(start).none { it[0] == 0x3d.toUByte() })
         }
+    }
+
+    @Test fun retiredBufferedHashCannotReachRoomAfterNewerAcknowledgedMode() = runTest {
+        withSettings { h, holder, failures, radioMode ->
+            val service = assertNotNull(h.sessions.current).settingsService
+            val before = assertNotNull(h.manager.connectedDevice)
+            val retired = service.events()
+            holder.onModeSelected(2u)
+            h.eventually("old verified mode queued without a collector") {
+                radioMode() == 2u.toUByte() && holder.state.value.isApplying
+            }
+            h.appState.wireServicesIfConnected()
+            h.eventually("old waiter sees subscription retirement") {
+                !holder.state.value.isApplying && failures.isNotEmpty()
+            }
+            holder.onModeSelected(0u)
+            h.eventually("new mode acknowledged") {
+                !holder.state.value.isApplying && !service.pathHashModeNeedsRecovery
+            }
+            assertTrue(retired.events.toList().isEmpty(), "Retired queued persistence must not be delivered")
+            assertEquals(0u.toUByte(), radioMode())
+            assertEquals(before, store.fetchDevice(before.id))
+            assertEquals(before, h.manager.connectedDevice)
+        }
+    }
+
+    @Test fun alreadyEnteredOldRoomCommitCannotLandAfterNewerAcknowledgedMode() = runTest {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var armed = false
+        val commits = mutableListOf<UByte>()
+        val held = object : PersistenceStoreProtocol by store, DeviceEditPersisting by store {
+            override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+                val saved = if (armed && dto.pathHashMode == 2u.toUByte()) {
+                    armed = false
+                    entered.complete(Unit)
+                    withContext(NonCancellable) {
+                        release.await()
+                        store.saveDeviceIfUnchanged(dto, expected)
+                    }
+                } else store.saveDeviceIfUnchanged(dto, expected)
+                if (saved) commits += dto.pathHashMode
+                return saved
+            }
+        }
+        try {
+            withSettings(held) { h, holder, failures, radioMode ->
+                val before = assertNotNull(h.manager.connectedDevice)
+                val service = assertNotNull(h.sessions.current).settingsService
+                armed = true
+                holder.onModeSelected(2u)
+                h.eventually("old Room write entered") { entered.isCompleted }
+                h.appState.wireServicesIfConnected()
+                h.eventually("retired original waiter fails") {
+                    !holder.state.value.isApplying && failures.isNotEmpty()
+                }
+                holder.onModeSelected(0u)
+                h.eventually("new radio mode verified while old commit held") { radioMode() == 0u.toUByte() }
+                assertTrue(holder.state.value.isApplying, "New success must wait for serialized persistence")
+                assertTrue(service.pathHashModeNeedsRecovery)
+                release.complete(Unit)
+                h.eventually("newer mode persists and acknowledges") {
+                    !holder.state.value.isApplying && !service.pathHashModeNeedsRecovery
+                }
+                assertEquals(listOf(2u.toUByte(), 0u.toUByte()), commits)
+                assertEquals(before, store.fetchDevice(before.id))
+                assertEquals(before, h.manager.connectedDevice)
+                h.settle()
+                assertEquals(before, store.fetchDevice(before.id))
+            }
+        } finally { release.complete(Unit) }
     }
 
     private suspend fun TestScope.withSettings(

@@ -69,7 +69,9 @@ class SettingsPathHashPersistenceTest {
             val failed = backgroundScope.async { runCatching { fixture.settings.setPathHashModePersisted(2u) } }
             reply(fixture, 2, PacketBuilder.setPathHashMode(2u), okPacket())
             reply(fixture, 3, PacketBuilder.deviceQuery(), capabilitiesPacket(hash = 2u))
-            assertSame(failure, failed.await().exceptionOrNull())
+            val actual = assertIs<IllegalStateException>(failed.await().exceptionOrNull())
+            assertEquals(failure.message, actual.message)
+            assertSame(failure, generateSequence<Throwable>(actual) { it.cause }.last())
             val retried = request { fixture.settings.setPathHashModePersisted(2u) }
             reply(fixture, 4, PacketBuilder.setPathHashMode(2u), okPacket())
             reply(fixture, 5, PacketBuilder.deviceQuery(), capabilitiesPacket(hash = 2u))
@@ -223,6 +225,7 @@ class SettingsPathHashPersistenceTest {
             runCurrent()
             kotlin.test.assertFailsWith<CancellationException> { write.await() }
             assertTrue(pending.isCancelled, "Cancelled waiting is not a successful persistence acknowledgment")
+            assertTrue(fixture.settings.pathHashModeNeedsRecovery)
             assertEquals(3, fixture.radio.sent.size, "Cancellation must not invent a radio rollback write")
             val next = fixture.settings.events()
             val nextCollector = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
@@ -234,6 +237,7 @@ class SettingsPathHashPersistenceTest {
             reply(fixture, 4, PacketBuilder.setPathHashMode(0u), okPacket())
             reply(fixture, 5, PacketBuilder.deviceQuery(), capabilitiesPacket(hash = 0u))
             assertEquals(0u.toUByte(), retry.await())
+            assertFalse(fixture.settings.pathHashModeNeedsRecovery)
             next.close()
             nextCollector.cancel()
         } finally {

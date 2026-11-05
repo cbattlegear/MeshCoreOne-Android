@@ -53,6 +53,8 @@ import com.meshcoreone.android.core.maps.MapFilterHost
 import com.meshcoreone.android.core.maps.MapFilterState
 import com.meshcoreone.android.core.maps.MapPreferenceStore
 import com.meshcoreone.android.core.maps.MapPreferences
+import com.meshcoreone.android.core.maps.MapMarker
+import com.meshcoreone.android.core.maps.MapPresentationState
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SavedTracePathDTO
@@ -658,6 +660,121 @@ class TraceCodeInputComposeTest {
             settle()
             assertTrue(texts().contains("SNR: 6.0 dB"), "The fresh B trace still accepts its own response")
         }
+    }
+
+    @Test fun sameRadioReconnectDismissesTheVisibleMapClearDialog() = retainedMapActionAcrossReconnect(false, "dialog")
+    @Test fun differentRadioReconnectDismissesTheVisibleMapClearDialog() = retainedMapActionAcrossReconnect(true, "dialog")
+    @Test fun sameRadioReconnectRejectsTheRetainedMapClearConfirmation() = retainedMapActionAcrossReconnect(false, "confirm")
+    @Test fun differentRadioReconnectRejectsTheRetainedMapClearConfirmation() = retainedMapActionAcrossReconnect(true, "confirm")
+    @Test fun sameRadioReconnectRejectsTheRetainedMapMarker() = retainedMapActionAcrossReconnect(false, "marker")
+    @Test fun differentRadioReconnectRejectsTheRetainedMapMarker() = retainedMapActionAcrossReconnect(true, "marker")
+    @Test fun sameRadioReconnectRejectsTheRetainedMapRun() = retainedMapActionAcrossReconnect(false, "run")
+    @Test fun differentRadioReconnectRejectsTheRetainedMapRun() = retainedMapActionAcrossReconnect(true, "run")
+
+    private fun retainedMapActionAcrossReconnect(crossRadio: Boolean, action: String) {
+        var token = com.meshcoreone.android.core.contracts.domain.SessionToken(
+            com.meshcoreone.android.core.contracts.domain.ProcessEpoch(UUID.randomUUID()),
+            com.meshcoreone.android.core.contracts.domain.Generation(1), RADIO,
+        )
+        var publishedVersion = 1
+        val persistence = InMemoryTracePathStore { T0 }
+        val path = savedPath(Bytes.of(0xA1, 0xB2), radioId = RADIO).copy(name = "Retained map route")
+        persistence.insert(path)
+        val recorded = FakeTraceSender()
+        val events = TraceResponseBroadcaster()
+        val deps = FakeTraceDependencies().apply {
+            device = device()
+            store = persistence
+            sender = recorded
+            responses = { events.subscribe() }
+            directory = FakeNodeDirectory(contacts = listOf(
+                contact(0xA1, name = "Alpha").copy(latitude = 37.0, longitude = -122.0),
+                contact(0xB2, name = "Bravo").copy(latitude = 38.0, longitude = -121.0),
+            ))
+        }
+        val feature = object : TracePathFeatureDependencies by deps {
+            override fun sessionToken() = token
+            override fun originatingSessionToken(generation: Int) = token.takeIf { generation == publishedVersion }
+            override fun isOriginatingSessionCurrent(
+                generation: Int,
+                token: com.meshcoreone.android.core.contracts.domain.SessionToken?,
+            ) = generation == publishedVersion && token == this.sessionToken()
+        }
+        val connection = mutableStateOf(TracePathScreen.Dependencies(
+            feature, MapRecentsStorage(), RecordingDiagnostics(), RADIO, 1, host.get().mapPreferences,
+        ))
+        var presentation = MapPresentationState()
+        var markerAction: ((MapMarker) -> Unit)? = null
+        content.setContent {
+            MaterialTheme {
+                TracePathScreen(connection.value, mapSurface = { shown, _, _, _, marker, overlay ->
+                    SideEffect { presentation = shown; markerAction = marker }
+                    Box(Modifier.fillMaxSize(), content = overlay)
+                })
+            }
+        }
+        settle()
+        click(host.get().getString(C.contactsTraceSaved))
+        click(path.name)
+        click(host.get().getString(C.contactsTraceModeMap))
+        assertEquals(listOf(1, 2), presentation.points.mapNotNull { it.hopIndex })
+        val lastPin = presentation.points.single { it.hopIndex == 2 }
+        val oldMarker = assertNotNull(markerAction)
+        val runLabel = host.get().getString(C.contactsTraceListRunTrace)
+        val clearLabel = host.get().getString(C.contactsTraceMapClear)
+        val oldRun = assertNotNull(button(runLabel).config[SemanticsActions.OnClick].action)
+        val oldOpen = assertNotNull(button(clearLabel).config[SemanticsActions.OnClick].action)
+        val oldConfirm = if (action == "dialog" || action == "confirm") {
+            click(clearLabel)
+            assertNotNull(button(host.get().getString(C.contactsTraceClearPath)).config[SemanticsActions.OnClick].action)
+                .also { if (action == "confirm") click(host.get().getString(L.commonCancel)) }
+        } else null
+        val nextRadio = if (crossRadio) RadioId(UUID.randomUUID()) else RADIO
+        host.get().runOnUiThread {
+            token = token.copy(generation = com.meshcoreone.android.core.contracts.domain.Generation(2), radioId = nextRadio)
+            publishedVersion = 2
+            deps.device = device().copy(radioId = nextRadio)
+            connection.value = connection.value.copy(radioId = nextRadio, generation = 2)
+            assertEquals(token, connection.value.originatingToken)
+        }
+        settle()
+        assertFalse(ShadowDialog.getLatestDialog()?.isShowing == true, "Reconnect retires the visible A map dialog")
+        assertEquals(listOf(1, 2), presentation.points.mapNotNull { it.hopIndex }, "B preserves the editable route")
+        host.get().runOnUiThread { assertTrue(oldOpen()) }
+        settle()
+        assertFalse(ShadowDialog.getLatestDialog()?.isShowing == true, "A's retained map opener cannot open a B dialog")
+        click(runLabel)
+        val pending = recorded.sent.single()
+        assertEquals(Bytes.of(0xA1, 0xB2), pending.path)
+        host.get().runOnUiThread {
+            when (action) {
+                "dialog", "confirm" -> assertTrue(assertNotNull(oldConfirm)())
+                "marker" -> oldMarker(lastPin)
+                "run" -> assertTrue(oldRun())
+                else -> error("Unknown retained map action: $action")
+            }
+        }
+        settle()
+        assertEquals(1, recorded.sent.size, "A's retained run cannot send on B")
+        assertEquals(listOf(1, 2), presentation.points.mapNotNull { it.hopIndex }, "A cannot edit B's active route")
+        assertTrue(button(runLabel).config.contains(SemanticsProperties.Disabled), "B's pending trace is not cancelled")
+        events.yield(TraceResponse(
+            traceInfo(pending.tag, listOf(node(0xA1, 6.0), node(0xB2, 4.0), node(null, 3.0))), nextRadio,
+        ))
+        settle()
+        assertFalse(button(runLabel).config.contains(SemanticsProperties.Disabled), "B accepts its own trace response")
+        assertTrue(presentation.lines.any { it.style == com.meshcoreone.android.core.maps.MapLineStyle.TRACE_GOOD })
+        if (action == "marker" || action == "run") {
+            host.get().runOnUiThread { assertNotNull(markerAction)(presentation.points.single { it.hopIndex == 2 }) }
+            settle()
+            assertEquals(listOf(1), presentation.points.mapNotNull { it.hopIndex }, "Fresh B marker reaches the holder")
+            click(runLabel)
+            assertEquals(Bytes.of(0xA1), recorded.sent.last().path, "Fresh B run uses the edited route")
+        }
+        click(clearLabel)
+        click(host.get().getString(C.contactsTraceClearPath))
+        assertTrue(presentation.points.none { it.hopIndex != null }, "Fresh B confirmation clears B's route")
+        assertEquals(path, persistence.paths[path.id], "Map edits never mutate the stored A path")
     }
 
     @Test fun savedDialogRetiresVisibleRowsHeldLoadsAndRetainedActionsAcrossConnections() {

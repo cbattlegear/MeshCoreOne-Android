@@ -26,6 +26,7 @@ import com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings as O
 import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings as S
 import com.meshcoreone.android.core.model.ConnectionMethod
 import com.meshcoreone.android.core.model.DeviceDTO
+import com.meshcoreone.android.core.model.DeviceIdentity
 import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
@@ -39,6 +40,7 @@ import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowDialog
 
 @Config(sdk = [31], qualifiers = "en-rUS-w360dp-h900dp")
 class DeviceSelectionRegistrationTest : RoomProcessTest() {
@@ -160,9 +162,11 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             assertEquals(ConnectionIntent.WantsConnection(forceFullSync = true), h.manager.connectionIntent)
             gate.complete(Unit)
             h.eventually("selected Wi-Fi ready") { h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY }
-            assertEquals(device.id, h.manager.connectedDevice?.id)
+            assertEquals(DeviceIdentity.deriveUUID(device.publicKey), h.manager.connectedDevice?.id)
             assertEquals(device.radioId, h.manager.connectedDevice?.radioId)
             assertEquals(device.publicKey, h.manager.connectedDevice?.publicKey)
+            assertEquals(device.radioId, store.fetchDevice(device.publicKey)?.radioId)
+            assertTrue(requireNotNull(h.manager.connectedDevice).connectionMethods.containsAll(device.connectionMethods + wifi))
         }
     }
 
@@ -206,8 +210,11 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             h.eventually("Wi-Fi ready despite external BLE") {
                 h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
             }
-            assertEquals(device.id, h.manager.connectedDevice?.id)
+            assertEquals(DeviceIdentity.deriveUUID(device.publicKey), h.manager.connectedDevice?.id)
             assertEquals(device.radioId, h.manager.connectedDevice?.radioId)
+            assertEquals(device.publicKey, h.manager.connectedDevice?.publicKey)
+            assertEquals(device.radioId, store.fetchDevice(device.publicKey)?.radioId)
+            assertTrue(requireNotNull(h.manager.connectedDevice).connectionMethods.containsAll(device.connectionMethods + wifi))
             assertFalse(h.appState.connectionUI.showingConnectionFailedAlert)
             assertEquals(0, h.pairing.removeCalls)
         }
@@ -258,7 +265,10 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             mount(h, feature)
             open(h)
             compose.onNodeWithText(device.nodeName).performClick()
-            h.eventually("other-app warning") { h.appState.connectionUI.otherAppWarningDeviceId == device.id }
+            h.eventually("other-app warning", virtualBudgetMillis = 3_000, virtualStepMillis = 10) {
+                h.appState.connectionUI.otherAppWarningDeviceId == device.id
+            }
+            assertEquals(5, h.links.links.size)
             assertFalse(h.appState.connectionUI.showingConnectionFailedAlert)
             assertNull(h.appState.connectionUI.failedPairingDeviceId)
             assertNotNull(store.fetchDevice(device.id))
@@ -273,7 +283,10 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             mount(h, feature)
             open(h)
             compose.onNodeWithText(device.nodeName).performClick()
-            h.eventually("generic saved failure") { h.appState.connectionUI.showingConnectionFailedAlert }
+            h.eventually("generic saved failure", virtualBudgetMillis = 3_000, virtualStepMillis = 10) {
+                h.appState.connectionUI.showingConnectionFailedAlert
+            }
+            assertEquals(5, h.links.links.size)
             assertNull(h.appState.connectionUI.pairingFailureKind)
             assertNull(h.appState.connectionUI.failedPairingDeviceId)
             assertNull(h.appState.connectionUI.otherAppWarningDeviceId)
@@ -334,7 +347,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         withSettings { h, feature ->
             mount(h, feature)
             open(h)
-            compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
+            compose.runOnUiThread { requireNotNull(ShadowDialog.getLatestDialog()).onBackPressed() }
             compose.waitForIdle()
             selectionTitle().assertDoesNotExist()
             assertFalse(h.container.connectionPort.isPairingFlowActive)
@@ -380,6 +393,10 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             gate.complete(Unit)
             h.eventually("manual Wi-Fi ready") {
                 h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
+            }
+            h.eventually("manual Wi-Fi completion dismisses the form") {
+                compose.onAllNodesWithText(compose.activity.getString(O.wifiConnectionTitle))
+                    .fetchSemanticsNodes().isEmpty()
             }
             compose.waitForIdle()
             compose.onNodeWithText(compose.activity.getString(O.wifiConnectionTitle)).assertDoesNotExist()

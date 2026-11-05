@@ -1,5 +1,4 @@
 // AndroidOnly: WP-317 TS-31 mounted Settings entry/actions over the production Room/process/connection adapters.
-// PortedFrom: MC1/Views/Settings/DeviceSelectionSheet.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.app.platform
 
 import androidx.activity.compose.setContent
@@ -15,6 +14,7 @@ import com.meshcoreone.android.app.state.PairingFailureKind
 import com.meshcoreone.android.core.ble.BleError
 import com.meshcoreone.android.core.ble.BleTransportException
 import com.meshcoreone.android.core.connectivity.pairing.DevicePairingError
+import com.meshcoreone.android.core.connectivity.ble.SystemLinkProbe
 import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.core.contracts.domain.ConnectionIntent
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
@@ -46,9 +46,10 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
 
     private suspend fun TestScope.withSettings(
         persistence: PersistenceStoreProtocol = store,
+        systemLinks: SystemLinkProbe = NoSystemLinks,
         test: suspend (ContainerHarness, AppSettingsFeature) -> Unit,
     ) {
-        val h = ContainerHarness(this, store, persistenceOverride = persistence)
+        val h = ContainerHarness(this, store, persistenceOverride = persistence, systemLinks = systemLinks)
         val storage = MeshCoreStorage.get(compose.activity)
         try {
             val feature = AppSettingsFeature.create(h.container, storage)
@@ -171,6 +172,63 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             assertEquals(ConnectionIntent.WantsConnection(forceFullSync = false), h.manager.connectionIntent)
             connect.cancelAndJoin()
             assertFalse(h.appState.connectionUI.showingConnectionFailedAlert)
+        }
+    }
+
+    @Test fun dualTransportRemainsSelectableOverWifiWhenItsBleLinkIsHeldElsewhere() = runTest {
+        val externallyConnected = mutableSetOf<UUID>()
+        val probe = object : SystemLinkProbe {
+            override suspend fun isDeviceConnectedToSystem(deviceId: UUID) = deviceId in externallyConnected
+            override suspend fun systemConnectedDeviceIds(): Set<UUID> = externallyConnected.toSet()
+        }
+        withSettings(systemLinks = probe) { h, feature ->
+            val device = saved(h)
+            val wifi = ConnectionMethod.WiFi("available-radio.local", 6123u)
+            store.saveDevice(device.copy(connectionMethods = (device.connectionMethods + wifi).snapshot()))
+            externallyConnected += device.id
+            val loaded = feature.deviceSelection()
+            assertTrue(device.id in feature.devicesConnectedElsewhere(loaded))
+            val gate = CompletableDeferred<Unit>()
+            h.links.configureRadio = { it.connectGate = gate }
+            val linksBefore = h.links.links.size
+            mount(h, feature)
+            open(h)
+            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionConnectedElsewhere)).assertIsDisplayed()
+            compose.onNodeWithText(device.nodeName).assertIsEnabled().performClick()
+            h.eventually("externally held BLE still permits Wi-Fi") { h.links.links.size == linksBefore + 1 }
+            assertEquals(ConnectionTarget.WiFi(wifi.host, wifi.port), h.links.links.last().target)
+            assertEquals(ConnectionIntent.WantsConnection(forceFullSync = true), h.manager.connectionIntent)
+            gate.complete(Unit)
+            h.eventually("Wi-Fi ready despite external BLE") {
+                h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
+            }
+            assertEquals(device.id, h.manager.connectedDevice?.id)
+            assertEquals(device.radioId, h.manager.connectedDevice?.radioId)
+            assertFalse(h.appState.connectionUI.showingConnectionFailedAlert)
+            assertEquals(0, h.pairing.removeCalls)
+        }
+    }
+
+    @Test fun bleOnlyExternallyConnectedDeviceKeepsItsWarningAndCannotConnect() = runTest {
+        val externallyConnected = mutableSetOf<UUID>()
+        val probe = object : SystemLinkProbe {
+            override suspend fun isDeviceConnectedToSystem(deviceId: UUID) = deviceId in externallyConnected
+            override suspend fun systemConnectedDeviceIds(): Set<UUID> = externallyConnected.toSet()
+        }
+        withSettings(systemLinks = probe) { h, feature ->
+            val device = saved(h)
+            assertTrue(device.connectionMethods.none { it.isWiFi })
+            externallyConnected += device.id
+            mount(h, feature)
+            open(h)
+            val linksBefore = h.links.links.size
+            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionConnectedElsewhere)).assertIsDisplayed()
+            compose.onNodeWithText(device.nodeName).assertIsNotEnabled().performClick()
+            h.settle()
+            assertEquals(linksBefore, h.links.links.size)
+            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionTitle)).assertIsDisplayed()
+            assertFalse(h.appState.connectionUI.showingConnectionFailedAlert)
+            assertEquals(0, h.pairing.removeCalls)
         }
     }
 

@@ -126,6 +126,7 @@ internal class ContainerHarness(
     preferencesOverride: ProcessConnectionPreferences? = null,
     simulatorSeedStore: com.meshcoreone.android.core.services.simulator.SimulatorSeedStore = RoomSimulatorSeedStore(store),
     onSessionCreated: (RadioSessionContainer) -> Unit = {},
+    systemLinks: com.meshcoreone.android.core.connectivity.ble.SystemLinkProbe = NoSystemLinks,
 ) {
     val scheduler: TestCoroutineScheduler = test.testScheduler
     val links = HarnessLinks(identity)
@@ -143,7 +144,7 @@ internal class ContainerHarness(
             store = persistenceOverride,
             passwords = MemoryVault(),
             connectionPreferences = preferencesOverride ?: preferences,
-            connectivity = newConnectivity(pairing, onForeground = { foregroundCalls += it }, currentLink = {
+            connectivity = newConnectivity(pairing, systemLinks = systemLinks, onForeground = { foregroundCalls += it }, currentLink = {
                 links.links.lastOrNull()?.takeIf {
                     observeBleLink && it.target is ConnectionTarget.Bluetooth && it.radio.connected && it.live != null
                 }?.let { link ->
@@ -159,7 +160,7 @@ internal class ContainerHarness(
                     )
                 }
             }),
-            linkProbe = NoSystemLinks,
+            linkProbe = systemLinks,
             scans = newScans(),
             linkFactory = links,
             simulatorSeedStore = simulatorSeedStore,

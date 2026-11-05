@@ -304,8 +304,9 @@ internal fun newConnectivity(
     pairing: HarnessPairingService = HarnessPairingService(),
     currentLink: () -> com.meshcoreone.android.core.connectivity.ble.BleLinkSnapshot? = { null },
     onForeground: (Boolean) -> Unit = {},
+    systemLinks: SystemLinkProbe = NoSystemLinks,
 ): ConnectivityPlatform = ConnectivityPlatform(
-    pairing, BleLinkInspector(NoSystemLinks, currentLink) { BluetoothAvailability.Ready }, SyntheticEndpoints(),
+    pairing, BleLinkInspector(systemLinks, currentLink) { BluetoothAvailability.Ready }, SyntheticEndpoints(),
     SystemLinkAdopter { false }, onForegroundChanged = onForeground,
 )
 

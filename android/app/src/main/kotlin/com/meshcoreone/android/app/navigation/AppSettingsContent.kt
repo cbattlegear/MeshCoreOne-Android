@@ -1,5 +1,4 @@
 // AndroidOnly: WP-407 Register implemented settings screens with real process/session/SAF adapters.
-// PortedFrom: MC1/Views/Settings/DeviceSelectionSheet.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.app.navigation
 
 import android.app.Activity

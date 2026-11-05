@@ -1,5 +1,4 @@
 // AndroidOnly: WP-407 Settings adapters over the process preferences/store and current connection-owned services.
-// PortedFrom: MC1/Views/Settings/DeviceSelectionSheet.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.datastore.*

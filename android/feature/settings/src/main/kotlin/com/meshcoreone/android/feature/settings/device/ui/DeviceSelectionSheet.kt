@@ -26,7 +26,7 @@ import java.util.UUID
 
 /**
  * Bottom sheet listing saved radios the user can reach plus accessories that still need setup. A radio another phone
- * holds stays visible but says so, and its row does not connect.
+ * holds stays visible but says so; only BLE-only rows are blocked by that BLE warning.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -44,7 +44,8 @@ fun DeviceSelectionSheet(
             for (device in list.connectable) {
                 val elsewhere = device.id in connectedElsewhere
                 val detail = if (elsewhere) res(AppSettingsStrings.deviceSelectionConnectedElsewhere) else null
-                ActionRow(UiText.Verbatim(device.nodeName), !elsewhere, { onSelect(device) }, detail = detail)
+                val canConnect = !elsewhere || device.connectionMethods.any { it.isWiFi }
+                ActionRow(UiText.Verbatim(device.nodeName), canConnect, { onSelect(device) }, detail = detail)
             }
             if (list.needsSetup.isNotEmpty()) {
                 Text(stringResource(AppSettingsStrings.deviceSelectionPreviouslyPaired), style = MaterialTheme.typography.titleSmall)

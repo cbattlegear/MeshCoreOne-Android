@@ -337,6 +337,11 @@ tasks.withType<Test>().configureEach {
         "com.meshcoreone.android.app.container.DeviceWriterAuthorityRoomTest",
         "com.meshcoreone.android.app.container.DevicePersistenceAuthorityRoomTest",
     )
+    val settingsPersistenceClasses = setOf(
+        "com.meshcoreone.android.app.container.SettingsPathHashPersistenceTest",
+        "com.meshcoreone.android.app.container.SettingsPathHashRecreationTest",
+        "com.meshcoreone.android.app.container.SettingsDefaultScopePersistenceTest",
+    )
     val pathRecencyClass = "com.meshcoreone.android.parity.AdvertisementPathRecencyOriginalPredicateTest"
     val rollbackClass = "com.meshcoreone.android.parity.AdvertisementRollbackOriginalPredicateTest"
     val rollbackTestNames = setOf(
@@ -362,6 +367,9 @@ tasks.withType<Test>().configureEach {
         override fun beforeSuite(suite: TestDescriptor) = Unit
         override fun afterSuite(suite: TestDescriptor, result: TestResult) = Unit
         override fun beforeTest(testDescriptor: TestDescriptor) {
+            if (testDescriptor.className in settingsPersistenceClasses) {
+                failureLogger.quiet("WP317_SETTINGS_PERSISTENCE|TEST|${testDescriptor.className}|${testDescriptor.name}|START")
+            }
             if (testDescriptor.className in deviceAuthorityClasses) {
                 failureLogger.quiet("WP305_DEVICE_AUTHORITY|TEST|${testDescriptor.className}|${testDescriptor.name}|START")
             }
@@ -373,6 +381,11 @@ tasks.withType<Test>().configureEach {
             }
         }
         override fun afterTest(testDescriptor: TestDescriptor, result: TestResult) {
+            if (testDescriptor.className in settingsPersistenceClasses) {
+                failureLogger.quiet(
+                    "WP317_SETTINGS_PERSISTENCE|TEST|${testDescriptor.className}|${testDescriptor.name}|END|${result.resultType}",
+                )
+            }
             if (testDescriptor.className in deviceAuthorityClasses) {
                 failureLogger.quiet(
                     "WP305_DEVICE_AUTHORITY|TEST|${testDescriptor.className}|${testDescriptor.name}|END|${result.resultType}",

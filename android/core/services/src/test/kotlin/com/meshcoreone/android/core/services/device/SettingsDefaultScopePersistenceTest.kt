@@ -6,6 +6,7 @@ import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceExcep
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.protocol.command.PacketBuilder
+import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.FloodScope
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
@@ -26,6 +27,9 @@ import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class SettingsDefaultScopePersistenceTest {
+    private fun floodScopePacket(name: String?, key: Bytes? = null): Bytes = Bytes.of(0x1c) +
+        (name?.let { Bytes.utf8(it).paddedOrTruncated(31) + (key ?: FloodScope.Region(it).scopeKey()) } ?: Bytes.EMPTY)
+
     private suspend fun SettingsService.selectScope(name: String?) = setDefaultFloodScopePersisted(name) {
         DeviceDTO(radioId = RADIO, publicKey = filled(1), nodeName = "Test", knownRegions = listOf("EU868", "US915").snapshot())
     }
@@ -123,7 +127,7 @@ class SettingsDefaultScopePersistenceTest {
         }
     }
 
-    @Test fun noSubscriberFailsBeforeTheRadioAndWrongReadbackNeverRequestsPersistence() = runTest {
+    @Test fun noSubscriberFailsBeforeTheRadioAndWrongReadbackPersistsActualBeforeFailure() = runTest {
         val fixture = settingsFixture()
         try {
             val missing = request { fixture.settings.selectScope("EU868") }
@@ -133,16 +137,20 @@ class SettingsDefaultScopePersistenceTest {
             )
             assertEquals(1, fixture.radio.sent.size)
             val subscription = fixture.settings.events()
-            var events = 0
+            val events = mutableListOf<String?>()
             val collector = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
-                subscription.events.collect { events++ }
+                subscription.events.collect {
+                    val update = assertIs<SettingsEvent.DefaultFloodScopeUpdated>(it.event)
+                    events += update.name
+                    assertNotNull(update.persistence).complete(Unit)
+                }
             }
             try {
                 val write = request { fixture.settings.selectScope("EU868") }
                 reply(fixture, 2, PacketBuilder.setDefaultFloodScope("EU868", FloodScope.Region("EU868")), okPacket())
                 reply(fixture, 3, PacketBuilder.getDefaultFloodScope(), floodScopePacket("Other"))
                 assertIs<SettingsServiceError.VerificationFailed>(assertFailsWith<SettingsServiceException> { write.await() }.error)
-                assertEquals(0, events)
+                assertEquals(listOf<String?>("Other"), events)
             } finally { subscription.close(); collector.cancel() }
         } finally { fixture.close() }
     }
@@ -180,10 +188,11 @@ class SettingsDefaultScopePersistenceTest {
             radioId = RADIO, publicKey = filled(1), nodeName = "Test", firmwareVersion = 11u,
             knownRegions = listOf(region).snapshot(),
         )
+        val observed = mutableListOf<String?>()
         val collector = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
             subscription.events.collect {
                 val update = assertIs<SettingsEvent.DefaultFloodScopeUpdated>(it.event)
-                assertEquals(null, update.name)
+                observed += update.name
                 assertNotNull(update.persistence).complete(Unit)
             }
         }
@@ -198,10 +207,146 @@ class SettingsDefaultScopePersistenceTest {
             reply(fixture, 4, PacketBuilder.getDefaultFloodScope(), floodScopePacket(null))
             removal.await()
             assertTrue(removed)
+            assertEquals(listOf(radioName, null), observed)
         } finally {
             subscription.close()
             collector.cancel()
             fixture.close()
         }
+    }
+
+    @Test fun closedOrdinaryReadBufferCannotRegainAuthorityAfterAReplacementCloses() = runTest {
+        val fixture = settingsFixture()
+        val old = fixture.settings.events()
+        try {
+            val read = request { fixture.settings.getDefaultFloodScope() }
+            reply(fixture, 2, PacketBuilder.getDefaultFloodScope(), floodScopePacket("EU868"))
+            assertEquals("EU868", read.await())
+            old.close()
+            fixture.settings.events().close()
+            val observed = mutableListOf<SettingsEvent>()
+            old.events.collect { observed += it.event }
+            assertTrue(observed.isEmpty(), "A closed replacement does not revive its predecessor's buffered default")
+        } finally { old.close(); fixture.close() }
+    }
+
+    @Test fun cancellingAfterVerificationBeforeConsumptionDoesNotDiscardTheAcceptedWrite() = runTest {
+        val fixture = settingsFixture()
+        val subscription = fixture.settings.events()
+        try {
+            val write = request { fixture.settings.selectScope("EU868") }
+            reply(fixture, 2, PacketBuilder.setDefaultFloodScope("EU868", FloodScope.Region("EU868")), okPacket())
+            reply(fixture, 3, PacketBuilder.getDefaultFloodScope(), floodScopePacket("EU868"))
+            write.cancel()
+            runCurrent()
+            val observed = mutableListOf<String?>()
+            val collector = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                subscription.events.collect {
+                    val update = assertIs<SettingsEvent.DefaultFloodScopeUpdated>(it.event)
+                    val completion = assertNotNull(update.persistence)
+                    assertFalse(completion.isCancelled)
+                    observed += update.name
+                    completion.complete(Unit)
+                }
+            }
+            try {
+                val restore = request { fixture.settings.selectScope(null) }
+                reply(fixture, 4, PacketBuilder.setDefaultFloodScope("", FloodScope.Disabled), okPacket())
+                reply(fixture, 5, PacketBuilder.getDefaultFloodScope(), floodScopePacket(null))
+                restore.await()
+                assertEquals(listOf("EU868", null), observed)
+            } finally { collector.cancel() }
+        } finally { subscription.close(); fixture.close() }
+    }
+
+    @Test fun replacingTheSubscriberWhileWaitingForTheRadioLockRejectsBeforeMutation() = runTest {
+        val fixture = settingsFixture()
+        val old = fixture.settings.events()
+        try {
+            val read = request { fixture.settings.queryDevice() }
+            runCurrent()
+            val write = request { fixture.settings.selectScope("EU868") }
+            runCurrent()
+            val replacement = fixture.settings.events()
+            reply(fixture, 2, PacketBuilder.deviceQuery(), capabilitiesPacket())
+            read.await()
+            assertEquals(SettingsServiceError.NotConnected, assertFailsWith<SettingsServiceException> { write.await() }.error)
+            assertEquals(2, fixture.radio.sent.size, "No scope write after its captured subscriber was retired")
+            replacement.close()
+        } finally { old.close(); fixture.close() }
+    }
+
+    @Test fun replacementAfterSendingFailsWithoutInventingRollbackAndAllowsAnExplicitRestore() = runTest {
+        val fixture = settingsFixture()
+        val old = fixture.settings.events()
+        try {
+            val write = request { fixture.settings.selectScope("EU868") }
+            reply(fixture, 2, PacketBuilder.setDefaultFloodScope("EU868", FloodScope.Region("EU868")), okPacket())
+            val replacement = fixture.settings.events()
+            reply(fixture, 3, PacketBuilder.getDefaultFloodScope(), floodScopePacket("EU868"))
+            assertEquals(SettingsServiceError.NotConnected, assertFailsWith<SettingsServiceException> { write.await() }.error)
+            assertEquals(3, fixture.radio.sent.size, "A sent command is not rolled back by subscriber retirement")
+            val collector = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                replacement.events.collect {
+                    val update = assertIs<SettingsEvent.DefaultFloodScopeUpdated>(it.event)
+                    assertEquals(null, update.name)
+                    assertNotNull(update.persistence).complete(Unit)
+                }
+            }
+            try {
+                val restore = request { fixture.settings.selectScope(null) }
+                reply(fixture, 4, PacketBuilder.setDefaultFloodScope("", FloodScope.Disabled), okPacket())
+                reply(fixture, 5, PacketBuilder.getDefaultFloodScope(), floodScopePacket(null))
+                restore.await()
+            } finally { replacement.close(); collector.cancel() }
+        } finally { old.close(); fixture.close() }
+    }
+
+    @Test fun correctNameWithWrongKeyIsPersistedAsObservedButNeverReportedVerified() = runTest {
+        val fixture = settingsFixture()
+        val subscription = fixture.settings.events()
+        val completion = CompletableDeferred<CompletableDeferred<Unit>>()
+        val collector = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            subscription.events.collect {
+                val update = assertIs<SettingsEvent.DefaultFloodScopeUpdated>(it.event)
+                assertEquals("EU868", update.name)
+                completion.complete(assertNotNull(update.persistence))
+            }
+        }
+        try {
+            val write = request { fixture.settings.selectScope("EU868") }
+            reply(fixture, 2, PacketBuilder.setDefaultFloodScope("EU868", FloodScope.Region("EU868")), okPacket())
+            reply(fixture, 3, PacketBuilder.getDefaultFloodScope(), floodScopePacket("EU868", filled(7, 16)))
+            assertFalse(write.isCompleted)
+            completion.await().complete(Unit)
+            assertIs<SettingsServiceError.VerificationFailed>(assertFailsWith<SettingsServiceException> { write.await() }.error)
+        } finally { subscription.close(); collector.cancel(); fixture.close() }
+    }
+
+    @Test fun removingOneNormalizedAliasDoesNotClearAnotherRegionsIdenticalRadioScope() = runTest {
+        val fixture = settingsFixture()
+        val subscription = fixture.settings.events()
+        val prefix = "A".repeat(30)
+        val device = DeviceDTO(
+            radioId = RADIO, publicKey = filled(1), nodeName = "Test", firmwareVersion = 11u,
+            defaultFloodScopeName = prefix, knownRegions = listOf(prefix + "one", prefix + "two").snapshot(),
+        )
+        val collector = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            subscription.events.collect {
+                val update = assertIs<SettingsEvent.DefaultFloodScopeUpdated>(it.event)
+                assertEquals(prefix, update.name)
+                assertNotNull(update.persistence).complete(Unit)
+            }
+        }
+        var removed = false
+        try {
+            val removal = request {
+                fixture.settings.removeKnownRegionPersisted(prefix + "two", { device }) { removed = true }
+            }
+            reply(fixture, 2, PacketBuilder.getDefaultFloodScope(), floodScopePacket(prefix))
+            removal.await()
+            assertTrue(removed)
+            assertEquals(2, fixture.radio.sent.size, "Only the read, not a radio clear")
+        } finally { subscription.close(); collector.cancel(); fixture.close() }
     }
 }

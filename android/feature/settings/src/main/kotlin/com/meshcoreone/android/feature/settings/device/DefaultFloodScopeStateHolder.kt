@@ -64,20 +64,22 @@ class DefaultFloodScopeStateHolder(
 
     fun dismissError() = mutable.update { it.copy(errorMessage = null) }
 
-    fun select(name: String?) = apply(name, settingsService())
+    fun select(name: String?) = apply(name, settingsService)
 
-    private fun apply(name: String?, service: SettingsRadioPort?) {
+    private fun apply(name: String?, resolveService: () -> SettingsRadioPort?) {
         if (mutable.value.isApplying) return
         mutable.update { it.copy(isApplying = true, errorMessage = null) }
         env.scope.launch {
+            var service: SettingsRadioPort? = null
             try {
+                service = resolveService()
                 (service ?: throw SettingsNotConnectedException()).setDefaultFloodScopeVerified(name)
                 retryAlert.reset()
             } catch (cancelled: CancellationException) {
                 mutable.update { it.copy(isApplying = false) }
                 throw cancelled
             } catch (error: Exception) {
-                val message = failures.route(error) { apply(name, service) }
+                val message = failures.route(error) { apply(name) { service } }
                 mutable.update { it.copy(errorMessage = message ?: it.errorMessage) }
             }
             mutable.update { it.copy(isApplying = false) }

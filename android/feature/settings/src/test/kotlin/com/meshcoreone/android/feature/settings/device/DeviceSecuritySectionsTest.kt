@@ -33,6 +33,18 @@ class PathHashModeStateHolderTest {
     private val state get() = holder.state.value
 
     @Test
+    fun `teardown acquisition failure cannot escape a path hash click or bind a retry to a successor`() {
+        val bound = PathHashModeStateHolder(scheduler.environment(), connection, { throw SettingsNotConnectedException() })
+        bound.start(); scheduler.runCurrent()
+        bound.onModeSelected(2u)
+        scheduler.runCurrent()
+        assertFalse(bound.state.value.isApplying)
+        assertTrue(bound.state.value.errorMessage != null)
+        assertTrue(service.calls.isEmpty())
+        bound.stop()
+    }
+
+    @Test
     fun `shows the radio's mode and writes a new pick verified`() {
         holder.start(); scheduler.runCurrent()
         assertEquals(1u.toUByte(), state.displayedMode)
@@ -472,6 +484,20 @@ class DefaultFloodScopeStateHolderTest {
         assertEquals(2, service.calls.size)
         assertTrue(successor.calls.isEmpty())
         assertFalse(bound.state.value.isApplying)
+        bound.stop()
+    }
+
+    @Test
+    fun `teardown during service acquisition is routed through the scope action instead of escaping the click`() {
+        val bound = DefaultFloodScopeStateHolder(
+            scheduler.environment(), connection, { throw SettingsNotConnectedException() }, discovery, store,
+        )
+        bound.start(); scheduler.runCurrent()
+        bound.select("Alpha")
+        scheduler.runCurrent()
+        assertFalse(bound.state.value.isApplying)
+        assertTrue(bound.state.value.errorMessage != null)
+        assertTrue(service.calls.isEmpty())
         bound.stop()
     }
 

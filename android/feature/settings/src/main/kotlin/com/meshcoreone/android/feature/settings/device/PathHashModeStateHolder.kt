@@ -58,16 +58,22 @@ class PathHashModeStateHolder(
 
     fun onModeSelected(mode: UByte) {
         if (mutable.value.isApplying) return
-        val service = settingsService()
+        val service = try {
+            settingsService()
+        } catch (failure: Exception) {
+            apply(mode, null, failure)
+            return
+        }
         if (mode == mutable.value.selectedMode && failedMode == null && service?.pathHashModeNeedsRecovery != true) return
         apply(mode, service)
     }
 
-    private fun apply(mode: UByte, service: SettingsRadioPort? = settingsService()) {
+    private fun apply(mode: UByte, service: SettingsRadioPort?, acquisitionFailure: Exception? = null) {
         if (mutable.value.isApplying) return
         mutable.update { it.copy(selectedMode = mode, isApplying = true, errorMessage = null) }
         env.scope.launch {
             try {
+                acquisitionFailure?.let { throw it }
                 (service ?: throw SettingsNotConnectedException()).setPathHashModeVerified(mode)
                 failedMode = null
                 retryAlert.reset()

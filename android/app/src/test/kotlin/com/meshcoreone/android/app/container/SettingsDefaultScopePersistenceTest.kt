@@ -12,6 +12,7 @@ import com.meshcoreone.android.core.model.ChannelFloodScope
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.model.FloodScope
 import com.meshcoreone.android.core.services.sync.SyncState
 import com.meshcoreone.android.core.ui.UiText
 import com.meshcoreone.android.feature.settings.device.*
@@ -52,7 +53,7 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
             holder.select("EU868")
             h.eventually("scope retry commits and acknowledges") {
                 !holder.state.value.isApplying && holder.state.value.errorMessage == null &&
-                    h.manager.connectedDevice?.defaultFloodScopeName == "EU868"
+                    h.manager.connectedDevice?.defaultFloodScopeName == "EU868" && holder.state.value.currentScope == "EU868"
             }
             assertEquals(before.copy(defaultFloodScopeName = "EU868"), store.fetchDevice(before.id))
             assertEquals(listOf<String?>("EU868", "EU868"), radio.writes)
@@ -201,13 +202,15 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
                 h.eventually("Settings waiter cancelled after sending radio write") { !holder.state.value.isApplying }
                 assertEquals("EU868", radio.mode)
                 val removal = async { removeSettingsKnownRegion(h.container, h.sessions.current!!, "EU868") }
-                h.eventually("removal clears actual radio but awaits serialized old consumer") { radio.writes.size == 2 }
-                assertNull(radio.mode)
+                h.settle()
+                assertEquals(listOf<String?>("EU868"), radio.writes, "Accepted write retains the queue through its acknowledgment")
+                assertEquals("EU868", radio.mode)
                 assertFalse(removal.isCompleted)
                 assertEquals(before, store.fetchDevice(before.id))
                 release.complete(Unit)
                 h.eventually("old write and clear complete before region removal acknowledges") { removal.isCompleted }
                 removal.await()
+                assertNull(radio.mode)
                 assertEquals(listOf("EU868", null), commits)
                 assertTrue(failures.isEmpty())
                 val expected = before.copy(knownRegions = listOf("US915").snapshot())
@@ -228,7 +231,7 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
             }
             val selected = before.copy(defaultFloodScopeName = "EU868")
             db.openHelper.writableDatabase.execSQL(
-                "CREATE TRIGGER reject_scope_clear BEFORE UPDATE ON devices " +
+                "CREATE TRIGGER reject_scope_clear BEFORE UPDATE ON devices WHEN NEW.defaultFloodScopeName IS NULL " +
                     "BEGIN SELECT RAISE(FAIL, 'scope clear storage failure'); END",
             )
             try {
@@ -274,21 +277,127 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
         }
     }
 
+    @Test fun bufferedOrdinaryReadAndCancelledClearCannotRestoreADeletedDefault() = runTest {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var armed = false
+        val held = object : PersistenceStoreProtocol by store {
+            override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+                if (armed && dto.pathHashMode == 2u.toUByte()) {
+                    armed = false
+                    entered.complete(Unit)
+                    release.await()
+                }
+                return store.saveDeviceIfUnchanged(dto, expected)
+            }
+        }
+        val actionJob = SupervisorJob(backgroundScope.coroutineContext[Job])
+        val actionScope = CoroutineScope(backgroundScope.coroutineContext + actionJob)
+        try {
+            withSettings(held, actionScope) { h, holder, failures, radio ->
+                val before = assertNotNull(h.manager.connectedDevice)
+                holder.select("EU868")
+                h.eventually("initial selected scope durable") {
+                    !holder.state.value.isApplying && h.manager.connectedDevice?.defaultFloodScopeName == "EU868"
+                }
+                val session = h.sessions.current!!
+                armed = true
+                val edit = async { h.container.deviceEditor.updatePathHashMode(2u, session.token) }
+                h.eventually("actual editor blocks ordinary read consumption") { entered.isCompleted }
+                assertEquals("EU868", session.settingsService.getDefaultFloodScope())
+                holder.select(null)
+                h.eventually("radio clear sent while old ordinary read waits") { radio.writes.size == 2 && radio.mode == null }
+                actionJob.cancel()
+                h.eventually("clear UI waiter cancelled") { !holder.state.value.isApplying }
+                val removal = async { removeSettingsKnownRegion(h.container, session, "EU868") }
+                h.settle()
+                assertFalse(removal.isCompleted)
+                release.complete(Unit)
+                h.eventually("buffered read, accepted clear and removal finish in order") { removal.isCompleted }
+                assertTrue(edit.await())
+                removal.await()
+                assertTrue(failures.isEmpty())
+                assertNull(radio.mode)
+                assertEquals(listOf("EU868", null), radio.writes)
+                val expected = before.copy(pathHashMode = 2u, knownRegions = listOf("US915").snapshot())
+                assertEquals(expected, store.fetchDevice(before.id))
+                assertEquals(expected, h.manager.connectedDevice)
+                h.settle()
+                assertEquals(expected, store.fetchDevice(before.id), "No delayed ordinary scope restoration after removal ACK")
+            }
+        } finally { release.complete(Unit); actionJob.cancel() }
+    }
+
+    @Test fun mismatchedNameAndKeyReachTheActionAfterActualNamePersistenceAndCanBeRetried() = runTest {
+        withSettings { h, holder, failures, radio ->
+            val before = assertNotNull(h.manager.connectedDevice)
+            radio.writeTransform = { if (it == "EU868") "US915" else it }
+            holder.select("EU868")
+            h.eventually("actual mismatched name persisted and reported") {
+                !holder.state.value.isApplying && holder.state.value.errorMessage != null && holder.state.value.currentScope == "US915"
+            }
+            assertEquals("US915", radio.mode)
+            assertEquals(before.copy(defaultFloodScopeName = "US915"), store.fetchDevice(before.id))
+            radio.writeTransform = { it }
+            radio.key = Bytes(ByteArray(16) { 7 })
+            holder.select("EU868")
+            h.eventually("same-name wrong-key readback fails instead of reporting success") {
+                !holder.state.value.isApplying && holder.state.value.errorMessage != null && holder.state.value.currentScope == "EU868"
+            }
+            assertEquals(2, failures.size)
+            assertEquals(before.copy(defaultFloodScopeName = "EU868"), store.fetchDevice(before.id))
+            radio.key = null
+            holder.select("EU868")
+            h.eventually("corrected name and key verify and persist") {
+                !holder.state.value.isApplying && holder.state.value.errorMessage == null
+            }
+            assertEquals(listOf<String?>("EU868", "EU868", "EU868"), radio.writes)
+            assertEquals(before.copy(defaultFloodScopeName = "EU868"), store.fetchDevice(before.id))
+        }
+    }
+
+    @Test fun normalizedAliasRemovalPreservesRadioScopeAndUpdatesTheActualPicker() = runTest {
+        withSettings { h, holder, failures, radio ->
+            val session = h.sessions.current!!
+            val prefix = "A".repeat(30)
+            val first = prefix + "one"
+            val second = prefix + "two"
+            assertTrue(h.container.deviceEditor.addKnownRegion(first, session.token))
+            assertTrue(h.container.deviceEditor.addKnownRegion(second, session.token))
+            h.eventually("newly committed aliases observed by picker") { second in holder.state.value.sortedKnownRegions }
+            holder.select(first)
+            h.eventually("normalized selected scope observed by picker") {
+                !holder.state.value.isApplying && holder.state.value.currentScope == prefix
+            }
+            removeSettingsKnownRegion(h.container, session, second)
+            h.eventually("removed alias disappears from actual picker") { second !in holder.state.value.sortedKnownRegions }
+            assertTrue(first in holder.state.value.sortedKnownRegions)
+            assertEquals(prefix, radio.mode)
+            assertEquals(prefix, holder.state.value.currentScope)
+            assertEquals(prefix, store.fetchDevice(h.manager.connectedDevice!!.id)!!.defaultFloodScopeName)
+            assertEquals(listOf<String?>(prefix), radio.writes, "Removing a different raw alias must not clear the selected scope")
+            assertTrue(failures.isEmpty())
+        }
+    }
+
     private class ScopeRadio {
         var mode: String? = null
+        var key: Bytes? = null
+        var writeTransform: (String?) -> String? = { it }
         val writes = mutableListOf<String?>()
         fun configure(radio: FirmwareRadio) {
             radio.firmwareVersion = 11u
             radio.respond = { command ->
                 when (command[0].toInt()) {
                     0x3f -> {
-                        mode = if (command.size == 1) null else
+                        val requested = if (command.size == 1) null else
                             command.slice(1, 32).toByteArray().toString(Charsets.UTF_8).substringBefore('\u0000')
-                        writes += mode
+                        writes += requested
+                        mode = writeTransform(requested)
                         listOf(Bytes.of(0))
                     }
                     0x40 -> listOf(Bytes.of(0x1c) + (mode?.let {
-                        Bytes.utf8(it).paddedOrTruncated(31) + Bytes(ByteArray(16))
+                        Bytes.utf8(it).paddedOrTruncated(31) + (key ?: FloodScope.Region(it).scopeKey())
                     } ?: Bytes.EMPTY))
                     else -> null
                 }

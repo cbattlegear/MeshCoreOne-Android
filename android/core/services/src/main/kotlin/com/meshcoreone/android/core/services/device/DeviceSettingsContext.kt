@@ -1,4 +1,5 @@
 // AndroidOnly: WP-211 Connection-token guard and owned, caller-cancellable service operations without a runtime dependency.
+// AndroidOnly: WP-317 Connection-owned accepted scope intents outlive disposable UI waiters.
 package com.meshcoreone.android.core.services.device
 
 import com.meshcoreone.android.core.contracts.domain.ConnectionSignals
@@ -9,6 +10,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
@@ -68,22 +70,33 @@ class DeviceSettingsContext(
 
     internal suspend fun <T> operation(action: suspend () -> T): T {
         currentCoroutineContext().ensureActive()
+        val task = submit(action)
+        try {
+            return await(task)
+        } finally {
+            task.cancel()
+        }
+    }
+
+    /** A begun radio mutation belongs to this connection, not its disposable UI waiter. */
+    internal fun <T> submit(action: suspend () -> T): Deferred<T> {
         requireCurrent()
-        val task = scope.async {
+        return scope.async {
             requireCurrent()
             val result = action()
             currentCoroutineContext().ensureActive()
             requireCurrent()
             result
         }
+    }
+
+    internal suspend fun <T> await(task: Deferred<T>): T {
         try {
             return task.await()
         } catch (cancelled: CancellationException) {
             // Our own caller's cancellation still propagates; a context closed under a live caller is NotConnected.
             currentCoroutineContext().ensureActive()
             throw SettingsServiceException(SettingsServiceError.NotConnected)
-        } finally {
-            task.cancel()
         }
     }
 

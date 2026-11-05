@@ -33,7 +33,7 @@ import kotlinx.coroutines.withContext
  * history undetectably; this is NOT monotonic antirollback or dispatch authority.
  */
 class NotificationEnrollmentWitness internal constructor(
-    private val file: File,
+    file: File,
     private val authentication: WitnessAuthentication,
     private val acknowledgment: ForegroundWitnessAcknowledgment,
     private val reporter: StorageIssueReporter = AndroidStorageIssueReporter,
@@ -41,6 +41,11 @@ class NotificationEnrollmentWitness internal constructor(
     private val fault: ((WritePoint) -> Unit)? = null,
     private val synchronize: (File) -> Unit = AndroidWitnessDurability::synchronize,
 ) {
+    private val requestedFile = file.absoluteFile
+    private val file: File by lazy {
+        File(requireNotNull(requestedFile.parentFile).canonicalFile, requestedFile.name)
+    }
+
     constructor(context: Context, acknowledgment: ForegroundWitnessAcknowledgment) : this(
         File(context.applicationContext.noBackupFilesDir, "notification-enrollment-witness-v1.db"),
         AndroidWitnessAuthentication(context.applicationContext), acknowledgment,
@@ -297,7 +302,8 @@ class NotificationEnrollmentWitness internal constructor(
     }
 
     private fun checkPath() {
-        if (Files.isSymbolicLink(file.toPath()) || file.canonicalFile != file.absoluteFile ||
+        if (requestedFile.parentFile.canonicalFile != file.parentFile ||
+            Files.isSymbolicLink(file.toPath()) || file.canonicalFile != file.absoluteFile ||
             file.exists() && !file.isFile
         ) throw Invalid(WitnessProblem.CORRUPT_STORAGE)
     }

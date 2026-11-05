@@ -90,7 +90,7 @@ detection, OS text survival, current-generation ingress fencing or readiness.
 ## Verification state
 
 At initial authoring, no Kotlin compilation or test execution is claimed.
-The two test classes contain 26 native-SQLite methods at SDK31/37 and three
+The two test classes contain 29 native-SQLite methods at SDK31/37 and three
 framework-lock/key-specification methods at SDK31/32/33/37. Tests use explicit
 test-only JCE keys; even successful Robolectric execution is not AndroidKeystore
 device, reboot, process-death, power-loss or restore-device evidence.
@@ -127,3 +127,38 @@ storage integration, current-generation transactional admit fencing, actual
 AndroidKeystore/device behavior and independent exact-candidate review remain
 separate gates. There is no production wiring, activation, merge or feature
 readiness claim.
+
+## Conditional trusted-parent alias compatibility
+
+Independent review of `761234f72995d590e27f4394329a7cfaff0c60f6`
+identified a conditional path-contract mismatch: comparing the entire supplied
+absolute path with its canonical form rejects aliases in a trusted parent's
+ancestors as well as an untrusted leaf symlink. Existing
+`MeshCoreStorage.get` canonicalizes its no-backup directory.
+
+The public [Context.getNoBackupFilesDir contract](https://developer.android.com/reference/android/content/Context#getNoBackupFilesDir())
+promises an absolute path, not a symlink-free canonical path. Android 12
+[ContextImpl](https://github.com/aosp-mirror/platform_frameworks_base/blob/android-12.0.0_r1/core/java/android/app/ContextImpl.java)
+constructs `new File(getDataDir(), "no_backup")` and ensures its existence,
+without canonicalizing it. This does not establish that stock Android 12
+`/data/user/0` is a symlink: its bind mount is not such a failure, and no
+OEM/device symlink failure has been reproduced here. A legitimate trusted
+ancestor alias is possible in the supported host-side Android test environment
+(for example a system temporary-root alias); the API does not provide an
+invariant that forbids it on every supported implementation.
+
+The witness now resolves only the trusted parent once per instance, on first
+checked use, and appends the unchanged fixed filename. Canonicalization failures
+remain inside typed operation reporting. It still rejects both existing and
+dangling leaf symlinks, canonical-parent changes, nonfile leaves, and later
+retargeting of the originally supplied parent alias. It does not canonicalize
+and adopt the leaf or keep resolving the DB to a new parent on each operation.
+This is not protection against arbitrary hostile same-UID filesystem races or
+snapshot rollback.
+
+Three deterministic native-SQLite methods cover a stable ancestor alias through
+authorization/reopen/replay, existing/dangling leaf refusal without target/key
+mutation, and alias retargeting on an existing instance without touching either
+the retained archive or replacement directory. These run on the hosted Linux
+filesystem at SDK31/37; they do not prove an Android device uses such aliases.
+Their execution outcome must be bound to the exact successor hosted run.

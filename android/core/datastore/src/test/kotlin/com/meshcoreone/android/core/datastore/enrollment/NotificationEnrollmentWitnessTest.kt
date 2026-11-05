@@ -6,6 +6,7 @@ import java.io.File
 import java.io.IOException
 import java.nio.channels.FileChannel
 import java.nio.file.StandardOpenOption
+import java.nio.file.Files
 import java.util.UUID
 import javax.crypto.KeyGenerator
 import javax.crypto.Mac
@@ -43,6 +44,57 @@ class NotificationEnrollmentWitnessTest {
         assertFalse(f.file.exists())
         assertTrue(f.keys.keys.isEmpty())
         assertEquals(0, f.verifications)
+    }
+
+    @Test
+    fun stableTrustedParentAliasCanAuthorizeAndReopenWithoutChangingIdentity() = runBlocking {
+        val root = temporary.newFolder()
+        val actual = File(root, "actual").apply { mkdir() }
+        val noBackup = File(actual, "no_backup").apply { mkdir() }
+        val alias = Files.createSymbolicLink(File(root, "trusted-alias").toPath(), actual.toPath()).toFile()
+        val f = Fixture(File(alias, "no_backup/witness.db"))
+        assertEquals(WitnessObservation.UnknownOrLost, f.store().observe())
+        val record = f.authorize()
+        assertEquals(WitnessObservation.Current(record), f.store().observe())
+        assertTrue(File(noBackup, "witness.db").isFile)
+        assertFalse(assertIs<WitnessMutation.Stored>(f.store().authorize(f.request)).newlyAuthorized)
+        assertEquals(1, f.keys.created)
+    }
+
+    @Test
+    fun parentAliasDoesNotPermitExistingOrDanglingLeafSymlinks() = runBlocking {
+        for (existing in listOf(false, true)) {
+            val root = temporary.newFolder()
+            val actual = File(root, "actual").apply { mkdir() }
+            val alias = Files.createSymbolicLink(File(root, "trusted-alias").toPath(), actual.toPath()).toFile()
+            val target = File(root, "foreign.db")
+            if (existing) target.writeText("must remain untouched")
+            Files.createSymbolicLink(File(actual, "witness.db").toPath(), target.toPath())
+            val f = Fixture(File(alias, "witness.db"))
+            assertEquals(WitnessObservation.Failed(WitnessProblem.CORRUPT_STORAGE), f.store().observe())
+            assertIs<WitnessMutation.NotRetained>(f.store().authorize(f.request))
+            assertTrue(f.keys.keys.isEmpty())
+            if (existing) assertEquals("must remain untouched", target.readText()) else assertFalse(target.exists())
+        }
+    }
+
+    @Test
+    fun retargetedTrustedParentIsRejectedByTheExistingWitnessInstance() = runBlocking {
+        val root = temporary.newFolder()
+        val actual = File(root, "actual").apply { mkdir() }
+        val replacement = File(root, "replacement").apply { mkdir() }
+        val alias = Files.createSymbolicLink(File(root, "trusted-alias").toPath(), actual.toPath())
+        val f = Fixture(File(alias.toFile(), "witness.db"))
+        val store = f.store()
+        val authorized = assertIs<WitnessMutation.Stored>(store.authorize(f.request)).record
+        val retained = File(actual, "witness.db").readBytes().toList()
+        Files.delete(alias)
+        Files.createSymbolicLink(alias, replacement.toPath())
+        assertEquals(WitnessObservation.Failed(WitnessProblem.CORRUPT_STORAGE), store.observe())
+        assertIs<WitnessMutation.NotRetained>(store.authorize(f.newRequest(authorized)))
+        assertEquals(retained, File(actual, "witness.db").readBytes().toList())
+        assertFalse(File(replacement, "witness.db").exists())
+        assertEquals(1, f.keys.created)
     }
 
     @Test

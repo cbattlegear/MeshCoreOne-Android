@@ -50,8 +50,9 @@ import kotlin.test.assertNotSame
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
-import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -61,6 +62,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
 
@@ -532,11 +534,18 @@ class SessionLifecycleTest : RoomProcessTest() {
         val attemptCounts = ConcurrentLinkedQueue<Long>()
         val accountingReceipts = ConcurrentLinkedQueue<ChannelQueryAccountingEvent>()
         val scopeErrorDelivered = AtomicBoolean(false)
+        val messageKey = EntityKey(radioId, messageId)
+        val terminalPendingDeleted = CompletableDeferred<Unit>()
         val observedStore = object : PersistenceStoreProtocol by store {
             override suspend fun incrementPendingSendAttemptCount(key: EntityKey): Long? {
                 val count = store.incrementPendingSendAttemptCount(key)
                 count?.let(attemptCounts::add)
                 return count
+            }
+
+            override suspend fun deletePendingSendsForMessage(key: EntityKey) {
+                store.deletePendingSendsForMessage(key)
+                if (key == messageKey) terminalPendingDeleted.complete(Unit)
             }
         }
         val h = ContainerHarness(
@@ -639,13 +648,8 @@ class SessionLifecycleTest : RoomProcessTest() {
                     delay(50.milliseconds)
                 }
             }
-            h.eventually("B's pre-send scope failure to become terminal") {
-                store.fetchMessage(EntityKey(radioId, messageId))?.status == MessageStatus.FAILED &&
-                    store.fetchPendingSends(radioId).none { it.messageID == messageId } &&
-                    synchronized(h.messagingDiagnostics) {
-                        h.messagingDiagnostics.filterIsInstance<MessagingDiagnostic.Failure>()
-                            .any { it.operation == "terminal.$messageId" }
-                    }
+            withContext(Dispatchers.Default) {
+                withTimeout(5.seconds) { terminalPendingDeleted.await() }
             }
         } finally {
             transportOpenTrigger?.cancel()

@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "wp": "WP-309",
+  "scope": "Independent direct-ACK delivery-confirmation-unavailable notice and graph-owned observation state",
+  "status": "SOURCE_ONLY_UNEXECUTED",
+  "base": "f8b1d31190f3e02370df147eb95428c9611de2c3",
+  "reference_pin": "db14559b39d32322b06477c6ae676112f583db50",
+  "canonical_dependency": {
+    "head": "0fb7fec315cb5d76988dfc8ff2eef9240c72092b",
+    "path": "android/core/contracts/src/main/kotlin/com/meshcoreone/android/core/contracts/domain/DirectAckRadioExclusion.kt",
+    "blob": "facbbe32c0dcd8cc7f9fa3a47b8fd69a852aa24f",
+    "copied_or_modified_in_this_candidate": false
+  },
+  "adaptation": {
+    "authority": "Coordinator-directed Android-only presentation; not new Swift parity or whole-WP acceptance",
+    "producer": "Optional DirectAckRadioConfirmationEvidenceObserving, never bounded diagnostic samples",
+    "freshness": "Cold immediate full read then serialized cancellable delay/requery; eventual, not per-commit events or a hard one-second freshness bound",
+    "ownership": "One monitor per active radio graph, shared by lifecycle-collecting routes",
+    "fencing": "Exact radio, session token, observation epoch, request identity and cancellation",
+    "absence": "NoPersistedWildcard is a historical atomic observation only, never delivery/eligibility permission",
+    "refresh": "Inspecting replaces the status with Checking; known wildcard warnings and explicitly historical non-authorizing wording remain stable to avoid repeated announcements",
+    "failures": "Missing capability, mismatched radio, typed store error, interrupted observation and unexpected completion remain explicitly unavailable",
+    "retention": "Same-radio known wildcard warning survives refresh, read failure and close; different-radio evidence is never relabeled",
+    "actions": "Read-only recheck. No send changes, evidence mutation, TTL, reset, delivery settlement or schema change",
+    "localization": "Attributed Android-only input generates separate additive resource files for all 12 supported locales",
+    "accessibility": "Material roles, scalable wrapping text, heading, polite body announcements, native text-button semantics"
+  },
+  "admission": {
+    "policy_blob": "e56438d64d2309c964353066f26e1427f17f55d8",
+    "manifest_blob": "e81605857f5aa7b893dcd63224fb27a45d7b0f3a",
+    "owned_actions_production_tests_and_evidence": "wp-owned / create",
+    "app_mounted_test_only": "reviewed-support-test / add-or-update-related-test",
+    "attributed_converter": "generated-resources / update-generator-input",
+    "generated_locale_resources": "generated-resources / replace-generated-output",
+    "protected_receipt_or_ledger_mutation": false
+  },
+  "controls": {
+    "unit_source": "DirectAckConfirmationStateTest",
+    "mounted_source": "DirectAckConfirmationNoticeComposeTest",
+    "executed": false,
+    "families": [
+      "Initial/missing/loading/uncertain/no-wildcard/read-error states",
+      "Original typed error and cancellation identity",
+      "Wrong-radio snapshot and Inspecting event rejection",
+      "Radio/session/process/epoch/recheck request fences and late noncancellable reads",
+      "Shared graph subscription, graph replacement and Activity recreation",
+      "Screen stop/start while the shared monitor receives new evidence",
+      "Known wildcard warning during refresh/error/close",
+      "Unexpected completion and inactive-owner recheck",
+      "French copy, forced RTL, 200-percent font, text layout and semantic roles"
+    ]
+  },
+  "verification": {
+    "resource_generation": "Executed only in the separate session source artifact; not a test or application build",
+    "local_builds_tests_gradle_fetch_decompression": "Not run by explicit low-memory direction",
+    "hosted_execution": "Not run; independent exact-source review and dependency composition required first",
+    "device_runtime_and_linguistic_review": "Not performed",
+    "whole_wp_acceptance": false
+  },
+  "integration": {
+    "app_or_timeline_production_wiring": false,
+    "reason": "Separate fresh-main integration requires the actual storage observer producer and hunk-level held-branch reconciliation",
+    "held_branches_or_paths_edited": false,
+    "sends_disabled_or_reclassified": false,
+    "holds_released": false
+  }
+}

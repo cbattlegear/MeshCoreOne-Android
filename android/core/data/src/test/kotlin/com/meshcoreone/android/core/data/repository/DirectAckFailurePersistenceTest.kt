@@ -410,8 +410,19 @@ class DirectAckFailurePersistenceTest {
     }
 
     @Test fun competingFailedWriterCannotBeMistakenForASuccessfulSameValueWrite() = runTest(scheduler) {
-        val writer = FailedWriter().apply { throws = false }
-        val generation = RadioGeneration(17, writer)
+        successfulSameValueWriteOverCompetingFailure(cancelCaller = false)
+    }
+
+    @Test fun competingFailedWriterCannotBeMistakenForASuccessfulSameValueWriteAfterCallerCancellation() = runTest(scheduler) {
+        successfulSameValueWriteOverCompetingFailure(cancelCaller = true)
+    }
+
+    private suspend fun TestScope.successfulSameValueWriteOverCompetingFailure(cancelCaller: Boolean) {
+        val writer = FailedWriter().apply {
+            throws = false
+            cancelAfterSuccessfulReturn = cancelCaller
+        }
+        val generation = RadioGeneration(if (cancelCaller) 18 else 17, writer)
         val message = sent(generation)
         val key = EntityKey(radio, message.id)
         val failure = async { generation.service.failAllPendingMessages() }
@@ -423,18 +434,31 @@ class DirectAckFailurePersistenceTest {
         assertEquals(independentlyFailed, store.fetchMessage(key))
         registerAckWhileWriterIsHeld(generation, writer)
         writer.release.complete(Unit)
-        failure.await()
+        if (cancelCaller) {
+            val thrown = assertFailsWith<CancellationException> { failure.await() }
+            assertTrue(generateSequence<Throwable>(thrown) { it.cause }.any { it === writer.cancellation })
+            assertTrue(failure.isCancelled)
+        } else {
+            failure.await()
+        }
         runCurrent()
         assertEquals(true, writer.committed, "The existing public Room writer returns true for this same-value write")
         assertEquals(1, writer.failedWrites)
         assertEquals(independentlyFailed, store.fetchMessage(key), "A successful same-value write is not ownership of the competing FAILED transition")
-        assertEquals(0, writer.ackWrites, "Independent terminal failure must not be rewritten as this writer's ACK delivery")
+        val persisted = assertNotNull(store.fetchMessage(key))
+        assertEquals(independentlyFailed.ackCode, persisted.ackCode)
+        assertEquals(independentlyFailed.roundTripTime, persisted.roundTripTime)
         assertTrue(generation.statuses.isEmpty())
         assertEquals(1, generation.firmware.directSends)
         assertTrue(generation.service.isEventMonitoringActive)
         assertNull(generation.statusFailure)
         generation.stop()
         assertEquals(independentlyFailed, store.fetchMessage(key), "Teardown must not resurrect the competing terminal failure")
+        val afterTeardown = assertNotNull(store.fetchMessage(key))
+        assertEquals(independentlyFailed.ackCode, afterTeardown.ackCode)
+        assertEquals(independentlyFailed.roundTripTime, afterTeardown.roundTripTime)
+        assertTrue(generation.statuses.isEmpty())
+        assertEquals(1, generation.firmware.directSends)
     }
 
     @Test fun competingDeliveredWriterRemainsDeliveredWhenFailedWriterThrows() = runTest(scheduler) {

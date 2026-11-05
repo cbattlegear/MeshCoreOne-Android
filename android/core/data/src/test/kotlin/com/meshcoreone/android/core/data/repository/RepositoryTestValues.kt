@@ -2,7 +2,6 @@
 // PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/PersistenceStore+TestFetch.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1Services/Tests/MC1ServicesTests/Mocks/MockPersistenceStore.swift@db14559b39d32322b06477c6ae676112f583db50
 // Real Room replaces the source's storage mock; the fixture never implements a production persistence role.
-// AndroidOnly: WP-202 Snapshot persisted rows around strict-policy refusals without manufacturing authority.
 package com.meshcoreone.android.core.data.repository
 
 import android.content.Context

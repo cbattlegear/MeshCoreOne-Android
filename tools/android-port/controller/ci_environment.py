@@ -92,7 +92,7 @@ def candidate_environment(state: dict, inherited=None, *, standalone=False, loca
         "PYTHONDONTWRITEBYTECODE": "1",
         "JAVA_OPTS": "-Xms32m -Xmx128m -Dfile.encoding=UTF-8",
     })
-    jvm = "-Xms64m -Xmx2048m -XX:MaxMetaspaceSize=768m -Dfile.encoding=UTF-8"
+    jvm = "-Xms64m -Xmx3072m -XX:MaxMetaspaceSize=768m -Dfile.encoding=UTF-8"
     if local:
         environment["JAVA_OPTS"] += " -XX:+UseSerialGC -XX:ActiveProcessorCount=2 -XX:TieredStopAtLevel=1 -XX:ReservedCodeCacheSize=32m"
         heap = 2048 if full_assembly else 768
@@ -101,6 +101,22 @@ def candidate_environment(state: dict, inherited=None, *, standalone=False, loca
     if any(name.casefold() not in allowed for name in environment):
         raise PortError("CI launcher attempted to extend the parent environment allowlist")
     return environment
+
+
+def hosted_resource_observation():
+    memory = Path("/proc/meminfo").read_text(encoding="ascii")
+    values = {}
+    for name in ("MemTotal", "MemAvailable"):
+        match = re.search(rf"^{name}:\s+([0-9]+) kB$", memory, re.MULTILINE)
+        if match is None:
+            raise PortError("Missing hosted Linux memory observation: " + name)
+        values[name] = int(match[1]) * 1024
+    return {
+        "scope": "Visible Linux host resources at preflight; not reserved memory or cgroup capacity.",
+        "cpu_affinity_count": len(os.sched_getaffinity(0)),
+        "host_memory_total_bytes": values["MemTotal"],
+        "host_memory_available_bytes": values["MemAvailable"],
+    }
 
 
 def verify_wrapper():

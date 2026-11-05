@@ -99,4 +99,27 @@ class ConversationFilteringTest {
             .run(ChatFilter.ROOMS, "al")
         assertEquals(2, result.size)
     }
+
+    @Test
+    fun `search preserves Foundation expansion boundaries across every filter`() {
+        val cases = listOf(
+            Triple("straße", "stras", false),
+            Triple("ﬁle", "f", false),
+            Triple("한글", "하", false),
+            Triple("ıstanbul", "istanbul", false),
+            Triple("straße", "strasse", true),
+            Triple("strasse", "straß", true),
+            Triple("１２", "12", true),
+            Triple("👨‍👩‍👧", "👨", true),
+            Triple("\u1e9e", "ss", true),
+            Triple("Alpha Repeater", "alpha", true),
+        )
+        for ((name, query, matches) in cases) {
+            val conversation = Conversation.Direct(contact(name))
+            val expected: List<Conversation> = if (matches) listOf(conversation) else emptyList()
+            for (filter in ChatFilter.entries) {
+                assertEquals(expected, listOf(conversation).run(filter, query), "$filter: $name contains $query")
+            }
+        }
+    }
 }

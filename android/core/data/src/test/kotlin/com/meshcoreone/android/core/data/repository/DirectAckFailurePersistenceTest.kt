@@ -409,6 +409,34 @@ class DirectAckFailurePersistenceTest {
         assertUncertain(generation, writer, message)
     }
 
+    @Test fun competingFailedWriterCannotBeMistakenForASuccessfulSameValueWrite() = runTest(scheduler) {
+        val writer = FailedWriter().apply { throws = false }
+        val generation = RadioGeneration(17, writer)
+        val message = sent(generation)
+        val key = EntityKey(radio, message.id)
+        val failure = async { generation.service.failAllPendingMessages() }
+        runCurrent()
+        assertTrue(writer.entered.isCompleted)
+        assertEquals(message, store.fetchMessage(key), "The service must begin its failure attempt from SENT")
+        store.updateMessageStatus(key, MessageStatus.FAILED)
+        val independentlyFailed = message.copy(status = MessageStatus.FAILED)
+        assertEquals(independentlyFailed, store.fetchMessage(key))
+        registerAckWhileWriterIsHeld(generation, writer)
+        writer.release.complete(Unit)
+        failure.await()
+        runCurrent()
+        assertEquals(true, writer.committed, "The existing public Room writer returns true for this same-value write")
+        assertEquals(1, writer.failedWrites)
+        assertEquals(independentlyFailed, store.fetchMessage(key), "A successful same-value write is not ownership of the competing FAILED transition")
+        assertEquals(0, writer.ackWrites, "Independent terminal failure must not be rewritten as this writer's ACK delivery")
+        assertTrue(generation.statuses.isEmpty())
+        assertEquals(1, generation.firmware.directSends)
+        assertTrue(generation.service.isEventMonitoringActive)
+        assertNull(generation.statusFailure)
+        generation.stop()
+        assertEquals(independentlyFailed, store.fetchMessage(key), "Teardown must not resurrect the competing terminal failure")
+    }
+
     @Test fun competingDeliveredWriterRemainsDeliveredWhenFailedWriterThrows() = runTest(scheduler) {
         val writer = FailedWriter()
         val generation = RadioGeneration(8, writer)

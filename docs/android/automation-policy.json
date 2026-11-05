@@ -952,6 +952,40 @@
           "future affected declared localization-resource settings and App test closures with positive hosted method discovery zero failures errors or skips",
           "policy fixtures prove admission only not Android resource compilation UI flow localization quality or WP210 WP318 acceptance"
         ]
+      },
+      {
+        "id": "reviewed-support-notification-enrollment-copy",
+        "work_packages": ["WP-303"],
+        "path_rules": [
+          "android/app/src/main/res/values/notification_enrollment.xml"
+        ],
+        "operations": ["add-or-update-notification-enrollment-copy"],
+        "keys": [
+          "notification_enrollment_action",
+          "notification_enrollment_title",
+          "notification_enrollment_warning",
+          "notification_enrollment_confirm",
+          "notification_enrollment_cancel",
+          "notification_enrollment_resume",
+          "notification_enrollment_held",
+          "notification_enrollment_interrupted",
+          "notification_enrollment_blocked",
+          "notification_enrollment_bound"
+        ],
+        "invariants": [
+          "only-WP303-notification-enrollment-resource-and-ten-approved-string-keys-no-other-key-edit-or-deletion",
+          "AndroidOnly-WP303-English-source-copy-is-not-reviewed-translation-or-localization-acceptance",
+          "preserve-pinned-db14559b39d32322b06477c6ae676112f583db50-source-and-generated-localization-bytes",
+          "preserve-unrelated-notices-and-resources-consumer-and-test-admission-remains-separate",
+          "trusted-main-landing-and-legitimate-assignment-path-operation-admission-with-resolved-overlap-before-product-edit-no-new-lease-or-historical-owner-reattestation",
+          "policy-admission-only-no-feature-acceptance-runtime-installation-dispatch-or-merge-authority"
+        ],
+        "validation": [
+          "exact-resource-path-named-operation-and-ten-key XML validation against immutable base and candidate blobs",
+          "wrong-WP-operation-path-sibling-traversal-extra-key-and-deletion denial fixtures",
+          "complete preceding trusted policy remains byte-semantically unchanged",
+          "policy admission does not claim translated-copy quality UI behavior or WP-303 acceptance"
+        ]
       }
     ]
   },

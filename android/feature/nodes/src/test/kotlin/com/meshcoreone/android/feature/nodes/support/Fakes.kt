@@ -64,18 +64,22 @@ internal class FakeDataStore : NodesDataStore {
     var fetchContactsError: Exception? = null
     var fetchDiscoveredError: Exception? = null
     var fetchContactsGate: (suspend () -> Unit)? = null
+    var fetchContactBehavior: (suspend (RadioId, Bytes) -> ContactDTO?)? = null
     val touched = mutableListOf<Pair<Bytes, Instant>>()
     val deletedDiscovered = mutableListOf<EntityKey>()
 
     override suspend fun fetchContacts(radioId: RadioId): List<ContactDTO> {
+        val snapshot = contacts.filter { it.radioId == radioId }
         fetchContactsGate?.invoke()
         fetchContactsError?.let { throw it }
-        return contacts.filter { it.radioId == radioId }
+        return snapshot
     }
 
     override suspend fun fetchContact(key: EntityKey): ContactDTO? = contacts.firstOrNull { it.id == key.id }
-    override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? =
-        contacts.firstOrNull { it.radioId == radioId && it.publicKey == publicKey }
+    override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+        fetchContactBehavior?.let { return it(radioId, publicKey) }
+        return contacts.firstOrNull { it.radioId == radioId && it.publicKey == publicKey }
+    }
 
     override suspend fun fetchBlockedContacts(radioId: RadioId): List<ContactDTO> = contacts.filter { it.radioId == radioId && it.isBlocked }
     override suspend fun fetchContactPublicKeys(radioId: RadioId): Set<Bytes> = contacts.filter { it.radioId == radioId }.map { it.publicKey }.toSet()

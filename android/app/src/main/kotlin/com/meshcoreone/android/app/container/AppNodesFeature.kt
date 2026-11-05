@@ -78,6 +78,7 @@ internal fun AppContainer.createNodesFeatureDependencies(): NodesFeatureDependen
     )
 
 private class AppNodesSession(private val container: AppContainer) : NodesSession {
+    override fun connectionIdentity(): Any? = container.sessions.current
     override fun connectionState() = container.appState.connectionState
     override fun connectedDevice() = container.appState.connectedDevice
     override fun currentRadioId() = container.appState.currentRadioId

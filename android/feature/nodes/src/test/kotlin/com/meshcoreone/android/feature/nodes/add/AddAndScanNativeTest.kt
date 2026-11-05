@@ -7,13 +7,18 @@ import com.meshcoreone.android.feature.nodes.deps.NodesContactFailure
 import com.meshcoreone.android.feature.nodes.deps.NodesMessage
 import com.meshcoreone.android.feature.nodes.support.Fixtures
 import com.meshcoreone.android.feature.nodes.support.Harness
+import com.meshcoreone.android.feature.nodes.support.FakeContactService
 import com.meshcoreone.android.feature.nodes.support.scenario
 import com.meshcoreone.android.feature.nodes.support.settle
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
 import org.junit.Test
 
 class AddAndScanNativeTest {
@@ -75,6 +80,169 @@ class AddAndScanNativeTest {
         val form = AddContactStateHolder(Harness(clock).dependencies)
         assertFalse(form.add())
         assertEquals(NodesMessage.res(R.string.l10n_app_contacts_contacts_add_error_notconnected), form.state.value.errorMessage)
+    }
+
+    @Test
+    fun `manual add returns the stored identity before list fetch catches up`() = scenario {
+        val harness = Harness(clock).connect()
+        val stored = Fixtures.contact(
+            radioId = checkNotNull(harness.session.radioId),
+            publicKey = Fixtures.repeated(0xAB),
+            name = "Stored",
+        )
+        harness.contactService.addBehavior = { _, _ -> }
+        harness.contactService.getContactBehavior = { radio, key ->
+            assertEquals(stored.radioId, radio)
+            assertEquals(stored.publicKey, key)
+            stored
+        }
+        val form = AddContactStateHolder(harness.dependencies)
+        form.setContactName("Entered")
+        form.setPublicKeyHex(hex64)
+
+        assertEquals(stored, form.addContact())
+        assertEquals(listOf("add:Entered", "getContact"), harness.contactService.calls)
+        assertTrue(harness.store.contacts.isEmpty(), "This double models a stale list, not durable persistence")
+    }
+
+    @Test
+    fun `manual add missing stored identity reports failure instead of fabricating a row`() = scenario {
+        val harness = Harness(clock).connect()
+        harness.contactService.addBehavior = { _, _ -> }
+        val form = AddContactStateHolder(harness.dependencies)
+        form.setContactName("Missing")
+        form.setPublicKeyHex(hex64)
+
+        assertNull(form.addContact())
+        assertNotNull(form.state.value.errorMessage)
+        assertFalse(form.state.value.isSubmitting)
+        assertTrue(harness.store.contacts.isEmpty())
+    }
+
+    @Test
+    fun `manual add stored-identity lookup cancellation propagates`() = scenario {
+        val harness = Harness(clock).connect()
+        val cancelled = CancellationException("lookup cancelled")
+        harness.contactService.getContactBehavior = { _, _ -> throw cancelled }
+        val form = AddContactStateHolder(harness.dependencies)
+        form.setContactName("Cancelled")
+        form.setPublicKeyHex(hex64)
+
+        var observed: CancellationException? = null
+        try {
+            form.addContact()
+        } catch (error: CancellationException) {
+            observed = error
+        }
+        assertTrue(observed === cancelled)
+        assertFalse(form.state.value.isSubmitting)
+        assertNull(form.state.value.errorMessage)
+    }
+
+    @Test
+    fun `manual add rejects a same-radio session replaced during stored lookup`() = scenario {
+        val harness = Harness(clock).connect()
+        val radio = checkNotNull(harness.session.radioId)
+        val stored = Fixtures.contact(radioId = radio, publicKey = Fixtures.repeated(0xAB))
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        harness.contactService.getContactBehavior = { _, _ ->
+            entered.complete(Unit)
+            release.await()
+            stored
+        }
+        val form = AddContactStateHolder(harness.dependencies)
+        form.setContactName("Entered")
+        form.setPublicKeyHex(hex64)
+        var completed = false
+        val adding = scope.launch { form.addContact(); completed = true }
+        entered.await()
+        harness.session.contacts = FakeContactService(harness.store)
+        release.complete(Unit)
+        adding.join()
+        assertTrue(adding.isCancelled)
+        assertFalse(completed)
+        assertFalse(form.state.value.isSubmitting)
+        assertNull(form.state.value.errorMessage)
+        assertEquals(listOf("add:Entered", "getContact"), harness.contactService.calls)
+    }
+
+    @Test
+    fun `manual add rejects a stored row from a different radio or public key`() = scenario {
+        val harness = Harness(clock).connect()
+        val radio = checkNotNull(harness.session.radioId)
+        val form = AddContactStateHolder(harness.dependencies)
+        form.setContactName("Entered")
+        form.setPublicKeyHex(hex64)
+        listOf(
+            Fixtures.contact(radioId = Fixtures.radio(), publicKey = Fixtures.repeated(0xAB)),
+            Fixtures.contact(radioId = radio, publicKey = Fixtures.repeated(0xBC)),
+        ).forEach { wrong ->
+            harness.contactService.getContactBehavior = { _, _ -> wrong }
+            assertNull(form.addContact())
+            assertNotNull(form.state.value.errorMessage)
+        }
+    }
+
+    @Test
+    fun `scan import never reads a replacement radios store after a held add`() = scenario {
+        val harness = Harness(clock).connect()
+        val oldRadio = checkNotNull(harness.session.radioId)
+        val scan = ScanContactStateHolder(harness.dependencies, scope)
+        scan.handleScanResult(harness.codec.exportContactUri("Relay", Fixtures.repeated(0xEE), ContactType.REPEATER))
+        settle()
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        harness.contactService.addBehavior = { radio, _ ->
+            assertEquals(oldRadio, radio)
+            entered.complete(Unit)
+            release.await()
+        }
+        var completed = false
+        val importing = scope.launch { scan.confirm(); completed = true }
+        entered.await()
+        val replacement = Harness(clock).connect()
+        var replacementReads = 0
+        replacement.store.fetchContactBehavior = { _, _ -> replacementReads++; null }
+        harness.session.device = replacement.session.device
+        harness.session.radioId = replacement.session.radioId
+        harness.session.contacts = replacement.contactService
+        harness.session.servicesStore = replacement.store
+        release.complete(Unit)
+        importing.join()
+        assertTrue(importing.isCancelled)
+        assertFalse(completed)
+        assertEquals(0, replacementReads)
+        assertEquals(0, scan.state.value.successFeedback)
+        assertFalse(scan.state.value.isImporting)
+    }
+
+    @Test
+    fun `scan reset cancels a held stored lookup without completing the next review`() = scenario {
+        val harness = Harness(clock).connect()
+        val radio = checkNotNull(harness.session.radioId)
+        val scanned = Fixtures.repeated(0xEE)
+        val stored = Fixtures.contact(radioId = radio, publicKey = scanned)
+        val scan = ScanContactStateHolder(harness.dependencies, scope)
+        scan.handleScanResult(harness.codec.exportContactUri("Relay", scanned, ContactType.REPEATER))
+        settle()
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        harness.contactService.addBehavior = { _, _ -> }
+        harness.store.fetchContactBehavior = { _, _ ->
+            entered.complete(Unit)
+            release.await()
+            stored
+        }
+        val importing = scope.launch { scan.confirm() }
+        entered.await()
+        scan.resetToScanner()
+        release.complete(Unit)
+        importing.join()
+        assertTrue(importing.isCancelled)
+        assertNull(scan.state.value.scannedContact)
+        assertEquals(0, scan.state.value.successFeedback)
+        assertNull(scan.state.value.errorMessage)
     }
 
     @Test

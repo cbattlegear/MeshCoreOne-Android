@@ -1,6 +1,7 @@
 // AndroidOnly: WP-311 Native API31/37 Compose semantics and narrow-window regressions.
 package com.meshcoreone.android.feature.nodes.ui
 
+import android.Manifest
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
@@ -12,6 +13,7 @@ import android.view.inspector.WindowInspector
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.BroadcastFrameClock
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -19,6 +21,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshots.Snapshot
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -27,11 +30,13 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsOwner
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.ContactType
@@ -46,6 +51,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CompletableDeferred
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
@@ -98,6 +104,18 @@ class ContactHopSortApi31ComposeTest : NodesScreensComposeTestBase.ContactHopSor
 @Config(sdk = [37], qualifiers = "w360dp-h900dp-mdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ContactHopSortApi37ComposeTest : NodesScreensComposeTestBase.ContactHopSortComposeTestBase()
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [31], qualifiers = "w360dp-h900dp-mdpi")
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+class ContactsImmediateAdmissionApi31ComposeTest :
+    NodesScreensComposeTestBase.ContactsImmediateAdmissionComposeTestBase()
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [37], qualifiers = "w360dp-h900dp-mdpi")
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+class ContactsImmediateAdmissionApi37ComposeTest :
+    NodesScreensComposeTestBase.ContactsImmediateAdmissionComposeTestBase()
 
 abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false) {
     protected lateinit var controller: ActivityController<ComponentActivity>
@@ -524,6 +542,150 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
             assertTrue(isDisplayed(awaitText(context.getString(C.contactsAddErrorNotConnected))))
             assertTrue(harness.contactService.calls.isEmpty())
             assertTrue(harness.store.contacts.isEmpty())
+        }
+    }
+
+    abstract class ContactsImmediateAdmissionComposeTestBase : NodesScreensComposeTestBase(deterministicFrames = true) {
+        override fun rootView(): View =
+            ShadowDialog.getLatestDialog()?.takeIf { it.isShowing }?.window?.decorView ?: super.rootView()
+
+        @Test
+        fun mountedManualAddAppendsBeforeListFetchIncludesContact() = verifyAdmission("append", scan = false)
+
+        @Test
+        fun mountedManualAddReplacesSameUuidBeforeListFetchIncludesContact() = verifyAdmission("same-id", scan = false)
+
+        @Test
+        fun mountedManualAddReplacesSameKeyAndRadioBeforeListFetchIncludesContact() = verifyAdmission("same-key", scan = false)
+
+        @Test
+        fun mountedScanAddAppendsBeforeListFetchIncludesContact() = verifyAdmission("append", scan = true)
+
+        @Test
+        fun mountedScanAddReplacesSameUuidBeforeListFetchIncludesContact() = verifyAdmission("same-id", scan = true)
+
+        @Test
+        fun mountedScanAddReplacesSameKeyAndRadioBeforeListFetchIncludesContact() = verifyAdmission("same-key", scan = true)
+
+        private fun verifyAdmission(identity: String, scan: Boolean) {
+            if (scan) Shadows.shadowOf(controller.get().application).denyPermissions(Manifest.permission.CAMERA)
+            val harness = Harness().connect()
+            val radio = checkNotNull(harness.session.radioId)
+            val existing = Fixtures.contact(radioId = radio, name = "Alex")
+            val added = when (identity) {
+                "same-id" -> existing.copy(name = "Sam")
+                "same-key" -> Fixtures.contact(radioId = radio, publicKey = existing.publicKey, name = "Sam")
+                else -> Fixtures.contact(radioId = radio, name = "Sam")
+            }
+            harness.store.contacts += existing
+            var fetches = 0
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            harness.store.fetchContactsGate = {
+                fetches++
+                if (fetches == 2) {
+                    entered.complete(Unit)
+                    release.await()
+                }
+            }
+            var imported = false
+            harness.contactService.addBehavior = { _, frame ->
+                assertEquals(added.publicKey, frame.publicKey)
+                assertEquals(added.name, frame.name)
+                imported = true
+            }
+            harness.contactService.getContactBehavior = { requestedRadio, key ->
+                assertEquals(radio, requestedRadio)
+                assertEquals(added.publicKey, key)
+                added
+            }
+            harness.store.fetchContactBehavior = { requestedRadio, key ->
+                assertEquals(radio, requestedRadio)
+                assertEquals(added.publicKey, key)
+                if (imported) added else null
+            }
+            val opened = mutableListOf<ContactDTO>()
+            val navigation = object : NodesNavigation by NodesNavigation.NONE {
+                override fun openContact(contact: ContactDTO) { opened += contact }
+            }
+            val inset = mutableStateOf(0)
+            mount { NodesListScreen(harness.dependencies, navigation, Modifier.padding(inset.value.dp)) }
+            awaitText("Alex")
+            val context = controller.get()
+            click(awaitAction(context.getString(C.contactsListSyncNodes)))
+            awaitCondition { entered.isCompleted }
+            click(awaitAction(context.getString(C.contactsListAddContact)))
+            if (scan) {
+                click(awaitAction(context.getString(C.contactsAddScanQR)))
+                val field = allSemanticsNodes().single { it.config.contains(SemanticsActions.SetText) }
+                setText(field, harness.codec.exportContactUri(added.name, added.publicKey, added.type))
+                click(awaitAction(context.getString(C.contactsAddView)))
+                awaitAction(context.getString(C.contactsAddAdd))
+            } else {
+                val fields = allSemanticsNodes().filter { it.config.contains(SemanticsActions.SetText) }
+                assertEquals(2, fields.size)
+                setText(fields[0], added.name)
+                setText(fields[1], added.publicKey.hexString)
+            }
+            click(awaitAction(context.getString(C.contactsAddAdd)))
+            awaitText("Sam")
+            assertFalse(release.isCompleted, "Admission must render while the older list fetch is held")
+            release.complete(Unit)
+            awaitCondition { harness.adverts.syncingFlags == listOf(true, false) }
+            advanceFrames()
+            val rows = allSemanticsNodes().filter { node ->
+                isDisplayed(node) && node.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { it.text == "Sam" }
+            }
+            assertEquals(1, rows.size, "The completed add must be presented exactly once")
+            if (identity != "append") {
+                assertFalse(allSemanticsNodes().any { node ->
+                    isDisplayed(node) && node.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { it.text == "Alex" }
+                })
+            }
+            click(awaitAction("Sam"))
+            assertEquals(List(if (scan) 2 else 1) { added }, opened)
+            assertEquals(2, fetches, "Add completion must not start another list fetch")
+            assertEquals(listOf(existing), harness.store.contacts, "The fake list deliberately has not caught up")
+            assertEquals(if (scan) listOf("sync", "add:Sam") else listOf("sync", "add:Sam", "getContact"), harness.contactService.calls)
+
+            val otherRadio = Fixtures.radio()
+            val other = Fixtures.contact(radioId = otherRadio, publicKey = added.publicKey, name = "Other radio")
+            harness.store.contacts += other
+            harness.connect(otherRadio)
+            controller.get().runOnUiThread { inset.value = 1 }
+            awaitText(other.name)
+            assertFalse(allSemanticsNodes().any { node ->
+                node.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { it.text == "Sam" }
+            }, "A new radio must not inherit the previous list's pending admissions")
+            click(awaitAction(other.name))
+            assertEquals(other, opened.last())
+
+            harness.store.contacts.clear()
+            harness.store.contacts += added
+            harness.connect(radio)
+            controller.get().runOnUiThread { inset.value = 2 }
+            awaitText("Sam")
+            click(awaitAction(context.getString(C.contactsListSyncNodes)))
+            awaitCondition { harness.adverts.syncingFlags == listOf(true, false, true, false) }
+            assertEquals(1, allSemanticsNodes().count { node ->
+                node.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { it.text == "Sam" }
+            })
+        }
+
+        private fun setText(node: SemanticsNode, text: String) {
+            controller.get().runOnUiThread {
+                assertTrue(checkNotNull(node.config[SemanticsActions.SetText].action).invoke(AnnotatedString(text)))
+            }
+            advanceFrames()
+        }
+
+        private fun awaitCondition(predicate: () -> Boolean) {
+            repeat(100) {
+                advanceFrames()
+                if (predicate()) return
+                Thread.sleep(10)
+            }
+            assertTrue(predicate(), "The mounted operation did not complete")
         }
     }
 

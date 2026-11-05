@@ -4,12 +4,14 @@ package com.meshcoreone.android.feature.nodes.add
 import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.ContactFrame
+import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.command.PacketBuilder
 import com.meshcoreone.android.feature.nodes.deps.NodesContactFailure
 import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
 import com.meshcoreone.android.feature.nodes.deps.NodesMessage
 import com.meshcoreone.android.feature.nodes.deps.ScannedContact
+import com.meshcoreone.android.feature.nodes.deps.ensureContactConnection
 import com.meshcoreone.android.feature.nodes.model.localizedNameRes
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -62,6 +64,9 @@ class ScanContactStateHolder(
     private val mutableState = MutableStateFlow(ScanContactState())
     val state: StateFlow<ScanContactState> = mutableState.asStateFlow()
     private val session get() = dependencies.session
+    private var scanConnection: Any? = null
+    private var scanRadioId: RadioId? = null
+    private var scanGeneration = 0
 
     fun onCameraPermissionDenied() = mutableState.update { it.copy(cameraPermissionDenied = true) }
     fun dismissError() = mutableState.update { it.copy(errorMessage = null) }
@@ -78,16 +83,23 @@ class ScanContactStateHolder(
             return
         }
         // Claim the scan before the lookup so a second callback cannot present another contact.
+        scanConnection = session.connectionIdentity()
+        scanRadioId = session.currentRadioId()
+        val generation = ++scanGeneration
+        val connection = scanConnection
+        val radioId = scanRadioId
         mutableState.update { it.copy(selectionFeedback = it.selectionFeedback + 1, errorMessage = null, isResolvingScan = true) }
-        scope.launch { presentScannedContact(parsed) }
+        scope.launch { presentScannedContact(parsed, generation, connection, radioId) }
     }
 
     /** Resolves the saved row first so the first paint is View, not Add. */
-    private suspend fun presentScannedContact(parsed: ScannedContact) {
+    private suspend fun presentScannedContact(parsed: ScannedContact, generation: Int, connection: Any?, radioId: RadioId?) {
         try {
+            ensureReview(generation, connection, radioId)
             val current = state.value
             if (current.scannedContact != null || current.isImporting) return
-            val existing = fetchExistingContact(parsed.publicKey)
+            val existing = fetchExistingContact(radioId, parsed.publicKey)
+            ensureReview(generation, connection, radioId)
             mutableState.update { it.copy(existingContact = existing, scannedContact = parsed) }
             val announcement = if (existing != null) {
                 NodesMessage.Joined(listOf(NodesMessage.res(R.string.l10n_app_contacts_contacts_add_alreadyadded), NodesMessage.Text(existing.displayName)), ", ")
@@ -96,12 +108,12 @@ class ScanContactStateHolder(
             }
             dependencies.announcer.announce(announcement)
         } finally {
-            mutableState.update { it.copy(isResolvingScan = false) }
+            if (generation == scanGeneration) mutableState.update { it.copy(isResolvingScan = false) }
         }
     }
 
-    private suspend fun fetchExistingContact(publicKey: Bytes): ContactDTO? {
-        val radioId = session.currentRadioId() ?: return null
+    private suspend fun fetchExistingContact(radioId: RadioId?, publicKey: Bytes): ContactDTO? {
+        if (radioId == null) return null
         val store = session.servicesDataStore() ?: session.offlineDataStore() ?: return null
         return try {
             store.fetchContact(radioId, publicKey)
@@ -112,22 +124,28 @@ class ScanContactStateHolder(
         }
     }
 
-    fun resetToScanner() = mutableState.update {
-        it.copy(scannedContact = null, existingContact = null, errorMessage = null, isImporting = false, isResolvingScan = false)
+    fun resetToScanner() {
+        ++scanGeneration
+        mutableState.update {
+            it.copy(scannedContact = null, existingContact = null, errorMessage = null, isImporting = false, isResolvingScan = false)
+        }
     }
 
     /** Primary button: open a saved contact, or import the scanned one after this explicit confirmation. */
     suspend fun confirm(): ScanConfirmOutcome {
         val current = state.value
+        if (current.scannedContact == null) return ScanConfirmOutcome.Stay
+        session.ensureContactConnection(scanConnection, scanRadioId)
         current.existingContact?.let { return ScanConfirmOutcome.Completed(it) }
         val scanned = current.scannedContact ?: return ScanConfirmOutcome.Stay
-        return importContact(scanned)
+        return importContact(scanned, scanGeneration, scanConnection)
     }
 
-    private suspend fun importContact(contact: ScannedContact): ScanConfirmOutcome {
+    private suspend fun importContact(contact: ScannedContact, generation: Int, connection: Any?): ScanConfirmOutcome {
         if (state.value.isImporting) return ScanConfirmOutcome.Stay
         val contactService = session.contactService()
         val device = session.connectedDevice()
+        val store = session.servicesDataStore()
         if (contactService == null || device == null) {
             presentImportFailure(NodesMessage.res(R.string.l10n_app_contacts_contacts_add_error_notconnected))
             return ScanConfirmOutcome.Stay
@@ -140,9 +158,11 @@ class ScanContactStateHolder(
                 lastModified = dependencies.clock.wallNow.epochSecond.toUInt(),
             )
             contactService.addOrUpdateContact(device.radioId, frame)
+            ensureReview(generation, connection, device.radioId)
             // The detail screen takes a stored row; the QR payload is not one.
-            val added = session.servicesDataStore()?.fetchContact(device.radioId, contact.publicKey)
-            if (added == null) {
+            val added = store?.fetchContact(device.radioId, contact.publicKey)
+            ensureReview(generation, connection, device.radioId)
+            if (added == null || added.radioId != device.radioId || added.publicKey != contact.publicKey) {
                 presentImportFailure(NodesMessage.res(R.string.l10n_app_contacts_contacts_common_erroroccurred))
                 mutableState.update { it.copy(isImporting = false) }
                 return ScanConfirmOutcome.Stay
@@ -153,13 +173,18 @@ class ScanContactStateHolder(
         } catch (_: NodesContactFailure.ContactTableFull) {
             presentImportFailure(NodesMessage.res(R.string.l10n_app_contacts_contacts_add_error_nodelistfull, device.maxContacts.toInt()))
         } catch (cancelled: CancellationException) {
-            mutableState.update { it.copy(isImporting = false) }
+            if (generation == scanGeneration) mutableState.update { it.copy(isImporting = false) }
             throw cancelled
         } catch (error: Exception) {
             presentImportFailure(NodesMessage.res(R.string.l10n_app_contacts_contacts_scan_error_importfailed, dependencies.messages.message(error)))
         }
         mutableState.update { it.copy(isImporting = false) }
         return ScanConfirmOutcome.Stay
+    }
+
+    private suspend fun ensureReview(generation: Int, connection: Any?, radioId: RadioId?) {
+        if (generation != scanGeneration) throw CancellationException("Contact scan was reset")
+        session.ensureContactConnection(connection, radioId)
     }
 
     private fun presentImportFailure(message: NodesMessage) {

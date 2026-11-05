@@ -79,11 +79,12 @@ class ContactsStateHolder(
     suspend fun loadContacts(radioId: RadioId) {
         val dataStore = session.offlineDataStore() ?: return
         val generation = ++loadGeneration
+        val admissionsAtStart = pendingAdmissions.toMap()
         mutableState.update { it.copy(isLoading = true, errorMessage = null) }
         try {
             val fetched = dataStore.fetchContacts(radioId)
             if (generation != loadGeneration) return
-            val merged = mergeAdmissions(fetched)
+            val merged = mergeAdmissions(fetched, admissionsAtStart)
             val ids = merged.mapTo(HashSet()) { it.id }
             // Self-heal the mask: once a deleted row is gone from the fetch, stop masking it.
             mutableState.update { it.copy(contacts = merged, pendingRemovalIds = it.pendingRemovalIds intersect ids) }
@@ -125,11 +126,19 @@ class ContactsStateHolder(
         }
     }
 
-    private fun mergeAdmissions(fetched: List<ContactDTO>): List<ContactDTO> {
+    private fun mergeAdmissions(fetched: List<ContactDTO>, admissionsAtStart: Map<UUID, ContactDTO>): List<ContactDTO> {
         val result = fetched.toMutableList()
         val resolved = mutableListOf<UUID>()
         for ((id, contact) in pendingAdmissions) {
-            if (result.any { it.id == contact.id || it.sameIdentity(contact) }) resolved += id else result += contact
+            val index = result.indexOfFirst { it.id == contact.id || it.sameIdentity(contact) }
+            if (index < 0) {
+                result += contact
+            } else if (admissionsAtStart[id] !== contact) {
+                // This query started before the admission: even a matching row may be an older version.
+                result[index] = contact
+            } else {
+                resolved += id
+            }
         }
         resolved.forEach(pendingAdmissions::remove)
         return result

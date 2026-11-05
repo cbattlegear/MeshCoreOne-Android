@@ -15,7 +15,10 @@ import com.meshcoreone.android.core.protocol.model.ContactType
 import java.time.Instant
 import java.util.Locale
 import java.util.UUID
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Duration
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 
 /**
@@ -99,6 +102,8 @@ interface NodesNotificationCleanup {
  * disconnected.
  */
 interface NodesSession {
+    /** Stable identity of the live service graph; changes even when reconnecting the same radio. */
+    fun connectionIdentity(): Any? = contactService()
     fun connectionState(): DeviceConnectionState
     fun connectedDevice(): DeviceDTO?
     fun currentRadioId(): RadioId?
@@ -110,6 +115,13 @@ interface NodesSession {
     fun advertisementService(): NodesAdvertisementService?
     fun traceService(): NodesTraceService?
     fun notificationCleanup(): NodesNotificationCleanup?
+}
+
+internal suspend fun NodesSession.ensureContactConnection(identity: Any?, radioId: RadioId?) {
+    currentCoroutineContext().ensureActive()
+    if (connectionIdentity() !== identity || currentRadioId() != radioId) {
+        throw CancellationException("Contact operation's radio session changed")
+    }
 }
 
 /** The scanned/pasted contact payload (`MeshCoreURLParser.ContactResult`, WP-405). */

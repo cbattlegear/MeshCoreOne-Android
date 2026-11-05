@@ -42,6 +42,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -88,14 +89,14 @@ internal fun NodesListScreen(
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
-    val holder = remember(dependencies) { ContactsStateHolder(dependencies, scope) }
-    val state by holder.state.collectAsStateWithLifecycle()
     val radioId = dependencies.session.currentRadioId()
+    val holder = remember(dependencies, radioId) { ContactsStateHolder(dependencies, scope) }
+    val state by holder.state.collectAsStateWithLifecycle()
     var search by remember { mutableStateOf("") }
     var segment by remember { mutableStateOf(NodeSegment.CONTACTS) }
     var sort by remember { mutableStateOf(NodeSortOrder.LAST_HEARD) }
     var sortMenu by remember { mutableStateOf(false) }
-    var showAdd by remember { mutableStateOf(false) }
+    var showAdd by remember(dependencies, radioId) { mutableStateOf(false) }
     var showShare by remember { mutableStateOf(false) }
     var pendingAction by remember { mutableStateOf<Pair<RowActionKind, ContactDTO>?>(null) }
 
@@ -167,7 +168,7 @@ internal fun NodesListScreen(
             }
         }
         when {
-            !state.hasLoadedOnce || state.isLoading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            (!state.hasLoadedOnce || state.isLoading) && contacts.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
             }
             contacts.isEmpty() -> NodesEmptyState(search, segment, Modifier.fillMaxSize())
@@ -232,15 +233,17 @@ internal fun NodesListScreen(
         )
     }
     if (showAdd) {
-        AddContactDialog(
-            dependencies = dependencies,
-            navigation = navigation,
-            onDismiss = { showAdd = false },
-            onAdded = {
-                showAdd = false
-                if (radioId != null) scope.launch { holder.loadContacts(radioId) }
-            },
-        )
+        key(dependencies, radioId, dependencies.session.connectionIdentity()) {
+            AddContactDialog(
+                dependencies = dependencies,
+                navigation = navigation,
+                onDismiss = { showAdd = false },
+                onAdded = { contact ->
+                    if (contact.radioId == dependencies.session.currentRadioId()) holder.upsert(contact)
+                    showAdd = false
+                },
+            )
+        }
     }
     if (showShare) {
         dependencies.session.connectedDevice()?.let { device ->
@@ -341,7 +344,7 @@ private fun AddContactDialog(
     dependencies: NodesFeatureDependencies,
     navigation: NodesNavigation,
     onDismiss: () -> Unit,
-    onAdded: () -> Unit,
+    onAdded: (ContactDTO) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     val holder = remember(dependencies) { AddContactStateHolder(dependencies) }
@@ -352,7 +355,7 @@ private fun AddContactDialog(
         confirmButton = {
             TextButton(
                 enabled = state.canAdd,
-                onClick = { scope.launch { if (holder.add()) onAdded() } },
+                onClick = { scope.launch { holder.addContact()?.let(onAdded) } },
             ) { Text(stringResource(C.contactsAddAdd)) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(C.contactsCommonCancel)) } },
@@ -431,7 +434,7 @@ private fun AddContactDialog(
                                 when (val result = scanHolder.confirm()) {
                                     is ScanConfirmOutcome.Completed -> {
                                         scanner = false
-                                        onDismiss()
+                                        onAdded(result.contact)
                                         navigation.openContact(result.contact)
                                     }
                                     ScanConfirmOutcome.Stay -> Unit

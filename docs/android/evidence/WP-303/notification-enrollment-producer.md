@@ -220,3 +220,42 @@ The evidence-only successor does not receive a transferred exact-head CI result;
 the executable-source result above stays bound to `e8d76e687`.
 
 The exact hosted job/log is authoritative. No second CI-result bundle is retained.
+
+## Restart-observation uncertainty successor (diagnostic-only)
+
+The storage owner's narrow correction
+`7c93360db1d1b9726e09066a3971166c41916e77` changes reconciliation
+observations of missing, corrupt, unavailable, unattributed or foreign storage
+to `Indeterminate(operation, reason)`. A restart cannot use those observations
+as proof that a prior prepare never committed. Invalid caller nonce/budgets and
+proven precommit prepare rejection remain distinct `NotRetained` outcomes.
+The existing app mapper already preserves the uncertain operation; no
+production mapper or coordinator algorithm change is needed.
+
+The successor locally composes only that owned source/test/evidence delta,
+the following app consumer regressions, and actual trusted main
+`9b27f8b1aa6d6d37b99aa4d37646280d9917096b`. The current-main delta is
+disjoint from enrollment and its runner. No unrelated custody successor or
+unreviewed PR #580 runner is imported.
+
+Native mapper controls now require uncertainty for missing history,
+prepared-then-deleted storage, corrupted retained digest and foreign replacement.
+Repeated observations must neither create a new database nor repair corrupt
+bytes nor overwrite the foreign operation. Malformed expected nonce still fails
+before allocation; a valid request observing a different disk nonce remains
+uncertain, while a new `prepare` against that foreign identity stays rejected.
+Seven mapper methods run at both API variants.
+
+An eighteenth entry/producer method mounts the real UI, consumes the real
+acknowledgment and obtains a real bound witness/journal, deletes only its test
+generation journal, then invokes the actual reconcile button twice. Assertions
+require `Indeterminate` for the same operation, exactly four allocated IDs,
+disabled new-generation action, no recreated database, and unchanged
+STAGED/CONSUMED acknowledgment history.
+
+This successor is pending fresh exact diagnostic execution. Its permission is
+diagnostic-only: it does not change held PR #579, publication/integration gates,
+execution owners, reservations, policies or deployed runtime. Earlier successful
+`e8d76e687` results do not transfer. The storage correction adds one method, so the
+new notification expectation is 168 reply methods at both APIs plus six baseline
+cases (342), independently checked against the actual hosted inventory.

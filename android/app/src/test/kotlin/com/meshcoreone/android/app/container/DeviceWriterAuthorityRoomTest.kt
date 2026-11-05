@@ -6,6 +6,7 @@ import com.meshcoreone.android.app.navigation.addSettingsKnownRegion
 import com.meshcoreone.android.app.navigation.removeSettingsKnownRegion
 import com.meshcoreone.android.core.contracts.domain.DeviceEditPersisting
 import com.meshcoreone.android.core.contracts.domain.DeviceWriteSnapshot
+import com.meshcoreone.android.core.contracts.domain.KnownRegionRemovalOutcome
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.model.ChannelDTO
@@ -15,6 +16,7 @@ import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.SelfInfo
+import com.meshcoreone.android.core.protocol.model.FloodScope
 import com.meshcoreone.android.feature.settings.device.SettingsNotConnectedException
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
@@ -868,6 +870,83 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
                 assertTrue(h.manager.connectionState.isOperational)
             }
             assertEquals(2, paused.rejected, "Each same-target removal must invalidate the production editor's ticket")
+        } finally { h.container.close() }
+    }
+
+    @Test fun differentAliasWriterRequiresRadioReadmissionBeforeEditorCanClearTheLastScope() = runTest {
+        val paused = PausedStore(store)
+        val h = ContainerHarness(this, store, persistenceOverride = paused)
+        var radioScope: String? = null
+        try {
+            h.links.configureRadio = { radio ->
+                radio.firmwareVersion = 13u
+                radio.respond = { command ->
+                    when (command[0].toInt()) {
+                        0x3f -> {
+                            radioScope = if (command.size == 1) null else
+                                command.slice(1, 32).toByteArray().toString(Charsets.UTF_8).substringBefore('\u0000')
+                            listOf(Bytes.of(0))
+                        }
+                        0x40 -> listOf(Bytes.of(0x1c) + (radioScope?.let {
+                            Bytes.utf8(it).paddedOrTruncated(31) + FloodScope.Region(it).scopeKey()
+                        } ?: Bytes.EMPTY))
+                        else -> null
+                    }
+                }
+            }
+            h.manager.connect(h.target())
+            h.settle()
+            val before = assertNotNull(h.manager.connectedDevice)
+            val session = h.sessions.current!!
+            val short = "a".repeat(25) + "\u00e9\u754c"
+            val long = short + "-suffix"
+            for (disabled in listOf(false, true)) {
+                for ((removed, other) in listOf(short to long, long to short)) {
+                    val acknowledged = if (disabled) null else short
+                    assertEquals(acknowledged, session.settingsService.setDefaultFloodScopeVerified(acknowledged))
+                    val ticket = assertNotNull(store.fetchDeviceWriteSnapshot(before.id))
+                    val seeded = ticket.device.copy(
+                        knownRegions = listOf(short, long).snapshot(), defaultFloodScopeName = acknowledged,
+                    )
+                    assertTrue(store.saveDeviceIfUnchanged(seeded, ticket))
+                    h.container.deviceEditor.updateDevice(seeded)
+                    for ((index, name) in listOf(removed, other).withIndex()) {
+                        store.saveChannel(ChannelDTO(radioId = before.radioId, index = (index + 1).toUByte(), name = name)
+                            .withFloodScope(ChannelFloodScope.Region(name)))
+                    }
+                    paused.beforeSave = { store.removeDeviceKnownRegion(before.radioId, other) }
+                    val outcome = h.container.deviceEditor.persistKnownRegionRemoval(removed, session.token, acknowledged)
+                    if (disabled) {
+                        assertEquals(KnownRegionRemovalOutcome.Removed, outcome)
+                    } else {
+                        assertEquals(KnownRegionRemovalOutcome.NeedsScopeReconciliation, outcome)
+                        val contested = assertNotNull(store.fetchDevice(before.id))
+                        assertEquals(listOf(removed), contested.knownRegions.toList())
+                        assertEquals(short, contested.defaultFloodScopeName)
+                        assertEquals(seeded, h.manager.connectedDevice, "A rejected projection must not publish")
+                        assertEquals(ChannelFloodScope.Region(removed), store.fetchChannel(before.radioId, 1u)!!.floodScope)
+                        assertEquals(ChannelFloodScope.Inherit, store.fetchChannel(before.radioId, 2u)!!.floodScope)
+                        assertEquals(short, session.settingsService.getDefaultFloodScope(), "Actual fake-radio readback stays scoped")
+                        assertTrue(h.container.deviceEditor.updateDefaultFloodScopeName(short, session.token))
+                        assertEquals(contested, h.manager.connectedDevice, "Acknowledgment refreshes authoritative regions")
+                        assertNull(session.settingsService.setDefaultFloodScopeVerified(null))
+                        assertTrue(h.container.deviceEditor.updateDefaultFloodScopeName(null, session.token))
+                        assertEquals(KnownRegionRemovalOutcome.Removed,
+                            h.container.deviceEditor.persistKnownRegionRemoval(removed, session.token, null))
+                    }
+                    val saved = assertNotNull(store.fetchDevice(before.id))
+                    assertTrue(saved.knownRegions.isEmpty())
+                    assertNull(saved.defaultFloodScopeName)
+                    assertEquals(saved, h.manager.connectedDevice)
+                    assertNull(session.settingsService.getDefaultFloodScope())
+                    assertNull(radioScope)
+                    assertEquals(ChannelFloodScope.Inherit, store.fetchChannel(before.radioId, 1u)!!.floodScope)
+                    assertEquals(ChannelFloodScope.Inherit, store.fetchChannel(before.radioId, 2u)!!.floodScope)
+                    assertEquals(session.token, h.manager.snapshot.value.token)
+                    assertTrue(h.manager.connectionState.isOperational)
+                }
+            }
+            assertEquals(4, paused.rejected, "Each different-target write must reject the first actual CAS")
         } finally { h.container.close() }
     }
 

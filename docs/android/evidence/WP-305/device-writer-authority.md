@@ -309,3 +309,52 @@ The isolated old-base storage successor must not ship by itself; the normalized 
 targeted writer and postcommit publication are composed here. Source count becomes twenty-five
 writer and fifteen persistence methods. Run `41954394380` at exact `9972903c` predates this
 additional control and cannot provide its execution evidence.
+
+Exact successor diagnostic
+[41954394380](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41954394380)
+at `9972903c07f0bd500c1c4c1e74a39b3f73fb331c` completed with overall failure.
+Job `127005770291` has deduplicated paired writer **24 START / 24 END SUCCESS** and persistence
+**15 START / 15 END SUCCESS**, with no authority method failures. This executes the legacy Job
+control and both transferred targeted-writer controls, but not the subsequent combined twenty-fifth
+writer control. App discovered 1,942 tests with only the same three known preset/onboarding failures.
+Controller/workflow policy and Swift codec oracle jobs passed. The separate composed Settings
+candidate `c43f9d5af3b875f470e5044ecc19bbc0e0752463`, run `41955116616`, includes all twenty-five
+writer and fifteen persistence controls; the Settings producer reports all four owned source/test
+files byte-identical to `db3d70453`. Its execution and Settings radio integration remain distinct
+from this predecessor result.
+
+The composed `c43f9d5a` run `41955116616` failed before App scenarios:
+job `127008154093`, `:app:compileDebugUnitTestKotlin`, reports duplicate ambiguous `ChannelDTO`
+imports at `SettingsDefaultScopePersistenceTest.kt:10,17`. Both authority classes have zero actual
+START/END markers in this run; that is absent execution, not passing or failed test methods.
+The Settings producer owns this fixture correction and fresh composed execution. The completed
+run is preserved. The independent owned candidate remains suitable for fresh execution of the
+twenty-fifth combined control without modifying the Settings producer's files.
+
+### Different-target alias authority follow-up
+
+The next review found a conditional public-writer race not covered by the same-target test:
+Settings admits removal of one alias while another survives, but a targeted writer removes the
+other alias before CAS. Blind editor rebasing would clear the local default without clearing the
+still-scoped radio. No production direct-writer caller was established; the public contract still
+requires a sound result. No new storage mutex or schema is introduced.
+
+The common contracts enum `KnownRegionRemovalOutcome` has `Removed`, `Retired` and
+`NeedsScopeReconciliation`. A new three-argument awaited editor overload takes the already
+acknowledged radio default. Every authoritative transform, including CAS retries, computes the
+post-removal default and compares its thirty-byte normalized value with that acknowledgment.
+A changed radio transition exits with `NeedsScopeReconciliation` before another save or live
+publication. Real persistence failures and cancellation still propagate; stale generation returns
+`Retired`. The two-argument and legacy persistence-only APIs are unchanged. Expected revalidation
+is not logged as a persistence error. No editor mutex is held while a caller performs radio work.
+
+The production-editor/real-Room/fake-protocol-radio control
+`differentAliasWriterRequiresRadioReadmissionBeforeEditorCanClearTheLastScope` exercises both
+alias orders, scoped and disabled baselines, with four actual stale CAS rejections. Scoped cases
+assert the refusal, unchanged live state, preserved target channel and actual still-scoped radio
+readback, then use real Settings radio write/readback and awaited editor acknowledgment before
+readmission. Disabled cases retain their disabled radio/default without an unnecessary refusal.
+All final Room/live/radio/channel values and the original operational token are asserted.
+This tests the editor boundary and explicit caller readmission, not the separately owned actual
+Settings removal queue integration. The Settings producer owns that queue's bounded full replan
+and exact consumer callback wiring. All predecessor assertions and diagnostics remain untouched.

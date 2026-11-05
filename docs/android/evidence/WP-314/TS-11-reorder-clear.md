@@ -117,6 +117,21 @@ The following source successor fences those callbacks by originating radio/versi
 resets the dialog per connection, and freezes clear semantics callbacks. Neither this
 additional schedule nor the full WP/device behavior is accepted by earlier results.
 
+R15 positive42012983052 passed all six jobs. Original hosted-log inspection confirms
+tools753/753 and app2008/2008, zero failed/errors/skips, with exact compiled-source
+blobs and actual methods: mounted51, execution37, batch4, saved13, app8. This does
+not accept later retained-action changes.
+
+R16 test-only42015053100 failed tools759/6: visible clear dialogs remained after
+same/different-radio reconnect (line613), retained confirmations canceled B's trace
+(line619), and both hop methods stopped at the description helper (line1768).
+Repaired42015431589 failed tools759/2, both hop methods at the same helper.
+The hop fixture omitted the displayed hash from its name label (`Alpha (A1)` /
+`Bravo (B2)`); neither failed hop method is claimed as a reached stale-edit finding.
+The fresh successor preserves those assertions with exact rendered descriptions
+and composes actual main5012's landed factory-publication fence. A distinct old-UI/
+holder negative will use identical corrected tests and the landed lifecycle baseline.
+
 | Check | Result |
 |---|---|
 | Pinned Windows preflight: `python .\\tools\\android-port\\controller\\ci.py preflight --local --state $env:ANDROID_CI_STATE --output $output` with a fresh absolute TEMP output and pinned Python 3.12.4 | PASS (exit 0; readiness only) |

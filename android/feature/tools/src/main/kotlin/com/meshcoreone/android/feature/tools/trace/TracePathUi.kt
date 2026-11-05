@@ -124,12 +124,15 @@ object TracePathScreen {
             }
         }
 
-        LaunchedEffect(dependencies.generation, dependencies.radioId) {
+        DisposableEffect(holder, dependencies.generation, dependencies.radioId) {
             holder.configure(dependencies.feature)
+            holder.bindConnection(dependencies.radioId, dependencies.generation)
             holder.startListening()
+            onDispose { holder.retireConnection() }
+        }
+        LaunchedEffect(holder, dependencies.generation, dependencies.radioId) {
             dependencies.radioId?.let { holder.loadContacts(it) }
         }
-        DisposableEffect(holder) { onDispose { holder.stopListening(); holder.cancelBatchTrace() } }
         val state by holder.state.collectAsStateWithLifecycle()
         val savedState by savedPaths.state.collectAsStateWithLifecycle()
         TracePathContent(state, holder, savedState, savedPaths, dependencies.generation, dependencies.radioId)
@@ -272,7 +275,8 @@ internal fun TracePathListContent(state: TracePathState, holder: TracePathStateH
                     }
                 }
                 val moveDown = {
-                    if (index < state.outboundPath.lastIndex && holder.state.value.outboundPath.getOrNull(index)?.id == hop.id) {
+                    val livePath = holder.state.value.outboundPath
+                    if (index < livePath.lastIndex && livePath.getOrNull(index)?.id == hop.id) {
                         holder.moveRepeater(setOf(index), index + 2)
                     }
                 }

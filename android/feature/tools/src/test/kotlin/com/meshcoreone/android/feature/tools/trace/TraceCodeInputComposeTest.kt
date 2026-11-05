@@ -48,6 +48,7 @@ import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SavedTracePathDTO
+import com.meshcoreone.android.core.contracts.domain.TracePathPersisting
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -422,6 +423,109 @@ class TraceCodeInputComposeTest {
             settle()
             assertTrue(next.isCompleted)
             assertEquals(edited.fullPathData, assertNotNull(harness.state.result).tracedPathBytes)
+        }
+    }
+
+    @Test fun retainedMoveDownAtANewBoundaryCannotRetireAnotherTrace() {
+        for (batch in listOf(false, true)) {
+            val harness = configured()
+            harness.holder.addNode(contact(0xA1, name = "Alpha"))
+            harness.holder.addNode(contact(0xB2, name = "Bravo"))
+            harness.holder.addNode(contact(0xC3, name = "Charlie"))
+            harness.holder.setBatchEnabled(batch)
+            harness.holder.setBatchSize(1)
+            mountPathList(harness)
+            val oldMove = assertNotNull(actionButton(
+                pathActionDescription(C.contactsDetailAvatarCropMoveDown, 2, harness.state.outboundPath[1]),
+            ).config[SemanticsActions.OnClick].action)
+            harness.holder.removeRepeater(2)
+            settle()
+            val gate = CompletableDeferred<MessageSentInfo>()
+            var tag = 0u
+            harness.deps.sender = TraceSender { sentTag, _, _, _ -> tag = sentTag; gate.await() }
+            val run = harness.start { harness.holder.runBatchTrace() }
+            val running = harness.state
+            host.get().runOnUiThread { assertTrue(oldMove()) }
+            settle()
+            assertEquals(running, harness.state)
+            assertEquals(tag, harness.holder.pendingTag)
+            gate.complete(MessageSentInfo(0u, Bytes.EMPTY, 0u))
+            harness.main.runCurrent()
+            harness.respond(tag, listOf(node(0xA1, 5.0), node(null, 3.0)), RADIO)
+            settle()
+            assertTrue(run.isCompleted)
+            assertFalse(harness.state.isRunning)
+            assertEquals(running.fullPathData, assertNotNull(harness.state.result).tracedPathBytes)
+        }
+    }
+
+    @Test fun stableFeatureReconnectRetiresHeldLookupAndSendBeforeAFreshMountedRun() {
+        for (sameRadio in listOf(false, true)) for (heldLookup in listOf(false, true)) {
+            val newRadio = if (sameRadio) RADIO else RadioId(UUID.randomUUID())
+            val persistence = InMemoryTracePathStore { T0 }
+            val oldPath = savedPath(Bytes.of(0xAA), radioId = RADIO)
+            persistence.insert(oldPath)
+            val selected = if (sameRadio) oldPath else savedPath(Bytes.of(0xAA), radioId = newRadio).also(persistence::insert)
+            val lookupGate = CompletableDeferred<Unit>()
+            val sendGate = CompletableDeferred<MessageSentInfo>()
+            val oldSends = mutableListOf<UInt>()
+            val freshSender = FakeTraceSender()
+            val oldEvents = TraceResponseBroadcaster()
+            val newEvents = TraceResponseBroadcaster()
+            var events = oldEvents
+            var firstLookup = true
+            val feature = FakeTraceDependencies().apply {
+                device = device()
+                directory = FakeNodeDirectory(contacts = listOf(contact(0xAA, name = "Tower")))
+                responses = { events.subscribe() }
+                store = object : TracePathPersisting by persistence {
+                    override suspend fun fetchSavedTracePaths(radioId: RadioId) =
+                        persistence.fetchSavedTracePaths(radioId).also {
+                            if (firstLookup) {
+                                firstLookup = false
+                                if (heldLookup) lookupGate.await()
+                            }
+                        }
+                }
+                sender = TraceSender { tag, _, _, _ -> oldSends += tag; sendGate.await() }
+            }
+            val connection = mutableStateOf(TracePathScreen.Dependencies(
+                feature, MapRecentsStorage(), RecordingDiagnostics(), RADIO, 1,
+            ))
+            content.setContent { MaterialTheme { TracePathScreen(connection.value) } }
+            settle()
+            click("Tower")
+            scrollToIndex(10)
+            click(host.get().getString(C.contactsTraceListRunTrace))
+            assertEquals(if (heldLookup) 0 else 1, oldSends.size)
+            host.get().runOnUiThread {
+                feature.device = device().copy(radioId = newRadio)
+                feature.sender = freshSender
+                events = newEvents
+                connection.value = connection.value.copy(radioId = newRadio, generation = 2)
+            }
+            settle()
+            lookupGate.complete(Unit)
+            sendGate.complete(MessageSentInfo(0u, Bytes.EMPTY, 0u))
+            oldSends.forEach { tag ->
+                oldEvents.yield(TraceResponse(traceInfo(tag, listOf(node(0xAA, 9.0), node(null, 3.0))), RADIO))
+                newEvents.yield(TraceResponse(traceInfo(tag, listOf(node(0xAA, 9.0), node(null, 3.0))), newRadio))
+            }
+            settle()
+            assertEquals(if (heldLookup) 0 else 1, oldSends.size, "A retired lookup must not reach its captured sender")
+            assertTrue(freshSender.sent.isEmpty())
+            assertTrue(persistence.paths.values.all { it.runs.isEmpty() })
+            assertFalse(texts().any { it.contains("SNR") })
+            scrollToIndex(10)
+            click(host.get().getString(C.contactsTraceListRunTrace))
+            assertEquals(Bytes.of(0xAA), freshSender.sent.single().path, "Reconnect preserves the editable route")
+            newEvents.yield(TraceResponse(
+                traceInfo(freshSender.sent.single().tag, listOf(node(0xAA, 6.0), node(null, 3.0))), newRadio,
+            ))
+            settle()
+            assertEquals(1, persistence.paths.getValue(selected.id).runs.size)
+            assertEquals(1, persistence.paths.values.sumOf { it.runs.size })
+            assertTrue(texts().contains("SNR: 6.0 dB"))
         }
     }
 

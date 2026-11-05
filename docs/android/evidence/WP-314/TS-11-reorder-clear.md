@@ -96,3 +96,11 @@ run `41989676506` discovered 731 with the same two failing methods. In addition 
 control, the mounted retained-row callback exposed Compose rebinding its Clickable delegate
 after a keyed row moved. Explicit immutable semantics callbacks now preserve the rendered
 hop/index guard. These failed runs remain authoritative for their own heads only.
+Independent `9ac` review additionally identified a retained move-down action whose hop stayed
+at the same index while its live boundary changed, and a stable-feature screen reconnect
+that did not retire the holder. The successor checks the live boundary, makes unchanged
+moves true no-ops, and retires the actual mounted radio/generation lifetime without discarding
+the editable route or committed history. New mounted and virtual-time cases cover held
+lookup/send, both radio-change and same-radio reconnect, old response/timeout/refresh, and
+successful fresh traces. Active `9ac` diagnostic/ref remain immutable and do not verify these
+successor changes.

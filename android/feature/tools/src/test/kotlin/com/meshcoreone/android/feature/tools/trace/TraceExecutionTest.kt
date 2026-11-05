@@ -590,6 +590,107 @@ class TraceExecutionTest {
     }
 
     @Test
+    fun `unchanged moves preserve pending traces errors selection and accepted history`() {
+        for (batch in listOf(false, true)) {
+            val h = TraceHarness(configureDependencies = true)
+            val gate = CompletableDeferred<MessageSentInfo>()
+            var tag = 0u
+            h.deps.device = device()
+            h.holder.addNode(alpha)
+            h.holder.addNode(bravo)
+            h.holder.setBatchEnabled(batch)
+            h.holder.setBatchSize(1)
+            h.deps.sender = TraceSender { sentTag, _, _, _ -> tag = sentTag; gate.await() }
+            val run = h.start { h.holder.runBatchTrace() }
+            h.holder.setError("Preserved diagnostic")
+            val before = h.state
+            for ((offsets, destination) in listOf(setOf(1) to 3, setOf(1) to 2, emptySet<Int>() to 0, setOf(9) to 0)) {
+                h.holder.moveRepeater(offsets, destination)
+                assertEquals(before, h.state)
+                assertEquals(tag, h.holder.pendingTag)
+            }
+            gate.complete(MessageSentInfo(0u, Bytes.EMPTY, 0u))
+            h.main.runCurrent()
+            h.respond(tag, listOf(node(0xA1, 5.0), node(null, 3.0)), RADIO)
+            assertTrue(run.isCompleted)
+            assertFalse(h.state.isRunning)
+            assertEquals(before.fullPathData, assertNotNull(h.state.result).tracedPathBytes)
+        }
+    }
+
+    @Test
+    fun `connection retirement fences lookup send response timeout and accepted append refresh`() {
+        for (sameRadio in listOf(false, true)) for (stage in listOf("lookup", "send", "refresh")) for (batch in listOf(false, true)) {
+            val h = TraceHarness(configureDependencies = true)
+            val nextRadio = if (sameRadio) RADIO else RadioId(UUID.randomUUID())
+            val persistence = InMemoryTracePathStore { h.time.now() }
+            val lookup = CompletableDeferred<Unit>()
+            val send = CompletableDeferred<MessageSentInfo>()
+            val refresh = CompletableDeferred<Unit>()
+            val oldTags = mutableListOf<UInt>()
+            var firstLookup = true
+            var firstRefresh = true
+            h.deps.device = device()
+            h.holder.bindConnection(RADIO, 1)
+            h.holder.addNode(alpha)
+            h.holder.setBatchEnabled(batch)
+            h.holder.setBatchSize(1)
+            val oldPath = savedPath(h.state.fullPathData, radioId = RADIO)
+            persistence.insert(oldPath)
+            val nextPath = if (sameRadio) oldPath else savedPath(h.state.fullPathData, radioId = nextRadio).also(persistence::insert)
+            h.deps.store = object : TracePathPersisting by persistence {
+                override suspend fun fetchSavedTracePaths(radioId: RadioId) =
+                    persistence.fetchSavedTracePaths(radioId).also {
+                        if (firstLookup) {
+                            firstLookup = false
+                            if (stage == "lookup") lookup.await()
+                        }
+                    }
+                override suspend fun fetchSavedTracePath(key: EntityKey) =
+                    persistence.fetchSavedTracePath(key).also {
+                        if (firstRefresh) {
+                            firstRefresh = false
+                            if (stage == "refresh") refresh.await()
+                        }
+                    }
+            }
+            h.deps.sender = TraceSender { tag, _, _, _ ->
+                oldTags += tag
+                if (stage == "send") send.await() else MessageSentInfo(0u, Bytes.EMPTY, 0u)
+            }
+            val old = h.start { h.holder.runBatchTrace() }
+            if (stage == "refresh") h.respond(oldTags.single(), listOf(node(0xA1, 5.0), node(null, 3.0)), RADIO)
+            h.deps.device = device().copy(radioId = nextRadio)
+            val recorded = FakeTraceSender()
+            h.deps.sender = recorded
+            h.holder.bindConnection(nextRadio, 2)
+            val retired = h.state
+            lookup.complete(Unit)
+            send.complete(MessageSentInfo(0u, Bytes.EMPTY, 0u))
+            refresh.complete(Unit)
+            h.main.runCurrent()
+            oldTags.forEach { h.respond(it, listOf(node(0xA1, 9.0), node(null, 3.0)), RADIO) }
+            h.time.advanceBy(60.seconds)
+            assertTrue(old.isCompleted)
+            assertEquals(retired, h.state)
+            assertFalse(h.state.isRunning)
+            assertNull(h.state.activeSavedPath)
+            assertNull(h.state.result)
+            assertEquals(if (stage == "lookup") 0 else 1, oldTags.size)
+            assertEquals(if (stage == "refresh") 1 else 0, persistence.paths.values.sumOf { it.runs.size })
+            assertTrue(recorded.sent.isEmpty())
+            val next = h.start { h.holder.runBatchTrace() }
+            h.respond(recorded.sent.single().tag, listOf(node(0xA1, 6.0), node(null, 3.0)), nextRadio)
+            assertTrue(next.isCompleted)
+            assertFalse(h.state.isRunning)
+            assertTrue(assertNotNull(h.state.result).success)
+            assertEquals(nextRadio, h.state.activeSavedPath?.radioId)
+            assertEquals(nextPath.id, h.state.activeSavedPath?.id)
+            assertEquals(if (stage == "refresh" && sameRadio) 2 else 1, h.state.activeSavedPath?.runs?.size)
+        }
+    }
+
+    @Test
     fun `changing batch mode retires the pending operation without sending another trace`() {
         for (initialBatch in listOf(false, true)) for (held in listOf(false, true)) {
             val h = TraceHarness(configureDependencies = true)

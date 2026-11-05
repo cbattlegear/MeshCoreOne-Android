@@ -47,6 +47,8 @@ class TracePathStateHolder(
 
     private val recents = RecentHopsStore(recentHopsStorage)
     private var currentRadioId: RadioId? = null
+    private var connectionIdentity: Pair<RadioId?, Int>? = null
+    private var connectionRevision = 0L
     private var pathSelectionRevision = 0L
     private var historyRefreshSequence = 0L
     private var publishedHistoryRefresh = 0L
@@ -77,6 +79,28 @@ class TracePathStateHolder(
         deps = dependencies
     }
 
+    fun bindConnection(radioId: RadioId?, generation: Int) {
+        val identity = radioId to generation
+        if (connectionIdentity == identity) return
+        retireConnection()
+        connectionIdentity = identity
+        currentRadioId = radioId
+    }
+
+    fun retireConnection() {
+        connectionIdentity = null
+        connectionRevision += 1
+        stopListening()
+        invalidatePathExecution()
+        clearError()
+        update {
+            it.copy(
+                activeSavedPath = null, result = null, resultID = null, batchPresentationActive = false,
+                availableRepeaters = emptyList(), availableRooms = emptyList(), discoveredRepeaters = emptyList(),
+            )
+        }
+    }
+
     internal fun observeHashModeActions(onAction: () -> Unit): () -> Unit {
         hashModeActionObservers += onAction
         return { hashModeActionObservers -= onAction }
@@ -94,9 +118,12 @@ class TracePathStateHolder(
     fun startListening() {
         traceEventsJob?.cancel()
         val events = deps.traceResponses() ?: return
+        val revision = connectionRevision
         traceEventsJob = scope.launch {
             try {
-                events.collect { handleTraceResponse(it.traceInfo, it.radioId) }
+                events.collect {
+                    if (connectionRevision == revision) handleTraceResponse(it.traceInfo, it.radioId)
+                }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -135,12 +162,14 @@ class TracePathStateHolder(
     internal fun resolver(snapshot: TracePathState = current) = TraceNodeResolver(snapshot, deps.bestAvailableLocation())
 
     suspend fun loadContacts(radioId: RadioId) {
+        val revision = connectionRevision
         currentRadioId = radioId
         update { it.copy(recentPublicKeys = recents.load(radioId)) }
         if (deps.connectedDevice()?.supportsTraceHashSizeOverride != true) update { it.copy(traceHashMode = null) }
         val directory = deps.nodeDirectory() ?: return
         try {
             val contacts = directory.fetchContacts(radioId)
+            if (connectionRevision != revision) return
             update { state ->
                 state.copy(
                     availableRepeaters = contacts.filter { it.type == ContactType.REPEATER },
@@ -148,12 +177,15 @@ class TracePathStateHolder(
                 )
             }
             val nodes = directory.fetchDiscoveredNodes(radioId)
+            if (connectionRevision != revision) return
             update { state -> state.copy(discoveredRepeaters = nodes.filter { it.nodeType == ContactType.REPEATER }) }
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
             diagnostics.failure("loadContacts", error)
-            update { it.copy(availableRepeaters = emptyList(), availableRooms = emptyList(), discoveredRepeaters = emptyList()) }
+            if (connectionRevision == revision) {
+                update { it.copy(availableRepeaters = emptyList(), availableRooms = emptyList(), discoveredRepeaters = emptyList()) }
+            }
         }
     }
 
@@ -225,10 +257,12 @@ class TracePathStateHolder(
     }
 
     fun moveRepeater(fromOffsets: Set<Int>, toOffset: Int) {
+        val moved = TracePathEditing.move(current.outboundPath, fromOffsets, toOffset)
+        if (moved == current.outboundPath) return
         clearError()
         invalidatePathExecution()
         update {
-            it.copy(outboundPath = TracePathEditing.move(it.outboundPath, fromOffsets, toOffset), activeSavedPath = null, result = null, batchPresentationActive = false)
+            it.copy(outboundPath = moved, activeSavedPath = null, result = null, batchPresentationActive = false)
         }
     }
 

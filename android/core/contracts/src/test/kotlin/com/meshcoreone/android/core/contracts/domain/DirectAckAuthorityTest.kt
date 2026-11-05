@@ -91,6 +91,23 @@ class DirectAckAuthorityTest {
     }
 
     @Test
+    fun inlineCompletionHistoryRetainsExactAcceptedWireAndOperationIdentities() {
+        val wireRequestId = UUID(0, 20)
+        val operationRequestId = UUID(0, 21)
+        val completion = DirectAckBookkeeping.SendCompleted(wireRequestId)
+        val history = DirectAckBookkeepingReceipt(operationRequestId, completion)
+        val wire = DirectAckWireReceipt(wireRequestId, 123u, 456u)
+
+        assertEquals(operationRequestId, history.requestId)
+        assertEquals(wireRequestId, completion.wireRequestId)
+        assertEquals(wire.requestId, completion.wireRequestId)
+        assertEquals(456u, wire.acceptedAckCode)
+        assertEquals(completion, DirectAckBookkeeping.SendCompleted(wireRequestId))
+        assertNotEquals(completion, completion.copy(wireRequestId = UUID(0, 22)))
+        assertEquals(MessageStatus.PENDING, message.status)
+    }
+
+    @Test
     fun resendBaselineDeliveryIsNotAnOwnDeliveryCommit() {
         val baseline = message.copy(status = MessageStatus.DELIVERED, ackCode = 7u)
         val registered = receipt().copy(

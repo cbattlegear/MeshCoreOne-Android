@@ -7,6 +7,9 @@
 package com.meshcoreone.android.core.data.messaging
 
 import androidx.room.Room
+import androidx.sqlite.db.SupportSQLiteDatabase
+import androidx.sqlite.db.SupportSQLiteOpenHelper
+import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueServiceException
@@ -18,6 +21,7 @@ import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.data.repository.OriginalCase
 import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.database.DirectAckStorage
+import com.meshcoreone.android.core.database.DirectAckRadioExclusionEntity
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.ByteWriter
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -39,10 +43,12 @@ import com.meshcoreone.android.core.services.messaging.MessageServiceConfig
 import com.meshcoreone.android.core.services.messaging.DirectAckNonsettlementException
 import com.meshcoreone.android.core.services.messaging.DirectAckFailureNonsettlementException
 import com.meshcoreone.android.core.services.messaging.DirectPreclaimFailureUncertaintyException
+import com.meshcoreone.android.core.services.messaging.DirectPreclaimFailureUncertaintyReason
 import com.meshcoreone.android.core.services.messaging.MessagePollingService
 import com.meshcoreone.android.core.services.messaging.PoolBackoffConfig
 import com.meshcoreone.android.core.services.contacts.ChannelService
 import java.security.MessageDigest
+import java.io.File
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneId
@@ -63,6 +69,7 @@ import org.junit.After
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.json.JSONObject
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.SQLiteMode
@@ -479,7 +486,11 @@ class MessagingRoomIntegrationTest {
             old.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().single {
                 it.operation == "ackFailureUncertain.$oldMessageID"
             }.cause)
-        assertEquals(setOf(DirectAckRadioNonfailingReason.TARGET_UNRESOLVED_PHYSICAL_EMISSION), oldUncertainty.reasons.toSet())
+        assertTrue(DirectAckRadioNonfailingReason.TARGET_UNRESOLVED_PHYSICAL_EMISSION in oldUncertainty.reasons)
+        assertTrue(oldUncertainty.reasons.all { it in setOf(
+            DirectAckRadioNonfailingReason.TARGET_UNRESOLVED_PHYSICAL_EMISSION,
+            DirectAckRadioNonfailingReason.PREAUTHORITY_HISTORY_UNKNOWN,
+        ) })
         assertEquals(marked, assertIs<DirectAckRadioEvidenceObservation.Found>(
             store.inspectDirectAckRadioEvidence(radio)).snapshot.wires.single())
         store.close(); db.close()
@@ -569,7 +580,10 @@ class MessagingRoomIntegrationTest {
                 assertEquals(fresh.token, uncertain.token)
                 assertEquals(sent.id, uncertain.messageID)
                 assertEquals(actual.readUInt32LE(0), uncertain.acknowledgedCode)
-                assertEquals(setOf(DirectAckRadioNonsettlingReason.UNRESOLVED_OTHER_CLAIM_EMISSION), uncertain.reasons.toSet())
+                assertEquals(setOf(
+                    DirectAckRadioNonsettlingReason.UNRESOLVED_OTHER_CLAIM_EMISSION,
+                    DirectAckRadioNonsettlingReason.PREAUTHORITY_HISTORY_UNKNOWN,
+                ), uncertain.reasons.toSet())
             } else {
                 assertTrue(fresh.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().none {
                     it.operation == "ackAmbiguous.${sent.id}"
@@ -600,8 +614,10 @@ class MessagingRoomIntegrationTest {
                 }.cause)
             assertEquals(fresh.token, failureUncertainty.token)
             assertEquals(sent.id, failureUncertainty.messageID)
-            assertEquals(setOf(DirectAckRadioNonfailingReason.UNRESOLVED_OTHER_CLAIM_EMISSION),
-                failureUncertainty.reasons.toSet())
+            assertEquals(setOf(
+                DirectAckRadioNonfailingReason.UNRESOLVED_OTHER_CLAIM_EMISSION,
+                DirectAckRadioNonfailingReason.PREAUTHORITY_HISTORY_UNKNOWN,
+            ), failureUncertainty.reasons.toSet())
             assertEquals(sent, store.fetchMessage(EntityKey(radio, sent.id)))
             assertEquals(oldRow, store.fetchMessage(EntityKey(radio, oldMessageID)))
             assertEquals(beforeAck, observed)
@@ -708,7 +724,11 @@ class MessagingRoomIntegrationTest {
                     g.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().last {
                         it.operation == "ackFailureUncertain.${message.id}"
                     }.cause)
-                assertEquals(setOf(DirectAckRadioNonfailingReason.TARGET_UNRESOLVED_PHYSICAL_EMISSION), blocked.reasons.toSet())
+                assertTrue(DirectAckRadioNonfailingReason.TARGET_UNRESOLVED_PHYSICAL_EMISSION in blocked.reasons)
+                assertTrue(blocked.reasons.all { it in setOf(
+                    DirectAckRadioNonfailingReason.TARGET_UNRESOLVED_PHYSICAL_EMISSION,
+                    DirectAckRadioNonfailingReason.PREAUTHORITY_HISTORY_UNKNOWN,
+                ) })
                 assertTrue(completedStatuses(g, events).none { it is MessageStatusEvent.Failed })
             } else {
                 // This fault is before the persisted physical marker, not a DeviceError no-write attestation.
@@ -803,7 +823,7 @@ class MessagingRoomIntegrationTest {
         val missing = MessageDTO(radioId = radio, contactID = UUID.randomUUID(), text = "retained first", timestamp = 100u)
         val later = MessageDTO(radioId = radio, contactID = contact.id, text = "safe later", timestamp = 101u)
         store.saveMessage(missing); store.saveMessage(later)
-        val retained = PendingSendDTO.fromEnvelope(DirectMessageEnvelope(missing.id, missing.contactID!!), radio)
+        val retained = PendingSendDTO.fromEnvelope(DirectMessageEnvelope(missing.id, requireNotNull(missing.contactID)), radio)
             .copy(sequence = 1)
         val ready = PendingSendDTO.fromEnvelope(DirectMessageEnvelope(later.id, contact.id), radio).copy(sequence = 2)
         store.upsertPendingSend(retained); store.upsertPendingSend(ready)
@@ -815,7 +835,12 @@ class MessagingRoomIntegrationTest {
         assertEquals(1, g.firmware.sent().size)
         assertEquals("safe later", g.firmware.sent().single().slice(13, g.firmware.sent().single().size)
             .toByteArray().toString(Charsets.UTF_8))
-        assertEquals(MessageStatus.DELIVERED, store.fetchMessage(EntityKey(radio, later.id))?.status)
+        assertEquals(MessageStatus.SENT, store.fetchMessage(EntityKey(radio, later.id))?.status)
+        assertNull(store.fetchMessage(EntityKey(radio, later.id))?.roundTripTime)
+        assertTrue(g.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+            (it.cause as? DirectAckNonsettlementException)?.reasons?.contains(
+                DirectAckRadioNonsettlingReason.PREAUTHORITY_HISTORY_UNKNOWN) == true
+        })
         assertEquals(0, g.queue.queuedEnvelopeCount)
         val warnings = g.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().count {
             it.operation == "preclaimUncertain.${missing.id}"
@@ -918,6 +943,339 @@ class MessagingRoomIntegrationTest {
                     it is MessageStatusEvent.StatusResolved && it.status == MessageStatus.DELIVERED
             })
         } finally { events.close(); fresh.stop() }
+    }
+
+    @Test fun oldMayAfterFileReopenCannotBecomeFailedThroughAZeroAttemptTimestampFault() = runTest(scheduler) {
+        unprovedZeroAttemptFailure(reopen = true)
+    }
+
+    @Test fun retiredRamTrackingCannotTurnSameServiceZeroAttemptPreclaimFaultIntoDefiniteFailure() = runTest(scheduler) {
+        unprovedZeroAttemptFailure(reopen = false)
+    }
+
+    private suspend fun TestScope.unprovedZeroAttemptFailure(reopen: Boolean) {
+        val name = "zero-attempt-may.db"
+        store.close(); db.close()
+        db = database(name); store = RoomPersistenceStore(db, process, clock.wallClock)
+        seed()
+        var rejectTimestamp = false
+        val fault = PersistenceStoreException(PersistenceStoreError.SaveFailed("one-shot zero-attempt timestamp fault"))
+        fun boundary(actual: RoomPersistenceStore) = object : DirectRoles(actual) {
+            override suspend fun updateMessageTimestamp(key: EntityKey, timestamp: UInt) {
+                if (rejectTimestamp) {
+                    rejectTimestamp = false
+                    throw fault
+                }
+                actual.updateMessageTimestamp(key, timestamp)
+            }
+        }
+        val old = RadioGeneration(157, boundary(store), config = MessageServiceConfig(maxAttempts = 0))
+        old.start(); old.firmware.error = 2u
+        assertFailsWith<MessageServiceException> { old.service.sendDirectMessage("old physical MAY, no live tracker", contact) }
+        val message = store.fetchMessages(EntityKey(radio, contact.id)).single()
+        assertEquals(MessageStatus.PENDING, message.status)
+        assertEquals(0, old.service.pendingAckCount)
+        assertEquals(1, old.firmware.sent().size)
+        val evidence = assertIs<DirectAckRadioEvidenceObservation.Found>(store.inspectDirectAckRadioEvidence(radio)).snapshot
+        assertEquals(DirectAckRadioWireOutcome.MayHaveWritten, evidence.wires.single().outcome)
+        val pending = PendingSendDTO.fromEnvelope(DirectMessageEnvelope(message.id, contact.id), radio).copy(sequence = 1)
+        store.upsertPendingSend(pending)
+        val current = if (reopen) {
+            assertNotNull(process.coroutineContext[Job]).cancelAndJoin()
+            old.stop(); store.close(); db.close()
+            process = CoroutineScope(SupervisorJob() + StandardTestDispatcher(scheduler))
+            db = database(name); store = RoomPersistenceStore(db, process, clock.wallClock)
+            store.warmUp()
+            RadioGeneration(1, boundary(store), config = MessageServiceConfig(maxAttempts = 0),
+                processEpoch = ProcessEpoch(UUID.fromString("FFFFFFFF-1111-2222-3333-444444444444"))).also { it.start() }
+        } else old
+        rejectTimestamp = true
+        current.signals.set(DeviceConnectionState.READY)
+        val events = current.service.statusEvents()
+        try {
+            current.queue.hydrate(); runCurrent()
+            advanceUntilParked(current, message.id)
+            assertFalse(rejectTimestamp)
+            assertSame(fault, current.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().last {
+                it.operation == "park.${message.id}"
+            }.cause)
+            val warning = assertIs<DirectPreclaimFailureUncertaintyException>(
+                current.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().last {
+                    it.operation == "preclaimUncertain.${message.id}"
+                }.cause)
+            assertEquals(DirectPreclaimFailureUncertaintyReason.UNPROVED_FAILURE, warning.reason)
+            assertEquals(message, store.fetchMessage(EntityKey(radio, message.id)))
+            assertEquals(listOf(pending.copy(attemptCount = 1)), store.fetchPendingSends(radio))
+            assertEquals(evidence, assertIs<DirectAckRadioEvidenceObservation.Found>(store.inspectDirectAckRadioEvidence(radio)).snapshot)
+            assertEquals(if (reopen) 0 else 1, current.firmware.sent().size)
+            assertEquals(0, current.service.pendingAckCount)
+            assertTrue(completedStatuses(current, events).none { it is MessageStatusEvent.Failed })
+        } finally { events.close(); current.stop() }
+    }
+
+    @Test fun expectedUncertaintyDoesNotPoisonRealServiceTeardownOrSameRadioSuccessorConnection() = runTest(scheduler) {
+        seed()
+        val missing = MessageDTO(radioId = radio, contactID = UUID.randomUUID(), text = "retained missing contact", timestamp = 100u)
+        store.saveMessage(missing)
+        val pending = PendingSendDTO.fromEnvelope(DirectMessageEnvelope(missing.id, requireNotNull(missing.contactID)), radio)
+            .copy(sequence = 1)
+        store.upsertPendingSend(pending)
+        val old = RadioGeneration(159)
+        old.start(); old.signals.set(DeviceConnectionState.READY)
+        old.queue.hydrate(); runCurrent(); old.queue.awaitDrainCompletion()
+        assertIs<DirectPreclaimFailureUncertaintyException>(
+            old.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().single {
+                it.operation == "preclaimUncertain.${missing.id}"
+            }.cause)
+        assertTrue(old.queue.shutdown().isComplete)
+        assertTrue(old.service.close().isComplete)
+        old.session.stop(); old.scope.cancel()
+
+        val current = RadioGeneration(160)
+        current.firmware.acknowledge = false
+        current.start(); current.service.startEventMonitoring()
+        current.signals.set(DeviceConnectionState.READY)
+        val sent = current.service.sendDirectMessage("successor still reaches the radio", contact)
+        assertEquals(1, current.firmware.sent().size)
+        assertEquals(MessageStatus.SENT, sent.status)
+        current.firmware.pushAck(assertNotNull(current.firmware.lastAck)); runCurrent()
+        assertTrue(current.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+            (it.cause as? DirectAckNonsettlementException)?.reasons?.contains(
+                DirectAckRadioNonsettlingReason.PREAUTHORITY_HISTORY_UNKNOWN) == true
+        })
+        advanceTimeBy(31_001); runCurrent()
+        current.service.checkExpiredAcks(); runCurrent()
+        assertEquals(MessageStatus.SENT, store.fetchMessage(EntityKey(radio, sent.id))?.status)
+        assertTrue(current.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+            (it.cause as? DirectAckFailureNonsettlementException)?.reasons?.contains(
+                DirectAckRadioNonfailingReason.PREAUTHORITY_HISTORY_UNKNOWN) == true
+        })
+        assertTrue(current.queue.shutdown().isComplete)
+        assertTrue(current.service.close().isComplete)
+        assertEquals(listOf(pending), store.fetchPendingSends(radio))
+        assertEquals(missing, store.fetchMessage(EntityKey(radio, missing.id)))
+        current.session.stop(); current.scope.cancel()
+    }
+
+    @Test fun migratedRetainedPreauthoritySendCannotDeliverANewActualClaimFromItsDelayedAckAfterReopen() = runTest(scheduler) {
+        preauthorityPhysicalSendAcrossMigration(deleted = false)
+    }
+
+    @Test fun migratedDeletedPreauthoritySendAndAbsentRadioCannotDeliverANewActualClaimFromItsDelayedAckAfterReopen() = runTest(scheduler) {
+        preauthorityPhysicalSendAcrossMigration(deleted = true)
+    }
+
+    private suspend fun TestScope.preauthorityPhysicalSendAcrossMigration(deleted: Boolean) {
+        store.close(); db.close()
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val name = "physical-preauthority-${UUID.randomUUID()}.db"
+        val schema = JSONObject(File(requireNotNull(System.getProperty("roomSchemaDirectory")),
+            "com.meshcoreone.android.core.database.MeshCoreDatabase${File.separator}1.json").readText())
+            .getJSONObject("database")
+        val oldID = UUID.randomUUID()
+        val radioText = radio.value.toString().uppercase()
+        val oldText = oldID.toString().uppercase()
+        val legacyAck = Bytes.of(0xE7, 0x03, 0x00, 0x00)
+        val helper = FrameworkSQLiteOpenHelperFactory().create(
+            SupportSQLiteOpenHelper.Configuration.builder(context).name(name)
+                .callback(object : SupportSQLiteOpenHelper.Callback(1) {
+                    override fun onCreate(old: SupportSQLiteDatabase) {
+                        val entities = schema.getJSONArray("entities")
+                        assertTrue(entities.length() > 0)
+                        for (i in 0 until entities.length()) {
+                            val entity = entities.getJSONObject(i)
+                            val table = entity.getString("tableName")
+                            old.execSQL(entity.getString("createSql").replace("\${TABLE_NAME}", table))
+                            if (entity.has("indices")) {
+                                val indices = entity.getJSONArray("indices")
+                                for (j in 0 until indices.length()) {
+                                    old.execSQL(indices.getJSONObject(j).getString("createSql")
+                                        .replace("\${TABLE_NAME}", table))
+                                }
+                            }
+                        }
+                        val setup = schema.getJSONArray("setupQueries")
+                        assertTrue(setup.length() > 0)
+                        for (i in 0 until setup.length()) old.execSQL(setup.getString(i))
+                        old.execSQL(
+                            "INSERT INTO messages (radioId,id,contactID,text,timestamp," +
+                                "createdAt_seconds,createdAt_nanos,sortDate_seconds,sortDate_nanos," +
+                                "directionRawValue,statusRawValue,textTypeRawValue,ackCode,pathLength,isRead," +
+                                "heardRepeats,sendCount,retryAttempt,maxRetryAttempts,linkPreviewFetched," +
+                                "containsSelfMention,mentionSeen,failureSeen,timestampCorrected," +
+                                "routeTypeRawValue,regionScopeMatches) VALUES " +
+                                "(?,?,?,'pre-authority physical send',1700000000,1700000000,0,1700000000,0," +
+                                "1,0,0,NULL,0,0,0,1,0,0,0,0,0,0,0,0,'[]')",
+                            arrayOf<Any?>(radioText, oldText, contact.id.toString().uppercase()),
+                        )
+                    }
+                    override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) =
+                        error("The genuine v1 fixture must be newly created")
+                }).build(),
+        )
+        val legacyScope = CoroutineScope(SupervisorJob(process.coroutineContext[Job]) + StandardTestDispatcher(scheduler))
+        val legacyFirmware = RoomFirmware().apply { acknowledge = false; acceptedAck = legacyAck }
+        val legacySession = MeshCoreSession(legacyFirmware, SessionConfiguration(defaultTimeout = 2.0), clock,
+            legacyScope.coroutineContext)
+        try {
+            val sqlite = helper.writableDatabase
+            assertEquals(1, sqlite.version)
+            sqlite.query("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE 'direct_ack_%'").use {
+                assertTrue(it.moveToFirst()); assertEquals(0, it.getInt(0))
+            }
+            // Same physical session API used by immutable pre-authority MessageService; no old service class is executed.
+            legacySession.start()
+            val info = legacySession.sendMessage(target, "pre-authority physical send", base)
+            assertEquals(legacyAck, info.expectedAck)
+            assertEquals(1, legacyFirmware.sent().size)
+            sqlite.execSQL("UPDATE messages SET statusRawValue=2,ackCode=? WHERE radioId=? AND id=?",
+                arrayOf<Any?>(info.expectedAck.readUInt32LE(0).toLong(), radioText, oldText))
+            if (deleted) sqlite.execSQL("DELETE FROM messages WHERE radioId=? AND id=?", arrayOf<Any?>(radioText, oldText))
+        } finally {
+            withContext(NonCancellable) {
+                legacySession.stop(); legacyScope.cancel()
+                helper.close()
+            }
+        }
+
+        MeshCoreDatabase.open(context, name).let { migrated ->
+            try { assertEquals(MeshCoreDatabase.SCHEMA_VERSION, migrated.openHelper.writableDatabase.version) }
+            finally { migrated.close() }
+        }
+        db = database(name); store = RoomPersistenceStore(db, process, clock.wallClock)
+        store.warmUp(); seed()
+        val oldRow = store.fetchMessage(EntityKey(radio, oldID))
+        if (deleted) assertNull(oldRow) else {
+            assertEquals(MessageStatus.SENT, assertNotNull(oldRow).status)
+            assertEquals(999u, oldRow.ackCode)
+        }
+        val before = assertIs<DirectAckRadioEvidenceObservation.Found>(store.inspectDirectAckRadioEvidence(radio)).snapshot
+        assertTrue(before.preauthorityHistoryUnknown)
+        assertTrue(before.wires.isEmpty())
+        val current = RadioGeneration(161)
+        current.firmware.acknowledge = false
+        current.firmware.acceptedAck = legacyAck
+        current.start(); current.service.startEventMonitoring()
+        val events = current.service.statusEvents()
+        val observed = mutableListOf<MessageStatusEvent>()
+        val listener = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            events.events.collect { observed += it.event }
+        }
+        val sent = try {
+            val accepted = current.service.sendDirectMessage("new accepted claim after real v1 migration", contact)
+            runCurrent()
+            assertEquals(MessageStatus.SENT, accepted.status)
+            assertEquals(999u, accepted.ackCode)
+            assertNull(accepted.roundTripTime)
+            assertEquals(1, current.firmware.sent().size)
+            val beforeAck = observed.toList()
+            current.firmware.pushAck(legacyAck, 888u); runCurrent()
+            val uncertainty = assertIs<DirectAckNonsettlementException>(
+                current.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().single {
+                    it.operation == "ackAmbiguous.${accepted.id}"
+                }.cause)
+            assertTrue(DirectAckRadioNonsettlingReason.PREAUTHORITY_HISTORY_UNKNOWN in uncertainty.reasons)
+            assertEquals(accepted, store.fetchMessage(EntityKey(radio, accepted.id)))
+            assertEquals(oldRow, store.fetchMessage(EntityKey(radio, oldID)))
+            assertEquals(beforeAck, observed)
+            advanceTimeBy(31_001); runCurrent()
+            current.service.checkExpiredAcks(); runCurrent()
+            assertEquals(accepted, store.fetchMessage(EntityKey(radio, accepted.id)))
+            assertTrue(current.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+                (it.cause as? DirectAckFailureNonsettlementException)?.reasons?.contains(
+                    DirectAckRadioNonfailingReason.PREAUTHORITY_HISTORY_UNKNOWN) == true
+            })
+            assertTrue(observed.none {
+                it is MessageStatusEvent.Failed ||
+                    it is MessageStatusEvent.StatusResolved && it.status == MessageStatus.DELIVERED
+            })
+            assertEquals(1, current.firmware.sent().size)
+            accepted
+        } finally {
+            listener.cancelAndJoin(); events.close(); current.stop()
+        }
+        val history = assertIs<DirectAckRadioEvidenceObservation.Found>(store.inspectDirectAckRadioEvidence(radio)).snapshot
+        assertTrue(history.preauthorityHistoryUnknown)
+        assertEquals(DirectAckRadioWireOutcome.Accepted(999u), history.wires.single().outcome)
+        store.close(); db.close()
+        db = database(name); store = RoomPersistenceStore(db, process, clock.wallClock)
+        store.warmUp()
+        assertEquals(sent, store.fetchMessage(EntityKey(radio, sent.id)))
+        assertEquals(oldRow, store.fetchMessage(EntityKey(radio, oldID)))
+        assertEquals(history, assertIs<DirectAckRadioEvidenceObservation.Found>(store.inspectDirectAckRadioEvidence(radio)).snapshot)
+        assertEquals(1, legacyFirmware.sent().size)
+    }
+
+    @Test fun realCoveredBySaturationSendRetainsTypedSaturationWithoutInventingAnEmissionOrCorruption() = runTest(scheduler) {
+        seed()
+        db.directAckExclusions().radio(DirectAckRadioExclusionEntity(radio.value, saturated = true))
+        val actual = store
+        val marks = mutableListOf<DirectAckEmissionMarkResult>()
+        val boundary = object : DirectRoles(actual) {
+            override suspend fun markDirectAckWireMayHaveWritten(
+                attempt: DirectAckAttempt, wireRequestId: UUID, emissionRequestId: UUID,
+            ): DirectAckEmissionMarkResult =
+                actual.markDirectAckWireMayHaveWritten(attempt, wireRequestId, emissionRequestId).also { marks += it }
+        }
+        val current = RadioGeneration(162, boundary)
+        current.firmware.acknowledge = false
+        current.start(); current.service.startEventMonitoring()
+        val events = current.service.statusEvents()
+        val sent = current.service.sendDirectMessage("allowed send with sticky saturated history", contact)
+        assertEquals(1, current.firmware.sent().size)
+        assertIs<DirectAckEmissionMarkResult.CoveredBySaturation>(marks.single())
+        assertEquals(MessageStatus.SENT, sent.status)
+        val acceptedCode = assertNotNull(current.firmware.lastAck)
+        db.openHelper.readableDatabase.query(
+            "SELECT COUNT(*) FROM direct_ack_wires WHERE radioId=? AND acceptedCode=?",
+            arrayOf<Any?>(radio.value.toString().uppercase(), acceptedCode.readUInt32LE(0).toLong()),
+        ).use { assertTrue(it.moveToFirst()); assertEquals(1, it.getInt(0)) }
+        val evidence = assertIs<DirectAckRadioEvidenceObservation.Found>(store.inspectDirectAckRadioEvidence(radio)).snapshot
+        assertEquals(DirectAckRadioEvidenceCoverage.SATURATED, evidence.coverage)
+        assertTrue(evidence.wires.isEmpty())
+        current.firmware.pushAck(acceptedCode); runCurrent()
+        val blockedAck = assertIs<DirectAckNonsettlementException>(
+            current.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().single {
+                it.operation == "ackAmbiguous.${sent.id}"
+            }.cause)
+        assertTrue(DirectAckRadioNonsettlingReason.RADIO_HISTORY_SATURATED in blockedAck.reasons)
+        advanceTimeBy(31_001); runCurrent()
+        current.service.checkExpiredAcks(); runCurrent()
+        val blockedFailure = assertIs<DirectAckFailureNonsettlementException>(
+            current.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().last {
+                it.operation == "ackFailureUncertain.${sent.id}"
+            }.cause)
+        assertTrue(DirectAckRadioNonfailingReason.RADIO_HISTORY_SATURATED in blockedFailure.reasons)
+        assertEquals(sent, store.fetchMessage(EntityKey(radio, sent.id)))
+        assertEquals(evidence, assertIs<DirectAckRadioEvidenceObservation.Found>(store.inspectDirectAckRadioEvidence(radio)).snapshot)
+        assertTrue(completedStatuses(current, events).none {
+            it is MessageStatusEvent.Failed ||
+                it is MessageStatusEvent.StatusResolved && it.status == MessageStatus.DELIVERED
+        })
+        assertEquals(1, current.firmware.sent().size)
+        assertTrue(current.queue.shutdown().isComplete)
+        assertTrue(current.service.close().isComplete)
+        current.session.stop(); current.scope.cancel()
+    }
+
+    @Test fun channelFailureStillUsesItsOwnGenericFailedPathWithoutDirectPreclaimInference() = runTest(scheduler) {
+        seed()
+        val current = RadioGeneration(163)
+        current.start(); current.firmware.error = 2u
+        val failure = assertFailsWith<MessageServiceException> {
+            current.service.sendChannelMessage("channel rejection remains failed", 0u, radio)
+        }
+        assertEquals(2u.toUByte(),
+            assertIs<MeshCoreException.DeviceError>(assertIs<MessageServiceError.SessionError>(failure.error).underlying).code)
+        val message = store.fetchMessages(radio, 0u, 10, 0).single()
+        assertEquals(MessageStatus.FAILED, message.status)
+        assertNull(message.contactID)
+        assertEquals(0u.toUByte(), message.channelIndex)
+        assertEquals(1, current.firmware.channelSent().size)
+        assertTrue(current.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().none {
+            it.cause is DirectPreclaimFailureUncertaintyException
+        })
+        current.stop()
     }
 
     private suspend fun TestScope.exerciseMissingContactHydration(count: Int, onceOnly: Boolean) {
@@ -3489,7 +3847,7 @@ class MessagingRoomIntegrationTest {
         assertEquals(0, p.undeliveredCount); assertTrue(p.close().isComplete); g.stop()
     }
 
-    @Test fun committedInlineRoomSaveAtDisconnectFailsBeforeTheWireAndPreservesTheProcessStore() = runTest(scheduler) {
+    @Test fun committedInlineRoomSaveAtDisconnectRetainsUnprovedPreclaimBeforeTheWireAndPreservesTheProcessStore() = runTest(scheduler) {
         seed(); val actual = store
         val committed = CompletableDeferred<UUID>(); val release = CompletableDeferred<Unit>()
         val blocked = object : PersistenceStoreProtocol by actual {
@@ -3506,7 +3864,7 @@ class MessagingRoomIntegrationTest {
         assertEquals(MessageStatus.PENDING, store.fetchMessage(EntityKey(radio, id))?.status)
         g.signals.set(DeviceConnectionState.DISCONNECTED); release.complete(Unit)
         assertEquals(MessageServiceError.NotConnected, assertNotNull(send.await()).error)
-        assertEquals(MessageStatus.FAILED, store.fetchMessage(EntityKey(radio, id))?.status)
+        assertEquals(MessageStatus.PENDING, store.fetchMessage(EntityKey(radio, id))?.status)
         assertTrue(g.firmware.sent().isEmpty())
         assertEquals(contact.id, store.fetchContact(EntityKey(radio, contact.id))?.id); g.stop()
     }

@@ -7,7 +7,10 @@ import java.util.UUID
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
+internal class RecordingDirectAckAuthority(
+    private val store: RecordingStore,
+    var preauthorityHistoryUnknown: Boolean,
+) :
     DirectAckAuthority, DirectPendingCompletionAuthority, DirectAckRadioExclusionAuthority, DirectAckRadioFailureAuthority {
     private class Lease(val token: SessionToken, val requestID: UUID) : DirectAckLease
     private class Attempt(
@@ -162,7 +165,25 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
         else DirectAckEmissionMutationResult.Applied(emission.receipt)
     }
 
+    private fun inconsistentAcceptedClaims(radio: RadioId): Set<UUID> {
+        if (radio in saturatedRadios) return emptySet()
+        return attempts.values.filter { it.receipt.key.radioId == radio }.filter { attempt ->
+            attempt.receipt.wires.any { wire ->
+                wire.acceptedAckCode != null &&
+                    (attempt.receipt.requestId to wire.requestId) in trackedWires &&
+                    emissions.values.none {
+                        val evidence = it.receipt.evidence
+                        evidence.claimRequestId == attempt.receipt.requestId && evidence.wireRequestId == wire.requestId &&
+                            (evidence.outcome as? DirectAckRadioWireOutcome.Accepted)?.ackCode == wire.acceptedAckCode
+                    }
+            }
+        }.map { it.receipt.requestId }.toSet()
+    }
+
     private fun radioEvidence(radio: RadioId, diagnostic: Boolean = true): DirectAckRadioEvidenceSnapshot {
+        if (diagnostic && inconsistentAcceptedClaims(radio).isNotEmpty()) {
+            throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+        }
         val marked = emissions.values.map { it.receipt.evidence }.filter { it.radioId == radio }
         val legacy = attempts.values.filter { it.receipt.key.radioId == radio }.flatMap { attempt ->
             attempt.receipt.wires.filter { wire ->
@@ -180,7 +201,7 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
                 diagnostic && all.size > DirectAckRadioEvidenceLimits.MAX_DIAGNOSTIC_WIRES_PER_RADIO ->
                     DirectAckRadioEvidenceCoverage.TRUNCATED
                 else -> DirectAckRadioEvidenceCoverage.COMPLETE
-            })
+            }, preauthorityHistoryUnknown)
     }
 
     override suspend fun inspectDirectAckRadioEvidence(radioId: RadioId): DirectAckRadioEvidenceObservation =
@@ -201,8 +222,11 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
         rejection(value)?.let { return@withLock DirectAckRadioSettlementResult.Rejected(it.reason) }
         val reasons = DirectAckRadioEvidenceAssessment.nonsettlingReasons(
             value.receipt.requestId, ackCode, radioEvidence(value.receipt.key.radioId, diagnostic = false),
-        )
-        if (reasons.isNotEmpty()) return@withLock DirectAckRadioSettlementResult.Nonsettling(reasons)
+        ).toMutableSet()
+        val inconsistent = inconsistentAcceptedClaims(value.receipt.key.radioId)
+        if (value.receipt.requestId in inconsistent) reasons += DirectAckRadioNonsettlingReason.TARGET_ACCEPTANCE_UNRESOLVED
+        if (inconsistent.any { it != value.receipt.requestId }) reasons += DirectAckRadioNonsettlingReason.UNRESOLVED_OTHER_CLAIM_EMISSION
+        if (reasons.isNotEmpty()) return@withLock DirectAckRadioSettlementResult.Nonsettling(reasons.snapshotSet())
         val message = requireNotNull(store.messages[value.receipt.key]).copy(
             status = MessageStatus.DELIVERED, ackCode = ackCode, roundTripTime = roundTripTime,
         )
@@ -455,7 +479,17 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
                 reasons += DirectAckRadioNonfailingReason.RADIO_HISTORY_SATURATED
             }
             val actualCodes = own.mapNotNull { (it.outcome as? DirectAckRadioWireOutcome.Accepted)?.ackCode }.toSet()
+            val inconsistent = inconsistentAcceptedClaims(value.receipt.key.radioId)
+            if (value.receipt.requestId in inconsistent) {
+                reasons += DirectAckRadioNonfailingReason.TARGET_CONFLICTING_PHYSICAL_EVIDENCE
+            }
+            if (evidence.preauthorityHistoryUnknown && actualCodes.isNotEmpty()) {
+                reasons += DirectAckRadioNonfailingReason.PREAUTHORITY_HISTORY_UNKNOWN
+            }
             if (actualCodes.isNotEmpty()) {
+                if (inconsistent.any { it != value.receipt.requestId }) {
+                    reasons += DirectAckRadioNonfailingReason.CONFLICTING_OTHER_CLAIM_EVIDENCE
+                }
                 evidence.wires.filter { it.claimRequestId != value.receipt.requestId }.forEach {
                     if (it.outcome != DirectAckRadioWireOutcome.DefinitelyUnsent && it.predictedAckCode in actualCodes) {
                         reasons += DirectAckRadioNonfailingReason.KNOWN_OTHER_CLAIM_CODE

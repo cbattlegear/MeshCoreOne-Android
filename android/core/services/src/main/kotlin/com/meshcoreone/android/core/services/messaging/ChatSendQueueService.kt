@@ -263,7 +263,7 @@ class ChatSendQueueService(
                 } catch (failure: PersistenceStoreException) { park(id, failure) }
                 if (contact == null) {
                     complete(id, clearProgress = false)
-                    record("preclaimUncertain.$id", DirectPreclaimFailureUncertaintyException(token, id))
+                    record("preclaimUncertain.$id", DirectPreclaimFailureUncertaintyException(token, id), retain = false)
                     return
                 }
                 val current = retained ?: run {
@@ -292,7 +292,6 @@ class ChatSendQueueService(
             ownership.check("dm.pendingDeleted")
             triggers.clear()
             complete(id)
-            recovered("preclaimUncertain.$id")
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: PersistenceStoreException) { park(id, failure) }
         catch (failure: MessageServiceException) {

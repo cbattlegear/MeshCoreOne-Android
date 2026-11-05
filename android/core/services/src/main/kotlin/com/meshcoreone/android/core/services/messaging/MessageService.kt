@@ -89,8 +89,6 @@ class MessageService(
         val confirmedCodes = mutableSetOf<Bytes>()
         val bufferedAcknowledgements = mutableListOf<MeshAcknowledgement>()
         var acknowledgementBufferOverflow = false
-        var nonsettlement: DirectAckNonsettlementException? = null
-        var failureNonsettlement: DirectAckFailureNonsettlementException? = null
     }
     private class AcceptedEmission(
         val handle: DirectAckEmissionHandle?,
@@ -811,10 +809,9 @@ class MessageService(
                             it.receipt === tracking.receipt && it.authority === attempt && it.acknowledgement == ack
                         }?.let {
                             pendingAcks[messageID] = it.copy(isDelivered = false, acknowledgement = null)
-                            directAuthorities[messageID]?.takeIf { it.attempt === attempt }?.nonsettlement = uncertainty
                         }
                     }
-                    remember("ackAmbiguous.$messageID", uncertainty)
+                    ownership.failure("ackAmbiguous.$messageID", uncertainty)
                     return
                 }
                 is DirectAckRadioSettlementResult.Rejected -> DirectAckMutationResult.Rejected(settled.reason)
@@ -861,16 +858,6 @@ class MessageService(
             committed.roundTripTime != delivery.roundTripTime) throw authorityFailure("delivery readback changed")
         synchronized(lock) {
             if (pendingAcks[messageID]?.receipt === tracking.receipt) {
-                directAuthorities[messageID]?.takeIf { it.attempt === tracking.authority }?.let {
-                    if (retainedFailures["ackAmbiguous.$messageID"] === it.nonsettlement) {
-                        retainedFailures.remove("ackAmbiguous.$messageID")
-                    }
-                    it.nonsettlement = null
-                    if (retainedFailures["ackFailureUncertain.$messageID"] === it.failureNonsettlement) {
-                        retainedFailures.remove("ackFailureUncertain.$messageID")
-                    }
-                    it.failureNonsettlement = null
-                }
                 activeDirectClaims[messageID]?.takeIf { directAuthorities[messageID]?.attempt === tracking.authority }
                     ?.acknowledgement = ack
                 tracking.receipt.complete(ack)
@@ -1092,8 +1079,14 @@ class MessageService(
                 if (tracking == null) directAuthorities[messageID]?.attempt else null
             }
             if (attempt == null && tracking == null) {
-                if (synchronized(lock) { messageID in directIntentMessages }) {
-                    throw authorityFailure("dispatch intent has no failure grant")
+                val row = dataStore.fetchMessage(key(messageID))
+                ownership.checkPersistenceCompletion("failMessage.preclaim")
+                if (row == null || row.channelIndex == null || row.contactID != null ||
+                    synchronized(lock) { messageID in directIntentMessages }) {
+                    ownership.failure("preclaimUncertain.$messageID", DirectPreclaimFailureUncertaintyException(
+                        token, messageID, DirectPreclaimFailureUncertaintyReason.UNPROVED_FAILURE,
+                    ))
+                    return FailureWrite.UNCERTAIN
                 }
                 return if (dataStore.updateMessageStatusUnlessDelivered(key(messageID), MessageStatus.FAILED)) {
                     FailureWrite.CHANGED
@@ -1112,10 +1105,7 @@ class MessageService(
                 is DirectAckRadioFailureResult.Rejected -> DirectAckMutationResult.Rejected(guarded.reason)
                 is DirectAckRadioFailureResult.Nonfailing -> {
                     val uncertainty = DirectAckFailureNonsettlementException(token, messageID, guarded.reasons)
-                    synchronized(lock) {
-                        directAuthorities[messageID]?.takeIf { it.attempt === attempt }?.failureNonsettlement = uncertainty
-                    }
-                    remember("ackFailureUncertain.$messageID", uncertainty)
+                    ownership.failure("ackFailureUncertain.$messageID", uncertainty)
                     return FailureWrite.UNCERTAIN
                 }
             }

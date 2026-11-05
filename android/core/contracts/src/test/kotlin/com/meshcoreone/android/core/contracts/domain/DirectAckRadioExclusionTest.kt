@@ -15,6 +15,60 @@ class DirectAckRadioExclusionTest {
     private val targetClaim = UUID(0, 2)
 
     @Test
+    fun preauthorityUncertaintyIsIndependentOfCompleteTruncatedAndSaturatedSamples() {
+        val target = wire(2, 3, 123u, DirectAckRadioWireOutcome.Accepted(123u))
+        for (coverage in DirectAckRadioEvidenceCoverage.entries) {
+            val baseline = reasons(123u, target, coverage = coverage)
+            assertEquals(
+                baseline + DirectAckRadioNonsettlingReason.PREAUTHORITY_HISTORY_UNKNOWN,
+                reasons(123u, target, coverage = coverage, preauthorityHistoryUnknown = true),
+            )
+        }
+    }
+
+    @Test
+    fun preauthorityUncertaintyDoesNotRequireAnySurvivingWireOrSyntheticSaturation() {
+        val snapshot = DirectAckRadioEvidenceSnapshot(
+            radio, SnapshotList.empty(), DirectAckRadioEvidenceCoverage.COMPLETE, true,
+        )
+        assertEquals(0, snapshot.wires.size)
+        assertEquals(DirectAckRadioEvidenceCoverage.COMPLETE, snapshot.coverage)
+        assertEquals(
+            setOf(
+                DirectAckRadioNonsettlingReason.PREAUTHORITY_HISTORY_UNKNOWN,
+                DirectAckRadioNonsettlingReason.TARGET_CODE_UNREGISTERED,
+            ),
+            DirectAckRadioEvidenceAssessment.nonsettlingReasons(targetClaim, 123u, snapshot),
+        )
+    }
+
+    @Test
+    fun preauthorityWildcardAndNonfailureReasonsAreNotSaturation() {
+        val warning = DirectAckRadioConfirmationEvidence.PersistedWildcard(
+            radio,
+            SnapshotSet(listOf(DirectAckRadioConfirmationWildcardReason.PREAUTHORITY_HISTORY_UNKNOWN)),
+        )
+        val failure = DirectAckRadioFailureResult.Nonfailing(
+            SnapshotSet(listOf(DirectAckRadioNonfailingReason.PREAUTHORITY_HISTORY_UNKNOWN)),
+        )
+
+        assertEquals(
+            setOf(DirectAckRadioConfirmationWildcardReason.PREAUTHORITY_HISTORY_UNKNOWN),
+            warning.reasons,
+        )
+        assertEquals(
+            setOf(DirectAckRadioNonfailingReason.PREAUTHORITY_HISTORY_UNKNOWN),
+            failure.reasons,
+        )
+        assertNotEquals(
+            warning,
+            warning.copy(reasons = SnapshotSet(listOf(
+                DirectAckRadioConfirmationWildcardReason.STICKY_SATURATION,
+            ))),
+        )
+    }
+
+    @Test
     fun nonfailingRequiresNonemptyReasonsIncludingOnCopy() {
         assertFailsWith<IllegalArgumentException> {
             DirectAckRadioFailureResult.Nonfailing(SnapshotSet.empty())
@@ -34,7 +88,7 @@ class DirectAckRadioExclusionTest {
         reasons.clear()
 
         assertEquals(DirectAckRadioNonfailingReason.entries.toSet(), result.reasons)
-        assertEquals(8, result.reasons.size)
+        assertEquals(9, result.reasons.size)
     }
 
     @Test
@@ -120,7 +174,7 @@ class DirectAckRadioExclusionTest {
         reasons.clear()
 
         assertEquals(DirectAckRadioConfirmationWildcardReason.entries.toSet(), evidence.reasons)
-        assertEquals(4, evidence.reasons.size)
+        assertEquals(5, evidence.reasons.size)
     }
 
     @Test
@@ -415,10 +469,13 @@ class DirectAckRadioExclusionTest {
         ackCode: UInt,
         vararg wires: DirectAckRadioWireEvidence,
         coverage: DirectAckRadioEvidenceCoverage = DirectAckRadioEvidenceCoverage.COMPLETE,
+        preauthorityHistoryUnknown: Boolean = false,
     ) = DirectAckRadioEvidenceAssessment.nonsettlingReasons(
         targetClaim,
         ackCode,
-        DirectAckRadioEvidenceSnapshot(radio, SnapshotList.of(*wires), coverage),
+        DirectAckRadioEvidenceSnapshot(
+            radio, SnapshotList.of(*wires), coverage, preauthorityHistoryUnknown,
+        ),
     )
 
     private fun wire(

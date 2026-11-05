@@ -60,7 +60,8 @@ class ReviewRecoveryTest {
                 runCurrent(); assertTrue(h.store.messages.isEmpty())
                 h.signals.set(null, DeviceConnectionState.DISCONNECTED); release.complete(Unit)
                 assertEquals(MessageServiceError.NotConnected, assertNotNull(send.await()).error)
-                assertEquals(MessageStatus.FAILED, h.store.messages.values.single().status)
+                assertEquals(if (channel) MessageStatus.FAILED else MessageStatus.PENDING,
+                    h.store.messages.values.single().status)
                 assertTrue(h.sends(CommandCode.SEND_MESSAGE).isEmpty())
                 assertTrue(h.sends(CommandCode.SEND_CHANNEL_MESSAGE).isEmpty()); h.close()
             }

@@ -112,7 +112,8 @@ private class RevisionedMap<K, V>(private val changed: (K, V?, V?) -> Unit) : Li
 }
 
 internal class RecordingStore : PersistenceStoreProtocol by unsupportedStore() {
-    val directAckAuthority = RecordingDirectAckAuthority(this)
+    // Conditional algorithm fixture only; this is not a production physical-history certificate.
+    val directAckAuthority = RecordingDirectAckAuthority(this, preauthorityHistoryUnknown = false)
     private val messageRevisions = mutableMapOf<EntityKey, Long>()
     private val pendingRevisions = mutableMapOf<EntityKey, Long>()
     internal fun messageRevision(key: EntityKey) = messageRevisions[key] ?: 0L

@@ -1,4 +1,5 @@
 // PortedFrom: MC1/State/MessageEventDispatcher.swift@db14559b39d32322b06477c6ae676112f583db50
+// AndroidOnly: WP-309 Forward neutral scoped invalidation without applying status or marking seen.
 package com.meshcoreone.android.app.state
 
 import com.meshcoreone.android.core.contracts.domain.MessageStatusEvent
@@ -138,6 +139,7 @@ class MessageEventDispatcher(
                 stream.send(MessageEvent.MessageRetrying(event.messageID, event.attempt, event.maxAttempts))
             is MessageStatusEvent.RoutingChanged -> stream.send(MessageEvent.RoutingChanged(event.contactID, event.isFlood))
             is MessageStatusEvent.Failed -> stream.send(MessageEvent.MessageFailed(event.messageID))
+            is MessageStatusEvent.PersistenceChanged -> stream.send(MessageEvent.MessagePersistenceChanged(event.key))
         }
     }
 }

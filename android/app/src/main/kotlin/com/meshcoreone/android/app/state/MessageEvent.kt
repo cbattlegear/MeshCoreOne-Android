@@ -1,6 +1,8 @@
 // PortedFrom: MC1/State/MessageEvent.swift@db14559b39d32322b06477c6ae676112f583db50
+// AndroidOnly: WP-309 Radio-scoped neutral persistence invalidation carries no status or incarnation grant.
 package com.meshcoreone.android.app.state
 
+import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageStatus
@@ -32,6 +34,7 @@ sealed interface MessageEvent {
     /** Fired after a channel-message resend completes; consumers must re-fetch every affected field. */
     data class MessageResent(val messageID: UUID) : MessageEvent
     data class MessageFailed(val messageID: UUID) : MessageEvent
+    data class MessagePersistenceChanged(val key: EntityKey) : MessageEvent
     data class MessageRetrying(val messageID: UUID, val attempt: Long, val maxAttempts: Long) : MessageEvent
     data class HeardRepeatRecorded(val messageID: UUID, val count: Long) : MessageEvent
     data class ReactionReceived(val messageID: UUID, val summary: String) : MessageEvent

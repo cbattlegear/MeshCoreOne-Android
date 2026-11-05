@@ -48,7 +48,10 @@ interface ComposerSendPort {
     /** The caller already persisted the retry row; signal the queue without inserting it again. */
     suspend fun signalDMEnqueued(envelope: DirectMessageEnvelope)
 
-    /** Mark the saved message failed unless delivered, publishing its actual status/event through the app adapter. */
+    /**
+     * Existing channel enqueue-failure compensation. A direct enqueue exception is not a no-send
+     * certificate: the direct composer must retain the saved row/history and report the original error.
+     */
     suspend fun recordLocalEnqueueFailure(messageId: UUID)
 }
 

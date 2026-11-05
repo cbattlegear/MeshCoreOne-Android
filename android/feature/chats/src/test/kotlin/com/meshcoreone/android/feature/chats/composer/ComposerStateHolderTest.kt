@@ -215,7 +215,10 @@ class ComposerStateHolderTest {
                 assertEquals("new draft", rig.drafts.values[target.conversationId])
                 assertEquals("saved pending", rig.port.pendingMessages.single().text)
                 assertEquals(listOf<Throwable>(failure), rig.failures)
-                assertEquals(listOf(rig.port.pendingMessages.single().id), rig.port.localEnqueueFailures)
+                assertEquals(
+                    if (target is ComposerTarget.Channel) listOf(rig.port.pendingMessages.single().id) else emptyList(),
+                    rig.port.localEnqueueFailures,
+                )
             }
         }
     }

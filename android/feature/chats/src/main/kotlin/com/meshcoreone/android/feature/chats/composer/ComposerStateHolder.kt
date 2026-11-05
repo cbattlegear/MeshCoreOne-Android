@@ -5,6 +5,7 @@
 // PortedFrom: MC1/Views/Chats/ViewModel/ChatViewModel+Channels.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Chats/ViewModel/ChatViewModel+SendQueues.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Chats/ViewModel/ChatViewModel+EventStream.swift@db14559b39d32322b06477c6ae676112f583db50
+// AndroidOnly: WP-309 Direct enqueue errors do not establish physical no-send or permit generic FAILED compensation.
 package com.meshcoreone.android.feature.chats.composer
 
 import com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueServiceError
@@ -36,7 +37,9 @@ import kotlinx.coroutines.launch
  * Send contract (iOS `ChatInputBar.send`): the trimmed draft is captured, the field clears at once,
  * and the button stays disabled for [ComposerLimits.SEND_COOLDOWN_MILLIS] and while a send is in
  * flight to durable enqueue acceptance. A pending row is created first so a later failure leaves a
- * visible failed message that the timeline retries; when creating that row fails nothing exists,
+ * visible saved message. A direct enqueue error is not proof of no send, so its status/history
+ * remain service-owned; channel failure compensation retains its existing behavior.
+ * When creating that row fails nothing exists,
  * so the captured text returns to the draft (unless the user already typed something new).
  */
 class ComposerStateHolder(
@@ -208,7 +211,9 @@ class ComposerStateHolder(
                 withMentions(current.copy(draft = restored, sendPhase = ComposerSendPhase.Failed(classify(failure), saved)))
             }
             if (!saved) drafts.set(target.conversationId, mutableState.value.draft.ifEmpty { null })
-            pendingId?.let { sendPort.recordLocalEnqueueFailure(it) }
+            if (target is ComposerTarget.Channel) {
+                pendingId?.let { sendPort.recordLocalEnqueueFailure(it) }
+            }
         }
     }
 

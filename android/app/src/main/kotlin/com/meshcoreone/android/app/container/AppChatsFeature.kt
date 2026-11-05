@@ -3,6 +3,7 @@
 // PortedFrom: MC1/Views/Chats/ViewModel/ChatViewModel+Messages.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/RemoteNodes/Rooms/RoomConversationViewModel.swift@db14559b39d32322b06477c6ae676112f583db50
 // WP-407 native composition binds the existing chat list/timeline/composer to the single process store and live radio graph.
+// AndroidOnly: WP-309 An enqueue exception cannot certify that a saved direct message was not emitted.
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.app.navigation.ChannelLinkRequest
@@ -219,7 +220,9 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         override val connectionState get() = this@AppChatsFeature.connectionState
         override val currentRadioId = MutableStateFlow(radio)
         override val reloadRequests get() = changes
-        override val messageEvents: Flow<ChatListEvent> get() = events().mapNotNull(::listEvent)
+        override val messageEvents: Flow<ChatListEvent> get() = events()
+            .filter { it !is MessageEvent.MessagePersistenceChanged || it.key.radioId == radio }
+            .mapNotNull(::listEvent)
         override val clock: Clock = Clock.systemUTC()
         override val diagnostics = ChatListDiagnostics { operation, failure -> report(operation, failure) }
         override fun conversationServices(): ChatConversationServices? {
@@ -323,6 +326,10 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
     }
 
     internal suspend fun failPending(message: MessageDTO) {
+        if (!message.isChannelMessage || message.contactID != null) {
+            report("Direct enqueue outcome is unconfirmed; retaining the saved message and pending history", null)
+            return
+        }
         if (store.updateMessageStatusUnlessDelivered(EntityKey(message.radioId, message.id), MessageStatus.FAILED)) {
             app.refreshConversations()
             try {
@@ -612,6 +619,10 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                     if (conversation is TimelineConversation.Channel && event.radioId == radio) {
                         emit(TimelineEvent.HistoryChanged(conversation.id))
                     }
+                    emptyList()
+                }
+                is MessageEvent.MessagePersistenceChanged -> {
+                    if (event.key.radioId == radio) emit(TimelineEvent.HistoryChanged(conversation.id))
                     emptyList()
                 }
                 is MessageEvent.MessageStatusResolved -> listOf(event.messageID)
@@ -1052,6 +1063,7 @@ private fun listEvent(event: MessageEvent): ChatListEvent? = when (event) {
     is MessageEvent.MessageStatusResolved -> ChatListEvent.MESSAGE_STATUS_RESOLVED
     is MessageEvent.MessageResent -> ChatListEvent.MESSAGE_RESENT
     is MessageEvent.MessageFailed -> ChatListEvent.MESSAGE_FAILED
+    is MessageEvent.MessagePersistenceChanged -> ChatListEvent.MESSAGE_PERSISTENCE_CHANGED
     is MessageEvent.MessageRetrying -> ChatListEvent.MESSAGE_RETRYING
     is MessageEvent.HeardRepeatRecorded -> ChatListEvent.HEARD_REPEAT_RECORDED
     is MessageEvent.ReactionReceived -> ChatListEvent.REACTION_RECEIVED

@@ -1,0 +1,51 @@
+{
+  "wp": "WP-309",
+  "scope": "Direct composer/shortcut enqueue failure and neutral persisted-state consumer invalidation",
+  "status": "SOURCE_ONLY_UNCOMPILED_UNEXECUTED",
+  "base": "83fc29b14f082ef1806f2d68516668128f63b1d4",
+  "reference": "db14559b39d32322b06477c6ae676112f583db50",
+  "assignment": "assignment:fc9361f4-ec03-4739-994b-ddb9b4e4cec9:call_JJRSqpVWPM7PLC0l5SJ6D2jc",
+  "contract_dependency": {
+    "head": "9a80bd1bfd5e5e7b6f0bbf632b8aba10c6e7cc03",
+    "messaging_contracts_blob": "e94ffbe17697e5549fc811a28dccb876b79cf7e3",
+    "event": "MessageStatusEvent.PersistenceChanged(key: EntityKey)",
+    "included_here": false
+  },
+  "finding": "Queue persistence runs independently of the awaiting enqueue caller. A committed pending row can be independently signalled and physically emitted before that caller observes an enqueue error; that error cannot certify no physical send.",
+  "repair": [
+    "Original direct composer target does not request generic local enqueue-failure compensation. Original failure, saved draft state and retry ownership remain unchanged.",
+    "Shared App failPending conservatively retains non-channel and contact-bearing ambiguous snapshots without status, pending-row or failure event mutation. Actual shortcut uses this shared guard.",
+    "Frozen neutral EntityKey event maps through the app dispatcher without status application. Same-radio timeline uses actual window refresh, including replacement and missing rows; no failure-seen operation is invoked.",
+    "Same-radio list uses a new neutral kind to request actual conversation/preview/badge reload, including legitimate newly persisted failures. Foreign-radio neutral keys are filtered before list mapping.",
+    "Unrelated pre-existing Failed, Resent and status event branches are not reinterpreted."
+  ],
+  "source_controls": {
+    "new_methods": 8,
+    "direct_adapter_methods": 4,
+    "direct_status_and_channel_positive_methods": 2,
+    "neutral_room_dispatcher_timeline_list_methods": 2,
+    "existing_composer_method_updated": "typed queue failures retain saved pending state and current draft for both targets",
+    "coverage": [
+      "Actual composer and actual shortcut, actual Room insertion commit followed by delayed typed error, independent real queue wake and accepted fake-radio protocol send without delivery ACK",
+      "Both actual direct adapters encountering channel replacement at the same message key before the original enqueue error",
+      "Every persisted status for stale direct and ambiguous contact-plus-channel snapshots; preserved pending rows",
+      "Existing pure-channel local compensation and delivered protection",
+      "Both direct-to-channel and channel-to-direct Room replacement after a committed fixture write but before canonical event publication",
+      "Actual started state-holder timeline/list reload, legitimate visible failed preview/badge, unrelated same-conversation failureSeen retention, delivered state, missing row and foreign-radio same-ID negative"
+    ],
+    "authority_boundary": "Neutral consumer tests use actual generic Room fixture writes and delayed canonical service-event injection. They do not prove a guarded direct failure can commit under strict UNKNOWN, and do not fabricate an authority receipt or clean-history flag."
+  },
+  "limitations": [
+    "No product build or test ran; authored methods are not execution or passing evidence.",
+    "Legacy pure-channel local compensation still has no creation-bound incarnation handle. It is intentionally not claimed safe against channel-to-direct replacement; contract/storage/service owners own the creation-bound repair.",
+    "Guarded service emitters and strict-UNKNOWN storage/schema composition are external dependencies, not included or accepted here.",
+    "No device, hardware, signing, migration, whole-WP or release acceptance is claimed.",
+    "Warning/UI acceptance remains separate at immutable source freeze 208 and its bounded ambiguous-row successor."
+  ],
+  "verification": {
+    "commands_executed": [],
+    "tests_discovered": 0,
+    "tests_executed": 0,
+    "reason": "User/coordinator forbids local builds/tests under acute host-memory constraint; exact-head hosted composition and authorization remain required."
+  }
+}

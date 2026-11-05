@@ -1,4 +1,5 @@
 // AndroidOnly: WP-306 Feature-owned dependency seams (contracts.md XFeatureDependencies pattern); the app layer adapts core:services/data/runtime to these.
+// AndroidOnly: WP-309 Neutral message persistence changes request an actual list reload.
 package com.meshcoreone.android.feature.chats.list
 
 import com.meshcoreone.android.core.contracts.AppTab
@@ -60,6 +61,7 @@ enum class ChatListEvent {
     DIRECT_MESSAGE_RECEIVED, CHANNEL_MESSAGE_RECEIVED, ROOM_MESSAGE_RECEIVED, MESSAGE_FAILED, MESSAGE_RESENT,
     ROOM_MESSAGE_FAILED, MESSAGE_STATUS_RESOLVED, ROOM_MESSAGE_STATUS_UPDATED, MESSAGE_RETRYING,
     HEARD_REPEAT_RECORDED, REACTION_RECEIVED, MESSAGES_REGION_UPDATED, ROUTING_CHANGED,
+    MESSAGE_PERSISTENCE_CHANGED,
 }
 
 /** Navigation hand-off the shell owns (pending requests from notifications/links, and the selected route). */

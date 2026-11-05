@@ -59,7 +59,12 @@ class NotificationReplyStagingStore internal constructor(
         val payload: NotificationPayload,
     )
 
-    data class IssuedRecord(val storeId: UUID, val sequence: Long, val action: IssuedAction)
+    data class IssuedRecord(
+        val storeId: UUID,
+        val sequence: Long,
+        val action: IssuedAction,
+        val maxReplyCodeUnits: Int? = null,
+    )
 
     /** Separate immutable caller-selected policy, with no expiry, eviction or production defaults. */
     data class IssuanceLimits(val maxRecords: Int, val maxRecordBytes: Long, val maxTotalRecordBytes: Long) {
@@ -177,6 +182,8 @@ class NotificationReplyStagingStore internal constructor(
         ISSUANCE_NOT_INITIALIZED, INVALID_ISSUANCE_LIMITS, ISSUANCE_RECORD_CAPACITY,
         ISSUANCE_PRIVATE_DATA_CAPACITY, ISSUANCE_CONFLICT, ISSUED_TOKEN_NOT_FOUND,
         ENROLLMENT_NOT_BOUND, ENROLLMENT_MISMATCH,
+        REPLY_RESERVATIONS_NOT_INITIALIZED, INVALID_REPLY_TEXT_BOUND,
+        REPLY_RESERVATION_CONSUMED, REPLY_TEXT_BOUND_EXCEEDED,
     }
 
     // Neither the current payload nor a display-time full key proves the radio's prefix destination.
@@ -351,15 +358,22 @@ class NotificationReplyStagingStore internal constructor(
                         it.payload.contentEquals(payloadBytes) && it.text.contentEquals(replyBytes)
                     }
                     if (identical != null) return@transaction result(state.storeId, identical, replay = true)
+                    if (issued?.maxReplyCodeUnits != null && exactText.length > issued.maxReplyCodeUnits) {
+                        return@transaction StageResult.Rejected(Failure.REPLY_TEXT_BOUND_EXCEEDED)
+                    }
                     val first = prior.firstOrNull { it.parentId == null }
                     val row = Row(
                         state.rows.size.toLong() + 1, proposedId, post, first?.recordId,
                         if (first == null) UUID.randomUUID() else null, payloadBytes, replyBytes, issuedToken,
                     )
+                    val outstanding = outstandingReservations(db, state.storeId).filter {
+                        it.action.token != issuedToken
+                    }
+                    val reservedBytes = outstanding.sumOf(::reservedReplyBytes)
                     if (row.contentBytes > limits.maxRecordBytes ||
-                        row.contentBytes > limits.maxTotalRecordBytes - state.contentBytes
+                        row.contentBytes > limits.maxTotalRecordBytes - state.contentBytes - reservedBytes
                     ) return@transaction StageResult.Rejected(Failure.PRIVATE_DATA_CAPACITY)
-                    if (state.rows.size >= limits.maxRecords) {
+                    if (state.rows.size.toLong() + outstanding.size >= limits.maxRecords) {
                         return@transaction StageResult.Rejected(Failure.RECORD_CAPACITY)
                     }
                     val values = arrayOf<Any?>(
@@ -427,7 +441,7 @@ class NotificationReplyStagingStore internal constructor(
                 val copies = state.rows.map {
                     CopyText(state.storeId, it.recordId, it.sequence, decodeText(it.text))
                 }
-                CopyInventory.Retained(copies + if (db.version == 4) {
+                CopyInventory.Retained(copies + if (db.version >= 4) {
                     NotificationReplyEnrollmentStore.copyProjection(db, state.storeId)
                 } else emptyList())
             } }
@@ -522,7 +536,7 @@ class NotificationReplyStagingStore internal constructor(
             2 -> setOf("reply_metadata", "reply_records", "reply_custody", "reply_custody_policy")
             3 -> setOf("reply_metadata", "reply_records", "reply_custody", "reply_custody_policy",
                 "reply_issued_actions", "reply_issuance_policy")
-            4 -> setOf("reply_metadata", "reply_records", "reply_custody", "reply_custody_policy",
+            4, 5 -> setOf("reply_metadata", "reply_records", "reply_custody", "reply_custody_policy",
                 "reply_issued_actions", "reply_issuance_policy", "reply_enrollment",
                 "reply_unbound_policy", "reply_unbound_text")
             else -> corrupt()
@@ -551,7 +565,7 @@ class NotificationReplyStagingStore internal constructor(
             if (storedLimits != limits) throw StoreFailure(Failure.LIMITS_MISMATCH)
             State(storeId, count, bytes, mutableListOf())
         }
-        if (db.version == 4) {
+        if (db.version >= 4) {
             val receipt = try {
                 NotificationReplyEnrollmentStore.validate(db, state.storeId)
             } catch (_: NotificationReplyEnrollmentStore.Invalid) {
@@ -602,8 +616,10 @@ class NotificationReplyStagingStore internal constructor(
                 ) corrupt()
                 decodePayload(row.payload)
                 if (row.issuedToken != null) {
-                    val issued = issuance[row.issuedToken]?.action ?: corrupt()
-                    if (issued.post != row.post || issued.payload != decodePayload(row.payload)) corrupt()
+                    val issued = issuance[row.issuedToken] ?: corrupt()
+                    if (issued.action.post != row.post || issued.action.payload != decodePayload(row.payload) ||
+                        issued.maxReplyCodeUnits?.let { row.text.size / Char.SIZE_BYTES > it } == true
+                    ) corrupt()
                 }
                 val key = row.post to row.issuedToken
                 val root = roots[key]
@@ -622,6 +638,10 @@ class NotificationReplyStagingStore internal constructor(
             }
         }
         if (state.count != state.rows.size.toLong() || state.contentBytes != totalBytes) corrupt()
+        val outstanding = outstandingReservations(db, state.storeId)
+        if (state.count + outstanding.size > limits.maxRecords ||
+            outstanding.sumOf(::reservedReplyBytes) > limits.maxTotalRecordBytes - totalBytes
+        ) corrupt()
         if (db.version >= 2) readCustody(db, state)
         return state
     }
@@ -760,11 +780,61 @@ class NotificationReplyStagingStore internal constructor(
             }
         }
 
-    /**
-     * Commit before exposing any PendingIntent. Exact token replay is idempotent; a differing
-     * proposal never overwrites it. Issuance reserves registry bytes, not future reply capacity.
-     */
+    /** Explicit opt-in on this exact bound generation; never upgrades an old unbound store. */
+    suspend fun initializeReplyReservations(expectedStoreId: UUID): InitializeResult = withContext(Dispatchers.IO) {
+        if (!limits.isValid()) return@withContext InitializeResult.Failed(Failure.INVALID_LIMITS)
+        var commitAttempted = false
+        try {
+            database { db -> transaction(db) {
+                val state = load(db)
+                if (state.storeId != expectedStoreId) throw StoreFailure(Failure.IDENTITY_MISMATCH)
+                if (expectedEnrollment == null || db.version < 4) throw StoreFailure(Failure.ENROLLMENT_MISMATCH)
+                if (db.version == 4) {
+                    db.execSQL("ALTER TABLE reply_issued_actions ADD COLUMN max_reply_code_units INTEGER")
+                    db.version = 5
+                }
+                load(db)
+                commitAttempted = true
+                InitializeResult.Ready
+            } }
+        } catch (error: StoreFailure) {
+            InitializeResult.Failed(error.reason)
+        } catch (_: SQLiteDatabaseCorruptException) {
+            InitializeResult.Failed(Failure.CORRUPT_STORAGE)
+        } catch (_: SQLiteException) {
+            if (commitAttempted) InitializeResult.Indeterminate
+            else InitializeResult.Failed(Failure.STORAGE_UNAVAILABLE)
+        } catch (_: SecurityException) {
+            if (commitAttempted) InitializeResult.Indeterminate
+            else InitializeResult.Failed(Failure.STORAGE_UNAVAILABLE)
+        }
+    }
+
+    /** Registry-only compatibility surface: it does NOT reserve future reply capacity. */
     suspend fun registerIssued(expectedStoreId: UUID, proposal: IssuedAction): IssuanceResult =
+        registerIssuedBound(expectedStoreId, proposal, null)
+
+    /**
+     * Atomically reserves quota for ONE initial bounded reply and its initial custody before action
+     * exposure. Not disk preallocation, write-success assurance, or capacity for changed submissions.
+     * Consumed reservations cannot be re-exposed; neither old tokens nor bounds are upgraded in place.
+     */
+    suspend fun reserveIssuedReply(
+        expectedStoreId: UUID,
+        proposal: IssuedAction,
+        maxReplyCodeUnits: Int,
+    ): IssuanceResult {
+        if (maxReplyCodeUnits <= 0 || maxReplyCodeUnits > Int.MAX_VALUE / Char.SIZE_BYTES) {
+            return IssuanceResult.Rejected(Failure.INVALID_REPLY_TEXT_BOUND)
+        }
+        return registerIssuedBound(expectedStoreId, proposal, maxReplyCodeUnits)
+    }
+
+    private suspend fun registerIssuedBound(
+        expectedStoreId: UUID,
+        proposal: IssuedAction,
+        maxReplyCodeUnits: Int?,
+    ): IssuanceResult =
         withContext(Dispatchers.IO) {
             if (!limits.isValid()) return@withContext IssuanceResult.Rejected(Failure.INVALID_LIMITS)
             if (!proposal.post.isValid() || proposal.logicalNotificationId.value.isEmpty()) {
@@ -789,13 +859,23 @@ class NotificationReplyStagingStore internal constructor(
                         if (db.version < 3) {
                             return@transaction IssuanceResult.Rejected(Failure.ISSUANCE_NOT_INITIALIZED)
                         }
+                        if (maxReplyCodeUnits != null && (db.version < 5 || expectedEnrollment == null)) {
+                            return@transaction IssuanceResult.Rejected(Failure.REPLY_RESERVATIONS_NOT_INITIALIZED)
+                        }
                         val issued = readIssuance(db, state.storeId)
                         val prior = issued.records.firstOrNull { it.action.token == proposal.token }
                         if (prior != null) {
-                            return@transaction if (prior.action == proposal) IssuanceResult.AlreadyReserved(prior)
-                            else IssuanceResult.Rejected(Failure.ISSUANCE_CONFLICT)
+                            return@transaction when {
+                                prior.action != proposal || prior.maxReplyCodeUnits != maxReplyCodeUnits ->
+                                    IssuanceResult.Rejected(Failure.ISSUANCE_CONFLICT)
+                                maxReplyCodeUnits != null && state.rows.any { it.issuedToken == proposal.token } ->
+                                    IssuanceResult.Rejected(Failure.REPLY_RESERVATION_CONSUMED)
+                                else -> IssuanceResult.AlreadyReserved(prior)
+                            }
                         }
-                        val record = IssuedRecord(state.storeId, issued.records.size.toLong() + 1, proposal)
+                        val record = IssuedRecord(
+                            state.storeId, issued.records.size.toLong() + 1, proposal, maxReplyCodeUnits,
+                        )
                         val bytes = issuanceContentBytes(record)
                         if (bytes > issued.policy.maxRecordBytes ||
                             bytes > issued.policy.maxTotalRecordBytes - issued.contentBytes
@@ -803,12 +883,27 @@ class NotificationReplyStagingStore internal constructor(
                         if (issued.records.size >= issued.policy.maxRecords) {
                             return@transaction IssuanceResult.Rejected(Failure.ISSUANCE_RECORD_CAPACITY)
                         }
+                        if (maxReplyCodeUnits != null) {
+                            val outstanding = outstandingReservations(db, state.storeId)
+                            if (state.count + outstanding.size >= limits.maxRecords) {
+                                return@transaction IssuanceResult.Rejected(Failure.RECORD_CAPACITY)
+                            }
+                            val reserved = reservedReplyBytes(record)
+                            if (reserved > limits.maxRecordBytes ||
+                                reserved > limits.maxTotalRecordBytes - state.contentBytes -
+                                    outstanding.sumOf(::reservedReplyBytes)
+                            ) return@transaction IssuanceResult.Rejected(Failure.PRIVATE_DATA_CAPACITY)
+                            checkCustodyBudget(db, readCustody(db, state).values,
+                                additionalReservationBytes = reservedCustodyBytes(record))
+                        }
+                        val values = arrayOf<Any?>(record.sequence, proposal.token.toString(),
+                            proposal.post.postId.toString(), proposal.post.version, proposal.post.action,
+                            textBytes(proposal.logicalNotificationId.value), textBytes(encoded), bytes,
+                            issuanceDigest(record))
                         db.execSQL(
-                            "INSERT INTO reply_issued_actions VALUES(?,?,?,?,?,?,?,?,?)",
-                            arrayOf<Any>(record.sequence, proposal.token.toString(), proposal.post.postId.toString(),
-                                proposal.post.version, proposal.post.action,
-                                textBytes(proposal.logicalNotificationId.value), textBytes(encoded), bytes,
-                                issuanceDigest(record)),
+                            if (db.version >= 5) "INSERT INTO reply_issued_actions VALUES(?,?,?,?,?,?,?,?,?,?)"
+                            else "INSERT INTO reply_issued_actions VALUES(?,?,?,?,?,?,?,?,?)",
+                            if (db.version >= 5) values + maxReplyCodeUnits else values,
                         )
                         val count = issued.records.size.toLong() + 1
                         val total = issued.contentBytes + bytes
@@ -826,27 +921,36 @@ class NotificationReplyStagingStore internal constructor(
                 if (commitAttempted) afterIssuanceCommit?.invoke()
                 result
             } catch (error: StoreFailure) {
-                if (commitAttempted) reconcileIssuance(expectedStoreId, proposal)
+                if (commitAttempted) reconcileIssuance(expectedStoreId, proposal, maxReplyCodeUnits)
                 else IssuanceResult.Rejected(error.reason)
             } catch (_: SQLiteDatabaseCorruptException) {
-                if (commitAttempted) reconcileIssuance(expectedStoreId, proposal)
+                if (commitAttempted) reconcileIssuance(expectedStoreId, proposal, maxReplyCodeUnits)
                 else IssuanceResult.Rejected(Failure.CORRUPT_STORAGE)
             } catch (_: SQLiteException) {
-                if (commitAttempted) reconcileIssuance(expectedStoreId, proposal)
+                if (commitAttempted) reconcileIssuance(expectedStoreId, proposal, maxReplyCodeUnits)
                 else IssuanceResult.Rejected(Failure.STORAGE_UNAVAILABLE)
             } catch (_: SecurityException) {
-                if (commitAttempted) reconcileIssuance(expectedStoreId, proposal)
+                if (commitAttempted) reconcileIssuance(expectedStoreId, proposal, maxReplyCodeUnits)
                 else IssuanceResult.Rejected(Failure.STORAGE_UNAVAILABLE)
             }
         }
 
-    private fun reconcileIssuance(expectedStoreId: UUID, proposal: IssuedAction): IssuanceResult = try {
+    private fun reconcileIssuance(
+        expectedStoreId: UUID,
+        proposal: IssuedAction,
+        maxReplyCodeUnits: Int?,
+    ): IssuanceResult = try {
         database { db ->
             transaction(db) {
                 val state = load(db)
                 val record = if (state.storeId != expectedStoreId || db.version < 3) null
-                else readIssuance(db, state.storeId).records.firstOrNull { it.action == proposal }
+                else readIssuance(db, state.storeId).records.firstOrNull {
+                    it.action == proposal && it.maxReplyCodeUnits == maxReplyCodeUnits
+                }
                 if (record == null) IssuanceResult.Indeterminate(proposal.token)
+                else if (maxReplyCodeUnits != null && state.rows.any { it.issuedToken == proposal.token }) {
+                    IssuanceResult.Rejected(Failure.REPLY_RESERVATION_CONSUMED)
+                }
                 else IssuanceResult.AlreadyReserved(record)
             }
         }
@@ -868,7 +972,7 @@ class NotificationReplyStagingStore internal constructor(
         ))
         checkColumns(db, "reply_issued_actions", listOf(
             "sequence", "token", "post_id", "version", "action", "logical_id", "payload", "content_bytes", "digest",
-        ))
+        ) + if (db.version >= 5) listOf("max_reply_code_units") else emptyList())
         val state = db.rawQuery("SELECT * FROM reply_issuance_policy", null).use { cursor ->
             if (!cursor.moveToFirst() || (0..5).any { cursor.getType(it) != Cursor.FIELD_TYPE_INTEGER } ||
                 cursor.getType(6) != Cursor.FIELD_TYPE_BLOB || cursor.getLong(0) != 1L
@@ -898,10 +1002,15 @@ class NotificationReplyStagingStore internal constructor(
                     NotificationReplyPost(exactInt(cursor, 3), uuid(cursor.getString(2)), cursor.getString(4)),
                     NotificationId(decodeText(cursor.getBlob(5))), decodePayload(cursor.getBlob(6)),
                 )
-                val record = IssuedRecord(storeId, cursor.getLong(0), action)
+                val bound = if (db.version < 5 || cursor.isNull(9)) null else {
+                    if (cursor.getType(9) != Cursor.FIELD_TYPE_INTEGER) corrupt()
+                    exactInt(cursor, 9).also { if (it <= 0 || it > Int.MAX_VALUE / Char.SIZE_BYTES) corrupt() }
+                }
+                val record = IssuedRecord(storeId, cursor.getLong(0), action, bound)
                 val size = issuanceContentBytes(record)
                 if (record.sequence != records.size.toLong() + 1 || !tokens.add(action.token) ||
                     !action.post.isValid() || action.logicalNotificationId.value.isEmpty() ||
+                    bound != null && reservedReplyBytes(record) > limits.maxRecordBytes ||
                     size != cursor.getLong(7) || size > state.first.maxRecordBytes ||
                     size > state.first.maxTotalRecordBytes - bytes ||
                     !issuanceDigest(record).contentEquals(cursor.getBlob(8))
@@ -916,7 +1025,28 @@ class NotificationReplyStagingStore internal constructor(
 
     private fun issuanceHeader(record: IssuedRecord): String =
         "issued-v1|${record.storeId}|${record.sequence}|${record.action.token}|" +
-            "${record.action.post.version}|${record.action.post.postId}|${record.action.post.action}"
+            "${record.action.post.version}|${record.action.post.postId}|${record.action.post.action}" +
+            (record.maxReplyCodeUnits?.let { "|reply-code-units:$it" } ?: "")
+
+    private fun outstandingReservations(db: SQLiteDatabase, storeId: UUID): List<IssuedRecord> {
+        if (db.version < 5) return emptyList()
+        val consumed = db.rawQuery(
+            "SELECT issued_token FROM reply_records WHERE parent_id IS NULL AND issued_token IS NOT NULL", null,
+        ).use { cursor -> buildSet { while (cursor.moveToNext()) add(uuid(cursor.getString(0))) } }
+        return readIssuance(db, storeId).records.filter {
+            it.maxReplyCodeUnits != null && it.action.token !in consumed
+        }
+    }
+
+    private fun reservedReplyBytes(record: IssuedRecord): Long = Row(
+        limits.maxRecords.toLong(), UUID(0, 0), record.action.post, null, UUID(0, 0),
+        textBytes(requireNotNull(ReplyRoutingCodec.encode(record.action.payload))), byteArrayOf(), record.action.token,
+    ).contentBytes + requireNotNull(record.maxReplyCodeUnits).toLong() * Char.SIZE_BYTES
+
+    private fun reservedCustodyBytes(record: IssuedRecord): Long = custodyBytes(CustodyReceipt(
+        RecordIdentity(record.storeId, UUID(0, 0), limits.maxRecords.toLong()),
+        0, Custody.UNCLAIMED, null, null, null,
+    )).size.toLong() + 32L
 
     private fun issuanceContentBytes(record: IssuedRecord): Long =
         (issuanceHeader(record).length.toLong() + record.action.logicalNotificationId.value.length +
@@ -1157,8 +1287,19 @@ class NotificationReplyStagingStore internal constructor(
         db: SQLiteDatabase,
         receipts: Collection<CustodyReceipt>,
         persisted: Boolean = false,
+        additionalReservationBytes: Long = 0,
     ) {
         var remaining = custodyBudget(db)
+        val storeId = db.rawQuery("SELECT store_id FROM reply_metadata WHERE singleton=1", null).use {
+            if (!it.moveToFirst()) corrupt()
+            uuid(it.getString(0))
+        }
+        val reserved = outstandingReservations(db, storeId).sumOf(::reservedCustodyBytes) +
+            additionalReservationBytes
+        if (reserved > remaining) {
+            if (persisted) corrupt() else throw StoreFailure(Failure.LIFECYCLE_CAPACITY)
+        }
+        remaining -= reserved
         receipts.forEach {
             val bytes = custodyBytes(it).size.toLong() + 32L
             if (bytes > remaining) {

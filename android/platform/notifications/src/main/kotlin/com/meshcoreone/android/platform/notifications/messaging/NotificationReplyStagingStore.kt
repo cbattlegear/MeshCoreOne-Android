@@ -702,13 +702,13 @@ class NotificationReplyStagingStore internal constructor(
 
     private fun userTables(db: SQLiteDatabase): Set<String> =
         db.rawQuery(
-            """SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'
+            """SELECT name FROM sqlite_master WHERE type='table' AND name NOT GLOB 'sqlite_*'
                AND name != 'android_metadata'""", null,
         ).use { cursor -> buildSet { while (cursor.moveToNext()) add(cursor.getString(0)) } }
 
     private fun hasUserSchema(db: SQLiteDatabase): Boolean =
         db.rawQuery(
-            """SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'
+            """SELECT 1 FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'
                AND NOT(type='table' AND name='android_metadata') LIMIT 1""", null,
         ).use { it.moveToFirst() }
 

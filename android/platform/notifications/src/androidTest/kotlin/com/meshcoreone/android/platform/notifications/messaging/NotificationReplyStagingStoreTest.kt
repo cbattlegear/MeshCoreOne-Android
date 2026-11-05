@@ -489,6 +489,88 @@ class NotificationReplyStagingStoreTest {
     }
 
     @Test
+    fun sqliteWildcardLookalikeForeignTableIsNotEvidenceOfFreshInstall() = runTest {
+        cleanup()
+        SQLiteDatabase.openOrCreateDatabase(file, null).use {
+            it.execSQL("CREATE TABLE sqliteX_user_data(value TEXT)")
+            it.execSQL("INSERT INTO sqliteX_user_data VALUES('preserve')")
+        }
+        assertEquals(
+            NotificationReplyStagingStore.InitializeResult.Failed(NotificationReplyStagingStore.Failure.CORRUPT_STORAGE),
+            store.initializeNew(),
+        )
+        assertEquals(0L, sqlLong("PRAGMA user_version"))
+        assertEquals(0L, sqlLong("SELECT count(*) FROM sqlite_master WHERE name='reply_metadata'"))
+        assertEquals(1L, sqlLong("SELECT count(*) FROM sqliteX_user_data WHERE value='preserve'"))
+    }
+
+    @Test
+    fun sqliteWildcardLookalikeForeignViewIsNotEvidenceOfFreshInstall() = runTest {
+        cleanup()
+        SQLiteDatabase.openOrCreateDatabase(file, null).use {
+            it.execSQL("CREATE VIEW sqliteX_foreign_view AS SELECT 7 AS value")
+        }
+        assertEquals(
+            NotificationReplyStagingStore.InitializeResult.Failed(NotificationReplyStagingStore.Failure.CORRUPT_STORAGE),
+            store.initializeNew(),
+        )
+        assertEquals(0L, sqlLong("PRAGMA user_version"))
+        assertEquals(0L, sqlLong("SELECT count(*) FROM sqlite_master WHERE name='reply_metadata'"))
+        assertEquals(7L, sqlLong("SELECT value FROM sqliteX_foreign_view"))
+    }
+
+    @Test
+    fun sqliteWildcardLookalikeTableIsCorruptionInBothInitializedJournalVersions() = runTest {
+        store.stage(post, payload, "retained")
+        val original = inventory().single().identity
+        listOf(1L, 2L).forEach { version ->
+            if (version == 2L) {
+                assertEquals(NotificationReplyStagingStore.InitializeResult.Ready, store.initializeLifecycle(100_000))
+            }
+            exec("CREATE TABLE sqliteX_user_data(value TEXT)")
+            exec("INSERT INTO sqliteX_user_data VALUES('preserve')")
+            assertEquals(
+                NotificationReplyStagingStore.ReadResult.Failed(NotificationReplyStagingStore.Failure.CORRUPT_STORAGE),
+                store.read(),
+            )
+            assertEquals(
+                NotificationReplyStagingStore.StageResult.Rejected(NotificationReplyStagingStore.Failure.CORRUPT_STORAGE),
+                store.stage(post, payload, "not retained"),
+            )
+            assertEquals(
+                NotificationReplyStagingStore.InitializeResult.Failed(NotificationReplyStagingStore.Failure.CORRUPT_STORAGE),
+                store.initializeNew(),
+            )
+            assertEquals(
+                NotificationReplyStagingStore.InitializeResult.Failed(NotificationReplyStagingStore.Failure.CORRUPT_STORAGE),
+                store.initializeLifecycle(100_000),
+            )
+            assertEquals(version, sqlLong("PRAGMA user_version"))
+            assertEquals(1L, sqlLong("SELECT count(*) FROM sqliteX_user_data WHERE value='preserve'"))
+            assertEquals(1L, sqlLong("SELECT count(*) FROM reply_records"))
+            exec("DROP TABLE sqliteX_user_data")
+            val retained = inventory().single()
+            assertEquals(original, retained.identity)
+            assertEquals("retained", retained.exactText)
+        }
+    }
+
+    @Test
+    fun literalSqliteInternalAndAndroidMetadataExclusionsStillPermitBootstrapAndReopen() = runTest {
+        cleanup()
+        SQLiteDatabase.openOrCreateDatabase(file, null).use {
+            it.execSQL("CREATE TABLE IF NOT EXISTS android_metadata(locale TEXT)")
+            it.execSQL("CREATE TABLE temporary_sequence(id INTEGER PRIMARY KEY AUTOINCREMENT)")
+            it.execSQL("DROP TABLE temporary_sequence")
+        }
+        assertEquals(1L, sqlLong("SELECT count(*) FROM sqlite_master WHERE name='sqlite_sequence'"))
+        assertEquals(NotificationReplyStagingStore.InitializeResult.Ready, store.initializeNew())
+        assertTrue(store.stage(post, payload, "retained") is NotificationReplyStagingStore.StageResult.Staged)
+        assertEquals(NotificationReplyStagingStore.InitializeResult.Ready, store.initializeLifecycle(100_000))
+        assertEquals("retained", inventory().single().exactText)
+    }
+
+    @Test
     fun unavailableStorageNeverReportsRetention() = runTest {
         cleanup()
         check(file.mkdir())

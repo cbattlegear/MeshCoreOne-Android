@@ -131,8 +131,8 @@ The existing, unchanged notification Gradle module maps
 `src/androidTest/kotlin/com/meshcoreone/android/platform/notifications/messaging`
 into `test`; it already declares Robolectric and coroutine/test dependencies. The declared module
 task is `:platform:notifications:testDebugUnitTest`, not connected device instrumentation.
-Expected authored cases: 24 intake methods and 16 lifecycle methods, each configured with
-`@Config(sdk = [31, 37])`. The expected 48+32 execution count is **not an execution claim**.
+Expected authored cases: 28 intake methods and 16 lifecycle methods, each configured with
+`@Config(sdk = [31, 37])`. The expected 56+32 execution count is **not an execution claim**.
 The discovery owner supplies the exact admitted current-candidate executable selectors and
 positive per-class discovery controls; no build/discovery paths are duplicated here.
 
@@ -142,3 +142,19 @@ transaction ABORT and IGNORE, schema/row/policy corruption, stale receipt/claim 
 no resend after restart, ambiguous committed returns and cancellation after commit.
 Only a subsequent exact-head job/log with positive actual class discovery can verify this candidate.
 No duplicate CI-result bundle is committed or retained.
+
+## Review correction: literal SQLite internal prefix
+
+The immutable initial extraction `e050e9a9b9561caf53d61b95c749320c944c1a77` is retained
+as an ancestor, not amended. Coordinator review found that SQL `LIKE 'sqlite_%'` treats
+the underscore as a wildcard and hides valid foreign `sqliteX...` objects. Both schema
+queries now use `GLOB 'sqlite_*'`, whose underscore is literal, preserving SQLite's
+reserved internal prefix and the exact Android metadata-table exception.
+
+Real SQLite controls now cover a version-zero foreign `sqliteX_user_data` table and
+`sqliteX_foreign_view` view, plus the foreign table in initialized v1 and v2 journals.
+They assert corruption/refusal, unchanged schema version, retained foreign content,
+no new rows, and restoration of the original journal identity/text after removing only
+the injected table. A positive control retains actual `sqlite_sequence` and
+`android_metadata` exclusions through bootstrap, lifecycle initialization and reopen.
+These controls are authored, not locally executed; no Gradle or retained-lock change occurred.

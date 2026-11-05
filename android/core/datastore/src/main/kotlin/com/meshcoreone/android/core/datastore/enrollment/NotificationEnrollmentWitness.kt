@@ -310,8 +310,11 @@ class NotificationEnrollmentWitness internal constructor(
         try {
             val committed = Os.open(file.absolutePath, OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW, 0)
             try { Os.fsync(committed) } finally { Os.close(committed) }
-            val directory = Os.open(requireNotNull(file.parent), OsConstants.O_RDONLY or OsConstants.O_DIRECTORY, 0)
-            try { Os.fsync(directory) } finally { Os.close(directory) }
+            val directory = Os.open(requireNotNull(file.parent), OsConstants.O_RDONLY or OsConstants.O_NOFOLLOW, 0)
+            try {
+                if (!OsConstants.S_ISDIR(Os.fstat(directory).st_mode)) throw IOException("Witness parent is not a directory")
+                Os.fsync(directory)
+            } finally { Os.close(directory) }
         } catch (failure: ErrnoException) {
             throw IOException("Witness synchronization failed", failure)
         }

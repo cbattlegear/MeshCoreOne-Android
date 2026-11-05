@@ -290,6 +290,12 @@ def candidate_plan(
         from .module_junit import remapped_tasks, select_remapped_tasks
 
         selection["tasks"] = select_remapped_tasks(selection["tasks"], remapped_tasks(repo, head))
+    if ":platform:notifications:testDebugUnitTest" in selection["tasks"]:
+        from .module_junit import notification_instrumentation_tasks
+
+        selection["tasks"] = list(dict.fromkeys([
+            *selection["tasks"], *notification_instrumentation_tasks(repo, head),
+        ]))
     return {
         "schema_version": 1, "kind": "local-affected-only", "base": base, "head": head,
         "tree": git(repo, "rev-parse", head + "^{tree}"), "paths": paths,
@@ -666,5 +672,12 @@ def _run_scaffold(
     report["remapped_jvm_inputs"] = validate_remapped_compilation(
         repo, report["compiled_test_sources"], runners,
     )
+    from .module_junit import notification_instrumentation_evidence
+
+    instrumentation = notification_instrumentation_evidence(
+        repo, sources_path, plan["tasks"], plan["head"],
+    )
+    if instrumentation:
+        report["notification_instrumentation"] = instrumentation
     validate_plan(repo, plan, trusted_base=trusted_base, merge_base_only=merge_base_only)
     return report

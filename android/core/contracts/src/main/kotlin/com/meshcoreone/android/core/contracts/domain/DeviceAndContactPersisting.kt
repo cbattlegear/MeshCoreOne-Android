@@ -86,19 +86,57 @@ class PreRepeatSettingsAttempt(val token: SessionToken?) {
 class RepeatSnapshotReconciliationRequired :
     IllegalStateException("A cancelled Repeat preparation requires an explicit snapshot clear before reuse")
 
+class RepeatSnapshotClearRequired :
+    IllegalStateException("A pending Repeat snapshot clear must be persisted before reuse")
+
 fun interface RepeatSnapshotRestoreAuthority {
     /** Release after the transport send settles, not after its protocol response arrives. */
     suspend fun withWrite(write: suspend (permit: RadioWritePermit) -> Unit)
+    /** Confirmed RF and Repeat-off readback, before any persistence/publication suspension. */
+    fun onRestoreVerified() = Unit
 }
 
 /** Process-store custody shared by all editors and delegating persistence wrappers; not durable across restart. */
 class RepeatSnapshotAuthority {
     private data class Identity(val id: UUID, val radioId: RadioId, val publicKey: Bytes)
     private data class Pending(val receipt: DeviceWriteSnapshot, val attempt: PreRepeatSettingsAttempt)
+    private data class ClearKey(val identity: Identity, val token: SessionToken?)
+    private data class ClearRequest(val device: DeviceDTO, val identityVersion: Long, val snapshotVersion: Long)
     private val pending = mutableMapOf<Identity, Pending>()
+    private val clearRequests = mutableMapOf<ClearKey, ClearRequest>()
     private val admissions = mutableMapOf<UUID, Mutex>()
     private val identityVersions = mutableMapOf<UUID, Long>()
+    private val snapshotVersions = mutableMapOf<UUID, Long>()
     private fun DeviceDTO.identity() = Identity(id, radioId, publicKey)
+
+    private fun DeviceDTO.sameSnapshot(other: DeviceDTO): Boolean =
+        preRepeatFrequency == other.preRepeatFrequency && preRepeatBandwidth == other.preRepeatBandwidth &&
+            preRepeatSpreadingFactor == other.preRepeatSpreadingFactor && preRepeatCodingRate == other.preRepeatCodingRate
+
+    @Synchronized fun recordRestoreVerified(device: DeviceDTO, token: SessionToken, identityVersion: Long, snapshotVersion: Long) {
+        if (device.sameSnapshot(device.clearingPreRepeatSettings())) return
+        clearRequests.putIfAbsent(ClearKey(device.identity(), token), ClearRequest(
+            device, identityVersion, snapshotVersion,
+        ))
+    }
+
+    @Synchronized fun snapshotVersion(deviceId: UUID): Long = snapshotVersions[deviceId] ?: 0L
+
+    @Synchronized fun hasClearRequest(device: DeviceDTO, token: SessionToken?): Boolean =
+        clearRequests.containsKey(ClearKey(device.identity(), token))
+
+    @Synchronized fun requireNoClearRequest(device: DeviceDTO, token: SessionToken?) {
+        if (hasClearRequest(device, token)) throw RepeatSnapshotClearRequired()
+    }
+
+    @Synchronized fun reconcilingClearRequest(device: DeviceDTO, token: SessionToken?): DeviceDTO {
+        val request = clearRequests[ClearKey(device.identity(), token)] ?: return device
+        if (device.clientRepeat || !device.sameSnapshot(request.device) ||
+            identityVersion(device.id) != request.identityVersion ||
+            (snapshotVersions[device.id] ?: 0L) != request.snapshotVersion
+        ) throw RepeatSnapshotClearRequired()
+        return device.clearingPreRepeatSettings()
+    }
 
     suspend fun <T> withAdmission(deviceId: UUID, action: suspend () -> T): T {
         val admission = synchronized(this) { admissions.getOrPut(deviceId) { Mutex() } }
@@ -127,10 +165,18 @@ class RepeatSnapshotAuthority {
     }
 
     @Synchronized fun observeIdentityChange(before: DeviceDTO, after: DeviceDTO) {
+        if (!before.sameSnapshot(after)) {
+            snapshotVersions[before.id] = Math.addExact(snapshotVersions[before.id] ?: 0L, 1L)
+        }
         if (before.identity() != after.identity()) {
             invalidateIdentity(before.id)
             if (before.id != after.id) invalidateIdentity(after.id)
             pending.remove(before.identity())?.let { pending[after.identity()] = it }
+            val moved = clearRequests.filterKeys { it.identity == before.identity() }
+            for ((key, request) in moved) {
+                clearRequests.remove(key)
+                clearRequests[key.copy(identity = after.identity())] = request
+            }
         }
     }
 
@@ -157,6 +203,7 @@ class RepeatSnapshotAuthority {
         if (device.preRepeatFrequency == null && device.preRepeatBandwidth == null &&
             device.preRepeatSpreadingFactor == null && device.preRepeatCodingRate == null) {
             pending.remove(device.identity())
+            clearRequests.keys.removeAll { it.identity == device.identity() }
         }
     }
 }

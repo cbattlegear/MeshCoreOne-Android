@@ -6,8 +6,10 @@ import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceExcep
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.contracts.domain.DeviceWriteSnapshot
 import com.meshcoreone.android.core.contracts.domain.PreRepeatSettingsAttempt
+import com.meshcoreone.android.core.contracts.domain.RepeatSnapshotRestoreAuthority
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.command.PacketBuilder
+import com.meshcoreone.android.core.protocol.session.RadioWritePermit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -30,6 +32,61 @@ import kotlinx.coroutines.test.runTest
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class SettingsRadioSerializationTest {
+    @Test fun restoreRetirementRequiresVerifiedRfAndRepeatOffBeforeEitherPublication() = runTest {
+        for (outcome in listOf("success", "cancel-before-ack", "rf-mismatch", "repeat-mismatch")) {
+            val fixture = settingsFixture()
+            val events = fixture.settings.events()
+            var verified = 0
+            var published = 0
+            val authority = object : RepeatSnapshotRestoreAuthority {
+                override suspend fun withWrite(write: suspend (RadioWritePermit) -> Unit) {
+                    val permit = RadioWritePermit {}
+                    try { write(permit) } finally { permit.releaseIfUnclaimed() }
+                }
+                override fun onRestoreVerified() { verified++ }
+            }
+            val collector = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                events.events.collect {
+                    assertEquals(1, verified, "Retirement proof precedes even the first durable publication")
+                    published++
+                    when (val event = it.event) {
+                        is SettingsEvent.ClientRepeatUpdated -> assertNotNull(event.persistence).complete(Unit)
+                        is SettingsEvent.DeviceUpdated -> assertNotNull(event.persistence).complete(Unit)
+                        else -> error("Unexpected restore event $event")
+                    }
+                }
+            }
+            try {
+                val write = request {
+                    fixture.settings.setRadioParamsPersisted(
+                        915_000u, 125_000u, 7u, 5u, false, restoreAuthority = authority,
+                    )
+                }
+                runCurrent()
+                assertEquals(0, verified)
+                if (outcome == "cancel-before-ack") {
+                    write.cancel()
+                    assertFailsWith<CancellationException> { write.await() }
+                    runCurrent()
+                } else {
+                    reply(fixture, 2, PacketBuilder.setRadio(915.0, 125.0, 7u, 5u, false), okPacket())
+                    assertEquals(0, verified, "An ACK is not verified restoration")
+                    reply(fixture, 3, PacketBuilder.appStart("MCore"), selfPacket(
+                        frequency = if (outcome == "rf-mismatch") 868_000u else 915_000u,
+                    ))
+                    if (outcome != "rf-mismatch") {
+                        assertEquals(0, verified, "RF readback alone does not confirm Repeat-off")
+                        reply(fixture, 4, PacketBuilder.deviceQuery(), capabilitiesPacket(repeat = outcome == "repeat-mismatch"))
+                    }
+                    if (outcome == "success") write.await()
+                    else assertFailsWith<SettingsServiceException> { write.await() }
+                }
+                assertEquals(if (outcome == "success") 1 else 0, verified)
+                assertEquals(if (outcome == "success") 2 else 0, published)
+            } finally { events.close(); collector.cancel(); fixture.close() }
+        }
+    }
+
     @Test fun failedRfAcknowledgementReconcilesActualCurrentRadioAndBothPublicationsBeforeClearingRecovery() = runTest {
         val fixture = settingsFixture()
         val events = fixture.settings.events()

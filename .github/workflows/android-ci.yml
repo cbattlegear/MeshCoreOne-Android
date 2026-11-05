@@ -133,6 +133,267 @@ jobs:
         run: python tools/android-port/controller/ci.py provision --root (Split-Path $env:ANDROID_CI_STATE -Parent) --accept-sdk-license
       - name: Check worker readiness
         run: python tools/android-port/controller/ci.py preflight
+      - id: room_v4_before
+        name: Preserve genuine v1-v3 and require absent v4
+        env:
+          ROOM_DIAGNOSTIC_SHA: ${{ github.sha }}
+        run: |
+          @'
+          import hashlib, json, os, pathlib, re, subprocess, time
+          repo = pathlib.Path.cwd()
+          workflow = ".github/workflows/android-ci.yml"
+          predecessors = {'1': {'path': 'android/core/database/schemas/com.meshcoreone.android.core.database.MeshCoreDatabase/1.json', 'blob': '0e6ce7706f75e08c4a70555178b2fdebb98f2184', 'sha256': 'c1962dd795e42bd4c7c0d199f65fa1558f02c4f6b0508693239fc72f26022229'}, '2': {'path': 'android/core/database/schemas/com.meshcoreone.android.core.database.MeshCoreDatabase/2.json', 'blob': '2a1c5c66d5c42b53b146becf2ed085cffee93f68', 'sha256': 'c8b324628f0ece66967c9ea9025567208bc23c4681f5973f72f7308d5cf732b2'}, '3': {'path': 'android/core/database/schemas/com.meshcoreone.android.core.database.MeshCoreDatabase/3.json', 'blob': 'e7bf0f62999896bca4d36a2a636096d962b12638', 'sha256': '4661fe56e21ac17c6b088fe794d0890294f01ac92825f321e36d1a067c78f28b'}}
+          v4 = "android/core/database/schemas/com.meshcoreone.android.core.database.MeshCoreDatabase/4.json"
+          source = "940a899216c1a5d33fc6b98d39f4b880b0f402ff"
+          fixture = "tools/android-port/oracle/test_ci.py"
+          task = ":core:database:kspDebugKotlin"
+          directory = pathlib.Path(os.environ["RUNNER_TEMP"]) / "room-v4-export"
+          def git(*args):
+              return subprocess.check_output(["git", *args], text=True).strip()
+          def digest(data):
+              return hashlib.sha256(data).hexdigest()
+          def unique_fields(pairs):
+              value = {}
+              for key, item in pairs:
+                  if key in value:
+                      raise RuntimeError("Duplicate JSON field: " + key)
+                  value[key] = item
+              return value
+          def parse_json(text):
+              return json.loads(text, object_pairs_hook=unique_fields)
+          def validate_execution(rows, bound):
+              if [row.get("phase") for row in rows] != ["before", "action-start", "action-end", "after"]:
+                  raise RuntimeError("Missing/duplicate/reordered actual KSP execution observations")
+              for row in rows:
+                  if (row.get("task") != task or not row.get("task_type", "").startswith("com.google.devtools.ksp.gradle.")
+                      or row.get("diagnostic_sha") != bound["diagnostic_sha"]
+                      or row.get("run_id") != bound["run_id"] or row.get("run_attempt") != bound["run_attempt"]
+                      or row.get("build_root") != str((repo / "android").resolve())
+                      or row.get("project_directory") != str((repo / "android" / "core" / "database").resolve())):
+                      raise RuntimeError("Unbound KSP execution observation")
+              last = rows[-1]
+              if (last.get("executed") is not True or last.get("did_work") is not True
+                  or any(last.get(key) is not False for key in ("skipped", "up_to_date", "no_source"))
+                  or last.get("skip_message") is not None or last.get("failure") is not None):
+                  raise RuntimeError("KSP did not actually execute successfully without skipping/caching")
+          def unlinked(path):
+              for item in (path, *path.parents):
+                  if item.is_symlink():
+                      raise RuntimeError("Linked diagnostic input: " + str(item))
+          def identity():
+              head = git("rev-parse", "HEAD")
+              parents = git("rev-list", "--parents", "-n", "1", "HEAD").split()
+              if len(parents) != 2 or parents[0] != head:
+                  raise RuntimeError("Diagnostic must have one fixture-only parent")
+              fixture_parent = parents[1]
+              if (head != os.environ["ROOM_DIAGNOSTIC_SHA"]
+                  or os.environ["GITHUB_REPOSITORY"] != "cbattlegear/MeshCoreOne-Android"
+                  or os.environ["GITHUB_EVENT_NAME"] != "workflow_dispatch"
+                  or os.environ["GITHUB_REF"] != "refs/heads/diagnostic/wp003-room-v4-export-940a8992-20261105-r1"
+                  or os.environ["GITHUB_WORKFLOW_SHA"] != head
+                  or os.environ["GITHUB_WORKFLOW_REF"] !=
+                      "cbattlegear/MeshCoreOne-Android/.github/workflows/android-ci.yml@" + os.environ["GITHUB_REF"]
+                  or git("rev-list", "--parents", "-n", "1", fixture_parent).split() != [fixture_parent, source]
+                  or git("diff", "--name-only", source, fixture_parent) != fixture
+                  or git("diff", "--name-only", fixture_parent, head) != workflow
+                  or git("status", "--porcelain", "--", workflow, fixture)
+                  or not os.environ["GITHUB_RUN_ID"].isdecimal()
+                  or not os.environ["GITHUB_RUN_ATTEMPT"].isdecimal()
+                  or int(os.environ["GITHUB_RUN_ATTEMPT"]) < 1):
+                  raise RuntimeError("Unexpected repository/source/diagnostic/workflow/run identity")
+              unlinked(repo / fixture)
+              return {"repository": os.environ["GITHUB_REPOSITORY"], "source_candidate_sha": source,
+                      "source_tree": git("rev-parse", source + "^{tree}"),
+                      "fixture_candidate_sha": fixture_parent, "fixture_path": fixture,
+                      "fixture_blob": git("rev-parse", "HEAD:" + fixture),
+                      "fixture_sha256": digest((repo / fixture).read_bytes()),
+                      "diagnostic_sha": head, "workflow_sha": os.environ["GITHUB_WORKFLOW_SHA"],
+                      "workflow_ref": os.environ["GITHUB_WORKFLOW_REF"],
+                      "run_id": os.environ["GITHUB_RUN_ID"], "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+                      "job": os.environ["GITHUB_JOB"]}
+          def preserve_predecessors():
+              for version, expected in predecessors.items():
+                  target = repo / expected["path"]
+                  unlinked(target)
+                  if (git("rev-parse", "HEAD:" + expected["path"]) != expected["blob"]
+                      or digest(target.read_bytes()) != expected["sha256"]
+                      or git("status", "--porcelain", "--", expected["path"])):
+                      raise RuntimeError("Genuine tracked predecessor changed: " + version)
+          def read_v4(started):
+              target = repo / v4
+              unlinked(target)
+              if (not target.is_file() or not 0 < target.stat().st_size <= 4194304
+                  or target.stat().st_mtime_ns < started):
+                  raise RuntimeError("Missing/empty/oversized/stale v4 export")
+              data = target.read_bytes()
+              value = parse_json(data)
+              if (not isinstance(value, dict) or not isinstance(value.get("database"), dict)
+                  or type(value["database"].get("version")) is not int
+                  or value["database"]["version"] != 4):
+                  raise RuntimeError("Generated schema is not numeric version 4")
+              return data
+          
+          bound = identity()
+          preserve_predecessors()
+          unlinked(repo / v4)
+          if (repo / v4).exists() or git("ls-files", "--", v4):
+              raise RuntimeError("v4 existed before compiler invocation; never delete/copy an export")
+          unlinked(directory)
+          directory.mkdir(exist_ok=False)
+          guard = {**bound, "predecessors": predecessors,
+                   "v4_path": v4, "v4_absent_before": True, "started_ns": time.time_ns(),
+                   "workflow_sha256": digest((repo / workflow).read_bytes())}
+          (directory / "before.json").write_text(json.dumps(guard), encoding="utf-8")
+          print("Exact v1-v3 preserved and v4 absent; no tracked schema deleted or overwritten")
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - id: room_v4_ksp
+        name: Execute fresh production Room v4 KSP
+        env:
+          ROOM_DIAGNOSTIC_SHA: ${{ github.sha }}
+        run: |
+          @'
+          import hashlib, json, os, pathlib, re, subprocess, time
+          repo = pathlib.Path.cwd()
+          workflow = ".github/workflows/android-ci.yml"
+          predecessors = {'1': {'path': 'android/core/database/schemas/com.meshcoreone.android.core.database.MeshCoreDatabase/1.json', 'blob': '0e6ce7706f75e08c4a70555178b2fdebb98f2184', 'sha256': 'c1962dd795e42bd4c7c0d199f65fa1558f02c4f6b0508693239fc72f26022229'}, '2': {'path': 'android/core/database/schemas/com.meshcoreone.android.core.database.MeshCoreDatabase/2.json', 'blob': '2a1c5c66d5c42b53b146becf2ed085cffee93f68', 'sha256': 'c8b324628f0ece66967c9ea9025567208bc23c4681f5973f72f7308d5cf732b2'}, '3': {'path': 'android/core/database/schemas/com.meshcoreone.android.core.database.MeshCoreDatabase/3.json', 'blob': 'e7bf0f62999896bca4d36a2a636096d962b12638', 'sha256': '4661fe56e21ac17c6b088fe794d0890294f01ac92825f321e36d1a067c78f28b'}}
+          v4 = "android/core/database/schemas/com.meshcoreone.android.core.database.MeshCoreDatabase/4.json"
+          source = "940a899216c1a5d33fc6b98d39f4b880b0f402ff"
+          fixture = "tools/android-port/oracle/test_ci.py"
+          task = ":core:database:kspDebugKotlin"
+          directory = pathlib.Path(os.environ["RUNNER_TEMP"]) / "room-v4-export"
+          def git(*args):
+              return subprocess.check_output(["git", *args], text=True).strip()
+          def digest(data):
+              return hashlib.sha256(data).hexdigest()
+          def unique_fields(pairs):
+              value = {}
+              for key, item in pairs:
+                  if key in value:
+                      raise RuntimeError("Duplicate JSON field: " + key)
+                  value[key] = item
+              return value
+          def parse_json(text):
+              return json.loads(text, object_pairs_hook=unique_fields)
+          def validate_execution(rows, bound):
+              if [row.get("phase") for row in rows] != ["before", "action-start", "action-end", "after"]:
+                  raise RuntimeError("Missing/duplicate/reordered actual KSP execution observations")
+              for row in rows:
+                  if (row.get("task") != task or not row.get("task_type", "").startswith("com.google.devtools.ksp.gradle.")
+                      or row.get("diagnostic_sha") != bound["diagnostic_sha"]
+                      or row.get("run_id") != bound["run_id"] or row.get("run_attempt") != bound["run_attempt"]
+                      or row.get("build_root") != str((repo / "android").resolve())
+                      or row.get("project_directory") != str((repo / "android" / "core" / "database").resolve())):
+                      raise RuntimeError("Unbound KSP execution observation")
+              last = rows[-1]
+              if (last.get("executed") is not True or last.get("did_work") is not True
+                  or any(last.get(key) is not False for key in ("skipped", "up_to_date", "no_source"))
+                  or last.get("skip_message") is not None or last.get("failure") is not None):
+                  raise RuntimeError("KSP did not actually execute successfully without skipping/caching")
+          def unlinked(path):
+              for item in (path, *path.parents):
+                  if item.is_symlink():
+                      raise RuntimeError("Linked diagnostic input: " + str(item))
+          def identity():
+              head = git("rev-parse", "HEAD")
+              parents = git("rev-list", "--parents", "-n", "1", "HEAD").split()
+              if len(parents) != 2 or parents[0] != head:
+                  raise RuntimeError("Diagnostic must have one fixture-only parent")
+              fixture_parent = parents[1]
+              if (head != os.environ["ROOM_DIAGNOSTIC_SHA"]
+                  or os.environ["GITHUB_REPOSITORY"] != "cbattlegear/MeshCoreOne-Android"
+                  or os.environ["GITHUB_EVENT_NAME"] != "workflow_dispatch"
+                  or os.environ["GITHUB_REF"] != "refs/heads/diagnostic/wp003-room-v4-export-940a8992-20261105-r1"
+                  or os.environ["GITHUB_WORKFLOW_SHA"] != head
+                  or os.environ["GITHUB_WORKFLOW_REF"] !=
+                      "cbattlegear/MeshCoreOne-Android/.github/workflows/android-ci.yml@" + os.environ["GITHUB_REF"]
+                  or git("rev-list", "--parents", "-n", "1", fixture_parent).split() != [fixture_parent, source]
+                  or git("diff", "--name-only", source, fixture_parent) != fixture
+                  or git("diff", "--name-only", fixture_parent, head) != workflow
+                  or git("status", "--porcelain", "--", workflow, fixture)
+                  or not os.environ["GITHUB_RUN_ID"].isdecimal()
+                  or not os.environ["GITHUB_RUN_ATTEMPT"].isdecimal()
+                  or int(os.environ["GITHUB_RUN_ATTEMPT"]) < 1):
+                  raise RuntimeError("Unexpected repository/source/diagnostic/workflow/run identity")
+              unlinked(repo / fixture)
+              return {"repository": os.environ["GITHUB_REPOSITORY"], "source_candidate_sha": source,
+                      "source_tree": git("rev-parse", source + "^{tree}"),
+                      "fixture_candidate_sha": fixture_parent, "fixture_path": fixture,
+                      "fixture_blob": git("rev-parse", "HEAD:" + fixture),
+                      "fixture_sha256": digest((repo / fixture).read_bytes()),
+                      "diagnostic_sha": head, "workflow_sha": os.environ["GITHUB_WORKFLOW_SHA"],
+                      "workflow_ref": os.environ["GITHUB_WORKFLOW_REF"],
+                      "run_id": os.environ["GITHUB_RUN_ID"], "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+                      "job": os.environ["GITHUB_JOB"]}
+          def preserve_predecessors():
+              for version, expected in predecessors.items():
+                  target = repo / expected["path"]
+                  unlinked(target)
+                  if (git("rev-parse", "HEAD:" + expected["path"]) != expected["blob"]
+                      or digest(target.read_bytes()) != expected["sha256"]
+                      or git("status", "--porcelain", "--", expected["path"])):
+                      raise RuntimeError("Genuine tracked predecessor changed: " + version)
+          def read_v4(started):
+              target = repo / v4
+              unlinked(target)
+              if (not target.is_file() or not 0 < target.stat().st_size <= 4194304
+                  or target.stat().st_mtime_ns < started):
+                  raise RuntimeError("Missing/empty/oversized/stale v4 export")
+              data = target.read_bytes()
+              value = parse_json(data)
+              if (not isinstance(value, dict) or not isinstance(value.get("database"), dict)
+                  or type(value["database"].get("version")) is not int
+                  or value["database"]["version"] != 4):
+                  raise RuntimeError("Generated schema is not numeric version 4")
+              return data
+          
+          import sys
+          sys.path.insert(0, str(repo / "tools" / "android-port"))
+          from controller.ci_environment import candidate_environment, verify_wrapper
+          from controller.ci import execute
+          bound = identity()
+          unlinked(directory)
+          guard = parse_json((directory / "before.json").read_text(encoding="utf-8"))
+          if any(guard.get(key) != value for key, value in bound.items()) or guard.get("v4_absent_before") is not True:
+              raise RuntimeError("Stale absence guard")
+          preserve_predecessors()
+          if (repo / v4).exists():
+              raise RuntimeError("v4 appeared before dedicated compiler execution")
+          state = parse_json(pathlib.Path(os.environ["ANDROID_CI_STATE"]).read_text(encoding="utf-8"))
+          if state.get("host") != "linux":
+              raise RuntimeError("Diagnostic is pinned to hosted Linux")
+          environment = candidate_environment(state)
+          verify_wrapper()
+          init = directory / "observe-ksp.gradle"
+          init.write_text('import groovy.json.JsonOutput\nimport org.gradle.api.execution.TaskExecutionListener\nimport org.gradle.api.tasks.TaskState\ndef expectedTask = ":core:database:kspDebugKotlin"\ndef expectedRoot = new File(System.getenv("ROOM_V4_PROJECT")).canonicalFile\ndef expectedDatabase = new File(expectedRoot, "core/database").canonicalFile\ndef includedRoot = new File(expectedRoot, "build-logic").canonicalFile\ndef destination = new File(System.getenv("ROOM_V4_EVENTS"))\ndef selectedBuild = { task -> task.project.rootProject.projectDir.canonicalFile == expectedRoot }\ndef emit = { task, phase, extra = [:] ->\n    def row = [task: task.path, task_type: task.class.name, phase: phase,\n               build_root: task.project.rootProject.projectDir.canonicalPath,\n               project_directory: task.project.projectDir.canonicalPath,\n               diagnostic_sha: System.getenv("ROOM_V4_HEAD"),\n               run_id: System.getenv("ROOM_V4_RUN"), run_attempt: System.getenv("ROOM_V4_ATTEMPT")]\n    row.putAll(extra)\n    destination.append(JsonOutput.toJson(row) + "\\n", "UTF-8")\n    task.logger.quiet("ROOM_V4_KSP|" + JsonOutput.toJson(row))\n}\ngradle.taskGraph.whenReady { graph ->\n    def actualRoot = gradle.rootProject.projectDir.canonicalFile\n    if (actualRoot != expectedRoot) {\n        if (actualRoot != includedRoot || gradle.rootProject.name != "build-logic") {\n            throw new GradleException("Unexpected non-target build root: " + actualRoot)\n        }\n        println("ROOM_V4_DISTINCT_INCLUDED_GRAPH|" + JsonOutput.toJson(\n            [build_root: actualRoot.path, name: gradle.rootProject.name,\n             tasks: graph.allTasks.collect { [path: it.path, type: it.class.name] }]))\n        return\n    }\n    def found = graph.allTasks.findAll { it.path == expectedTask }\n    if (found.size() != 1 || !found[0].class.name.startsWith("com.google.devtools.ksp.gradle.")\n        || found[0].project.projectDir.canonicalFile != expectedDatabase || !selectedBuild(found[0])) {\n        throw new GradleException("Expected exactly the production KSP task in " + expectedDatabase\n            + "; observed root=" + actualRoot + "; tasks="\n            + JsonOutput.toJson(graph.allTasks.collect { [path: it.path, type: it.class.name,\n                                                         directory: it.project.projectDir.canonicalPath] }))\n    }\n    def task = found[0]\n    task.outputs.upToDateWhen { false }\n    task.outputs.cacheIf { false }\n    task.doFirst { emit(task, "action-start") }\n    task.doLast { emit(task, "action-end") }\n}\ngradle.addListener(new TaskExecutionListener() {\n    void beforeExecute(org.gradle.api.Task task) {\n        if (selectedBuild(task) && task.path == expectedTask) emit(task, "before")\n    }\n    void afterExecute(org.gradle.api.Task task, TaskState state) {\n        if (selectedBuild(task) && task.path == expectedTask) {\n            emit(task, "after", [executed: state.executed, did_work: state.didWork,\n                 skipped: state.skipped, up_to_date: state.upToDate, no_source: state.noSource,\n                 skip_message: state.skipMessage, failure: state.failure?.class?.name])\n        }\n    }\n})', encoding="utf-8")
+          events = directory / "task-events.jsonl"
+          environment.update({"ROOM_V4_EVENTS": str(events), "ROOM_V4_HEAD": bound["diagnostic_sha"],
+                              "ROOM_V4_PROJECT": str((repo / "android").resolve()),
+                              "ROOM_V4_RUN": bound["run_id"], "ROOM_V4_ATTEMPT": bound["run_attempt"]})
+          command = [str(repo / "android" / "gradlew"), "-p", str(repo / "android"), task,
+                     "--no-daemon", "--console=plain", "--dependency-verification", "strict",
+                     "--rerun-tasks", "--no-build-cache", "--no-configuration-cache", "--max-workers=2",
+                     "-Pkotlin.compiler.execution.strategy=in-process", "-Pksp.incremental=false",
+                     "--project-cache-dir", str(directory / "project-cache"), "--init-script", str(init)]
+          log = directory / "ksp-original.log"
+          execute(command, environment, log, timeout=1800, stream_output=True)
+          rows = [parse_json(line) for line in events.read_text(encoding="utf-8").splitlines()]
+          validate_execution(rows, bound)
+          observations = [line.strip() for line in log.read_text(encoding="utf-8").splitlines()
+                          if re.match(r"^> Task :core:database:kspDebugKotlin(?:\s|$)", line.strip())]
+          if not observations or any(item != "> Task " + task for item in observations):
+              raise RuntimeError("KSP original log lacks successful unsuffixed task observation")
+          preserve_predecessors()
+          data = read_v4(guard["started_ns"])
+          receipt = {**bound, "process_exit_code": 0, "task": task, "execution_observations": rows,
+                     "command": command, "schema_sha256": digest(data), "schema_size": len(data),
+                     "ksp_log_sha256": digest(log.read_bytes()), "init_sha256": digest(init.read_bytes()),
+                     "events_sha256": digest(events.read_bytes()), "finished_ns": time.time_ns(),
+                     "task_heading_displays": observations, "guard": guard}
+          (directory / "compiler.json").write_text(json.dumps(receipt), encoding="utf-8")
+          print(json.dumps(receipt, sort_keys=True))
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - id: gradle
         name: Run parallel Gradle validation and Android tasks
         env:
@@ -173,6 +434,170 @@ jobs:
           path: android/core/data/build/reports/wp203/interop/
           if-no-files-found: error
           retention-days: 1
+      - id: room_v4_collect
+        name: Collect exact unchanged compiler-generated Room v4
+        if: ${{ always() && steps.room_v4_ksp.outcome == 'success' && (steps.gradle.outcome == 'success' || steps.gradle.outcome == 'failure') }}
+        env:
+          ROOM_DIAGNOSTIC_SHA: ${{ github.sha }}
+          ROOM_KSP_OUTCOME: ${{ steps.room_v4_ksp.outcome }}
+          ROOM_GRADLE_OUTCOME: ${{ steps.gradle.outcome }}
+        run: |
+          @'
+          import hashlib, json, os, pathlib, re, subprocess, time
+          repo = pathlib.Path.cwd()
+          workflow = ".github/workflows/android-ci.yml"
+          predecessors = {'1': {'path': 'android/core/database/schemas/com.meshcoreone.android.core.database.MeshCoreDatabase/1.json', 'blob': '0e6ce7706f75e08c4a70555178b2fdebb98f2184', 'sha256': 'c1962dd795e42bd4c7c0d199f65fa1558f02c4f6b0508693239fc72f26022229'}, '2': {'path': 'android/core/database/schemas/com.meshcoreone.android.core.database.MeshCoreDatabase/2.json', 'blob': '2a1c5c66d5c42b53b146becf2ed085cffee93f68', 'sha256': 'c8b324628f0ece66967c9ea9025567208bc23c4681f5973f72f7308d5cf732b2'}, '3': {'path': 'android/core/database/schemas/com.meshcoreone.android.core.database.MeshCoreDatabase/3.json', 'blob': 'e7bf0f62999896bca4d36a2a636096d962b12638', 'sha256': '4661fe56e21ac17c6b088fe794d0890294f01ac92825f321e36d1a067c78f28b'}}
+          v4 = "android/core/database/schemas/com.meshcoreone.android.core.database.MeshCoreDatabase/4.json"
+          source = "940a899216c1a5d33fc6b98d39f4b880b0f402ff"
+          fixture = "tools/android-port/oracle/test_ci.py"
+          task = ":core:database:kspDebugKotlin"
+          directory = pathlib.Path(os.environ["RUNNER_TEMP"]) / "room-v4-export"
+          def git(*args):
+              return subprocess.check_output(["git", *args], text=True).strip()
+          def digest(data):
+              return hashlib.sha256(data).hexdigest()
+          def unique_fields(pairs):
+              value = {}
+              for key, item in pairs:
+                  if key in value:
+                      raise RuntimeError("Duplicate JSON field: " + key)
+                  value[key] = item
+              return value
+          def parse_json(text):
+              return json.loads(text, object_pairs_hook=unique_fields)
+          def validate_execution(rows, bound):
+              if [row.get("phase") for row in rows] != ["before", "action-start", "action-end", "after"]:
+                  raise RuntimeError("Missing/duplicate/reordered actual KSP execution observations")
+              for row in rows:
+                  if (row.get("task") != task or not row.get("task_type", "").startswith("com.google.devtools.ksp.gradle.")
+                      or row.get("diagnostic_sha") != bound["diagnostic_sha"]
+                      or row.get("run_id") != bound["run_id"] or row.get("run_attempt") != bound["run_attempt"]
+                      or row.get("build_root") != str((repo / "android").resolve())
+                      or row.get("project_directory") != str((repo / "android" / "core" / "database").resolve())):
+                      raise RuntimeError("Unbound KSP execution observation")
+              last = rows[-1]
+              if (last.get("executed") is not True or last.get("did_work") is not True
+                  or any(last.get(key) is not False for key in ("skipped", "up_to_date", "no_source"))
+                  or last.get("skip_message") is not None or last.get("failure") is not None):
+                  raise RuntimeError("KSP did not actually execute successfully without skipping/caching")
+          def unlinked(path):
+              for item in (path, *path.parents):
+                  if item.is_symlink():
+                      raise RuntimeError("Linked diagnostic input: " + str(item))
+          def identity():
+              head = git("rev-parse", "HEAD")
+              parents = git("rev-list", "--parents", "-n", "1", "HEAD").split()
+              if len(parents) != 2 or parents[0] != head:
+                  raise RuntimeError("Diagnostic must have one fixture-only parent")
+              fixture_parent = parents[1]
+              if (head != os.environ["ROOM_DIAGNOSTIC_SHA"]
+                  or os.environ["GITHUB_REPOSITORY"] != "cbattlegear/MeshCoreOne-Android"
+                  or os.environ["GITHUB_EVENT_NAME"] != "workflow_dispatch"
+                  or os.environ["GITHUB_REF"] != "refs/heads/diagnostic/wp003-room-v4-export-940a8992-20261105-r1"
+                  or os.environ["GITHUB_WORKFLOW_SHA"] != head
+                  or os.environ["GITHUB_WORKFLOW_REF"] !=
+                      "cbattlegear/MeshCoreOne-Android/.github/workflows/android-ci.yml@" + os.environ["GITHUB_REF"]
+                  or git("rev-list", "--parents", "-n", "1", fixture_parent).split() != [fixture_parent, source]
+                  or git("diff", "--name-only", source, fixture_parent) != fixture
+                  or git("diff", "--name-only", fixture_parent, head) != workflow
+                  or git("status", "--porcelain", "--", workflow, fixture)
+                  or not os.environ["GITHUB_RUN_ID"].isdecimal()
+                  or not os.environ["GITHUB_RUN_ATTEMPT"].isdecimal()
+                  or int(os.environ["GITHUB_RUN_ATTEMPT"]) < 1):
+                  raise RuntimeError("Unexpected repository/source/diagnostic/workflow/run identity")
+              unlinked(repo / fixture)
+              return {"repository": os.environ["GITHUB_REPOSITORY"], "source_candidate_sha": source,
+                      "source_tree": git("rev-parse", source + "^{tree}"),
+                      "fixture_candidate_sha": fixture_parent, "fixture_path": fixture,
+                      "fixture_blob": git("rev-parse", "HEAD:" + fixture),
+                      "fixture_sha256": digest((repo / fixture).read_bytes()),
+                      "diagnostic_sha": head, "workflow_sha": os.environ["GITHUB_WORKFLOW_SHA"],
+                      "workflow_ref": os.environ["GITHUB_WORKFLOW_REF"],
+                      "run_id": os.environ["GITHUB_RUN_ID"], "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+                      "job": os.environ["GITHUB_JOB"]}
+          def preserve_predecessors():
+              for version, expected in predecessors.items():
+                  target = repo / expected["path"]
+                  unlinked(target)
+                  if (git("rev-parse", "HEAD:" + expected["path"]) != expected["blob"]
+                      or digest(target.read_bytes()) != expected["sha256"]
+                      or git("status", "--porcelain", "--", expected["path"])):
+                      raise RuntimeError("Genuine tracked predecessor changed: " + version)
+          def read_v4(started):
+              target = repo / v4
+              unlinked(target)
+              if (not target.is_file() or not 0 < target.stat().st_size <= 4194304
+                  or target.stat().st_mtime_ns < started):
+                  raise RuntimeError("Missing/empty/oversized/stale v4 export")
+              data = target.read_bytes()
+              value = parse_json(data)
+              if (not isinstance(value, dict) or not isinstance(value.get("database"), dict)
+                  or type(value["database"].get("version")) is not int
+                  or value["database"]["version"] != 4):
+                  raise RuntimeError("Generated schema is not numeric version 4")
+              return data
+          
+          bound = identity()
+          if os.environ["ROOM_KSP_OUTCOME"] != "success" or os.environ["ROOM_GRADLE_OUTCOME"] not in ("success", "failure"):
+              raise RuntimeError("No successful dedicated KSP or no ordinary Gradle execution")
+          for item in ("before.json", "compiler.json", "ksp-original.log", "task-events.jsonl", "observe-ksp.gradle"):
+              unlinked(directory / item)
+          guard = parse_json((directory / "before.json").read_text(encoding="utf-8"))
+          receipt = parse_json((directory / "compiler.json").read_text(encoding="utf-8"))
+          if (any(receipt.get(key) != value or guard.get(key) != value for key, value in bound.items())
+              or receipt.get("guard") != guard or receipt.get("process_exit_code") != 0
+              or guard.get("v4_absent_before") is not True or guard.get("v4_path") != v4
+              or guard.get("predecessors") != predecessors
+              or type(guard.get("started_ns")) is not int or guard["started_ns"] <= 0
+              or receipt.get("task") != task
+              or guard.get("workflow_sha256") != digest((repo / workflow).read_bytes())):
+              raise RuntimeError("Stale/mismatched compiler receipt or workflow/absence guard")
+          for filename, key in (("ksp-original.log", "ksp_log_sha256"), ("task-events.jsonl", "events_sha256"),
+                                ("observe-ksp.gradle", "init_sha256")):
+              if digest((directory / filename).read_bytes()) != receipt.get(key):
+                  raise RuntimeError("Original KSP observation changed after compiler execution")
+          rows = [parse_json(line) for line in (directory / "task-events.jsonl").read_text(encoding="utf-8").splitlines()]
+          validate_execution(rows, bound)
+          if rows != receipt.get("execution_observations"):
+              raise RuntimeError("Compiler receipt disagrees with actual KSP event records")
+          if (type(receipt.get("finished_ns")) is not int
+              or not guard["started_ns"] <= receipt["finished_ns"] <= time.time_ns()):
+              raise RuntimeError("Invalid compiler execution interval")
+          preserve_predecessors()
+          data = read_v4(guard["started_ns"])
+          if digest(data) != receipt.get("schema_sha256") or len(data) != receipt.get("schema_size"):
+              raise RuntimeError("Ordinary Gradle changed/removed the dedicated compiler's v4 export")
+          log_bytes = (directory / "ksp-original.log").read_bytes()
+          if not 0 < len(log_bytes) <= 16777216:
+              raise RuntimeError("Missing or oversized original diagnostic compiler log")
+          artifact = directory / "artifact"
+          unlinked(artifact)
+          artifact.mkdir(exist_ok=False)
+          (artifact / "4.json").write_bytes(data)
+          provenance = {**receipt, "diagnostic_only": True, "schema_path": v4, "schema_version": 4,
+                        "predecessors_preserved_after": predecessors, "unchanged_after_ordinary_gradle": True,
+                        "ordinary_gradle_outcome": os.environ["ROOM_GRADLE_OUTCOME"],
+                        "original_log_path": "room-v4-export/ksp-original.log",
+                        "original_hosted_step": "Execute fresh production Room v4 KSP",
+                        "ksp_original_log_utf8": log_bytes.decode("utf-8"),
+                        "task_events_jsonl": (directory / "task-events.jsonl").read_text(encoding="utf-8"),
+                        "init_script_utf8": (directory / "observe-ksp.gradle").read_text(encoding="utf-8"),
+                        "authority": "Diagnostic compiler execution/output custody only; not migration/product acceptance"}
+          (artifact / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n", encoding="utf-8")
+          print("Retained exact fresh v4 plus provenance, including original compiler log bytes")
+          '@ | python -
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - id: room_v4_upload
+        name: Retain diagnostic Room v4 schema and provenance
+        if: ${{ always() && steps.room_v4_collect.outcome == 'success' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: room-v4-export-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/room-v4-export/artifact/4.json
+            ${{ runner.temp }}/room-v4-export/artifact/provenance.json
+          if-no-files-found: error
+          retention-days: 7
 
   external-oracle:
     name: Swift codec oracle

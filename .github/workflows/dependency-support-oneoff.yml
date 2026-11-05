@@ -138,6 +138,7 @@ jobs:
         run: |
           set +e
           ./android/gradlew -p android :app:testDebugUnitTest \
+            --write-locks --write-verification-metadata sha256 \
             --no-daemon --console=plain --no-build-cache --no-parallel --max-workers=2 \
             --stacktrace -Pkotlin.compiler.execution.strategy=in-process -PscaffoldTestHeap=512m
           result=$?
@@ -252,6 +253,7 @@ jobs:
                   ],
                   "app": [
                       "./android/gradlew", "-p", "android", ":app:testDebugUnitTest",
+                      "--write-locks", "--write-verification-metadata", "sha256",
                       "--no-daemon", "--console=plain", "--no-build-cache", "--no-parallel",
                       "--max-workers=2", "--stacktrace",
                       "-Pkotlin.compiler.execution.strategy=in-process", "-PscaffoldTestHeap=512m",

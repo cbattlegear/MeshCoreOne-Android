@@ -294,7 +294,7 @@ class RadioPresetStateHolder(
             // Only the committed creation receipt and definitely-unsent dispatch qualify for this tail.
             withContext(NonCancellable) { deviceStore.abortPreRepeatSettings(target.token, attempt) }
         } catch (cleanupFailure: Exception) {
-            failure.addSuppressed(cleanupFailure)
+            if (cleanupFailure !== failure) failure.addSuppressed(cleanupFailure)
             mutable.update { it.copy(errorMessage = env.describe(cleanupFailure)) }
         }
     }

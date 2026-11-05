@@ -76,7 +76,9 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                 holder.confirmEnableRepeatMode()
                 h.eventually("fresh Repeat snapshot follows the later manual RF") {
                     !holder.state.value.isApplyingRepeat && h.manager.connectedDevice?.clientRepeat == true &&
-                        holder.state.value.device?.clientRepeat == true
+                        holder.state.value.device?.clientRepeat == true &&
+                        h.manager.connectedDevice?.frequency == radio.frequency &&
+                        holder.state.value.device?.frequency == radio.frequency
                 }
                 val prepared = assertNotNull(store.fetchDevice(before.id))
                 assertEquals(manual.frequency, prepared.preRepeatFrequency)

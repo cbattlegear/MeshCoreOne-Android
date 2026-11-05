@@ -57,6 +57,16 @@ confirmed no competing fixture edit. This is a source-backed command-response
 provenance repair, not dismissal as flaky or acceptance without exact execution.
 The held map/timeline test is not edited.
 
+Independent Settings review of 98 identified a missing Bytes import in the new
+real-protocol queue test. The successor supplies that exact import. The fresh
+enable/off Room discriminator also waits for both the actual live RF frequency
+and the holder's observation after the existing verified API's asynchronous RF
+publication, in addition to all earlier snapshot and Repeat assertions. This does
+not claim the separately owned persisted-ACK API is composed: the restore begins
+from the actually published RF state rather than racing an intentionally queued
+consumer. Cleanup suppression avoids self-suppression if a persistence adapter
+rethrows the identical failure object. Original assertions are retained.
+
 Independent producer reviews accepted the bounded source seams but found an
 additional actual cancellation gap: a newly committed snapshot could survive
 cancellation before SET, then a later manual RF edit and fresh enable/off would

@@ -442,12 +442,34 @@ API/device or notification trampoline evidence. A candidate verifier change
 cannot approve itself: trusted reader deployment and admission are separate from
 these source fixtures.
 
+The Kotlin declaration reader also recognizes one bounded non-suite collaborator:
+a direct, non-inner nested class in a non-inheriting top-level test class, with
+the exact `@Implements(NotificationManager::class)` / `: ShadowNotificationManager()`
+shape and unaliased, unshadowed explicit Android/Robolectric imports. The external
+`org.robolectric.shadows.ShadowNotificationManager` in the pinned Robolectric 4.17
+is a shadow, not a JUnit superclass. This is not a general `@Implements` exemption.
+Only resolved `@Implementation` function annotations are admitted inside this
+collaborator; test/lifecycle/rule annotations, unknown or additional bases,
+aliases, ambiguous names, inherited enclosing classes and bodyless declarations
+remain fail-closed. Other nested inherited suites retain the existing checks.
+Named test identities, nonzero execution, skipped-case refusal and immutable
+compiled-source equality are unchanged. A source-reader repair still requires
+independent trusted-reader review/admission before product acceptance.
+
 Focused source-only remapping and selector regression command (no Gradle lock,
 runtime installation or device execution):
 
 ```powershell
 $env:PYTHONPATH = "$PWD\tools\android-port;$PWD\tools\android-port\tests"
 python -B -c "import unittest; from controller.test_runner import run_suite; raise SystemExit(run_suite(unittest.TestLoader().loadTestsFromNames(['test_module_junit', 'test_local_scope', 'test_ci'])))"
+```
+
+For declaration-reader changes, include the inherited-suite and hostile
+collaborator controls in that same source-only run:
+
+```powershell
+$env:PYTHONPATH = "$PWD\tools\android-port;$PWD\tools\android-port\tests"
+python -B -c "import unittest; from controller.test_runner import run_suite; raise SystemExit(run_suite(unittest.TestLoader().loadTestsFromNames(['test_repair_acceptance', 'test_module_junit', 'test_local_scope', 'test_ci'])))"
 ```
 
 Focused source/launcher integration fixtures (no real Gradle/native/runtime

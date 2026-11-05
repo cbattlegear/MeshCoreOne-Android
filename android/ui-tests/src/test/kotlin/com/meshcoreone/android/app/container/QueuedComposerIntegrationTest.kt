@@ -54,6 +54,7 @@ class QueuedComposerIntegrationTest : RoomProcessTest() {
     }
 
     private suspend fun graph(test: TestScope): Graph {
+        reopenProcessStore()
         val h = ContainerHarness(test, store)
         h.links.configureRadio = { radio ->
             radio.knownContacts += contactFrame(peerKey, "Synthetic queue peer")

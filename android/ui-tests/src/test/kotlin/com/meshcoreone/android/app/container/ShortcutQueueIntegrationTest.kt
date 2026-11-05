@@ -21,6 +21,7 @@ import com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueService
 import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceException
 import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
+import com.meshcoreone.android.core.database.DirectAckStorage
 import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.l10n.R as L10nR
@@ -73,13 +74,17 @@ class ShortcutQueueIntegrationTest : RoomProcessTest() {
         identity: (ConnectionTarget) -> Bytes = { key(7) },
         rejectSend: Boolean = false,
     ): ContainerHarness {
-        val h = ContainerHarness(test, backing, identity = identity)
+        val activeStore = if (backing === store) {
+            reopenProcessStore()
+            store
+        } else backing
+        val h = ContainerHarness(test, activeStore, identity = identity)
         configure(h, rejectSend = rejectSend)
         h.manager.connect(h.target(target))
         h.eventually("shortcut services ready") { h.manager.connectionState == DeviceConnectionState.READY }
         val radio = assertNotNull(h.appState.currentRadioId)
-        if (backing.fetchChannels(radio).none { it.index == 0.toUByte() }) {
-            backing.saveChannel(ChannelDTO(radioId = radio, index = 0u, name = "Synthetic channel"))
+        if (activeStore.fetchChannels(radio).none { it.index == 0.toUByte() }) {
+            activeStore.saveChannel(ChannelDTO(radioId = radio, index = 0u, name = "Synthetic channel"))
         }
         return h
     }
@@ -634,6 +639,7 @@ class ShortcutQueueIntegrationTest : RoomProcessTest() {
         val name = "wp502-shortcut-${UUID.randomUUID()}.db"
         val immediate = Executor { it.run() }
         fun open() = Room.databaseBuilder(context, MeshCoreDatabase::class.java, name)
+            .addCallback(DirectAckStorage.callback).addMigrations(DirectAckStorage.migration1To2)
             .allowMainThreadQueries().setQueryExecutor(immediate).setTransactionExecutor(immediate).build()
         var database = open()
         var owner = CoroutineScope(SupervisorJob() + Dispatchers.Default)

@@ -37,6 +37,7 @@ class ShortcutConsumerRepairTest : RoomProcessTest() {
     private fun secret(value: Int) = Bytes(ByteArray(16) { value.toByte() })
 
     private suspend fun connected(test: TestScope): ContainerHarness {
+        reopenProcessStore()
         val h = ContainerHarness(test, store)
         h.links.configureRadio = { it.knownContacts += contactFrame(key(4), "Shortcut peer") }
         h.manager.connect(h.target())

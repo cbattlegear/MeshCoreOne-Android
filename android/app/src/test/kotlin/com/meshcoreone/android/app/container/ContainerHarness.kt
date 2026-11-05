@@ -243,6 +243,12 @@ abstract class RoomProcessTest {
         reportPathRecencyPhase("room-open|END")
     }
 
+    /** Call only after the previous AppContainer has closed; retain rows, not process authority. */
+    protected suspend fun reopenProcessStore() {
+        store.close()
+        store = RoomPersistenceStore(db, owner)
+    }
+
     @After fun closeStore() {
         reportPathRecencyPhase("room-close|START")
         try { kotlinx.coroutines.runBlocking { store.close() } } finally {

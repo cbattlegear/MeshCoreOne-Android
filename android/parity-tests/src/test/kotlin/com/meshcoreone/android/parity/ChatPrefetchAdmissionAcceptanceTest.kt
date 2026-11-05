@@ -401,6 +401,7 @@ class ChatPrefetchAdmissionAcceptanceTest : RoomProcessTest() {
         lateinit var viewModel: ChatViewModel
 
         suspend fun start(enabled: Boolean, wireContent: Boolean, autoDM: Boolean, autoChannel: Boolean) {
+            reopenProcessStore()
             context.getFileStreamPath("InlineImageDimensions.json").delete()
             storage.preferences.set(AppStorageKey.linkPreviewsEnabled, enabled)
             storage.preferences.set(AppStorageKey.linkPreviewsAutoResolveDM, autoDM)

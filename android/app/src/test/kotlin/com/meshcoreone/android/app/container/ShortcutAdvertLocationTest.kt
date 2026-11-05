@@ -111,6 +111,7 @@ class ShortcutAdvertLocationTest : RoomProcessTest() {
         preparation: AppAdvertLocation,
         radioLocation: RadioLocation = RadioLocation(),
     ): ContainerHarness {
+        reopenProcessStore()
         val h = ContainerHarness(test, store, advertLocation = preparation)
         h.links.configureRadio = { it.respond = radioLocation::respond }
         h.manager.connect(h.target())

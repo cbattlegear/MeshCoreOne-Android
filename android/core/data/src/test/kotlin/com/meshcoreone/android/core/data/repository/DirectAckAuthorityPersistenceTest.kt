@@ -620,6 +620,72 @@ class DirectAckAuthorityPersistenceTest {
         rejected(store.settleDirectAck(claim.attempt, 123u, 43u), DirectAckRejection.CONFLICT)
     }
 
+    @Test fun acceptedWireBindingPreservesPendingUntilExactWireSendCompletion() = runTest {
+        val claim = begin()
+        val accepted = assertIs<DirectAckMutationResult.Applied>(
+            store.recordDirectSendAccepted(claim.attempt, claim.wire, 456u),
+        )
+        assertEquals(MessageStatus.PENDING, assertNotNull(store.fetchMessage(entity(id = claim.row.id))).status)
+        assertEquals(456u, accepted.receipt.wires.single { it.requestId == claim.wire }.acceptedAckCode)
+
+        val laterWire = UUID.randomUUID()
+        assertIs<DirectAckMutationResult.Applied>(
+            store.registerDirectAckDispatch(claim.attempt, laterWire, 789u),
+        )
+        assertIs<DirectAckMutationResult.Applied>(
+            store.recordDirectSendAccepted(claim.attempt, laterWire, 987u),
+        )
+        val operationId = UUID.randomUUID()
+        val completion = DirectAckBookkeeping.SendCompleted(claim.wire)
+        val applied = assertIs<DirectAckMutationResult.Applied>(
+            store.applyDirectAckBookkeeping(claim.attempt, operationId, completion),
+        )
+        val sent = assertNotNull(store.fetchMessage(entity(id = claim.row.id)))
+        assertEquals(MessageStatus.SENT, sent.status)
+        assertEquals(456u, sent.ackCode)
+        assertNull(sent.roundTripTime)
+        assertEquals(completion, applied.receipt.bookkeeping.single { it.requestId == operationId }.change)
+        assertIs<DirectAckMutationResult.AlreadyApplied>(
+            store.applyDirectAckBookkeeping(claim.attempt, operationId, completion),
+        )
+        assertEquals(DirectAckRejection.CONFLICT, assertIs<DirectAckMutationResult.Rejected>(
+            store.applyDirectAckBookkeeping(
+                claim.attempt, operationId, DirectAckBookkeeping.SendCompleted(laterWire),
+            ),
+        ).reason)
+        assertEquals(sent, store.fetchMessage(entity(id = claim.row.id)))
+    }
+
+    @Test fun sendCompletionRequiresAnAcceptedClaimWireAndCannotPromoteRetryingStatus() = runTest {
+        val claim = begin()
+        val missing = assertIs<DirectAckMutationResult.Rejected>(
+            store.applyDirectAckBookkeeping(
+                claim.attempt, UUID.randomUUID(), DirectAckBookkeeping.SendCompleted(UUID.randomUUID()),
+            ),
+        )
+        assertEquals(DirectAckRejection.MISSING, missing.reason)
+        val predictedOnly = assertIs<DirectAckMutationResult.Rejected>(
+            store.applyDirectAckBookkeeping(
+                claim.attempt, UUID.randomUUID(), DirectAckBookkeeping.SendCompleted(claim.wire),
+            ),
+        )
+        assertEquals(DirectAckRejection.NOT_ELIGIBLE, predictedOnly.reason)
+        assertIs<DirectAckMutationResult.Applied>(store.recordDirectSendAccepted(claim.attempt, claim.wire, 456u))
+        assertIs<DirectAckMutationResult.Applied>(
+            store.applyDirectAckBookkeeping(
+                claim.attempt, UUID.randomUUID(), DirectAckBookkeeping.RetryStarted(1, 4),
+            ),
+        )
+        val retrying = assertNotNull(store.fetchMessage(entity(id = claim.row.id)))
+        assertEquals(MessageStatus.RETRYING, retrying.status)
+        assertEquals(DirectAckRejection.NOT_ELIGIBLE, assertIs<DirectAckMutationResult.Rejected>(
+            store.applyDirectAckBookkeeping(
+                claim.attempt, UUID.randomUUID(), DirectAckBookkeeping.SendCompleted(claim.wire),
+            ),
+        ).reason)
+        assertEquals(retrying, store.fetchMessage(entity(id = claim.row.id)))
+    }
+
     @Test fun activationAndBeginReplayRecoverOnlyTheExactStillCurrentLogicalClaim() = runTest {
         val activation = UUID.randomUUID()
         val lease = activate(request = activation)
@@ -786,6 +852,7 @@ class DirectAckAuthorityPersistenceTest {
         val wire2 = UUID.randomUUID()
         store.registerDirectAckDispatch(claim.attempt, wire2, 789u)
         store.recordDirectSendAccepted(claim.attempt, wire2, 987u)
+        assertEquals(MessageStatus.RETRYING, assertNotNull(store.fetchMessage(entity(id = claim.row.id))).status)
         val codes = observed(claim).wires.flatMap { listOfNotNull(it.predictedAckCode, it.acceptedAckCode) }.toSet()
         assertEquals(setOf(123u, 456u, 789u, 987u), codes)
         assertIs<DirectAckMutationResult.Applied>(store.settleDirectAck(claim.attempt, 456u, 88u))
@@ -799,6 +866,16 @@ class DirectAckAuthorityPersistenceTest {
         for (initial in listOf(MessageStatus.DELIVERED, MessageStatus.FAILED)) {
             val claim = begin(row = message(status = initial), mode = DirectAckMode.RESEND, lease = lease)
             store.recordDirectSendAccepted(claim.attempt, claim.wire, 456u)
+            assertEquals(initial, assertNotNull(store.fetchMessage(entity(id = claim.row.id))).status)
+            val completion = store.applyDirectAckBookkeeping(
+                claim.attempt, UUID.randomUUID(), DirectAckBookkeeping.SendCompleted(claim.wire),
+            )
+            if (initial == MessageStatus.DELIVERED) {
+                assertIs<DirectAckMutationResult.AlreadyDelivered>(completion)
+            } else {
+                assertEquals(DirectAckRejection.NOT_ELIGIBLE,
+                    assertIs<DirectAckMutationResult.Rejected>(completion).reason)
+            }
             assertEquals(initial, assertNotNull(store.fetchMessage(entity(id = claim.row.id))).status)
             assertIs<DirectAckMutationResult.Applied>(store.settleDirectAck(claim.attempt, 123u, 123u))
             val count = UUID.randomUUID()

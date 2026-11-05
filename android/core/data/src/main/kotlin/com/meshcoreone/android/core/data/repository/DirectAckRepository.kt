@@ -202,11 +202,8 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         } else DirectAckMutationResult.Rejected(DirectAckRejection.CONFLICT)
         deny(claim, issued)?.let { return@mutate it }
         dao.wire(wire.copy(acceptedCode = ackCode.toLong()))
-        val writesMessage = claim.phase in setOf(DirectAckPhase.REGISTERED.name, DirectAckPhase.ACCEPTED.name) &&
-            (claim.snapshot ?: invalidData("Current claim has no message")).statusRawValue !in setOf(3L, 4L)
-        if (writesMessage) ownWrite(database.messages().setAck(claim.radioId, claim.messageId, ackCode.toLong(), 2, null))
         val phase = if (claim.phase == DirectAckPhase.REGISTERED.name) DirectAckPhase.ACCEPTED.name else claim.phase
-        val updated = renew(claim, phase, if (writesMessage) 1 else 0)
+        val updated = renew(claim, phase)
         save()
         DirectAckMutationResult.Applied(receipt(updated, issued.lease))
     }
@@ -260,10 +257,24 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         replay(claim, issued, operation)?.let { return@mutate it }
         deny(claim, issued)?.let { return@mutate it }
         val row = claim.snapshot ?: invalidData("Current claim has no message")
+        val dao = database.directAcks()
         if (change != DirectAckBookkeeping.ResendCountIncrement && row.statusRawValue == 3L) {
             return@mutate DirectAckMutationResult.AlreadyDelivered(receipt(claim, issued.lease))
         }
         when (change) {
+            is DirectAckBookkeeping.SendCompleted -> {
+                if (row.statusRawValue != MessageStatus.PENDING.rawValue) {
+                    return@mutate DirectAckMutationResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
+                }
+                val wire = dao.wires(claim.radioId, claim.requestId)
+                    .firstOrNull { it.requestId == change.wireRequestId }
+                    ?: return@mutate DirectAckMutationResult.Rejected(DirectAckRejection.MISSING)
+                val acceptedCode = wire.acceptedCode
+                    ?: return@mutate DirectAckMutationResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
+                ownWrite(database.messages().setAck(
+                    claim.radioId, claim.messageId, acceptedCode, MessageStatus.SENT.rawValue, null,
+                ))
+            }
             is DirectAckBookkeeping.RetryStarted -> {
                 if (change.retryAttempt < 0 || change.maxRetryAttempts < 0) {
                     return@mutate DirectAckMutationResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
@@ -537,6 +548,7 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         DirectAckOperationEntity(
             claim.radioId, claim.requestId, request,
             when (change) {
+                is DirectAckBookkeeping.SendCompleted -> "SEND_COMPLETED:${change.wireRequestId}"
                 is DirectAckBookkeeping.RetryStarted -> "RETRY"
                 DirectAckBookkeeping.RetryExhausted -> "EXHAUSTED"
                 DirectAckBookkeeping.ResendCountIncrement -> "COUNT"
@@ -561,12 +573,16 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         val dao = database.directAcks()
         val operations = dao.operations(claim.radioId, claim.requestId)
         val bookkeeping = operations.filter { it.kind != "PENDING" }.map {
-            val change = when (it.kind) {
-                "RETRY" -> DirectAckBookkeeping.RetryStarted(
+            val change = when {
+                it.kind.startsWith("SEND_COMPLETED:") -> {
+                    val wireId = it.kind.removePrefix("SEND_COMPLETED:")
+                    DirectAckBookkeeping.SendCompleted(UUID.fromString(wireId))
+                }
+                it.kind == "RETRY" -> DirectAckBookkeeping.RetryStarted(
                     it.argument ?: invalidData("Missing retry argument"), it.maximum ?: invalidData("Missing retry maximum"),
                 )
-                "EXHAUSTED" -> DirectAckBookkeeping.RetryExhausted
-                "COUNT" -> DirectAckBookkeeping.ResendCountIncrement
+                it.kind == "EXHAUSTED" -> DirectAckBookkeeping.RetryExhausted
+                it.kind == "COUNT" -> DirectAckBookkeeping.ResendCountIncrement
                 else -> invalidData("Unknown direct ACK operation")
             }
             DirectAckBookkeepingReceipt(it.requestId, change)

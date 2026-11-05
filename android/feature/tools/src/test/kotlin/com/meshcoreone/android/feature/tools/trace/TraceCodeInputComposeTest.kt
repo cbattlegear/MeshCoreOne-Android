@@ -668,6 +668,8 @@ class TraceCodeInputComposeTest {
         var token = com.meshcoreone.android.core.contracts.domain.SessionToken(
             epoch, com.meshcoreone.android.core.contracts.domain.Generation(1), RADIO,
         )
+        var publishedToken = token
+        var publishedVersion = 1
         val persistence = InMemoryTracePathStore { T0 }
         val recorded = FakeTraceSender()
         val deps = FakeTraceDependencies().apply {
@@ -678,12 +680,20 @@ class TraceCodeInputComposeTest {
         }
         val feature = object : TracePathFeatureDependencies by deps {
             override fun sessionToken() = token
+            override fun originatingSessionToken(generation: Int) = publishedToken.takeIf { generation == publishedVersion }
+            override fun isOriginatingSessionCurrent(
+                generation: Int,
+                token: com.meshcoreone.android.core.contracts.domain.SessionToken?,
+            ) = generation == publishedVersion && token == publishedToken
         }
         val captured = TracePathScreen.Dependencies(
             feature, MapRecentsStorage(), RecordingDiagnostics(), RADIO, 1,
         )
+        assertEquals(token, captured.originatingToken)
         val nextRadio = if (crossRadio) RadioId(UUID.randomUUID()) else RADIO
         token = token.copy(generation = com.meshcoreone.android.core.contracts.domain.Generation(2), radioId = nextRadio)
+        publishedToken = token
+        publishedVersion = 2
         deps.device = device().copy(radioId = nextRadio)
         val path = savedPath(Bytes.of(0xBB), radioId = nextRadio).copy(name = "New graph only")
         persistence.insert(path)
@@ -694,7 +704,9 @@ class TraceCodeInputComposeTest {
         assertFalse(texts().contains(path.name), "Delayed A configure must not expose B rows")
         assertTrue(recorded.sent.isEmpty())
         click(host.get().getString(L.commonDone))
-        host.get().runOnUiThread { connection.value = captured.copy(radioId = nextRadio, generation = 2) }
+        val fresh = captured.copy(radioId = nextRadio, generation = 2)
+        assertEquals(token, fresh.originatingToken)
+        host.get().runOnUiThread { connection.value = fresh }
         settle()
         click(host.get().getString(C.contactsTraceSaved))
         click(path.name)
@@ -710,6 +722,8 @@ class TraceCodeInputComposeTest {
         var token = com.meshcoreone.android.core.contracts.domain.SessionToken(
             epoch, com.meshcoreone.android.core.contracts.domain.Generation(1), RADIO,
         )
+        var publishedToken = token
+        var publishedVersion = 1
         val persistence = InMemoryTracePathStore { T0 }
         val path = savedPath(Bytes.of(0xAA), radioId = RADIO).copy(name = "Retained graph route")
         persistence.insert(path)
@@ -720,10 +734,16 @@ class TraceCodeInputComposeTest {
         }
         val feature = object : TracePathFeatureDependencies by deps {
             override fun sessionToken() = token
+            override fun originatingSessionToken(generation: Int) = publishedToken.takeIf { generation == publishedVersion }
+            override fun isOriginatingSessionCurrent(
+                generation: Int,
+                token: com.meshcoreone.android.core.contracts.domain.SessionToken?,
+            ) = generation == publishedVersion && token == publishedToken
         }
         val connection = mutableStateOf(TracePathScreen.Dependencies(
             feature, MapRecentsStorage(), RecordingDiagnostics(), RADIO, 1,
         ))
+        assertEquals(token, connection.value.originatingToken)
         content.setContent { MaterialTheme { TracePathScreen(connection.value) } }
         settle()
         click(host.get().getString(C.contactsTraceSaved))
@@ -740,7 +760,12 @@ class TraceCodeInputComposeTest {
         assertEquals(path, persistence.paths[path.id])
         click(host.get().getString(L.commonDone))
         assertTrue(texts().contains(host.get().getString(C.contactsTraceListEmptyPath)))
-        host.get().runOnUiThread { connection.value = connection.value.copy(generation = 2) }
+        host.get().runOnUiThread {
+            publishedToken = token
+            publishedVersion = 2
+            connection.value = connection.value.copy(generation = 2)
+            assertEquals(token, connection.value.originatingToken)
+        }
         settle()
         click(host.get().getString(C.contactsTraceSaved))
         click(path.name)

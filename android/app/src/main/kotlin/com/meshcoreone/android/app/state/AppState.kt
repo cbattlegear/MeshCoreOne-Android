@@ -366,7 +366,9 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
     }
 
     fun sessionTokenForServicesVersion(version: Int): com.meshcoreone.android.core.contracts.domain.SessionToken? =
-        synchronized(lock) { servicesOrigin.takeIf { servicesVersionFlow.value == version } }
+        synchronized(lock) {
+            servicesOrigin.takeIf { servicesVersionFlow.value == version && lastBumpedSession === services }
+        }
 
     override fun handleSessionStateChange() {
         refreshConversations()

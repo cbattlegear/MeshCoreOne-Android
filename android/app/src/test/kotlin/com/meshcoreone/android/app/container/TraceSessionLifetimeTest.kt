@@ -3,10 +3,13 @@ package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.SessionToken
+import com.meshcoreone.android.core.contracts.domain.TracePathPersisting
 import com.meshcoreone.android.core.model.PersistenceKeys
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.model.SavedTracePathDTO
+import com.meshcoreone.android.core.model.TracePathRunDTO
 import com.meshcoreone.android.core.database.toEntity
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.MessageSentInfo
@@ -27,9 +30,7 @@ import com.meshcoreone.android.feature.tools.trace.TracePathStateHolder
 import com.meshcoreone.android.feature.tools.trace.TracePathScreen
 import com.meshcoreone.android.feature.tools.trace.TracePathStrings
 import com.meshcoreone.android.feature.tools.trace.TraceSender
-import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.UUID
 import kotlin.test.assertEquals
@@ -51,6 +52,34 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class TraceSessionLifetimeTest : RoomProcessTest() {
+    @Test
+    fun originLookupRejectsAWithdrawnGraphBeforeContainerWatchersStart() = runTest {
+        val h = ContainerHarness(this, store)
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            h.assertReady()
+            val version = h.appState.servicesVersion.value
+            val token = assertNotNull(h.sessions.current).token
+            val recents = object : RecentHopsStorage {
+                override fun stringList(key: String): List<String>? = null
+                override fun setStringList(key: String, value: List<String>) = Unit
+            }
+            val actual = h.container.createToolsFeatureDependencies(
+                recents, h.container.createToolsDiagnosticsDependencies(),
+            ).trace
+            assertEquals(token, actual.sessionToken())
+            assertEquals(token, h.appState.sessionTokenForServicesVersion(version))
+            h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            assertNull(h.sessions.current, "Actual registry withdrawal, not UI counter timing")
+            assertNull(actual.sessionToken(), "The real feature observes registry withdrawal without a watcher")
+            assertNull(h.manager.connectedDevice)
+            assertNull(h.appState.sessionTokenForServicesVersion(version), "Cached origin cannot outlive the actual graph")
+        } finally {
+            h.container.close()
+        }
+    }
+
     @Test
     fun sameTokenReloadCannotAuthorizeOldVersionActionsAgainstAReplacementRow() = runTest {
         val h = ContainerHarness(this, store)
@@ -146,6 +175,8 @@ class TraceSessionLifetimeTest : RoomProcessTest() {
         var replacing = false
         val h = ContainerHarness(this, store, identity = { if (replacing && crossRadio) key(9) else key(7) })
         try {
+            h.container.start().join()
+            h.settle()
             val target = h.target()
             h.manager.connect(target)
             h.settle()
@@ -203,6 +234,9 @@ class TraceSessionLifetimeTest : RoomProcessTest() {
             h.appState.wireServicesIfConnected()
             assertEquals(reloadVersion, h.appState.servicesVersion.value, "Same graph rewiring stays idempotent")
             h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            assertNull(h.sessions.current, "Direct disconnect withdrew A")
+            assertNull(actual.sessionToken(), "The live graph token is already absent before watcher dispatch")
+            assertNull(actual.originatingSessionToken(reloadVersion), "Synchronous origin lookup observes withdrawal")
             h.settle()
             assertNull(actual.originatingSessionToken(reloadVersion))
             replacing = true
@@ -422,10 +456,12 @@ class TraceSessionLifetimeTest : RoomProcessTest() {
         var replacing = false
         val h = ContainerHarness(this, store, identity = { if (replacing && crossRadio) key(9) else key(7) },
             preferencesOverride = preferences)
-        val releaseTokenRead = CountDownLatch(1)
+        val releaseStore = CompletableDeferred<Unit>()
         val worker = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
         val holderScope = CoroutineScope(SupervisorJob() + worker)
         try {
+            h.container.start().join()
+            h.settle()
             val target = h.target()
             h.manager.connect(target)
             h.settle()
@@ -439,18 +475,31 @@ class TraceSessionLifetimeTest : RoomProcessTest() {
             ).trace
             val oldToken = assertNotNull(actual.sessionToken())
             val version = h.appState.servicesVersion.value
-            val holdTokenRead = AtomicBoolean()
-            val tokenRead = CompletableDeferred<SessionToken?>()
+            val holdMutation = AtomicBoolean()
+            val mutationReached = CompletableDeferred<Pair<String, RadioId>>()
+            val actualStore = assertNotNull(actual.savedPaths())
+            val selectedStore = object : TracePathPersisting by actualStore {
+                override suspend fun createSavedTracePath(
+                    radioId: RadioId, name: String, pathBytes: Bytes, hashSize: Long, initialRun: TracePathRunDTO?,
+                ): SavedTracePathDTO {
+                    if (holdMutation.compareAndSet(true, false)) {
+                        mutationReached.complete("create" to radioId)
+                        releaseStore.await()
+                    }
+                    return actualStore.createSavedTracePath(radioId, name, pathBytes, hashSize, initialRun)
+                }
+
+                override suspend fun deleteSavedTracePath(key: EntityKey) {
+                    if (holdMutation.compareAndSet(true, false)) {
+                        mutationReached.complete("delete" to key.radioId)
+                        releaseStore.await()
+                    }
+                    actualStore.deleteSavedTracePath(key)
+                }
+            }
             var tag = 0u
             val feature = object : TracePathFeatureDependencies by actual {
-                override fun sessionToken(): com.meshcoreone.android.core.contracts.domain.SessionToken? {
-                    val captured = actual.sessionToken()
-                    if (holdTokenRead.compareAndSet(true, false)) {
-                        tokenRead.complete(captured)
-                        check(releaseTokenRead.await(30, TimeUnit.SECONDS)) { "Publication control did not release token read" }
-                    }
-                    return captured
-                }
+                override fun savedPaths() = selectedStore
                 override fun traceSender() = TraceSender { sentTag, _, _, _ ->
                     tag = sentTag
                     MessageSentInfo(0u, Bytes.EMPTY, 0u)
@@ -464,9 +513,11 @@ class TraceSessionLifetimeTest : RoomProcessTest() {
             withContext(worker) {
                 saved.configure(object : SavedPathsDependencies {
                     override fun sessionToken() = feature.sessionToken()
+                    override fun isOriginatingSessionCurrent(generation: Int, token: SessionToken?) =
+                        feature.isOriginatingSessionCurrent(generation, token)
                     override fun connectedDevice() = feature.connectedDevice()
                     override fun savedPaths() = feature.savedPaths()
-                })
+                }, oldToken, version)
                 saved.loadSavedPaths()
                 trace.configure(feature)
                 trace.bindConnection(oldToken.radioId, version)
@@ -475,15 +526,19 @@ class TraceSessionLifetimeTest : RoomProcessTest() {
                 trace.handleTraceResponse(TraceInfo(tag, 0u, 0u, 0u, emptyList()), oldToken.radioId)
                 assertTrue(assertNotNull(trace.state.value.result).success)
             }
-            h.eventually("initial accepted run refresh completes before the action token gate") {
+            h.eventually("initial accepted run refresh completes before the persistence gate") {
                 trace.state.value.activeSavedPath?.runs?.size == 1
             }
             val accepted = backgroundScope.async(worker) {
-                holdTokenRead.set(true)
+                holdMutation.set(true)
                 if (crossRadio) trace.savePath("Accepted A result") else saved.deletePath(path)
             }
-            h.eventually("A action token read") { tokenRead.isCompleted }
-            assertEquals(oldToken, tokenRead.await(), "The intended action accepted A before replacement")
+            h.eventually("A action reached its selected real store after all admission checks") { mutationReached.isCompleted }
+            assertEquals(
+                (if (crossRadio) "create" else "delete") to oldToken.radioId,
+                mutationReached.await(),
+                "The intended accepted action targets A's actual store/key",
+            )
             h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
             h.settle()
             replacing = true
@@ -496,7 +551,7 @@ class TraceSessionLifetimeTest : RoomProcessTest() {
             assertEquals(version, h.appState.servicesVersion.value)
             assertEquals(newToken.radioId, actual.connectedDevice()?.radioId)
             assertEquals(crossRadio, oldToken.radioId != newToken.radioId)
-            releaseTokenRead.countDown()
+            releaseStore.complete(Unit)
             h.eventually("accepted A action finished") { accepted.isCompleted }
             assertTrue(accepted.await())
             if (crossRadio) {
@@ -518,7 +573,7 @@ class TraceSessionLifetimeTest : RoomProcessTest() {
             h.settle()
             h.assertReady()
         } finally {
-            releaseTokenRead.countDown()
+            releaseStore.complete(Unit)
             releasePublication.complete(Unit)
             holderScope.cancel()
             worker.close()

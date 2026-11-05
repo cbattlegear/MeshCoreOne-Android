@@ -8,7 +8,7 @@
       "checking": "Delivery confirmation is unavailable while stored evidence is checked.",
       "missing": "This radio's stored delivery evidence cannot be checked here. Delivery is not confirmed.",
       "unavailable": "Stored delivery evidence could not be checked. Delivery is not confirmed.",
-      "uncertain": "Delivery confirmation is unavailable for this radio. Messages may have been sent.",
+      "uncertain": "Delivery confirmation may be unavailable for some messages on this radio. Affected messages may have been sent.",
       "checked": "The stored-evidence check finished. It does not confirm whether your messages were delivered.",
       "interrupted": "The stored-evidence check was interrupted. Delivery is not confirmed.",
       "check_again": "Check again"
@@ -18,7 +18,7 @@
       "checking": "Während gespeicherte Nachweise geprüft werden, ist keine Zustellbestätigung verfügbar.",
       "missing": "Die gespeicherten Zustellnachweise dieses Funkgeräts können hier nicht geprüft werden. Die Zustellung ist nicht bestätigt.",
       "unavailable": "Gespeicherte Zustellnachweise konnten nicht geprüft werden. Die Zustellung ist nicht bestätigt.",
-      "uncertain": "Für dieses Funkgerät ist keine Zustellbestätigung verfügbar. Nachrichten wurden möglicherweise gesendet.",
+      "uncertain": "Für einige Nachrichten dieses Funkgeräts ist möglicherweise keine Zustellbestätigung verfügbar. Betroffene Nachrichten wurden möglicherweise gesendet.",
       "checked": "Die Prüfung der gespeicherten Nachweise ist abgeschlossen. Sie bestätigt nicht, ob deine Nachrichten zugestellt wurden.",
       "interrupted": "Die Prüfung der gespeicherten Nachweise wurde unterbrochen. Die Zustellung ist nicht bestätigt.",
       "check_again": "Erneut prüfen"
@@ -28,7 +28,7 @@
       "checking": "La confirmación de entrega no está disponible mientras se comprueban los registros guardados.",
       "missing": "Aquí no se pueden comprobar los registros de entrega guardados de esta radio. La entrega no está confirmada.",
       "unavailable": "No se pudieron comprobar los registros de entrega guardados. La entrega no está confirmada.",
-      "uncertain": "La confirmación de entrega no está disponible para esta radio. Es posible que los mensajes se hayan enviado.",
+      "uncertain": "Es posible que la confirmación de entrega no esté disponible para algunos mensajes de esta radio. Los mensajes afectados pueden haberse enviado.",
       "checked": "La comprobación de los registros guardados ha terminado. No confirma si tus mensajes se han entregado.",
       "interrupted": "La comprobación de los registros guardados se ha interrumpido. La entrega no está confirmada.",
       "check_again": "Volver a comprobar"
@@ -38,7 +38,7 @@
       "checking": "La confirmation de livraison est indisponible pendant la vérification des données enregistrées.",
       "missing": "Les données de livraison enregistrées pour cette radio ne peuvent pas être vérifiées ici. La livraison n'est pas confirmée.",
       "unavailable": "Les données de livraison enregistrées n'ont pas pu être vérifiées. La livraison n'est pas confirmée.",
-      "uncertain": "La confirmation de livraison est indisponible pour cette radio. Des messages ont peut-être été envoyés.",
+      "uncertain": "La confirmation de livraison peut être indisponible pour certains messages de cette radio. Les messages concernés ont peut-être été envoyés.",
       "checked": "La vérification des données enregistrées est terminée. Elle ne confirme pas si vos messages ont été livrés.",
       "interrupted": "La vérification des données enregistrées a été interrompue. La livraison n'est pas confirmée.",
       "check_again": "Vérifier à nouveau"
@@ -48,7 +48,7 @@
       "checking": "La conferma di consegna non è disponibile durante la verifica dei dati salvati.",
       "missing": "I dati di consegna salvati per questa radio non possono essere verificati qui. La consegna non è confermata.",
       "unavailable": "Non è stato possibile verificare i dati di consegna salvati. La consegna non è confermata.",
-      "uncertain": "La conferma di consegna non è disponibile per questa radio. I messaggi potrebbero essere stati inviati.",
+      "uncertain": "La conferma di consegna potrebbe non essere disponibile per alcuni messaggi di questa radio. I messaggi interessati potrebbero essere stati inviati.",
       "checked": "La verifica dei dati salvati è terminata. Non conferma se i tuoi messaggi sono stati consegnati.",
       "interrupted": "La verifica dei dati salvati è stata interrotta. La consegna non è confermata.",
       "check_again": "Verifica di nuovo"
@@ -58,7 +58,7 @@
       "checking": "저장된 기록을 확인하는 동안에는 전달 여부를 확인할 수 없습니다.",
       "missing": "여기서는 이 무전기의 저장된 전달 기록을 확인할 수 없습니다. 전달 여부가 확인되지 않았습니다.",
       "unavailable": "저장된 전달 기록을 확인하지 못했습니다. 전달 여부가 확인되지 않았습니다.",
-      "uncertain": "이 무전기의 전달 여부를 확인할 수 없습니다. 메시지가 전송되었을 수 있습니다.",
+      "uncertain": "이 무전기의 일부 메시지는 전달 여부를 확인할 수 없을 수 있습니다. 해당 메시지는 전송되었을 수 있습니다.",
       "checked": "저장된 기록 확인이 끝났습니다. 이 확인으로 메시지 전달 여부가 확정되지는 않습니다.",
       "interrupted": "저장된 기록 확인이 중단되었습니다. 전달 여부가 확인되지 않았습니다.",
       "check_again": "다시 확인"
@@ -68,7 +68,7 @@
       "checking": "Afleverbevestiging is niet beschikbaar terwijl opgeslagen gegevens worden gecontroleerd.",
       "missing": "De opgeslagen aflevergegevens van deze radio kunnen hier niet worden gecontroleerd. De aflevering is niet bevestigd.",
       "unavailable": "Opgeslagen aflevergegevens konden niet worden gecontroleerd. De aflevering is niet bevestigd.",
-      "uncertain": "Afleverbevestiging is niet beschikbaar voor deze radio. Berichten zijn mogelijk verzonden.",
+      "uncertain": "Afleverbevestiging is mogelijk niet beschikbaar voor sommige berichten van deze radio. De betreffende berichten zijn mogelijk verzonden.",
       "checked": "De controle van opgeslagen gegevens is voltooid. Deze bevestigt niet of je berichten zijn afgeleverd.",
       "interrupted": "De controle van opgeslagen gegevens is onderbroken. De aflevering is niet bevestigd.",
       "check_again": "Opnieuw controleren"
@@ -78,7 +78,7 @@
       "checking": "Potwierdzenie dostarczenia jest niedostępne podczas sprawdzania zapisanych danych.",
       "missing": "Nie można tutaj sprawdzić zapisanych danych o dostarczeniu dla tego radia. Dostarczenie nie jest potwierdzone.",
       "unavailable": "Nie udało się sprawdzić zapisanych danych o dostarczeniu. Dostarczenie nie jest potwierdzone.",
-      "uncertain": "Potwierdzenie dostarczenia jest niedostępne dla tego radia. Wiadomości mogły zostać wysłane.",
+      "uncertain": "Potwierdzenie dostarczenia może być niedostępne dla niektórych wiadomości tego radia. Te wiadomości mogły zostać wysłane.",
       "checked": "Sprawdzanie zapisanych danych zakończono. Nie potwierdza ono, czy wiadomości zostały dostarczone.",
       "interrupted": "Sprawdzanie zapisanych danych zostało przerwane. Dostarczenie nie jest potwierdzone.",
       "check_again": "Sprawdź ponownie"
@@ -88,7 +88,7 @@
       "checking": "A confirmação de entrega não está disponível enquanto os registos guardados são verificados.",
       "missing": "Os registos de entrega guardados deste rádio não podem ser verificados aqui. A entrega não está confirmada.",
       "unavailable": "Não foi possível verificar os registos de entrega guardados. A entrega não está confirmada.",
-      "uncertain": "A confirmação de entrega não está disponível para este rádio. As mensagens podem ter sido enviadas.",
+      "uncertain": "A confirmação de entrega pode não estar disponível para algumas mensagens deste rádio. As mensagens afetadas podem ter sido enviadas.",
       "checked": "A verificação dos registos guardados terminou. Não confirma se as suas mensagens foram entregues.",
       "interrupted": "A verificação dos registos guardados foi interrompida. A entrega não está confirmada.",
       "check_again": "Verificar novamente"
@@ -98,7 +98,7 @@
       "checking": "Подтверждение доставки недоступно, пока проверяются сохранённые данные.",
       "missing": "Здесь нельзя проверить сохранённые данные о доставке для этой радиостанции. Доставка не подтверждена.",
       "unavailable": "Не удалось проверить сохранённые данные о доставке. Доставка не подтверждена.",
-      "uncertain": "Подтверждение доставки недоступно для этой радиостанции. Сообщения могли быть отправлены.",
+      "uncertain": "Подтверждение доставки может быть недоступно для некоторых сообщений этой радиостанции. Эти сообщения могли быть отправлены.",
       "checked": "Проверка сохранённых данных завершена. Она не подтверждает, были ли доставлены ваши сообщения.",
       "interrupted": "Проверка сохранённых данных прервана. Доставка не подтверждена.",
       "check_again": "Проверить ещё раз"
@@ -108,7 +108,7 @@
       "checking": "Підтвердження доставки недоступне, поки перевіряються збережені дані.",
       "missing": "Тут неможливо перевірити збережені дані про доставку для цієї радіостанції. Доставку не підтверджено.",
       "unavailable": "Не вдалося перевірити збережені дані про доставку. Доставку не підтверджено.",
-      "uncertain": "Підтвердження доставки недоступне для цієї радіостанції. Повідомлення могли бути надіслані.",
+      "uncertain": "Підтвердження доставки може бути недоступне для деяких повідомлень цієї радіостанції. Ці повідомлення могли бути надіслані.",
       "checked": "Перевірку збережених даних завершено. Вона не підтверджує, чи було доставлено ваші повідомлення.",
       "interrupted": "Перевірку збережених даних перервано. Доставку не підтверджено.",
       "check_again": "Перевірити знову"
@@ -118,7 +118,7 @@
       "checking": "正在检查已保存的记录，暂时无法确认是否送达。",
       "missing": "此处无法检查该电台已保存的送达记录。尚未确认是否送达。",
       "unavailable": "无法检查已保存的送达记录。尚未确认是否送达。",
-      "uncertain": "无法确认该电台的消息是否送达。消息可能已发送。",
+      "uncertain": "该电台的部分消息可能无法确认是否送达。受影响的消息可能已发送。",
       "checked": "已完成保存记录的检查。这并不确认您的消息是否已送达。",
       "interrupted": "保存记录的检查已中断。尚未确认是否送达。",
       "check_again": "重新检查"

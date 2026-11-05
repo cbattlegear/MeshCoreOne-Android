@@ -293,6 +293,30 @@ private fun AppChatConversation(
         })
         AppChatConversationScreen(
             timeline, composer, placeholder, links,
+            confirmationNotice = {
+                if (conversation is TimelineConversation.Direct) {
+                    val monitor = remember(feature) { feature.directAckConfirmation }
+                    val confirmation by monitor.state.collectAsStateWithLifecycle()
+                    val observed = confirmation.observation
+                    val current = if (observed != null &&
+                        observed.radioId == conversation.id.radioId &&
+                        feature.isConfirmationObservationCurrent(observed)
+                    ) confirmation else {
+                        com.meshcoreone.android.feature.chats.actions.DirectAckConfirmationState(
+                            null,
+                            com.meshcoreone.android.feature.chats.actions.DirectAckConfirmationStatus.CapabilityUnavailable,
+                        )
+                    }
+                    com.meshcoreone.android.feature.chats.actions.DirectAckConfirmationNotice(
+                        current,
+                        onCheckAgain = {
+                            if (observed != null && feature.isConfirmationObservationCurrent(observed)) {
+                                monitor.holder.recheck()
+                            }
+                        },
+                    )
+                }
+            },
             currentUserName = composerDevice?.nodeName,
             messageAccessibilityLabel = bubbleLabels,
             incomingAvatar = { message -> AppChannelAvatar(message, avatarTable, mentionContacts, avatarCache) },

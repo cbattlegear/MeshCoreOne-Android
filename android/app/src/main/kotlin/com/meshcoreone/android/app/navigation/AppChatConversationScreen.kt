@@ -35,6 +35,7 @@ internal fun AppChatConversationScreen(
     emojiPicker: EmojiPickerStateHolder? = null,
     emojiStatus: @Composable () -> Unit = {},
     incomingAvatar: @Composable (MessageDTO) -> Unit = DefaultIncomingAvatar,
+    confirmationNotice: @Composable () -> Unit = {},
 ) {
     val configuration = MessageBubbleConfiguration.forConversation(timeline.conversation)
     val state by timeline.state.collectAsState()
@@ -95,6 +96,7 @@ internal fun AppChatConversationScreen(
         onRetryLoad = { scope.launch { timeline.open() } },
     )
     Column(Modifier.fillMaxSize().navigationBarsPadding().imePadding()) {
+        confirmationNotice()
         Box(Modifier.weight(1f)) {
             ChatTimeline(
                 presented, callbacks,

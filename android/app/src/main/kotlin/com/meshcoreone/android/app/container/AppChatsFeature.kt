@@ -88,6 +88,37 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         .stateIn(scope, SharingStarted.Eagerly, app.connectionState)
     val currentRadioId = changes.map { app.currentRadioId }
         .stateIn(scope, SharingStarted.Eagerly, app.currentRadioId)
+    private var confirmationObservedGraph: RadioSessionContainer? = null
+    internal val directAckConfirmation by lazy {
+        var epoch = 0L
+        val observations = combine(container.sessions.currentSessions, currentRadioId) { graph, radio ->
+            graph to radio
+        }.distinctUntilChanged().map { (graph, selectedRadio) ->
+            confirmationObservedGraph = graph
+            val radio = graph?.token?.radioId ?: selectedRadio
+            radio?.let {
+                epoch = Math.incrementExact(epoch)
+                com.meshcoreone.android.feature.chats.actions.DirectAckConfirmationObservation(
+                    it, graph?.token, epoch,
+                )
+            }
+        }
+        com.meshcoreone.android.feature.chats.actions.DirectAckConfirmationMonitor(
+            store as? com.meshcoreone.android.core.contracts.domain.DirectAckRadioConfirmationEvidenceObserving,
+            observations, scope, ::report,
+        )
+    }
+
+    internal fun isConfirmationObservationCurrent(
+        observation: com.meshcoreone.android.feature.chats.actions.DirectAckConfirmationObservation,
+    ): Boolean {
+        val graph = container.sessions.current
+        return confirmationObservedGraph === graph &&
+            observation.sessionToken == graph?.token &&
+            observation.radioId == (graph?.token?.radioId ?: app.currentRadioId) &&
+            graph?.isTornDown != true
+    }
+
     internal val notificationSource = app.servicesVersion.map { container.sessions.current?.notificationService }
         .stateIn(scope, SharingStarted.Eagerly, container.sessions.current?.notificationService)
     val unreadCount = merge(changes, events().map { Unit }).map {

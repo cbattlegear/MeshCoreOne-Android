@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "wp": "WP-309",
+  "status": "SOURCE_ONLY_UNEXECUTED_PARTIAL_INTEGRATION",
+  "base": "f8b1d31190f3e02370df147eb95428c9611de2c3",
+  "source_component_parent": "276dea26172ad8f4b9d583b9d63c62ccfc530007",
+  "reference_pin": "db14559b39d32322b06477c6ae676112f583db50",
+  "canonical_observer": "0fb7fec315cb5d76988dfc8ff2eef9240c72092b",
+  "storage_observer_source": "a2c1b66d9f567b497f4002c9022b2efc9c0aa713",
+  "integration": {
+    "scope": "Radio-wide historical wildcard notice only; not complete message confirmation coverage",
+    "actual_consumer": "AppChatsContent direct conversation calls the actual AppChatConversationScreen notice slot",
+    "actual_owner": "AppChatsFeature owns one lazy monitor combining actual SessionRegistry.currentSessions and currentRadioId",
+    "lifetime": "Child SupervisorJob of existing UI/process scope, graph identity/token/radio/epoch replacement and cancellation",
+    "unexpected_failure": "Original uncaught observer cause reaches CoroutineExceptionHandler and existing AppChatsFeature.report; unrelated graph children remain supervised",
+    "freshness": "Accepted eventual complete atomic snapshot polling; never per-commit events or guaranteed one-second freshness",
+    "copy": "Some affected messages may be unconfirmable; messages may have been sent. Does not block or reclassify sends.",
+    "held_graph_producer_contract": "Uses existing main currentSessions, preserves publication and registry implementations",
+    "message_status_gap": "No claim of covering inherited FAILED rows, known-code collisions or legacy preclaim MAY until separately admitted durable exact-incarnation query is composed",
+    "reporter_gap": "Transient DirectAckNonsettlementException and preclaim reports are not complete durable message evidence"
+  },
+  "custody_and_admission": {
+    "policy_blob": "e56438d64d2309c964353066f26e1427f17f55d8",
+    "held_530_head": "274f81fda31d9e06ee4bd2478487eac0837e69ff",
+    "held_495_head": "4d9d94c1f3776499c293c1ee0a8ef7733d2efceb",
+    "inspection": "Read exact public held diffs without waking or inspecting paused sessions. Coordinator separately allocated main-only integration; 13a confirms no App/timeline/UI changes.",
+    "disposition": "Three existing App consumers receive additive monitor/slot/call only; held send, scroll, notification, registry and runtime-publication hunks unchanged. Shared-file composition still requires exact review.",
+    "existing_app_files": "reviewed-support-consumer / modify-related-consumer",
+    "new_feature_monitor": "wp-owned / create",
+    "new_graph_tests": "reviewed-support-test / add-or-update-related-test",
+    "locale_copy_and_outputs": "Existing attributed generator-input and generated-resources rules, all locales regenerated",
+    "reservation_ledger_or_held_branch_mutation": false
+  },
+  "source_controls": {
+    "actual_app_graph_class": "DirectAckConfirmationGraphTest",
+    "cases": [
+      "Actual ContainerHarness App feature shares monitor across consumers and replaces graph ownership",
+      "Unexpected graph observer exception marks unavailable, logs original cause and preserves sibling work",
+      "Missing actual store capability stays explicit without fake NoWildcard"
+    ],
+    "executed": false,
+    "device_or_integrated_runtime_evidence": false
+  },
+  "execution": {
+    "only_resource_generation_and_git_api_source_identity_operations": true,
+    "local_build_test_gradle_fetch_decompression": false,
+    "hosted_dispatch_pr_merge_or_gate_publication": false,
+    "full_wp_acceptance": false,
+    "next_gate": "Independent exact-source review and full dependency composition before hosted execution"
+  }
+}

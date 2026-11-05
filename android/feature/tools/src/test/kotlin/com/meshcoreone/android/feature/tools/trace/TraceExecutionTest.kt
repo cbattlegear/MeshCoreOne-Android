@@ -15,6 +15,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
@@ -762,6 +763,68 @@ class TraceExecutionTest {
             val next = h.start { h.holder.runBatchTrace() }
             h.respond(sent.last(), listOf(node(0xA1, 6.0), node(null, 3.0)), RADIO)
             assertTrue(next.isCompleted)
+            assertTrue(assertNotNull(h.state.result).success)
+        }
+    }
+
+    @Test
+    fun `starting another trace cannot cancel the accepted timeout history append`() {
+        for (nextBatch in listOf(false, true)) {
+            val h = TraceHarness(configureDependencies = true)
+            val persistence = InMemoryTracePathStore { h.time.now() }
+            val sender = FakeTraceSender()
+            val appendGate = CompletableDeferred<Unit>()
+            var appends = 0
+            var cancelled = false
+            h.deps.device = device()
+            h.deps.sender = sender
+            h.holder.addNode(alpha)
+            val saved = savedPath(h.state.fullPathData, radioId = RADIO)
+            persistence.insert(saved)
+            h.deps.store = object : TracePathPersisting by persistence {
+                override suspend fun appendTracePathRun(key: EntityKey, run: com.meshcoreone.android.core.model.TracePathRunDTO) {
+                    if (++appends == 1) {
+                        try {
+                            appendGate.await()
+                        } catch (error: kotlinx.coroutines.CancellationException) {
+                            cancelled = true
+                            throw error
+                        }
+                    }
+                    persistence.appendTracePathRun(key, run)
+                }
+            }
+            h.complete { h.holder.runTrace() }
+            val oldTag = sender.sent.single().tag
+            h.time.advanceBy(60.seconds)
+            assertFalse(h.state.isRunning)
+            assertEquals(1, appends)
+            assertTrue(persistence.paths.getValue(saved.id).runs.isEmpty())
+            h.holder.setBatchEnabled(nextBatch)
+            h.holder.setBatchSize(1)
+            val next = h.start { h.holder.runBatchTrace() }
+            val nextTag = sender.sent.last().tag
+            assertNotEquals(oldTag, nextTag)
+            assertTrue(h.state.isRunning)
+            appendGate.complete(Unit)
+            h.main.runCurrent()
+            assertFalse(cancelled, "A new trace must not cancel a committed timeout outcome waiting for storage")
+            val failed = persistence.paths.getValue(saved.id).runs.single()
+            assertFalse(failed.success)
+            assertEquals(1, appends)
+            assertTrue(h.state.isRunning)
+            assertEquals(nextTag, h.holder.pendingTag)
+            assertNull(h.state.result)
+            h.respond(oldTag, listOf(node(0xA1, 9.0), node(null, 3.0)), RADIO)
+            assertEquals(nextTag, h.holder.pendingTag)
+            h.respond(nextTag, listOf(node(0xA1, 6.0), node(null, 3.0)), RADIO)
+            assertTrue(next.isCompleted)
+            assertFalse(h.state.isRunning)
+            val runs = persistence.paths.getValue(saved.id).runs
+            assertEquals(2, runs.size)
+            assertEquals(1, runs.count { !it.success })
+            assertEquals(1, runs.count { it.id == failed.id })
+            assertEquals(runs, h.state.activeSavedPath?.runs)
             assertTrue(assertNotNull(h.state.result).success)
         }
     }

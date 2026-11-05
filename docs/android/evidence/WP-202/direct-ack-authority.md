@@ -368,7 +368,7 @@ passed with pinned Python 3.12.4. The declared
 `python .\tools\android-port\controller\ci.py inspect --state $env:ANDROID_CI_STATE --output <fresh absolute temp directory>`
 did not run product tests and exited 2 because `android/scaffold/inspect_apk.py`
 had no available APK input. No `ci.py run`, Gradle, or hosted candidate run was
-started for this uncommitted follow-up; the execution-owner/publication hold
+started for this committed follow-up; the execution-owner/publication hold
 remains in force.
 
 ## Unresolved ACK origin boundary

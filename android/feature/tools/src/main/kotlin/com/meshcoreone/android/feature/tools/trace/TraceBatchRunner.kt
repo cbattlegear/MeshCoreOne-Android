@@ -20,7 +20,6 @@ internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
     private var batchCancelled = false
     private var traceContinuation: CompletableDeferred<Unit>? = null
     private var generation = 0L
-    val revision: Long get() = generation
 
     suspend fun runTrace() {
         val sender = holder.deps.traceSender() ?: return

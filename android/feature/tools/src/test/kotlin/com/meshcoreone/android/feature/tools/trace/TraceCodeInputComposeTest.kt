@@ -31,6 +31,7 @@ import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.createLifecycleAwareWindowRecomposer
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsOwner
@@ -388,6 +389,39 @@ class TraceCodeInputComposeTest {
             settle()
             assertTrue(run.isCompleted)
             assertEquals(running.fullPathData, assertNotNull(harness.state.result).tracedPathBytes)
+        }
+    }
+
+    @Test fun mountedAutoReturnSwitchRetiresTheOldTraceAndTheNextRunUsesTheNewWireRoute() {
+        for (batch in listOf(false, true)) {
+            val harness = configured()
+            val recorded = FakeTraceSender()
+            harness.deps.sender = recorded
+            harness.holder.addNode(contact(0xA1, name = "Alpha"))
+            harness.holder.addNode(contact(0xB2, name = "Bravo"))
+            harness.holder.setBatchEnabled(batch)
+            harness.holder.setBatchSize(1)
+            mountPathList(harness)
+            harness.start { harness.holder.runBatchTrace() }
+            assertEquals(Bytes.of(0xA1, 0xB2, 0xA1), recorded.sent.last().path)
+            val oldTag = recorded.sent.last().tag
+            host.get().runOnUiThread {
+                val autoReturn = nodes().first { it.config.getOrElseNullable(SemanticsProperties.Role) { null } == Role.Switch }
+                assertTrue(assertNotNull(autoReturn.config[SemanticsActions.OnClick].action)())
+            }
+            settle()
+            assertFalse(harness.state.autoReturnPath)
+            assertFalse(harness.state.isRunning)
+            val edited = harness.state
+            harness.respond(oldTag, listOf(node(0xA1, 5.0), node(null, 3.0)), RADIO)
+            harness.time.advanceBy(60.seconds)
+            assertEquals(edited, harness.state)
+            val next = harness.start { harness.holder.runBatchTrace() }
+            assertEquals(Bytes.of(0xA1, 0xB2), recorded.sent.last().path)
+            harness.respond(recorded.sent.last().tag, listOf(node(0xB2, 5.0), node(null, 3.0)), RADIO)
+            settle()
+            assertTrue(next.isCompleted)
+            assertEquals(edited.fullPathData, assertNotNull(harness.state.result).tracedPathBytes)
         }
     }
 

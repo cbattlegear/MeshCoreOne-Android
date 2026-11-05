@@ -6,6 +6,7 @@ import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.TracePathPersisting
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SavedTracePathDTO
+import com.meshcoreone.android.core.model.TracePathRunDTO
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.MessageSentInfo
 import java.io.IOException
@@ -302,6 +303,7 @@ class TraceExecutionTest {
             { it.addNode(contact(0xC3, name = "Charlie")) },
             { it.addRepeatersFromCodes("C3"); Unit },
             { it.setTraceHashMode(2u) },
+            { it.setAutoReturnPath(false) },
             { it.loadSavedPath(savedPath(Bytes.of(0xD4), radioId = RADIO)) },
         )
         for (batch in listOf(false, true)) for (held in listOf(false, true)) {
@@ -473,6 +475,138 @@ class TraceExecutionTest {
             assertEquals(selected, h.state.activeSavedPath)
             assertNull(h.state.result)
             assertEquals(1, persistence.paths.getValue(saved.id).runs.size)
+        }
+    }
+
+    @Test
+    fun `auto return changes retire old routes but unchanged values preserve pending work`() {
+        for (batch in listOf(false, true)) {
+            val h = TraceHarness(configureDependencies = true)
+            val recorded = FakeTraceSender()
+            val persistence = InMemoryTracePathStore { h.time.now() }
+            h.deps.device = device()
+            h.deps.sender = recorded
+            h.deps.store = persistence
+            h.holder.addNode(alpha)
+            h.holder.addNode(bravo)
+            h.holder.setBatchEnabled(batch)
+            h.holder.setBatchSize(1)
+            val oldPath = h.state.fullPathData
+            val saved = savedPath(oldPath, radioId = RADIO)
+            persistence.insert(saved)
+            h.start { h.holder.runBatchTrace() }
+            val oldTag = recorded.sent.last().tag
+            val running = h.state
+            h.holder.setAutoReturnPath(true)
+            assertEquals(running, h.state)
+            assertEquals(oldTag, h.holder.pendingTag)
+            h.holder.setAutoReturnPath(false)
+            assertFalse(h.state.isRunning)
+            assertNull(h.state.activeSavedPath)
+            assertNull(h.state.result)
+            assertEquals(Bytes.of(0xA1, 0xB2), h.state.fullPathData)
+            val edited = h.state
+            h.respond(oldTag, listOf(node(0xA1, 5.0), node(null, 3.0)), RADIO)
+            h.time.advanceBy(60.seconds)
+            assertEquals(edited, h.state)
+            assertTrue(persistence.paths.getValue(saved.id).runs.isEmpty())
+            val next = h.start { h.holder.runBatchTrace() }
+            assertEquals(edited.fullPathData, recorded.sent.last().path)
+            h.respond(recorded.sent.last().tag, listOf(node(0xB2, 5.0), node(null, 3.0)), RADIO)
+            assertTrue(next.isCompleted)
+            assertEquals(edited.fullPathData, assertNotNull(h.state.result).tracedPathBytes)
+        }
+    }
+
+    @Test
+    fun `history refresh remains valid when another trace starts or cancels on the same selection`() {
+        for (cancelSecond in listOf(false, true)) {
+            val h = TraceHarness(configureDependencies = true)
+            val recorded = FakeTraceSender()
+            val persistence = InMemoryTracePathStore { h.time.now() }
+            val gate = CompletableDeferred<Unit>()
+            h.deps.device = device()
+            h.deps.sender = recorded
+            h.holder.addNode(alpha)
+            val previous = run(T0.minusSeconds(60))
+            val saved = savedPath(h.state.fullPathData, radioId = RADIO, runs = listOf(previous))
+            persistence.insert(saved)
+            h.deps.store = object : TracePathPersisting by persistence {
+                override suspend fun fetchSavedTracePath(key: EntityKey): SavedTracePathDTO? {
+                    gate.await()
+                    return persistence.fetchSavedTracePath(key)
+                }
+            }
+            h.complete { h.holder.runTrace() }
+            h.respond(recorded.sent.last().tag, listOf(node(0xA1, 5.0), node(null, 3.0)), RADIO)
+            assertEquals(2, persistence.paths.getValue(saved.id).runs.size)
+            h.complete { h.holder.runTrace() }
+            if (cancelSecond) h.holder.cancelBatchTrace()
+            val beforeRefresh = h.state
+            gate.complete(Unit)
+            h.main.runCurrent()
+            assertEquals(2, h.state.activeSavedPath?.runs?.size)
+            assertEquals(previous, h.state.previousRun)
+            assertEquals(beforeRefresh.isRunning, h.state.isRunning)
+            if (!cancelSecond) {
+                h.respond(recorded.sent.last().tag, listOf(node(0xA1, 6.0), node(null, 3.0)), RADIO)
+                assertEquals(3, h.state.activeSavedPath?.runs?.size)
+            }
+        }
+    }
+
+    @Test
+    fun `held save continuations preserve durable history without restoring an edited selection`() {
+        for (batch in listOf(false, true)) for (holdFetch in listOf(false, true)) {
+            if (!batch && holdFetch) continue
+            for (reselect in listOf(false, true)) {
+                val h = TraceHarness(configureDependencies = true)
+                val recorded = FakeTraceSender()
+                val persistence = InMemoryTracePathStore { h.time.now() }
+                val gate = CompletableDeferred<Unit>()
+                h.deps.device = device()
+                h.deps.sender = recorded
+                h.holder.addNode(alpha)
+                h.holder.setBatchEnabled(batch)
+                h.holder.setBatchSize(2)
+                h.deps.store = object : TracePathPersisting by persistence {
+                    override suspend fun createSavedTracePath(
+                        radioId: RadioId, name: String, pathBytes: Bytes, hashSize: Long, initialRun: TracePathRunDTO?,
+                    ): SavedTracePathDTO {
+                        val saved = persistence.createSavedTracePath(radioId, name, pathBytes, hashSize, initialRun)
+                        if (!holdFetch) gate.await()
+                        return saved
+                    }
+
+                    override suspend fun fetchSavedTracePath(key: EntityKey): SavedTracePathDTO? {
+                        if (holdFetch) gate.await()
+                        return persistence.fetchSavedTracePath(key)
+                    }
+                }
+                val execution = h.start { h.holder.runBatchTrace() }
+                h.respond(recorded.sent.last().tag, listOf(node(0xA1, 5.0), node(null, 3.0)), RADIO)
+                if (batch) {
+                    h.time.advanceBy(500.milliseconds)
+                    h.respond(recorded.sent.last().tag, listOf(node(0xA1, 6.0), node(null, 3.0)), RADIO)
+                }
+                assertTrue(execution.isCompleted)
+                var accepted: Boolean? = null
+                val save = h.start { accepted = h.holder.savePath("Accepted history") }
+                assertFalse(save.isCompleted)
+                h.holder.clearPath()
+                val selected = savedPath(Bytes.of(0xB2), radioId = RADIO)
+                if (reselect) h.holder.loadSavedPath(selected)
+                val edited = h.state
+                gate.complete(Unit)
+                h.main.runCurrent()
+                assertTrue(save.isCompleted)
+                assertEquals(true, accepted, "Durably committed save must still report success")
+                assertEquals(edited, h.state)
+                val durable = persistence.paths.values.single()
+                assertEquals("Accepted history", durable.name)
+                assertEquals(if (batch) 2 else 1, durable.runs.size)
+                assertTrue(durable.runs.all { it.success })
+            }
         }
     }
 

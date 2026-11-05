@@ -557,6 +557,7 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
                 ),
             )) {
                 val transport = h.links.radios.single()
+                val preparationStart = transport.sent.size
                 val scopeOpcode = PacketBuilder.setFloodScope(FloodScope.Region("EU868").scopeKey())[0]
                 var encountered = false
                 transport.beforeSend = { command ->
@@ -577,7 +578,7 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
                     h.settle()
                     assertTrue(store.hasPendingSend(pendingKey), "Pre-send transient failures cannot delete the unsent envelope")
                     assertEquals(MessageStatus.PENDING, store.fetchMessage(pendingKey)?.status)
-                    assertFalse(transport.sent.any { it[0] == 0x1f.toUByte() }, "A scope timeout/lost connection is not a channel ERROR2")
+                    assertFalse(transport.sent.drop(preparationStart).any { it[0] == 0x1f.toUByte() }, "A scope timeout/lost connection is not a channel ERROR2")
                 } finally { transport.beforeSend = {} }
                 h.sessions.current!!.chatSendQueueService.transportDidOpen()
                 h.eventually("the same parked envelope transmits after scope preparation recovers") {

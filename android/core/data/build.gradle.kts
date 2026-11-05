@@ -23,6 +23,9 @@ dependencyLocking {
 }
 
 tasks.withType<Test>().configureEach {
+    val roomSchemas = rootProject.layout.projectDirectory.dir("core/database/schemas")
+    inputs.dir(roomSchemas)
+    systemProperty("roomSchemaDirectory", roomSchemas.asFile.absolutePath)
     systemProperty("wp203.interop.output", layout.buildDirectory.dir("reports/wp203/interop").get().asFile.absolutePath)
     providers.gradleProperty("wp203InteropInputDir").orNull?.let { systemProperty("wp203.interop.input", it) }
 }

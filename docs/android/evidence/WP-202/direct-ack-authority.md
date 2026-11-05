@@ -1,5 +1,285 @@
 # Direct ACK storage authority
 
+## Current combined-v4 execution snapshot (2026-11-05)
+
+This section supersedes earlier UNEXECUTED status statements only for this mutable
+worktree snapshot; it is not immutable hosted-candidate evidence. Parent HEAD was
+`2efb6135cbc545800ac7706bd3528236a3a3a0e1`. Native Windows used pinned Python
+3.12.4, the existing same-host Android toolchain state, and the documented short
+SQLite temp root. Exact controller invocation:
+
+```powershell
+python .\tools\android-port\controller\ci.py run --local --stage scaffold --scope backup --state C:\Users\camer\AppData\Local\MeshCoreOne\toolchains\windows-existing-sdk-r02-65a1304729d745f3a9b0d72d085661f5\environment.json --output C:\m202\WP202-channel-validation-48455b565c56445698a6034b17827156
+```
+
+The controller discovered 808 `core:data:testDebugUnitTest` tests: 796 passed,
+12 failed, zero errors or skips. All 12 failures are in the separate
+`ChannelSuccessReplacementRoomTest` service-consumer suite; no channel storage,
+admission, completion, migration, or direct-ACK producer test failed. The
+`ChannelSendRepositoryTest` suite discovered and passed all 19 tests, including
+`creationPinsPersistedOccupantAcrossReopenAndRejectsReplacementRebind`.
+`core:database:testDebugUnitTest` discovered and passed all 60 tests. KSP's
+combined Room v4 schema export contains 33 entities, including the channel origin,
+pending-lifecycle, attempt, operation, and completion tables. The current v4
+migration chain compiles and the database migration suite passes; this does not
+prove the service's actual `sendAgain` path or clear its 12 consumer failures.
+
+The data suite also verified that a contradictory later ACK resolution preserves
+the first accepted code in the registered wire while retaining the conflict
+wildcard. Durable ACK ingress and process-death ACK recovery remain unimplemented
+and unclaimed. The test execution used the mutable worktree, including the
+already-present Windows task-graph sanitizer repair; no commit, PR, push, or
+merge was created by this run.
+
+## Reviewed findings repaired in the source successor to c77: UNEXECUTED
+
+This is the coordinator-requested strict-bootstrap/policy source-review and
+possible exact-head KSP diagnostic candidate. It explicitly EXCLUDES the
+not-yet-authored channel-success/completion contract, producer, completion table
+and consumer integration. Owner 808 retains that separate work; its eventual
+combined-v4 integration is still required. This 30-entity source freeze is not
+the final composed v4 application or schema.
+
+Immutable `c77e8a732d49680f78b74973515c1ed8f574e486` is not admitted for
+execution. Its exact channel repository `45b71761...` accidentally nested the
+capture-validation overload inside identity validation. The successor imports
+owner 808's exact corrected blob `21163a92eb341a8fe3306ac7b9906f1cb92ae76d`
+from `3e2c36508946d79a544d88320cacdbcdcc6b503e`; its raw CRLF bytes were
+compared to the Git blob, not normalized into a different purported owner blob.
+No channel behavior, table, contract or v4 migration is changed by that import.
+The new v4 primary keys are now explicitly covered by the existing schema-boundary
+assertions; the real v2 migration control also checks immutable UNKNOWN.
+
+The coordinator explicitly directed individual strict-policy test adaptation.
+No real fresh, migrated, reopened or restored store can manufacture known physical
+prehistory. Therefore old new-operation strict successes are not constructible
+under this production policy. They now require Nonfailing/Nonsettling with
+PREAUTHORITY_HISTORY_UNKNOWN, retaining each applicable collision, MAY, legacy
+and saturation assertion. A shared real-Room snapshot compares actual message,
+pending rows and identities, claim, wires, operation journal, delivery, complete
+physical history, saturation and metadata before and after strict refusal.
+The unmarked/all-UNSENT case includes actual queued pending rows and independently
+checks the retained target/foreign SQL projections. It is not conditional-positive
+real-Room coverage under an unreachable clean state.
+
+| Source controls | Changed expectation and retained behavior |
+| --- | --- |
+| Exclusion: own accepted/generic FAILED, resolved MAY, never-invoked competitor, earlier accepted actual, different radio, more-than-4096 known history, truncated sample, tracked-registration race | New strict delivery is refused with UNKNOWN and unchanged state. Original physical acceptance, per-code eligibility, radio isolation, full-history counts and real SQLite BUSY assertions remain. Ordinary generic delivery and exact replay remain actual successful public API calls. |
+| Failure: no marker/all UNSENT with unrelated foreign MAY | UNKNOWN independently blocks; target remains unaccepted/nonconflicting, foreign MAY remains distinct, queued pending survives, no RADIO_FAILURE operation appears. This does not claim the old conditional positive executed. |
+| Failure: prior guarded-replay, delivery-after-failure and restore/reopen cases | Repeated new strict refusals cannot mint replay proof. Actual generic failure/delivery and their replay, invalidation, retirement, restore, replacement and old-handle rejection remain constructible. Generic failure is never relabeled a RADIO_FAILURE certificate. |
+| Failure/settlement proof-insertion and cancellation cases | UNKNOWN prevents reaching the strict proof insertion hook, including when a rejecting trigger is installed. No commit-then-cancel strict proof is claimed. Caller cancellation before/after a refusal remains explicit; generic transaction rollback/cancellation controls are unchanged. |
+| Confirmation reads/observer: initially empty, known/UNSENT only, other radio, reopen, rollback, poll and error cases | Every valid snapshot includes durable UNKNOWN plus the exact existing independent wildcard reasons. Polling, transaction isolation, cancellation and typed terminal errors remain asserted. |
+| Receipt-journal query and malformed-physical matrix | Strict refusal preserves rows/journal; genuine generic delivery preserves receipt/pending/query-shape success assertions. Malformed-data errors are not converted into UNKNOWN-only snapshots. |
+
+Independent review also found that the full radio warning and bounded diagnostic
+could overlook out-of-range registered legacy codes, especially outside the
+materialized sample. Global registered-history validation now precedes every new
+public radio/message assessment, strict settlement and guarded failure. The bounded
+diagnostic additionally validates physical shape over the complete radio, not just
+sampled rows. Historical delivery/proof replay and actual DELIVERED precedence stay
+before these new-operation checks; no historical receipt is fabricated for testing.
+The genuine generic delivery replay control includes unrelated malformed registered
+and physical history, while strict reinterpretation remains rejected.
+
+A new raw legacy-wire control covers negative/overflow prediction and accepted
+codes, with no physical row or acceptance operation, beyond 4,096 sampled physical
+rows. All five public assessment paths must fail typed InvalidData without
+message/pending/history mutation; another radio retains only its own UNKNOWN.
+A malformed physical row omitted from the sample must also fail the bounded read;
+guarded failure retains its existing conflict classification plus UNKNOWN.
+Repairing only that corrupt test row restores a real truncated observation, not
+clean prehistory. Two additional compact controls retain old tracked-only legacy
+coverage despite matching physical acceptance/saturation and reject an out-of-range
+registered actual.
+
+Source annotation counts only (NOT discovered/executed tests): exclusion 24,
+failure 23, complete confirmation 7, observer 2, receipt query 1, malformed matrix 2,
+compact message 14, exact owner channel 16. No test is skipped, no UNKNOWN metadata
+is cleared or falsified, and all pre-existing generic-API success controls remain.
+The source successor still needs independent exact-source review, genuine hosted
+KSP v4 generation and exact-head validation. Genuine schema v1-v3 and c77 remain
+immutable; no v4 export is fabricated. No build, test, SQL, dispatch, PR or merge
+has run for this successor. Local execution holds remain in force.
+
+## Historical c77 combined v4 bootstrap and compact diagnostic source
+
+The coordinator assigned v4 as the sole combined successor to genuine v3.
+This candidate builds on frozen acceptance source
+`4f7e747d85fd1a6d4bac29d9977511602b53c189`; it is not behavioral clearance
+of that predecessor. Its independent review identified a same-incarnation
+history defect, repaired here as described below. No exported v1, v2 or v3
+bytes were changed, and no v4 export was invented. The schema-boundary test
+now requires the genuine future KSP v4 export with 30 entities. Its absence
+is a missing verification input, not a passing schema check.
+The first publication precheck stopped before upload because local schema1
+has Windows CRLF bytes (blob `9d9c7425...`), not its immutable LF blob
+`0e6ce770...`. A read-only newline comparison proved its LF content matches
+that exact published v1; schemas2/3 match their pinned blobs byte-for-byte.
+No export was normalized or uploaded, and this source-only diagnosis is not
+Room/KSP/migration execution evidence.
+
+`DirectAckPrehistoryStorage` adds one DB-wide persisted UNKNOWN singleton,
+initialized on fresh creation and in the non-destructive 3-to-4 migration.
+Immutable insert/update/delete guards reject replacement or clearing; reads
+verify exact protection and metadata rather than default missing/corrupt state
+to clean. No clock, radio registry row, empty journal, session identity or
+restore envelope supplies a clean-history certificate. All requested radios,
+including absent/deleted/import-remapped radios, share the persisted uncertainty.
+There is no reset/clearing API. Sending and ordinary generic settlement remain
+unchanged; new strict settlement and every new guarded failure, including
+unmarked/all-unsent targets, independently retain PREAUTHORITY_HISTORY_UNKNOWN.
+Exact historical committed replay and actual DELIVERED precedence are preserved.
+
+The compact optional message inspector is wired through the actual Room store.
+One read transaction binds the actual outgoing DM/status to its literal
+persisted 64-hex incarnation and mutation revision. Constant-size SQL EXISTS
+projections inspect all target claims for that exact incarnation and all different
+claims on the radio, including different contacts and claims for the same
+message. Accepted physical actuals, registered accepted actuals and all retained
+generic actuals participate; target predictions/DTO ACKs are not invented actuals.
+Retired leases and erased payload snapshots do not discard positive ancestry.
+Every Present is TARGET_PROVENANCE_UNPROVEN, independently adding durable UNKNOWN,
+known collisions, legacy, unresolved, conflicting and saturation reasons.
+Missing/ineligible describe real rows, never query failures. Invalid identity,
+registered codes or malformed stored evidence explicitly fails; no mutation or
+handle issuance occurs. A timeline DTO still cannot bind itself by key/equality.
+
+The predecessor's conditional no-write failure path ignored an old MAY on another
+claim for the SAME persisted message incarnation when the new claim had no marker
+or only UNSENT rows. SQL now joins the actual radio/message/incarnation across
+retired claims: old uncertainty opens the existing OTHER_CLAIM classifications.
+Inherited generic FAILED is not a no-write certificate. Valid accepted ancestry
+also opens foreign checks. Whole-incarnation actual-code families carry their
+source claim identity so an ancestor accepted K does not collide with itself, but
+a third claim's MAY or known K cannot be skipped. This is separate from unconditional
+UNKNOWN; no false clean flag was used to demonstrate the retained predicates.
+The existing conditional control for truly unrelated foreign history is retained,
+not reinterpreted as real fresh-install confirmation availability.
+
+Exact WP-201 exclusion contract blob
+`8f0ad1fee0eecae66388b3368b723628b654033d` from
+`1f138b71d061f426a497a93230957940efa6c29c` and compact contract blob
+`c0394fab08955537d1f1f586a8019df5e13b1a92` are imported unchanged.
+The generic direct-authority contract remains exact `8e59fda1...`.
+WP-003 owner 808 supplies the separate channel implementation: canonical channel
+contract `5897785d7a50a5d9b3648357e60a5cbb87348d52`, storage
+`b07ffb41a237abfa2d049c22837888df9c9c193d`, repository
+`45b71761acad7818ac8e728243286e810c92a6d2`, creation digest
+`c380e0e1ee755572d1f687080f29b75a909e8867`, and 16-control test
+`ac811541a2d41061a9c7a2331332c36c5bc5c58a`. These are exact owner bytes,
+not independently authored channel semantics in this lane. Combined registration
+adds its two tables to fresh creation and the sole 3-to-4 migration; restore
+invalidates captures in the existing restore transaction. The precise same-instance
+lease bridge and store delegation are integrated. Generic message SQL and service
+files are unchanged. See the separate channel-owner evidence for its limits.
+
+Twelve new public Room source methods cover empty fresh/unknown-radio observations,
+strict unmarked/UNSENT/accepted denials, same-incarnation old MAY with inherited
+FAILED/new generation, accepted ancestry with third-claim MAY/known code and
+self-source exclusion, identical-DTO delete/recreate without incarnation adoption,
+generic DELIVERED preservation, full retained generic999/physical888 ancestry,
+real file reopen with payload erasure and INVALID_HANDLE rather than reconstructed
+restart authority, covered saturation, malformed evidence/identity/protection,
+and public backup merge/remapping, empty import, commit/failure/cancellation and
+reopen. The eight-method database exclusion source adds genuine v3 migration,
+retains old coverage as unproven, and rejects metadata clearing/replacement.
+The prior v1/fresh migration negatives now explicitly read actual durable UNKNOWN,
+not a conflated synthetic emission/saturation. Migration-chain/version assertions
+are advanced to v4; prior product-row/physical-history assertions remain.
+
+ALL source controls above are UNEXECUTED. The original strict fresh-store
+success/no-wildcard assertions were not mass-weakened, skipped or given fabricated
+clean metadata: they are incompatible with strict UNKNOWN and remain a concrete
+review/test-policy composition blocker, not expected passes. Existing 4f7's
+23 controls also carry no new execution credit. Host-memory/local-execution holds
+continue. No local builds/tests/SQL execution, Git object decompression, CI dispatch,
+PR or merge was performed. Independent source review, actual genuine hosted schema
+generation and exact-candidate hosted validation are still required. No hardware,
+ACK ingress durability, process-death delivery recovery, or full WP acceptance
+is claimed.
+
+## Immutable acceptance-history successor for source review only
+
+This successor is based on `8a8441b25e832785dcd2719fb3e1750168f9638c`.
+It implements the separately authorized internal retention repair, not bootstrap
+acceptance or completion of WP-202. No local build, test, SQL execution, Git object
+decompression, schema generation, hosted dispatch, PR or merge was performed.
+The host-memory and execution holds remain in force. Independent immutable-source
+review is required before execution.
+
+New tracked first wires and retry wires atomically receive the unchanged
+`EMISSION_TRACKING_REQUIRED` operation and a separate immutable
+`ACCEPTANCE_HISTORY_REQUIRED:<wire UUID>` birth operation. Exact registration
+replay does not add either missing marker. Older original-tracked-only wires
+remain legacy/unproven even with matching physical acceptance, an empty internal
+journal or sticky saturation. No historical accepted code is manufactured.
+
+After the existing generic acceptance replay/conflict/stale checks, a genuinely
+new acceptance on a tracked wire atomically appends
+`TRACKED_WIRE_ACCEPTANCE:<wire UUID>` with the actual code, then updates the wire
+and claim. Each internal operation uses a new unused operation primary key.
+The unchanged generic rule only commits acceptance while the wire actual is null;
+matching later calls replay and differing actuals conflict. Thus ordinary replay
+cannot grow or overwrite this journal. A later physical resolution may change
+the current wire actual but cannot replace the retained generic actual. Durable
+nonpayload history is not evicted or capped; diagnostic materialization remains
+bounded. Message erasure and lease retirement still erase payload snapshots.
+
+Complete SQL predicates inspect both birth markers and every retained generic
+actual, not only the latest wire actual. An unsaturated unmatched actual remains
+target/foreign conflict and unresolved settlement evidence. Historical generic
+codes also participate in radio-wide known-code collision checks, across distinct
+messages and contacts. On sticky saturation, fully covered wires may legitimately
+have no matching physical row after CoveredBySaturation; that gap alone is not
+malformed/conflicting. Independently malformed journals/physical evidence and
+missing birth coverage remain explicit. Bounded diagnostics return typed
+InvalidData for incomplete older tracked coverage or contradictory acceptance,
+rather than fabricating a legacy physical invocation. Internal kinds are filtered
+in SQL before public receipt decoding; generic results, eligibility and receipt
+shape are unchanged.
+
+The existing exact delivery proof is checked before unrelated later malformed
+radio history. It proves historical committed delivery/idempotency only, not
+compliance with today's stronger exclusion policy. Its stored fields contain no
+policy/prehistory qualification. Code/RTT/proof mismatch still rejects; malformed
+new settlement still fails. Existing product DELIVERED state is preserved. An
+old attempt cannot be adopted by a newly opened repository context, and receipt
+inspection never reconstructs an attempt. No restart attempt/ACK recovery is
+claimed. Canonical clarification lineage through remote
+`56613c6edb25411bf7aef4ad9659675667d38983` supplied the retention, provenance,
+saturation, old-wire mapping and historical-proof requirements. Its mandatory
+bootstrap declarations are not imported without the missing metadata producer.
+
+The guarded-failure Room source now has 23 test annotations, all UNEXECUTED.
+New controls include generic 999 -> physical 888 and matching 999 -> 999,
+deletion/lease retirement/file reopen, a fresh process epoch and different-contact
+foreign collision; generic insertion rollback, commit then caller cancellation,
+exact replay without growth, internal-operation-ID collision, initial/retry
+birth-insertion rollback and conflicting/missing/stale rejection; old-marker-
+only ancestry including a newer fully covered retry; exact delivered replay
+after unrelated malformed evidence, mismatched RTT, proof/receipt corruption and
+malformed new settlement; malformed acceptance journals despite saturation; and
+real public CoveredBySaturation with no invented marker, including retained
+generic 999 alongside physical 888. Conditional retained-journal positives are
+not certificates of clean physical prehistory on a real installation.
+
+Current-positive raw fixture births now explicitly include both provenance
+markers. The observation control's later original-marker-only insertion remains
+legacy: its expected reason set retains the existing conflict/saturation reasons
+and additionally requires legacy ancestry. The receipt query control retains its
+4,101-resolution load and every public receipt assertion; its raw operation count
+increases from 4,102 to 4,103 for the new hidden birth marker. The preexisting MAY
+diagnostic assertion is retained before generic acceptance; after acceptance the
+same physical MAY is independently inspected and bounded InvalidData is required.
+Its successful physical acceptance/delivery assertions are unchanged.
+
+Global physical prehistory UNKNOWN, its fresh/upgrade/merge-restore/reopen
+controls, schema/version admission and the compact message diagnostic producer
+remain separate unfinished prerequisites. The three frozen bootstrap negatives
+remain unexecuted/expected failing. This repair must not be used to claim a
+globally sound current-policy confirmation or accepted macro WP. Genuine schemas,
+consumer files, generic contracts and the held WP-203 surface are unchanged.
+
 ## Candidate boundary
 
 This is an independently authored WP-202 repair based on published main
@@ -378,6 +658,574 @@ started for this committed follow-up; the execution-owner/publication hold
 remains in force.
 
 ## Unresolved ACK origin boundary
+
+### Persisted cross-generation exclusion prerequisite
+
+The coordinator assigned a separate producer successor after the service owner
+reported an executed cross-generation control: a possibly written, unresolved
+generation-1 send followed by a new graph over the same store can let a raw ACK
+settle a generation-2 message. A lease fences mutation grants, not radio emissions.
+This is not durable ACK ingress or proof that a received ACK originated from a
+specific dispatch.
+
+Isolated schema-only preparation is frozen at
+`3e582bcf25d13412f2b81f4c44b6a36baefbc1bf`, parent
+`fc84a775a4e6a343a24de38e5246074a9cc92fc1`, above the preserved
+`4e25e25ae69d91b313ae704d31864a3d5fb8226b` v2 producer. The intermediate
+`fc84` schema draft was superseded before dispatch after the consumer confirmed
+that pool-backoff calls can reuse a registered wire ID. The corrected marker
+key is `(radioId, claimId, wireId, markRequestId)`: each physical transport call
+requires a fresh marker, so proving a later call definitely unsent cannot clear
+an earlier possibly written call using the same wire ID.
+
+This source adds v3 emission and per-radio sticky-saturation tables and a
+forward 2-to-3 migration, without altering v2 tables, historical wire rows,
+snapshots, journals or trigger fencing. The existing v2 export is retained:
+Git blob `2a1c5c66d5c42b53b146becf2ed085cffee93f68`, SHA-256
+`c8b324628f0ece66967c9ea9025567208bc23c4681f5973f72f7308d5cf732b2`.
+No generated v3 JSON is present or manufactured. Schema-only preparation is
+nonexclusive: current main `c0e9dc862e4b2c9e962e6f0237d0824e23b0d298` still
+publishes v1; other-owner version collisions must be reconciled before promotion.
+The held channel candidates were neither inspected nor modified.
+
+The new optional settlement must validate the current grant and query all
+radio-scoped persisted exclusion facts in the same actual Room transaction as
+delivery. A previously returned public snapshot cannot authorize settlement.
+Unproven legacy wires remain wildcards even with a known accepted code or a
+later definitely-unsent marker. A single legacy accepted code does not prove
+that every earlier physical pool-backoff call was excluded. Known foreign
+predicted/actual code membership is retained independently of that wildcard.
+For the current valid claim, accepted actual codes supersede only
+their own predictions, and earlier accepted same-claim retries remain eligible.
+
+The initial frozen contract caps the new marker budget at 4,096 physical calls
+per radio. Its overflow transaction persists sticky radio saturation before
+reporting coverage, without fabricating an exact-wire marker or handle. This
+does not block sends, but indefinitely suppresses automatic confirmation after
+ordinary known sends fill the budget. The coordinator explicitly rejected
+that liveness behavior as production parity. This historical hard-cap design is
+not accepted or ready for consumer integration. No expiry,
+deletion of old receipt/wire history, or automatic reset may turn unknown
+history into clean evidence.
+
+The coordinator resolved the additional requirement by authorizing the
+schema-unchanged authoritative per-emission journal without a total-row cap,
+consistent with existing durable wire/operation history. The local successor
+does not create saturation from row count, delete known/unsent rows, or erase
+exact handles/replay/conflict facts. Durable storage is not bounded. Radio-wide
+comparison uses SQL aggregates; diagnostic results alone are limited to 4,096
+rows and report TRUNCATED when omitting history. A complete transactional
+comparison can safely settle despite a truncated diagnostic sample. Existing
+persisted saturation, if present, remains a sticky wildcard; it is not cleared
+by restore, reopen or lease replacement.
+
+The canonical contract owner corrected the incompatible total-cap wording from
+`5db00defc6c7ac1e6c22237edd1d48b8d99beb35` in
+`0eea3589d989a905f0d57b2ac1937a3b2732dc5e`. A further tracked-wire provenance
+revision is still required below. New source controls retain 4,100 known
+accepted/definitely-unsent physical markers, replay the earliest exact
+resolution, reopen the file, and settle a disjoint accepted code. A second
+reopen retains a later unknown marker and explicitly prevents settlement.
+These are authored controls, not execution evidence. Persistence errors and
+cancellation propagate before any caller may physically emit; there is no
+storage-failure fallback allowing an unrecorded send.
+
+Only the exact transport invocation's proven definitely-unsent cancellation
+can resolve its marker as unsent. A firmware `DeviceError` is not proof of
+zero command writes. An unresolved earlier call therefore remains a wildcard
+even after a later backoff call succeeds. Late accepted-code refinement must
+identify the exact physical marker and be independent of the product row's
+retired mutation grant; it must never clear another marker or renew authority.
+The old `recordDirectSendAccepted(attempt, wireId, code)` signature cannot
+identify a physical invocation and must not silently resolve every marker
+sharing a wire ID.
+
+Trusted policy/manifest were read through the GitHub API at immutable current
+main under the memory constraint. `wp-owned` covers the repository/tests/evidence;
+`persistence-schemas` admits forward migration and directly required entities/DAO
+changes, with real migration and export comparison required. Source snapshots
+were published through bounded GitHub REST tree/commit creation, not local Git
+decompression, local builds or new worktrees. The genuine KSP export route and
+independent fixture are owned by the infrastructure/oracle lanes. New Room
+migration, same-wire physical-call and separate-handle concurrency controls are
+authored but unexecuted at this stage. Neither schema-only commit establishes
+the optional producer implementation or runtime acceptance.
+
+The later local producer draft integrates the additive contract from
+`5db00defc6c7ac1e6c22237edd1d48b8d99beb35`; it is not in the frozen schema-only
+source. It uses complete SQL aggregates inside the delivery transaction, never
+a diagnostic sample as permission. A `RADIO_DELIVERY` operation discriminator
+prevents a historical legacy settlement receipt from being presented as new
+exclusion-aware settlement evidence. This operation is not product bookkeeping
+and is excluded from that public receipt list. New producer controls cover
+exact physical retries, contradictory resolutions, retired-grant refinement,
+restore/reopen, competing handles, rollback and cancellation. All remain
+unexecuted, and the final canonical provenance and actual execution gates remain open.
+
+The service owner identified a distinct pre-dispatch liveness gap: a newly
+registered logical wire can be cancelled or lose its grant before any physical
+invocation. Absence of a marker cannot distinguish that case from a legacy wire
+that emitted without premarking. The agreed additive seam is
+`beginDirectAckAttemptRequiringEmissionTracking` and
+`registerDirectAckDispatchRequiringEmissionTracking`. They atomically create the
+wire and an immutable `EMISSION_TRACKING_REQUIRED` operation, binding the wire ID,
+prediction and version 1. Generic/tracked mode crossing, old-wire upgrade and
+request-ID collisions are explicit conflicts; no begin-then-tag gap is allowed.
+This uses the existing operation journal and changes no schema metadata.
+
+Premarking requires that tracked provenance. A tracked but unmarked wire is
+absent from emitted-history diagnostics and does not compete before transport.
+All physical invocations still require a committed exact marker first. Legacy
+wire-level evidence has no invented physical ID; unknown ancestry remains
+independently wildcard even when physical marker rows or accepted metadata
+later exist. The new optional source-only legacy-known positive was corrected
+to assert explicit Nonsettling under this requirement; the previously executed
+legacy settlement suite and its successful-ACK assertions are unchanged.
+Additional real Room source controls cover tracked begin rollback, exact mode
+replay/conflict, never-invoked positive selectivity, legacy/unsent plus known
+acceptance across file reopen, and competing atomic registration/settlement.
+None of these new controls has executed.
+
+Independent review found a brace/scope defect in the frozen schema-only
+separate-handle test. The DB-only successor repaired that scope, but its
+query-callback BEGIN observation does not establish an underlying SQLite attempt:
+Room 2.8.5 invokes the callback before delegate.beginTransaction. It is not
+accepted blocking evidence. The frozen source and export overlay remain
+untouched. The live Room boundary comparison is updated locally from schema
+v2/25 entities to v3/27 entities and the four-field physical marker key;
+historical v2 migration inputs remain unchanged. Actual v3 KSP output was
+subsequently obtained as recorded below, not manufactured. Published main subsequently advanced to
+`99f03ad2da235e66c5cbcb58e88ac4d9aa55d2c5`; its published delta contains only
+WP-313 resolver tests/evidence, not a database version change. Later product
+integration must bind and verify a fresh exact candidate against that base.
+
+A separate DB-only successor is frozen at
+`3d2f7177aee225078f5234301721d83cb33b554c`, parent `3e582`, tree
+`a6efbaed5c6e4db0e413b0b57de44a3048974b30`, ref
+`diagnostic/wp202-physical-journal-db-20261105-1225`. Its six database source/test
+paths include the scope repair, live boundary update, complete-history queries,
+exact wire/operation lookups and LF normalization. Entity/migration metadata
+is unchanged; v1/v2 schema blobs remain `0e6ce7706f75e08c4a70555178b2fdebb98f2184`
+and `2a1c5c66d5c42b53b146becf2ed085cffee93f68`, and v3 remains absent.
+It contains no optional data producer or canonical contract integration.
+The earlier exact schema-export diagnostic
+[42078121256 attempt 1](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42078121256)
+failed in its init-script task guard before KSP executed; it produced no
+schema/provenance artifact. That failed run, `3e582` and its `ce176` overlay stay
+immutable. The infrastructure owner is preparing an independently reviewed
+successor route; no old result is transferred.
+
+### Genuine v3 custody and coherent producer successor (unverified)
+
+The corrected dedicated KSP route executed on schema source
+`3d2f7177aee225078f5234301721d83cb33b554c`, diagnostic head `7933`, fixture
+`e602`, in [run 42080209234 attempt 1](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42080209234/job/127431111349).
+Production `:core:database:kspDebugKotlin` actually executed and succeeded;
+collector/upload succeeded after the ordinary Gradle aggregate failed.
+The ordinary failure was `:core:database:compileDebugUnitTestKotlin` at
+`DirectAckExclusionStorageTest.kt:73:37`, where the mixed SQLite bind array
+inferred a reified intersection type. The successor explicitly uses
+`arrayOf<Any?>`; this is a source repair, not a passing compilation claim.
+
+The genuine generated `3.json` is imported byte-for-byte from immutable Git blob
+`e7bf0f62999896bca4d36a2a636096d962b12638`, 132613 bytes, SHA256
+`4661fe56e21ac17c6b088fe794d0890294f01ac92825f321e36d1a067c78f28b`.
+The original artifact is `13441870104`. Independent custody/schema and static
+migration review found all 25 prior entities unchanged, exactly two added
+entities, the four-field physical marker key, and matching migration CREATE
+statements. This is generated-byte custody and static comparison only, not
+Room migration or product acceptance. The failed aggregate remains failed;
+no second CI-result/provenance bundle is committed or substituted.
+
+The canonical optional contract is now exact bytes from
+`7af7eefe319c31e5b96e2749e1e6296ffcd63aa1`, blob
+`886418aa7eaf464b39ae5e3bafc1f83bbe6abae1`. It incorporates the tracked
+registration/legacy-evidence contract and the later durable replay
+clarifications without changing the declarations of those clarifications.
+The producer uses the exact long `RequiringEmissionTracking` names.
+
+Every new resolution ID is atomically journaled in `direct_ack_operations`,
+scoped by radio/claim and bound to the exact logical wire, physical emission,
+input kind/code and committed result. The first entry is immutable.
+`direct_ack_emissions.resolutionRequestId` remains only latest metadata.
+Old exact replay does not replace that metadata, rewind wire acceptance or
+clear later conflicts. Reusing an ID with another code, unsent input or physical
+emission makes that emission sticky Conflict without rewriting the first entry.
+Internal resolution/provenance/proof entries are not public product bookkeeping.
+This evolves no entity or schema metadata.
+
+The new Room source controls exercise r1 Accepted(123), r2 Accepted(123), file
+reopen, r1 AlreadyApplied with latest r2; conflicting code/unsent/cross-emission
+reuse; independent physical IDs; conflict retained over another reopen; and
+resolution-journal insertion failure rolling back emission/wire/claim updates.
+Historical replay requires a retained genuine handle whose original
+issuer/lease/emission is persisted. The receiver's new issuer cannot acquire
+product grant/attempt authority from this historical refinement. No handle is
+reconstructed from a receipt and no restart handle-recovery API is introduced.
+
+A separate unresolved-MAY control closes the old store, cancels its owner scope,
+closes the actual file, then opens a fresh store/scope/ProcessEpoch on that file.
+It checks the exact old wildcard remains before and after the later unrelated
+claim, whose different accepted code must remain Nonsettling without product,
+receipt, incarnation, operation or delivery mutation. Restore also retains the
+wildcard. This is file-backed store-graph recreation, not an observed OS-process
+death or durable ACK-ingress/restart-recovery claim.
+
+Both producer race controls and the DB-only contention control now require an
+actual competing Room transaction to fail with SQLiteDatabaseLockedException
+while the first writer is held, using busy_timeout=0 on the pinned primary
+connection. They release the writer, retry, and assert the committed full-history
+result (unknown competitor blocks; tracked markerless registration does not).
+Query callback ordering and job-incomplete observations are not the oracle.
+These source controls, the replay controls and all current successor runtime
+behavior remain unexecuted under the retained local-execution hold. An exact
+coherent candidate must obtain its own hosted compilation, discovered tests and
+Room migration/reopen results; no predecessor aggregate result transfers.
+
+### Bounded internal-journal query repair (source-only successor to dfe)
+
+Independent review of immutable `dfe282e29b42ac8cf1c19270b14ddf4eb46e202b`
+found that receipt filtering occurred after loading every operation for a claim.
+Exact bookkeeping replay also loaded that list to locate one request. Further
+inspection found two pending-completion presence checks with the same problem.
+Uncapped durable resolution history must not become an uncapped receipt working
+set even when there is only one logical wire.
+
+The successor moves internal-kind exclusion into a new SQL `receiptOperations`
+query, preserving request ordering, public bookkeeping and pending receipt
+semantics, and explicit unknown-kind failure. Exact replay uses the existing
+primary-key `operation(radio, claim, request)` query. Both pending-presence paths
+use a SQL EXISTS result. No production path calls the full `operations` list;
+that DAO remains available for existing controls. Public receipt/wire shapes
+are unchanged and no journal fact is removed or capped.
+
+`DirectAckReceiptJournalQueryTest` authors a real Room same-claim fixture with
+4,101 resolution journal entries and one wire, then checks the two public
+bookkeeping/pending records, exact replay, input collision, completed-pending
+permission and exclusion-aware delivery. Its query callback records SQL only:
+it refuses an unfiltered operation-journal SELECT and requires the filtered
+receipt, exact-ID and pending-EXISTS statements. This does not rely on callback
+timing to establish transaction contention. The test is authored, not executed.
+This repair changes no schema/entity metadata and is frozen separately from
+the later optional complete-radio confirmation query.
+
+### Separate complete-radio confirmation snapshot (source-only)
+
+The separately authored canonical optional read capability from
+`78336196243c9de8e2f28a11a0817186e1bff80d` is imported exactly, Git blob
+`e5c9bfd74d529c1524dbdb6469643859dc44141b`. The implementation is separate
+from the bounded-receipt repair and does not change atomic settlement.
+`inspectDirectAckRadioConfirmationEvidence(radioId)` runs one four-EXISTS
+SQL aggregate across emissions, legacy wires/provenance and saturation inside
+`RoomRepositoryContext.read`, which uses a real Room transaction. Every
+applicable reason is retained; no row sample, claim sentinel, generation
+filter, lease, grant, handle, TTL or authority mutation is involved.
+
+The optional capability reports the exact requested radio. Known accepted
+and definitely-unsent physical history alone is not a wildcard; untracked
+ancestry remains wildcard even with accepted metadata. Unknown physical
+states and accepted rows missing actual codes conservatively report unresolved
+physical evidence. A NoPersistedWildcard result is only the complete atomic
+snapshot's absence of wildcard evidence, never code uniqueness, delivery
+eligibility, permission, or a guarantee of continued freshness.
+
+`DirectAckRadioConfirmationPersistenceTest` contains seven authored real Room
+controls: known-code collision without wildcard; all four typed reasons and
+radio isolation with unchanged storage; distinct conflict/unresolved reasons;
+an unknown physical row deliberately outside the diagnostic cap; original
+MAY evidence after actual file reopen without adopting a grant/handle;
+two ordinary same-file handles with a held multi-table transition, explicit
+SQLite BUSY negative control, committed aggregate and rollback isolation;
+and typed SQL/closed-store failures plus cancellation instead of all-clear.
+They have not compiled or executed under the local execution hold.
+No new schema/entity metadata is introduced.
+
+This suspend snapshot is not a live invalidation/observation stream. Current
+`MeshCoreDatabase.open` does not enable multi-instance invalidation; a
+single-instance Room Flow is not evidence that a different handle's commits
+are observed. Cross-handle/raw-writer observation and UI refresh semantics are
+being coordinated separately. No stream, synchronous freshness, App integration,
+accessible live warning, or runtime acceptance is claimed by this snapshot.
+
+### Malformed physical-evidence fail-closed repair (source-only)
+
+Further independent review found that immutable dfe/4384 could ignore a
+DEFINITELY_UNSENT row with an actual code or without a resolution identity,
+and could accept an ACCEPTED row without a resolution identity. The separate
+3f179 confirmation snapshot had equivalent blind spots. These predecessors
+remain immutable and have not received transferred acceptance.
+
+The successor shares an explicit SQL malformed-physical predicate across
+target/competitor unresolved classification and the complete confirmation
+aggregate. Every physical row must have UInt-range prediction/actual codes,
+a recognized state, and the correct actual/resolution shape for that state.
+The accepted-target query additionally requires a resolution identity and
+valid prediction/actual ranges. The public complete-radio snapshot and new
+exclusion settlement both reject any malformed physical evidence in that
+radio with the existing typed `PersistenceStoreError.InvalidData`, without
+changing product or evidence. This includes malformed target rows even when
+another target emission supplies valid matching acceptance. Other radios
+are unaffected.
+
+This supersedes 3f179's authored unknown-state/null-actual warning result:
+malformation now explicitly fails as typed InvalidData, not a successful
+NoPersistedWildcard or delivery. Valid MAY/conflict/legacy/saturation evidence
+retains its typed wildcard semantics; genuine definitely-unsent evidence with
+null actual and nonnull resolution remains excluded from uncertainty.
+
+`DirectAckMalformedEvidenceTest` authors a twelve-case raw-SQL corruption matrix
+on both the target and a competing claim: unsent with actual/missing resolution;
+accepted with missing resolution/null/negative/overflow actual; prediction
+underflow/overflow; unknown state; MAY with actual/resolution; and conflict
+without resolution. It asserts explicit warning/settlement InvalidData,
+unchanged product/incarnation/operation history, no delivery, and radio
+isolation, plus a malformed-target/second-valid-acceptance control and a valid
+zero-write positive permitting genuine target settlement. These are authored
+real Room controls, not execution evidence. No schema/entity metadata,
+legacy failure API, consumer file, held source or genuine schema bytes change.
+
+The same successor imports the previously omitted canonical base
+`DirectAckAuthority.kt` KDoc bytes from WP-201 7af7eefe, blob
+`aee117e9a012ed5f33d9519e04807fe7c78b06bf`. The earlier exact 7af/783 byte
+claims concerned `DirectAckRadioExclusion.kt` only; the base authority file
+still inherited blob `bfdc036b`. The import changes documentation, not
+declarations or implementation, and prevents a composition from falsely
+claiming the entire older contract tree was already canonical.
+
+### Separate collector-owned confirmation observation (source-only)
+
+The observer implementation imports exact canonical exclusion-file bytes from
+`0fb7fec315cb5d76988dfc8ff2eef9240c72092b`, blob
+`facbbe32c0dcd8cc7f9fa3a47b8fd69a852aa24f`. It is additive to the immutable
+783 snapshot and separate from the bounded-receipt/malformed-evidence repairs.
+Each collector starts a cold serial loop: Inspecting, complete atomic read,
+Snapshot, then cancellable `delay(1_000)` before the next Inspecting/read.
+There is no initial cached value, replay/conflation/distinct suppression,
+detached publisher, global Room builder change or evidence mutation.
+
+The coordinator explicitly selected periodic complete reads rather than
+unproven one-handle invalidations. Other-handle/raw-SQL committed state is
+eventually observed while collection continues, independent of multi-instance
+notifications. Intermediate commits can coalesce. Scheduling, query duration
+and collector backpressure add latency; no hard one-second age bound,
+every-commit delivery or synchronous UI freshness is claimed. NoWildcard
+always describes a historical snapshot, not delivery eligibility or permission.
+The active radio graph must share one subscription and fence radio/session
+lifetime in its consumer; that integration is not owned by this storage source.
+
+Read failures, malformed evidence, closed-store failure and cancellation
+terminate through the existing typed paths. The consumer must show unavailable
+on errors or unexpected completion and may retain a historical warning during
+Inspecting without a flashing spinner. Polling is not a TTL, reset or eviction
+policy and cannot authorize sending or change FAILED/DELIVERED.
+
+`DirectAckRadioConfirmationObservationTest` authors two real same-file-handle
+controls without multi-instance invalidation: cold initial read; persisted
+state committed through the other DAO and raw SQL handle; full reasons for
+MAY/conflict/legacy/provenance/saturation; rollback and radio isolation;
+cancelled subscription stopping queries; and a barrier-ordered commit between
+initial Inspecting and its query. Real SQL failure and closed-store collection
+terminate without a cached clear. All are authored, unexecuted controls.
+
+The inherited e69 base-authority KDoc import is not accepted as generic API
+compatibility: review found that aee/7af incorrectly removed the existing
+generic prediction-before-return rule. WP-201 is preparing a split canonical
+successor preserving generic behavior and restricting accepted-only settlement
+to the new radio-exclusion API/activated service. Final composition must import
+that correction; this observer does not change legacy production semantics.
+
+## Atomic guarded failure successor: source only
+
+This successor is independently layered on immutable observer source
+`a2c1b66d9f567b497f4002c9022b2efc9c0aa713`. It imports the exact WP-201
+canonical saturation clarification from
+`671343259886e9c7eb0d7a8c836d4e7e8e2a0d1a`:
+`DirectAckRadioExclusion.kt` blob `dccd38dea9fc646932e7e04957dc392c40e1ddb6`.
+The corrected generic `DirectAckAuthority.kt` blob is
+`8e59fda1ada8178ad687d13de1ae98f65fae6bb1`. The previously inherited
+aee/7af generic KDoc is explicitly superseded, not retroactively accepted.
+Legacy generic settlement still matches each wire's `accepted ?: predicted`,
+including an unaccepted prediction before return. Only radio-exclusion
+settlement requires accepted physical evidence. Generic production methods
+are unchanged by this successor.
+
+The optional `DirectAckRadioFailureAuthority` delegates to one serialized
+Room write transaction. Genuine own delivery and protected initially DELIVERED
+RESEND baseline win without mutation. Otherwise an exact existing
+`RADIO_FAILURE` journal proof returns historical AlreadyApplied, even after
+later history, invalidation, restore or revocation; it does not renew authority.
+A generic FAILED phase without this proof is Rejected(CONFLICT), never upgraded.
+New failure requires current lease, message incarnation/revision and grant,
+complete history, the FAILED write, expected-revision renewal and proof insertion
+in the same transaction. Proofs use the existing operation journal, are excluded
+from public receipt bookkeeping, and are read with LIMIT 2 to reject duplicates.
+There is no entity, migration, schema-version or generated-schema change.
+
+One constant-size SQL projection inspects all target physical emissions and
+tracking provenance plus full retained foreign history for the radio.
+Target MAY, conflict, malformed evidence or legacy ancestry blocks failure.
+ANY valid accepted target actual code colliding with another claim's known
+predicted/actual code blocks failure; an additional noncolliding actual is not
+proof that the blocked emission failed. Foreign unresolved/conflicting/legacy
+history blocks a possibly emitted target. Malformed target/foreign evidence is
+mapped to the corresponding typed conflict reason for this failure operation;
+the existing snapshot and settlement malformed-input typed errors are unchanged.
+
+Sticky saturation ALWAYS blocks every NEW failure, even a tracked target with
+no marker or only represented DefinitelyUnsent rows. CoveredBySaturation may
+permit an additional physical invocation without a row/handle; the current
+contract supplies no overriding target-specific proof. Only on a nonsaturated
+radio may a fully tracked markerless/all-unsent target use the known-safe path
+despite unrelated foreign ambiguity. Delivery and exact guarded replay retain
+their earlier read-only precedence. Nonfailing has nonempty typed reasons,
+writes no product status/proof, and renews no grant.
+
+`DirectAckRadioFailurePersistenceTest` contains 11 authored actual-Room controls:
+own MAY and earlier MAY/later unsent; target legacy/conflict/malformed evidence;
+ANY accepted-code collision plus all foreign wildcard kinds; nonsaturated
+no-marker/all-unsent positives with foreign MAY; both saturated markerless and
+represented-unsent cases including CoveredBySaturation; exact historical proof
+replay and generic-failure rejection; delivery/baseline precedence; malformed
+foreign evidence and current-grant rejection; proof-insertion rollback and
+post-commit caller cancellation; cancellation during proof insertion; durable
+proof through restore/delete/recreate/reopen with no handle reissuance; and
+two ordinary same-file handles with an explicitly asserted SQLite BUSY failure
+followed by a complete-history Nonfailing retry. Internal proof exclusion from
+public receipt bookkeeping is asserted. These controls are NOT executed.
+
+No local build/test, KSP, migration execution, hosted dispatch, runtime/device
+acceptance, PR or merge is claimed. Exact canonical blob checks are source
+checks only. Older storage-only diagnostic run `42084764103` binds only composed
+candidate `74dfb3d08b89a1ae6a8cf04203b00bf276009bba`, not this source.
+The retained local execution hold remains in force.
+
+The missing-contact/preclaim path has no positive authority in this successor.
+Generic save/upsert/import, incarnation/revision, captured intent, zero-attempt
+metadata and empty claim history do not establish trusted birth/no-write proof.
+The coordinator selected explicit unavailable/uncertain retain-and-park rather
+than generic FAILED or unsynchronized pending deletion. New birth provenance
+is a separate design, not implemented or inferred for old rows. A separate
+message-level durable collision observation contract is also not included in
+this frozen radio observer/failure surface.
+
+### Blocking pre-authority migration-history finding
+
+Source inspection found that the existing v1-to-v2 migration creates empty
+claims/wires and backfills only surviving message/pending identities. The
+v2-to-v3 migration creates empty emission/saturation tables. Legacy detection
+only sees existing wires. A supported pre-authority send can therefore leave
+no journal after upgrade, including when its message/radio was deleted before
+migration. A delayed ACK sharing a new tracked attempt's accepted code is not
+excluded by the existing journal queries. Complete retained SQL history is
+not proof of complete physical prehistory.
+
+The service owner independently traced published main
+`f8b1d31190f3e02370df147eb95428c9611de2c3`, MessageService blob
+`14568ac582098c3fe98bbd2c0d0d3f78ea5365f5`: generic saveMessage followed by
+physical session.sendMessage, including queued retry, with no ACK-authority
+wire registration. Published database blob
+`fddaf0eb11805586e72b3e9ec848aa5fa6fbbee7` is version 1. This is a concrete
+unsupported completeness claim, not evidence that old messages were unsent.
+No actual migration/reopen execution is claimed for this finding.
+
+Full safety acceptance remains BLOCKED. The coordinator selected a separate
+durable DB-wide pre-authority UNKNOWN latch, including empty upgrades and
+removed/re-added radios, without TTL/reset and without inventing target birth
+proof. That successor requires separately admitted migration/version ownership,
+canonical coordination and authentic hosted schema generation. The genuine
+v3 schema and earlier immutable source candidates remain unchanged. Two
+expected-failing real-file v1 migration/reopen regressions are being frozen
+separately before implementation, not included as passing guarded-failure
+acceptance. This finding also bounds every earlier COMPLETE/NoWildcard statement
+to retained rows; those historical labels do not establish physical prehistory.
+
+## Separate pre-authority migration regression and fixture repair
+
+This diagnostic successor is layered after guarded-failure source
+`75127240ba71853726933348a849e8ea03b1cce5`. It changes only the database
+exclusion test and this evidence, before any bootstrap production/migration edit.
+Two actual-file controls create v1 from its genuine exported schema, represent a
+sent outgoing DM with actual code 999, optionally delete the message so no radio
+rows survive, migrate through the supported v1-to-v2-to-v3 chain, register a new
+tracked accepted physical code 999, close and reopen the same file, and require
+persisted exclusion uncertainty after both opens. They deliberately assert the
+required safe outcome, not the current unsafe empty-history outcome. They are
+EXPECTED TO FAIL against the current producer, but have NOT been executed.
+This models the retained/deleted pre-authority-send counterexample; it is not
+hardware evidence of a physical send or ACK.
+
+The older exact candidate `74dfb3d08b89a1ae6a8cf04203b00bf276009bba` hosted
+run `42084764103` attempt 1 failed in build job `127446949709` at
+`:core:database:testDebugUnitTest`: 56 discovered database tests, one failure,
+`DirectAckExclusionStorageTest.v2MigrationRetainsLegacyUnknownAndKnownCodesAcrossReopen`,
+reported `org.json.JSONException`. Compile succeeded; runtime/migration acceptance
+did not. The controller, scope and Swift oracle jobs passed. The execution owner
+reported 3329 available discovered tests / 3328 passing / one failing / zero errors
+or skips, with incomplete mandatory reports. No result is transferred to a later
+source, and no second CI-result bundle is generated or retained.
+
+Source inspection found a concrete fixture JSON fault consistent with that error:
+genuine v1/v2/v3 exports omit `indices` on `link_preview_data`, and v2 additionally
+omits it on the authority entities. Unconditional getJSONArray("indices") throws.
+The shared exported-schema fixture loader now tests presence, then strictly reads
+any present array. Required entities/setup queries remain strict and nonempty;
+malformed present fields still throw. Existing migration assertions are preserved.
+This is a source diagnosis/repair, not independent reproduction of the hosted error.
+The log remains authoritative:
+https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42084764103/job/127446949709
+
+No schema version, migration, exported JSON, production source, contract, service
+or observer changes occur in this diagnostic freeze. The database test file now
+has six test annotations: four existing controls and two expected-failing
+prehistory controls. All successor controls remain UNEXECUTED under the retained
+local execution hold. The original source/run and genuine v3 export stay immutable.
+
+### Separate fresh-install physical-history regression
+
+The coordinator provisionally selected strict safety while the user is unavailable,
+not a user-selected trust boundary. Both fresh and upgraded stores must treat
+unowned external/pre-authority physical history as UNKNOWN absent genuine proof;
+new confirmations may remain unavailable indefinitely while sending continues.
+No new local database, radio UUID, reconnect, APP_START or payload import is a
+physical-history certificate. No TTL/reset or guessed safe epoch is introduced.
+
+A third, separate expected-failing control creates an actual fresh Room file,
+records a new accepted physical code 999, reopens it, and requires uncertainty on
+both reads because the supported creation path has no evidence excluding an
+external previous installation's code-999 send. It is an adversarial environmental
+assumption/control, not physical-radio execution. It is UNEXECUTED, as are the two
+earlier v1 migration controls. The database test now has seven annotations.
+No production/migration/schema defaults change in this diagnostic source.
+
+The actual local creation callback installs identities/triggers only. Backup
+restore erases authority payloads and inserts/remaps imported devices/messages;
+it supplies no physical send-history journal or certificate. Device save, ghost
+reconciliation and radio deletion likewise establish registry identity only.
+They cannot clear a future DB-wide unknown latch or establish a trusted first-use
+boundary. The protocol/firmware owners separately reported client-switch delayed
+ACK counterexamples; no external source pin or hardware acceptance is advanced
+by this storage diagnosis.
+
+Implementing the successor remains gated on negative-control source review,
+typed schema/version admission, corrected canonical contracts and supported
+hosted schema generation. Existing successful-ACK assertions must not be changed
+to success-shaped unknown outcomes or passed with a fabricated production birth/
+physical-history certificate. Conditional retained-journal algorithm controls
+do not establish confirmation availability on real fresh installations.
+
+The same separate source also supplies the directly necessary owned data-test
+wiring for the service owner's public migration control: the Test tasks declare
+`core/database/schemas` as an input and pass its actual absolute location as
+`roomSchemaDirectory`, using the Android root project's directory provider.
+There is no CWD fallback, copied schema, invented DDL, dependency/version change
+or test assertion change. The trusted `dependency-resolution-metadata` rule admits
+this `update-directly-required-build-wiring` on the existing owned data build
+surface. Build/test execution remains unverified. Actual immutable schema blobs
+1=`0e6ce7706f75e08c4a70555178b2fdebb98f2184`,
+2=`2a1c5c66d5c42b53b146becf2ed085cffee93f68` and
+3=`e7bf0f62999896bca4d36a2a636096d962b12638` were independently read through REST:
+all have root keys formatVersion/database and setupQueries INSIDE database.
+The relayed root-level setupQueries guess was false and was not implemented.
 
 ### Separate accepted-code mismatch repair
 

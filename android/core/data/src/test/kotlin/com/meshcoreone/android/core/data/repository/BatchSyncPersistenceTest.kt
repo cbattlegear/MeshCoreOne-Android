@@ -89,7 +89,7 @@ class BatchSyncPersistenceTest : RepositoryTest() {
         assertEquals(3, store.fetchMessages(RADIO_A, 3u).size)
         store.saveChannel(RADIO_A, info(3u, "Replacement", 0x99))
         val replaced = assertNotNull(store.fetchChannel(RADIO_A, 3u))
-        assertEquals(original.id, replaced.id)
+        assertNotEquals(original.id, replaced.id)
         assertEquals("Replacement", replaced.name)
         assertEquals(0L, replaced.unreadCount)
         assertEquals(0L, replaced.unreadMentionCount)
@@ -113,12 +113,12 @@ class BatchSyncPersistenceTest : RepositoryTest() {
         slot(2u)
         slot(3u)
         db.openHelper.writableDatabase.execSQL(
-            "CREATE TRIGGER fail_channel_update BEFORE UPDATE ON channels BEGIN SELECT RAISE(ABORT, 'source save failure'); END",
+            "CREATE TRIGGER fail_channel_insert BEFORE INSERT ON channels BEGIN SELECT RAISE(ABORT, 'source save failure'); END",
         )
         assertFailsWith<PersistenceStoreException> {
             store.batchSaveChannels(RADIO_A, SnapshotList.of(info(2u, "Taken over", 0x99)), SnapshotList.of(3u), 8u)
         }
-        db.openHelper.writableDatabase.execSQL("DROP TRIGGER fail_channel_update")
+        db.openHelper.writableDatabase.execSQL("DROP TRIGGER fail_channel_insert")
         assertEquals(info(2u).secret, assertNotNull(store.fetchChannel(RADIO_A, 2u)).secret)
         assertNotNull(store.fetchChannel(RADIO_A, 3u))
         assertEquals(3, store.fetchMessages(RADIO_A, 2u).size)

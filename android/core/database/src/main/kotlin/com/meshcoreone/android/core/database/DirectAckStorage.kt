@@ -122,6 +122,8 @@ interface DirectAckDao {
     suspend fun incarnation(radio: UUID, id: UUID, kind: String): DirectAckIncarnationEntity?
     @Query("SELECT * FROM direct_ack_leases WHERE radioId = :radio")
     suspend fun leases(radio: UUID): List<DirectAckLeaseEntity>
+    @Query("SELECT * FROM direct_ack_leases WHERE radioId = :radio AND requestId = :request")
+    suspend fun lease(radio: UUID, request: UUID): DirectAckLeaseEntity?
     @Upsert suspend fun lease(row: DirectAckLeaseEntity)
     @Query("UPDATE direct_ack_leases SET active = 0 WHERE issuer = :issuer")
     suspend fun revokeIssuer(issuer: UUID): Int
@@ -139,9 +141,29 @@ interface DirectAckDao {
     @Upsert suspend fun delivery(row: DirectAckDeliveryEntity)
     @Query("SELECT * FROM direct_ack_wires WHERE radioId = :radio AND claimId = :claim ORDER BY requestId")
     suspend fun wires(radio: UUID, claim: UUID): List<DirectAckWireEntity>
+    @Query("SELECT * FROM direct_ack_wires WHERE radioId = :radio AND claimId = :claim AND requestId = :request")
+    suspend fun wire(radio: UUID, claim: UUID, request: UUID): DirectAckWireEntity?
     @Upsert suspend fun wire(row: DirectAckWireEntity)
     @Query("SELECT * FROM direct_ack_operations WHERE radioId = :radio AND claimId = :claim ORDER BY requestId")
     suspend fun operations(radio: UUID, claim: UUID): List<DirectAckOperationEntity>
+    @Query("""
+        SELECT * FROM direct_ack_operations
+        WHERE radioId = :radio AND claimId = :claim
+          AND kind NOT IN ('RADIO_DELIVERY','RADIO_FAILURE','EMISSION_TRACKING_REQUIRED')
+          AND substr(kind,1,20) != 'EMISSION_RESOLUTION:'
+          AND substr(kind,1,28) != 'ACCEPTANCE_HISTORY_REQUIRED:'
+          AND substr(kind,1,24) != 'TRACKED_WIRE_ACCEPTANCE:'
+        ORDER BY requestId
+    """)
+    suspend fun receiptOperations(radio: UUID, claim: UUID): List<DirectAckOperationEntity>
+    @Query("SELECT EXISTS(SELECT 1 FROM direct_ack_operations WHERE radioId = :radio AND claimId = :claim AND kind = 'PENDING')")
+    suspend fun hasPendingCompletion(radio: UUID, claim: UUID): Boolean
+    @Query("SELECT * FROM direct_ack_operations WHERE radioId = :radio AND claimId = :claim AND requestId = :request")
+    suspend fun operation(radio: UUID, claim: UUID, request: UUID): DirectAckOperationEntity?
+    @Query("SELECT * FROM direct_ack_operations WHERE radioId = :radio AND claimId = :claim AND kind = 'RADIO_DELIVERY' LIMIT 2")
+    suspend fun radioDeliveries(radio: UUID, claim: UUID): List<DirectAckOperationEntity>
+    @Query("SELECT * FROM direct_ack_operations WHERE radioId = :radio AND claimId = :claim AND kind = 'RADIO_FAILURE' LIMIT 2")
+    suspend fun radioFailures(radio: UUID, claim: UUID): List<DirectAckOperationEntity>
     @Upsert suspend fun operation(row: DirectAckOperationEntity)
     @Query("SELECT * FROM direct_pending_completions WHERE radioId = :radio AND captureRequestId = :request")
     suspend fun pendingCompletion(radio: UUID, request: UUID): DirectPendingCompletionEntity?
@@ -250,8 +272,18 @@ object DirectAckStorage {
     }
 
     val callback: RoomDatabase.Callback = object : RoomDatabase.Callback() {
-        override fun onCreate(db: SupportSQLiteDatabase) { install(db) }
-        override fun onOpen(db: SupportSQLiteDatabase) { verify(db) }
+        override fun onCreate(db: SupportSQLiteDatabase) {
+            install(db)
+            DirectAckPrehistoryStorage.initialize(db)
+            ChannelSendStorage.installPendingLifecycles(db)
+            ChannelSendStorage.installMessageOriginProtection(db)
+        }
+        override fun onOpen(db: SupportSQLiteDatabase) {
+            verify(db)
+            DirectAckPrehistoryStorage.verify(db)
+            ChannelSendStorage.verifyPendingLifecycles(db)
+            ChannelSendStorage.verifyMessageOriginProtection(db)
+        }
     }
 
     val migration1To2: Migration = object : Migration(1, 2) {

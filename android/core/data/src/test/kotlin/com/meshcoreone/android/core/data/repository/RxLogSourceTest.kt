@@ -152,13 +152,13 @@ class RxLogSourceTest : RepositoryTest() {
         store.saveRxLogEntry(entry)
         assertEquals(0L, store.rxInitiatedSaveCount)
         db.openHelper.writableDatabase.execSQL(
-            "CREATE TRIGGER reject_channel_update BEFORE UPDATE ON channels BEGIN SELECT RAISE(ABORT, 'source save failure'); END",
+            "CREATE TRIGGER reject_channel_insert BEFORE INSERT ON channels BEGIN SELECT RAISE(ABORT, 'source save failure'); END",
         )
         assertFailsWith<PersistenceStoreException> {
             store.batchSaveChannels(RADIO_A, SnapshotList.of(ChannelInfo(1u, "After", Bytes(ByteArray(16) { 0x42 }))),
                 SnapshotList.empty(), null)
         }
-        db.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_channel_update")
+        db.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_channel_insert")
         assertEquals(entry.id, assertNotNull(store.findRxLogEntry(RADIO_A, 1u, 42u)).id)
         assertEquals(1, store.fetchRxLogEntries(RADIO_A, 40).size)
         assertNotNull(db.rxLogs().byId(RADIO_A.value, entry.id))

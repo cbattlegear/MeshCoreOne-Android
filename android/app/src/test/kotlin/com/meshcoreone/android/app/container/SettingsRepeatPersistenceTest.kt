@@ -176,11 +176,13 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
             h.eventually("normal preset subscription retirement reaches its actual action") {
                 !holder.state.value.isApplying && failures.isNotEmpty()
             }
-            assertNotNull(holder.state.value.errorMessage)
+            assertTrue(holder.retryAlertState.value.isPresented)
+            assertNotNull(holder.retryAlertState.value.message)
+            assertEquals(1, holder.retryAlertState.value.retryCount)
             assertTrue(service.radioSettingsNeedsRecovery)
             assertTrue(service.pathHashModeNeedsRecovery)
             assertTrue(retired.events.toList().isEmpty())
-            holder.onPresetSelected("ca")
+            holder.retry.retry()
             h.eventually("fresh normal preset retry reconciles both retired publications") {
                 !holder.state.value.isApplying && holder.state.value.errorMessage == null &&
                     !service.radioSettingsNeedsRecovery && !service.pathHashModeNeedsRecovery
@@ -189,6 +191,8 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
             assertEquals("ca", saved.appliedRadioPresetID)
             assertEquals(2u.toUByte(), saved.pathHashMode)
             assertEquals(saved, h.manager.connectedDevice)
+            assertFalse(holder.retryAlertState.value.isPresented)
+            assertEquals(0, holder.retryAlertState.value.retryCount)
         }
     }
 

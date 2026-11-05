@@ -27,6 +27,9 @@ data class DeviceWriteSnapshot(
 
 class DeviceWriteConflict : IllegalStateException("Device write authority changed")
 
+/** A verified radio scope must still match the projected persisted default when removing a region. */
+enum class KnownRegionRemovalOutcome { Removed, Retired, NeedsScopeReconciliation }
+
 /** Overlay only changes published since [before], retaining newly committed Room fields otherwise. */
 fun DeviceDTO.preservingChanges(before: DeviceDTO, live: DeviceDTO): DeviceDTO {
     require(id == before.id && id == live.id && radioId == before.radioId && radioId == live.radioId)

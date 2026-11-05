@@ -7,6 +7,7 @@ import com.meshcoreone.android.core.contracts.domain.ConnectedDeviceEdit
 import com.meshcoreone.android.core.contracts.domain.ContactPersisting
 import com.meshcoreone.android.core.contracts.domain.DevicePersisting
 import com.meshcoreone.android.core.contracts.domain.DeviceWriteConflict
+import com.meshcoreone.android.core.contracts.domain.KnownRegionRemovalOutcome
 import com.meshcoreone.android.core.contracts.domain.editDevice
 import com.meshcoreone.android.core.contracts.domain.preservingChanges
 import com.meshcoreone.android.core.contracts.domain.SessionToken
@@ -65,6 +66,8 @@ interface ContactRemovalPort {
 class ContactNotFoundException : Exception("Contact not found on device")
 
 class DeviceEditPersistenceConflict : IllegalStateException("Connected device changed before the edit was persisted")
+
+private class RegionScopeReconciliationRequired : IllegalStateException()
 
 /** Radio preset catalog lookup (WP-211 owns the catalog); returns ids whose RF matches. */
 fun interface RadioPresetMatcher {
@@ -179,6 +182,8 @@ class ConnectedDeviceEditor(
             return published
         } catch (cancelled: CancellationException) {
             throw cancelled
+        } catch (reconcile: RegionScopeReconciliationRequired) {
+            throw reconcile
         } catch (conflict: DeviceWriteConflict) {
             val failure = DeviceEditPersistenceConflict()
             diagnostics.report("device.$operation", failure)
@@ -249,10 +254,30 @@ class ConnectedDeviceEditor(
     suspend fun persistKnownRegionRemoval(region: String, expectedToken: SessionToken): Boolean =
         changeKnownRegion(region, true, expectedToken)
 
+    /** Refuse a changed radio transition instead of silently clearing a still-acknowledged scope. */
+    suspend fun persistKnownRegionRemoval(
+        region: String,
+        expectedToken: SessionToken,
+        acknowledgedDefaultFloodScopeName: String?,
+    ): KnownRegionRemovalOutcome = try {
+        val saved = changeKnownRegion(region, true, expectedToken) { projected ->
+            if (projected.defaultFloodScopeName.normalizedScope() != acknowledgedDefaultFloodScopeName.normalizedScope()) {
+                throw RegionScopeReconciliationRequired()
+            }
+        }
+        if (saved) KnownRegionRemovalOutcome.Removed else KnownRegionRemovalOutcome.Retired
+    } catch (_: RegionScopeReconciliationRequired) {
+        KnownRegionRemovalOutcome.NeedsScopeReconciliation
+    }
+
+    private fun String?.normalizedScope(): String? =
+        this?.utf8Prefix(ProtocolLimits.MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES)
+
     private suspend fun changeKnownRegion(
         region: String,
         remove: Boolean,
         expectedToken: SessionToken?,
+        validateProjected: (DeviceDTO) -> Unit = {},
     ): Boolean {
         fun DeviceDTO.removesSelectedScope(): Boolean {
             val selected = defaultFloodScopeName?.utf8Prefix(ProtocolLimits.MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES)
@@ -267,7 +292,7 @@ class ConnectedDeviceEditor(
                 knownRegions = if (remove) authoritative.knownRegions.filterNot { it == region }.snapshot()
                 else (authoritative.knownRegions + region).distinct().snapshot(),
                 defaultFloodScopeName = authoritative.defaultFloodScopeName.takeUnless { authoritative.removesSelectedScope() },
-            )
+            ).also(validateProjected)
         }
     }
 

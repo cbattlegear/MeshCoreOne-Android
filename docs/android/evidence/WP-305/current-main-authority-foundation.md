@@ -20,6 +20,39 @@ The coordinator assigned an independent clean-current-main foundation. Runtime/d
 
 ## Source custody and adaptations
 
+### Follow-up: acknowledged region-removal composition
+
+The successor of `e83fb622f550ed74df0fb925a398c9c8d38764c4` composes only the
+producer-approved contract/editor seam from `725495e42bc6279bd9af5c1559b412f0919b928a`:
+`KnownRegionRemovalOutcome { Removed, Retired, NeedsScopeReconciliation }` and the
+three-argument `persistKnownRegionRemoval(region, originalToken, acknowledgedDefaultFloodScopeName)`.
+Runtime/device and Settings owners confirmed exact custody and no competing edits.
+The existing two-argument API remains unchanged. Each authoritative CAS transform validates
+the normalized projected default against the acknowledged radio default before persistence
+or live publication; mismatch returns NeedsScopeReconciliation without treating it as an
+unexpected diagnostic failure. The foundation's sessionEdit/deferred observer notification
+ordering remains intact. No Settings collector, adapter, service-replan or OCV code is imported.
+Settings owns those consumer changes at `d52b9a925a8413037c929fa97dd3b7ce40816545`.
+
+The added Room control
+`differentAliasWriterRequiresRadioReadmissionBeforeEditorCanClearTheLastScope` is method-text
+identical to corrected producer `350eb42a16fd02cf5e8431543a5dceb02f1e99d0`, verified by direct
+comparison. It retains all original assertions and the indexed-channel reset/preassertion;
+the writer class now has 19 authored controls. Both alias orders and enabled/disabled scope
+families use actual protocol fake-radio readback, competing Room CAS rejection, no rejected
+publication and explicit radio re-acknowledgment. This is manual ACK evidence design, not
+execution of the Settings replanning queue. The 16 storage controls already in the foundation
+remain unchanged. Producer-reported 350 writer26/persistence16 success is not execution
+evidence for this different current-main adaptation.
+
+Fresh current trusted admissions returned reviewed-support-consumer for the existing contracts
+and editor paths and reviewed-support-test for the writer test. The pinned command
+`C:\Python312\python.exe tools\android-port\controller\ci.py python --output C:\Users\camer\.copilot\session-state\6e767589-3de4-4390-a618-1fafe7293cbb\files\python-region-ack-01`
+passed manifest/provenance/notices/parity/semantic checks, scaffold 16/16 and parity 110/110,
+zero skips. `git diff --check` passed. These checks cover the source working diff, not Kotlin:
+the existing local Gradle hold remains untouched; exact-candidate compilation, Room execution
+and independent composed-seam review are outstanding.
+
 ### Follow-up: queued reconnection failure authority
 
 The independently reviewed foundation `8344344ff180faa3754928edd42c9e38e69adad1`

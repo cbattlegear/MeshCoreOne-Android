@@ -85,15 +85,43 @@ class TraceMapAndNavigationTest {
         trace.addNode(north)
         harness.start { trace.runTrace() }
         val pendingTag = sender.sent.single().tag
+        assertTrue(trace.current.isRunning)
         trace.addNode(south)
+        assertNull(trace.current.result)
+        assertFalse(trace.current.isRunning)
         harness.respond(pendingTag, listOf(node(0x3F, -6.0), node(null, 3.0)), RADIO)
-        val lateResult = checkNotNull(trace.current.result)
-        assertTrue(lateResult.success)
-        assertTrue(lateResult.tracedPathBytes.isEmpty)
-        assertFalse(lateResult.tracedPathBytes == trace.current.fullPathData)
+        assertNull(trace.current.result)
+        assertFalse(trace.current.isRunning)
 
         map.rebuildPathState()
 
+        assertEquals(listOf(MapLineStyle.TRACE_UNTRACED, MapLineStyle.TRACE_UNTRACED), map.lines.map { it.style })
+        assertTrue(map.badges.isEmpty())
+    }
+
+    @Test
+    fun `fresh valid response traces geometry until a subsequent path edit`() {
+        map.configure(Coordinate(37.0, -123.0))
+        val sender = FakeTraceSender()
+        harness.deps.device = device()
+        harness.deps.sender = sender
+        trace.configure(harness.deps)
+        trace.addNode(north)
+        harness.start { trace.runTrace() }
+        assertTrue(trace.current.isRunning)
+        harness.respond(sender.sent.single().tag, listOf(node(0x3F, -6.0), node(null, 3.0)), RADIO)
+        val result = checkNotNull(trace.current.result)
+        assertTrue(result.success)
+        assertEquals(trace.current.fullPathData, result.tracedPathBytes)
+        assertFalse(trace.current.isRunning)
+        map.rebuildPathState()
+        assertEquals(listOf(MapLineStyle.TRACE_WEAK), map.lines.map { it.style })
+        assertTrue(map.badges.isNotEmpty())
+
+        trace.addNode(south)
+        assertNull(trace.current.result)
+        assertFalse(trace.current.isRunning)
+        map.rebuildPathState()
         assertEquals(listOf(MapLineStyle.TRACE_UNTRACED, MapLineStyle.TRACE_UNTRACED), map.lines.map { it.style })
         assertTrue(map.badges.isEmpty())
     }

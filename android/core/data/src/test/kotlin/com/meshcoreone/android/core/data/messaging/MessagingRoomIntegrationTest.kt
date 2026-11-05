@@ -1784,7 +1784,8 @@ class MessagingRoomIntegrationTest {
             assertEquals(MessageStatus.DELIVERED, delivered.status)
             assertEquals(resendCode.readUInt32LE(0), delivered.ackCode)
             assertEquals(123u, delivered.roundTripTime)
-            assertEquals(1L, delivered.sendCount)
+            assertEquals(pending.sendCount + 1, delivered.sendCount)
+            assertEquals(1L, delivered.sendCount - pending.sendCount)
             assertTrue(settlements.isNotEmpty())
             assertTrue(settlements.all { it === registrations[1].first })
             assertEquals(listOf(MessageStatusEvent.StatusResolved(pending.id, MessageStatus.DELIVERED, 123u)),

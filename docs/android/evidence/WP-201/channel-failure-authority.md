@@ -108,3 +108,22 @@ path/rule matching, whitespace, declarations and remote blob/ref/diff identity.
 No hosted result, migration, hardware, lifecycle execution or UI acceptance is claimed.
 The producer's exact-candidate Room controls and consumer/UI integration remain
 separately owned. No PR, merge, runtime activation or schema version is selected here.
+
+## Neutral persistence invalidation successor
+
+The coordinator explicitly approved the minimal shared neutral event after the
+actual UI flow demonstrated that Room observation is not available. The additive
+domain declaration is `MessageStatusEvent.PersistenceChanged(key: EntityKey)`.
+The radio-scoped key is a routing hint to refetch actual persisted state, including
+absence or replacement, not status, FAILED, mark-seen or incarnation authority.
+Existing `Failed`, `StatusResolved` and other variants remain unchanged.
+
+The domain file is admitted by `wp-owned/modify`; its related value control and
+this evidence use the same test/evidence admissions above. Service owner 13a
+publishes the new hint; UI owner 5c owns the app counterpart, exhaustive dispatcher,
+timeline neutral refetch and list neutral reload. App consumers must preserve the
+radio scope even after delayed delivery and bypass the failure-seen branch. They
+cannot apply an old DTO/status, and a missing current row must refresh absence,
+not leave the old row displayed. Consumers are not implemented or validated here.
+The eighth authored value control distinguishes radio keys and the existing Failed
+variant; it is unexecuted, not proof of actual refresh or absence handling.

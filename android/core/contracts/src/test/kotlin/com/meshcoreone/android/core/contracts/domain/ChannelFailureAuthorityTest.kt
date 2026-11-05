@@ -30,6 +30,16 @@ class ChannelFailureAuthorityTest {
     )
 
     @Test
+    fun neutralInvalidationRetainsRadioKeyAndIsDistinctFromFailed() {
+        val changed = MessageStatusEvent.PersistenceChanged(key)
+        val otherRadio = key.copy(radioId = RadioId(UUID(0, 9)))
+
+        assertEquals(key, changed.key)
+        assertNotEquals<MessageStatusEvent>(MessageStatusEvent.PersistenceChanged(otherRadio), changed)
+        assertNotEquals<MessageStatusEvent>(MessageStatusEvent.Failed(key.id), changed)
+    }
+
+    @Test
     fun captureRetainsActualSnapshotAndOpaqueHandleWithoutFabricatingPendingIdentity() {
         val handle = object : ChannelFailureAttempt {}
         val captured = ChannelFailureCaptureResult.Captured(handle, receipt)

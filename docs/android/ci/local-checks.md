@@ -428,6 +428,8 @@ Only `@Implementation` resolved through its exact unaliased canonical
 collaborator; test/lifecycle/rule annotations, unknown or additional bases,
 aliases, ambiguous names, inherited enclosing classes and bodyless declarations
 remain fail-closed. Other nested inherited suites retain the existing checks.
+Direct getter/setter annotations are checked as well as property/function
+annotations; ordinary resolved Rule accessors on the outer test stay supported.
 When the evidence reader uses this exception, it checks the exact immutable
 candidate's Kotlin and Java source declarations, including main sources and other
 modules, not just the selected Kotlin test compiler map. A declaration shadowing

@@ -1132,6 +1132,54 @@ class RepairExecutionTests(unittest.TestCase):
                     else:
                         validate_compiled_hosted_methods(scope, blobs, manifest.repo, executed, {})
 
+    def test_explicit_accessor_rules_are_outer_controls_not_shadow_annotations(self):
+        accessor = "val rule: TestRule\n@Rule get() = Timeout.seconds(1)\n"
+        imports = (
+            "import android.app.Notification\nimport org.junit.Rule\nimport org.junit.Test\n"
+            "import org.junit.rules.TestRule\nimport org.junit.rules.Timeout\n"
+        )
+        for whole in (False, True):
+            for inside in (False, True):
+                source = self.notification_shadow_source(imports=imports)
+                source = source.replace(
+                    "companion object { var calls = 0 }" if inside else "class MapTest {",
+                    accessor + "companion object { var calls = 0 }" if inside
+                    else "class MapTest {\n" + accessor,
+                )
+                manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs({
+                    TEST: source.encode(),
+                }, whole=whole)
+                with self.subTest(whole=whole, inside=inside), patch(
+                    "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+                ):
+                    if inside:
+                        with self.assertRaisesRegex(PortError, "collaborator annotations|property annotation"):
+                            validate_compiled_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+                    else:
+                        validate_compiled_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
+    def test_shadow_accessor_annotations_reject_rule_unknown_and_setter_forms(self):
+        for accessor in (
+            "val rule: org.junit.rules.TestRule\n"
+            "@org.junit.Rule get() = org.junit.rules.Timeout.seconds(1)\n",
+            "var rule: org.junit.rules.TestRule = org.junit.rules.Timeout.seconds(1)\n"
+            "@org.junit.Rule set(value) { field = value }\n",
+            "val rule: Int\n@Unknown get() = 1\n",
+            "var rule: Int = 0\n@Unknown set(value) { field = value }\n",
+        ):
+            for whole in (False, True):
+                source = self.notification_shadow_source().replace(
+                    "companion object { var calls = 0 }",
+                    accessor + "companion object { var calls = 0 }",
+                )
+                manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs({
+                    TEST: source.encode(),
+                }, whole=whole)
+                with self.subTest(accessor=accessor, whole=whole), patch(
+                    "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+                ), self.assertRaisesRegex(PortError, "collaborator annotations|property annotation"):
+                    validate_compiled_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
     def test_notification_shadow_external_inventory_requires_immutable_actual_blobs(self):
         base = TEST.replace("MapTest.kt", "UnrelatedShadow.kt")
         for whole in (False, True):

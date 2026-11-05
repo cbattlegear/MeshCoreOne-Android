@@ -1415,7 +1415,7 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
                     raise PortError("Unclosed Kotlin annotation in hosted test source")
         if (
             notification_shadows.intersection(scopes[start])
-            and index < len(tokens) and tokens[index] in ("fun", "val", "var")
+            and index < len(tokens) and tokens[index] in ("fun", "val", "var", "get", "set")
             and annotations != {"Implementation"}
         ):
             raise PortError("Cannot establish JUnit-free Robolectric collaborator annotations")
@@ -1425,7 +1425,7 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
         if (
             annotations and not annotations & (test_annotations | family_annotations)
             and not annotations.issubset(non_test_annotations)
-            and index < len(tokens) and tokens[index] in ("fun", "val", "var")
+            and index < len(tokens) and tokens[index] in ("fun", "val", "var", "get", "set")
         ):
             unknown = ", ".join(sorted(annotations - non_test_annotations))
             raise PortError(f"Ambiguous Kotlin function annotation or property annotation ({unknown}); "

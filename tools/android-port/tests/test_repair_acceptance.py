@@ -2188,7 +2188,9 @@ class RepairExecutionTests(unittest.TestCase):
         expected = notification_instrumentation_candidate(candidate_repo, revision)
         self.assertIsNotNone(expected)
         tasks = [*TASKS["scaffold"], NOTIFICATION_INSTRUMENTATION_TASK]
-        plan = {"full_scaffold": True, "tasks": tasks}
+        from controller.ci import SCOPED_TASKS
+
+        plan = {"full_scaffold": True, "tasks": tasks, "scopes": list(SCOPED_TASKS)}
         proof = {key: expected[key] for key in ("task", "sources", "excluded_reply_sources")}
         report = {"tasks": tasks, "scopes": ["scaffold"], "notification_instrumentation": proof,
                   "compiled_test_sources": {
@@ -2201,7 +2203,7 @@ class RepairExecutionTests(unittest.TestCase):
         def provider(scopes):
             from controller.ci import SCOPED_TASKS
 
-            self.assertEqual(scopes, list(SCOPED_TASKS))
+            self.assertIn(scopes, (None, list(SCOPED_TASKS)))
             return plan
         self.assertTrue(validate_build_log(
             build_log([], **report), [], plan_for_scopes=provider,

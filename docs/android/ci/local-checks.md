@@ -638,7 +638,10 @@ requires the exact profile task in the trusted full-scaffold plan and rejects
 reports omitting that task or its proof, including omission of both. For
 affected-only runs, the trusted plan for the actual selected scopes determines
 this obligation: notification-selected runs require both, while unrelated
-scopes require neither and reject unsolicited notification proof. Reported Kotlin inputs and excluded
+scopes require neither and reject unsolicited notification proof. Full-plan
+lookups first derive scopes from the immutable candidate (`requested=None`),
+then add the historical scaffold/oracle scopes without dropping required
+`module:*` scopes. Reported Kotlin inputs and excluded
 reply JVM inputs must match candidate blobs exactly. Older candidates without
 the approved build profile retain the existing plan. The reader does not extend
 the historical scaffold task set unconditionally. The collector also refuses

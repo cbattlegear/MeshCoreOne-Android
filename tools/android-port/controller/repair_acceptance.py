@@ -767,6 +767,26 @@ def _notification_instrumentation_report(report, compiled, expected):
         raise PortError("Notification JVM sources differ from the immutable candidate compilation")
 
 
+def _trusted_full_candidate_plan(plan_for_scopes):
+    from .ci import SCOPED_TASKS
+
+    derived = plan_for_scopes(None)
+    if not isinstance(derived, dict):
+        raise PortError("Missing/malformed trusted candidate-derived scopes")
+    scopes = derived.get("scopes")
+    if (
+        not isinstance(scopes, list) or not scopes
+        or not all(isinstance(scope, str) and scope for scope in scopes)
+        or len(scopes) != len(set(scopes))
+    ):
+        raise PortError("Missing/malformed trusted candidate-derived scopes")
+    requested = [*SCOPED_TASKS, *sorted(set(scopes) - set(SCOPED_TASKS))]
+    plan = plan_for_scopes(requested)
+    if not isinstance(plan, dict) or plan.get("scopes") != requested:
+        raise PortError("Trusted full-scaffold plan omits candidate-derived scopes")
+    return plan
+
+
 def validate_build_log(log, modules, *, plan_for_scopes=None, notification_inputs_for_candidate=None):
     lines = []
     for line in log.splitlines():
@@ -839,7 +859,7 @@ def validate_build_log(log, modules, *, plan_for_scopes=None, notification_input
 
         if plan_for_scopes is None:
             raise PortError("Notification instrumentation proof requires the trusted candidate task plan")
-        trusted_full_plan = plan_for_scopes(list(SCOPED_TASKS))
+        trusted_full_plan = _trusted_full_candidate_plan(plan_for_scopes)
         if (
             not isinstance(trusted_full_plan, dict)
             or trusted_full_plan.get("full_scaffold") is not True
@@ -932,7 +952,7 @@ def validate_build_log(log, modules, *, plan_for_scopes=None, notification_input
             expected_tasks = {task for scope in scopes for task in SCOPED_TASKS[scope]} | extra_tasks
             # Hosted full jobs can leave oracle scopes to separate jobs; the maximal
             # immutable plan establishes profile support without widening their task set.
-            plan = plan_for_scopes(list(SCOPED_TASKS))
+            plan = _trusted_full_candidate_plan(plan_for_scopes)
             if (
                 plan.get("full_scaffold") is not True or not extra_tasks <= set(plan["tasks"])
                 or set(tasks) != expected_tasks
@@ -950,10 +970,9 @@ def validate_build_log(log, modules, *, plan_for_scopes=None, notification_input
     if not required.issubset(tasks) and plan_for_scopes is not None:
         from .module_junit import JVM_REMAPPED_TASKS, select_remapped_tasks
 
-        plan = plan_for_scopes(list(SCOPED_TASKS))
+        plan = _trusted_full_candidate_plan(plan_for_scopes)
         if (
-            not isinstance(plan, dict) or plan.get("scopes") != list(SCOPED_TASKS)
-            or not isinstance(plan.get("tasks"), list)
+            not isinstance(plan.get("tasks"), list)
             or not all(isinstance(task, str) for task in plan["tasks"])
             or len(set(plan["tasks"])) != len(plan["tasks"])
         ):

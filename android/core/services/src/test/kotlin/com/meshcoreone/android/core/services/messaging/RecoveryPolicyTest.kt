@@ -17,6 +17,153 @@ import org.junit.jupiter.api.TestFactory
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class RecoveryPolicyTest {
+    @TestFactory fun queuedFinalizerAndReplacementCleanup() = listOf(
+        native("active retry finalizer reconciles an ACK registered while waiting behind cancelled fail-all") {
+            val h = Harness(this, MessageServiceConfig(maxAttempts = 1, floodAfter = 5, minTimeout = 0.0))
+            h.start(); h.service.startEventMonitoring()
+            val message = h.message()
+            h.transport.suggestedTimeout = 10u
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val cancellation = CancellationException("fail-all cancelled after successful FAILED return")
+            var writing = false
+            h.store.before = {
+                if (it == "updateMessageStatusUnlessDelivered" && !writing) {
+                    writing = true
+                    entered.complete(Unit); release.await()
+                    assertTrue(h.store.updateMessageStatusUnlessDelivered(
+                        EntityKey(RADIO, message.id), MessageStatus.FAILED,
+                    ))
+                    currentCoroutineContext().cancel(cancellation)
+                }
+            }
+            val observed = mutableListOf<MessageStatusEvent>()
+            observe(h, observed)
+            val sending = backgroundScope.async {
+                h.service.sendPendingDirectMessage(message.id, h.contact, preserveTimestamp = true)
+            }
+            runCurrent()
+            assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+            val code = assertNotNull(h.service.pendingAck(message.id)).ackCodes.first()
+            val failing = backgroundScope.async { h.service.failAllPendingMessages() }
+            entered.await()
+            advanceTimeBy(20); runCurrent()
+            assertFalse(sending.isCompleted)
+            assertFalse(h.store.calls.contains("clearRetryingToSent"))
+            h.transport.pushAck(code, 123u); runCurrent()
+            assertEquals(code, h.service.pendingAck(message.id)?.acknowledgement?.code)
+            release.complete(Unit)
+            failing.join()
+            assertTrue(failing.isCancelled)
+            val delivered = sending.await()
+            runCurrent()
+            assertEquals(MessageStatus.DELIVERED, delivered.status)
+            assertEquals(123u, delivered.roundTripTime)
+            assertEquals(code.ackCodeUInt32, delivered.ackCode)
+            assertNull(h.service.pendingAck(message.id))
+            assertEquals(listOf<MessageStatusEvent>(
+                MessageStatusEvent.StatusResolved(message.id, MessageStatus.DELIVERED, 123u),
+            ), observed)
+            assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+            assertTrue(h.service.close().isComplete)
+            h.close()
+        },
+    ) + listOf(false, true).map { replacementDuringRead ->
+        native("old close fences a successful failure marker; replacement during read=$replacementDuringRead") {
+            val h = Harness(this); h.start(); h.service.startEventMonitoring()
+            val message = h.message()
+            val code = Bytes.of(0xAB, 0xCD, 0xEF, 0x12)
+            h.service.installPendingAck(h.tracking(message, code))
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            var writing = false
+            h.store.before = {
+                if (it == "updateMessageStatusUnlessDelivered" && !writing) {
+                    writing = true
+                    entered.complete(Unit); release.await()
+                    assertTrue(h.store.updateMessageStatusUnlessDelivered(
+                        EntityKey(RADIO, message.id), MessageStatus.FAILED,
+                    ))
+                    currentCoroutineContext().cancel(CancellationException("cancel before settlement"))
+                }
+            }
+            val failing = backgroundScope.async { h.service.failAllPendingMessages() }
+            entered.await()
+            h.transport.pushAck(code, 123u); runCurrent()
+            assertEquals(code, h.service.pendingAck(message.id)?.acknowledgement?.code)
+            h.service.stopEventMonitoring()
+            release.complete(Unit); failing.join()
+            assertTrue(failing.isCancelled)
+            val independentlyStored = h.stored(message.id)
+            assertEquals(MessageStatus.FAILED, independentlyStored.status)
+            if (replacementDuringRead) h.store.before = {
+                if (it == "fetchMessage") h.signals.set(token(generation = 2), DeviceConnectionState.READY)
+            }
+            else h.signals.set(token(generation = 2), DeviceConnectionState.READY)
+            val callsBeforeClose = h.store.calls.toList()
+            val report = h.service.close()
+            assertFalse(report.isComplete)
+            assertTrue(report.issues.any {
+                (it.cause as? MessageServiceException)?.error == MessageServiceError.NotConnected
+            })
+            assertEquals(
+                if (replacementDuringRead) listOf("fetchMessage") else emptyList(),
+                h.store.calls.drop(callsBeforeClose.size),
+            )
+            assertEquals(independentlyStored, h.stored(message.id))
+            assertEquals(0, h.service.pendingAckCount)
+            assertTrue(h.sends(CommandCode.SEND_MESSAGE).isEmpty())
+            h.close()
+        }
+    }
+
+    @TestFactory fun failureAuthorityAfterQueuedRetry() = listOf(
+        native("late original ACK cannot consume a failure marker after retry independently fails for a repeater") {
+            val h = Harness(this); h.start(); h.service.startEventMonitoring()
+            val message = h.service.sendDirectMessage("original accepted send", h.contact)
+            val code = assertNotNull(h.service.pendingAck(message.id)).ackCodes.first()
+            var writing = false
+            h.store.before = {
+                if (it == "updateMessageStatusUnlessDelivered" && !writing) {
+                    writing = true
+                    assertTrue(h.store.updateMessageStatusUnlessDelivered(
+                        EntityKey(RADIO, message.id), MessageStatus.FAILED,
+                    ))
+                    currentCoroutineContext().cancel(CancellationException("cancel after FAILED commit without ACK"))
+                }
+            }
+            val failing = backgroundScope.async { h.service.failAllPendingMessages() }
+            failing.join()
+            assertTrue(failing.isCancelled)
+            assertEquals(MessageStatus.FAILED, h.stored(message.id).status)
+            assertNotNull(h.service.pendingAck(message.id))
+            h.store.before = null
+            h.store.updateMessageStatus(EntityKey(RADIO, message.id), MessageStatus.PENDING)
+            h.store.saveContact(h.contact.copy(type = ContactType.REPEATER))
+            val observed = mutableListOf<MessageStatusEvent>()
+            observe(h, observed)
+            h.pending(message)
+            val queue = h.queue()
+            queue.hydrate(); runCurrent(); queue.awaitDrainCompletion()
+            val independentlyFailed = h.stored(message.id)
+            assertEquals(MessageStatus.FAILED, independentlyFailed.status)
+            assertTrue(h.store.pending.isEmpty())
+            assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+            assertTrue(observed.none {
+                it is MessageStatusEvent.StatusResolved && it.status == MessageStatus.DELIVERED
+            })
+            h.transport.pushAck(code, 123u); runCurrent()
+            assertEquals(independentlyFailed, h.stored(message.id))
+            assertTrue(observed.none {
+                it is MessageStatusEvent.StatusResolved && it.status == MessageStatus.DELIVERED
+            })
+            queue.shutdown(); h.service.close()
+            assertEquals(independentlyFailed, h.stored(message.id))
+            assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+            h.close()
+        },
+    )
+
     @TestFactory fun successfulFailedWriteCancellation() = listOf("expiry", "fail-all").flatMap { path ->
         listOf(false to true, true to true, false to false, true to false).map { (alreadyFailed, ackDuringWrite) ->
             native("$path records successful FAILED outcome before caller cancellation; prior FAILED=$alreadyFailed; in-write ACK=$ackDuringWrite") {

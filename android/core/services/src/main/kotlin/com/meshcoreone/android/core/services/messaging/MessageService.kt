@@ -249,9 +249,13 @@ class MessageService(
     private suspend fun reconcileAcknowledgementLocked(messageID: UUID, cleanup: Boolean) {
         val tracking = pendingAck(messageID) ?: return
         val ack = tracking.acknowledgement ?: return
-        if (!cleanup) checkIdentity("commitAcknowledgement")
+        suspend fun checkOwnership(operation: String) {
+            if (cleanup) ownership.checkPersistenceCompletion(operation) else ownership.check(operation)
+        }
+        if (cleanup) checkOwnership("commitAcknowledgement.cleanup")
+        else checkIdentity("commitAcknowledgement")
         val row = dataStore.fetchMessage(key(messageID))
-        if (!cleanup) ownership.check("commitAcknowledgement.read")
+        checkOwnership("commitAcknowledgement.read")
         if (row == null) {
             val failure = PersistenceStoreException(PersistenceStoreError.MessageNotFound)
             remember("ack.$messageID", failure)
@@ -266,7 +270,7 @@ class MessageService(
         }
         if (tracking.publicKey != null) {
             val contact = dataStore.fetchContact(key(tracking.contactID))
-            if (!cleanup) ownership.check("commitAcknowledgement.contact")
+            checkOwnership("commitAcknowledgement.contact")
             if (contact != null && contact.publicKey != tracking.publicKey) {
                 val failure = MessageServiceException(MessageServiceError.ContactNotFound)
                 remember("ack.$messageID.identity", failure)
@@ -288,12 +292,12 @@ class MessageService(
         }
         if (row.status == MessageStatus.FAILED && restoresOwnFailure) {
             dataStore.updateMessageStatusUnlessDelivered(key(messageID), MessageStatus.SENT)
-            if (!cleanup) ownership.check("commitAcknowledgement.restoreForAck")
+            checkOwnership("commitAcknowledgement.restoreForAck")
         }
         dataStore.updateMessageAck(key(messageID), ack.code.ackCodeUInt32, MessageStatus.DELIVERED, ack.tripTime)
-        if (!cleanup) ownership.check("commitAcknowledgement.saved")
+        checkOwnership("commitAcknowledgement.saved")
         val committed = dataStore.fetchMessage(key(messageID))
-        if (!cleanup) ownership.check("commitAcknowledgement.refetched")
+        checkOwnership("commitAcknowledgement.refetched")
         if (committed?.status != MessageStatus.DELIVERED && uncertainWrite != null) {
             remember("ackUncertain.$messageID", uncertainWrite.cause)
             remember("ack.$messageID", uncertainWrite.cause)
@@ -302,6 +306,7 @@ class MessageService(
         if (committed?.status == MessageStatus.DELIVERED) {
             try {
                 dataStore.updateContactLastMessage(key(tracking.contactID), clock.wallClock.instant())
+                checkOwnership("commitAcknowledgement.contactSaved")
                 recovered("ackContact.$messageID")
             } catch (failure: PersistenceStoreException) { remember("ackContact.$messageID", failure) }
             if (!cleanup && ownership.isCurrent) events.yield(MessageStatusEvent.StatusResolved(messageID, MessageStatus.DELIVERED, ack.tripTime))
@@ -944,7 +949,8 @@ class MessageService(
         else mutation(messageID).withLock {
             ownership.check("finalizeSend.transition")
             val current = pendingAck(messageID)
-            if (current == null || current.isDelivered) synchronized(lock) { pendingAcks.remove(messageID) }
+            if (current?.acknowledgement != null) reconcileAcknowledgementLocked(messageID, cleanup = false)
+            else if (current == null || current.isDelivered) synchronized(lock) { pendingAcks.remove(messageID) }
             else if (sentInfo != null) {
                 dataStore.updateMessageAck(key(messageID), sentInfo.expectedAck.ackCodeUInt32, MessageStatus.DELIVERED)
                 ownership.check("finalizeSend.delivered")

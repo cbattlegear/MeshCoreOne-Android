@@ -162,3 +162,31 @@ mutation, and alias retargeting on an existing instance without touching either
 the retained archive or replacement directory. These run on the hosted Linux
 filesystem at SDK31/37; they do not prove an Android device uses such aliases.
 Their execution outcome must be bound to the exact successor hosted run.
+
+## Latest-main composition
+
+The fresh review candidate is based on actual trusted `main`
+`1a8b406a67d44006f14ac043ac468b6adf07a9d7`, which advances `f93e201` only with
+the six WP-003 CI/docs paths. Merge commit
+`2767a9744a76143056d013bb966f17c2023aaf68` has that main commit as first parent
+and the unchanged producer `94493a7248f8ad4a4a72f9751946339418174679` as second
+parent. No production/test conflicts were present. The prior 94493 exact run and
+the earlier f93 composition are not acceptance evidence for this latest-main
+candidate; use its own exact-head hosted run.
+
+## PR review follow-up
+
+The initial PR head received two bounded Copilot review findings: wrapped
+Keystore failures could lose their typed lock/invalidation category, and a
+foreign schema-compatible database could return SQL NULL for witness blobs and
+escape typed corruption handling. The successor source now walks a bounded,
+cycle-safe cause chain for the existing typed Keystore categories and rejects
+null history/head blobs as `CORRUPT_STORAGE`; regressions cover both wrapped
+Keystore causes and nullable payload/MAC columns after SQLite `quick_check`.
+The next review found that database allocation after acknowledgment must also
+require an originally absent expected state. Allocation is now limited to
+`expectedCurrent == null`, with a regression deleting an existing database
+during verification and confirming the stale request cannot create an empty
+replacement schema. These changes do not add verifier/UI wiring or activation.
+Each successor's exact-head CI and review outcomes must be recorded from actual
+GitHub results; earlier-head runs and reviews are not evidence for successors.

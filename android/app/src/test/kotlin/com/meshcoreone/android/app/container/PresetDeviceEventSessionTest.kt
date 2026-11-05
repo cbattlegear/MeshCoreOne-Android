@@ -54,7 +54,7 @@ class PresetDeviceEventSessionTest : RoomProcessTest() {
                         0x16 -> if (pathHashSize == null) null else listOf(
                             Bytes.of(13, 10, 50, 8) + le32(0) + Bytes.utf8("01 Jan 2025").paddedOrTruncated(12) +
                                 Bytes.utf8("T-Deck").paddedOrTruncated(40) +
-                                Bytes.utf8("v1.13.0").paddedOrTruncated(20) + Bytes.of(mode),
+                                Bytes.utf8("v1.13.0").paddedOrTruncated(20) + Bytes.of(0, mode),
                         )
                         else -> null
                     }

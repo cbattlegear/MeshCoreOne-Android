@@ -1,6 +1,8 @@
 # WP-313 TS-02: Android locale and measurement presentation
 
 Source-only candidate based on `99f03ad2da235e66c5cbcb58e88ac4d9aa55d2c5`.
+Successor of source-only `8441dbb99090855a9c0426d69b13d7eddfcb4d2f`;
+that immutable candidate is preserved, not executed or rewritten.
 Read-only Swift reference: `db14559b39d32322b06477c6ae676112f583db50`.
 Relates to #408; this does not close the whole work package.
 
@@ -16,6 +18,14 @@ invalidates composition on a locale change. The existing remembered neighbor
 map calculation now keys its locale-dependent labels on that locale too.
 No map implementation, route/identity policy, command text or stored SI value
 is changed.
+
+The history holder is remembered by data identity/store/clock/zone, not locale
+or units. A latest-value presentation provider supplies current locale, unit
+system and resource resolver to grouping and name resolution. Locale changes
+therefore retain loaded snapshots, errors, loading state and the selected time
+range without relaunching the data-load effect. Chart selection is remembered
+by its timestamp list rather than the unit-dependent chart model; converting
+the same samples does not reset a non-latest selection.
 
 ICU's regional `LocaleData.getMeasurementSystem` is retained for normal locales
 and regional `rg` overrides. Its supplemental-region lookup does not implement
@@ -91,13 +101,21 @@ It does not calculate expected values with production helpers.
 2. Load two genuine snapshot records through the actual history holder/route.
    Assert both its production chart readout and actual location report change
    units/separators with app configuration; dotted coordinates remain unchanged.
-   The store is deterministic test data, not a claim of real persistence.
+   Select ALL rather than default MONTH and use the actual slider's SetProgress
+   action to select the earlier 20.5 C sample (68.9 F), distinct from latest
+   25.5 C (77.9 F). Change resources to German, assert ALL and the earlier
+   20,5 C sample remain selected, and assert all four store-call counts remain
+   one. Explicitly refresh with a snapshot failure, retain cached data/error,
+   switch to US-with-metric-preference, then assert ALL, 20.5 C, report details
+   and error remain with every store-call count still two. This detects both
+   unintended reload and unit-dependent scrub reset. The store is deterministic
+   test data, not a claim of real persistence.
 
 ## Admission, verification and limits
 
 The actual immutable-main `CapabilityEngine`, its `errors`/`paths`/`schema`
 imports, policy and manifest were loaded in memory without ledger access.
-All seven candidate paths admit as WP-313 `wp-owned`: four production `modify`,
+All eight candidate paths admit as WP-313 `wp-owned`: five production `modify`,
 two test `create`, one owned evidence `create`. Capability revision:
 `7680d62ed91fa7b9455647745901c07ac962966fba9ae26ab69e09a498911396`.
 This is path-rule evidence, not an identity receipt or a claim mutation.

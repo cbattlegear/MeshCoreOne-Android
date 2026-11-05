@@ -74,8 +74,9 @@ internal fun RemoteNodeHistoryRoute(
     val locale = LocalConfiguration.current.locales[0]
     val system = MeasurementSystem.of(locale)
     val zone = ZoneId.systemDefault()
-    val holder = remember(publicKey, radioId, store, locale, system, zone, clock) {
-        TelemetryHistoryOverviewStateHolder(clock, zone, locale, system, context::getString)
+    val presentation = rememberUpdatedState(HistoryPresentation(locale, system, context::getString))
+    val holder = remember(publicKey, radioId, store, zone, clock) {
+        TelemetryHistoryOverviewStateHolder(clock, zone, locale, system, context::getString) { presentation.value }
     }
     val state by holder.state.collectAsStateWithLifecycle()
     var refresh by remember { mutableIntStateOf(0) }

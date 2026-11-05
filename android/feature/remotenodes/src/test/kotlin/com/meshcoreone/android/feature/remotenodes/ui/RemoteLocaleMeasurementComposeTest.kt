@@ -20,12 +20,19 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.unit.Density
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
+import com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings as L
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.DiscoveredNodeDTO
 import com.meshcoreone.android.core.model.NodeStatusSnapshotDTO
@@ -148,7 +155,7 @@ class RemoteLocaleMeasurementComposeTest {
         val reports = listOf(
             NodeStatusSnapshotDTO(
                 nodePublicKey = key, timestamp = now.minusSeconds(10_800),
-                telemetryEntries = listOf(TelemetrySnapshotEntry(1, "Temperature", 25.5)).snapshot(),
+                telemetryEntries = listOf(TelemetrySnapshotEntry(1, "Temperature", 20.5)).snapshot(),
             ),
             NodeStatusSnapshotDTO(
                 nodePublicKey = key, timestamp = now.minusSeconds(7_200),
@@ -156,11 +163,42 @@ class RemoteLocaleMeasurementComposeTest {
                 telemetryEntries = listOf(TelemetrySnapshotEntry(1, "Temperature", 25.5)).snapshot(),
             ),
         ).snapshot()
+        var snapshotReads = 0
+        var contactReads = 0
+        var contactsReads = 0
+        var discoveredReads = 0
+        var failSnapshots = false
         val store = object : RemoteNodeHistoryStore {
-            override suspend fun fetchNodeStatusSnapshots(nodePublicKey: Bytes, since: Instant?) = reports
-            override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? = null
-            override suspend fun fetchContacts(radioId: RadioId) = SnapshotList.empty<ContactDTO>()
-            override suspend fun fetchDiscoveredNodes(radioId: RadioId) = SnapshotList.empty<DiscoveredNodeDTO>()
+            override suspend fun fetchNodeStatusSnapshots(nodePublicKey: Bytes, since: Instant?): SnapshotList<NodeStatusSnapshotDTO> {
+                snapshotReads++
+                if (failSnapshots) throw IllegalStateException("Offline history fixture")
+                return reports
+            }
+            override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                contactReads++
+                return null
+            }
+            override suspend fun fetchContacts(radioId: RadioId): SnapshotList<ContactDTO> {
+                contactsReads++
+                return SnapshotList.empty()
+            }
+            override suspend fun fetchDiscoveredNodes(radioId: RadioId): SnapshotList<DiscoveredNodeDTO> {
+                discoveredReads++
+                return SnapshotList.empty()
+            }
+        }
+        fun text(id: Int) = activity.get().createConfigurationContext(
+            Configuration(activity.get().resources.configuration).apply {
+                setLocales(LocaleList(Locale.forLanguageTag(tag.value)))
+            },
+        ).getString(id)
+        fun assertReads(expected: Int) {
+            compose.runOnIdle {
+                assertEquals(expected, snapshotReads)
+                assertEquals(expected, contactReads)
+                assertEquals(expected, contactsReads)
+                assertEquals(expected, discoveredReads)
+            }
         }
         activity.get().setContent {
             ResourceLocale {
@@ -170,17 +208,32 @@ class RemoteLocaleMeasurementComposeTest {
             }
         }
         compose.onNode(hasText(": 77.9 \u00b0F", substring = true)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(text(L.remoteNodesHistoryAll)).performScrollTo().performClick().assertIsSelected()
+        val slider = SemanticsMatcher.keyIsDefined(SemanticsActions.SetProgress)
+        compose.onNode(slider).performScrollTo().performSemanticsAction(SemanticsActions.SetProgress) { it(0f) }
+        compose.onNode(hasText(": 68.9 \u00b0F", substring = true)).performScrollTo().assertIsDisplayed()
+        assertReads(1)
         compose.onNode(hasText(" \u00b7 37.7847, -122.4012 \u00b7 138 ft", substring = true))
             .performScrollTo().assertIsDisplayed()
         changeLocale("de-DE")
-        compose.onNode(hasText(": 25,5 \u00b0C", substring = true)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(text(L.remoteNodesHistoryAll)).performScrollTo().assertIsSelected()
+        compose.onNode(hasText(": 20,5 \u00b0C", substring = true)).performScrollTo().assertIsDisplayed()
         compose.onNode(hasText(" \u00b7 37.7847, -122.4012 \u00b7 42 m", substring = true))
             .performScrollTo().assertIsDisplayed()
         compose.onNode(hasText(": 77.9 \u00b0F", substring = true)).assertDoesNotExist()
         compose.onNode(hasText(" \u00b7 138 ft", substring = true)).assertDoesNotExist()
+        assertReads(1)
+        compose.runOnIdle { failSnapshots = true }
+        compose.onNodeWithText(text(L.remoteNodesStatusRefresh)).performScrollTo().performClick()
+        compose.onNode(hasText(": 20,5 \u00b0C", substring = true)).performScrollTo().assertIsDisplayed()
+        assertReads(2)
+        compose.onNode(hasTestTag("remote-error")).performScrollTo().assertIsDisplayed()
         changeLocale("en-US-u-ms-metric")
-        compose.onNode(hasText(": 25.5 \u00b0C", substring = true)).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText(text(L.remoteNodesHistoryAll)).performScrollTo().assertIsSelected()
+        compose.onNode(hasText(": 20.5 \u00b0C", substring = true)).performScrollTo().assertIsDisplayed()
         compose.onNode(hasText(" \u00b7 37.7847, -122.4012 \u00b7 42 m", substring = true))
             .performScrollTo().assertIsDisplayed()
+        compose.onNode(hasTestTag("remote-error")).performScrollTo().assertIsDisplayed()
+        assertReads(2)
     }
 }

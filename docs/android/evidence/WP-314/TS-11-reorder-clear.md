@@ -436,3 +436,36 @@ Room-backed saved-row publication, scopes clear confirmation to the dialog,
 and additionally asserts the connected route is runnable and fresh B clear
 actually empties it. No previous assertion is removed or relaxed. Those fixture
 bytes need their own exact run; no result is transferred from r26 or r27.
+
+### r28 actual entry and held registry withdrawal
+
+Exact `840d815b4c7c4ff7fb4af22ddcf6edd4764d4173`, run `42043614778`,
+passed all six jobs. Original-log audit matched all six candidate-compiled test
+class blobs and all 159 selected declarations: 84 mounted, 45 execution,
+4 batch-card, 14 saved-list, 8 AppContainer/Room lifetime and 4 actual Tools-entry
+methods. Tools 795/795 and App 2016/2016 passed, with zero failures, errors or
+skips. All four actual entry controls executed, including both held teardown
+same/different-radio schedules.
+
+Identical-test negative `a5f45a3ab28f7683df6b0869ae14b0c529e8c2b0`,
+run `42043619498`, restored only the three publication files from `218`.
+App discovered 2016 executions and failed exactly the two held-withdrawal
+same/different-radio methods at the offline draft assertion (line 170);
+errors/skips were zero. The quiet completed-disconnect controls passed and are
+not claimed as discriminators for this negative. Mandatory later notifications,
+shortcuts, widgets and Room-verification reports were absent; aggregate failed.
+
+R27 originals remain failed diagnostics: both runs discovered 2016 App tests
+with five failures. The four positive entry controls reached the ambiguous
+clear-confirmation matcher, corrected in r28; the negative held controls reached
+offline draft rejection. Both also failed the unchanged shared map-preview
+renderer-entry assertion at line 150. That separate assertion passed on both
+r28 heads without modifying its test or production implementation. No original
+run has been replaced, retried or credited as passing.
+
+The five declared pinned-source checks and trusted 19-path/159-method bounded
+scope validation passed on r28. No local Gradle was run under host memory
+pressure; earlier Windows Java preflight could not allocate its G1 heap. Hosted
+exact execution is authoritative. Final PR-head checks and independent cumulative
+review are separate from these immutable diagnostics. Physical radio/firmware,
+emulator, TalkBack and whole-WP-314 acceptance remain unverified.

@@ -95,6 +95,75 @@ class AdvancedRadioStateHolderTest {
     }
 
     @Test
+    fun `untouched nearest bandwidth follows recovery rather than becoming an explicit edit`() {
+        connection.deviceFlow.value = device(
+            frequency = 910_525u, bandwidth = 7_799u, spreadingFactor = 11u, codingRate = 6u, clientRepeat = true,
+        )
+        serviceProvider = object : SettingsRadioPort by service {
+            override suspend fun reconcileRadioSettingsIfNeeded() {
+                connection.deviceFlow.value = device(
+                    frequency = 868_000u, bandwidth = 125_000u, spreadingFactor = 9u, codingRate = 5u,
+                )
+                yield()
+            }
+        }
+        started()
+        assertEquals(7_800u, state.bandwidth)
+        holder.onTxPowerTextChanged("10")
+        holder.apply()
+        scheduler.runCurrent()
+        assertEquals(
+            listOf("setRadioParamsVerified(868000,125000,9,5,false,null)", "setTxPowerVerified(10)"),
+            service.calls,
+        )
+        assertEquals("868.000", state.frequencyText)
+        assertEquals(125_000u, state.bandwidth)
+        assertEquals(9, state.spreadingFactor)
+        assertEquals(5, state.codingRate)
+        assertEquals("10", state.txPowerText)
+    }
+
+    @Test
+    fun `deliberate off-mode RF edits retain their original intent through recovery and retry`() {
+        var reconciliations = 0
+        serviceProvider = object : SettingsRadioPort by service {
+            override suspend fun reconcileRadioSettingsIfNeeded() {
+                reconciliations++
+                connection.deviceFlow.value = device(
+                    frequency = if (reconciliations == 1) 867_000u else 866_000u,
+                    bandwidth = 62_500u, spreadingFactor = 8u, codingRate = 7u,
+                )
+                yield()
+            }
+        }
+        started()
+        holder.onFrequencyTextChanged("868.1")
+        holder.onBandwidthSelected(125_000u)
+        holder.onSpreadingFactorSelected(9)
+        holder.onCodingRateSelected(5)
+        holder.onTxPowerTextChanged("10")
+        service.failNext("setRadioParamsVerified", SettingsServiceException(SettingsServiceError.SendFailed))
+        holder.apply()
+        scheduler.runCurrent()
+        assertTrue(holder.retryAlertState.value.isPresented)
+        holder.retry.retry()
+        scheduler.runCurrent()
+        assertEquals(2, reconciliations)
+        assertEquals(
+            listOf(
+                "setRadioParamsVerified(868100,125000,9,5,false,null)",
+                "setRadioParamsVerified(868100,125000,9,5,false,null)",
+                "setTxPowerVerified(10)",
+            ),
+            service.calls,
+        )
+        assertEquals("868.100", state.frequencyText)
+        assertEquals(125_000u, state.bandwidth)
+        assertEquals(9, state.spreadingFactor)
+        assertEquals(5, state.codingRate)
+    }
+
+    @Test
     fun `invalid input is rejected before any write`() {
         started()
         val invalid = listOf("", "abc", "nan", "149.9994", "2500.0006", "-1", "1e400")

@@ -201,14 +201,23 @@ class AdvancedRadioStateHolder(
             service.reconcileRadioSettingsIfNeeded()
             val device = target.currentDevice(mutable.value.device, mutable.value.sessionToken)
             // Firmware treats an omitted repeat byte as off; read current values only from the captured radio.
-            val frequencyToSend = if (target.device.clientRepeat || device.clientRepeat) device.frequency else request.frequencyKHz
+            val captured = target.device
+            val frequencyToSend =
+                if (captured.clientRepeat || device.clientRepeat || request.frequencyKHz == captured.frequency) device.frequency
+                else request.frequencyKHz
+            val bandwidthToSend =
+                if (request.bandwidthHz == RadioOptions.nearestBandwidth(captured.bandwidth)) RadioOptions.nearestBandwidth(device.bandwidth)
+                else request.bandwidthHz
+            val sfToSend = if (request.spreadingFactor == captured.spreadingFactor) device.spreadingFactor else request.spreadingFactor
+            val crToSend = if (request.codingRate == captured.codingRate) device.codingRate else request.codingRate
+            val powerToSend = if (request.power == captured.txPower) device.txPower else request.power
             service.setRadioParamsVerified(
-                frequencyToSend, request.bandwidthHz, request.spreadingFactor, request.codingRate,
+                frequencyToSend, bandwidthToSend, sfToSend, crToSend,
                 clientRepeat = device.clientRepeat,
                 expectedDevice = device,
             )
             target.requireCurrent(mutable.value.device, mutable.value.sessionToken)
-            service.setTxPowerVerified(request.power)
+            service.setTxPowerVerified(powerToSend)
             target.requireCurrent(mutable.value.device, mutable.value.sessionToken)
             // A queued observation can predate these committed writes; retain the exact-token read boundary.
             appliedTarget = target
@@ -216,6 +225,11 @@ class AdvancedRadioStateHolder(
                 it.copy(
                     frequency = frequencyToSend.toDouble() / 1000.0,
                     frequencyText = formatFrequencyMHz(frequencyToSend),
+                    bandwidth = bandwidthToSend,
+                    spreadingFactor = sfToSend.toInt(),
+                    codingRate = crToSend.toInt(),
+                    txPower = powerToSend.toInt(),
+                    txPowerText = powerToSend.toString(),
                 )
             }
         } catch (cancelled: CancellationException) {

@@ -85,6 +85,21 @@ against observable preference storage across same/different-radio graph replacem
 new controls require their own positive/negative runtime evidence; no aggregate acceptance
 is transferred from any earlier diagnostic.
 
+R13 positive42006222795 (`f92208945`) and legacy-effect negative42006324874 (`c6582e2e1`)
+are failed diagnostics, not origin acceptance. R14 positive42007671881 (`59cd22521`)
+reports app2007/2 and tools753/3 failed; the delayed app controls failed their null-origin
+assertion at line207, and the three mounted graph cases failed the shared button lookup at
+line1618. Negative42007775666 (`a2032e1a3`) reports app2007/3 and tools753/4 failed, adding
+the same-token reload app/mounted discriminators. Original assertions remain.
+
+The successor explicitly models origin/version in mounted wrappers instead of delegating
+to the fake's null-token defaults, checks origin against actual registry presence, and adds
+no-watcher plus started-container withdrawal controls. Its accepted-operation gate is inside
+the selected real A store create/delete boundary after complete admission, records the exact
+operation/A radio, and then forwards into Room after B publishes. Saved holders use actual
+generation/origin validation. These are new unverified changes requiring fresh execution;
+failed earlier controls are not reclassified as product passes.
+
 | Check | Result |
 |---|---|
 | Pinned Windows preflight: `python .\\tools\\android-port\\controller\\ci.py preflight --local --state $env:ANDROID_CI_STATE --output $output` with a fresh absolute TEMP output and pinned Python 3.12.4 | PASS (exit 0; readiness only) |

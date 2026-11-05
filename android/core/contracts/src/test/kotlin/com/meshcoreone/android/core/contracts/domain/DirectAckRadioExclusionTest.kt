@@ -3,14 +3,68 @@ package com.meshcoreone.android.core.contracts.domain
 
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SnapshotList
+import com.meshcoreone.android.core.model.SnapshotSet
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotEquals
 
 class DirectAckRadioExclusionTest {
     private val radio = RadioId(UUID(0, 1))
     private val targetClaim = UUID(0, 2)
+
+    @Test
+    fun confirmationEvidenceAlwaysIdentifiesItsExactRadio() {
+        val otherRadio = RadioId(UUID(0, 20))
+        val evidence = DirectAckRadioConfirmationEvidence.NoPersistedWildcard(radio)
+
+        assertEquals(radio, evidence.radioId)
+        assertNotEquals(
+            evidence,
+            DirectAckRadioConfirmationEvidence.NoPersistedWildcard(otherRadio),
+        )
+    }
+
+    @Test
+    fun confirmationWildcardReasonsRemainTypedDistinctAndRadioScoped() {
+        for (reason in DirectAckRadioConfirmationWildcardReason.entries) {
+            val evidence = DirectAckRadioConfirmationEvidence.PersistedWildcard(
+                radio,
+                SnapshotSet(listOf(reason)),
+            )
+            assertEquals(radio, evidence.radioId)
+            assertEquals(setOf(reason), evidence.reasons)
+            assertNotEquals<DirectAckRadioConfirmationEvidence>(
+                DirectAckRadioConfirmationEvidence.NoPersistedWildcard(radio),
+                evidence,
+            )
+        }
+    }
+
+    @Test
+    fun confirmationWildcardSnapshotRetainsAllReasonsWithoutMutableAliases() {
+        val reasons = DirectAckRadioConfirmationWildcardReason.entries.toMutableList()
+        val evidence = DirectAckRadioConfirmationEvidence.PersistedWildcard(radio, SnapshotSet(reasons))
+        reasons.clear()
+
+        assertEquals(DirectAckRadioConfirmationWildcardReason.entries.toSet(), evidence.reasons)
+        assertEquals(4, evidence.reasons.size)
+    }
+
+    @Test
+    fun confirmationWildcardRequiresNonemptyReasonsIncludingOnCopy() {
+        assertFailsWith<IllegalArgumentException> {
+            DirectAckRadioConfirmationEvidence.PersistedWildcard(radio, SnapshotSet.empty())
+        }
+        val evidence = DirectAckRadioConfirmationEvidence.PersistedWildcard(
+            radio,
+            SnapshotSet(listOf(DirectAckRadioConfirmationWildcardReason.STICKY_SATURATION)),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            evidence.copy(reasons = SnapshotSet.empty())
+        }
+    }
 
     @Test
     fun olderResolutionReplayReceiptCanCarryNewerResolutionMetadata() {

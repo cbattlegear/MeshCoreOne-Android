@@ -197,13 +197,48 @@ routing, radio hardware behavior, or durable ACK ingress.
 Two additional receipt-value controls cover older-replay/latest-metadata
 distinction and sticky-conflict representation, bringing this file to 17 tests.
 
+## Read-only radio confirmation evidence
+
+The separately discoverable optional capability
+`DirectAckRadioConfirmationEvidenceInspecting` exposes only
+`inspectDirectAckRadioConfirmationEvidence(radioId): DirectAckRadioConfirmationEvidence`.
+It does not extend the settlement authority or require any lease/claim/grant.
+Both sealed variants return the exact `radioId`:
+`NoPersistedWildcard(radioId)` and
+`PersistedWildcard(radioId, reasons: SnapshotSet<DirectAckRadioConfirmationWildcardReason>)`.
+The latter rejects empty reasons, including through data-class copy.
+
+The four distinct reasons are `UNRESOLVED_PHYSICAL_EMISSION`,
+`CONFLICTING_PHYSICAL_EVIDENCE`, `UNTRACKED_LEGACY_ANCESTRY`, and
+`STICKY_SATURATION`. Storage must report every applicable reason in one atomic
+complete radio-history read, including retired leases/generations and legacy
+ancestry with a known accepted code or later markers. Known accepted and
+definitely-unsent physical evidence alone is not wildcard evidence; a tracked
+registered wire without a marker is not a physical emission. No diagnostic
+sample, fake excluded claim, TTL or generation filter may narrow the query.
+This read creates no evidence, handle, grant, mutation or authority renewal.
+
+`NoPersistedWildcard` means only that no persisted wildcard was observed in
+that atomic snapshot. Known code collisions, message eligibility, grant
+validity and recipient delivery are not established. The snapshot can become
+stale immediately and never replaces full atomic settlement. Missing
+capability is explicitly unavailable; storage errors and cancellation
+propagate through existing typed failure paths, never a no-wildcard fallback.
+
+Four added value controls cover exact radio tagging, distinct typed reasons,
+snapshot isolation from mutable inputs, and nonempty construction/copy
+invariants. They bring the test file to 21 tests, not evidence that the actual
+storage query is complete, atomic, read-only or error-propagating. Storage
+implementation and UI integration remain separately owned and this additive
+contract is source-only pending review.
+
 The wire ACK has no session, graph, claim, or physical-emission origin field.
 Therefore identical actual codes across distinct claims, unresolved possible
 emissions, and sticky saturation are fundamentally nonsettling; the contract
 preserves safety rather than inventing origin or expiry.
 
 No local Gradle/Kotlin build or tests were run because of the explicit local
-Gradle owner hold. Source-only `git diff --check` passed and 17 test annotations were
+Gradle owner hold. Source-only `git diff --check` passed and 21 test annotations were
 present in the contract test file; neither check establishes compilation or
 test execution. Hosted exact-candidate compilation/test discovery is pending.
 Physical radio testing and a real Room implementation of the optional

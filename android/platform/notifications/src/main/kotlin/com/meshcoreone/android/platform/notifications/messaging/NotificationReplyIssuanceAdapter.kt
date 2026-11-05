@@ -43,7 +43,10 @@ sealed interface NotificationReplyDeliveryParsing {
         /** Volatile display/recovery data only; never admission, persistence, or send authority. */
         val readableExactText: String? = null,
         val inputStatus: InputStatus = InputStatus.MISSING,
-    ) : NotificationReplyDeliveryParsing
+    ) : NotificationReplyDeliveryParsing {
+        override fun toString(): String =
+            "Rejected(reason=$reason, inputStatus=$inputStatus, hasReadableExactText=${readableExactText != null})"
+    }
     enum class InputStatus { READABLE, EMPTY, MISSING, MALFORMED }
     enum class ParseFailure {
         MISSING_IDENTITY, MALFORMED_IDENTITY, STALE_INSTALLATION, MISSING_INPUT, MALFORMED_INPUT,

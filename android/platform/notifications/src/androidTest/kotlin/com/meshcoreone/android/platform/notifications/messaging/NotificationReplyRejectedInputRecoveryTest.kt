@@ -40,6 +40,7 @@ class NotificationReplyRejectedInputRecoveryTest {
             stale,
         )
         assertFalse(stale is NotificationReplyDeliveryParsing.ReadyForAdmission)
+        assertFalse(stale.toString().contains(exactText))
 
         val malformed = adapter.parseDelivery(
             addInput(identity(expectedStoreId).setAction("legacy"), exactText),

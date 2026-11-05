@@ -194,12 +194,13 @@ ghost-identity change intentionally retains conversation data in the published
 source; this repair does not invent a cascade. Other-radio/channel queue semantics
 are unchanged.
 
-The original 20 repository controls are adapted to issued capture/begin. Eight
+The original 20 repository controls are adapted to issued capture/begin. Nine
 additional actual-Room methods are authored: before-begin text/same-value/identical
 DTO ABA, same-ID pending replacement/preflight, fresh issued inputs after an old
 cache window, eleven deletion/redaction/replace routes across every history, own
 pending completion erasure/replay, cancellation-after-capture recovery, and
-foreign-context/restore/generation fencing, and retired-lease erasure. Their assertions are not discovered
+foreign-context/restore/generation fencing, retired-lease erasure, and issued-intent
+invalidation through a second file handle plus reopen. Their assertions are not discovered
 or passing evidence. The consumer owns actual wire derivation and service barriers.
 
 The tracked genuine v2 predecessor remains byte-for-byte unchanged at the digest

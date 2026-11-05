@@ -178,8 +178,13 @@ class DirectAckAuthorityPersistenceTest {
             store.fetchMessage(entity(id = earlier.id)))
     }
 
-    private fun assertPayloadColumnsNull(table: String, messageId: UUID, vararg prefixes: String) {
-        db.openHelper.readableDatabase.query(
+    private fun assertPayloadColumnsNull(table: String, messageId: UUID, vararg prefixes: String) =
+        assertPayloadColumnsNullIn(db, table, messageId, *prefixes)
+
+    private fun assertPayloadColumnsNullIn(
+        database: MeshCoreDatabase, table: String, messageId: UUID, vararg prefixes: String,
+    ) {
+        database.openHelper.readableDatabase.query(
             "SELECT * FROM $table WHERE radioId = ? AND messageId = ?",
             arrayOf(RADIO_A.value.toString().uppercase(), messageId.toString().uppercase()),
         ).use { cursor ->
@@ -874,6 +879,54 @@ class DirectAckAuthorityPersistenceTest {
                 assertNull(row.roundTripTime)
                 replacement.close()
             } finally { reopened.close() }
+        } finally { context.deleteDatabase(name) }
+    }
+
+    @Test fun issuedIntentCannotCrossOtherHandleMutationOrFileReopen() = runTest {
+        val name = "direct-intent-handles-${UUID.randomUUID()}.db"
+        fun file(): MeshCoreDatabase = Room.databaseBuilder(context, MeshCoreDatabase::class.java, name)
+            .setJournalMode(RoomDatabase.JournalMode.TRUNCATE).addCallback(DirectAckStorage.callback).build()
+        try {
+            val first = file()
+            val original = newStore(first)
+            try {
+                val lease = activate(original)
+                val row = message()
+                original.saveMessage(row)
+                val queued = pending(messageID = row.id)
+                original.upsertPendingSend(queued)
+                for (pendingMutation in listOf(false, true)) {
+                    val issued = assertIs<DirectAckIntentResult.Captured>(
+                        original.captureDirectAckIntent(lease, entity(id = row.id), UUID.randomUUID(),
+                            DirectAckMode.SEND, queued.id),
+                    )
+                    val second = file()
+                    try {
+                        if (pendingMutation) second.pendingSends().upsert(queued.toEntity())
+                        else second.messages().upsert(row.toEntity())
+                    } finally { second.close() }
+                    assertEquals(DirectAckRejection.INVALIDATED, assertIs<DirectAckBeginResult.Rejected>(
+                        original.beginDirectAckAttempt(issued.intent, UUID.randomUUID(), 123u),
+                    ).reason)
+                    assertEquals(row, original.fetchMessage(entity(id = row.id)))
+                }
+                val issued = assertIs<DirectAckIntentResult.Captured>(
+                    original.captureDirectAckIntent(lease, entity(id = row.id), UUID.randomUUID(),
+                        DirectAckMode.SEND, queued.id),
+                )
+                original.close()
+                first.close()
+                val reopened = file()
+                val replacement = newStore(reopened)
+                try {
+                    assertEquals(DirectAckRejection.INVALID_HANDLE, assertIs<DirectAckBeginResult.Rejected>(
+                        replacement.beginDirectAckAttempt(issued.intent, UUID.randomUUID(), 123u),
+                    ).reason)
+                    assertEquals(row, replacement.fetchMessage(entity(id = row.id)))
+                    assertEquals(listOf(queued), replacement.fetchPendingSendsForMessage(entity(id = row.id)))
+                    assertPayloadColumnsNullIn(reopened, "direct_ack_intents", row.id, "message_", "pending_")
+                } finally { replacement.close(); reopened.close() }
+            } finally { original.close(); first.close() }
         } finally { context.deleteDatabase(name) }
     }
 }

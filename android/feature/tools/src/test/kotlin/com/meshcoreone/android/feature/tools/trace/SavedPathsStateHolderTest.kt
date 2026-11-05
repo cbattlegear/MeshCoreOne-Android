@@ -136,6 +136,45 @@ class SavedPathsStateHolderTest {
     }
 
     @Test
+    fun `accepted rename refreshes the same connection after a newer load without restoring older snapshots`() {
+        for (holdSnapshot in listOf(false, true)) {
+            val path = savedPath(Bytes.of(1), radioId = RADIO)
+            store.insert(path)
+            val writeGate = CompletableDeferred<Unit>()
+            val readGate = CompletableDeferred<Unit>()
+            var reads = 0
+            holder.configure(object : SavedPathsDependencies {
+                override fun connectedDevice() = connected
+                override fun savedPaths() = object : TracePathPersisting by store {
+                    override suspend fun updateSavedTracePathName(key: EntityKey, name: String) {
+                        writeGate.await()
+                        store.updateSavedTracePathName(key, name)
+                    }
+                    override suspend fun fetchSavedTracePaths(radioId: RadioId) =
+                        store.fetchSavedTracePaths(radioId).also {
+                            if (++reads == 2 && holdSnapshot) readGate.await()
+                        }
+                }
+            })
+            harness.complete { holder.loadSavedPaths() }
+            val rename = harness.start { holder.renamePath(path, "Accepted new name") }
+            val newerLoad = harness.start { holder.loadSavedPaths() }
+            assertEquals(path.name, store.paths.getValue(path.id).name)
+            writeGate.complete(Unit)
+            harness.main.runCurrent()
+            assertTrue(rename.isCompleted)
+            assertEquals("Accepted new name", store.paths.getValue(path.id).name)
+            assertEquals("Accepted new name", holder.state.value.savedPaths.single { it.id == path.id }.name)
+            val accepted = holder.state.value
+            readGate.complete(Unit)
+            harness.main.runCurrent()
+            assertTrue(newerLoad.isCompleted)
+            assertEquals(accepted, holder.state.value)
+            assertFalse(holder.state.value.isLoading)
+        }
+    }
+
+    @Test
     fun `committed deletion retires an older snapshot without resurrecting its row`() {
         val path = savedPath(Bytes.of(1), radioId = RADIO)
         store.insert(path)

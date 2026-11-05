@@ -97,7 +97,7 @@ class SavedPathsStateHolder(
             if (isCurrent(operation, path.radioId)) mutableState.update { it.copy(errorMessage = strings.renameFailed) }
             return
         }
-        if (isCurrent(operation, path.radioId)) loadSavedPaths()
+        if (isCurrentConnection(path.radioId)) loadSavedPaths()
     }
 
     /** Deletes and drops the row locally without a reload. */

@@ -1,8 +1,9 @@
 # WP-313 TS-02: Android locale and measurement presentation
 
 Source-only candidate based on `99f03ad2da235e66c5cbcb58e88ac4d9aa55d2c5`.
-Successor of source-only `8441dbb99090855a9c0426d69b13d7eddfcb4d2f`;
-that immutable candidate is preserved, not executed or rewritten.
+Successor of source-only `a41f9548a819013c49a6b4bc0189efb40d3c12a2`,
+itself a successor of `8441dbb99090855a9c0426d69b13d7eddfcb4d2f`;
+both immutable candidates are preserved, not executed or rewritten.
 Read-only Swift reference: `db14559b39d32322b06477c6ae676112f583db50`.
 Relates to #408; this does not close the whole work package.
 
@@ -24,8 +25,16 @@ or units. A latest-value presentation provider supplies current locale, unit
 system and resource resolver to grouping and name resolution. Locale changes
 therefore retain loaded snapshots, errors, loading state and the selected time
 range without relaunching the data-load effect. Chart selection is remembered
-by its timestamp list rather than the unit-dependent chart model; converting
-the same samples does not reset a non-latest selection.
+by its stable chart identity and timestamp list rather than the unit-dependent
+chart model; converting the same samples does not reset a non-latest selection.
+Sensor identity is the original channel plus `TelemetryChartGroup.key`, carried
+through `MetricChartModel` independently of localized title/order/unit/value.
+Sensor compositions use that identity as their Compose key. Radio metric
+compositions key their invariant title resource; neighbor compositions key the
+public-key prefix. The history chart subtree is additionally keyed by node
+public key and radio identity, so another node with identical timestamps gets
+fresh chart state. Selected map report and map visibility also reset on node
+replacement, not on locale changes.
 
 ICU's regional `LocaleData.getMeasurementSystem` is retained for normal locales
 and regional `rg` overrides. Its supplemental-region lookup does not implement
@@ -110,12 +119,19 @@ It does not calculate expected values with production helpers.
    and error remain with every store-call count still two. This detects both
    unintended reload and unit-dependent scrub reset. The store is deterministic
    test data, not a claim of real persistence.
+3. Load Humidity and Power histories on the same channel with identical two
+   timestamps. Select earlier Humidity 40.5% and leave Power at latest 20.5 W.
+   Assert the real localized titles order Humidity before Power in English,
+   but Leistung before Luftfeuchtigkeit in German; assert each retained its own
+   sample (40,5% and 20,5 W) without any extra snapshot read. Switch the node
+   public key, keeping timestamps identical, then assert the new node starts at
+   latest Humidity 60,5% and Power 20,5 W with exactly one new load.
 
 ## Admission, verification and limits
 
 The actual immutable-main `CapabilityEngine`, its `errors`/`paths`/`schema`
 imports, policy and manifest were loaded in memory without ledger access.
-All eight candidate paths admit as WP-313 `wp-owned`: five production `modify`,
+All ten candidate paths admit as WP-313 `wp-owned`: seven production `modify`,
 two test `create`, one owned evidence `create`. Capability revision:
 `7680d62ed91fa7b9455647745901c07ac962966fba9ae26ab69e09a498911396`.
 This is path-rule evidence, not an identity receipt or a claim mutation.

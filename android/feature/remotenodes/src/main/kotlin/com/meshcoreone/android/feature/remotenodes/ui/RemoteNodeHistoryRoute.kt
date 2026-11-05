@@ -80,11 +80,12 @@ internal fun RemoteNodeHistoryRoute(
     }
     val state by holder.state.collectAsStateWithLifecycle()
     var refresh by remember { mutableIntStateOf(0) }
-    var fullMap by remember { mutableStateOf(false) }
-    var selectedReport by remember { mutableStateOf<NodeStatusSnapshotDTO?>(null) }
+    var fullMap by remember(publicKey, radioId) { mutableStateOf(false) }
+    var selectedReport by remember(publicKey, radioId) { mutableStateOf<NodeStatusSnapshotDTO?>(null) }
     LaunchedEffect(holder, refresh) {
         if (store != null) holder.loadData(store, publicKey, radioId)
     }
+    key(publicKey, radioId) {
     Column(modifier.verticalScroll(rememberScrollState()).testTag("remote-history-content"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         RemoteHeading(stringResource(L.remoteNodesHistoryOverviewTitle))
         TextButton({ refresh++ }) { Text(stringResource(L.remoteNodesStatusRefresh)) }
@@ -103,10 +104,10 @@ internal fun RemoteNodeHistoryRoute(
                     RemoteHeading(remoteText(content.radioTitle))
                     items.forEach { item ->
                         when (item) {
-                            is RadioChartItem.Chart -> RemoteMetricChart(item.chart)
+                            is RadioChartItem.Chart -> key(item.chart.title) { RemoteMetricChart(item.chart) }
                             is RadioChartItem.PacketSection -> {
                                 RemoteHeading(remoteText(item.header))
-                                item.charts.forEach { RemoteMetricChart(it) }
+                                item.charts.forEach { chart -> key(chart.title) { RemoteMetricChart(chart) } }
                             }
                         }
                     }
@@ -116,7 +117,9 @@ internal fun RemoteNodeHistoryRoute(
                     is OverviewSection.NotCaptured -> Text(remoteText(sensors.notice.text))
                     is OverviewSection.Content -> sensors.value.forEach { section ->
                         section.header?.let { RemoteHeading(remoteText(it)) }
-                        section.charts.forEach { RemoteMetricChart(it) }
+                        section.charts.forEach { chart ->
+                            key(chart.identity) { RemoteMetricChart(chart) }
+                        }
                     }
                 }
                 val reports = LocationHistoryPreview.locationReports(content.filteredSnapshots)
@@ -170,11 +173,14 @@ internal fun RemoteNodeHistoryRoute(
                     RemoteHeading(remoteText(content.neighborsTitle))
                     when (neighbors) {
                         is OverviewSection.NotCaptured -> Text(remoteText(neighbors.notice.text))
-                        is OverviewSection.Content -> neighbors.value.forEach { RemoteMetricChart(it.chart) }
+                        is OverviewSection.Content -> neighbors.value.forEach { neighbor ->
+                            key(neighbor.prefix) { RemoteMetricChart(neighbor.chart) }
+                        }
                     }
                 }
                 Text(remoteText(content.retentionNotice))
             }
         }
+    }
     }
 }

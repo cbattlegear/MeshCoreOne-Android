@@ -24,6 +24,7 @@ import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.semantics.SemanticsActions
@@ -56,6 +57,7 @@ import kotlin.time.Duration
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -235,5 +237,64 @@ class RemoteLocaleMeasurementComposeTest {
             .performScrollTo().assertIsDisplayed()
         compose.onNode(hasTestTag("remote-error")).performScrollTo().assertIsDisplayed()
         assertReads(2)
+    }
+
+    @Test fun sameTimestampChartsKeepTheirOwnSelectionWhenLocaleReordersThemAndResetForAnotherNode() {
+        val node = mutableStateOf(key)
+        var snapshotReads = 0
+        val store = object : RemoteNodeHistoryStore {
+            override suspend fun fetchNodeStatusSnapshots(nodePublicKey: Bytes, since: Instant?): SnapshotList<NodeStatusSnapshotDTO> {
+                snapshotReads++
+                return listOf(
+                    NodeStatusSnapshotDTO(
+                        nodePublicKey = nodePublicKey, timestamp = now.minusSeconds(10_800),
+                        telemetryEntries = listOf(
+                            TelemetrySnapshotEntry(1, "Humidity", 40.5),
+                            TelemetrySnapshotEntry(1, "Power", 10.5),
+                        ).snapshot(),
+                    ),
+                    NodeStatusSnapshotDTO(
+                        nodePublicKey = nodePublicKey, timestamp = now.minusSeconds(7_200),
+                        telemetryEntries = listOf(
+                            TelemetrySnapshotEntry(1, "Humidity", 60.5),
+                            TelemetrySnapshotEntry(1, "Power", 20.5),
+                        ).snapshot(),
+                    ),
+                ).snapshot()
+            }
+            override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? = null
+            override suspend fun fetchContacts(radioId: RadioId) = SnapshotList.empty<ContactDTO>()
+            override suspend fun fetchDiscoveredNodes(radioId: RadioId) = SnapshotList.empty<DiscoveredNodeDTO>()
+        }
+        activity.get().setContent {
+            ResourceLocale {
+                RemoteNodeHistoryRoute(
+                    node.value, RadioId(UUID(0, 1)), false, store, Modifier, { _, _, _, _, _, _, _ -> }, clock,
+                )
+            }
+        }
+        val slider = SemanticsMatcher.keyIsDefined(SemanticsActions.SetProgress)
+        compose.onNode(slider and hasContentDescription("Humidity.", substring = true))
+            .performScrollTo().performSemanticsAction(SemanticsActions.SetProgress) { it(0f) }
+        compose.onNode(hasText(": 40.5 %", substring = true)).performScrollTo().assertIsDisplayed()
+        compose.onNode(hasText(": 20.5 W", substring = true)).performScrollTo().assertIsDisplayed()
+        val humidityBefore = compose.onNodeWithText("Humidity").fetchSemanticsNode().positionInRoot.y
+        val powerBefore = compose.onNodeWithText("Power").fetchSemanticsNode().positionInRoot.y
+        assertTrue("English orders Humidity before Power", humidityBefore < powerBefore)
+        compose.runOnIdle { assertEquals(1, snapshotReads) }
+
+        changeLocale("de-DE")
+        compose.onNode(hasText(": 40,5 %", substring = true)).performScrollTo().assertIsDisplayed()
+        compose.onNode(hasText(": 20,5 W", substring = true)).performScrollTo().assertIsDisplayed()
+        val humidityAfter = compose.onNodeWithText("Luftfeuchtigkeit").fetchSemanticsNode().positionInRoot.y
+        val powerAfter = compose.onNodeWithText("Leistung").fetchSemanticsNode().positionInRoot.y
+        assertTrue("German orders Leistung before Luftfeuchtigkeit", powerAfter < humidityAfter)
+        compose.runOnIdle { assertEquals(1, snapshotReads) }
+
+        compose.runOnIdle { node.value = Bytes(ByteArray(32) { 2 }) }
+        compose.onNode(hasText(": 60,5 %", substring = true)).performScrollTo().assertIsDisplayed()
+        compose.onNode(hasText(": 20,5 W", substring = true)).performScrollTo().assertIsDisplayed()
+        compose.onNode(hasText(": 40,5 %", substring = true)).assertDoesNotExist()
+        compose.runOnIdle { assertEquals(2, snapshotReads) }
     }
 }

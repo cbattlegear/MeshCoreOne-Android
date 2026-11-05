@@ -28,7 +28,7 @@ internal fun RemoteMetricChart(chart: MetricChartModel) {
     val zone = ZoneId.systemDefault()
     val title = remoteText(chart.title)
     val dates = remember(chart) { chart.drawnSeries.flatMap { it.dataPoints.map { point -> point.date } }.distinct().sorted() }
-    var selected by remember(dates) { mutableIntStateOf(dates.lastIndex.coerceAtLeast(0)) }
+    var selected by remember(chart.identity ?: chart.title, dates) { mutableIntStateOf(dates.lastIndex.coerceAtLeast(0)) }
     val readout = chart.readout(dates.getOrNull(selected), locale)
     val descriptions = readout?.entries?.map { "${remoteText(it.seriesName)}: ${it.valueText} ${if (readout.isMultiSeries) chart.unit else ""}" }.orEmpty()
     val dateText = readout?.let { HistoryDateFormat.monthDayTime(it.date, locale, zone) }.orEmpty()

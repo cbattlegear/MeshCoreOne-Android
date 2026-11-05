@@ -4,10 +4,7 @@ package com.meshcoreone.android.app.container
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.lifecycle.Lifecycle
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
+import android.app.Dialog
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
@@ -56,14 +53,45 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.annotation.Implementation
+import org.robolectric.annotation.Implements
 import org.robolectric.annotation.SQLiteMode
+import org.robolectric.shadow.api.Shadow
 import org.robolectric.shadows.ShadowDialog
+import org.robolectric.shadows.ShadowViewRootImpl
+import org.robolectric.util.ReflectionHelpers
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [31, 37], qualifiers = "en-rUS-w360dp-h800dp-mdpi")
+@Config(
+    sdk = [31, 37], qualifiers = "en-rUS-w360dp-h800dp-mdpi",
+    shadows = [NotificationEnrollmentEntryTest.FocusedEnrollmentDialog::class],
+)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 class NotificationEnrollmentEntryTest {
+    @Implements(Dialog::class)
+    class FocusedEnrollmentDialog : ShadowDialog() {
+        @Implementation
+        public override fun show() {
+            super.show()
+            if (focusOnShow) setDialogWindowFocus(true)
+        }
+    }
+
+    companion object {
+        private var focusOnShow = true
+
+        private fun setDialogWindowFocus(focused: Boolean) {
+            val decor = requireNotNull(requireNotNull(ShadowDialog.getLatestDialog()).window).decorView
+            val root = requireNotNull(ReflectionHelpers.callInstanceMethod<Any>(decor, "getViewRootImpl"))
+            Shadow.extract<ShadowViewRootImpl>(root).callWindowFocusChanged(focused)
+            // Handle the real root event before the already queued initial-focus check,
+            // as WindowManager would; dispatching only the View callback leaves AttachInfo unfocused.
+            ReflectionHelpers.callInstanceMethod<Unit>(root, "handleWindowFocusChanged")
+            assertEquals(focused, decor.hasWindowFocus())
+        }
+    }
+
     @get:Rule val compose = createEmptyComposeRule()
     @get:Rule val temporary = TemporaryFolder()
     private lateinit var host: ActivityController<ComponentActivity>
@@ -75,6 +103,7 @@ class NotificationEnrollmentEntryTest {
     private var generationFile: File? = null
 
     @Before fun create() {
+        focusOnShow = true
         host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
         host.windowFocusChanged(true)
         backend = RecordingBackend()
@@ -92,21 +121,8 @@ class NotificationEnrollmentEntryTest {
 
     private fun text(id: Int) = host.get().getString(id)
     private fun mount(value: NotificationEnrollmentProducer? = producer) {
-        compose.runOnUiThread { host.get().setContent { MeshCoreTheme { MountedEntry(value) } } }
+        compose.runOnUiThread { host.get().setContent { MeshCoreTheme { NotificationEnrollmentEntry(value) } } }
         compose.waitForIdle()
-    }
-
-    @Composable
-    private fun MountedEntry(value: NotificationEnrollmentProducer?) {
-        val state = value?.state?.collectAsState()?.value
-        NotificationEnrollmentEntry(value)
-        // Robolectric does not deliver WindowManager focus to a newly shown Dialog.
-        // Deliver that real view event before its posted initial-focus observation.
-        SideEffect {
-            if (state is NotificationEnrollmentProducer.State.Warning) {
-                ShadowDialog.getLatestDialog()?.window?.decorView?.dispatchWindowFocusChanged(true)
-            }
-        }
     }
     private fun start() = compose.onNodeWithText(text(R.string.notification_enrollment_action)).performClick()
 
@@ -117,6 +133,18 @@ class NotificationEnrollmentEntryTest {
         compose.onNodeWithText(text(R.string.notification_enrollment_title)).assertDoesNotExist()
         assertEquals(0, ids)
         assertEquals(0, backend.stages)
+    }
+
+    @Test fun dialogWithoutInitialWindowFocusRetiresWithoutAcknowledgment() {
+        mount()
+        focusOnShow = false
+        start()
+        compose.waitForIdle()
+        assertIs<NotificationEnrollmentProducer.State.Interrupted>(producer.state.value)
+        compose.onNodeWithText(text(R.string.notification_enrollment_confirm)).assertDoesNotExist()
+        assertEquals(4, ids)
+        assertEquals(0, backend.stages)
+        assertEquals(0, backend.enrollments)
     }
 
     @Test fun actualNotificationsSettingsMountsEntryWithoutRequiringSystemPermission() {
@@ -138,7 +166,7 @@ class NotificationEnrollmentEntryTest {
             host.get().setContent {
                 MeshCoreTheme {
                     NotificationSettingsScreen(holder, SettingsNavigator {}, null) {
-                        MountedEntry(producer)
+                        NotificationEnrollmentEntry(producer)
                     }
                 }
             }
@@ -209,7 +237,7 @@ class NotificationEnrollmentEntryTest {
         mount()
         start()
         compose.runOnUiThread {
-            requireNotNull(ShadowDialog.getLatestDialog().window).decorView.dispatchWindowFocusChanged(false)
+            setDialogWindowFocus(false)
         }
         compose.waitForIdle()
         assertTrue(requireNotNull(backend.shown).retired)
@@ -223,7 +251,7 @@ class NotificationEnrollmentEntryTest {
         val confirm = compose.onNodeWithText(text(R.string.notification_enrollment_confirm))
             .fetchSemanticsNode().config[SemanticsActions.OnClick].action
         compose.runOnUiThread {
-            requireNotNull(ShadowDialog.getLatestDialog().window).decorView.dispatchWindowFocusChanged(false)
+            setDialogWindowFocus(false)
             requireNotNull(confirm).invoke()
         }
         compose.waitForIdle()

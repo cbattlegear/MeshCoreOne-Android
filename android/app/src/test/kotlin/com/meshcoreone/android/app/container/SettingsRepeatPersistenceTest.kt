@@ -782,6 +782,9 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                 assertTrue(sibling.savePreRepeatSettings(token, attempt))
                 val created = assertNotNull(h.manager.connectedDevice)
                 store.updateDeviceLastContactSync(created.radioId, created.lastContactSync + 1u)
+                val changed = assertNotNull(store.fetchDevice(created.id))
+                store.saveDevice(changed.copy(preRepeatFrequency = assertNotNull(changed.preRepeatFrequency) + 1u))
+                store.saveDevice(changed)
                 assertNotNull(runCatching { sibling.abortPreRepeatSettings(token, attempt) }.exceptionOrNull())
                 service.setRadioParamsVerified(869_000u, 62_500u, 8u, 7u, false)
                 h.eventually("later manual baseline is published before old restore resumes") { h.manager.connectedDevice?.frequency == 869_000u }
@@ -1063,7 +1066,89 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
         } finally { hold.complete(Unit) }
     }
 
-    @Test fun abortPreservesEveryExistingSnapshotAndRefusesEqualDtoAbaOrRetiredCreationReceipts() = runTest {
+    @Test fun failedDefinitelyUnsentCleanupCanBeRetriedThroughTheActualRepeatAction() = runTest {
+        val committed = CompletableDeferred<Job>()
+        val hold = CompletableDeferred<Unit>()
+        var armed = false
+        var rejectCleanup = false
+        var cleanupFailures = 0
+        val held = object : PersistenceStoreProtocol by store {
+            override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+                if (rejectCleanup && expected.device.preRepeatFrequency != null && dto.preRepeatFrequency == null) {
+                    cleanupFailures++
+                    throw PersistenceStoreException(PersistenceStoreError.SaveFailed("Snapshot cleanup unavailable"))
+                }
+                val saved = store.saveDeviceIfUnchanged(dto, expected)
+                if (saved && armed && expected.device.preRepeatFrequency == null && dto.preRepeatFrequency != null) {
+                    armed = false
+                    committed.complete(currentCoroutineContext()[Job]!!)
+                    hold.await()
+                }
+                return saved
+            }
+        }
+        try {
+            withRepeat(held) { h, holder, failures, radio ->
+                val before = assertNotNull(h.manager.connectedDevice)
+                val token = assertNotNull(h.sessions.current).token
+                armed = true
+                rejectCleanup = true
+                holder.onRepeatToggled(true)
+                holder.confirmEnableRepeatMode()
+                h.eventually("new snapshot commits before cancellation") { committed.isCompleted }
+                committed.await().cancel()
+                h.eventually("failed definitely-unsent cleanup is shown") {
+                    !holder.state.value.isApplyingRepeat && cleanupFailures == 1
+                }
+                assertNotNull(holder.state.value.errorMessage)
+                assertTrue(radio.radioWrites.isEmpty())
+                assertEquals(before.savingPreRepeatSettings(), store.fetchDevice(before.id))
+                val failuresBefore = failures.size
+                holder.dismissError()
+                holder.onRepeatToggled(true)
+                holder.confirmEnableRepeatMode()
+                h.eventually("an ordinary retry still surfaces the storage outage without sending") {
+                    !holder.state.value.isApplyingRepeat && failures.size > failuresBefore
+                }
+                assertTrue(cleanupFailures >= 2)
+                assertTrue(radio.radioWrites.isEmpty())
+                assertNotNull(holder.state.value.errorMessage)
+                rejectCleanup = false
+                h.sessions.current!!.settingsService.setRadioParamsVerified(868_000u, 125_000u, 9u, 6u, false)
+                h.eventually("later manual RF is observed before retry") {
+                    holder.state.value.device?.frequency == 868_000u && h.manager.connectedDevice?.frequency == 868_000u
+                }
+                val manual = assertNotNull(h.manager.connectedDevice)
+                holder.dismissError()
+                holder.onRepeatToggled(true)
+                holder.confirmEnableRepeatMode()
+                h.eventually("ordinary Repeat enable retries the proven cleanup and prepares a fresh baseline") {
+                    !holder.state.value.isApplyingRepeat && holder.state.value.device?.clientRepeat == true
+                }
+                val fresh = assertNotNull(store.fetchDevice(before.id))
+                assertEquals(manual.frequency, fresh.preRepeatFrequency)
+                assertEquals(manual.bandwidth, fresh.preRepeatBandwidth)
+                assertEquals(manual.spreadingFactor, fresh.preRepeatSpreadingFactor)
+                assertEquals(manual.codingRate, fresh.preRepeatCodingRate)
+                holder.onRepeatToggled(false)
+                h.eventually("Repeat off restores only the later baseline") {
+                    !holder.state.value.isApplyingRepeat && h.manager.connectedDevice?.clientRepeat == false &&
+                        h.manager.connectedDevice?.preRepeatFrequency == null
+                }
+                val restored = assertNotNull(store.fetchDevice(before.id))
+                assertEquals(manual.frequency, restored.frequency)
+                assertEquals(manual.bandwidth, restored.bandwidth)
+                assertEquals(manual.spreadingFactor, restored.spreadingFactor)
+                assertEquals(manual.codingRate, restored.codingRate)
+                assertEquals(restored, h.manager.connectedDevice)
+                assertEquals(token, h.sessions.current?.token)
+                assertEquals(listOf(0, 1, 0), radio.radioWrites.map { it[11].toInt() })
+                assertNull(holder.state.value.errorMessage)
+            }
+        } finally { rejectCleanup = false; hold.complete(Unit) }
+    }
+
+    @Test fun abortPreservesExistingSnapshotsAcceptsWatermarkAbaAndRefusesSnapshotAbaOrRetiredReceipts() = runTest {
         withRepeat(store) { h, _, _, _ ->
             val before = assertNotNull(h.manager.connectedDevice)
             val token = assertNotNull(h.sessions.current).token
@@ -1088,14 +1173,21 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
             val abaAttempt = PreRepeatSettingsAttempt(token)
             assertTrue(editor.savePreRepeatSettings(token, abaAttempt))
             val prepared = assertNotNull(store.fetchDevice(before.id))
-            // Same complete DTO after two targeted commits must still invalidate the creation receipt.
+            // Watermark ABA does not change the snapshot or identity lifecycle.
             store.updateDeviceLastContactSync(before.radioId, prepared.lastContactSync + 1u)
             store.updateDeviceLastContactSync(before.radioId, prepared.lastContactSync)
             assertEquals(prepared, store.fetchDevice(before.id))
-            val refused = runCatching { editor.abortPreRepeatSettings(token, abaAttempt) }.exceptionOrNull()
-            assertNotNull(refused, "Abort must compare the actual creation revision, not just snapshot values")
-            assertEquals(prepared, store.fetchDevice(before.id))
-            assertEquals(prepared, h.manager.connectedDevice)
+            assertTrue(editor.abortPreRepeatSettings(token, abaAttempt))
+            assertEquals(prepared.clearingPreRepeatSettings(), store.fetchDevice(before.id))
+            assertEquals(prepared.clearingPreRepeatSettings(), h.manager.connectedDevice)
+            val snapshotAttempt = PreRepeatSettingsAttempt(token)
+            assertTrue(editor.savePreRepeatSettings(token, snapshotAttempt))
+            val original = assertNotNull(store.fetchDevice(before.id))
+            store.saveDevice(original.copy(preRepeatFrequency = assertNotNull(original.preRepeatFrequency) + 1u))
+            store.saveDevice(original)
+            assertNotNull(runCatching { editor.abortPreRepeatSettings(token, snapshotAttempt) }.exceptionOrNull())
+            assertEquals(original, store.fetchDevice(before.id), "Equal DTOs do not restore snapshot lifecycle authority")
+            assertEquals(original, h.manager.connectedDevice)
             assertTrue(editor.clearPreRepeatSettings(token))
             val retiredAttempt = PreRepeatSettingsAttempt(token)
             assertTrue(editor.savePreRepeatSettings(token, retiredAttempt))

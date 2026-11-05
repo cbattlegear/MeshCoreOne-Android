@@ -262,7 +262,7 @@ class ConnectedDeviceEditor(
 
     suspend fun abortPreRepeatSettings(expectedToken: SessionToken, attempt: PreRepeatSettingsAttempt): Boolean {
         require(attempt.token == expectedToken)
-        val receipt = attempt.takeAbortSnapshot() ?: return true
+        val receipt = repeatSnapshotAuthority.requestUnsentAbort(attempt) ?: return true
         val saved = sessionEdit("abortRepeat", expectedToken) {
             repeatSnapshotAuthority.abortingUnsentSnapshot(it, receipt, attempt)
         }
@@ -343,9 +343,11 @@ class ConnectedDeviceEditor(
 
     private suspend fun reconcilePreRepeatSettingsClear(expectedToken: SessionToken): Boolean {
         val device = access.currentDevice(expectedToken) ?: return false
-        if (!repeatSnapshotAuthority.hasClearRequest(device)) return true
+        if (!repeatSnapshotAuthority.hasClearRequest(device) && !repeatSnapshotAuthority.hasUnsentAbortRequest(device)) return true
         return sessionEdit("reconcileRepeatClear", expectedToken) {
-            repeatSnapshotAuthority.reconcilingClearRequest(it)
+            if (repeatSnapshotAuthority.hasUnsentAbortRequest(it))
+                repeatSnapshotAuthority.reconcilingUnsentAbortRequest(it, expectedToken)
+            else repeatSnapshotAuthority.reconcilingClearRequest(it)
         }
     }
 

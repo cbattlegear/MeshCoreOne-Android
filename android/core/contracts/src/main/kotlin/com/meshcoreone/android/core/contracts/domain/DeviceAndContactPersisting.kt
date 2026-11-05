@@ -102,6 +102,7 @@ class RepeatSnapshotAuthority {
     private data class Pending(
         val receipt: DeviceWriteSnapshot, val attempt: PreRepeatSettingsAttempt,
         val identityVersion: Long, val snapshotVersion: Long,
+        var abortRequested: Boolean = false,
     )
     private data class ClearRequest(val device: DeviceDTO, val token: SessionToken, val identityVersion: Long, val snapshotVersion: Long)
     private data class CommittedClear(val identityVersion: Long, val snapshotVersion: Long)
@@ -198,12 +199,32 @@ class RepeatSnapshotAuthority {
         )
     }
 
-    /** The caller already consumed this attempt's definitely-unsent creation receipt. */
+    fun requestUnsentAbort(attempt: PreRepeatSettingsAttempt): DeviceWriteSnapshot? {
+        val receipt = attempt.takeAbortSnapshot() ?: return null
+        synchronized(this) {
+            val created = pending[receipt.device.identity()] ?: throw DeviceWriteConflict()
+            if (created.attempt !== attempt || created.receipt !== receipt) throw DeviceWriteConflict()
+            created.abortRequested = true
+        }
+        return receipt
+    }
+
+    @Synchronized fun hasUnsentAbortRequest(device: DeviceDTO): Boolean =
+        pending[device.identity()]?.abortRequested == true
+
+    @Synchronized fun reconcilingUnsentAbortRequest(device: DeviceDTO, token: SessionToken): DeviceDTO {
+        val created = pending[device.identity()] ?: return device
+        if (!created.abortRequested) return device
+        if (created.attempt.token != token) throw DeviceWriteConflict()
+        return abortingUnsentSnapshot(device, created.receipt, created.attempt)
+    }
+
+    /** Retain the proven disposition until a lifecycle-bound clear actually commits. */
     @Synchronized fun abortingUnsentSnapshot(
         device: DeviceDTO, receipt: DeviceWriteSnapshot, attempt: PreRepeatSettingsAttempt,
     ): DeviceDTO {
         val created = pending[receipt.device.identity()] ?: throw DeviceWriteConflict()
-        if (created.attempt !== attempt || created.receipt !== receipt ||
+        if (!created.abortRequested || created.attempt !== attempt || created.receipt !== receipt ||
             attempt.token?.radioId != device.radioId || device.identity() != receipt.device.identity() ||
             device.clientRepeat || !device.sameSnapshot(receipt.device) ||
             identityVersion(device.id) != created.identityVersion || snapshotVersion(device.id) != created.snapshotVersion

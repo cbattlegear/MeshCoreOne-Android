@@ -353,6 +353,55 @@ class OnboardingGateTest {
         }
     }
 
+    @Test fun `mounted preset action refreshes when cancelled completion is known uncommitted`() = runBlocking {
+        val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val finalizerEntered = CompletableDeferred<String>()
+        val releaseFinalizer = CompletableDeferred<Unit>()
+        try {
+            host.setup().visible()
+            val reads = mutableListOf<String>()
+            val flags = WriteBehindOnboardingFlags(
+                emptyMap(), processScope, { _, _ -> error("Use the original finalizer") },
+                persistCompletion = { id ->
+                    finalizerEntered.complete(id)
+                    releaseFinalizer.await()
+                    throw java.io.IOException("finalizer did not commit")
+                },
+                reconcileCompletion = { id -> reads += id; false },
+            )
+            val dependencies = onboarding(flags, flags.hasCompleted, processScope)
+            val flow = dependencies.retainedFlowCoordinator()
+            flow.onboarding.replacePath(listOf(OnboardingStep.PRESET))
+            val preset = flow.preset.visiblePresets().first()
+            flow.preset.select(preset.id)
+            showFlow(dependencies)
+            val apply = compose.onNodeWithText(
+                com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings.presetUse(
+                    host.get().resources, preset.name,
+                ),
+            )
+            compose.waitForIdle()
+            apply.assertIsEnabled()
+
+            val pending = async(start = CoroutineStart.UNDISPATCHED) { flow.onboarding.completeOnboarding() }
+            val attemptId = finalizerEntered.await()
+            pending.cancelAndJoin()
+            compose.waitForIdle()
+            assertTrue(flow.onboarding.unsettledCompletionFlow.value)
+            apply.assertIsNotEnabled()
+
+            releaseFinalizer.complete(Unit)
+            flow.onboarding.unsettledCompletionFlow.first { !it }
+            compose.waitForIdle()
+            assertEquals(listOf(attemptId), reads)
+            assertFalse(flags.hasCompleted.value)
+            apply.assertIsEnabled()
+        } finally {
+            releaseFinalizer.complete(Unit)
+            processScope.cancel()
+        }
+    }
+
     @Test fun `mounted preset retry reads the original sealed receipt even after its radio is replaced`() = runBlocking {
         val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
         try {

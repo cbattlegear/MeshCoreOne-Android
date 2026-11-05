@@ -479,3 +479,100 @@ Historical successful hosted run `41708894306` covers only parent `cf894d9` on b
 not this repair. Exact-head hosted execution and independent review remain outstanding.
 The separate WP-302 atomic navigation handoff, device-menu tip display seam, WP-503 disposition,
 physical API31/37 behavior and full-WP acceptance are not established by this patch.
+
+## Exact 82cba9 result and same-attempt recovery follow-up
+
+Repository: `cbattlegear/MeshCoreOne-Android`; base
+`16d6ff9146142c16226cecc1f1461e0afc450137`; published predecessor
+`82cba9bf948376529a319b1a8a8a0bf25cf88644`. Automatic run
+`41942692910`, Linux job `126967249464`, finished **FAILURE**, with
+**1,933 app tests / 19 failures**. Classifier/controller passed; Swift oracles
+were skipped. This supersedes the earlier in-progress status, not the preserved
+0ac, fc7 or 98d failures. The authoritative hosted job/log is retained by GitHub;
+no second CI-result bundle was committed, uploaded, hashed or revalidated.
+
+Named log observations on that exact head include OnboardingFlagsTest 24 passed,
+OnboardingGateTest 19 passed, OnboardingFlowCoordinatorTest 21 passed,
+PresetDeviceEventSessionTest 6 passed, CompanionSetupServiceTest 20 passed and
+core SettingsPathHashPersistenceTest 8 passed. Those observations include the
+typed unavailable-readback repair; they do not execute this section's successor
+or establish whole-WP, gate/witness or original-case acceptance.
+
+The app's seven path-hash persistence controls and fresh mounted Settings
+recreation control failed before their intended scenarios with
+`CancellationException: Superseded connection generation` in connection
+initialization/time synchronization. Other failures included the RX old-write
+control's missing versioned-persistence wrapper, two actual Room region cases
+expecting a nonempty known-region list but observing an empty list, the held
+activation/retirement control's timeout, five channel-recovery controls, one
+saved-device recovery control and one mounted partial-import control. Actual
+failures/causes were routed to the existing Settings/device-writer owners.
+Core success is not mounted Settings/Room execution credit. No unreviewed
+runtime/storage successor was imported to mask these failures.
+
+The separate immutable 169-to-891 source review supplied six follow-up concerns
+and a weak-barrier test gap. The source/test changes in the commit containing
+this section have these bounded dispositions:
+
+- The real production liveness gap is repaired through the existing visible
+  completion retry. An unresolved sealed decision retains its original attempt,
+  receipt and revision. Retry submits readback of that exact ID to the existing
+  process writer, not a fresh stage, finalization, radio apply or decision.
+  Unavailable readback keeps authority fenced and retry available. Authoritative
+  true publishes the original receipt; authoritative false releases admission
+  but requires a subsequent explicit retry before any replacement write.
+- The process queue owns an admitted read through initiating-child cancellation.
+  A read already in progress may settle canonical knowledge after reset/retirement,
+  but revision/owner checks prevent delivery of the revoked receipt. A queued
+  reset follows it and must acknowledge false before reopening completion.
+  A new real MeshCoreStorage/ShowOnceTips control covers actual committed data,
+  lost acknowledgement, unavailable initial readback, held original-ID read and
+  child cancellation/reset/retirement. It asserts one stage/finalization, no stale
+  receipt, original receipt identity after child cancellation, and actual storage
+  false after reset.
+- Concurrent public resets serialize their complete durable false operation
+  using a mutex and validate revision before submission and after acknowledgement.
+  A real writer-boundary control holds the older reset before submission, starts
+  the newer reset, proves it cannot submit or admit true early, then requires
+  false/false/true ordering and a durable true final snapshot. No production reset
+  caller was established; this repairs the API contract rather than claiming an
+  observed user failure.
+- Preset retry captures alert/applied identity and generation under the lifecycle
+  lock, and revalidates that generation at admission. Preset results also check
+  generation after potentially reentrant admission/target callbacks. The control
+  resets/replaces the target from an admission callback: old retry cannot apply
+  to the successor; a genuinely fresh apply still completes.
+- Wi-Fi and pairing results validate their initiating generation after the
+  potentially reentrant admission callback, before advancing. A control resets
+  from that callback and rejects old success for each port, then accepts a fresh
+  connection. No production callback-triggered reset was found.
+- Still-mounted first-run content observes process-owned availability revision.
+  When an explicitly retired sealed owner settles known-uncommitted, it is
+  replaced without Activity recreation or a second setContent. The mounted
+  control clicks the actual welcome action and requires the fresh owner's path,
+  not the retired owner's path, to advance. Successful completion does not
+  increment that revision/remount into a restored-receipt loop. Reruns do not
+  inherit the first-run revision. Activity recreation alone still does not retire
+  the process owner.
+- The concurrent admission/reset control now waits for actual JVM monitor
+  contention owned by the applying thread, using ThreadMXBean, before releasing
+  target capture. A signal merely announcing that reset was scheduled is no
+  longer its race barrier.
+
+New mounted no-device and preset controls click the existing localized Try Again
+action. The preset control replaces the radio and disables new radio application
+before retry, and requires delivery of the original target receipt with one
+radio apply and one finalization. These are screen/writer controls, not acceptance
+of the held AppRoot/navigation bridge. All eight new test methods and strengthened
+barrier are **authored, not executed** at publication of this follow-up.
+
+Pinned Python 3.12.4 and trusted capability admissions were checked. Declared
+source-only commands passed: `python .\tools\android-port\controller\validate.py`
+(64 WPs / 1,866 references), `python .\tools\android-port\portmap.py` (exit 0,
+attribution only), `python .\tools\android-port\test_inventory.py --check`
+(468 pinned paths / 5,133 declarations, not Android execution), and
+`git diff --check`. Exact-successor hosted discovery/review remains required.
+Shared local Gradle ownership was not cleared, bypassed or contended for.
+The #495 navigation/source/reservation/publication hold, original entry/activation
+witness, first-run presenter/dismissal, unknown retired-owner recovery, physical
+API31/37/radio evidence and native tip UX remain unresolved as applicable.

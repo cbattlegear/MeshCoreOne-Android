@@ -82,7 +82,7 @@ class WiFiConnectionCoordinator(
                     if (generation == started) when (outcome) {
                         OnboardingConnectOutcome.Connected -> {
                             mutable.update { it.copy(isConnecting = false) }
-                            if (canStartConnection()) onConnected()
+                            if (canStartConnection() && generation == started) onConnected()
                         }
                         is OnboardingConnectOutcome.Failed -> mutable.update { it.copy(isConnecting = false, error = outcome.message) }
                         else -> mutable.update { it.copy(isConnecting = false) }

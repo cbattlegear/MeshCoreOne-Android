@@ -41,7 +41,8 @@ fun OnboardingFlow(
     completionDeliveryKey: Any? = null,
 ) {
     val scope = rememberCoroutineScope()
-    val flow = remember(dependencies, attemptKey) {
+    val ownerRevision = dependencies.flowCoordinatorRevision?.collectAsState()?.value
+    val flow = remember(dependencies, attemptKey, ownerRevision) {
         dependencies.retainedFlowCoordinator()
             ?: OnboardingFlowCoordinator(scope, dependencies).also { it.restoreStartingPath() }
     }

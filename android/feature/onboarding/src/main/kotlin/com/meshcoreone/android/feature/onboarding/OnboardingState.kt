@@ -8,6 +8,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 enum class OnboardingStep(val rawValue: String) {
     WELCOME("welcome"), PERMISSIONS("permissions"), PAIR("pair"), REGION("region"), PRESET("preset"),
@@ -28,6 +30,15 @@ interface OnboardingCompletionOutcomeUnknown
 interface OnboardingFlagStore {
     fun getBoolean(key: String): Boolean
     fun setBoolean(key: String, value: Boolean)
+
+    suspend fun reconcileCompletion(
+        attempt: OnboardingCompletionAttempt, requireCurrent: () -> Unit,
+        onFinished: (Result<Boolean>) -> Unit,
+    ) {
+        val failure = UnsupportedOperationException("Onboarding completion readback is unavailable")
+        onFinished(Result.failure(failure))
+        throw failure
+    }
 
     /** Waits for durable adapters to confirm the write before publishing completion. */
     suspend fun persistBoolean(key: String, value: Boolean) = setBoolean(key, value)
@@ -85,6 +96,14 @@ class OnboardingState(private val store: OnboardingFlagStore) {
     private val completionLock = Any()
     private var pendingAttempt: OnboardingCompletionAttempt? = null
     private var settlingAttempt: OnboardingCompletionAttempt? = null
+    private val unsettled = MutableStateFlow(false)
+    val unsettledCompletionFlow: StateFlow<Boolean> = unsettled.asStateFlow()
+    private data class UncertainCompletion(
+        val attempt: OnboardingCompletionAttempt, val receipt: OnboardingCompletionReceipt, val revision: Long,
+    )
+    private var uncertain: UncertainCompletion? = null
+    private var reconcilingAttempt: OnboardingCompletionAttempt? = null
+    private val resetMutex = Mutex()
     private var completionRevision = 0L
     private var retired = false
     private var resetRequired = false
@@ -97,7 +116,7 @@ class OnboardingState(private val store: OnboardingFlagStore) {
         if (completed.value) OnboardingCompletionPublication(OnboardingCompletionReceipt.Restored, completionRevision) else null,
     )
     val completionReceipt: OnboardingCompletionReceipt? get() = publication.value?.receipt
-    val hasUnsettledCompletion: Boolean get() = synchronized(completionLock) { settlingAttempt != null }
+    val hasUnsettledCompletion: Boolean get() = unsettled.value
     internal val completionPublication = publication.asStateFlow()
 
     val hasCompletedOnboardingFlow: StateFlow<Boolean> = completed.asStateFlow()
@@ -150,7 +169,7 @@ class OnboardingState(private val store: OnboardingFlagStore) {
             check(!completed.value) { "Onboarding completion is awaiting exact-flow settlement" }
             check(pendingAttempt == null) { "An onboarding completion is already pending" }
             pendingAttempt = attempt
-            settlingAttempt = attempt
+            setSettlingAttempt(attempt)
             ++completionRevision
         }
         val caller = currentCoroutineContext()
@@ -166,9 +185,12 @@ class OnboardingState(private val store: OnboardingFlagStore) {
             store.persistBoolean(KEY_HAS_COMPLETED, true, validate, seal, attempt) { result ->
                 synchronized(completionLock) {
                     val unknown = result.exceptionOrNull() is OnboardingCompletionOutcomeUnknown
-                    if (settlingAttempt === attempt && !unknown) settlingAttempt = null
+                    if (settlingAttempt === attempt && !unknown) setSettlingAttempt(null)
                     if (pendingAttempt === attempt) {
-                        if (unknown) resetRequired = true else pendingAttempt = null
+                        if (unknown) {
+                            resetRequired = true
+                            uncertain = UncertainCompletion(attempt, receipt, revision)
+                        } else pendingAttempt = null
                         if (result.isSuccess) {
                             completed.value = true
                             if (completionRevision == revision && !retired && !resetRequired) {
@@ -186,7 +208,7 @@ class OnboardingState(private val store: OnboardingFlagStore) {
             synchronized(completionLock) {
                 attempt.reject(IllegalStateException("Onboarding attempt ended before sealing"))
                 if (!attempt.isSealed && pendingAttempt === attempt) pendingAttempt = null
-                if (!attempt.isSealed && settlingAttempt === attempt) settlingAttempt = null
+                if (!attempt.isSealed && settlingAttempt === attempt) setSettlingAttempt(null)
             }
         }
     }
@@ -200,6 +222,49 @@ class OnboardingState(private val store: OnboardingFlagStore) {
 
     fun canStartCompletion(): Boolean =
         synchronized(completionLock) { !retired && !resetRequired && !completed.value && pendingAttempt == null }
+
+    fun canReconcileCompletion(): Boolean = synchronized(completionLock) {
+        !retired && uncertain != null && reconcilingAttempt == null
+    }
+
+    suspend fun reconcileCompletion(expectedGeneration: Long? = null): Boolean {
+        val original = synchronized(completionLock) {
+            check(expectedGeneration == null || lifecycle.value == expectedGeneration) {
+                "Onboarding reconciliation was retired"
+            }
+            check(canReconcileCompletion()) { "No uncertain onboarding decision is available for readback" }
+            checkNotNull(uncertain).also { reconcilingAttempt = it.attempt }
+        }
+        var resolved: Boolean? = null
+        val validate = {
+            synchronized(completionLock) {
+                check(!retired && uncertain === original && completionRevision == original.revision) {
+                    "Onboarding reconciliation was retired"
+                }
+            }
+        }
+        store.reconcileCompletion(original.attempt, validate) { result ->
+            synchronized(completionLock) {
+                if (reconcilingAttempt === original.attempt) reconcilingAttempt = null
+                if (uncertain === original && !retired && completionRevision == original.revision) {
+                    result.getOrNull()?.let { committed ->
+                        pendingAttempt = null
+                        uncertain = null
+                        resetRequired = false
+                        resolved = committed
+                        if (committed) {
+                            completed.value = true
+                            publication.value = OnboardingCompletionPublication(original.receipt, original.revision)
+                        }
+                        setSettlingAttempt(null)
+                    }
+                } else if (result.isSuccess && settlingAttempt === original.attempt) {
+                    setSettlingAttempt(null)
+                }
+            }
+        }
+        return synchronized(completionLock) { checkNotNull(resolved) { "Onboarding reconciliation was retired" } }
+    }
 
     internal fun <T> withLifecycle(block: () -> T): T = synchronized(completionLock) { block() }
 
@@ -216,7 +281,9 @@ class OnboardingState(private val store: OnboardingFlagStore) {
     private fun invalidateCompletion(): Long = synchronized(completionLock) {
         pendingAttempt?.reject(IllegalStateException("Onboarding attempt was retired"))
         pendingAttempt = null
-        if (settlingAttempt?.isSealed == false) settlingAttempt = null
+        uncertain = null
+        reconcilingAttempt = null
+        if (settlingAttempt?.isSealed == false) setSettlingAttempt(null)
         val revision = ++completionRevision
         lifecycle.value = Math.incrementExact(lifecycle.value)
         val observers = invalidationObservers.toList()
@@ -231,15 +298,25 @@ class OnboardingState(private val store: OnboardingFlagStore) {
             resetRequired = true
             invalidateCompletion()
         }
-        store.persistBoolean(KEY_HAS_COMPLETED, false)
-        synchronized(completionLock) {
-            check(completionRevision == revision) { "Onboarding reset was superseded" }
-            publication.value = null
-            completed.value = false
-            resetRequired = false
-            settlingAttempt = null
-            path.value = emptyList()
+        resetMutex.withLock {
+            synchronized(completionLock) {
+                check(completionRevision == revision) { "Onboarding reset was superseded" }
+            }
+            store.persistBoolean(KEY_HAS_COMPLETED, false)
+            synchronized(completionLock) {
+                check(completionRevision == revision) { "Onboarding reset was superseded" }
+                publication.value = null
+                completed.value = false
+                resetRequired = false
+                setSettlingAttempt(null)
+                path.value = emptyList()
+            }
         }
+    }
+
+    private fun setSettlingAttempt(attempt: OnboardingCompletionAttempt?) {
+        settlingAttempt = attempt
+        unsettled.value = attempt != null
     }
 
     /**

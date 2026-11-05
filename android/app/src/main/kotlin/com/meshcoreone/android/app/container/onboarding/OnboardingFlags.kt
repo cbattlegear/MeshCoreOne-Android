@@ -64,6 +64,7 @@ class WriteBehindOnboardingFlags(
         val attempt: OnboardingCompletionAttempt? = null,
         val seal: ((OnboardingCompletionAttempt) -> Boolean)? = null,
         val onFinished: ((Result<Unit>) -> Unit)? = null,
+        val onReconciled: ((Result<Boolean>) -> Unit)? = null,
     )
 
     private class RejectedWrite(val failure: Exception) : Exception(failure)
@@ -111,9 +112,12 @@ class WriteBehindOnboardingFlags(
                     try {
                         validate(write)
                         val attempt = write.attempt
-                        if (attempt == null) {
+                        val reconciled = if (write.onReconciled != null) {
+                            reconcileCompletion(checkNotNull(attempt).id.toString())
+                        } else null
+                        if (write.onReconciled == null && attempt == null) {
                             persist(write.key, write.value)
-                        } else {
+                        } else if (write.onReconciled == null && attempt != null) {
                             stageCompletion(attempt.id.toString())
                             validate(write)
                             val sealed = try {
@@ -141,23 +145,27 @@ class WriteBehindOnboardingFlags(
                             }
                         }
                         synchronized(lock) {
-                            if (write.revision >= (snapshotRevision[write.key] ?: 0L)) {
+                            if (reconciled != false && write.revision >= (snapshotRevision[write.key] ?: 0L)) {
                                 snapshotRevision[write.key] = write.revision
                                 values = values + (write.key to write.value)
                                 if (write.key == OnboardingState.KEY_HAS_COMPLETED) completed.value = write.value
                             }
                         }
                         write.onFinished?.invoke(Result.success(Unit))
+                        write.onReconciled?.invoke(Result.success(checkNotNull(reconciled)))
                         write.persisted?.resume(Unit)
                     } catch (rejected: RejectedWrite) {
                         write.onFinished?.invoke(Result.failure(rejected.failure))
+                        write.onReconciled?.invoke(Result.failure(rejected.failure))
                         write.persisted?.resumeWithException(rejected.failure)
                     } catch (cancelled: CancellationException) {
                         write.onFinished?.invoke(Result.failure(cancelled))
+                        write.onReconciled?.invoke(Result.failure(cancelled))
                         write.persisted?.resumeWithException(cancelled)
                         throw cancelled
                     } catch (failure: Exception) {
                         write.onFinished?.invoke(Result.failure(failure))
+                        write.onReconciled?.invoke(Result.failure(failure))
                         try {
                             onFailure(failure)
                         } finally {
@@ -180,6 +188,7 @@ class WriteBehindOnboardingFlags(
                 wakeups.close(failure)
                 abandoned.forEach {
                     it.onFinished?.invoke(Result.failure(failure))
+                    it.onReconciled?.invoke(Result.failure(failure))
                     it.persisted?.resumeWithException(failure)
                 }
             }
@@ -187,6 +196,33 @@ class WriteBehindOnboardingFlags(
     }
 
     override fun getBoolean(key: String): Boolean = synchronized(lock) { values[key] ?: false }
+
+    override suspend fun reconcileCompletion(
+        attempt: OnboardingCompletionAttempt, requireCurrent: () -> Unit,
+        onFinished: (Result<Boolean>) -> Unit,
+    ) {
+        var submitted = false
+        try {
+            requireCurrent()
+            suspendCancellableCoroutine<Unit> { continuation ->
+                synchronized(lock) {
+                    val revision = nextRevision + 1
+                    enqueue(
+                        Write(
+                            OnboardingState.KEY_HAS_COMPLETED, true, revision, continuation,
+                            requireCurrent, attempt, onReconciled = onFinished,
+                        ),
+                    )
+                    nextRevision = revision
+                    submitted = true
+                }
+                wakeups.trySend(Unit).getOrThrow()
+            }
+        } catch (failure: Exception) {
+            if (!submitted) onFinished(Result.failure(failure))
+            throw failure
+        }
+    }
 
     /** Process shutdown rejects pending decisions before cancelling the process Job; sealed writes drain first. */
     suspend fun shutdown() {

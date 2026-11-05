@@ -37,6 +37,7 @@ data class OnboardingPresetCompletion(
     val receipt: OnboardingCompletionReceipt.Preset,
     val requireCurrent: () -> Unit,
     val seal: (OnboardingCompletionAttempt) -> Boolean,
+    val generation: Long? = null,
 )
 
 class PresetStepCoordinator(
@@ -83,16 +84,22 @@ class PresetStepCoordinator(
     fun dismissError() = mutable.update { it.copy(error = null) }
 
     fun canApply(canApplyToRadio: Boolean, state: PresetStepState): Boolean =
-        !state.isApplying && !state.isCompleted && canStart() && state.selectedId != null && canApplyToRadio
+        !state.isApplying && !state.isCompleted &&
+            (lifecycle?.canReconcileCompletion() == true || (canStart() && state.selectedId != null && canApplyToRadio))
 
     /** Resolves the user's selection against what is actually visible (a stale id is ignored). */
-    fun apply(id: String? = mutable.value.selectedId) {
+    fun apply(id: String? = mutable.value.selectedId) = applyInGeneration(id, null)
+
+    private fun applyInGeneration(id: String?, expectedGeneration: Long?) {
         val job = withLifecycle {
-            if (mutable.value.isApplying || mutable.value.isCompleted || !canStart()) return@withLifecycle null
             val generation = currentGeneration
+            if (expectedGeneration != null && generation != expectedGeneration) return@withLifecycle null
+            if (mutable.value.isApplying || mutable.value.isCompleted) return@withLifecycle null
+            if (lifecycle?.canReconcileCompletion() == true) return@withLifecycle beginCompletionPersistence()
+            if (!canStart() || currentGeneration != generation) return@withLifecycle null
             val option = visiblePresets().firstOrNull { it.id == id } ?: return@withLifecycle null
             val target = presets.currentTarget()
-            if (currentGeneration != generation || !canStart()) return@withLifecycle null
+            if (!canStart() || currentGeneration != generation) return@withLifecycle null
             if (appliedPreset == AppliedPreset(option.id, target, generation)) {
                 return@withLifecycle beginCompletionPersistence()
             }
@@ -121,11 +128,15 @@ class PresetStepCoordinator(
     ) {
         val job = withLifecycle {
             if (currentGeneration != generation) return@withLifecycle null
-            if (!canStart()) {
+            val admitted = canStart()
+            if (currentGeneration != generation) return@withLifecycle null
+            if (!admitted) {
                 mutable.update { it.copy(isApplying = false) }
                 return@withLifecycle null
             }
-            if (presets.currentTarget() != target) {
+            val currentTarget = presets.currentTarget()
+            if (currentGeneration != generation) return@withLifecycle null
+            if (currentTarget != target) {
                 appliedPreset = null
                 mutable.update {
                     it.copy(isApplying = false, completionNeedsRetry = false, error = UiText.Resource(O.presetErrorNotConnected))
@@ -179,13 +190,14 @@ class PresetStepCoordinator(
         if (currentGeneration != generation) return null
         val completion = OnboardingPresetCompletion(
             OnboardingCompletionReceipt.Preset(applied.id, applied.target), applied.targetGuard(), applied.sealer(),
+            generation,
         )
         if (completionJobGeneration == generation && completionPersistenceJob?.isActive == true) return null
         mutable.update { it.copy(isApplying = true, error = null, retryAlert = null) }
         val job = scope.launch(start = CoroutineStart.LAZY) {
             try {
                 if (currentGeneration != generation) return@launch
-                completion.requireCurrent()
+                if (lifecycle?.canReconcileCompletion() != true) completion.requireCurrent()
                 onCompleted(completion)
                 withLifecycle {
                     if (currentGeneration == generation) {
@@ -224,15 +236,23 @@ class PresetStepCoordinator(
     }
 
     fun retry() {
-        val current = mutable.value
-        if (current.isApplying || current.isCompleted || !canStart()) return
-        val alert = current.retryAlert
-        if (alert != null) {
-            mutable.update { it.copy(retryAlert = null) }
-            apply(alert.presetId)
-            return
+        val request = withLifecycle {
+            val generation = currentGeneration
+            val current = mutable.value
+            if (current.isApplying || current.isCompleted ||
+                (!canStart() && lifecycle?.canReconcileCompletion() != true) || currentGeneration != generation
+            ) return@withLifecycle null
+            val alert = current.retryAlert
+            when {
+                alert != null -> {
+                    mutable.update { it.copy(retryAlert = null) }
+                    alert.presetId to generation
+                }
+                appliedPreset != null && current.completionNeedsRetry -> checkNotNull(appliedPreset).id to generation
+                else -> null
+            }
         }
-        if (appliedPreset != null && current.completionNeedsRetry) apply(current.selectedId)
+        request?.let { (id, generation) -> applyInGeneration(id, generation) }
     }
 
     /** Cancel or the max-retries acknowledgement; the latter surfaces the generic fallback. */

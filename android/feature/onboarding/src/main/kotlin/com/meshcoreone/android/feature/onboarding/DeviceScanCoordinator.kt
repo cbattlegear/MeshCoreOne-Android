@@ -153,18 +153,18 @@ class DeviceScanCoordinator(
                     OnboardingConnectOutcome.Failed(UiText.Verbatim(failure.message.orEmpty()))
                 }
                 withLifecycle {
-                    if (generation == started) apply(outcome, retriedDeviceId)
+                    if (generation == started) apply(outcome, retriedDeviceId, started)
                 }
             }.also { job = it }
         }
         next?.start()
     }
 
-    private fun apply(outcome: OnboardingConnectOutcome, retriedDeviceId: UUID?) {
+    private fun apply(outcome: OnboardingConnectOutcome, retriedDeviceId: UUID?, started: Long) {
         when (outcome) {
             OnboardingConnectOutcome.Connected -> {
                 mutable.update { it.copy(localBusy = false, otherAppDeviceId = null, successTick = it.successTick + 1) }
-                if (canStartConnection()) onConnected()
+                if (canStartConnection() && generation == started) onConnected()
             }
             OnboardingConnectOutcome.Cancelled, OnboardingConnectOutcome.Ignored ->
                 mutable.update { it.copy(localBusy = false) }
@@ -185,7 +185,10 @@ class DeviceScanCoordinator(
 
     /** Continue after an already-connected radio (resume path). */
     fun continueConnected() {
-        withLifecycle { if (canStartConnection()) onConnected() }
+        withLifecycle {
+            val started = generation
+            if (canStartConnection() && generation == started) onConnected()
+        }
     }
 
     private companion object { const val TITLE_TAPS_TO_UNLOCK = 3 }

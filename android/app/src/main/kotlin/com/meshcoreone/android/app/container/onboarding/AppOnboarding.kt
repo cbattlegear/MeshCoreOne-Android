@@ -56,8 +56,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 
 /** Process-lifetime platform pieces the container cannot derive itself; built once by the container factory. */
 class OnboardingPlatform(
@@ -199,6 +203,8 @@ class AppOnboarding(
     val wasCompletedAtLoad: Boolean = hasCompleted.value
     private var firstRunFlowCoordinator: OnboardingFlowCoordinator? = null
     private var retiringFirstRunFlow: OnboardingFlowCoordinator? = null
+    private val firstRunRevision = MutableStateFlow(0L)
+    override val flowCoordinatorRevision: StateFlow<Long> = firstRunRevision.asStateFlow()
     private val rerunDependencies by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { Rerun(this) }
 
     override fun openAppSettings() = settingsOpener()
@@ -207,7 +213,7 @@ class AppOnboarding(
     override fun retainedFlowCoordinator(): OnboardingFlowCoordinator {
         retiringFirstRunFlow?.let {
             if (it.onboarding.hasUnsettledCompletion) return it
-            retiringFirstRunFlow = null
+            releaseRetiringCoordinator(it)
         }
         return firstRunFlowCoordinator ?: OnboardingFlowCoordinator(flowScope, this).also {
             it.restoreStartingPath()
@@ -224,7 +230,26 @@ class AppOnboarding(
         if (firstRunFlowCoordinator === coordinator) {
             coordinator.onboarding.retireCompletion()
             firstRunFlowCoordinator = null
-            if (coordinator.onboarding.hasUnsettledCompletion) retiringFirstRunFlow = coordinator
+            if (coordinator.onboarding.hasUnsettledCompletion) {
+                retiringFirstRunFlow = coordinator
+                flowScope.launch {
+                    coordinator.onboarding.unsettledCompletionFlow.first { !it }
+                    synchronized(this@AppOnboarding) {
+                        releaseRetiringCoordinator(coordinator)
+                    }
+                }
+            } else if (!flags.getBoolean(com.meshcoreone.android.feature.onboarding.OnboardingState.KEY_HAS_COMPLETED)) {
+                firstRunRevision.value = Math.incrementExact(firstRunRevision.value)
+            }
+        }
+    }
+
+    private fun releaseRetiringCoordinator(coordinator: OnboardingFlowCoordinator) {
+        if (retiringFirstRunFlow === coordinator) {
+            retiringFirstRunFlow = null
+            if (!flags.getBoolean(com.meshcoreone.android.feature.onboarding.OnboardingState.KEY_HAS_COMPLETED)) {
+                firstRunRevision.value = Math.incrementExact(firstRunRevision.value)
+            }
         }
     }
 
@@ -267,6 +292,7 @@ class AppOnboarding(
     fun forRerun(): OnboardingFeatureDependencies = rerunDependencies
 
     private class Rerun(private val base: AppOnboarding) : OnboardingFeatureDependencies by base {
+        override val flowCoordinatorRevision: StateFlow<Long>? = null
         private var sessionFlags: OnboardingFlagStore = InMemoryOnboardingFlagStore()
         private var flowCoordinator: OnboardingFlowCoordinator? = null
 

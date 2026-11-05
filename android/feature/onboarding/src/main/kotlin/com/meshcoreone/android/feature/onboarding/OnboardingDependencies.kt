@@ -157,6 +157,9 @@ interface OnboardingFeatureDependencies {
     /** A process owner may return its retained flow coordinator across Activity recreation. */
     fun retainedFlowCoordinator(): OnboardingFlowCoordinator? = null
 
+    /** Changes only when a retired, uncompleted first-run owner can be replaced while still mounted. */
+    val flowCoordinatorRevision: StateFlow<Long>? get() = null
+
     /** Whether a completion callback still belongs to the currently retained flow. */
     fun ownsFlowCoordinator(coordinator: OnboardingFlowCoordinator): Boolean = true
 

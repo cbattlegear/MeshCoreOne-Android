@@ -556,6 +556,8 @@ class OnboardingFlowCoordinatorTest {
         val entered = java.util.concurrent.CountDownLatch(1)
         val release = java.util.concurrent.CountDownLatch(1)
         val resetStarted = java.util.concurrent.CountDownLatch(1)
+        val applyingThread = java.util.concurrent.atomic.AtomicReference<Thread>()
+        val resettingThread = java.util.concurrent.atomic.AtomicReference<Thread>()
         var targetReads = 0
         val applied = mutableListOf<String>()
         val port = object : OnboardingPresetPort {
@@ -574,14 +576,27 @@ class OnboardingFlowCoordinatorTest {
         }
         try {
             val flow = OnboardingFlowCoordinator(CoroutineScope(dispatcher + owner), Deps(presets = port))
-            val applying = java.util.concurrent.CompletableFuture.runAsync { flow.preset.apply("p") }
+            val applying = java.util.concurrent.CompletableFuture.runAsync {
+                applyingThread.set(Thread.currentThread())
+                flow.preset.apply("p")
+            }
             assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS))
             val resetting = java.util.concurrent.CompletableFuture.runAsync {
+                resettingThread.set(Thread.currentThread())
                 resetStarted.countDown()
                 kotlinx.coroutines.runBlocking { flow.onboarding.resetOnboarding() }
             }
             assertTrue(resetStarted.await(5, java.util.concurrent.TimeUnit.SECONDS))
-            assertFalse(resetting.isDone)
+            val threads = java.lang.management.ManagementFactory.getThreadMXBean()
+            val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5)
+            var blockedOnAdmission = false
+            while (!blockedOnAdmission && System.nanoTime() < deadline) {
+                val info = threads.getThreadInfo(resettingThread.get().id)
+                blockedOnAdmission = info != null && info.threadState == Thread.State.BLOCKED &&
+                    info.lockOwnerId == applyingThread.get().id
+                if (!blockedOnAdmission) Thread.sleep(1)
+            }
+            assertTrue(blockedOnAdmission, "Reset must actually wait on the monitor held during target capture")
             release.countDown()
             applying.get(5, java.util.concurrent.TimeUnit.SECONDS)
             resetting.get(5, java.util.concurrent.TimeUnit.SECONDS)
@@ -594,6 +609,67 @@ class OnboardingFlowCoordinatorTest {
             assertEquals(listOf("p"), applied)
             assertTrue(flow.onboarding.hasCompletedOnboarding)
         } finally { release.countDown(); owner.cancel(); dispatcher.drain() }
+    }
+
+    @Test fun reentrantConnectionAdmissionResetCannotPublishSuccessIntoTheNextGeneration() =
+        kotlinx.coroutines.runBlocking {
+            for (useWiFi in listOf(false, true)) {
+                val state = OnboardingState(InMemoryOnboardingFlagStore())
+                var checks = 0
+                var connected = 0
+                val canStart = {
+                    if (++checks == 2) kotlinx.coroutines.runBlocking { state.resetOnboarding() }
+                    true
+                }
+                if (useWiFi) {
+                    val c = WiFiConnectionCoordinator(scope, FakeWiFi(), canStart, state) { connected++ }
+                    c.setAddress("mesh.local")
+                    c.connect()
+                    assertEquals(0, connected)
+                    assertFalse(c.state.value.isConnecting)
+                    c.connect()
+                } else {
+                    val c = DeviceScanCoordinator(scope, FakePairing(), FakeDemo(), FakePermissions(granted), canStart, state) {
+                        connected++
+                    }
+                    c.retryConnection(UUID.randomUUID())
+                    assertEquals(0, connected)
+                    assertFalse(c.state.value.localBusy)
+                    c.retryConnection(UUID.randomUUID())
+                }
+                assertEquals(1, connected)
+            }
+        }
+
+    @Test fun presetRetryCannotAdoptAResetTriggeredDuringItsAdmissionCallback() = kotlinx.coroutines.runBlocking {
+        val state = OnboardingState(InMemoryOnboardingFlagStore())
+        val port = FakePresets(OnboardingPresetOutcome.Retryable(UiText.Verbatim("busy")))
+        var resetOnAdmission = false
+        val c = PresetStepCoordinator(
+            scope, FakeRegion(presets = mapOf(null to listOf(OnboardingPresetOption("p", "P", 915.0)))), port,
+            canStart = {
+                if (resetOnAdmission) {
+                    resetOnAdmission = false
+                    kotlinx.coroutines.runBlocking { state.resetOnboarding() }
+                    port.target = OnboardingPresetTarget(UUID.randomUUID(), 2, UUID.randomUUID())
+                }
+                state.canStartCompletion()
+            },
+            lifecycle = state,
+        ) { completion ->
+            state.completeOnboardingWithReceipt(completion.receipt, completion.requireCurrent, completion.seal)
+        }
+        c.apply("p")
+        assertNotNull(c.state.value.retryAlert)
+        resetOnAdmission = true
+        c.retry()
+        assertEquals(listOf("p"), port.applied)
+        assertFalse(c.state.value.isApplying)
+        assertNull(c.state.value.retryAlert)
+        port.outcome = OnboardingPresetOutcome.Applied
+        c.apply("p")
+        assertEquals(listOf("p", "p"), port.applied)
+        assertTrue(state.hasCompletedOnboarding)
     }
 
     @Test fun resetBeforeQueuedNoDeviceCompletionRejectsOldAdmissionAndAllowsFreshAttempt() =

@@ -23,6 +23,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.core.app.ActivityOptionsCompat
 import com.meshcoreone.android.app.content.LocationPermissionResultReporting
@@ -233,6 +234,147 @@ class OnboardingGateTest {
             compose.waitForIdle()
             assertEquals(2, delivered.size)
             assertTrue(durable)
+        } finally { release.complete(Unit); processScope.cancel() }
+    }
+
+    @Test fun `mounted no-device retry reconciles the original unknown decision without another write`() = runBlocking {
+        val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            host.setup().visible()
+            var committedId: String? = null
+            var readbackAvailable = false
+            val writes = mutableListOf<String>()
+            val reads = mutableListOf<String>()
+            val flags = WriteBehindOnboardingFlags(
+                emptyMap(), processScope, { _, _ -> error("Use the original finalizer") },
+                persistCompletion = { id ->
+                    writes += id
+                    committedId = id
+                    throw java.io.IOException("lost acknowledgement")
+                },
+                reconcileCompletion = { id ->
+                    reads += id
+                    if (!readbackAvailable) throw java.io.IOException("readback unavailable")
+                    committedId == id
+                },
+            )
+            val dependencies = onboarding(flags, flags.hasCompleted, processScope)
+            val original = dependencies.retainedFlowCoordinator()
+            original.onboarding.replacePath(listOf(OnboardingStep.PAIR))
+            original.openPairingSheet(PairSheet.NO_DEVICE)
+            val delivered = mutableListOf<com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt>()
+            showFlow(dependencies) { delivered += it; true }
+            val context = host.get()
+            compose.onNodeWithText(context.getString(
+                com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings.noDeviceSheetConfirm,
+            )).performClick()
+            compose.waitForIdle()
+            assertTrue(original.hasCompletionError.value)
+            assertTrue(delivered.isEmpty())
+            assertFalse(flags.hasCompleted.value)
+            compose.runOnIdle { readbackAvailable = true }
+            compose.onNodeWithText(context.getString(
+                com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings.commonTryAgain,
+            )).performClick()
+            compose.waitForIdle()
+            assertEquals(1, writes.size)
+            assertEquals(listOf(writes.single(), writes.single()), reads)
+            assertTrue(flags.hasCompleted.value)
+            assertEquals(
+                listOf(com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt.WithoutDevice), delivered,
+            )
+        } finally { processScope.cancel() }
+    }
+
+    @Test fun `mounted preset retry reads the original sealed receipt even after its radio is replaced`() = runBlocking {
+        val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            host.setup().visible()
+            val writes = mutableListOf<String>()
+            val reads = mutableListOf<String>()
+            var readbackAvailable = false
+            val flags = WriteBehindOnboardingFlags(
+                emptyMap(), processScope, { _, _ -> error("Use the original finalizer") },
+                persistCompletion = { id -> writes += id; throw java.io.IOException("lost acknowledgement") },
+                reconcileCompletion = { id ->
+                    reads += id
+                    if (!readbackAvailable) throw java.io.IOException("readback unavailable")
+                    true
+                },
+            )
+            val first = OnboardingPresetTarget(java.util.UUID.randomUUID(), 1, java.util.UUID.randomUUID())
+            var target = first
+            var applies = 0
+            val presets = object : OnboardingPresetPort {
+                override val canApply = MutableStateFlow(true)
+                override fun currentTarget() = target
+                override suspend fun apply(presetId: String): OnboardingPresetOutcome {
+                    applies++
+                    return OnboardingPresetOutcome.Applied
+                }
+            }
+            val dependencies = onboarding(flags, flags.hasCompleted, processScope, presets = presets)
+            val flow = dependencies.retainedFlowCoordinator()
+            flow.onboarding.replacePath(listOf(OnboardingStep.PRESET))
+            val id = flow.preset.visiblePresets().first().id
+            val delivered = mutableListOf<com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt>()
+            showFlow(dependencies) { delivered += it; true }
+            compose.runOnIdle { flow.preset.apply(id) }
+            compose.waitForIdle()
+            assertTrue(flow.preset.state.value.completionNeedsRetry)
+            compose.runOnIdle {
+                target = first.copy(generation = 2, radioId = java.util.UUID.randomUUID())
+                presets.canApply.value = false
+                readbackAvailable = true
+            }
+            compose.onNodeWithText(host.get().getString(
+                com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings.commonTryAgain,
+            )).performClick()
+            compose.waitForIdle()
+            assertEquals(1, applies)
+            assertEquals(1, writes.size)
+            assertEquals(listOf(writes.single(), writes.single()), reads)
+            assertEquals(
+                listOf(com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt.Preset(id, first)),
+                delivered,
+            )
+            assertTrue(flags.hasCompleted.value)
+        } finally { processScope.cancel() }
+    }
+
+    @Test fun `still-mounted explicitly retired owner is replaced after known-uncommitted finalization`() = runBlocking {
+        val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val release = CompletableDeferred<Unit>()
+        try {
+            host.setup().visible()
+            val entered = CompletableDeferred<Unit>()
+            val flags = WriteBehindOnboardingFlags(
+                emptyMap(), processScope, { _, _ -> },
+                persistCompletion = {
+                    entered.complete(Unit)
+                    release.await()
+                    throw java.io.IOException("not committed")
+                },
+                reconcileCompletion = { false },
+            )
+            val dependencies = onboarding(flags, flags.hasCompleted, processScope)
+            val old = dependencies.retainedFlowCoordinator()
+            showFlow(dependencies)
+            val completing = async { runCatching { old.onboarding.completeOnboarding() } }
+            entered.await()
+            dependencies.onFlowCompletionHandled(old)
+            release.complete(Unit)
+            assertTrue(completing.await().isFailure)
+            compose.waitForIdle()
+            val fresh = dependencies.retainedFlowCoordinator()
+            assertNotSame(old, fresh)
+            compose.onNodeWithText(host.get().getString(
+                com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings.welcomeGetStarted,
+            )).performClick()
+            compose.waitForIdle()
+            assertEquals(listOf(OnboardingStep.PERMISSIONS), fresh.onboarding.onboardingPath)
+            assertEquals(emptyList<OnboardingStep>(), old.onboarding.onboardingPath)
+            assertTrue(fresh.onboarding.canStartCompletion())
         } finally { release.complete(Unit); processScope.cancel() }
     }
 

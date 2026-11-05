@@ -42,9 +42,15 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
     )
 
     private suspend fun completePreset(completion: OnboardingPresetCompletion) {
-        onboarding.completeOnboardingWithReceipt(
-            completion.receipt, completion.requireCurrent, completion.seal,
-        )
+        if (onboarding.canReconcileCompletion()) {
+            check(onboarding.reconcileCompletion(completion.generation)) {
+                "Onboarding completion was not committed; retry is now available"
+            }
+        } else {
+            onboarding.completeOnboardingWithReceipt(
+                completion.receipt, completion.requireCurrent, completion.seal,
+            )
+        }
     }
 
     private val clearing = MutableStateFlow(false)
@@ -83,7 +89,8 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
     fun continueFromPermissions() = onboarding.append(OnboardingStep.PAIR)
     // Completion remains owned by the mounted host until it delivers navigation and retires this flow.
     fun canLeaveCurrentFlow(): Boolean =
-        !completing && !preset.state.value.isApplying && !onboarding.hasCompletedOnboarding
+        !completing && !preset.state.value.isApplying && !onboarding.hasCompletedOnboarding &&
+            !onboarding.hasUnsettledCompletion
     fun back(): Boolean = canLeaveCurrentFlow() && onboarding.pop()
 
     /** Just-in-time Bluetooth permission: ask on first "Add device", then resume pairing from the result. */
@@ -115,7 +122,7 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
     }
 
     fun canCompleteWithoutDevice(): Boolean =
-        onboarding.canStartCompletion() && !preset.state.value.isApplying &&
+        (onboarding.canStartCompletion() || onboarding.canReconcileCompletion()) && !preset.state.value.isApplying &&
             !completing && !clearing.value && !deviceScan.state.value.localBusy &&
             !deps.pairing.connection.value.isBusy && !wifi.state.value.isConnecting
 
@@ -138,8 +145,14 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
             completingWithoutDevice.value = true
             scope.launch(start = CoroutineStart.LAZY) {
                 try {
-                    onboarding.completeOnboarding {
-                        check(onboarding.lifecycleGeneration.value == generation) { "Onboarding attempt was retired" }
+                    if (onboarding.canReconcileCompletion()) {
+                        check(onboarding.reconcileCompletion(generation)) {
+                            "Onboarding completion was not committed; retry is now available"
+                        }
+                    } else {
+                        onboarding.completeOnboarding {
+                            check(onboarding.lifecycleGeneration.value == generation) { "Onboarding attempt was retired" }
+                        }
                     }
                     onboarding.withLifecycle {
                         if (onboarding.lifecycleGeneration.value == generation) {

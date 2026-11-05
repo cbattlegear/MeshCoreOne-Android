@@ -22,7 +22,10 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from controller.apk_alignment import inspect_alignment
-from controller.ci_environment import REPO, candidate_environment, host_name, toolchain_lock, verify_wrapper, write_json
+from controller.ci_environment import (
+    REPO, candidate_environment, host_name, hosted_resource_observation,
+    toolchain_lock, verify_wrapper, write_json,
+)
 from controller.ci_evidence import PYTHON_MINIMUMS, bind_test_lineage, collect_lint, collect_suites, counts, prepare_test_lineage, prepare_test_sources, read_test_lineage, read_test_sources, read_xml, suite_case_ids, suite_counts, validate_graph_runtime
 from controller.errors import PortError
 from controller.gates import Binding, policy_revision
@@ -335,6 +338,8 @@ def preflight(state: dict, output: Path, *, local=False):
         "scope": "explicit current build inputs; not cloud assignability, native host, publisher or human approval",
         "provenance": state["provenance"],
     })
+    if not local and state["host"] == "linux":
+        print(json.dumps({"hosted_resources": hosted_resource_observation()}, sort_keys=True), flush=True)
 
 
 def write_github_outputs(*, full_scaffold: bool, localization: bool):
@@ -365,7 +370,7 @@ def run_stage(stage: str, state: dict, output: Path, *, local=False, scopes=None
         "--project-cache-dir", str(cache),
     ]
     if not local:
-        options.extend(("--build-cache", "--parallel", "--max-workers=8"))
+        options.extend(("--build-cache", "--parallel", "--max-workers=2"))
     if local:
         options.append("-PscaffoldTestJvmArgs=-Xms32m -XX:+UseSerialGC -XX:ActiveProcessorCount=2 -XX:TieredStopAtLevel=1 -XX:ReservedCodeCacheSize=32m -XX:MaxMetaspaceSize=256m")
     wrapper = REPO / "android" / ("gradlew.bat" if state["host"] == "windows" else "gradlew")

@@ -10,6 +10,7 @@ import com.meshcoreone.android.app.navigation.ContactLinkRequest
 import com.meshcoreone.android.app.navigation.HashtagJoinRequest
 import com.meshcoreone.android.app.state.MessageEvent
 import com.meshcoreone.android.core.contracts.domain.ChannelQuery
+import com.meshcoreone.android.core.contracts.domain.ChannelHistoryRejected
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
@@ -959,15 +960,26 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             ?: throw MessageServiceException(MessageServiceError.SendFailed("Saved message not found"))
 
     private suspend fun enqueueChannel(radio: RadioId, id: UUID, isResend: Boolean) {
-        val queue = sendQueue(radio)
         val localName = app.connectedDevice?.takeIf { it.radioId == radio }?.nodeName
         val message = savedMessage(radio, id)
         deferredCommitted[id]?.let { requireOriginalChannel(it.target, it.slotGeneration) }
         unresolvedCreations[id]?.let { requireOriginalChannel(it.target, it.slotGeneration) }
         val index = message.channelIndex
             ?: throw MessageServiceException(MessageServiceError.ChannelNotFound)
+        val origin = try {
+            store.validateChannelMessageOrigin(EntityKey(radio, id))
+        } catch (failure: PersistenceStoreException) {
+            if (failure.cause !is ChannelHistoryRejected) throw failure
+            throw MessageServiceException(MessageServiceError.ChannelNotFound).also {
+                it.initCause(failure)
+            }
+        }
+        val queue = sendQueue(radio)
         queue.enqueueChannel(
-            ChannelMessageEnvelope(id, index, isResend, message.text, message.timestamp, localName),
+            ChannelMessageEnvelope(
+                id, index, isResend, message.text, message.timestamp, localName,
+                channelOccupantID = origin.expectedOccupantID,
+            ),
         )
     }
 

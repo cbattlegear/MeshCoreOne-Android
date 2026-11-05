@@ -18,6 +18,8 @@ import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
 import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceException
 import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceError
+import com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueServiceException
+import com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueServiceError
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.database.MeshCoreDatabase
@@ -67,6 +69,50 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
     }
 
     @After fun destroyHost() { host.pause().stop().destroy() }
+
+    @Test fun sendAgainRefusesLegacyUnboundChannelTextBeforeQueueAdmission() =
+        channelSendAgainOrigin(unbound = true, replaced = false)
+
+    @Test fun sendAgainRefusesPersistedOldOccupantBeforeQueueAdmission() =
+        channelSendAgainOrigin(unbound = false, replaced = true)
+
+    @Test fun currentPersistedOriginReachesConnectivityCheckWithoutBeingRelabeled() =
+        channelSendAgainOrigin(unbound = false, replaced = false)
+
+    private fun channelSendAgainOrigin(unbound: Boolean, replaced: Boolean) = runTest {
+        val radio = RadioId(UUID(0, 710))
+        val slot = com.meshcoreone.android.core.protocol.event.ChannelInfo(
+            2u, "Original", Bytes(ByteArray(16) { 1 }),
+        )
+        store.saveChannel(radio, slot)
+        val originalOccupant = requireNotNull(store.fetchChannelOccupantID(radio, slot.index))
+        val original = MessageDTO(
+            id = UUID(0, 711), radioId = radio, channelIndex = slot.index,
+            text = "  original channel text \u4e2d\uD83D\uDE80  ", timestamp = 100u,
+            status = MessageStatus.SENT, channelOccupantID = originalOccupant.takeUnless { unbound },
+        )
+        store.saveMessage(original)
+        if (replaced) store.saveChannel(radio, slot.copy(name = "Replacement", secret = Bytes(ByteArray(16) { 2 })))
+        val current = requireNotNull(store.fetchChannel(radio, slot.index))
+        val rig = ContainerHarness(this, store)
+        try {
+            try {
+                rig.container.chatsFeature.sendAgain(original, TimelineConversation.Channel(current))
+                fail("Offline Send Again must not admit a queue submission")
+            } catch (rejected: MessageServiceException) {
+                assertTrue(unbound || replaced)
+                assertEquals(MessageServiceError.ChannelNotFound, rejected.error)
+            } catch (offline: ChatSendQueueServiceException) {
+                assertFalse(unbound || replaced)
+                assertEquals(ChatSendQueueServiceError.NotConnected, offline.error)
+            }
+            assertEquals(original, store.fetchMessage(EntityKey(radio, original.id)))
+            assertTrue(store.fetchPendingSendsForMessage(EntityKey(radio, original.id)).isEmpty())
+            assertTrue(rig.links.links.isEmpty())
+        } finally {
+            rig.container.close()
+        }
+    }
 
     @Test fun directBeforeLaunch() = exercise(false, Boundary.BEFORE_START)
     @Test fun channelBeforeLaunch() = exercise(true, Boundary.BEFORE_START)

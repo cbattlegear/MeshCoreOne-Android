@@ -1,5 +1,41 @@
 # WP-308 outgoing send lifetime (#524)
 
+## Current-main restart repair continuation
+
+Reconciled actual main `83fc29b14f082ef1806f2d68516668128f63b1d4` in
+`05ccf895001e97b2989d90af224e21505032905a`, preserving existing composer,
+copy-only and foreground-warning work and the two untracked geometry files.
+Four producer-file conflicts were resolved in favor of main's newer
+pending-creation canonical-row/UNKNOWN and notification behavior. The exact
+preexisting `notifyQueuedChannelRetired` helper was retained because the local
+queue prerequisite still invokes it; no replacement producer implementation
+was invented.
+
+The App Retry/Send Again adapter now validates the exact persisted message's
+origin through `validateChannelMessageOrigin` before queue lookup or mutation,
+and propagates that origin in `ChannelMessageEnvelope`. Typed unknown/stale
+origin refusals are mapped to the existing `MessageServiceError.ChannelNotFound`
+while preserving the storage cause; other storage errors propagate.
+This rejects legacy NULL and replaced-occupant rows even in a fresh process,
+without relying on deferred in-memory creation maps. It neither samples a
+replacement occupant into the old row nor deletes/recreates the original.
+
+The existing actual disk-reopen Send Again regression and its zero-wire,
+typed-refusal, exact-source and no-pending assertions remain unchanged.
+Three added actual App/Room adapter controls distinguish NULL origin, known
+replaced origin and valid current origin while offline. The positive origin
+case must reach the connectivity check rather than be falsely classified as
+an origin failure. These controls are authored, not yet executed.
+
+This adapter guard alone is not full channel-send acceptance. Fresh pending
+creation still needs the actual messaging producer's original-display-scope
+overload, and runtime needs the real channel dispatch lease. Raw index-only
+creation currently persists NULL proof and cannot be made retryable by silently
+adopting current slot identity. The exact producer request is recorded in
+PR530 comments `6670930125` and `6670960872`; no service policy is fabricated.
+All existing positive send/retry cases must pass with the real producer wiring
+before merge. No diagnostic infrastructure or new process-only gate is added.
+
 ## Recovery-list consumer preparation (not activated)
 
 ### Foreground loss-warning interaction boundary (not activated)

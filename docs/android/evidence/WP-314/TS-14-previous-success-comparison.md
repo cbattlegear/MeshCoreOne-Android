@@ -86,6 +86,15 @@ Declared source checks passed using `C:\Python312\python.exe`:
 `.\tools\android-port\test_inventory.py --check` and
 `.\tools\android-port\extract_vectors.py --check`. `git diff --check` passed.
 Normal exact-candidate PR CI and actual method discovery are pending publication.
+Preserved predecessor `3ad27f4f8c6fe416563b3bffec7b4717898ed756`, normal
+run [42131049153](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42131049153),
+discovered 830 Tools tests and failed only the new batch-precedence control
+at line 343. Its text matcher expected children intentionally hidden by the
+existing batch card's `clearAndSetSemantics`. The successor asserts the real
+localized average/min/max accessibility summary (75/50/100ms), nonempty mounted
+bounds and the actual average, retaining no-comparison assertions. No batch card
+behavior or existing assertion is relaxed. Missing downstream mandatory reports
+mean this predecessor has no passing aggregate acceptance.
 The original hosted result/log is authoritative; no second CI-result bundle is
 retained. Physical device, firmware, real radio, emulator and TalkBack execution
 remain unverified. This does not accept TS-08, unrelated TS families or all WP-314.

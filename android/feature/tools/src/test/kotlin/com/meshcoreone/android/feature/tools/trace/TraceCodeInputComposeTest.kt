@@ -340,8 +340,9 @@ class TraceCodeInputComposeTest {
         mountTraceResults(h)
         assertNotNull(h.state.previousRun)
         assertTrue(h.state.isBatchComplete)
-        assertTrue(texts().contains(host.get().getString(C.contactsResultsAvgRoundTrip)))
-        assertTrue(texts().contains("75 ms"))
+        val average = actionButton(C.contactsResultsAvgRTTLabel(host.get().resources, 75, 50, 100))
+        assertTrue(average.boundsInRoot.width > 0f && average.boundsInRoot.height > 0f)
+        assertEquals(75L, assertNotNull(h.state.batchRtt).averageMs)
         assertFalse(texts().any { it.startsWith("vs.") })
         assertNoComparisonDirection()
     }

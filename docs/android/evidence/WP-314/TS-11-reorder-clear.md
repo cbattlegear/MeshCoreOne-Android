@@ -382,3 +382,13 @@ controls: the new forwarding fixture declared `List` instead of the contract's
 `SnapshotList`, and its final suspend cleanup lacked the harness coroutine.
 The successor corrects those two fixture signatures/call sites without changing
 any assertion. This compile failure is not negative behavioral evidence.
+
+The actual Tools-entry successor mounts the production dependency adapter and
+real AppContainer/Room/ConnectionManager. Its two same/different-radio controls
+disconnect that manager without changing a Compose connection value, manually
+bumping servicesVersion or resetting content; they require offline editing,
+stale-A/offline callback rejection and fresh B controls with no offline radio
+writes. The implementation supplies the existing manager snapshot flow to
+ToolsEntry and observes withdrawal there, leaving AppState's global counter
+semantics unchanged. This actual mounted boundary needs fresh exact execution;
+the manually published feature-level fixtures do not establish it.

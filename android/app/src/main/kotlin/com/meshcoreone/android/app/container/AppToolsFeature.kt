@@ -77,5 +77,6 @@ fun AppContainer.createToolsFeatureDependencies(
         { appState.connectedDevice?.radioId },
         appState.servicesVersion,
         toolsDiagnostics,
+        connection = connectionManager.snapshot,
     )
 }

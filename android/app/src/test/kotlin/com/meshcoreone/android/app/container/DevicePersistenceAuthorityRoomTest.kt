@@ -346,6 +346,35 @@ class DevicePersistenceAuthorityRoomTest : RoomProcessTest() {
         assertEquals(ticket.revision, store.fetchDeviceWriteSnapshot(original.id)!!.revision)
     }
 
+    @Test fun committedCallbackFailureIsNotReportedAsASaveFailureOrRetried() = runTest {
+        val original = device(616)
+        store.saveDevice(original)
+        val before = assertNotNull(store.fetchDeviceWriteSnapshot(original.id))
+        val failure = PersistenceStoreException(PersistenceStoreError.SaveFailed("committed consumer failure"))
+        var transforms = 0
+        var callbacks = 0
+        var saveFailures = 0
+        val result = runCatching {
+            store.editDevice(
+                original.id,
+                onSaveFailure = { saveFailures++; throw it },
+                onCommitted = {
+                    callbacks++
+                    assertEquals(original.copy(lastContactSync = 1u), it)
+                    throw failure
+                },
+            ) { transforms++; it.copy(lastContactSync = it.lastContactSync + 1u) }
+        }
+        assertTrue(result.exceptionOrNull() === failure, "Preserve the exact post-commit exception")
+        assertEquals(1, transforms, "Never repeat a non-idempotent transform after its commit")
+        assertEquals(1, callbacks)
+        assertEquals(0, saveFailures, "A committed consumer failure is not a failed save")
+        assertEquals(original.copy(lastContactSync = 1u), store.fetchDevice(original.id))
+        val after = assertNotNull(store.fetchDeviceWriteSnapshot(original.id))
+        assertEquals(before.revision + 1, after.revision)
+        assertEquals(before.authorityRevision, after.authorityRevision)
+    }
+
     private suspend fun seedRegions(id: Long): DeviceDTO {
         val original = device(id)
         store.saveDevice(original)

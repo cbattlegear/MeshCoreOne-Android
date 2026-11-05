@@ -812,6 +812,301 @@ class RepairExecutionTests(unittest.TestCase):
                         inheritance=lambda record, complete: set(),
                     )
 
+    def notification_shadow_source(self, helper=None, imports=""):
+        helper = helper or """
+            @Implements(NotificationManager::class)
+            class CountingNotificationManager : ShadowNotificationManager() {
+                @Implementation
+                override fun notify(tag: String?, id: Int, notification: Notification) {
+                    calls++
+                    super.notify(tag, id, notification)
+                }
+                companion object { var calls = 0 }
+            }
+        """
+        return (
+            "package sample\n"
+            "import android.app.NotificationManager\n"
+            "import org.robolectric.annotation.Implements\n"
+            "import org.robolectric.annotation.Implementation\n"
+            "import org.robolectric.shadows.ShadowNotificationManager\n"
+            + imports + "\nclass MapTest { @Test fun keepsListReachable() {} "
+            + helper + " }"
+        )
+
+    def test_exact_notification_shadow_preserves_named_and_compiled_suite_proof(self):
+        from controller.repair_acceptance import _kotlin_junit_methods
+
+        source = self.notification_shadow_source()
+        for whole in (False, True):
+            manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs(
+                {TEST: source.encode()}, whole=whole,
+            )
+            with self.subTest(whole=whole), patch(
+                "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+            ):
+                validate_compiled_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+                for mutation in ("wrong-class", "unexecuted", "uncompiled", "stale-compiled"):
+                    records, inventory = copy.deepcopy(executed), copy.deepcopy(compiled)
+                    if mutation == "wrong-class":
+                        records["core/maps"][0]["class"] = "sample.MapTest.CountingNotificationManager"
+                    elif mutation == "unexecuted":
+                        records["core/maps"] = []
+                    elif mutation == "uncompiled":
+                        del inventory["core/maps"][TEST]
+                    else:
+                        inventory["core/maps"][TEST] = "7" * 40
+                    with self.subTest(mutation=mutation), self.assertRaises(PortError):
+                        validate_compiled_hosted_methods(scope, blobs, manifest.repo, records, inventory)
+        classes = {}
+        external = []
+        self.assertEqual(_kotlin_junit_methods(
+            source, classes, reject_inherited=True,
+            inheritance=lambda record, complete: external.append((record, complete)) or set(),
+        ), {"keepsListReachable": "test"})
+        self.assertEqual(classes, {"keepsListReachable": "sample.MapTest"})
+        self.assertEqual(external, [
+            ({"external_non_junit": target}, True) for target in (
+                "org.robolectric.annotation.Implements", "android.app.NotificationManager",
+                "org.robolectric.shadows.ShadowNotificationManager",
+                "org.robolectric.annotation.Implementation",
+            )
+        ])
+
+    def test_notification_shadow_rejects_compiled_same_fqn_sources(self):
+        source = self.notification_shadow_source()
+        for declaration in (
+            "open class ShadowNotificationManager { @org.junit.Test fun inheritedCase() {} }",
+            "open class ShadowNotificationManager { annotation class Implementation; "
+            "@org.junit.Rule val rule = example }",
+            "open class ShadowNotificationManager",
+            "object ShadowNotificationManager {}",
+            "interface ShadowNotificationManager {}",
+            "typealias ShadowNotificationManager = OtherBase",
+        ):
+            for whole in (False, True):
+                for module in ("core/maps", "core/testing"):
+                    base = (
+                        "android/" + module
+                        + "/src/test/kotlin/elsewhere/ShadowNotificationManager.kt"
+                    )
+                    sources = {
+                        TEST: source.encode(),
+                        base: ("package org.robolectric.shadows\n" + declaration).encode(),
+                    }
+                    manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs(
+                        sources, whole=whole,
+                    )
+                    if module != "core/maps":
+                        compiled[module] = {base: compiled["core/maps"].pop(base)}
+                    with self.subTest(declaration=declaration, whole=whole, module=module), patch(
+                        "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+                    ), self.assertRaisesRegex(PortError, "shadows the external Robolectric identity"):
+                        validate_compiled_hosted_methods(
+                            scope, blobs, manifest.repo, executed, compiled,
+                        )
+
+    def test_notification_shadow_external_inventory_requires_immutable_actual_blobs(self):
+        base = TEST.replace("MapTest.kt", "UnrelatedShadow.kt")
+        for whole in (False, True):
+            manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs({
+                TEST: self.notification_shadow_source().encode(),
+                base: b"package unrelated\nopen class ShadowNotificationManager {}",
+            }, whole=whole)
+            with patch("controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob]):
+                validate_compiled_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+                for mutation in ("stale", "missing", "forged"):
+                    tree = dict(blobs)
+                    if mutation == "missing":
+                        del tree[base]
+                    elif mutation == "stale":
+                        tree[base] = "7" * 40
+                    with self.subTest(whole=whole, mutation=mutation), patch(
+                        "controller.staging.object_bytes",
+                        side_effect=lambda repo, blob: (
+                            b"package forged\nclass Changed {}"
+                            if mutation == "forged" and blob == blobs[base] else contents[blob]
+                        ),
+                    ), self.assertRaisesRegex(PortError, "compiled Kotlin superclass|blob identity"):
+                        validate_compiled_hosted_methods(scope, tree, manifest.repo, executed, compiled)
+
+    def test_notification_shadow_rejects_candidate_main_java_and_annotation_collisions(self):
+        identities = (
+            ("org.robolectric.shadows", "ShadowNotificationManager"),
+            ("org.robolectric.annotation", "Implements"),
+            ("org.robolectric.annotation", "Implementation"),
+            ("android.app", "NotificationManager"),
+        )
+        for package, name in identities:
+            for extension, declaration in (
+                ("kt", "annotation class " + name),
+                ("kt", "typealias " + name + " = Other"),
+                ("java", "public class " + name + " {}"),
+                ("java", "public @interface " + name + " {}"),
+                ("java", "public record " + name + "(int value) {}"),
+                ("java", "public enum " + name + " { VALUE }"),
+            ):
+                for location in ("android/core/model/src/main/java/Other", "build-logic/Elsewhere"):
+                    for whole in (False, True):
+                        path = location + "." + extension
+                        prefix = "package " + package.replace(".", " /* gap */ . ") + ";\n"
+                        if extension == "java":
+                            prefix = prefix.replace("package", r"\u0070ackage")
+                        manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs({
+                            TEST: self.notification_shadow_source().encode(),
+                            path: (prefix + declaration).encode(),
+                        }, whole=whole)
+                        del compiled["core/maps"][path]
+                        with self.subTest(package=package, declaration=declaration,
+                                          location=location, whole=whole), patch(
+                            "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+                        ), self.assertRaisesRegex(PortError, "shadows the external Robolectric identity"):
+                            validate_compiled_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
+    def test_notification_shadow_candidate_scan_ignores_literals_comments_and_nested_names(self):
+        for suffix, source in (
+            ("kt", 'package unrelated\nval text = "package org.robolectric.shadows; '
+             'class ShadowNotificationManager {}"\n/* package android.app; class NotificationManager */'),
+            ("java", 'package unrelated; class Outer { class NotificationManager {} '
+             'String text = "package org.robolectric.annotation; @interface Implements {}"; }'),
+            ("kt", "package org.robolectric.shadows\nclass Other { class ShadowNotificationManager {} }"),
+        ):
+            path = "android/core/model/src/main/java/Other." + suffix
+            manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs({
+                TEST: self.notification_shadow_source().encode(), path: source.encode(),
+            }, whole=True)
+            del compiled["core/maps"][path]
+            with self.subTest(source=source), patch(
+                "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+            ):
+                validate_compiled_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
+    def test_notification_shadow_rejects_source_type_shadowing_external_package_prefix(self):
+        for source in (
+            "package org.robolectric\nclass shadows { class ShadowNotificationManager {} }",
+            "package org.robolectric\nobject annotation { annotation class Implements }",
+            "package android\nclass app { class NotificationManager {} }",
+        ):
+            path = "android/core/model/src/main/kotlin/Other.kt"
+            manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs({
+                TEST: self.notification_shadow_source().encode(), path: source.encode(),
+            }, whole=True)
+            del compiled["core/maps"][path]
+            with self.subTest(source=source), patch(
+                "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+            ), self.assertRaisesRegex(PortError, "shadows the external Robolectric identity"):
+                validate_compiled_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
+    def test_remapped_native_coverage_also_checks_compiled_shadow_base(self):
+        remapped = TEST.replace("/src/test/", "/src/androidTest/")
+        base = TEST.replace("MapTest.kt", "ShadowNotificationManager.kt")
+        for collision in (False, True):
+            sources = {TEST: self.notification_shadow_source().encode()}
+            if collision:
+                sources[base] = (
+                    b"package org.robolectric.shadows\n"
+                    b"open class ShadowNotificationManager { @org.junit.Test fun hidden() {} }"
+                )
+            manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs(sources, whole=True)
+            blobs[remapped] = blobs.pop(TEST)
+            compiled["core/maps"][remapped] = compiled["core/maps"].pop(TEST)
+            coverage = scope["coverage"][0]
+            coverage["path"], coverage["hosted_methods"] = remapped, []
+            coverage["native_methods"] = ["sample.MapTest#keepsListReachable"]
+            with self.subTest(collision=collision), patch(
+                "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+            ):
+                if collision:
+                    with self.assertRaisesRegex(PortError, "shadows the external Robolectric identity"):
+                        validate_compiled_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+                else:
+                    validate_compiled_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
+    def test_unremapped_native_shadow_requires_candidate_source_proof(self):
+        from controller.repair_acceptance import _kotlin_junit_methods
+
+        with self.assertRaisesRegex(PortError, "immutable candidate source proof"):
+            _kotlin_junit_methods(self.notification_shadow_source(), {}, reject_inherited=True)
+        path = TEST.replace("/src/test/", "/src/androidTest/")
+        for collision in (False, True):
+            sources = {TEST: self.notification_shadow_source().encode()}
+            if collision:
+                sources[TEST.replace("MapTest.kt", "Other.kt")] = (
+                    b"package org.robolectric.shadows\n"
+                    b"open class ShadowNotificationManager { @org.junit.Test fun hidden() {} }"
+                )
+            manifest, scope, blobs, contents, executed, _ = self.lineage_inputs(sources, whole=True)
+            blobs[path] = blobs.pop(TEST)
+            coverage = scope["coverage"][0]
+            coverage["path"], coverage["hosted_methods"] = path, []
+            coverage["native_methods"] = ["sample.MapTest#keepsListReachable"]
+            with self.subTest(collision=collision), patch(
+                "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+            ), self.assertRaisesRegex(PortError, "immutable candidate source proof|inherited Kotlin JUnit"):
+                validate_compiled_hosted_methods(scope, blobs, manifest.repo, executed, {})
+
+    def test_notification_shadow_rejects_malformed_other_compiled_inventories(self):
+        for inventory in (None, [], {"x.kt": "7" * 40}, {1: "7" * 40}):
+            manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs({
+                TEST: self.notification_shadow_source().encode(),
+            }, whole=True)
+            compiled["core/testing"] = inventory
+            with self.subTest(inventory=inventory), patch(
+                "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+            ), self.assertRaisesRegex(PortError, "compiled source inventory|compiled Kotlin superclass"):
+                validate_compiled_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
+    def test_notification_shadow_cannot_hide_suites_or_uncertain_lineage(self):
+        from controller.repair_acceptance import _kotlin_junit_methods
+
+        source = self.notification_shadow_source()
+        mutations = (
+            source.replace("ShadowNotificationManager()", "Missing()"),
+            source.replace("ShadowNotificationManager()", "ShadowNotificationManager(), Marker"),
+            source.replace("ShadowNotificationManager()", "Alias()").replace(
+                "class MapTest", "typealias Alias = ShadowNotificationManager\nclass MapTest",
+            ),
+            source.replace("annotation.Implements", "other.Implements"),
+            source.replace("shadows.ShadowNotificationManager", "other.ShadowNotificationManager"),
+            source.replace("import android.app.NotificationManager", "import other.NotificationManager"),
+            source.replace("annotation.Implementation", "other.Implementation"),
+            source.replace("annotation.Implements", "annotation.Implements as Shadowed").replace(
+                "@Implements", "@Shadowed",
+            ),
+            source.replace("shadows.ShadowNotificationManager", "shadows.ShadowNotificationManager as Base").replace(
+                ": ShadowNotificationManager()", ": Base()",
+            ),
+            source.replace("import android.app.NotificationManager", "import android.app.NotificationManager as Manager")
+                  .replace("NotificationManager::class", "Manager::class"),
+            source.replace("@Implements", "inner @Implements"),
+            source.replace("@Implements(NotificationManager::class)", ""),
+            source.replace("class MapTest {", "class MapTest : Parent() {"),
+            source.replace("@Implementation", "@Test"),
+            source.replace("@Implementation", "@org.junit.Test"),
+            source.replace("@Implementation", "@Before").replace(
+                "package sample", "package sample\nimport org.junit.Before",
+            ),
+            source.replace("@Implementation", "@Other"),
+            source.replace("@Implementation", "@get:Rule").replace(
+                "package sample", "package sample\nimport org.junit.Rule",
+            ),
+            source.replace("companion object { var calls = 0 }", "companion object { annotation class Implementation }"),
+            source.replace("companion object { var calls = 0 }", "class Hidden : Parent() {}"),
+            source.replace("companion object { var calls = 0 }", "class Hidden { @Test fun hidden() {} }"),
+            source.replace("class MapTest {", "class MapTest { annotation class Implements;"),
+            source.replace("class MapTest {", "class MapTest { class NotificationManager;"),
+            source.replace("class MapTest {", "class MapTest { class ShadowNotificationManager;"),
+            source.replace("class MapTest {", "class MapTest { companion object { class ShadowNotificationManager };"),
+            self.notification_shadow_source(
+                "@Implements(NotificationManager::class) class CountingNotificationManager : ShadowNotificationManager()",
+            ),
+            self.notification_shadow_source(imports="import other.Implements"),
+            self.notification_shadow_source(imports="import org.robolectric.shadows.ShadowNotificationManager as Extra"),
+        )
+        for index, changed in enumerate(mutations):
+            with self.subTest(index=index), self.assertRaises(PortError):
+                _kotlin_junit_methods(changed, {}, reject_inherited=True, inheritance=lambda *args: set())
+
     def test_collaborators_do_not_hide_named_or_ambiguous_inherited_suites(self):
         base = TEST.replace("MapTest.kt", "Parent.kt")
         collaborator = "val fake = object : Collaborator { override fun call() {} }; "

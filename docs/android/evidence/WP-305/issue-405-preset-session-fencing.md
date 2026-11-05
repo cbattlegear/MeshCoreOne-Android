@@ -589,3 +589,58 @@ it changes no assertion or production behavior. App tests did not execute on
 3f22, so the new app/mounted controls remain unverified. Classifier/controller
 passed; Swift oracles were skipped. The corrected successor requires its own
 automatic exact-head result; this failure is not relabeled as test success.
+
+## Snapshot-bound 82-to-3f22/a5 review dispositions
+
+The independent immutable review supplied five source-only concerns. On actual
+parent `a5d7af3da905ccf62c41c7cefe7cce279a481240`, the following narrowly
+related repairs and controls were authored while its run `41947420835` was
+preserved. None of these controls has executed at authoring time:
+
+- The dismissed preset-error recovery gap is production-reachable without a
+  reset: unknown finalization/readback plus radio disconnection must not make
+  the original-ID readback action disappear. Preset content now uses the
+  coordinator's admission policy, and the primary button exposes localized
+  Try Again for same-attempt reconciliation independently of selected preset
+  and radio availability. Ordinary radio apply retains its selected-ID/radio
+  requirements. A new actual mounted control applies without selecting a row,
+  loses acknowledgement/readback, disconnects, dismisses the actual Android
+  error dialog through Back, proves ordinary flow Back is fenced, then clicks
+  the enabled primary recovery button. It requires the original target receipt,
+  original ID read twice, and exactly one radio apply/finalization.
+- A readback-only queue record no longer rejects or registers among pending
+  completion writes. Worker validation still rejects stale queued reads; reads
+  cannot reject a newer unsealed decision merely by being enqueued. A concurrent
+  control holds the original read after validation, resets, stages a newer
+  completion, then proves the old read is actually submitted before releasing
+  the fresh stage. The newer real writer seals/finishes; the stale read fails.
+  This is public API/concurrent-reset safety, not a found production reset path.
+- An admitted reset now counts as unsettled owner work from invalidation through
+  the complete acknowledged false operation. This includes pre-submission
+  suspension. The narrow non-cancellable settlement boundary retains custody
+  through initiating-child cancellation; it does not invent rollback or let a
+  fresh owner finish true ahead of a still-capable old false writer. Retirement
+  blocks owner replacement until actual storage settlement; terminal/revision
+  checks still reject the old owner's result. A control pauses a delegating
+  reset before actual queue submission, retires/cancels its owner, requires
+  reacquisition to remain the unavailable exact old owner, releases false, then
+  completes the fresh owner and requires actual writer false/true order and
+  durable true. No Activity-recreation early-retirement claim is made.
+- The flow's Wi-Fi completion callback captures generation before dismissing the
+  sheet and revalidates after dismissal before appending REGION. A deterministic
+  control uses the real flow with a queued producer and an unconfined sheet
+  collector, so synchronous sheet-dismissal reset occurs within that callback.
+  Old success cannot append; a fresh connection appends once. No production
+  reset observer was established.
+- The existing mounted retired-owner control no longer calls the side-effecting
+  retained-owner accessor before its observed action. It first clicks the still
+  mounted welcome control, then reads ownership and requires only the fresh
+  owner's path to advance. No setContent, Activity recreation or accessor-induced
+  availability signal can manufacture the tested automatic refresh.
+
+These are four new methods and one strengthened existing mounted control.
+Original assertions/receipt identity and held entry/activation witness semantics
+remain intact. Trusted path/operation admissions and the documented validator,
+portmap, pinned inventory and diff checks passed; these source-only results do
+not compile or execute Kotlin. No runtime/storage owner delta, #495 source,
+reservation or publication was imported; no local Gradle or manual CI rerun.

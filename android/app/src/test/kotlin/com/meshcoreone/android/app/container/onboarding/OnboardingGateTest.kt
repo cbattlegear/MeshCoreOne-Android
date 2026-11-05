@@ -21,6 +21,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -342,6 +343,113 @@ class OnboardingGateTest {
         } finally { processScope.cancel() }
     }
 
+    @Test fun `dismissed preset error keeps mounted no-radio no-selection original readback available`() = runBlocking {
+        val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            host.setup().visible()
+            var readbackAvailable = false
+            var applies = 0
+            val writes = mutableListOf<String>()
+            val reads = mutableListOf<String>()
+            val flags = WriteBehindOnboardingFlags(
+                emptyMap(), processScope, { _, _ -> error("Use the original finalizer") },
+                persistCompletion = { id -> writes += id; throw java.io.IOException("lost acknowledgement") },
+                reconcileCompletion = { id ->
+                    reads += id
+                    if (!readbackAvailable) throw java.io.IOException("readback unavailable")
+                    true
+                },
+            )
+            val first = OnboardingPresetTarget(java.util.UUID.randomUUID(), 1, java.util.UUID.randomUUID())
+            var target: OnboardingPresetTarget? = first
+            val presets = object : OnboardingPresetPort {
+                override val canApply = MutableStateFlow(true)
+                override fun currentTarget() = target
+                override suspend fun apply(presetId: String): OnboardingPresetOutcome {
+                    applies++
+                    return OnboardingPresetOutcome.Applied
+                }
+            }
+            val dependencies = onboarding(flags, flags.hasCompleted, processScope, presets = presets)
+            val flow = dependencies.retainedFlowCoordinator()
+            flow.onboarding.replacePath(listOf(OnboardingStep.PRESET))
+            val id = flow.preset.visiblePresets().first().id
+            val delivered = mutableListOf<com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt>()
+            showFlow(dependencies) { delivered += it; true }
+            compose.runOnIdle { flow.preset.apply(id) }
+            compose.waitForIdle()
+            assertEquals(null, flow.preset.state.value.selectedId)
+            assertTrue(flow.preset.state.value.error != null)
+            compose.runOnIdle {
+                target = null
+                presets.canApply.value = false
+                org.robolectric.shadows.ShadowDialog.getLatestDialog().onBackPressed()
+            }
+            compose.waitForIdle()
+            assertEquals(null, flow.preset.state.value.error)
+            assertFalse(flow.back())
+            assertTrue(flow.onboarding.canReconcileCompletion())
+            compose.runOnIdle { readbackAvailable = true }
+            compose.onNodeWithText(host.get().getString(
+                com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings.commonTryAgain,
+            )).assertIsEnabled().performClick()
+            compose.waitForIdle()
+            assertEquals(1, applies)
+            assertEquals(1, writes.size)
+            assertEquals(listOf(writes.single(), writes.single()), reads)
+            assertEquals(
+                listOf(com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt.Preset(id, first)),
+                delivered,
+            )
+        } finally { processScope.cancel() }
+    }
+
+    @Test fun `retiring an owner during admitted reset retains custody until the actual false write settles`() = runBlocking {
+        val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val release = CompletableDeferred<Unit>()
+        try {
+            val entered = CompletableDeferred<Unit>()
+            val writes = mutableListOf<Boolean>()
+            var durable = false
+            val flags = WriteBehindOnboardingFlags(emptyMap(), processScope, { _, value ->
+                writes += value
+                durable = value
+            })
+            val delayed = object : OnboardingFlagStore by flags {
+                override suspend fun persistBoolean(key: String, value: Boolean) {
+                    if (!value) {
+                        entered.complete(Unit)
+                        release.await()
+                    }
+                    flags.persistBoolean(key, value)
+                }
+            }
+            val dependencies = onboarding(delayed, flags.hasCompleted, processScope)
+            val old = dependencies.retainedFlowCoordinator()
+            val resetting = async(start = CoroutineStart.UNDISPATCHED) {
+                runCatching { old.onboarding.resetOnboarding() }
+            }
+            entered.await()
+            dependencies.onFlowCompletionHandled(old)
+            assertTrue(old.onboarding.hasUnsettledCompletion)
+            assertSame(old, dependencies.retainedFlowCoordinator())
+            assertFalse(dependencies.ownsFlowCoordinator(old))
+            resetting.cancel()
+            assertTrue(old.onboarding.hasUnsettledCompletion)
+            release.complete(Unit)
+            resetting.join()
+            assertFalse(old.onboarding.hasUnsettledCompletion)
+            val fresh = dependencies.retainedFlowCoordinator()
+            assertNotSame(old, fresh)
+            fresh.onboarding.completeOnboarding()
+            assertEquals(listOf(false, true), writes)
+            assertTrue(durable)
+            assertTrue(flags.hasCompleted.value)
+            assertTrue(fresh.onboarding.hasCompletedOnboarding)
+            assertEquals(null, old.onboarding.completionReceipt)
+        } finally { release.complete(Unit); processScope.cancel() }
+    }
+
     @Test fun `still-mounted explicitly retired owner is replaced after known-uncommitted finalization`() = runBlocking {
         val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
         val release = CompletableDeferred<Unit>()
@@ -366,12 +474,12 @@ class OnboardingGateTest {
             release.complete(Unit)
             assertTrue(completing.await().isFailure)
             compose.waitForIdle()
-            val fresh = dependencies.retainedFlowCoordinator()
-            assertNotSame(old, fresh)
             compose.onNodeWithText(host.get().getString(
                 com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings.welcomeGetStarted,
             )).performClick()
             compose.waitForIdle()
+            val fresh = dependencies.retainedFlowCoordinator()
+            assertNotSame(old, fresh)
             assertEquals(listOf(OnboardingStep.PERMISSIONS), fresh.onboarding.onboardingPath)
             assertEquals(emptyList<OnboardingStep>(), old.onboarding.onboardingPath)
             assertTrue(fresh.onboarding.canStartCompletion())

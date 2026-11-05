@@ -333,6 +333,70 @@ class OnboardingFlagsTest {
         }
     }
 
+    @Test fun `stale readback enqueue cannot reject a newer staged completion`() = kotlinx.coroutines.runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val validated = java.util.concurrent.CountDownLatch(1)
+        val enqueueRead = java.util.concurrent.CountDownLatch(1)
+        val submitted = java.util.concurrent.CountDownLatch(1)
+        val staging = CompletableDeferred<Unit>()
+        val releaseStage = CompletableDeferred<Unit>()
+        var stages = 0
+        var finalizations = 0
+        try {
+            val flags = WriteBehindOnboardingFlags(
+                emptyMap(), scope, { _, _ -> },
+                stageCompletion = {
+                    if (++stages == 2) {
+                        staging.complete(Unit)
+                        releaseStage.await()
+                    }
+                },
+                persistCompletion = { if (++finalizations == 1) throw IOException("unknown commit") },
+                reconcileCompletion = { throw IOException("read unavailable") },
+            )
+            val delayed = object : OnboardingFlagStore by flags {
+                override suspend fun reconcileCompletion(
+                    attempt: com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt,
+                    requireCurrent: () -> Unit, onFinished: (Result<Boolean>) -> Unit,
+                ) {
+                    var first = true
+                    flags.reconcileCompletion(attempt, {
+                        requireCurrent()
+                        if (first) {
+                            first = false
+                            validated.countDown()
+                            check(enqueueRead.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                        }
+                    }, onFinished)
+                }
+            }
+            val state = OnboardingState(delayed)
+            assertFailsWith<OnboardingCompletionOutcomeUnknownException> { state.completeOnboarding() }
+            val oldRead = java.util.concurrent.CompletableFuture.supplyAsync {
+                kotlinx.coroutines.runBlocking {
+                    val reading = async(start = CoroutineStart.UNDISPATCHED) {
+                        runCatching { state.reconcileCompletion() }
+                    }
+                    submitted.countDown()
+                    reading.await()
+                }
+            }
+            assertTrue(validated.await(5, java.util.concurrent.TimeUnit.SECONDS))
+            state.resetOnboarding()
+            val fresh = async(start = CoroutineStart.UNDISPATCHED) { state.completeOnboarding() }
+            staging.await()
+            enqueueRead.countDown()
+            assertTrue(submitted.await(5, java.util.concurrent.TimeUnit.SECONDS))
+            releaseStage.complete(Unit)
+            fresh.await()
+            assertTrue(oldRead.get(5, java.util.concurrent.TimeUnit.SECONDS).isFailure)
+            assertEquals(2, stages)
+            assertEquals(2, finalizations)
+            assertTrue(flags.hasCompleted.value)
+            assertTrue(state.hasCompletedOnboarding)
+        } finally { enqueueRead.countDown(); releaseStage.complete(Unit); scope.cancel() }
+    }
+
     @Test fun `concurrent resets cannot submit a late false after a newer completion`() = runTest {
         val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
         val entered = CompletableDeferred<Unit>()

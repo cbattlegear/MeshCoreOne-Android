@@ -57,6 +57,7 @@ fun PresetStepScreen(
     canApply: Boolean,
     actions: PresetStepActions,
     modifier: Modifier = Modifier,
+    canReconcileCompletion: Boolean = false,
 ) {
     val haptics = LocalHapticFeedback.current
     LaunchedEffect(state.commitTick) { if (state.commitTick > 0) haptics.performHapticFeedback(HapticFeedbackType.LongPress) }
@@ -80,9 +81,11 @@ fun PresetStepScreen(
             }
         }
         OnboardingPrimaryButton(
-            selected?.let { O.presetUse(resources, it.name) } ?: stringResource(O.presetContinue), actions.onApply,
+            if (canReconcileCompletion) stringResource(L.commonTryAgain)
+            else selected?.let { O.presetUse(resources, it.name) } ?: stringResource(O.presetContinue), actions.onApply,
             Modifier.padding(bottom = OnboardingMetrics.cardSpacing),
-            enabled = !state.isApplying && !state.isCompleted && selected != null && canApply, loading = state.isApplying,
+            enabled = !state.isApplying && !state.isCompleted &&
+                (canReconcileCompletion || (selected != null && canApply)), loading = state.isApplying,
         )
     }
     state.error?.let {

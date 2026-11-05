@@ -26,8 +26,11 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
     val wifi = WiFiConnectionCoordinator(
         scope, deps.wifi,
         onConnected = {
+            val generation = onboarding.lifecycleGeneration.value
             deviceScan.dismissSheet()
-            onboarding.append(OnboardingStep.REGION)
+            if (onboarding.lifecycleGeneration.value == generation && onboarding.canStartCompletion()) {
+                onboarding.append(OnboardingStep.REGION)
+            }
         },
         canStartConnection = { !completing && onboarding.canStartCompletion() },
         lifecycle = onboarding,

@@ -92,12 +92,12 @@ class WriteBehindOnboardingFlags(
     private fun enqueue(write: Write) {
         stopped?.let { throw it }
         if (drained.isCompleted) drained = CompletableDeferred()
-        if (write.key == OnboardingState.KEY_HAS_COMPLETED) {
+        if (write.key == OnboardingState.KEY_HAS_COMPLETED && write.onReconciled == null) {
             pendingCompletions.values.forEach {
                 it.reject(IllegalStateException("Onboarding completion was superseded by a newer write"))
             }
         }
-        write.attempt?.let { pendingCompletions[write.revision] = it }
+        if (write.onReconciled == null) write.attempt?.let { pendingCompletions[write.revision] = it }
         writes.addLast(write)
     }
 

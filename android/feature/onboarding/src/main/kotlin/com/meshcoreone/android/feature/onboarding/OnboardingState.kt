@@ -10,6 +10,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 
 enum class OnboardingStep(val rawValue: String) {
     WELCOME("welcome"), PERMISSIONS("permissions"), PAIR("pair"), REGION("region"), PRESET("preset"),
@@ -23,7 +25,7 @@ sealed interface OnboardingCompletionReceipt {
 
 internal class OnboardingCompletionPublication(val receipt: OnboardingCompletionReceipt, val revision: Long)
 
-/** A finalizer may have committed; another decision requires an acknowledged explicit reset. */
+/** A finalizer may have committed; reconcile its original ID or acknowledge an explicit reset before replacing it. */
 interface OnboardingCompletionOutcomeUnknown
 
 /** Boolean persistence seam mirroring the `UserDefaults` calls the original state makes. */
@@ -104,6 +106,7 @@ class OnboardingState(private val store: OnboardingFlagStore) {
     private var uncertain: UncertainCompletion? = null
     private var reconcilingAttempt: OnboardingCompletionAttempt? = null
     private val resetMutex = Mutex()
+    private var settlingResets = 0
     private var completionRevision = 0L
     private var retired = false
     private var resetRequired = false
@@ -296,27 +299,39 @@ class OnboardingState(private val store: OnboardingFlagStore) {
         val revision = synchronized(completionLock) {
             check(!retired) { "Onboarding flow was retired" }
             resetRequired = true
+            settlingResets++
+            unsettled.value = true
             invalidateCompletion()
         }
-        resetMutex.withLock {
-            synchronized(completionLock) {
-                check(completionRevision == revision) { "Onboarding reset was superseded" }
-            }
-            store.persistBoolean(KEY_HAS_COMPLETED, false)
-            synchronized(completionLock) {
-                check(completionRevision == revision) { "Onboarding reset was superseded" }
-                publication.value = null
-                completed.value = false
-                resetRequired = false
-                setSettlingAttempt(null)
-                path.value = emptyList()
+        // An admitted false write retains owner custody until its actual storage result, even if its caller cancels.
+        withContext(NonCancellable) {
+            try {
+                resetMutex.withLock {
+                    synchronized(completionLock) {
+                        check(!retired && completionRevision == revision) { "Onboarding reset was superseded" }
+                    }
+                    store.persistBoolean(KEY_HAS_COMPLETED, false)
+                    synchronized(completionLock) {
+                        check(!retired && completionRevision == revision) { "Onboarding reset was superseded" }
+                        publication.value = null
+                        completed.value = false
+                        resetRequired = false
+                        setSettlingAttempt(null)
+                        path.value = emptyList()
+                    }
+                }
+            } finally {
+                synchronized(completionLock) {
+                    settlingResets--
+                    unsettled.value = settlingAttempt != null || settlingResets > 0
+                }
             }
         }
     }
 
     private fun setSettlingAttempt(attempt: OnboardingCompletionAttempt?) {
         settlingAttempt = attempt
-        unsettled.value = attempt != null
+        unsettled.value = attempt != null || settlingResets > 0
     }
 
     /**

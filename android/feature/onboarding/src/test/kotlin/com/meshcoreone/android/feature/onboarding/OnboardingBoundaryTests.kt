@@ -15,6 +15,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collect
 import org.junit.Test
 
 private val scope = CoroutineScope(Dispatchers.Unconfined)
@@ -1142,6 +1144,34 @@ class OnboardingFlowCoordinatorTest {
         flow.wifi.setAddress("10.0.0.5"); flow.wifi.connect()
         assertEquals(OnboardingStep.REGION, flow.currentStep)
         assertEquals(PairSheet.NONE, flow.deviceScan.state.value.sheet)
+    }
+
+    @Test fun synchronousSheetDismissalResetCannotAppendRegionForTheRetiredConnection() = kotlinx.coroutines.runBlocking {
+        val dispatcher = QueuedDispatcher()
+        val owner = Job()
+        val flow = OnboardingFlowCoordinator(CoroutineScope(owner + dispatcher), Deps())
+        flow.deviceScan.showSheet(PairSheet.WIFI)
+        var reset = false
+        val observer = scope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            flow.deviceScan.state.collect {
+                if (!reset && it.sheet == PairSheet.NONE) {
+                    reset = true
+                    flow.onboarding.resetOnboarding()
+                }
+            }
+        }
+        try {
+            flow.wifi.setAddress("mesh.local")
+            flow.wifi.connect()
+            dispatcher.drain()
+            assertTrue(reset)
+            assertEquals(emptyList(), flow.onboarding.onboardingPath)
+            assertEquals(PairSheet.NONE, flow.deviceScan.state.value.sheet)
+            assertFalse(flow.wifi.state.value.isConnecting)
+            flow.wifi.connect()
+            dispatcher.drain()
+            assertEquals(listOf(OnboardingStep.REGION), flow.onboarding.onboardingPath)
+        } finally { observer.cancel(); owner.cancel() }
     }
 
     @Test fun justInTimeBluetoothPermissionThenPairResumes() {

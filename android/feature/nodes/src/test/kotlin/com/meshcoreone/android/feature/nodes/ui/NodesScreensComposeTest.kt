@@ -604,6 +604,50 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
         fun mountedRetainedSyncCannotStartReplacementRadioSync() = verifySyncControlOwner(sameRadio = false)
 
         @Test
+        fun mountedSyncCarriesItsOwnerAcrossTheReadinessHandoff() = verifySyncHandoffOwner(ready = true)
+
+        @Test
+        fun mountedSyncCannotPublishRetiredNotReadyFailureAcrossTheHandoff() = verifySyncHandoffOwner(ready = false)
+
+        private fun verifySyncHandoffOwner(ready: Boolean) {
+            val harness = Harness().connect()
+            val radio = checkNotNull(harness.session.radioId)
+            harness.session.state = if (ready) DeviceConnectionState.READY else DeviceConnectionState.DISCONNECTED
+            mount { NodesListScreen(harness.dependencies, NodesNavigation.NONE) }
+            val label = controller.get().getString(C.contactsListSyncNodes)
+            val oldNode = awaitAction(label)
+            val replacement = Harness().connect(radio)
+            val fresh = Fixtures.contact(radioId = radio, name = "Fresh")
+            replacement.store.contacts += fresh
+            var swaps = 0
+            harness.session.onConnectionStateRead = {
+                harness.session.onConnectionStateRead = {}
+                swaps++
+                harness.session.contacts = replacement.contactService
+                harness.session.adverts = replacement.adverts
+                harness.session.device = replacement.session.device
+                harness.session.servicesStore = replacement.store
+                harness.session.offlineStore = replacement.store
+                harness.session.state = DeviceConnectionState.READY
+            }
+            click(oldNode)
+            assertEquals(1, swaps, "The graph must actually change during the ready/not-ready handoff")
+            advanceFrames()
+            assertTrue(harness.contactService.calls.isEmpty())
+            assertTrue(replacement.contactService.calls.isEmpty(), "An A click cannot recapture B at holder entry")
+            assertTrue(harness.adverts.syncingFlags.isEmpty())
+            assertTrue(replacement.adverts.syncingFlags.isEmpty())
+            assertTrue(ShadowDialog.getLatestDialog()?.isShowing != true, "A's not-ready error cannot be published into B")
+            awaitCondition { actionNode(label)?.id?.let { it != oldNode.id } == true }
+            click(awaitAction(label))
+            awaitCondition { replacement.adverts.syncingFlags == listOf(true, false) }
+            awaitText(fresh.name)
+            assertEquals(listOf("sync"), replacement.contactService.calls)
+            assertTrue(harness.contactService.calls.isEmpty())
+            assertTrue(ShadowDialog.getLatestDialog()?.isShowing != true)
+        }
+
+        @Test
         fun mountedShareEnablesWhenReplacementDeviceBecomesReadyWithoutAnotherUiChange() {
             val harness = Harness().connect()
             mount { NodesListScreen(harness.dependencies, NodesNavigation.NONE) }

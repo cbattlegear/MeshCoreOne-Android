@@ -134,6 +134,13 @@ effect starts a replacement local read after retiring Sync, without starting a r
 Mounted held-initial-read controls cover both empty state and an actual manual admission, require
 B's row before A's read is released, retain the admitted DTO and then require fresh B Sync.
 
+The original control owner is passed into the holder rather than recaptured there. The holder
+validates it before acquisition and around readiness evaluation; the not-ready error is owned by
+the same captured graph. Mounted controls replace A with same-radio B during readiness handoff,
+covering both ready and not-ready A, and require no A/B commands, flags or stale error before
+fresh B success. A holder-entry control independently rejects an already-retired initiating owner
+before any provider acquisition. Existing acquisition and held-operation controls are preserved.
+
 Both `ContactsImmediateAdmissionApi31ComposeTest` and
 `ContactsImmediateAdmissionApi37ComposeTest` inherit six mounted tests:
 

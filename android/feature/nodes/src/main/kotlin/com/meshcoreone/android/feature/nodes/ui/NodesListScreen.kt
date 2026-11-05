@@ -58,7 +58,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.model.ContactDTO
@@ -157,11 +156,7 @@ internal fun NodesListScreen(
                 Button(
                     onClick = {
                         if (radioId != null) syncScope.launch {
-                            dependencies.session.ensureContactConnection(connection, radioId)
-                            if (dependencies.session.connectionState() == DeviceConnectionState.READY) holder.syncContacts(radioId)
-                            else holder.seed {
-                                it.copy(errorMessage = com.meshcoreone.android.feature.nodes.deps.NodesMessage.res(C.contactsListConnectToSync))
-                            }
+                            holder.syncContacts(radioId, connection)
                         }
                     },
                     enabled = !state.isSyncing,

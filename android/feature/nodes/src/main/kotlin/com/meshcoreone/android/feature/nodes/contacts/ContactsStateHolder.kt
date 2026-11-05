@@ -2,6 +2,7 @@
 package com.meshcoreone.android.feature.nodes.contacts
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.Coordinate
@@ -164,10 +165,17 @@ class ContactsStateHolder(
     }
 
     /** Sync contacts from the device; a re-trigger while one is in flight is a no-op. */
-    suspend fun syncContacts(radioId: RadioId) {
+    suspend fun syncContacts(radioId: RadioId, connection: Any? = session.connectionIdentity()) {
+        session.ensureContactConnection(connection, radioId)
+        val ready = session.connectionState() == DeviceConnectionState.READY
+        session.ensureContactConnection(connection, radioId)
+        if (!ready) {
+            mutableState.update { it.copy(errorMessage = NodesMessage.res(R.string.l10n_app_contacts_contacts_list_connecttosync)) }
+            return
+        }
         onConnectionChanged()
         if (activeSync != null) return
-        val operation = ContactSync(session.connectionIdentity(), radioId)
+        val operation = ContactSync(connection, radioId)
         val contactService = session.contactService() ?: return
         val advertisementService = session.advertisementService()
         // Providers can observe different registry generations; reject a mixed capture before any side effect.

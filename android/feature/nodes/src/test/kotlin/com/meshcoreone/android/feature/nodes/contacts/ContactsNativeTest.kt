@@ -99,6 +99,38 @@ class ContactsNativeTest {
     fun `same-radio swap while setting advert flag cleans only the captured pipeline`() =
         verifySyncAcquisitionSwap("flag")
 
+    @Test
+    fun `sync entry rejects an initiating graph retired before holder acquisition`() = scenario {
+        val harness = Harness(clock).connect()
+        val radio = checkNotNull(harness.session.radioId)
+        val owner = harness.session.connectionIdentity()
+        val replacement = Harness(clock).connect(radio)
+        harness.session.contacts = replacement.contactService
+        harness.session.adverts = replacement.adverts
+        harness.session.servicesStore = replacement.store
+        harness.session.offlineStore = replacement.store
+        var acquired = false
+        harness.session.onContactServiceRead = { acquired = true }
+        val holder = ContactsStateHolder(harness.dependencies, scope)
+        var cancelled = false
+        try {
+            holder.syncContacts(radio, owner)
+        } catch (_: CancellationException) {
+            cancelled = true
+        }
+        assertTrue(cancelled)
+        assertFalse(acquired, "Retired owner rejection must precede service acquisition")
+        assertTrue(harness.contactService.calls.isEmpty())
+        assertTrue(replacement.contactService.calls.isEmpty())
+        assertTrue(harness.adverts.syncingFlags.isEmpty())
+        assertTrue(replacement.adverts.syncingFlags.isEmpty())
+        assertNull(holder.state.value.errorMessage)
+        harness.session.onContactServiceRead = {}
+        holder.syncContacts(radio, harness.session.connectionIdentity())
+        assertEquals(listOf("sync"), replacement.contactService.calls)
+        assertEquals(listOf(true, false), replacement.adverts.syncingFlags)
+    }
+
     private fun verifySyncAcquisitionSwap(boundary: String) = scenario {
         val harness = Harness(clock).connect()
         val radio = checkNotNull(harness.session.radioId)

@@ -141,6 +141,20 @@ verifier rejects pending new evidence, while only the uninterrupted actual new
 action may consume it once. These controls bring the focused suite to 26 methods
 at SDK31/37; successor execution remains pending.
 
+Combined candidate `36f3aa83fbbb094a1bbb16e280145b4ff41a6c6e` contained
+the exact `2d4c42d8f` verifier/test bytes plus an actual producer/backend
+copy-replacement control. Run
+[42015816886](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42015816886)
+failed only that new producer method at both SDKs (2,062 app executions,
+two failures): its fixture routed admission hooks but not the `ALLOCATED`
+write hook, so the intended gate was never reached. This does not execute
+the intended cross-copy schedule. Reviewed successor
+`e8d76e687e3c83ec3041bb15930c7aa2cde456c9` wires the actual write-point
+callback to the same test gate, without changing production or owned verifier
+source. Exact run
+[42017808137](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42017808137)
+is pending.
+
 ## Ownership and advisory state
 
 Trusted `reserve.py admit` returned `wp-owned/create` for the verifier and

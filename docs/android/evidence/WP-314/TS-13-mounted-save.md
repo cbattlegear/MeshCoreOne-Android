@@ -29,7 +29,7 @@ invariants are unchanged.
 
 ## Mounted regression controls
 
-Ten new methods in `TraceCodeInputComposeTest` drive the real state holder after
+Eleven new methods in `TraceCodeInputComposeTest` drive the real state holder after
 actual fake-radio dispatch/response correlation and persist through
 `InMemoryTracePathStore` (not Room). They cover:
 
@@ -37,7 +37,8 @@ actual fake-radio dispatch/response correlation and persist through
   exact radio/bytes/dispatched width/SNR/run persistence and no duplicate Save.
 - Completed batch runs and their existing storage semantics.
 - Storage failure with diagnostics, retained name, visible error and real retry.
-- Held storage creation and repeated retained-confirmation rejection.
+- Held storage creation and repeated retained-confirmation rejection, including
+  another batch result arriving while the accepted write remains suspended.
 - Edited and failed routes with no storage write.
 - Retained confirmation after same/different-radio reconnect and fresh B Save.
 - Accepted A write completing after same/different-radio reconnect without

@@ -29,6 +29,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -271,6 +272,9 @@ internal fun TracePathListContent(
             holder.clearPath()
         }
     }
+    val savingPath = remember(connection?.radioId, connection?.generation, connection?.originatingToken) {
+        mutableStateOf(false)
+    }
     LazyColumn(
         Modifier.fillMaxSize().padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -442,7 +446,7 @@ internal fun TracePathListContent(
             item { Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.semantics { contentDescription = error }) }
         }
         item { TraceResults(state) }
-        item(key = "trace-save-path") { TraceSavePathAction(state, holder, connection, scope) }
+        item(key = "trace-save-path") { TraceSavePathAction(state, holder, connection, scope, savingPath) }
         item {
             val canExecute = { holder.deps.connectedDevice() != null && canEdit() }
             val runOrCancel = {
@@ -492,7 +496,6 @@ internal fun TracePathListContent(
 private data class TraceSaveDialogState(
     val open: Boolean = false,
     val name: String = "",
-    val saving: Boolean = false,
     val failed: Boolean = false,
 )
 
@@ -502,6 +505,7 @@ private fun TraceSavePathAction(
     holder: TracePathStateHolder,
     connection: TracePathScreen.Dependencies?,
     scope: CoroutineScope,
+    saving: MutableState<Boolean>,
 ) {
     val dialog = remember(
         connection?.radioId, connection?.generation, connection?.originatingToken,
@@ -518,13 +522,13 @@ private fun TraceSavePathAction(
     }
     if (state.displayedResult?.success != true || state.isRunningSavedPath) return
     val requestSave = {
-        if (canSave() && !dialog.value.saving) {
+        if (canSave() && !saving.value) {
             dialog.value = TraceSaveDialogState(open = true, name = holder.generatePathName())
         }
     }
     OutlinedButton(
         onClick = requestSave,
-        enabled = state.canSavePath && holder.deps.connectedDevice() != null && !dialog.value.saving,
+        enabled = state.canSavePath && holder.deps.connectedDevice() != null && !saving.value,
         modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp).semantics {
             onClick { requestSave(); true }
         },
@@ -533,19 +537,24 @@ private fun TraceSavePathAction(
     }
     if (dialog.value.open) {
         val dismiss = {
-            if (!dialog.value.saving) dialog.value = TraceSaveDialogState()
+            if (!saving.value) dialog.value = TraceSaveDialogState()
         }
         val confirmSave = {
-            if (dialog.value.open && !dialog.value.saving && dialog.value.name.isNotBlank() && canSave()) {
+            if (dialog.value.open && !saving.value && dialog.value.name.isNotBlank() && canSave()) {
                 val name = dialog.value.name
-                dialog.value = dialog.value.copy(saving = true, failed = false)
+                saving.value = true
+                dialog.value = dialog.value.copy(failed = false)
                 scope.launch {
-                    if (canSave()) {
-                        val saved = holder.savePath(name)
-                        dialog.value = if (saved) TraceSaveDialogState()
-                        else dialog.value.copy(saving = false, failed = true)
-                    } else {
-                        dialog.value = TraceSaveDialogState()
+                    try {
+                        if (canSave()) {
+                            val saved = holder.savePath(name)
+                            dialog.value = if (saved) TraceSaveDialogState()
+                            else dialog.value.copy(failed = true)
+                        } else {
+                            dialog.value = TraceSaveDialogState()
+                        }
+                    } finally {
+                        saving.value = false
                     }
                 }
             }
@@ -558,14 +567,14 @@ private fun TraceSavePathAction(
                     OutlinedTextField(
                         value = dialog.value.name,
                         onValueChange = { name ->
-                            if (!dialog.value.saving && canSave()) dialog.value = dialog.value.copy(name = name, failed = false)
+                            if (!saving.value && canSave()) dialog.value = dialog.value.copy(name = name, failed = false)
                         },
                         label = { Text(stringResource(C.contactsTraceMapPathName)) },
                         singleLine = true,
-                        enabled = !dialog.value.saving,
+                        enabled = !saving.value,
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    if (dialog.value.saving) CircularProgressIndicator()
+                    if (saving.value) CircularProgressIndicator()
                     if (dialog.value.failed) {
                         Text(
                             stringResource(C.contactsTraceMapSaveFailedMessage),
@@ -575,14 +584,14 @@ private fun TraceSavePathAction(
                 }
             },
             dismissButton = {
-                TextButton(onClick = dismiss, enabled = !dialog.value.saving) {
+                TextButton(onClick = dismiss, enabled = !saving.value) {
                     Text(stringResource(L.commonCancel))
                 }
             },
             confirmButton = {
                 TextButton(
                     onClick = confirmSave,
-                    enabled = dialog.value.name.isNotBlank() && state.canSavePath && !dialog.value.saving,
+                    enabled = dialog.value.name.isNotBlank() && state.canSavePath && !saving.value,
                     modifier = Modifier.semantics { onClick { confirmSave(); true } },
                 ) {
                     Text(stringResource(L.commonSave))

@@ -213,6 +213,49 @@ class TraceCodeInputComposeTest {
         assertTrue(store.paths.isEmpty())
     }
 
+    @Test fun mountedSaveRemainsBusyWhenTheNextBatchResultArrivesDuringStorage() {
+        val h = configured()
+        val store = InMemoryTracePathStore { h.time.now() }
+        val release = CompletableDeferred<Unit>()
+        var creates = 0
+        h.deps.store = object : TracePathPersisting by store {
+            override suspend fun createSavedTracePath(
+                radioId: RadioId, name: String, pathBytes: Bytes, hashSize: Long,
+                initialRun: com.meshcoreone.android.core.model.TracePathRunDTO?,
+            ): SavedTracePathDTO {
+                creates += 1
+                release.await()
+                return store.createSavedTracePath(radioId, name, pathBytes, hashSize, initialRun)
+            }
+        }
+        val sender = FakeTraceSender()
+        h.deps.sender = sender
+        h.holder.setTraceHashMode(1u)
+        h.holder.addNode(contact(0xAA, 0x11, name = "Tower"))
+        h.holder.setBatchEnabled(true)
+        h.holder.setBatchSize(2)
+        h.start { h.holder.runBatchTrace() }
+        h.respond(sender.sent.last().tag, listOf(TraceNode(Bytes.of(0xAA, 0x11), 6.0), node(null, 3.0)), RADIO)
+        assertTrue(h.state.canSavePath)
+        mountSaveAction(h)
+        click(host.get().getString(C.contactsResultsSavePath))
+        click(host.get().getString(L.commonSave))
+        assertEquals(1, creates)
+        h.time.advanceBy(500.milliseconds)
+        h.respond(sender.sent.last().tag, listOf(TraceNode(Bytes.of(0xAA, 0x11), 8.0), node(null, 4.0)), RADIO)
+        settle()
+        scrollToIndex(11)
+        val save = button(host.get().getString(C.contactsResultsSavePath))
+        assertTrue(save.config.contains(SemanticsProperties.Disabled))
+        host.get().runOnUiThread { assertNotNull(save.config[SemanticsActions.OnClick].action)() }
+        settle()
+        assertEquals(1, creates, "A new batch result must not release an accepted save's submission guard")
+        host.get().runOnUiThread { release.complete(Unit) }
+        settle()
+        assertEquals(1, store.paths.size)
+        assertEquals(2, h.state.completedResults.size)
+    }
+
     @Test fun mountedSaveRejectsRetainedSameRadioConfirmationAfterReconnect() = staleSaveAcrossReconnect(false)
 
     @Test fun mountedSaveRejectsRetainedDifferentRadioConfirmationAfterReconnect() = staleSaveAcrossReconnect(true)

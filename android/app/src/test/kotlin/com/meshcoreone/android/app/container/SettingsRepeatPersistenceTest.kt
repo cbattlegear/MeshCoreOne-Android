@@ -866,6 +866,7 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
     }
 
     @Test fun confirmedRestoreRetirementIsSharedAcrossEditorsAndRejectsSnapshotAba() = runTest {
+        println("WP305_REPEAT_CLEAR|shared-retirement|START")
         for (aba in listOf(false, true)) {
             withRepeat(store) { h, _, _, radio ->
                 val token = assertNotNull(h.sessions.current).token
@@ -918,10 +919,12 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                     assertNull(store.fetchDevice(saved.id)!!.preRepeatFrequency)
                 } finally { alternate.close() }
             }
+            println("WP305_REPEAT_CLEAR|shared-retirement|aba=$aba|END|SUCCESS")
         }
     }
 
     @Test fun delayedRepeatOffObservationAfterFailedClearCannotReuseThePreviousBaseline() = runTest {
+        println("WP305_REPEAT_CLEAR|delayed-off|START")
         for (failurePoint in listOf("save", "cancel-clear", "cancel-before-clear")) {
             val clearEntered = CompletableDeferred<Unit>()
             val clearRelease = CompletableDeferred<Unit>()
@@ -1039,6 +1042,7 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                     assertEquals(listOf(1, 0, 0, 1, 0), radio.radioWrites.map { it[11].toInt() })
                 }
             } finally { clearRelease.complete(Unit); forwarding?.cancel(); forwarding?.join() }
+            println("WP305_REPEAT_CLEAR|delayed-off|$failurePoint|END|SUCCESS")
         }
     }
 

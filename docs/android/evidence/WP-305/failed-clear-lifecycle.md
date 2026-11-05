@@ -113,6 +113,9 @@ No off observation can pass through during the controlled ordering. Test-only
 baseline `b1db04bfe3375fc507546fa616dd269c72793f2c`, parent `d05509a9`, contains
 only that bootstrap correction with unchanged production and assertions.
 The same bootstrap correction is applied to the repaired candidate.
+The three new methods emit `WP305_REPEAT_CLEAR` START and per-family END/SUCCESS
+markers after explicit cleanup. These establish reached assertions/cleanup only;
+pair them with the exact hosted JUnit suite result, not standalone test acceptance.
 
 No Kotlin execution, hardware, signing, iOS UI or whole-WP acceptance is claimed
 for the repaired candidate by the source checks or prior #585 greens.

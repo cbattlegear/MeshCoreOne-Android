@@ -162,3 +162,20 @@ mutation, and alias retargeting on an existing instance without touching either
 the retained archive or replacement directory. These run on the hosted Linux
 filesystem at SDK31/37; they do not prove an Android device uses such aliases.
 Their execution outcome must be bound to the exact successor hosted run.
+
+## Current-main composition
+
+The review composition is based on actual trusted `main`
+`f93e2012049feb4d6be728f32bd661665d71161c`, including the merged #571
+coordinator primitive. Merge commit `40c40b079ebe852f9694b1745fb04e6b315a63c5`
+has that exact main commit as first parent and the unchanged, independently
+reviewed producer `94493a7248f8ad4a4a72f9751946339418174679` as second parent.
+Thus the witness commits remain actual ancestry; no patch-copy, cherry-pick or
+rewrite was used. The coordinator's successor operation/nonce/receipt contract
+is present on main, but this composition deliberately adds no app adapter,
+foreground verifier/UI, ingress or activation.
+
+The earlier exact 94493 run establishes its own base only. It is not evidence for
+this current-main composition. Record exact-head hosted checks, test discovery,
+review and current base binding separately after the composed candidate is
+published.

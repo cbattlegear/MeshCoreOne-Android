@@ -5,6 +5,7 @@ package com.meshcoreone.android.feature.settings.device
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.contracts.domain.PreRepeatSettingsAttempt
+import com.meshcoreone.android.core.contracts.domain.RepeatSnapshotRestoreAuthority
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RegionSelection
 import com.meshcoreone.android.core.ui.UiText
@@ -310,20 +311,26 @@ class RadioPresetStateHolder(
     }
 
     private suspend fun runDisableRepeat(target: SettingsRadioTarget) {
-        var repeatOffAcknowledged = false
+        var repeatOffVerified = false
         try {
             target.service.reconcileRadioSettingsIfNeeded()
             deviceStore.validatePreRepeatSettings(target.token)
             val device = target.currentDevice(mutable.value.device, mutable.value.sessionToken)
             val restoreAuthority = deviceStore.preRepeatSettingsRestoreAuthority(target.token, device)
+            val trackedRestoreAuthority = object : RepeatSnapshotRestoreAuthority by restoreAuthority {
+                override fun onRestoreVerified() {
+                    repeatOffVerified = true
+                    restoreAuthority.onRestoreVerified()
+                }
+            }
             target.service.setRadioParamsVerified(
                 device.preRepeatFrequency ?: device.frequency, device.preRepeatBandwidth ?: device.bandwidth,
                 device.preRepeatSpreadingFactor ?: device.spreadingFactor, device.preRepeatCodingRate ?: device.codingRate,
                 clientRepeat = false,
                 expectedDevice = device,
-                restoreAuthority = restoreAuthority,
+                restoreAuthority = trackedRestoreAuthority,
             )
-            repeatOffAcknowledged = true
+            repeatOffVerified = true
             target.requireCurrent(mutable.value.device, mutable.value.sessionToken)
             deviceStore.clearPreRepeatSettings(target.token)
             mutable.update { it.copy(selectedPresetId = it.currentPresetId) }
@@ -334,7 +341,7 @@ class RadioPresetStateHolder(
         } catch (error: Exception) {
             mutable.update {
                 val enabled = if (it.sessionToken == target.token) {
-                    !repeatOffAcknowledged && it.device?.clientRepeat != false
+                    !repeatOffVerified
                 } else it.device?.clientRepeat ?: false
                 it.copy(isRepeatEnabled = enabled)
             }

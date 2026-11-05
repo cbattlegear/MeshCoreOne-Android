@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.lifecycle.Lifecycle
 import android.app.Dialog
+import android.view.View
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
@@ -74,7 +75,16 @@ class NotificationEnrollmentEntryTest {
         @Implementation
         public override fun show() {
             super.show()
-            if (focusOnShow) setDialogWindowFocus(true)
+            if (!focusOnShow) return
+            val decor = requireNotNull(requireNotNull(ShadowDialog.getLatestDialog()).window).decorView
+            if (decor.isAttachedToWindow) setWindowFocus(decor, true)
+            else decor.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+                override fun onViewAttachedToWindow(view: View) {
+                    view.removeOnAttachStateChangeListener(this)
+                    setWindowFocus(view, true)
+                }
+                override fun onViewDetachedFromWindow(view: View) = Unit
+            })
         }
     }
 
@@ -83,7 +93,14 @@ class NotificationEnrollmentEntryTest {
 
         private fun setDialogWindowFocus(focused: Boolean) {
             val decor = requireNotNull(requireNotNull(ShadowDialog.getLatestDialog()).window).decorView
-            val root = requireNotNull(ReflectionHelpers.callInstanceMethod<Any>(decor, "getViewRootImpl"))
+            setWindowFocus(decor, focused)
+        }
+
+        private fun setWindowFocus(decor: View, focused: Boolean) {
+            check(decor.isAttachedToWindow) { "Dialog must be attached before window focus delivery" }
+            val root = requireNotNull(ReflectionHelpers.callInstanceMethod<Any>(decor, "getViewRootImpl")) {
+                "Attached dialog must have an actual ViewRootImpl"
+            }
             Shadow.extract<ShadowViewRootImpl>(root).callWindowFocusChanged(focused)
             // Handle the real root event before the already queued initial-focus check,
             // as WindowManager would; dispatching only the View callback leaves AttachInfo unfocused.

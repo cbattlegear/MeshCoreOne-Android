@@ -16,8 +16,14 @@ sealed interface DirectAckRadioWireOutcome {
     /** Only an explicit transport guarantee that no bytes were written can produce this state. */
     data object DefinitelyUnsent : DirectAckRadioWireOutcome
 
-    /** Historical wire without an emission marker and without an accepted actual code. */
+    /** Untracked legacy wire with no known accepted actual code. */
     data object LegacyUnknown : DirectAckRadioWireOutcome
+
+    /**
+     * The accepted code is known, but untracked history cannot rule out earlier physical emissions.
+     * The code remains known evidence while the ancestry remains wildcard ambiguity.
+     */
+    data class LegacyAcceptedUnknown(val ackCode: UInt) : DirectAckRadioWireOutcome
 
     /** Actual accepted code for this physical emission. */
     data class Accepted(val ackCode: UInt) : DirectAckRadioWireOutcome
@@ -38,7 +44,8 @@ data class DirectAckRadioWireEvidence(
     val radioId: RadioId,
     val claimRequestId: UUID,
     val wireRequestId: UUID,
-    val emissionRequestId: UUID,
+    /** Null only for legacy wire-level evidence that has no physical-emission identity. */
+    val emissionRequestId: UUID?,
     val predictedAckCode: UInt,
     val outcome: DirectAckRadioWireOutcome,
 )
@@ -50,10 +57,10 @@ object DirectAckRadioEvidenceLimits {
 }
 
 /**
- * Bounded diagnostic evidence only. COMPLETE means the snapshot contains every retained row,
- * including legacy markerless rows mapped to LegacyUnknown or their known accepted actual code.
- * TRUNCATED means rows were omitted; SATURATED means a durable radio-wide wildcard was committed.
- * Neither a public snapshot nor an empty snapshot authorizes a delivery mutation.
+ * Bounded diagnostic evidence only. COMPLETE means the snapshot contains every retained physical
+ * emission and genuine legacy markerless row; tracked wires with no physical marker are omitted.
+ * TRUNCATED means diagnostic rows were omitted; SATURATED means a durable radio-wide wildcard was
+ * committed. Neither a public snapshot nor an empty snapshot authorizes a delivery mutation.
  */
 data class DirectAckRadioEvidenceSnapshot(
     val radioId: RadioId,
@@ -132,6 +139,7 @@ enum class DirectAckRadioNonsettlingReason {
     TARGET_ACCEPTANCE_UNRESOLVED,
     KNOWN_OTHER_CLAIM_CODE,
     UNRESOLVED_OTHER_CLAIM_EMISSION,
+    /** Diagnostic-snapshot classification only; SQL settlement checks the complete journal. */
     RADIO_HISTORY_INCOMPLETE,
     RADIO_HISTORY_SATURATED,
 }
@@ -157,6 +165,7 @@ object DirectAckRadioEvidenceAssessment {
             if (targetWires.any {
                     it.outcome == DirectAckRadioWireOutcome.MayHaveWritten ||
                         it.outcome == DirectAckRadioWireOutcome.LegacyUnknown ||
+                        it.outcome is DirectAckRadioWireOutcome.LegacyAcceptedUnknown ||
                         it.outcome is DirectAckRadioWireOutcome.Conflict
                 }) {
                 reasons.add(DirectAckRadioNonsettlingReason.TARGET_ACCEPTANCE_UNRESOLVED)
@@ -169,21 +178,30 @@ object DirectAckRadioEvidenceAssessment {
             if (wire.claimRequestId == targetClaimRequestId) continue
             when (val outcome = wire.outcome) {
                 DirectAckRadioWireOutcome.DefinitelyUnsent -> Unit
-                DirectAckRadioWireOutcome.MayHaveWritten,
                 DirectAckRadioWireOutcome.LegacyUnknown,
-                is DirectAckRadioWireOutcome.Conflict ->
+                DirectAckRadioWireOutcome.MayHaveWritten -> {
                     reasons.add(DirectAckRadioNonsettlingReason.UNRESOLVED_OTHER_CLAIM_EMISSION)
+                    if (wire.predictedAckCode == ackCode) {
+                        reasons.add(DirectAckRadioNonsettlingReason.KNOWN_OTHER_CLAIM_CODE)
+                    }
+                }
+                is DirectAckRadioWireOutcome.LegacyAcceptedUnknown -> {
+                    reasons.add(DirectAckRadioNonsettlingReason.UNRESOLVED_OTHER_CLAIM_EMISSION)
+                    if (wire.predictedAckCode == ackCode || outcome.ackCode == ackCode) {
+                        reasons.add(DirectAckRadioNonsettlingReason.KNOWN_OTHER_CLAIM_CODE)
+                    }
+                }
+                is DirectAckRadioWireOutcome.Conflict -> {
+                    reasons.add(DirectAckRadioNonsettlingReason.UNRESOLVED_OTHER_CLAIM_EMISSION)
+                    if (wire.predictedAckCode == ackCode || outcome.firstAcceptedAckCode == ackCode) {
+                        reasons.add(DirectAckRadioNonsettlingReason.KNOWN_OTHER_CLAIM_CODE)
+                    }
+                }
                 is DirectAckRadioWireOutcome.Accepted -> {
                     if (wire.predictedAckCode == ackCode || outcome.ackCode == ackCode) {
                         reasons.add(DirectAckRadioNonsettlingReason.KNOWN_OTHER_CLAIM_CODE)
                     }
                 }
-            }
-            if (wire.outcome is DirectAckRadioWireOutcome.Conflict &&
-                (wire.predictedAckCode == ackCode ||
-                    wire.outcome.firstAcceptedAckCode == ackCode)
-            ) {
-                reasons.add(DirectAckRadioNonsettlingReason.KNOWN_OTHER_CLAIM_CODE)
             }
         }
 
@@ -224,7 +242,9 @@ object DirectAckRadioEvidenceAssessment {
  * DefinitelyUnsent refines only that physical emission and cannot clear another marker with the
  * same registered wireRequestId. The legacy recordDirectSendAccepted API has no physical emission
  * ID and must never clear per-emission MAY_HAVE_WRITTEN evidence; only this exact-handle resolver
- * can do so. Markerless legacy wires with no accepted code remain LegacyUnknown.
+ * can do so. Markerless legacy wires remain wildcard-ambiguous even when a wire-level accepted code
+ * exists; LegacyAcceptedUnknown preserves that code as known competitor evidence. A later emission
+ * marker never erases untracked legacy ancestry.
  *
  * Marker registration and settlement share a database-level per-radio serialization/fence across
  * every Room handle. In a race, the marker transaction and settlement transaction have a single
@@ -246,9 +266,13 @@ object DirectAckRadioEvidenceAssessment {
  * emissions that reused one wireRequestId; an earlier accepted emission remains eligible across a
  * prepared or differently accepted retry. For every other claim, a completed emission contributes
  * both its predicted and accepted codes as competitors; any unresolved
- * MAY_HAVE_WRITTEN/LegacyUnknown/Conflict emission is a wildcard. DefinitelyUnsent excludes only
- * that exact wire. TRUNCATED, SATURATED, unresolved competitors, and known code collisions return
- * typed Nonsettling reasons without a delivery mutation. Only Settled(Applied/AlreadyApplied)
+ * MAY_HAVE_WRITTEN/LegacyUnknown/LegacyAcceptedUnknown/Conflict emission is a wildcard.
+ * DefinitelyUnsent excludes only that exact physical emission. The diagnostic classifier reports
+ * TRUNCATED snapshots as RADIO_HISTORY_INCOMPLETE, but settlement does not trust or depend on a
+ * diagnostic snapshot: its database transaction compares the complete durable history and may
+ * settle selectively when a diagnostic sample would be truncated. Persisted SATURATED, unresolved
+ * competitors, and known code collisions return typed Nonsettling reasons without a delivery
+ * mutation. Only Settled(Applied/AlreadyApplied)
  * permits the consumer to complete its delivery receipt or publish delivered state. Nonsettling
  * abandons only the exact pending ACK candidate, leaves the logical claim waiting, and preserves
  * the product row. A successful send response or evidence refinement is not a delivery fallback.
@@ -261,9 +285,37 @@ object DirectAckRadioEvidenceAssessment {
  */
 interface DirectAckRadioExclusionAuthority {
     /**
+     * Atomically create the first wire and immutable emission-tracking-required provenance.
+     * Exact replay returns AlreadyBegun only when the original wire has matching tracked
+     * provenance; reusing the operation/wire identity with different inputs, crossing a generic
+     * untracked operation, or trying to upgrade an existing legacy wire is Rejected(CONFLICT).
+     * This method has no begin-then-tag gap. Generic DirectAckAuthority begin remains the legacy
+     * untracked path.
+     */
+    suspend fun beginDirectAckAttemptRequiringEmissionTracking(
+        intent: DirectAckIntent,
+        firstWireRequestId: UUID,
+        predictedAckCode: UInt,
+    ): DirectAckBeginResult
+
+    /**
+     * Atomically register a retry wire with immutable emission-tracking-required provenance.
+     * Exact tracked replay returns AlreadyApplied; collisions and attempts to upgrade a legacy wire,
+     * cross a generic untracked operation, or downgrade a tracked attempt return
+     * Rejected(CONFLICT). Generic DirectAckAuthority registration remains the legacy untracked path.
+     */
+    suspend fun registerDirectAckDispatchRequiringEmissionTracking(
+        attempt: DirectAckAttempt,
+        wireRequestId: UUID,
+        predictedAckCode: UInt,
+    ): DirectAckMutationResult
+
+    /**
      * emissionRequestId is new for each physical transport invocation. Replaying the same exact
      * claim/wire/emission operation returns its persisted handle; reusing that ID with different
-     * input is CONFLICT. A marker must be committed before the caller invokes transport.
+     * input is CONFLICT. The wire must have been created with the tracking-required methods above;
+     * an untracked legacy wire cannot be upgraded by marking, and rejection occurs before a marker
+     * write. A marker must be committed before the caller invokes transport.
      */
     suspend fun markDirectAckWireMayHaveWritten(
         attempt: DirectAckAttempt,

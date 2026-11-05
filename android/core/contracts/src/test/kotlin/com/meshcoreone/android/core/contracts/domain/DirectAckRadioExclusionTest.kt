@@ -105,6 +105,13 @@ class DirectAckRadioExclusionTest {
             setOf(DirectAckRadioNonsettlingReason.UNRESOLVED_OTHER_CLAIM_EMISSION),
             reasons(123u, target, foreign),
         )
+        assertEquals(
+            setOf(
+                DirectAckRadioNonsettlingReason.KNOWN_OTHER_CLAIM_CODE,
+                DirectAckRadioNonsettlingReason.UNRESOLVED_OTHER_CLAIM_EMISSION,
+            ),
+            reasons(789u, target, foreign),
+        )
     }
 
     @Test
@@ -115,6 +122,65 @@ class DirectAckRadioExclusionTest {
             setOf(DirectAckRadioNonsettlingReason.UNRESOLVED_OTHER_CLAIM_EMISSION),
             reasons(123u, target, legacy),
         )
+        assertEquals(
+            setOf(
+                DirectAckRadioNonsettlingReason.KNOWN_OTHER_CLAIM_CODE,
+                DirectAckRadioNonsettlingReason.UNRESOLVED_OTHER_CLAIM_EMISSION,
+            ),
+            reasons(789u, target, legacy),
+        )
+        assertEquals(null, legacy.emissionRequestId)
+    }
+
+    @Test
+    fun legacyAcceptedCodeRemainsWildcardAndKnownCompetitor() {
+        val target = wire(2, 3, 123u, DirectAckRadioWireOutcome.Accepted(123u))
+        val legacy = wire(5, 6, 789u, DirectAckRadioWireOutcome.LegacyAcceptedUnknown(456u))
+
+        assertEquals(
+            setOf(
+                DirectAckRadioNonsettlingReason.KNOWN_OTHER_CLAIM_CODE,
+                DirectAckRadioNonsettlingReason.UNRESOLVED_OTHER_CLAIM_EMISSION,
+            ),
+            reasons(456u, target, legacy),
+        )
+        assertEquals(
+            setOf(DirectAckRadioNonsettlingReason.UNRESOLVED_OTHER_CLAIM_EMISSION),
+            reasons(123u, target, legacy),
+        )
+        assertEquals(null, legacy.emissionRequestId)
+        assertEquals(
+            setOf(DirectAckRadioNonsettlingReason.TARGET_ACCEPTANCE_UNRESOLVED),
+            reasons(
+                456u,
+                wire(2, 3, 789u, DirectAckRadioWireOutcome.LegacyAcceptedUnknown(456u)),
+            ),
+        )
+    }
+
+    @Test
+    fun laterPhysicalMarkerDoesNotEraseLegacyWireAncestry() {
+        val target = wire(2, 3, 123u, DirectAckRadioWireOutcome.Accepted(123u))
+        val legacy = wire(5, 6, 789u, DirectAckRadioWireOutcome.LegacyAcceptedUnknown(456u))
+        val laterEmission = wire(5, 6, 789u, DirectAckRadioWireOutcome.Accepted(987u), emission = 8)
+
+        assertEquals(
+            setOf(
+                DirectAckRadioNonsettlingReason.KNOWN_OTHER_CLAIM_CODE,
+                DirectAckRadioNonsettlingReason.UNRESOLVED_OTHER_CLAIM_EMISSION,
+            ),
+            reasons(456u, target, legacy, laterEmission),
+        )
+        assertEquals(
+            setOf(
+                DirectAckRadioNonsettlingReason.KNOWN_OTHER_CLAIM_CODE,
+                DirectAckRadioNonsettlingReason.UNRESOLVED_OTHER_CLAIM_EMISSION,
+            ),
+            reasons(987u, target, legacy, laterEmission),
+        )
+        assertEquals(legacy.wireRequestId, laterEmission.wireRequestId)
+        assertEquals(null, legacy.emissionRequestId)
+        assertNotEquals(null, laterEmission.emissionRequestId)
     }
 
     @Test
@@ -178,12 +244,15 @@ class DirectAckRadioExclusionTest {
         request: Long,
         predictedCode: UInt,
         outcome: DirectAckRadioWireOutcome,
-        emission: Long = request + 1_000,
+        emission: Long? = if (
+            outcome == DirectAckRadioWireOutcome.LegacyUnknown ||
+            outcome is DirectAckRadioWireOutcome.LegacyAcceptedUnknown
+        ) null else request + 1_000,
     ) = DirectAckRadioWireEvidence(
         radio,
         UUID(0, claim),
         UUID(0, request),
-        UUID(0, emission),
+        emission?.let { UUID(0, it) },
         predictedCode,
         outcome,
     )

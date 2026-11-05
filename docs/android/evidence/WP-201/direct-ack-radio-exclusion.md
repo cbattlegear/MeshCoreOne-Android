@@ -19,9 +19,12 @@ nonactivated. The service and storage owners confirmed the per-emission marker
 and resolver boundary. Storage's schema work is a separate implementation and
 is not included or validated by this contract candidate.
 
-This correction supersedes `5db00defc6c7ac1e6c22237edd1d48b8d99beb35` because
-its total-marker cap lost normal-history selectivity. Hosted run `42077798177`
-targets that superseded SHA and is not verification of this corrected source.
+The uncapped-journal correction supersedes
+`5db00defc6c7ac1e6c22237edd1d48b8d99beb35` because its total-marker cap lost
+normal-history selectivity. The tracked-wire and legacy-ancestry corrections
+also supersede interim source `0eea3589d989a905f0d57b2ac1937a3b2732dc5e`.
+Hosted run `42077798177` targets the capped `5db` SHA and is not verification
+of either corrected source.
 
 ## Contract boundary
 
@@ -32,6 +35,20 @@ they must not fall back to `settleDirectAck`.
 
 The optional API declares:
 
+- `beginDirectAckAttemptRequiringEmissionTracking(intent, firstWireRequestId,
+  predictedAckCode): DirectAckBeginResult` and
+  `registerDirectAckDispatchRequiringEmissionTracking(attempt, wireRequestId,
+  predictedAckCode): DirectAckMutationResult` create the initial and retry wires
+  with immutable tracked provenance in the same transaction. Exact tracked
+  replays return `AlreadyBegun` / `AlreadyApplied`;
+  generic/tracked operation-ID crossings, different inputs and attempts to
+  upgrade a legacy wire or downgrade a tracked attempt reject with `CONFLICT`.
+  The existing generic begin/register APIs retain their untracked legacy
+  behavior. There is no begin-then-tag gap.
+- `DirectAckRadioWireEvidence.emissionRequestId` is non-null for physical
+  emission rows and null only for genuine markerless legacy wire rows. Tracked
+  registered wires with no physical emission are omitted from emitted-history
+  diagnostics; no synthetic emission identity is created.
 - `markDirectAckWireMayHaveWritten(attempt, wireRequestId, emissionRequestId)`
   to commit a radio/claim/wire/physical-emission marker before every transport
   invocation and return a storage-issued opaque handle. The caller creates a
@@ -86,24 +103,39 @@ deployed firmware behavior are not established for all clients/interfaces,
 and older ACK entries are not proven drained. No raw `DeviceError` code is
 classified as definitely unsent by this contract.
 
+Tracked initial/retry registration is required for every modern producer.
+Tracking provenance is committed atomically with wire creation; a later marker
+cannot upgrade an existing untracked wire, and generic registration cannot
+downgrade a tracked attempt. A tracked registered wire with no physical marker
+has not been invoked and contributes no physical emission; it cannot establish
+target acceptance. Storage rejects marker registration on an untracked legacy
+wire. Legacy markerless history remains distinct even if a later marker exists.
+
 The service owner confirmed that receipt/tracker delivery is completed only
 after `Settled`; `Nonsettling` discards only the exact pending ACK candidate
 and leaves the logical claim waiting. A successful send response, late evidence
 refinement, or raw ACK retained only in RAM cannot synthesize or publish
 recipient delivery.
 
-For the target logical claim, any matching accepted actual code from that
-claim is eligible, including multiple physical emissions that reused one wire
-ID; an earlier accepted emission remains eligible across a prepared or
-differently accepted retry. For every other claim on that radio, each physical
+For the target logical claim, any matching accepted actual code from an exact
+physical emission in that claim is eligible, including multiple emissions
+that reused one wire ID; an earlier accepted emission remains eligible across
+a prepared or differently accepted retry. A legacy wire-level accepted code
+does not prove an exact physical emission or rule out earlier invocations. It
+remains wildcard-ambiguous while preserving the accepted code and prediction
+as known competitor values. For every other claim on that radio, each physical
 emission contributes its predicted and accepted codes as known competitors.
-An unresolved `MAY_HAVE_WRITTEN`, `LEGACY_UNKNOWN`, or conflict is wildcard
-ambiguity. `DEFINITELY_UNSENT` excludes only that exact physical emission.
+An unresolved `MAY_HAVE_WRITTEN`, `LEGACY_UNKNOWN`,
+`LEGACY_ACCEPTED_UNKNOWN`, or conflict is wildcard ambiguity.
+`DEFINITELY_UNSENT` excludes only that exact physical emission.
 
 The authoritative per-emission journal has no total-row cap, TTL or eviction:
 exact emission identities, replay/conflict evidence, and unresolved facts are
 retained. The 4,096-row bound applies only to diagnostic samples;
-`TRUNCATED` means the sample omitted history and never implies completeness.
+`TRUNCATED` means the sample omitted history and the diagnostic classifier
+reports it as incomplete. This does not block settlement: the storage
+transaction must query the full journal and may settle selectively beyond
+4,096 rows.
 Normal journal growth does not create saturation. `CoveredBySaturation` and
 `SATURATED` only report a sticky wildcard already persisted (for example,
 conservative legacy history); it is never reset by reconnect, lease
@@ -118,9 +150,11 @@ the matching actual code is persisted.
 
 ## Validation and limits
 
-Thirteen new pure classifier controls cover target accepted-code matching,
+Fifteen new pure classifier controls cover target accepted-code matching,
 same-claim prior wires, both foreign predicted/actual code memberships,
-unknown and conflicting wildcards, definite non-emission, saturation,
+unknown and conflicting wildcards, legacy accepted-code wildcard retention and
+its preservation alongside a later physical marker,
+definite non-emission, saturation,
 truncation, radio partitioning, reused wire IDs across distinct physical
 emissions (including different actual codes on foreign emissions sharing one
 wire ID), and a definite-unsent retry that cannot clear an earlier
@@ -134,7 +168,7 @@ emissions, and sticky saturation are fundamentally nonsettling; the contract
 preserves safety rather than inventing origin or expiry.
 
 No local Gradle/Kotlin build or tests were run because of the explicit local
-Gradle owner hold. Source-only `git diff --check` passed and 13 test annotations were
+Gradle owner hold. Source-only `git diff --check` passed and 15 test annotations were
 present in the contract test file; neither check establishes compilation or
 test execution. Hosted exact-candidate compilation/test discovery is pending.
 Physical radio testing and a real Room implementation of the optional

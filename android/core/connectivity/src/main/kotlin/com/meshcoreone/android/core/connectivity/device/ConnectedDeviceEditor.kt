@@ -354,6 +354,22 @@ class ConnectedDeviceEditor(
     suspend fun clearPreRepeatSettings(expectedToken: SessionToken): Boolean =
         sessionEdit("clearPreRepeat", expectedToken) { it.retiringPreRepeatSettings() }
 
+    /** Explicitly discard the current restoration baseline; never rebase over a competing write. */
+    suspend fun discardPreRepeatSettings(expectedToken: SessionToken): Boolean {
+        val current = access.currentDevice(expectedToken) ?: return false
+        val persistence = devices as? DeviceEditPersisting
+            ?: throw UnsupportedOperationException("Repeat snapshots require versioned device persistence")
+        val receipt = persistence.fetchDeviceWriteSnapshot(current.id) ?: return false
+        val live = access.currentDevice(expectedToken) ?: return false
+        if (receipt.device.id != live.id || receipt.device.radioId != live.radioId ||
+            receipt.device.publicKey != live.publicKey) throw DeviceEditPersistenceConflict()
+        val saved = sessionEdit("discardRepeat", expectedToken, expectedSnapshot = receipt) {
+            it.clearingPreRepeatSettings()
+        }
+        if (!saved && access.currentDevice(expectedToken) != null) throw DeviceEditPersistenceConflict()
+        return saved
+    }
+
     private fun DeviceDTO.retiringPreRepeatSettings(): DeviceDTO =
         if (repeatSnapshotAuthority.hasClearRequest(this))
             repeatSnapshotAuthority.reconcilingClearRequest(this)

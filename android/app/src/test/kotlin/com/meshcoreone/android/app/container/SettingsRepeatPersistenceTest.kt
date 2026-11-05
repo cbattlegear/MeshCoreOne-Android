@@ -865,6 +865,62 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
         }
     }
 
+    @Test fun explicitSnapshotDiscardRejectsConcurrentRevisionAndAbaButAllowsFreshRecovery() = runTest {
+        println("WP305_REPEAT_CLEAR|explicit-discard|START")
+        for (aba in listOf(false, true)) {
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            var armed = false
+            val held = object : PersistenceStoreProtocol by store {
+                override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+                    if (armed && expected.device.preRepeatFrequency != null && dto.preRepeatFrequency == null) {
+                        armed = false
+                        entered.complete(Unit)
+                        release.await()
+                    }
+                    return store.saveDeviceIfUnchanged(dto, expected)
+                }
+            }
+            try {
+                withRepeat(held) { h, _, _, radio ->
+                    val token = assertNotNull(h.sessions.current).token
+                    assertTrue(h.container.deviceEditor.savePreRepeatSettings(token))
+                    val before = assertNotNull(store.fetchDevice(assertNotNull(h.manager.connectedDevice).id))
+                    armed = true
+                    val discard = async { runCatching { h.container.deviceEditor.discardPreRepeatSettings(token) } }
+                    try {
+                        h.eventually("explicit discard paused after its exact authoritative receipt") { entered.isCompleted }
+                        val changed = before.copy(preRepeatBandwidth = before.bandwidth + 1u)
+                        store.saveDevice(changed)
+                        if (aba) store.saveDevice(before)
+                        val latest = assertNotNull(store.fetchDevice(before.id))
+                        h.container.deviceEditor.updateDevice(latest)
+                        release.complete(Unit)
+                        assertIs<DeviceEditPersistenceConflict>(discard.await().exceptionOrNull())
+                        assertEquals(latest, store.fetchDevice(before.id))
+                        assertEquals(latest, h.manager.connectedDevice)
+                        assertTrue(radio.radioWrites.isEmpty(), "Discard never sends RF")
+                        assertTrue(h.container.deviceEditor.discardPreRepeatSettings(token))
+                        assertEquals(latest.clearingPreRepeatSettings(), store.fetchDevice(before.id))
+                        assertTrue(h.container.deviceEditor.savePreRepeatSettings(token))
+                        h.manager.disconnect()
+                        h.manager.connect(h.target(before.id))
+                        h.eventually("fresh current session after explicit recovery") {
+                            h.sessions.current?.token != token && h.appState.canRunSettingsStartupReads
+                        }
+                        val next = assertNotNull(h.sessions.current).token
+                        val successor = store.fetchDevice(before.id)
+                        assertFalse(h.container.deviceEditor.discardPreRepeatSettings(token))
+                        assertEquals(successor, store.fetchDevice(before.id))
+                        assertTrue(h.container.deviceEditor.savePreRepeatSettings(next))
+                        assertTrue(h.container.deviceEditor.discardPreRepeatSettings(next))
+                    } finally { release.complete(Unit); discard.cancel(); discard.join() }
+                }
+            } finally { release.complete(Unit) }
+            println("WP305_REPEAT_CLEAR|explicit-discard|aba=$aba|END|SUCCESS")
+        }
+    }
+
     @Test fun failedClearRetirementSurvivesASameRadioReconnectBeforeTheNextCycle() = runTest {
         println("WP305_REPEAT_CLEAR|reconnected-retirement|START")
         val entered = CompletableDeferred<Unit>()
@@ -1020,9 +1076,8 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                             runCatching { sibling.savePreRepeatSettings(token) }.exceptionOrNull(),
                         )
                         assertEquals(settled, store.fetchDevice(before.id), "A nonempty or ABA successor snapshot is never discarded")
-                        val explicitClear = settled.clearingPreRepeatSettings()
-                        store.saveDevice(explicitClear)
-                        h.container.deviceEditor.updateDevice(explicitClear)
+                        assertTrue(sibling.discardPreRepeatSettings(token))
+                        assertEquals(settled.clearingPreRepeatSettings(), store.fetchDevice(before.id))
                         assertTrue(sibling.validatePreRepeatSettings(token))
                     }
                     assertEquals(writes, radio.radioWrites, "Retirement reconciliation never invents radio traffic")
@@ -1105,8 +1160,8 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                         assertEquals(current, store.fetchDevice(saved.id))
                         assertEquals(writes, radio.radioWrites)
                         val cleared = current.clearingPreRepeatSettings()
-                        store.saveDevice(cleared)
-                        editor.updateDevice(cleared)
+                        assertTrue(sibling.discardPreRepeatSettings(token))
+                        assertEquals(cleared, store.fetchDevice(saved.id))
                         if (change == "identity") {
                             val originalIdentity = cleared.copy(publicKey = original.publicKey)
                             store.saveDevice(originalIdentity)
@@ -1464,9 +1519,9 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                             "An active successor cannot reuse the old consumed baseline merely by changing tokens",
                         )
                         assertEquals(durable, store.fetchDevice(successor.id))
-                        val explicitlyCleared = assertNotNull(durable).clearingPreRepeatSettings()
-                        store.saveDevice(explicitlyCleared)
-                        h.container.deviceEditor.updateDevice(explicitlyCleared)
+                        assertFalse(h.container.deviceEditor.discardPreRepeatSettings(oldToken))
+                        assertTrue(h.container.deviceEditor.discardPreRepeatSettings(successorToken))
+                        assertEquals(assertNotNull(durable).clearingPreRepeatSettings(), store.fetchDevice(successor.id))
                     }
                     assertTrue(h.container.deviceEditor.savePreRepeatSettings(successorToken))
                     assertNotNull(store.fetchDevice(successor.id)?.preRepeatFrequency, "A fresh successor action remains supported")

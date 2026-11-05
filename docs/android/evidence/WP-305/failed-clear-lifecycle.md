@@ -72,6 +72,15 @@ Changed/nonempty and equal-value ABA snapshots are therefore still quarantined,
 not admitted through a general version-mismatch bypass.
 
 After a matching clear commits, normal preparation snapshots the current RF.
+For intentional recovery from a changed/ABA baseline, the production editor
+exposes `discardPreRepeatSettings(currentToken)`: capture the real Room revision,
+validate current live identity, then clear only snapshot fields under the original
+token and exact receipt without rebasing. A conflicting revision (including equal
+DTO ABA) throws `DeviceEditPersistenceConflict`; a retired token returns false.
+The ordinary automatic clear/reconciliation still refuses ambiguous baselines.
+All new ambiguity controls use this production editor API, not direct Room writes,
+to prove explicit recovery. This is a callable editor recovery operation, not a
+new user-facing discard button or permission to discard uncertain data implicitly.
 Legacy asynchronous preparation refuses the pending retirement through existing
 diagnostics instead of reusing it. The original uncertain-creation custody,
 partial/imported snapshot behavior, exact abort receipt, actual send permit,
@@ -107,6 +116,10 @@ runtime authority and bounded CAS retry remain in place.
   token (so initialization really retains the old snapshot), retired-token
   refusal, later manual RF and a fresh enable/off cycle. The new cycle must save
   and restore the later manual baseline, not the consumed one.
+- `explicitSnapshotDiscardRejectsConcurrentRevisionAndAbaButAllowsFreshRecovery`:
+  pause the real discard's conditional write, commit a competing snapshot change
+  or equal-DTO ABA, require exact refusal and no RF traffic, then prove a freshly
+  captured discard succeeds and a retired token cannot discard its successor.
 
 All twenty original Repeat/preset methods are retained. Nineteen original bodies
 remain exact. `retiredSnapshotOrClearCannotMutateASameRadioSuccessorOrItsDurableSnapshot`
@@ -157,7 +170,11 @@ markers after explicit cleanup. These establish reached assertions/cleanup only;
 pair them with the exact hosted JUnit suite result, not standalone test acceptance.
 
 The corrected test-only baseline's exact hosted run is `42062401151`, Android
-job `127367492092`; at writing it remains in progress. The initial dispatch
+job `127367492092`. It executed App 2,135 tests with one failure, the actual
+lifecycle discriminator: expected later manual RF `868000`, but the next off
+restored obsolete `915000`. This reproduces the original save-failure family;
+later cancellation families are not credited from this failing first iteration.
+The initial dispatch
 returned HTTP 500, and the branch run list contained no run before the successful
 retry returned this receipt. No duplicate dispatch or predecessor acceptance is
 claimed.

@@ -54,6 +54,88 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class SettingsRepeatPersistenceTest : RoomProcessTest() {
+    @Test fun txPowerOnlyApplyPreservesVerifiedRestoreAfterRepeatOffProjectionFailure() = runTest {
+        var rejectRepeatOff = false
+        val failing = object : PersistenceStoreProtocol by store {
+            override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+                if (rejectRepeatOff && expected.device.clientRepeat && !dto.clientRepeat) {
+                    rejectRepeatOff = false
+                    throw PersistenceStoreException(PersistenceStoreError.SaveFailed("Repeat off projection unavailable"))
+                }
+                return store.saveDeviceIfUnchanged(dto, expected)
+            }
+        }
+        var dependencies: SettingsFeatureDependencies? = null
+        withRepeat(failing, exposeDependencies = { dependencies = it }) { h, holder, failures, radio ->
+            val before = assertNotNull(h.manager.connectedDevice)
+            val session = assertNotNull(h.sessions.current)
+            holder.onRepeatToggled(true)
+            holder.confirmEnableRepeatMode()
+            h.eventually("Repeat is enabled before the verified-off projection failure") {
+                !holder.state.value.isApplyingRepeat && holder.state.value.device?.clientRepeat == true
+            }
+            val repeating = assertNotNull(store.fetchDevice(before.id))
+            assertTrue(repeating.frequency != before.frequency)
+            rejectRepeatOff = true
+            holder.onRepeatToggled(false)
+            h.eventually("verified off failed its first actual Room projection") {
+                !holder.state.value.isApplyingRepeat && failures.isNotEmpty()
+            }
+            assertFalse(rejectRepeatOff)
+            assertFalse(holder.state.value.isRepeatEnabled)
+            assertNotNull(holder.state.value.errorMessage)
+            assertEquals(repeating, store.fetchDevice(before.id))
+            assertEquals(repeating, h.manager.connectedDevice)
+            assertEquals(before.frequency, radio.frequency)
+            assertFalse(session.settingsService.queryDevice().clientRepeat)
+            assertTrue(session.settingsService.radioSettingsNeedsRecovery)
+
+            val deps = assertNotNull(dependencies)
+            val advancedFailures = mutableListOf<Throwable>()
+            val advanced = AdvancedRadioStateHolder(
+                SettingsEnvironment(backgroundScope, describe = { advancedFailures += it; UiText.Verbatim("Radio failed") }),
+                deps.connection, deps.settingsService, RadioWriteGate(),
+            )
+            advanced.start()
+            try {
+                h.eventually("Advanced captures the still-pinned old Repeat frequency") {
+                    advanced.state.value.hasLoaded && advanced.state.value.device == repeating
+                }
+                assertFalse(advanced.state.value.frequencyEditable)
+                assertEquals(repeating.frequency.toDouble() / 1000.0, advanced.state.value.frequency)
+                advanced.onTxPowerTextChanged("10")
+                advanced.apply(session.token)
+                h.eventually("TX-only Apply completes actual recovery and both durable writes") {
+                    !advanced.state.value.isApplying && advanced.state.value.showSuccess
+                }
+                assertEquals(before.frequency, radio.frequency, "TX-only Apply must not replay the disabled Repeat frequency")
+                assertFalse(session.settingsService.queryDevice().clientRepeat)
+                assertTrue(advancedFailures.isEmpty())
+                assertNull(advanced.state.value.errorMessage)
+                assertFalse(session.settingsService.radioSettingsNeedsRecovery)
+                val saved = assertNotNull(store.fetchDevice(before.id))
+                assertEquals(before.frequency, saved.frequency)
+                assertEquals(before.bandwidth, saved.bandwidth)
+                assertEquals(before.spreadingFactor, saved.spreadingFactor)
+                assertEquals(before.codingRate, saved.codingRate)
+                assertEquals(10.toByte(), saved.txPower)
+                assertFalse(saved.clientRepeat)
+                assertEquals(repeating.preRepeatFrequency, saved.preRepeatFrequency)
+                assertEquals(repeating.preRepeatBandwidth, saved.preRepeatBandwidth)
+                assertEquals(repeating.preRepeatSpreadingFactor, saved.preRepeatSpreadingFactor)
+                assertEquals(repeating.preRepeatCodingRate, saved.preRepeatCodingRate)
+                assertEquals(saved, h.manager.connectedDevice)
+                h.eventually("Advanced fields reflect the restored frequency and committed power") {
+                    advanced.state.value.device == saved && !advanced.state.value.settingsModified
+                }
+                assertEquals(session.token, advanced.state.value.sessionToken)
+                assertEquals(listOf(1, 0, 0), radio.radioWrites.map { it[11].toInt() })
+                assertEquals(1, radio.powerWrites.size)
+                assertEquals(10u.toUByte(), radio.powerWrites.single()[1])
+            } finally { advanced.stop() }
+        }
+    }
+
     @Test fun normalPresetRejectsRepeatModeChangedByFailedEnableReconciliation() = runTest {
         var rejectRepeatOn = false
         val failing = object : PersistenceStoreProtocol by store {
@@ -1781,6 +1863,8 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
 
     private class RepeatRadio {
         val radioWrites = mutableListOf<Bytes>()
+        val powerWrites = mutableListOf<Bytes>()
+        private var txPower: Byte? = null
         var pathHashMode: UByte = 0u
             private set
         private var params: Bytes? = null
@@ -1803,6 +1887,7 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
 
         fun configure(radio: FirmwareRadio) {
             params = null
+            txPower = null
             pathHashMode = 0u
             repeat = repeatOnNextConnection
             repeatOnNextConnection = false
@@ -1824,7 +1909,19 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                             emptyList()
                         } else listOf(Bytes.of(0))
                     }
-                    0x01 -> params?.let { listOf(radio.selfPacket().slice(0, 48) + it + Bytes.utf8("TestNode")) }
+                    0x0c -> {
+                        powerWrites += command
+                        txPower = command[1].toByte()
+                        listOf(Bytes.of(0))
+                    }
+                    0x01 -> if (params == null && txPower == null) null else {
+                        val self = radio.selfPacket().toByteArray()
+                        txPower?.let { self[2] = it }
+                        val packet = Bytes(self)
+                        listOf(params?.let {
+                            packet.slice(0, 48) + it + Bytes.utf8("TestNode")
+                        } ?: packet)
+                    }
                     0x16 -> if (params != null || repeat) listOf(
                         Bytes.of(13, 11, 50, 8) + le32(0) + Bytes.utf8("01 Jan 2025").paddedOrTruncated(12) +
                             Bytes.utf8("T-Deck").paddedOrTruncated(40) +
@@ -1849,6 +1946,7 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
         initiallyRepeating: Boolean = false,
         sessionConfiguration: SessionConfiguration = SessionConfiguration.DEFAULT,
         connectionOverride: (SettingsConnection) -> SettingsConnection = { it },
+        exposeDependencies: (SettingsFeatureDependencies) -> Unit = {},
         action: suspend (ContainerHarness, RadioPresetStateHolder, MutableList<Throwable>, RepeatRadio) -> Unit,
     ) {
         val h = ContainerHarness(this, room, persistenceOverride = persistence, sessionConfiguration = sessionConfiguration)
@@ -1885,6 +1983,7 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                     override suspend fun clearDebugLogs() = error("No log deletion in Repeat test")
                 },
             )
+            exposeDependencies(deps)
             val failures = mutableListOf<Throwable>()
             val deviceStore = object : DeviceSettingsStorePort by deps.deviceStore {
                 override suspend fun clearPreRepeatSettings(expectedToken: SessionToken?) {

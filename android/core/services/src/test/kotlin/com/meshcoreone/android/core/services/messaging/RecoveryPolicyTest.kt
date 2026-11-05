@@ -9,6 +9,7 @@ import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.model.CommandCode
+import com.meshcoreone.android.core.protocol.model.ContactType
 import kotlin.test.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collect
@@ -139,7 +140,7 @@ class RecoveryPolicyTest {
             assertNotNull(h.service.pendingAck(message.id))
             h.store.before = null
             h.store.updateMessageStatus(EntityKey(RADIO, message.id), MessageStatus.PENDING)
-            h.store.saveContact(h.contact.copy(type = ContactType.REPEATER))
+            h.store.saveContact(h.contact.copy(typeRawValue = ContactType.REPEATER.rawValue))
             val observed = mutableListOf<MessageStatusEvent>()
             observe(h, observed)
             h.pending(message)

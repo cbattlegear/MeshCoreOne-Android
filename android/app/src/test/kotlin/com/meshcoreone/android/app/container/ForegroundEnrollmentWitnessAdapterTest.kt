@@ -29,12 +29,31 @@ class ForegroundEnrollmentWitnessAdapterTest {
     private val authorized = EnrollmentWitnessRecord(operation, witnessId, 1, WitnessPhase.AUTHORIZED, null)
     private val accepted = authorized.copy(revision = 2, phase = WitnessPhase.ACCEPTED, receipt = preparing)
     private val completed = authorized.copy(revision = 3, phase = WitnessPhase.BOUND, receipt = bound)
+    private val enrollmentOperation = Enrollment.Operation(operation.operationId, operation.storeId, operation.creationNonce)
+    private val enrollmentPreparing = Enrollment.CreationReceipt(
+        enrollmentOperation, 1, Enrollment.Phase.PREPARING, operation.creationNonce, null,
+    )
+    private val enrollmentBound = Enrollment.CreationReceipt(
+        enrollmentOperation, 2, Enrollment.Phase.BOUND, operation.creationNonce, witnessId,
+    )
+    private val enrollmentAuthorized = Enrollment.WitnessRecord(
+        enrollmentOperation, witnessId, 1, Enrollment.WitnessPhase.AUTHORIZED, null,
+    )
+    private val enrollmentAccepted = Enrollment.WitnessRecord(
+        enrollmentOperation, witnessId, 2, Enrollment.WitnessPhase.ACCEPTED, enrollmentPreparing,
+    )
+    private val enrollmentCompleted = Enrollment.WitnessRecord(
+        enrollmentOperation, witnessId, 3, Enrollment.WitnessPhase.BOUND, enrollmentBound,
+    )
+    private val recordPairs get() = listOf(
+        authorized to enrollmentAuthorized, accepted to enrollmentAccepted, completed to enrollmentCompleted,
+    )
 
     @Test
     fun requestRetainsEveryPredeclaredIdentityAndExactPriorRecord() = runBlocking {
         val request = Enrollment.EnrollmentRequest(
             Enrollment.Operation(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID()),
-            UUID.randomUUID(), completed.toEnrollmentRecord(),
+            UUID.randomUUID(), enrollmentCompleted,
         )
         val expected = WitnessAuthorizationRequest(
             WitnessOperation(request.operation.operationId, request.operation.storeId, request.operation.creationNonce),
@@ -54,10 +73,11 @@ class ForegroundEnrollmentWitnessAdapterTest {
     @Test
     fun observationsPreserveUnknownLostAndEveryRecordPhase() = runBlocking {
         assertEquals(Enrollment.Observation.UnknownOrLost, adapter().observe())
-        for (record in listOf(authorized, accepted, completed)) {
+        for ((record, expected) in recordPairs) {
             val observed = assertIs<Enrollment.Observation.Current>(
                 adapter(read = { WitnessObservation.Current(record) }).observe(),
             )
+            assertEquals(expected, observed.record)
             assertEquals(record, observed.record.toWitnessRecord())
             assertEquals(record.operation.operationId, observed.record.operation.operationId)
             assertEquals(record.operation.storeId, observed.record.operation.storeId)
@@ -69,11 +89,12 @@ class ForegroundEnrollmentWitnessAdapterTest {
 
     @Test
     fun storedReplayNeverAcquiresNewPreparePermission() = runBlocking {
-        for (record in listOf(authorized, accepted, completed)) {
+        for ((record, expected) in recordPairs) {
             for (fresh in listOf(false, true)) {
                 val write = assertIs<Enrollment.WitnessWrite.Stored>(
                     adapter(authorize = { WitnessMutation.Stored(record, fresh) }).authorize(request()),
                 )
+                assertEquals(expected, write.record)
                 assertEquals(record, write.record.toWitnessRecord())
                 assertEquals(fresh, write.newlyAuthorized)
             }
@@ -99,12 +120,12 @@ class ForegroundEnrollmentWitnessAdapterTest {
             },
         )
         assertEquals(
-            Enrollment.WitnessWrite.Stored(accepted.toEnrollmentRecord()),
-            adapter.accept(authorized.toEnrollmentRecord(), preparing.toEnrollmentReceipt()),
+            Enrollment.WitnessWrite.Stored(enrollmentAccepted),
+            adapter.accept(enrollmentAuthorized, enrollmentPreparing),
         )
         assertEquals(
-            Enrollment.WitnessWrite.Stored(completed.toEnrollmentRecord()),
-            adapter.complete(accepted.toEnrollmentRecord(), bound.toEnrollmentReceipt()),
+            Enrollment.WitnessWrite.Stored(enrollmentCompleted),
+            adapter.complete(enrollmentAccepted, enrollmentBound),
         )
         val mismatched = bound.copy(creationNonce = UUID.randomUUID(), witnessId = UUID.randomUUID())
         assertEquals(mismatched, mismatched.toEnrollmentReceipt().toWitnessReceipt())

@@ -2,6 +2,7 @@
 package com.meshcoreone.android.app.platform
 
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.test.*
@@ -162,6 +163,27 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
     private fun permissionSettingsButton() = compose.onNode(
         hasText(compose.activity.getString(O.permissionsOpenSettings)) and hasClickAction() and hasAnyAncestor(isDialog()),
     )
+
+    private fun assertLocalNetworkRequestCanStart(h: ContainerHarness) {
+        val port = requireNotNull(h.container.onboarding).permissions
+        val names = port.permissionsFor(OnboardingPermissionKind.LOCAL_NETWORK, android.os.Build.VERSION.SDK_INT)
+        assertEquals(37, android.os.Build.VERSION.SDK_INT)
+        assertEquals(listOf(ConnectivityPermission.ACCESS_LOCAL_NETWORK.manifestName), names)
+        assertEquals(com.meshcoreone.android.feature.onboarding.PermissionStatus.NOT_DETERMINED, port.snapshot.value.localNetwork)
+        assertEquals(android.content.pm.PackageManager.PERMISSION_DENIED,
+            androidx.core.content.ContextCompat.checkSelfPermission(compose.activity, names.single()))
+        assertNull("The real permission contract must not complete synchronously before the request",
+            ActivityResultContracts.RequestMultiplePermissions().getSynchronousResult(compose.activity, names.toTypedArray()))
+    }
+
+    private fun assertLocalNetworkRequestPending(h: ContainerHarness, feature: AppSettingsFeature) {
+        val request = shadowOf(compose.activity).lastRequestedPermission
+        val platform = requireNotNull(h.container.onboarding)
+        val context = "action=${feature.selectionAction.value}, denied=${feature.selectionPermissionDenied.value}, " +
+            "snapshot=${platform.permissions.snapshot.value}, " +
+            "request=${request?.requestCode}:${request?.requestedPermissions?.toList()}"
+        assertEquals(context, OnboardingPermissionKind.LOCAL_NETWORK, feature.selectionRequestedPermission.value)
+    }
 
     private fun ContainerHarness.eventuallyMounted(message: String, condition: () -> Boolean) =
         eventually(message) {
@@ -762,6 +784,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             val gate = CompletableDeferred<Unit>()
             h.links.configureRadio = { it.connectGate = gate }
             mount(h, feature)
+            assertLocalNetworkRequestCanStart(h)
             if (device != null) {
                 open(h)
                 compose.onNodeWithText(device.nodeName).performClick()
@@ -770,7 +793,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             h.settle()
             assertEquals(before, h.links.links.size)
             assertNotNull(feature.selectionAction.value)
-            assertEquals(OnboardingPermissionKind.LOCAL_NETWORK, feature.selectionRequestedPermission.value)
+            assertLocalNetworkRequestPending(h, feature)
             permissionResult(facts, grant)
             assertNull(feature.selectionRequestedPermission.value)
             assertEquals(if (grant) com.meshcoreone.android.feature.onboarding.PermissionStatus.GRANTED
@@ -830,10 +853,11 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             val gate = CompletableDeferred<Unit>()
             h.links.configureRadio = { it.connectGate = gate }
             mountNavigationShell(h, feature)
+            assertLocalNetworkRequestCanStart(h)
             open(h)
             compose.onNodeWithText(device.nodeName).performClick()
             compose.waitForIdle()
-            assertEquals(OnboardingPermissionKind.LOCAL_NETWORK, feature.selectionRequestedPermission.value)
+            assertLocalNetworkRequestPending(h, feature)
             compose.onNodeWithTag("tab:CHATS").performClick()
             compose.onNodeWithTag("tab:CHATS").assertIsSelected()
             permissionResult(facts, grant)

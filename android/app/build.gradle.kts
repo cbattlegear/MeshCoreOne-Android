@@ -333,6 +333,10 @@ tasks.withType<Test>().configureEach {
         showStackTraces = true
     }
     val failureLogger = logger
+    val deviceAuthorityClasses = setOf(
+        "com.meshcoreone.android.app.container.DeviceWriterAuthorityRoomTest",
+        "com.meshcoreone.android.app.container.DevicePersistenceAuthorityRoomTest",
+    )
     val pathRecencyClass = "com.meshcoreone.android.parity.AdvertisementPathRecencyOriginalPredicateTest"
     val rollbackClass = "com.meshcoreone.android.parity.AdvertisementRollbackOriginalPredicateTest"
     val rollbackTestNames = setOf(
@@ -358,6 +362,9 @@ tasks.withType<Test>().configureEach {
         override fun beforeSuite(suite: TestDescriptor) = Unit
         override fun afterSuite(suite: TestDescriptor, result: TestResult) = Unit
         override fun beforeTest(testDescriptor: TestDescriptor) {
+            if (testDescriptor.className in deviceAuthorityClasses) {
+                failureLogger.quiet("WP305_DEVICE_AUTHORITY|TEST|${testDescriptor.className}|${testDescriptor.name}|START")
+            }
             if (testDescriptor.className == pathRecencyClass) {
                 failureLogger.quiet("WP501_PATH_RECENCY|TEST|${testDescriptor.className}|${testDescriptor.name}|START")
             }
@@ -366,6 +373,11 @@ tasks.withType<Test>().configureEach {
             }
         }
         override fun afterTest(testDescriptor: TestDescriptor, result: TestResult) {
+            if (testDescriptor.className in deviceAuthorityClasses) {
+                failureLogger.quiet(
+                    "WP305_DEVICE_AUTHORITY|TEST|${testDescriptor.className}|${testDescriptor.name}|END|${result.resultType}",
+                )
+            }
             if (testDescriptor.className == pathRecencyClass) {
                 synchronized(pathRecencyOutput) { pathRecencyOutput.remove(testDescriptor.name) }
                 failureLogger.quiet(

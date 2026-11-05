@@ -489,8 +489,9 @@ class NotificationReplyCapacityTest {
             held.reserveIssuedReply(operation.storeId, action, raw.length))
         assertEquals(stageRejected(NotificationReplyStagingStore.Failure.ENROLLMENT_MISMATCH),
             held.admitIssued(operation.storeId, action.token, raw))
-        assertEquals(NotificationReplyEnrollmentStore.EnrollmentResult.NotRetained(
-            NotificationReplyEnrollmentStore.Failure.MISMATCH), enrollment.reconcile(retainedReceipt.operation))
+        assertEquals(NotificationReplyEnrollmentStore.EnrollmentResult.Indeterminate(
+            retainedReceipt.operation, NotificationReplyEnrollmentStore.Failure.MISMATCH),
+            enrollment.reconcile(retainedReceipt.operation))
     }
 
     @Test

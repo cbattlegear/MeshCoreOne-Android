@@ -56,49 +56,51 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
 
     override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean =
         expected.withAuthority {
-            conditionalWrite("saveDeviceIfUnchanged", expected.isCurrent) {
-                val existing = database.devices().byId(dto.id) ?: return@conditionalWrite false
-                if ((context.deviceRevisions[dto.id] ?: 0L) != expected.revision ||
-                    (context.deviceAuthorityRevisions[dto.id] ?: 0L) != expected.authorityRevision ||
-                    existing.toDTO() != expected.device ||
-                    dto.id != expected.device.id || dto.radioId != expected.device.radioId) return@conditionalWrite false
-                if (dto.isActive != expected.device.isActive || dto.lastConnected != expected.device.lastConnected) return@conditionalWrite false
-                val removed = existing.knownRegions.toSet() - dto.knownRegions.toSet()
-                val normalizedDefault = dto.defaultFloodScopeName
-                    ?.utf8Prefix(ProtocolLimits.MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES)
-                if (normalizedDefault != null && removed.any {
-                        it.utf8Prefix(ProtocolLimits.MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES) == normalizedDefault
-                    } && dto.knownRegions.none {
-                        it.utf8Prefix(ProtocolLimits.MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES) == normalizedDefault
-                    }) {
-                    invalidData("Removing the default region requires clearing its default flood scope")
-                }
-                database.devices().upsert(dto.toEntity())
-                resetRemovedRegionScopes(dto.radioId, removed)
-                changed(dto.id, authority = dto.publicKey != expected.device.publicKey)
-                afterCommit {
-                    repeatSnapshotAuthority.observeCommittedClear(dto)
-                    var receiptFailure: Throwable? = null
-                    try {
-                        expected.onCommittedSnapshot(DeviceWriteSnapshot(
-                            dto, checkNotNull(context.deviceRevisions[dto.id]),
-                            context.deviceAuthorityRevisions[dto.id] ?: 0L,
-                        ))
-                    } catch (failure: Throwable) {
-                        receiptFailure = failure
-                        throw failure
-                    } finally {
+            repeatSnapshotAuthority.withAdmission(dto.id) {
+                conditionalWrite("saveDeviceIfUnchanged", expected.isCurrent) {
+                    val existing = database.devices().byId(dto.id) ?: return@conditionalWrite false
+                    if ((context.deviceRevisions[dto.id] ?: 0L) != expected.revision ||
+                        (context.deviceAuthorityRevisions[dto.id] ?: 0L) != expected.authorityRevision ||
+                        existing.toDTO() != expected.device ||
+                        dto.id != expected.device.id || dto.radioId != expected.device.radioId) return@conditionalWrite false
+                    if (dto.isActive != expected.device.isActive || dto.lastConnected != expected.device.lastConnected) return@conditionalWrite false
+                    val removed = existing.knownRegions.toSet() - dto.knownRegions.toSet()
+                    val normalizedDefault = dto.defaultFloodScopeName
+                        ?.utf8Prefix(ProtocolLimits.MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES)
+                    if (normalizedDefault != null && removed.any {
+                            it.utf8Prefix(ProtocolLimits.MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES) == normalizedDefault
+                        } && dto.knownRegions.none {
+                            it.utf8Prefix(ProtocolLimits.MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES) == normalizedDefault
+                        }) {
+                        invalidData("Removing the default region requires clearing its default flood scope")
+                    }
+                    database.devices().upsert(dto.toEntity())
+                    resetRemovedRegionScopes(dto.radioId, removed)
+                    changed(dto.id, authority = dto.publicKey != expected.device.publicKey)
+                    afterCommit {
+                        repeatSnapshotAuthority.observeCommittedClear(dto)
+                        var receiptFailure: Throwable? = null
                         try {
-                            expected.onCommitted(dto)
+                            expected.onCommittedSnapshot(DeviceWriteSnapshot(
+                                dto, checkNotNull(context.deviceRevisions[dto.id]),
+                                context.deviceAuthorityRevisions[dto.id] ?: 0L,
+                            ))
                         } catch (failure: Throwable) {
-                            val first = receiptFailure
-                            if (first == null) throw failure
-                            if (first !== failure) first.addSuppressed(failure)
+                            receiptFailure = failure
+                            throw failure
+                        } finally {
+                            try {
+                                expected.onCommitted(dto)
+                            } catch (failure: Throwable) {
+                                val first = receiptFailure
+                                if (first == null) throw failure
+                                if (first !== failure) first.addSuppressed(failure)
+                            }
                         }
                     }
+                    save()
+                    true
                 }
-                save()
-                true
             }
         }
 
@@ -122,13 +124,15 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
         database.devices().active().firstOrNull()?.toDTO()
     }
 
-    override suspend fun saveDevice(dto: DeviceDTO) = context.write("saveDevice") {
-        val existing = database.devices().byId(dto.id)
-        val stored = existing?.applying(dto) ?: dto.toEntity()
-        database.devices().upsert(stored)
-        changed(dto.id)
-        afterCommit { repeatSnapshotAuthority.observeCommittedClear(stored.toDTO()) }
-        save()
+    override suspend fun saveDevice(dto: DeviceDTO) = repeatSnapshotAuthority.withAdmission(dto.id) {
+        context.write("saveDevice") {
+            val existing = database.devices().byId(dto.id)
+            val stored = existing?.applying(dto) ?: dto.toEntity()
+            database.devices().upsert(stored)
+            changed(dto.id)
+            afterCommit { repeatSnapshotAuthority.observeCommittedClear(stored.toDTO()) }
+            save()
+        }
     }
 
     override suspend fun setActiveDevice(id: UUID) = context.write("setActiveDevice") {

@@ -124,6 +124,14 @@ zero additional SET on disable and working fresh enable/off after an explicit
 current-token snapshot clear. This test-only discriminator precedes the production
 repair; it is not claimed to have reproduced until exact hosted execution.
 
+Exact test-only 808a25b9b30a2174c12f18b1f020b5139f42525f run
+42002092620, Linux job 127159678705, completed FAILURE: App 2082 tests / one
+failure, solely the new conflictedUnsentSnapshotCannotRestoreOldRfAfterAnInterveningWriteAndFreshEnable.
+Its actual assertion was expected manual frequency 868000 but restored 915000.
+This reproduces stale baseline reuse after strict abort refusal, not merely a
+timeout or hypothetical source path. The retired reconnect control did not fail
+on this candidate with its correct AllowedRepeatFreq fixture response.
+
 The production successor explicitly fences conflict-retained, definitely-unsent
 snapshots rather than weakening the creation receipt's CAS. Its process-store-owned
 RepeatSnapshotAuthority lives beside revisions in RoomRepositoryContext.DatabaseState
@@ -136,7 +144,8 @@ callback, before ordinary publication/caller unwind or abort entry. A suspended,
 cancelled or conflicting cleanup cannot leave an unregistered creation.
 
 Every authoritative snapshot-save transform checks that custody, including retries;
-the real restore consumer validates it before deriving RF or sending SET. A pending,
+the real restore consumer has an early validation hint and an actual serialized
+SET admission. A pending,
 UNKNOWN or definitely-unsent creation cannot be reused. An actual successful SET
 return is recorded separately because ChannelWriteDispatch remains UNKNOWN on
 success; cancellation's MAY_HAVE_WRITTEN likewise permits retaining legitimate
@@ -154,6 +163,30 @@ fence, not a persisted quarantine format or evidence of orphan recovery across a
 process restart. Cold connection initialization's existing Repeat-off snapshot
 clear remains unchanged; no schema, Room transaction boundary, runtime authority, RF ACK recovery
 or protected scope is changed by this repair.
+
+Independent runtime review of bdee78e369c60417003f9725d1d0596eb29df2d5
+found that its early restore validation could race a sibling creation before reading
+the snapshot/dispatch. That candidate is not dispatched or accepted. The successor
+adds a per-device admission mutex shared by the same DB-object state. CAS lock order
+is existing runtime authority, admission, then DB mutex; full saves acquire admission
+before DB work. Restore admission acquires no editor mutex or runtime coroutine
+lease: it reads the original token through the short access monitor, reads actual
+Room state and checks custody plus the captured snapshot/RF/identity. It holds admission
+through only the actual protocol SET, including queue wait, then releases it before
+readback, publication or persistence ACKs. Cancellation while awaiting admission
+remains cancellable. This prevents a creation/clear commit or newer complete/partial
+snapshot from changing the meaning of captured restore arguments before SET.
+
+The optional last restoreAuthority argument is forwarded by the actual holder,
+port, app adapter and verified Settings service into writeRadio, not treated as an
+optimistic pre-suspension check. The original APIs without that argument retain
+their behavior. One deterministic actual Room control pauses after early validation,
+then performs a sibling creation, intervening revision/abort refusal and actual later
+manual RF before resuming: it requires zero additional SET and exact row/live/error
+preservation. Another pauses after capture before actual dispatch and independently
+replaces the full snapshot, each partial field family or clears it; every family must
+refuse stale restore arguments without SET or row changes. These successor controls
+remain unexecuted until fresh exact-head hosted verification.
 
 Independent producer reviews accepted the bounded source seams but found an
 additional actual cancellation gap: a newly committed snapshot could survive

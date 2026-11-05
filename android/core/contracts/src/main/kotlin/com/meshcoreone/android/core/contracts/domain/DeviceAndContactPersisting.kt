@@ -15,6 +15,8 @@ import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** A process-owned optimistic write ticket; device writers invalidate it inside their transaction. */
 data class DeviceWriteSnapshot(
@@ -83,12 +85,22 @@ class PreRepeatSettingsAttempt(val token: SessionToken?) {
 class RepeatSnapshotReconciliationRequired :
     IllegalStateException("A cancelled Repeat preparation requires an explicit snapshot clear before reuse")
 
+fun interface RepeatSnapshotRestoreAuthority {
+    suspend fun withWrite(write: suspend () -> Unit)
+}
+
 /** Process-store custody shared by all editors and delegating persistence wrappers; not durable across restart. */
 class RepeatSnapshotAuthority {
     private data class Identity(val id: UUID, val radioId: RadioId, val publicKey: Bytes)
     private data class Pending(val receipt: DeviceWriteSnapshot, val attempt: PreRepeatSettingsAttempt)
     private val pending = mutableMapOf<Identity, Pending>()
+    private val admissions = mutableMapOf<UUID, Mutex>()
     private fun DeviceDTO.identity() = Identity(id, radioId, publicKey)
+
+    suspend fun <T> withAdmission(deviceId: UUID, action: suspend () -> T): T {
+        val admission = synchronized(this) { admissions.getOrPut(deviceId) { Mutex() } }
+        return admission.withLock { action() }
+    }
 
     @Synchronized fun recordCreated(receipt: DeviceWriteSnapshot, attempt: PreRepeatSettingsAttempt) {
         pending[receipt.device.identity()] = Pending(receipt, attempt)

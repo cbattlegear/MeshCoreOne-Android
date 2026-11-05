@@ -11,7 +11,10 @@ import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
 import com.meshcoreone.android.core.contracts.domain.RepeatSnapshotReconciliationRequired
+import com.meshcoreone.android.core.contracts.domain.RepeatSnapshotRestoreAuthority
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.connectivity.device.ConnectedDeviceEditor
+import com.meshcoreone.android.core.connectivity.device.DeviceEditPersistenceConflict
 import com.meshcoreone.android.core.connectivity.device.RadioPresetMatcher
 import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.database.MeshCoreDatabase
@@ -42,6 +45,90 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class SettingsRepeatPersistenceTest : RoomProcessTest() {
+    @Test fun restoreDispatchRejectsSiblingUnsentCreationAfterItsEarlyValidation() = runTest {
+        val validated = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        try {
+            withRepeat(store, afterRestoreValidation = { validated.complete(Unit); release.await() }) { h, holder, failures, radio ->
+                val token = assertNotNull(h.sessions.current).token
+                holder.onRepeatToggled(true)
+                holder.confirmEnableRepeatMode()
+                h.eventually("Repeat active before queued restoration") {
+                    !holder.state.value.isApplyingRepeat && holder.state.value.device?.clientRepeat == true &&
+                        h.manager.connectedDevice?.frequency == radio.frequency
+                }
+                holder.onRepeatToggled(false)
+                h.eventually("restore passed early validation before reading its device") { validated.isCompleted }
+                val service = assertNotNull(h.sessions.current).settingsService
+                service.setRadioParamsVerified(868_000u, 125_000u, 9u, 6u, false)
+                h.eventually("independent manual off is published") { h.manager.connectedDevice?.frequency == 868_000u }
+                assertTrue(h.container.deviceEditor.clearPreRepeatSettings(token))
+                val sibling = ConnectedDeviceEditor(
+                    h.container.deviceAccess, store, store, { null },
+                    RadioPresetMatcher { _, _, _, _ -> emptySet() }, backgroundScope, { java.time.Instant.EPOCH },
+                )
+                val attempt = PreRepeatSettingsAttempt(token)
+                assertTrue(sibling.savePreRepeatSettings(token, attempt))
+                val created = assertNotNull(h.manager.connectedDevice)
+                store.updateDeviceLastContactSync(created.radioId, created.lastContactSync + 1u)
+                assertNotNull(runCatching { sibling.abortPreRepeatSettings(token, attempt) }.exceptionOrNull())
+                service.setRadioParamsVerified(869_000u, 62_500u, 8u, 7u, false)
+                h.eventually("later manual baseline is published before old restore resumes") { h.manager.connectedDevice?.frequency == 869_000u }
+                val before = assertNotNull(store.fetchDevice(created.id))
+                val transmissions = radio.radioWrites.size
+                release.complete(Unit)
+                h.eventually("dispatch admission rejects the newly fenced snapshot") {
+                    !holder.state.value.isApplyingRepeat && failures.isNotEmpty()
+                }
+                assertIs<RepeatSnapshotReconciliationRequired>(failures.last())
+                assertNotNull(holder.state.value.errorMessage)
+                assertEquals(transmissions, radio.radioWrites.size, "Early validation cannot authorize a later SET")
+                assertEquals(before, store.fetchDevice(created.id))
+                assertEquals(before, h.manager.connectedDevice)
+                assertEquals(token, h.sessions.current?.token)
+            }
+        } finally { release.complete(Unit) }
+    }
+
+    @Test fun restoreDispatchRejectsChangedCompletePartialOrClearedSnapshotsAfterCapturingItsArguments() = runTest {
+        for (replacement in listOf("full", "frequency", "bandwidth", "sf", "cr", "clear")) {
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            try {
+                withRepeat(store, beforeRestoreWrite = { entered.complete(Unit); release.await() }) { h, holder, failures, radio ->
+                    holder.onRepeatToggled(true)
+                    holder.confirmEnableRepeatMode()
+                    h.eventually("Repeat active before restore argument race") {
+                        !holder.state.value.isApplyingRepeat && holder.state.value.device?.clientRepeat == true &&
+                            h.manager.connectedDevice?.frequency == radio.frequency
+                    }
+                    holder.onRepeatToggled(false)
+                    h.eventually("restore arguments captured before admission") { entered.isCompleted }
+                    val current = assertNotNull(h.manager.connectedDevice)
+                    val cleared = current.clearingPreRepeatSettings()
+                    val changed = when (replacement) {
+                        "full" -> cleared.copy(preRepeatFrequency = 868_000u, preRepeatBandwidth = 125_000u,
+                            preRepeatSpreadingFactor = 9u, preRepeatCodingRate = 6u)
+                        "frequency" -> cleared.copy(preRepeatFrequency = 868_000u)
+                        "bandwidth" -> cleared.copy(preRepeatBandwidth = 125_000u)
+                        "sf" -> cleared.copy(preRepeatSpreadingFactor = 9u)
+                        "cr" -> cleared.copy(preRepeatCodingRate = 6u)
+                        else -> cleared
+                    }
+                    store.saveDevice(changed)
+                    h.container.deviceEditor.updateDevice(changed)
+                    val transmissions = radio.radioWrites.size
+                    release.complete(Unit)
+                    h.eventually("stale restoration arguments are rejected") { !holder.state.value.isApplyingRepeat && failures.isNotEmpty() }
+                    assertIs<DeviceEditPersistenceConflict>(failures.last())
+                    assertEquals(transmissions, radio.radioWrites.size, "A $replacement snapshot change must prevent the old SET")
+                    assertEquals(changed, store.fetchDevice(changed.id))
+                    assertEquals(changed, h.manager.connectedDevice)
+                }
+            } finally { release.complete(Unit) }
+        }
+    }
+
     @Test fun separateStoresAndEditorsOnTheSameRoomDatabaseShareTheUnsentSnapshotFenceAndCommittedClear() = runTest {
         withRepeat(store) { h, _, _, _ ->
             val token = assertNotNull(h.sessions.current).token
@@ -549,6 +636,8 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
     private suspend fun TestScope.withRepeat(
         persistence: PersistenceStoreProtocol,
         room: RoomPersistenceStore = store,
+        afterRestoreValidation: (suspend () -> Unit)? = null,
+        beforeRestoreWrite: (suspend () -> Unit)? = null,
         action: suspend (ContainerHarness, RadioPresetStateHolder, MutableList<Throwable>, RepeatRadio) -> Unit,
     ) {
         val h = ContainerHarness(this, room, persistenceOverride = persistence)
@@ -582,9 +671,22 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                 },
             )
             val failures = mutableListOf<Throwable>()
+            val deviceStore = object : DeviceSettingsStorePort by deps.deviceStore {
+                override suspend fun validatePreRepeatSettings(expectedToken: SessionToken?) {
+                    deps.deviceStore.validatePreRepeatSettings(expectedToken)
+                    afterRestoreValidation?.invoke()
+                }
+                override fun preRepeatSettingsRestoreAuthority(expectedToken: SessionToken?, expectedDevice: DeviceDTO): RepeatSnapshotRestoreAuthority {
+                    val actual = deps.deviceStore.preRepeatSettingsRestoreAuthority(expectedToken, expectedDevice)
+                    return RepeatSnapshotRestoreAuthority { write ->
+                        beforeRestoreWrite?.invoke()
+                        actual.withWrite(write)
+                    }
+                }
+            }
             val repeat = RadioPresetStateHolder(
                 SettingsEnvironment(backgroundScope, describe = { failures += it; UiText.Verbatim("Repeat failed") }),
-                deps.connection, deps.regions, deps.radioCatalog, deps.settingsService, deps.deviceStore, RadioWriteGate(),
+                deps.connection, deps.regions, deps.radioCatalog, deps.settingsService, deviceStore, RadioWriteGate(),
             )
             holder = repeat
             repeat.start()

@@ -4,6 +4,7 @@ package com.meshcoreone.android.feature.settings.device
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.contracts.domain.PreRepeatSettingsAttempt
+import com.meshcoreone.android.core.contracts.domain.RepeatSnapshotRestoreAuthority
 import com.meshcoreone.android.core.model.AdvertLocationPolicy
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RegionSelection
@@ -76,6 +77,7 @@ interface SettingsRadioPort {
         clientRepeat: Boolean? = null, appliedRadioPresetID: String? = null,
         expectedDevice: DeviceDTO? = null,
         repeatAttempt: PreRepeatSettingsAttempt? = null,
+        restoreAuthority: RepeatSnapshotRestoreAuthority? = null,
     ): SelfInfo
     suspend fun setTxPowerVerified(power: Byte): SelfInfo
     suspend fun applyRadioPresetVerified(presetId: String): SelfInfo
@@ -186,6 +188,8 @@ class PairingCancelledException : Exception("Pairing cancelled")
 
 /** Persistence-backed device edits the sections trigger (`ConnectionManager`/`DeviceService`). */
 interface DeviceSettingsStorePort {
+    fun preRepeatSettingsRestoreAuthority(expectedToken: SessionToken?, expectedDevice: DeviceDTO): RepeatSnapshotRestoreAuthority =
+        throw UnsupportedOperationException("Serialized Repeat snapshot restore admission is not supported")
     suspend fun validatePreRepeatSettings(expectedToken: SessionToken?) {
         throw UnsupportedOperationException("Repeat snapshot restore validation is not supported")
     }

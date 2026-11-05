@@ -39,6 +39,8 @@ internal class FakeRegions(initial: RegionSelection? = null) : RegionSelectionPo
 }
 
 internal class FakeStore : DeviceSettingsStorePort {
+    override fun preRepeatSettingsRestoreAuthority(expectedToken: com.meshcoreone.android.core.contracts.domain.SessionToken?, expectedDevice: DeviceDTO) =
+        com.meshcoreone.android.core.contracts.domain.RepeatSnapshotRestoreAuthority { write -> write() }
     override suspend fun validatePreRepeatSettings(expectedToken: com.meshcoreone.android.core.contracts.domain.SessionToken?) = Unit
     val calls = mutableListOf<String>()
     var ocvError: Throwable? = null

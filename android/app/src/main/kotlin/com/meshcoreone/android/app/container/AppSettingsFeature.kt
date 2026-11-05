@@ -3,6 +3,7 @@ package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.datastore.*
 import com.meshcoreone.android.core.contracts.domain.PreRepeatSettingsAttempt
+import com.meshcoreone.android.core.contracts.domain.RepeatSnapshotRestoreAuthority
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.*
@@ -230,6 +231,8 @@ class AppSettingsFeature private constructor(
             }
         },
         deviceStore = object : DeviceSettingsStorePort {
+            override fun preRepeatSettingsRestoreAuthority(expectedToken: com.meshcoreone.android.core.contracts.domain.SessionToken?, expectedDevice: DeviceDTO) =
+                container.deviceEditor.preRepeatSettingsRestoreAuthority(expectedToken ?: throw SettingsNotConnectedException(), expectedDevice)
             override suspend fun validatePreRepeatSettings(expectedToken: com.meshcoreone.android.core.contracts.domain.SessionToken?) {
                 val token = expectedToken ?: throw SettingsNotConnectedException()
                 if (!container.deviceEditor.validatePreRepeatSettings(token)) throw SettingsNotConnectedException()
@@ -338,9 +341,9 @@ private class SettingsRadioAdapter(
     override suspend fun getSelfInfo() = service.getSelfInfo()
     override suspend fun setRadioParamsVerified(frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte,
         codingRate: UByte, clientRepeat: Boolean?, appliedRadioPresetID: String?, expectedDevice: DeviceDTO?,
-        repeatAttempt: PreRepeatSettingsAttempt?) =
+        repeatAttempt: PreRepeatSettingsAttempt?, restoreAuthority: RepeatSnapshotRestoreAuthority?) =
         service.setRadioParamsVerified(frequencyKHz, bandwidthKHz, spreadingFactor, codingRate, clientRepeat,
-            appliedRadioPresetID, expectedDevice, repeatAttempt)
+            appliedRadioPresetID, expectedDevice, repeatAttempt, restoreAuthority)
     override suspend fun setTxPowerVerified(power: Byte) = service.setTxPowerVerified(power)
     override suspend fun applyRadioPresetVerified(presetId: String) =
         service.applyRadioPresetVerified(requireNotNull((RadioPresets.all + RadioPresets.repeatPresets).firstOrNull { it.id == presetId }))

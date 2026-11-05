@@ -156,6 +156,85 @@ class ForegroundWitnessAcknowledgmentVerifierTest {
     }
 
     @Test
+    fun retirementBeforeLedgerAllocationTerminatesLateStagingWithoutWitnessAuthorization() = runBlocking {
+        val f = fixture()
+        val presentation = f.verifier.present(f.request)
+        val gate = WriteGate(ForegroundWitnessAcknowledgmentVerifier.WritePoint.KEY_CREATED)
+        f.writeGate = gate
+        val staging = async(Dispatchers.IO) { f.verifier.recordExplicitAction(presentation) }
+        try {
+            assertTrue(gate.entered.await(10, TimeUnit.SECONDS))
+            assertFalse(f.file.exists())
+            f.verifier.retire(presentation)
+            f.verifier.invalidate(presentation)
+            assertFalse(f.file.exists())
+        } finally {
+            gate.release.countDown()
+        }
+
+        assertEquals(ForegroundAcknowledgmentStaging.Rejected, staging.await())
+        f.database { db ->
+            db.rawQuery("SELECT payload FROM acknowledgment_history ORDER BY sequence", null).use { rows ->
+                for (status in listOf("STAGED", "INVALIDATED")) {
+                    assertTrue(rows.moveToNext())
+                    DataInputStream(ByteArrayInputStream(rows.getBlob(0))).use { input ->
+                        assertEquals("MeshCoreOne.notification-ack.history.v1", input.readUTF())
+                        input.readLong()
+                        repeat(2) { input.readFully(ByteArray(input.readInt())) }
+                        assertEquals(presentation.presentationId, input.readUuid())
+                        assertEquals(presentation.processId, input.readUuid())
+                        assertEquals(status, input.readUTF())
+                        assertEquals(32, input.available())
+                    }
+                }
+                assertFalse(rows.moveToNext())
+            }
+        }
+        assertEquals(ForegroundAcknowledgmentResult.Rejected, f.verifier.verify(f.request))
+        val reopened = f.verifier(processId = UUID.randomUUID())
+        assertEquals(ForegroundAcknowledgmentResult.Rejected, reopened.verify(f.request))
+        val witnessFile = File(f.root, "witness.db")
+        val authentication = TestWitnessAuthentication()
+        val witness = NotificationEnrollmentWitness(
+            witnessFile,
+            authentication,
+            reopened,
+            StorageIssueReporter { _ -> },
+            synchronize = f::synchronize,
+        )
+        assertEquals(
+            WitnessMutation.NotRetained(WitnessProblem.ACKNOWLEDGMENT_MISMATCH),
+            witness.authorize(f.request),
+        )
+        assertFalse(witnessFile.exists())
+        assertEquals(0, authentication.created)
+    }
+
+    @Test
+    fun retiredStagingCleanupFailureIsIndeterminateAndCannotAuthorize() = runBlocking {
+        val f = fixture()
+        val presentation = f.verifier.present(f.request)
+        val gate = SynchronizationGate()
+        f.synchronizationGate = gate
+        val staging = async(Dispatchers.IO) { f.verifier.recordExplicitAction(presentation) }
+        try {
+            assertTrue(gate.entered.await(10, TimeUnit.SECONDS))
+            f.verifier.retire(presentation)
+            f.failAt = ForegroundWitnessAcknowledgmentVerifier.WritePoint.ROW_WRITTEN
+        } finally {
+            gate.release.countDown()
+        }
+        assertEquals(ForegroundAcknowledgmentStaging.Indeterminate, staging.await())
+        assertTrue(f.failures.isNotEmpty())
+        f.failAt = null
+        assertEquals(ForegroundAcknowledgmentResult.Rejected, f.verifier.verify(f.request))
+        assertEquals(
+            ForegroundAcknowledgmentResult.Rejected,
+            f.verifier(processId = UUID.randomUUID()).verify(f.request),
+        )
+    }
+
+    @Test
     fun retirementBeforeActionAdmissionDoesNotCreateAcknowledgmentStorage() = runBlocking {
         val f = fixture()
         val presentation = f.verifier.present(f.request)
@@ -510,6 +589,7 @@ class ForegroundWitnessAcknowledgmentVerifierTest {
         var failAt: ForegroundWitnessAcknowledgmentVerifier.WritePoint? = null
         @Volatile var synchronizationGate: SynchronizationGate? = null
         @Volatile var admissionGate: AdmissionGate? = null
+        @Volatile var writeGate: WriteGate? = null
         val failures = mutableListOf<StorageFailure>()
         val verifier = verifier()
 
@@ -522,7 +602,16 @@ class ForegroundWitnessAcknowledgmentVerifierTest {
             authentication,
             StorageIssueReporter { failures.add(it) },
             processId = processId,
-            fault = { if (it == failAt) throw IOException("injected acknowledgment write uncertainty") },
+            fault = {
+                writeGate?.takeIf { gate -> gate.point == it }?.let { gate ->
+                    gate.entered.countDown()
+                    if (!gate.release.await(10, TimeUnit.SECONDS)) {
+                        throw IOException("timed out waiting for acknowledgment write release")
+                    }
+                    writeGate = null
+                }
+                if (it == failAt) throw IOException("injected acknowledgment write uncertainty")
+            },
             synchronize = ::synchronize,
             beforeAdmission = ::beforeAdmission,
         )
@@ -555,6 +644,11 @@ class ForegroundWitnessAcknowledgmentVerifierTest {
     }
 
     private class SynchronizationGate {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+    }
+
+    private class WriteGate(val point: ForegroundWitnessAcknowledgmentVerifier.WritePoint) {
         val entered = CountDownLatch(1)
         val release = CountDownLatch(1)
     }

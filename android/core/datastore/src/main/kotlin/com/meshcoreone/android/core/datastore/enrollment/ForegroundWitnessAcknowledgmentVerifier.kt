@@ -166,7 +166,12 @@ class ForegroundWitnessAcknowledgmentVerifier internal constructor(
                     isActive(presentation)
                 }
                 if (stillActive) ForegroundAcknowledgmentStaging.Staged
-                else ForegroundAcknowledgmentStaging.Rejected
+                else {
+                    // Retirement may have finished invalidation before this writer allocated the ledger.
+                    if (transition(evidence, Status.INVALIDATED) == Status.INVALIDATED) {
+                        ForegroundAcknowledgmentStaging.Rejected
+                    } else ForegroundAcknowledgmentStaging.Indeterminate
+                }
             } else {
                 presentation.invalidated.set(true)
                 result

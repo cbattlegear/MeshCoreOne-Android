@@ -198,6 +198,8 @@ class RadioSessionContainer private constructor(
         config = env.messageServiceConfig,
         reporter = env.messagingReporter,
         channelTransmission = { index, transmit ->
+            var transmissionStarted = false
+            var transmissionAccepted = false
             try {
                 settingsService.withPersistedDefaultFloodScope {
                     val device = dataStore.fetchDevice(radioId)
@@ -213,15 +215,23 @@ class RadioSessionContainer private constructor(
                         // Scope preparation is not a channel write's ERROR 2 or pool-backoff attempt.
                         throw MessageServiceException(MessageServiceError.SendFailed("Channel scope application failed"), failure)
                     }
+                    transmissionStarted = true
                     transmit()
+                    transmissionAccepted = true
                 }
             } catch (failure: SettingsServiceException) {
-                if (failure.error == SettingsServiceError.NotConnected) {
+                if (transmissionAccepted && failure.error == SettingsServiceError.NotConnected) {
+                    // The scope context's post-action liveness check cannot revoke a radio acceptance.
+                    Unit
+                } else if (transmissionStarted) {
+                    throw MessageServiceException(MessageServiceError.SendFailed("Channel send outcome is uncertain"), failure)
+                } else if (failure.error == SettingsServiceError.NotConnected) {
                     throw MessageServiceException(MessageServiceError.NotConnected, failure)
+                } else {
+                    val underlying = (failure.error as? SettingsServiceError.SessionError)?.error
+                    if (underlying != null && underlying !is MeshCoreException.DeviceError) throw underlying
+                    throw MessageServiceException(MessageServiceError.SendFailed("Channel scope reconciliation failed"), failure)
                 }
-                val underlying = (failure.error as? SettingsServiceError.SessionError)?.error
-                if (underlying != null && underlying !is MeshCoreException.DeviceError) throw underlying
-                throw MessageServiceException(MessageServiceError.SendFailed("Channel scope reconciliation failed"), failure)
             }
         },
     )

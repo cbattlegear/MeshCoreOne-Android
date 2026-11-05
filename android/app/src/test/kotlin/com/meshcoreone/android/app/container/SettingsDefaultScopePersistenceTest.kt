@@ -601,6 +601,45 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
         }
     }
 
+    @Test fun acceptedChannelIsNotRetriedWhenSettingsContextLosesConnectionAfterTheWrite() = runTest {
+        withSettings { h, holder, _, radio ->
+            val before = assertNotNull(h.manager.connectedDevice)
+            store.saveChannel(ChannelDTO(radioId = before.radioId, index = 1u, name = "Accepted scope control"))
+            holder.select("EU868")
+            h.eventually("default acknowledged") { !holder.state.value.isApplying && holder.state.value.currentScope == "EU868" }
+            val session = h.sessions.current!!
+            var connectionWithdrawn = false
+            radio.onChannelWrite = {
+                kotlinx.coroutines.runBlocking {
+                    h.manager.setConnectionState(com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.CONNECTING)
+                }
+                connectionWithdrawn = true
+            }
+            try {
+                val message = enqueueActualChannel(h, before, "accepted before scope context post-check")
+                val key = com.meshcoreone.android.core.contracts.domain.EntityKey(before.radioId, message.id)
+                h.eventually("radio acceptance remains sent despite Settings post-check disconnection") {
+                    connectionWithdrawn && kotlinx.coroutines.runBlocking {
+                        store.fetchMessage(key)?.status == MessageStatus.SENT && !store.hasPendingSend(key)
+                    }
+                }
+                assertFalse(h.manager.connectionState.isConnected)
+                assertEquals(session.token, h.manager.snapshot.value.token)
+                assertEquals(1, radio.channelTransmissions.size)
+                radio.onChannelWrite = null
+                h.manager.setConnectionState(com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY)
+                session.chatSendQueueService.transportDidOpen()
+                h.settle()
+                assertEquals(1, radio.channelTransmissions.size, "Post-action connection loss cannot resend an accepted envelope")
+                assertEquals(MessageStatus.SENT, store.fetchMessage(key)?.status)
+                assertFalse(store.hasPendingSend(key))
+            } finally {
+                radio.onChannelWrite = null
+                h.manager.setConnectionState(com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY)
+            }
+        }
+    }
+
     @Test fun successorGenerationReconcilesARadioWriteThatOutlivedTheOriginalPersistenceConsumer() = runTest {
         withSettings { h, holder, _, radio ->
             holder.select("US915")
@@ -1271,6 +1310,7 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
         val writes = mutableListOf<String?>()
         val activeScopes = mutableListOf<Bytes>()
         val channelTransmissions = mutableListOf<Bytes>()
+        var onChannelWrite: (() -> Unit)? = null
         var defaultReads = 0
         var onWrite: (() -> Unit)? = null
         var activeScopeFailure: UByte? = null
@@ -1305,6 +1345,7 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
                     ) else null
                     0x03 -> {
                         channelTransmissions += command
+                        onChannelWrite?.invoke()
                         listOf(Bytes.of(0))
                     }
                     PacketBuilder.setFloodScope(Bytes(ByteArray(16)))[0].toInt() -> {

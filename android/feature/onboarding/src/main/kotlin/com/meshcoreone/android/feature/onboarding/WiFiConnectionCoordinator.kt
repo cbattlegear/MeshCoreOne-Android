@@ -27,7 +27,6 @@ data class WiFiSheetState(
 class WiFiConnectionCoordinator(
     private val scope: CoroutineScope,
     private val wifi: OnboardingWiFiPort,
-    private val canStartConnection: () -> Boolean = { true },
     private val onConnected: () -> Unit,
 ) {
     private val mutable = MutableStateFlow(WiFiSheetState())
@@ -41,7 +40,7 @@ class WiFiConnectionCoordinator(
 
     fun connect() {
         val current = mutable.value
-        if (current.isConnecting || !canStartConnection()) return
+        if (current.isConnecting) return
         val portNumber = current.port.toIntOrNull()?.takeIf { it in 0..65535 }
         if (portNumber == null) {
             mutable.update { it.copy(error = UiText.Resource(O.wifiConnectionErrorInvalidPort)) }
@@ -60,7 +59,7 @@ class WiFiConnectionCoordinator(
             when (outcome) {
                 OnboardingConnectOutcome.Connected -> {
                     mutable.update { it.copy(isConnecting = false) }
-                    if (canStartConnection()) onConnected()
+                    onConnected()
                 }
                 is OnboardingConnectOutcome.Failed -> mutable.update { it.copy(isConnecting = false, error = outcome.message) }
                 else -> mutable.update { it.copy(isConnecting = false) }

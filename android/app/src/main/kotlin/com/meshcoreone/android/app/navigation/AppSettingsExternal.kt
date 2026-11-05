@@ -13,6 +13,9 @@ import com.meshcoreone.android.app.container.AppSettingsFeature
 import com.meshcoreone.android.app.container.AppContainer
 import com.meshcoreone.android.app.state.AppSession
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.KnownRegionRemovalOutcome
+import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
+import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException
 import com.meshcoreone.android.core.datastore.KeyGenerationService
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -35,19 +38,41 @@ internal suspend fun removeSettingsKnownRegion(container: AppContainer, session:
         }
     }
     requireCurrent()
-    if (container.appState.connectedDevice?.defaultFloodScopeName == region) {
-        session.settingsService.setDefaultFloodScopeVerified(null)
-        requireCurrent()
+    try {
+        session.settingsService.removeKnownRegionPersisted(
+            region,
+            currentDevice = { requireCurrent(); container.appState.connectedDevice },
+        ) { acknowledgedName ->
+            requireCurrent()
+            if (container.appState.connectedDevice?.supportsDefaultFloodScope == true) {
+                container.deviceEditor.persistKnownRegionRemoval(region, session.token, acknowledgedName)
+            } else if (container.deviceEditor.persistKnownRegionRemoval(region, session.token)) {
+                KnownRegionRemovalOutcome.Removed
+            } else KnownRegionRemovalOutcome.Retired
+        }
+    } catch (failure: SettingsServiceException) {
+        if (failure.error == SettingsServiceError.NotConnected) {
+            throw SettingsNotConnectedException().also { it.initCause(failure) }
+        }
+        throw failure
     }
-    if (!container.deviceEditor.persistKnownRegionRemoval(region, session.token)) throw SettingsNotConnectedException()
 }
 
 internal suspend fun addSettingsKnownRegion(container: AppContainer, session: AppSession, region: String) {
     if (container.sessions.current !== session || !container.appState.canRunSettingsStartupReads) {
         throw SettingsNotConnectedException()
     }
-    if (!container.deviceEditor.addKnownRegion(region, session.token)) throw SettingsNotConnectedException()
+    session.settingsService.withPersistedDefaultFloodScope {
+        if (container.sessions.current !== session ||
+            !container.deviceEditor.addKnownRegion(region, session.token)
+        ) throw SettingsNotConnectedException()
+    }
 }
+
+internal data class SettingsKnownRegionRows(val session: AppSession?, val regions: List<String>)
+
+internal suspend fun removeSettingsKnownRegion(container: AppContainer, rows: SettingsKnownRegionRows, region: String) =
+    removeSettingsKnownRegion(container, rows.session ?: throw SettingsNotConnectedException(), region)
 
 @Composable
 internal fun AppSettingsExternal(feature: AppSettingsFeature, target: SettingsExternalDestination, onDone: () -> Unit) {
@@ -120,28 +145,29 @@ internal fun AppSettingsExternal(feature: AppSettingsFeature, target: SettingsEx
             }
             SettingsExternalDestination.RegionManagement -> {
                 var name by remember { mutableStateOf("") }
-                var known by remember { mutableStateOf(emptyList<String>()) }
+                var known by remember { mutableStateOf(SettingsKnownRegionRows(null, emptyList())) }
                 val connection by container.connectionManager.snapshot.collectAsState()
                 val deviceRevision by container.deviceAccess.changes.collectAsState()
                 LaunchedEffect(version, connection, deviceRevision) {
-                    known = container.appState.connectedDevice?.knownRegions.orEmpty()
+                    val session = container.sessions.current?.takeIf { it.token == connection.token }
+                    val device = session?.let { container.deviceAccess.currentDevice(it.token) }
+                    known = SettingsKnownRegionRows(session, device?.knownRegions?.toList().orEmpty())
                 }
-                known.forEach { region ->
+                val rows = known
+                rows.regions.forEach { region ->
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text(region)
-                        TextButton(enabled = !busy, onClick = { run {
-                            val current = live()
-                            if (current.token != connection.token) throw SettingsNotConnectedException()
-                            removeSettingsKnownRegion(container, current, region)
+                        TextButton(enabled = !busy && rows.session?.token == connection.token, onClick = { run {
+                            removeSettingsKnownRegion(container, rows, region)
                         } }) {
                             Text(stringResource(L.commonDelete))
                         }
                     }
                 }
                 OutlinedTextField(name, { name = it }, label = { Text(stringResource(S.radioPresetLocation)) })
-                Button(enabled = name.isNotBlank() && !busy, onClick = { run {
-                    val current = live()
-                    if (current.token != connection.token) throw SettingsNotConnectedException()
+                Button(enabled = name.isNotBlank() && !busy && rows.session != null &&
+                    rows.session.token == connection.token, onClick = { run {
+                    val current = rows.session ?: throw SettingsNotConnectedException()
                     addSettingsKnownRegion(container, current, name.trim())
                     name = ""
                 } }) { Text(stringResource(L.commonSave)) }

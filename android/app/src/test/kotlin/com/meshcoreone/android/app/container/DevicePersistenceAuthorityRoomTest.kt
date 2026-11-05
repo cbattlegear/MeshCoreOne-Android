@@ -23,6 +23,7 @@ import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -34,9 +35,73 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class DevicePersistenceAuthorityRoomTest : RoomProcessTest() {
+    @Test fun actualCommittedSnapshotReceiptPrecedesOriginalCallbackAndPostCommitFailuresNeverMapToSaveFailure() = runTest {
+        for (failReceipt in listOf(false, true)) {
+            val original = device(if (failReceipt) 609 else 610)
+            store.saveDevice(original)
+            val calls = mutableListOf<String>()
+            var receipt: DeviceWriteSnapshot? = null
+            var mappedFailures = 0
+            val injected = PersistenceStoreException(PersistenceStoreError.SaveFailed("post-commit callback"))
+            val failure = runCatching {
+                store.editDevice(
+                    original.id,
+                    onSaveFailure = { mappedFailures++; throw it },
+                    onCommittedSnapshot = {
+                        calls += "receipt"
+                        receipt = it
+                        if (failReceipt) throw injected
+                    },
+                    onCommitted = {
+                        calls += "original"
+                        if (!failReceipt) throw injected
+                    },
+                ) { it.copy(pathHashMode = 2u) }
+            }.exceptionOrNull()
+            assertTrue(failure === injected)
+            assertEquals(listOf("receipt", "original"), calls, "Both post-commit callbacks run once in declared order")
+            assertEquals(0, mappedFailures, "A committed write is not a failed save")
+            val committed = assertNotNull(receipt)
+            val actual = assertNotNull(store.fetchDeviceWriteSnapshot(original.id))
+            assertEquals(original.copy(pathHashMode = 2u), committed.device)
+            assertEquals(actual.device, committed.device)
+            assertEquals(actual.revision, committed.revision)
+            assertEquals(actual.authorityRevision, committed.authorityRevision)
+        }
+    }
+
+    @Test fun dualPostCommitCallbackFailuresRetainTheFirstIdentityAndSuppressTheSecondWithoutRemapping() = runTest {
+        val original = device(611)
+        store.saveDevice(original)
+        val calls = mutableListOf<String>()
+        var receipt: DeviceWriteSnapshot? = null
+        var mappedFailures = 0
+        val first = kotlinx.coroutines.CancellationException("receipt callback cancelled")
+        val second = PersistenceStoreException(PersistenceStoreError.SaveFailed("original callback failed"))
+        val failure = runCatching {
+            store.editDevice(
+                original.id,
+                onSaveFailure = { mappedFailures++; throw it },
+                onCommittedSnapshot = { calls += "receipt"; receipt = it; throw first },
+                onCommitted = { calls += "original"; throw second },
+            ) { it.copy(pathHashMode = 2u) }
+        }.exceptionOrNull()
+        assertTrue(failure === first)
+        assertEquals(listOf(second), first.suppressed.toList())
+        assertEquals(listOf("receipt", "original"), calls)
+        assertEquals(0, mappedFailures)
+        val committed = assertNotNull(receipt)
+        val actual = assertNotNull(store.fetchDeviceWriteSnapshot(original.id))
+        assertEquals(original.copy(pathHashMode = 2u), actual.device)
+        assertEquals(actual.device, committed.device)
+        assertEquals(actual.revision, committed.revision)
+        assertEquals(actual.authorityRevision, committed.authorityRevision)
+    }
+
     private class PausedStore(private val room: RoomPersistenceStore) : PersistenceStoreProtocol by room {
         var beforeSave: suspend () -> Unit = {}
         var rejected = 0
@@ -508,6 +573,96 @@ class DevicePersistenceAuthorityRoomTest : RoomProcessTest() {
                     assertEquals(ChannelFloodScope.Inherit, store.fetchChannel(original.radioId, 2u)!!.floodScope)
                     assertEquals(unrelatedChannel, store.fetchChannel(original.radioId, 3u))
                 } finally { release.complete(Unit) }
+            }
+        }
+    }
+
+    @Test fun queuedRoomRetirementPreventsRegionAndPresetEditsFromChangingAnyDurableState() = runTest {
+        for (operation in listOf("add", "remove", "preset")) {
+            val requested = CompletableDeferred<Unit>()
+            val release = CountDownLatch(1)
+            val pauseNext = AtomicBoolean(false)
+            val current = AtomicBoolean(true)
+            val callbacks = AtomicInteger()
+            val worker = Executors.newSingleThreadExecutor()
+            val immediate = Executor { it.run() }
+            val transactionExecutor = Executor { command ->
+                if (pauseNext.compareAndSet(true, false)) {
+                    requested.complete(Unit)
+                    worker.execute { release.await(); command.run() }
+                } else command.run()
+            }
+            val database = Room.inMemoryDatabaseBuilder(
+                ApplicationProvider.getApplicationContext<Context>(), MeshCoreDatabase::class.java,
+            ).allowMainThreadQueries().setQueryExecutor(immediate).setTransactionExecutor(transactionExecutor).build()
+            val repository = RoomPersistenceStore(database, backgroundScope)
+            try {
+                val initial = device(650)
+                repository.saveDevice(initial)
+                listOf("US915", "EU868").forEach { repository.addDeviceKnownRegion(initial.radioId, it) }
+                val seed = assertNotNull(repository.fetchDeviceWriteSnapshot(initial.id))
+                assertTrue(repository.saveDeviceIfUnchanged(seed.device.copy(defaultFloodScopeName = "US915"), seed))
+                val before = assertNotNull(repository.fetchDeviceWriteSnapshot(initial.id))
+                val channels = listOf(
+                    channel(initial.radioId, 1, ChannelFloodScope.Region("US915")),
+                    channel(initial.radioId, 2, ChannelFloodScope.Region("EU868")),
+                    channel(initial.radioId, 3, ChannelFloodScope.Inherit),
+                    channel(RadioId(UUID(0, 999)), 1, ChannelFloodScope.Region("US915")),
+                )
+                channels.forEach { repository.saveChannel(it) }
+                val paused = PausedStore(repository)
+                paused.beforeSave = { pauseNext.set(true) }
+                val edited = async(Dispatchers.IO) {
+                    paused.editDevice(
+                        initial.id,
+                        isCurrent = current::get,
+                        onCommitted = { callbacks.incrementAndGet() },
+                    ) {
+                        when (operation) {
+                            "add" -> it.copy(knownRegions = (it.knownRegions + "AU915").snapshot())
+                            "remove" -> it.copy(
+                                knownRegions = it.knownRegions.filterNot { name -> name == "US915" }.snapshot(),
+                                defaultFloodScopeName = null,
+                            )
+                            else -> it.copy(
+                                nodeName = "Retired preset",
+                                frequency = 868000u,
+                                bandwidth = 125000u,
+                                spreadingFactor = 9u,
+                                codingRate = 6u,
+                                txPower = 17,
+                                appliedRadioPresetID = "retired-preset",
+                                preRepeatFrequency = 915000u,
+                                preRepeatBandwidth = 250000u,
+                                preRepeatSpreadingFactor = 10u,
+                                preRepeatCodingRate = 5u,
+                                pathHashMode = 2u,
+                                clientRepeat = true,
+                            )
+                        }
+                    }
+                }
+                requested.await()
+                assertFalse(edited.isCompleted, "The actual Room transaction command is queued")
+                current.set(false)
+                release.countDown()
+                assertNull(edited.await(), "A retired $operation must not be reported committed")
+                assertEquals(1, paused.rejected, "The queued save must reach the transaction-local guard")
+                assertEquals(0, callbacks.get(), "A rejected transaction must not publish")
+                val after = assertNotNull(repository.fetchDeviceWriteSnapshot(initial.id))
+                assertEquals(before.device, after.device, "Every durable device field must survive retired $operation")
+                assertEquals(before.revision, after.revision)
+                assertEquals(before.authorityRevision, after.authorityRevision)
+                for (row in channels) assertEquals(row, repository.fetchChannel(row.radioId, row.index))
+                assertEquals(channels.filter { it.radioId == initial.radioId }, repository.fetchChannels(initial.radioId))
+            } finally {
+                release.countDown()
+                worker.shutdown()
+                try {
+                    assertTrue(worker.awaitTermination(10, TimeUnit.SECONDS), "Owned Room command must finish")
+                } finally {
+                    try { repository.close() } finally { database.close() }
+                }
             }
         }
     }

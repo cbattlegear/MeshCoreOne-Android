@@ -182,9 +182,7 @@ class ManagerDeviceAccess(private val manager: ConnectionManager) : ConnectedDev
 
     override fun replaceConnectedDevice(device: DeviceDTO, expectedToken: SessionToken): ConnectedDeviceEdit? {
         val edit = manager.replaceConnectedDevice(device, expectedToken)
-        if (edit != null) {
-            mutableChanges.update { Math.incrementExact(it) }
-        }
+        if (edit != null) mutableChanges.update { Math.incrementExact(it) }
         return edit
     }
 }

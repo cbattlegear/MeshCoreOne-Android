@@ -1,6 +1,8 @@
 // AndroidOnly: WP-305 composition of the onboarding step coordinators behind OnboardingFeatureDependencies.
 package com.meshcoreone.android.feature.onboarding
 
+import com.meshcoreone.android.core.ui.UiText
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -9,29 +11,17 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val deps: OnboardingFeatureDependencies) {
-    private var completing = false
-    private var pendingPairAfterPermission = false
     val onboarding = OnboardingState(deps.flags)
     val permissions = PermissionsCoordinator(deps.permissions)
-    val deviceScan = DeviceScanCoordinator(
-        scope, deps.pairing, deps.demo, deps.permissions,
-        onConnected = { onboarding.append(OnboardingStep.REGION) },
-        canStartConnection = { !completing && onboarding.canStartCompletion() },
-    )
-    val wifi = WiFiConnectionCoordinator(
-        scope, deps.wifi,
-        onConnected = {
-            deviceScan.dismissSheet()
-            onboarding.append(OnboardingStep.REGION)
-        },
-        canStartConnection = { !completing && onboarding.canStartCompletion() },
-    )
+    val deviceScan = DeviceScanCoordinator(scope, deps.pairing, deps.demo, deps.permissions) { onboarding.append(OnboardingStep.REGION) }
+    val wifi = WiFiConnectionCoordinator(scope, deps.wifi) {
+        deviceScan.dismissSheet()
+        onboarding.append(OnboardingStep.REGION)
+    }
     val region = RegionStepCoordinator(scope, deps.region, { deps.permissions.snapshot.value.location == PermissionStatus.GRANTED }) {
         onboarding.append(OnboardingStep.PRESET)
     }
-    val preset = PresetStepCoordinator(
-        scope, deps.region, deps.presets, canStart = onboarding::canStartCompletion, onCompleted = ::completePreset,
-    )
+    val preset = PresetStepCoordinator(scope, deps.region, deps.presets, onCompleted = ::completePreset)
 
     private suspend fun completePreset() {
         onboarding.completeOnboardingWithReceipt(
@@ -41,10 +31,9 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
 
     private val clearing = MutableStateFlow(false)
     val isClearingPairings: StateFlow<Boolean> = clearing.asStateFlow()
-    private val completionError = MutableStateFlow(false)
-    val hasCompletionError: StateFlow<Boolean> = completionError.asStateFlow()
-    private val completingWithoutDevice = MutableStateFlow(false)
-    val isCompletingWithoutDevice: StateFlow<Boolean> = completingWithoutDevice.asStateFlow()
+    private var pendingPairAfterPermission = false
+    private var completingWithoutDevice = false
+
     val currentStep: OnboardingStep get() = onboarding.onboardingPath.lastOrNull() ?: OnboardingStep.WELCOME
 
     /** Resumes a partially onboarded install above the welcome root (no-op once complete). */
@@ -58,10 +47,7 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
 
     fun getStarted() = onboarding.append(OnboardingStep.PERMISSIONS)
     fun continueFromPermissions() = onboarding.append(OnboardingStep.PAIR)
-    // Completion remains owned by the mounted host until it delivers navigation and retires this flow.
-    fun canLeaveCurrentFlow(): Boolean =
-        !completing && !preset.state.value.isApplying && !onboarding.hasCompletedOnboarding
-    fun back(): Boolean = canLeaveCurrentFlow() && onboarding.pop()
+    fun back(): Boolean = onboarding.pop()
 
     /** Just-in-time Bluetooth permission: ask on first "Add device", then resume pairing from the result. */
     fun addDevice(requestPermission: (OnboardingPermissionKind) -> Unit) {
@@ -80,51 +66,23 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
     }
 
     fun confirmNoDevice() {
-        completeWithoutDevice()
-    }
-
-    fun retryCompletion() {
-        if (completionError.value) completeWithoutDevice()
-    }
-
-    fun dismissCompletionError() {
-        completionError.value = false
-    }
-
-    fun canCompleteWithoutDevice(): Boolean =
-        onboarding.canStartCompletion() && !completing && !deviceScan.state.value.localBusy &&
-            !deps.pairing.connection.value.isBusy && !wifi.state.value.isConnecting
-
-    fun dismissPairingSheet() {
-        if (canDismissPairingSheet()) deviceScan.dismissSheet()
-    }
-
-    fun canDismissPairingSheet(): Boolean = !completing
-
-    fun openPairingSheet(sheet: PairSheet) {
-        if (sheet == PairSheet.WIFI && deviceScan.state.value.sheet != PairSheet.WIFI) wifi.reset()
-        deviceScan.showSheet(sheet)
-    }
-
-    private fun completeWithoutDevice() {
-        if (!canCompleteWithoutDevice()) return
-        completing = true
-        completingWithoutDevice.value = true
+        if (completingWithoutDevice) return
+        completingWithoutDevice = true
+        deviceScan.dismissSheet()
         scope.launch {
             try {
                 onboarding.completeOnboarding()
-                completionError.value = false
-                deviceScan.dismissSheet()
-            } catch (cancelled: kotlinx.coroutines.CancellationException) {
-                throw cancelled
-            } catch (_: Exception) {
-                completionError.value = true
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (failure: Exception) {
+                deviceScan.reportCompletionFailure(UiText.Verbatim(failure.message.orEmpty()))
             } finally {
-                completing = false
-                completingWithoutDevice.value = false
+                completingWithoutDevice = false
             }
         }
     }
+
+    fun retire() = onboarding.retireCompletion()
 
     fun clearStalePairings() {
         if (clearing.value) return

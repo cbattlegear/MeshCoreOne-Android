@@ -69,11 +69,7 @@ fun PresetStepScreen(
             style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
         Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(vertical = OnboardingMetrics.cardSpacing),
             verticalArrangement = Arrangement.spacedBy(OnboardingMetrics.mediumSpacing)) {
-            presets.forEach { preset ->
-                PresetRow(preset, preset.id == state.selectedId, enabled = !state.isApplying && !state.isCompleted) {
-                    actions.onSelect(preset.id)
-                }
-            }
+            presets.forEach { preset -> PresetRow(preset, preset.id == state.selectedId) { actions.onSelect(preset.id) } }
             if (presets.size > 1) {
                 Text(stringResource(O.presetDiscordHelp), Modifier.fillMaxWidth().padding(top = OnboardingMetrics.mediumSpacing),
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
@@ -82,17 +78,13 @@ fun PresetStepScreen(
         OnboardingPrimaryButton(
             selected?.let { O.presetUse(resources, it.name) } ?: stringResource(O.presetContinue), actions.onApply,
             Modifier.padding(bottom = OnboardingMetrics.cardSpacing),
-            enabled = !state.isApplying && !state.isCompleted && selected != null && canApply, loading = state.isApplying,
+            enabled = !state.isApplying && selected != null && canApply, loading = state.isApplying,
         )
     }
     state.error?.let {
         AlertDialog(
             onDismissRequest = actions.onDismissError, title = { Text(stringResource(S.alertErrorTitle)) }, text = { Text(uiString(it)) },
-            confirmButton = {
-                TextButton(if (state.completionNeedsRetry) actions.onRetry else actions.onDismissError) {
-                    Text(stringResource(if (state.completionNeedsRetry) L.commonTryAgain else L.commonOk))
-                }
-            },
+            confirmButton = { TextButton(actions.onDismissError) { Text(stringResource(L.commonOk)) } },
         )
     }
     state.retryAlert?.let { alert ->
@@ -115,16 +107,13 @@ fun PresetStepScreen(
 }
 
 @Composable
-private fun PresetRow(preset: OnboardingPresetOption, isSelected: Boolean, enabled: Boolean, onClick: () -> Unit) {
+private fun PresetRow(preset: OnboardingPresetOption, isSelected: Boolean, onClick: () -> Unit) {
     val hint = stringResource(O.presetRowAccessibilityHint)
     Card(Modifier.fillMaxWidth()) {
         Row(
             Modifier.fillMaxWidth().heightIn(min = OnboardingMetrics.minHitTarget)
-                .clickable(enabled = enabled, role = Role.RadioButton, onClick = onClick)
-                .semantics(mergeDescendants = true) {
-                    selected = isSelected
-                    if (enabled) onClick(hint) { onClick(); true }
-                }
+                .clickable(role = Role.RadioButton, onClick = onClick)
+                .semantics(mergeDescendants = true) { selected = isSelected; onClick(hint) { onClick(); true } }
                 .padding(OnboardingMetrics.cardSpacing),
             horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically,
         ) {

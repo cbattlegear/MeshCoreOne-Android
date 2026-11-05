@@ -6,8 +6,11 @@ import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.LifecycleStage
 import com.meshcoreone.android.core.contracts.domain.MessagingDiagnostic
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.contracts.domain.TeardownReport
+import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceError
+import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceException
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.MessageDTO
@@ -36,7 +39,6 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicReference
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.test.assertEquals
@@ -48,8 +50,9 @@ import kotlin.test.assertNotSame
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
-import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -59,6 +62,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
 
@@ -168,19 +172,18 @@ class SessionLifecycleTest : RoomProcessTest() {
                 accountingReceipts += event to h.manager.snapshot.value.token
             },
         )
-        val activeRadio = AtomicReference<FirmwareRadio?>()
         val generationRadios = ConcurrentHashMap<SessionToken, FirmwareRadio>()
         val bootstrapChannelRequests = ConcurrentLinkedQueue<Pair<SessionToken, UByte>>()
         val queueChannelRequests = ConcurrentLinkedQueue<Pair<SessionToken, UByte>>()
         h.links.configureRadio = { radio ->
-            activeRadio.set(radio)
             val sending = AtomicBoolean(false)
             radio.respond = { command ->
                 when (command[0].toInt()) {
                     3 -> {
                         check(h.manager.connectionState == DeviceConnectionState.READY)
                         sending.set(true)
-                        emptyList()
+                        // ERROR 2 belongs to this channel write, not a preceding scope/configuration command.
+                        listOf(Bytes.of(1, 2))
                     }
                     31 -> {
                         val index = command[1]
@@ -268,7 +271,6 @@ class SessionLifecycleTest : RoomProcessTest() {
             attemptCount = 2,
         ))
 
-        var errorDispatcher: Job? = null
         var transportOpenTrigger: Job? = null
         var queue: ChatSendQueueService? = null
         var initialToken: SessionToken? = null
@@ -312,7 +314,10 @@ class SessionLifecycleTest : RoomProcessTest() {
             for (issue in report.issues) {
                 assertEquals(LifecycleStage.STOP_SERVICES, issue.stage, "$description: unexpected teardown stage")
                 val receipt = expected.singleOrNull { it.queryFailure === issue.cause }
-                assertNotNull(receipt, "$description: teardown cause must be the exact persisted park cause of a proven generation")
+                assertNotNull(receipt,
+                    "$description: teardown cause must be the exact persisted park cause of a proven generation; " +
+                        "issue=$issue; retained=$expected; " +
+                        "operations=${synchronized(h.messagingDiagnostics) { h.messagingDiagnostics.toList() }}")
                 assertTrue(seen.add(receipt.token), "$description: duplicate teardown issue for ${receipt.token}")
             }
         }
@@ -358,14 +363,6 @@ class SessionLifecycleTest : RoomProcessTest() {
             assertTrue(h.container.foreground.activityStarted())
             h.appState.handleBecameActive()
             h.appState.handleReturnToForeground()
-            errorDispatcher = backgroundScope.launch(Dispatchers.Default) {
-                while (isActive) {
-                    if (h.manager.connectionState == DeviceConnectionState.READY) {
-                        activeRadio.get()?.push(Bytes.of(1, 2))
-                    }
-                    delay(20.milliseconds)
-                }
-            }
             transportOpenTrigger = backgroundScope.launch(Dispatchers.Default) {
                 while (isActive) {
                     h.sessions.current?.chatSendQueueService?.transportDidOpen()
@@ -500,7 +497,6 @@ class SessionLifecycleTest : RoomProcessTest() {
                         }
                     }
 
-                    cleanupStep { errorDispatcher?.cancel() }
                     cleanupStep { transportOpenTrigger?.cancel() }
                     var queueReport: TeardownReport? = null
                     cleanupStep { queueReport = queue?.shutdown() }
@@ -509,7 +505,8 @@ class SessionLifecycleTest : RoomProcessTest() {
                         queueReport?.let { report ->
                             val token = assertNotNull(initialToken)
                             assertEquals(ChannelQueryAccountingOutcome.PARKED, assertNotNull(provenReceipts[token]).outcome)
-                            assertEquals(1, report.issues.size, "Initial queue must return its same single retained park issue")
+                            assertEquals(1, report.issues.size,
+                                "Initial queue must return its same single retained park issue; issues=${report.issues}")
                             assertExpectedTeardownIssues(report, setOf(token), "Repeated initial queue shutdown")
                         }
                     }
@@ -522,6 +519,158 @@ class SessionLifecycleTest : RoomProcessTest() {
                 if (cleanup !== failure) failure.addSuppressed(cleanup)
             }
         }
+    }
+
+    @Test
+    fun unsolicitedErrorTwoDuringChannelScopeSetupDoesNotBecomeAChannelQueryFailure() = runTest {
+        val radioId = RadioId(UUID.fromString("B0000000-0000-0000-0000-000000000001"))
+        val deviceId = UUID.fromString("B0000000-0000-0000-0000-000000000002")
+        val messageId = UUID.fromString("B0000000-0000-0000-0000-000000000004")
+        val pendingId = UUID.fromString("B0000000-0000-0000-0000-000000000005")
+        val scopeCommands = ConcurrentLinkedQueue<Bytes>()
+        val channelWrites = ConcurrentLinkedQueue<Bytes>()
+        val initialChannelRequests = ConcurrentLinkedQueue<UByte>()
+        val postScopeChannelRequests = ConcurrentLinkedQueue<UByte>()
+        val attemptCounts = ConcurrentLinkedQueue<Long>()
+        val accountingReceipts = ConcurrentLinkedQueue<ChannelQueryAccountingEvent>()
+        val scopeErrorDelivered = AtomicBoolean(false)
+        val messageKey = EntityKey(radioId, messageId)
+        val terminalPendingDeleted = CompletableDeferred<Unit>()
+        val observedStore = object : PersistenceStoreProtocol by store {
+            override suspend fun incrementPendingSendAttemptCount(key: EntityKey): Long? {
+                val count = store.incrementPendingSendAttemptCount(key)
+                count?.let(attemptCounts::add)
+                return count
+            }
+
+            override suspend fun deletePendingSendsForMessage(key: EntityKey) {
+                store.deletePendingSendsForMessage(key)
+                if (key == messageKey) terminalPendingDeleted.complete(Unit)
+            }
+        }
+        val h = ContainerHarness(
+            this,
+            store,
+            runtimeClock = SystemRuntimeClock(),
+            runtimeContext = Dispatchers.Default,
+            sessionConfiguration = SessionConfiguration(defaultTimeout = 0.2),
+            messageServiceConfig = MessageServiceConfig(
+                poolBackoff = PoolBackoffConfig(attemptCap = 2, baseDelay = 0.01),
+            ),
+            chatSendQueueConfig = ChatSendQueueConfig(maxConsecutiveFetchChannelFailures = QUERY_FAILURE_CAP),
+            mainScope = CoroutineScope(backgroundScope.coroutineContext + Dispatchers.Default.limitedParallelism(1)),
+            onChannelQueryAccounting = { accountingReceipts += it },
+            persistenceOverride = observedStore,
+        )
+        h.links.configureRadio = { radio ->
+            radio.respond = { command ->
+                when (command[0].toInt()) {
+                    0x36 -> {
+                        scopeCommands += command
+                        if (scopeErrorDelivered.compareAndSet(false, true)) {
+                            radio.push(Bytes.of(1, 2))
+                        }
+                        listOf(Bytes.of(0))
+                    }
+                    3 -> {
+                        channelWrites += command
+                        listOf(Bytes.of(0))
+                    }
+                    31 -> {
+                        val index = command[1]
+                        if (scopeErrorDelivered.get()) postScopeChannelRequests += index
+                        else initialChannelRequests += index
+                        listOf(
+                            Bytes.of(0x12, index.toInt()) +
+                                Bytes.utf8(if (index == 0.toUByte()) "Test" else "").paddedOrTruncated(32) +
+                                Bytes(ByteArray(16) { if (index == 0.toUByte()) 0xaa.toByte() else 0 }),
+                        )
+                    }
+                    else -> null
+                }
+            }
+        }
+        val channel = ChannelDTO(
+            id = UUID.fromString("B0000000-0000-0000-0000-000000000003"),
+            radioId = radioId,
+            index = 0u,
+            name = "Test",
+            secret = Bytes.fromHex("aa".repeat(16)),
+        )
+        val message = MessageDTO(
+            id = messageId,
+            radioId = radioId,
+            channelIndex = 0u,
+            text = "Scope setup control",
+            timestamp = 1_704_067_200u,
+            createdAt = EPOCH,
+            sortDate = EPOCH,
+            direction = MessageDirection.OUTGOING,
+            status = MessageStatus.PENDING,
+        )
+        store.saveDevice(DeviceDTO(
+            id = deviceId,
+            radioId = radioId,
+            publicKey = key(7),
+            nodeName = "Stored Node",
+            isActive = false,
+        ))
+        store.saveChannel(channel)
+        store.saveMessage(message)
+        store.upsertPendingSend(PendingSendDTO(
+            id = pendingId,
+            radioId = radioId,
+            messageID = messageId,
+            kind = PendingSendKind.CHANNEL,
+            contactID = null,
+            channelIndex = 0u,
+            isResend = false,
+            messageText = message.text,
+            messageTimestamp = message.timestamp,
+            localNodeName = "Stored Node",
+            sequence = 1,
+            enqueuedAt = EPOCH,
+            attemptCount = 2,
+        ))
+
+        var transportOpenTrigger: Job? = null
+        try {
+            assertTrue(h.container.foreground.activityStarted())
+            h.appState.handleBecameActive()
+            h.appState.handleReturnToForeground()
+            h.connect(h.target(deviceId))
+            h.eventually("initial channel sync before the scope-error control") {
+                initialChannelRequests.toSet() == (0 until 8).map { it.toUByte() }.toSet()
+            }
+            transportOpenTrigger = backgroundScope.launch(Dispatchers.Default) {
+                while (isActive) {
+                    h.sessions.current?.chatSendQueueService?.transportDidOpen()
+                    delay(50.milliseconds)
+                }
+            }
+            withContext(Dispatchers.Default) {
+                withTimeout(5.seconds) { terminalPendingDeleted.await() }
+            }
+        } finally {
+            transportOpenTrigger?.cancel()
+            h.container.close()
+        }
+
+        assertTrue(scopeErrorDelivered.get(), "the deterministic ERROR 2 must arrive during SET_FLOOD_SCOPE")
+        assertEquals(1, scopeCommands.size)
+        assertEquals(0x36, scopeCommands.single()[0].toInt())
+        assertEquals(listOf(3L), attemptCounts.toList(), "the actual pending B attempt advances from 2 to 3")
+        assertTrue(channelWrites.isEmpty(), "scope setup must fail before SEND_CHANNEL")
+        assertTrue(postScopeChannelRequests.isEmpty(), "scope ERROR 2 must not trigger GET_CHANNEL")
+        assertTrue(accountingReceipts.isEmpty(), "no genuine queue query means no query-accounting receipt")
+        assertEquals(MessageStatus.FAILED, store.fetchMessage(EntityKey(radioId, messageId))?.status)
+        assertFalse(store.fetchPendingSends(radioId).any { it.messageID == messageId })
+        val terminal = synchronized(h.messagingDiagnostics) {
+            h.messagingDiagnostics.filterIsInstance<MessagingDiagnostic.Failure>()
+                .single { it.operation == "terminal.$messageId" }
+        }
+        val failure = assertIs<MessageServiceException>(terminal.cause)
+        assertIs<MessageServiceError.SendFailed>(failure.error)
     }
 
     @Test

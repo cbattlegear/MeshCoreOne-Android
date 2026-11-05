@@ -24,16 +24,16 @@ class DeviceMenuTipCoordinator(
 
     suspend fun donateIfOnValidTab() {
         if (isOnValidTab) {
-            donate()
             pending.value = false
+            donate()
         } else {
             pending.value = true
         }
     }
 
     suspend fun donateUnconditionally() {
-        donate()
         pending.value = false
+        donate()
     }
 
     private companion object {

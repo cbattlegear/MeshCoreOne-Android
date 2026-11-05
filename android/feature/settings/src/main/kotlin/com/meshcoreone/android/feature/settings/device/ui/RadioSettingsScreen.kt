@@ -113,6 +113,7 @@ private fun PresetLocationSection(holders: RadioSettingsHolders, navigator: Sett
 private fun RadioPresetSection(holders: RadioSettingsHolders) {
     val holder = holders.preset
     val state by holder.state.collectAsState()
+    val renderedToken = state.sessionToken
     val inFlight by holders.gate.inFlight.collectAsState()
     val connected = state.connectionState == DeviceConnectionState.READY
     val custom = res(AppSettingsStrings.batteryCurveCustom)
@@ -129,16 +130,16 @@ private fun RadioPresetSection(holders: RadioSettingsHolders) {
     }
     SettingsSection(res(AppSettingsStrings.radioHeader), footers) {
         DropdownRow(res(AppSettingsStrings.radioPreset), selectedName?.let { UiText.Verbatim(it) } ?: custom, options,
-            enabled = state.pickerEnabled(inFlight), onSelect = holder::onPresetSelected)
+            enabled = state.pickerEnabled(inFlight), onSelect = { holder.onPresetSelected(it, renderedToken) })
         if (state.supportsRepeatToggle) {
             RowDivider()
             SwitchRow(res(AppSettingsStrings.radioRepeatMode), state.isRepeatEnabled, state.repeatToggleEnabled(inFlight) && connected,
-                holder::onRepeatToggled, description = res(AppSettingsStrings.radioRepeatModeFooter))
+                { holder.onRepeatToggled(it, renderedToken) }, description = res(AppSettingsStrings.radioRepeatModeFooter))
         }
     }
     ConfirmDialog(
         state.showRepeatConfirmation, res(AppSettingsStrings.radioRepeatModeConfirmTitle), res(AppSettingsStrings.radioRepeatModeConfirmMessage),
-        res(AppSettingsStrings.radioRepeatModeConfirmEnable), holder::confirmEnableRepeatMode, holder::dismissRepeatConfirmation, destructive = false,
+        res(AppSettingsStrings.radioRepeatModeConfirmEnable), { holder.confirmEnableRepeatMode(renderedToken) }, holder::dismissRepeatConfirmation, destructive = false,
     )
     ErrorMessageDialog(state.errorMessage, holder::dismissError)
     RetryAlertDialog(holder.retry)
@@ -147,6 +148,7 @@ private fun RadioPresetSection(holders: RadioSettingsHolders) {
 @Composable
 private fun PathHashModeSection(holder: PathHashModeStateHolder) {
     val state by holder.state.collectAsState()
+    val renderedToken = state.sessionToken
     val options = listOf(
         res(AppSettingsStrings.pathHashModeOneByte) to 0.toUByte(),
         res(AppSettingsStrings.pathHashModeTwoBytes) to 1.toUByte(),
@@ -154,7 +156,7 @@ private fun PathHashModeSection(holder: PathHashModeStateHolder) {
     )
     SettingsSection(res(AppSettingsStrings.pathHashModeHeader), listOf(res(AppSettingsStrings.pathHashModeFooter))) {
         DropdownRow(res(AppSettingsStrings.pathHashModeLabel), options.first { it.second == state.displayedMode }.first, options,
-            state.enabled, holder::onModeSelected)
+            state.enabled, { holder.onModeSelected(it, renderedToken) })
     }
     ErrorMessageDialog(state.errorMessage, holder::dismissError)
     RetryAlertDialog(holder.retry)
@@ -163,6 +165,7 @@ private fun PathHashModeSection(holder: PathHashModeStateHolder) {
 @Composable
 private fun AdvancedRadioSection(holder: AdvancedRadioStateHolder, gate: RadioWriteGate) {
     val state by holder.state.collectAsState()
+    val renderedToken = state.sessionToken
     val inFlight by gate.inFlight.collectAsState()
     val context = LocalContext.current
     val enabled = radioActionEnabled(state.connectionState) && !state.isApplying
@@ -193,7 +196,7 @@ private fun AdvancedRadioSection(holder: AdvancedRadioStateHolder, gate: RadioWr
         ValidatedField(res(AppSettingsStrings.advancedRadioTxPower), state.txPowerText, holder::onTxPowerTextChanged, enabled,
             KeyboardType.Number, error = if (powerInvalid) res(AppSettingsStrings.advancedRadioInvalidInput) else null,
             placeholder = res(AppSettingsStrings.advancedRadioTxPowerPlaceholder))
-        androidx.compose.material3.TextButton(holder::apply, Modifier.fillMaxWidth().sharedTouchTarget(), enabled = state.canApply(inFlight)) {
+        androidx.compose.material3.TextButton({ holder.apply(renderedToken) }, Modifier.fillMaxWidth().sharedTouchTarget(), enabled = state.canApply(inFlight)) {
             AsyncActionLabel(state.isApplying, state.showSuccess, res(AppSettingsStrings.advancedRadioApply), res(AppSettingsStrings.advancedRadioApply)) {
                 Text(uiString(res(AppSettingsStrings.advancedRadioApply)))
             }

@@ -128,7 +128,10 @@ class CapabilityReservationTests(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(PortError):
                 routine_support_predecessor(altered)
         extended = copy.deepcopy(current)
-        extra = copy.deepcopy(extended["reservation_policy"]["capabilities"][-1])
+        extra = copy.deepcopy(next(
+            rule for rule in extended["reservation_policy"]["capabilities"]
+            if rule["id"] == "reviewed-support-consumer"
+        ))
         extra["id"] = "reviewed-support-new-fixture"
         extra["path_rules"] = ["tools/android-port/tests/*.py"]
         extended["reservation_policy"]["capabilities"].append(extra)

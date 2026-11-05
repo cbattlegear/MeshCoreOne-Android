@@ -9,10 +9,15 @@ package com.meshcoreone.android.core.contracts.domain
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
+import com.meshcoreone.android.core.protocol.session.ChannelWriteCancellationDisposition
+import com.meshcoreone.android.core.protocol.session.ChannelWriteDispatch
+import com.meshcoreone.android.core.protocol.session.RadioWritePermit
 import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** A process-owned optimistic write ticket; device writers invalidate it inside their transaction. */
 data class DeviceWriteSnapshot(
@@ -23,7 +28,138 @@ data class DeviceWriteSnapshot(
     val withAuthority: suspend (suspend () -> Boolean) -> Boolean = { it() },
     /** Post-commit, under [withAuthority]; must not suspend or re-enter persistence. */
     val onCommitted: (DeviceDTO) -> Unit = {},
+    /** Actual post-commit revision receipt; invoked before [onCommitted], even if that callback throws. */
+    val onCommittedSnapshot: (DeviceWriteSnapshot) -> Unit = {},
 )
+
+/** One preparation/SET attempt; only a newly created, definitely unissued snapshot can be aborted. */
+class PreRepeatSettingsAttempt(val token: SessionToken?) {
+    private var preparationClaimed = false
+    private var commitRecorded = false
+    private var created: DeviceWriteSnapshot? = null
+    private var dispatchEntered = false
+    private var radioWriteCompleted = false
+    private var abortClaimed = false
+    private val dispatch = ChannelWriteDispatch()
+
+    @Synchronized fun claimPreparation() {
+        check(!preparationClaimed) { "A Repeat preparation is single-use" }
+        preparationClaimed = true
+    }
+
+    @Synchronized fun recordCommitted(snapshot: DeviceWriteSnapshot, created: Boolean) {
+        check(preparationClaimed && !commitRecorded && !abortClaimed)
+        check(snapshot.device.radioId == token?.radioId)
+        commitRecorded = true
+        if (created) this.created = snapshot
+    }
+
+    @Synchronized fun requireCommitted() {
+        check(commitRecorded) { "Repeat preparation requires a post-commit revision receipt" }
+    }
+
+    @Synchronized fun startRadioDispatch(): ChannelWriteDispatch {
+        check(commitRecorded && !abortClaimed && !dispatchEntered)
+        dispatchEntered = true
+        return dispatch
+    }
+
+    @Synchronized fun takeAbortSnapshot(): DeviceWriteSnapshot? {
+        if (abortClaimed) return null
+        abortClaimed = true
+        if (dispatchEntered &&
+            dispatch.cancellationDisposition != ChannelWriteCancellationDisposition.DEFINITELY_UNSENT
+        ) return null
+        return created
+    }
+
+    @Synchronized fun recordRadioWriteCompleted() {
+        check(dispatchEntered)
+        radioWriteCompleted = true
+    }
+
+    @Synchronized fun restorationMayHaveBeenUsed(): Boolean =
+        radioWriteCompleted || (abortClaimed && dispatchEntered &&
+            dispatch.cancellationDisposition == ChannelWriteCancellationDisposition.MAY_HAVE_WRITTEN)
+}
+
+class RepeatSnapshotReconciliationRequired :
+    IllegalStateException("A cancelled Repeat preparation requires an explicit snapshot clear before reuse")
+
+fun interface RepeatSnapshotRestoreAuthority {
+    /** Release after the transport send settles, not after its protocol response arrives. */
+    suspend fun withWrite(write: suspend (permit: RadioWritePermit) -> Unit)
+}
+
+/** Process-store custody shared by all editors and delegating persistence wrappers; not durable across restart. */
+class RepeatSnapshotAuthority {
+    private data class Identity(val id: UUID, val radioId: RadioId, val publicKey: Bytes)
+    private data class Pending(val receipt: DeviceWriteSnapshot, val attempt: PreRepeatSettingsAttempt)
+    private val pending = mutableMapOf<Identity, Pending>()
+    private val admissions = mutableMapOf<UUID, Mutex>()
+    private val identityVersions = mutableMapOf<UUID, Long>()
+    private fun DeviceDTO.identity() = Identity(id, radioId, publicKey)
+
+    suspend fun <T> withAdmission(deviceId: UUID, action: suspend () -> T): T {
+        val admission = synchronized(this) { admissions.getOrPut(deviceId) { Mutex() } }
+        return admission.withLock { action() }
+    }
+
+    suspend fun <T> tryWithAdmission(deviceId: UUID, ifBusy: () -> T, action: suspend () -> T): T {
+        val admission = synchronized(this) { admissions.getOrPut(deviceId) { Mutex() } }
+        if (!admission.tryLock()) return ifBusy()
+        return try { action() } finally { admission.unlock() }
+    }
+
+    suspend fun <T> withAdmissions(deviceIds: Collection<UUID>, action: suspend () -> T): T {
+        val ordered = deviceIds.distinct().sorted()
+        suspend fun acquire(index: Int): T =
+            if (index == ordered.size) action()
+            else withAdmission(ordered[index]) { acquire(index + 1) }
+        return acquire(0)
+    }
+
+    suspend fun <T> withDispatchAdmission(deviceId: UUID, action: suspend (permit: RadioWritePermit) -> T): T {
+        val admission = synchronized(this) { admissions.getOrPut(deviceId) { Mutex() } }
+        admission.lock()
+        val permit = RadioWritePermit { admission.unlock() }
+        return try { action(permit) } finally { permit.releaseIfUnclaimed() }
+    }
+
+    @Synchronized fun observeIdentityChange(before: DeviceDTO, after: DeviceDTO) {
+        if (before.identity() != after.identity()) {
+            invalidateIdentity(before.id)
+            if (before.id != after.id) invalidateIdentity(after.id)
+            pending.remove(before.identity())?.let { pending[after.identity()] = it }
+        }
+    }
+
+    @Synchronized fun identityVersion(deviceId: UUID): Long = identityVersions[deviceId] ?: 0L
+
+    @Synchronized fun invalidateIdentity(deviceId: UUID) {
+        identityVersions[deviceId] = Math.addExact(identityVersion(deviceId), 1L)
+    }
+
+    @Synchronized fun recordCreated(receipt: DeviceWriteSnapshot, attempt: PreRepeatSettingsAttempt) {
+        pending[receipt.device.identity()] = Pending(receipt, attempt)
+    }
+
+    fun requireUsable(device: DeviceDTO) {
+        val identity = device.identity()
+        val entry = synchronized(this) { pending[identity] } ?: return
+        // Never acquire the attempt monitor while holding the registry monitor.
+        if (!entry.attempt.restorationMayHaveBeenUsed()) throw RepeatSnapshotReconciliationRequired()
+        synchronized(this) { if (pending[identity] === entry) pending.remove(identity) }
+    }
+
+    /** Only an actual committed clear resolves an unissued/ambiguous creation, not DTO or revision inequality. */
+    @Synchronized fun observeCommittedClear(device: DeviceDTO) {
+        if (device.preRepeatFrequency == null && device.preRepeatBandwidth == null &&
+            device.preRepeatSpreadingFactor == null && device.preRepeatCodingRate == null) {
+            pending.remove(device.identity())
+        }
+    }
+}
 
 class DeviceWriteConflict : IllegalStateException("Device write authority changed")
 
@@ -91,6 +227,8 @@ suspend fun DevicePersisting.editDevice(
     onSaveFailure: (PersistenceStoreException) -> Nothing = { throw it },
     onCommitted: (DeviceDTO) -> Unit = {},
     withAuthority: suspend (suspend () -> Boolean) -> Boolean = { it() },
+    expectedSnapshot: DeviceWriteSnapshot? = null,
+    onCommittedSnapshot: (DeviceWriteSnapshot) -> Unit = {},
     transform: (DeviceDTO) -> DeviceDTO,
 ): DeviceDTO? {
     val persistence = this as? DeviceEditPersisting
@@ -101,6 +239,9 @@ suspend fun DevicePersisting.editDevice(
         if (!isCurrent()) return null
         val snapshot = persistence.fetchDeviceWriteSnapshot(id) ?: return null
         if (!isCurrent()) return null
+        if (expectedSnapshot != null && (snapshot.revision != expectedSnapshot.revision ||
+                snapshot.authorityRevision != expectedSnapshot.authorityRevision ||
+                snapshot.device != expectedSnapshot.device)) return null
         if (authority != null && snapshot.authorityRevision != authority) throw DeviceWriteConflict()
         authority = snapshot.authorityRevision
         val updated = transform(snapshot.device)
@@ -108,18 +249,34 @@ suspend fun DevicePersisting.editDevice(
         require(updated.isActive == snapshot.device.isActive && updated.lastConnected == snapshot.device.lastConnected)
         val caller = currentCoroutineContext()
         var commitObserved = false
+        var callbackFailure: Throwable? = null
         val guarded = snapshot.copy(withAuthority = withAuthority, onCommitted = { saved ->
             commitObserved = true
-            onCommitted(saved)
+            try {
+                onCommitted(saved)
+            } catch (failure: Throwable) {
+                if (callbackFailure == null) callbackFailure = failure
+                throw failure
+            }
+        }, onCommittedSnapshot = { committed ->
+            commitObserved = true
+            try {
+                onCommittedSnapshot(committed)
+            } catch (failure: Throwable) {
+                if (callbackFailure == null) callbackFailure = failure
+                throw failure
+            }
         }, isCurrent = {
             caller.ensureActive()
             isCurrent()
         })
         val committed = try {
             persistence.saveDeviceIfUnchanged(updated, guarded)
-        } catch (failure: PersistenceStoreException) {
-            if (commitObserved) throw failure
-            onSaveFailure(failure)
+        } catch (failure: Throwable) {
+            // A dispatcher boundary may recover/copy CancellationException; retain the actual callback object.
+            callbackFailure?.let { throw it }
+            if (failure is PersistenceStoreException && !commitObserved) onSaveFailure(failure)
+            throw failure
         }
         caller.ensureActive()
         if (committed) return updated
@@ -128,6 +285,8 @@ suspend fun DevicePersisting.editDevice(
 }
 
 interface DeviceEditPersisting {
+    val repeatSnapshotAuthority: RepeatSnapshotAuthority
+        get() = throw UnsupportedOperationException("Repeat snapshot custody requires a process-owned authority")
     /** Initialization only: atomically create an inactive row, never replace an existing device. */
     suspend fun insertDeviceIfAbsent(dto: DeviceDTO): Boolean
     /** Evaluate connection ownership inside the serialized activation transaction, not before waiting. */
@@ -170,7 +329,27 @@ interface ContactPersisting {
     suspend fun findContactNameByKeyPrefix(prefix: Bytes): String?
     suspend fun findContactByPublicKey(publicKey: Bytes): ContactDTO?
     suspend fun saveContact(radioId: RadioId, frame: ContactFrame): ContactSaveResult
+    /**
+     * Atomic accepted-write upsert preserving newer timestamps and equal-timestamp frames changed
+     * since [expectedFrame] was read. Returns null when a newer frame was retained rather than
+     * applying this one. Local preferences/activity are retained even when applying.
+     */
+    suspend fun saveContactPreservingNewer(
+        radioId: RadioId, frame: ContactFrame, expectedFrame: ContactFrame? = null,
+    ): ContactSaveResult?
     suspend fun saveContact(dto: ContactDTO)
+    /** Atomically changes only the avatar of an existing matching identity; null clears it. Never inserts. */
+    suspend fun updateContactAvatar(
+        key: EntityKey, expectedPublicKey: Bytes, imageData: Bytes?,
+    ): ContactAvatarUpdateResult
+    /** Changes only the favorite preference and flag bit on an existing matching identity. */
+    suspend fun updateContactFavorite(
+        key: EntityKey, expectedPublicKey: Bytes, isFavorite: Boolean,
+    ): ContactFavoriteUpdateResult
+    /** Applies only the selected local fields to an existing identity; reports the committed block transition. */
+    suspend fun updateContactLocalFields(
+        key: EntityKey, expectedPublicKey: Bytes, update: ContactLocalUpdate,
+    ): ContactLocalUpdateResult
     suspend fun batchSaveContacts(radioId: RadioId, frames: SnapshotList<ContactFrame>): Long
     suspend fun deleteContact(key: EntityKey)
     suspend fun deleteContacts(

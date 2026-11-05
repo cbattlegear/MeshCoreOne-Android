@@ -611,9 +611,14 @@ class ConnectionManager(
         if (existing == null) {
             val persistence = devices as? DeviceEditPersisting
                 ?: throw UnsupportedOperationException("Connection initialization requires versioned device persistence")
-            if (!persistence.insertDeviceIfAbsent(device)) throw DeviceWriteConflict()
+            deviceCommitAuthority.withLock {
+                requireCurrent(owner)
+                if (!persistence.insertDeviceIfAbsent(device)) throw DeviceWriteConflict()
+            }
         } else {
-            devices.editDevice(deviceId, isCurrent = { isCurrent(owner) }) { latest ->
+            devices.editDevice(deviceId, isCurrent = { isCurrent(owner) }, withAuthority = { write ->
+                deviceCommitAuthority.withLock { requireCurrent(owner); write() }
+            }) { latest ->
                 DeviceDTO.fromConnection(deviceId, radioId, info, capabilities, autoAdd, latest, methods, clock.instant)
                     .copy(isActive = latest.isActive, lastConnected = latest.lastConnected)
             } ?: throw ConnectionError.DeviceNotFound()
@@ -1013,6 +1018,9 @@ class ConnectionManager(
         val expectedCoordinator = reconnectionCoordinator.reconnectGeneration
         val expectedRevision = synchronized(lock) { revision }
         val owner = mutateDeviceAuthority {
+            if (closed || revision != expectedRevision ||
+                reconnectionCoordinator.reconnectGeneration != expectedCoordinator
+            ) return
             if (connectionIntent.wantsConnection) rebuildFailures++
             (active ?: retained).also {
                 active = null
@@ -1207,7 +1215,9 @@ class ConnectionManager(
         if (!isCurrent(owner)) return radioId
         if (radioId == null && before.publicKey != info.publicKey) {
             requireCurrent(owner)
-            devices.editDevice(before.id, isCurrent = { isCurrent(owner) }) { it.copy(publicKey = info.publicKey) }
+            devices.editDevice(before.id, isCurrent = { isCurrent(owner) }, withAuthority = { write ->
+                deviceCommitAuthority.withLock { requireCurrent(owner); write() }
+            }) { it.copy(publicKey = info.publicKey) }
                 ?: throw ConnectionError.DeviceNotFound()
             requireCurrent(owner)
         }

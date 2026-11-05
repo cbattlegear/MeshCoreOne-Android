@@ -3,24 +3,18 @@ package com.meshcoreone.android.feature.onboarding.ui
 
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.stringResource
-import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
-import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings as S
 import com.meshcoreone.android.core.ui.SharedUiScaffold
 import com.meshcoreone.android.feature.onboarding.OnboardingFeatureDependencies
-import com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt
 import com.meshcoreone.android.feature.onboarding.OnboardingFlowCoordinator
 import com.meshcoreone.android.feature.onboarding.OnboardingPermissionKind
 import com.meshcoreone.android.feature.onboarding.OnboardingPermissionSnapshot
@@ -32,64 +26,25 @@ import kotlinx.coroutines.flow.emptyFlow
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun OnboardingFlow(
-    dependencies: OnboardingFeatureDependencies,
-    onCompleted: () -> Unit,
-    modifier: Modifier = Modifier,
-    onCompletionReceipt: ((OnboardingCompletionReceipt) -> Boolean)? = null,
-    attemptKey: Any? = null,
-    completionDeliveryKey: Any? = null,
-) {
+fun OnboardingFlow(dependencies: OnboardingFeatureDependencies, onCompleted: () -> Unit, modifier: Modifier = Modifier) {
     val scope = rememberCoroutineScope()
-    val flow = remember(dependencies, attemptKey) {
-        dependencies.retainedFlowCoordinator()
-            ?: OnboardingFlowCoordinator(scope, dependencies).also { it.restoreStartingPath() }
-    }
+    val flow = remember(dependencies) { OnboardingFlowCoordinator(scope, dependencies).also { it.restoreStartingPath() } }
+    DisposableEffect(flow) { onDispose { flow.retire() } }
     val requester = dependencies.rememberPermissionRequester { flow.onPermissionResult() }
     val path by flow.onboarding.onboardingPathFlow.collectAsState()
-    val completion by flow.onboarding.completionPublication.collectAsState()
+    val completed by flow.onboarding.hasCompletedOnboardingFlow.collectAsState()
     val permissionSnapshot by dependencies.permissions.snapshot.collectAsState()
-    val completionError by flow.hasCompletionError.collectAsState()
-    val completingWithoutDevice by flow.isCompletingWithoutDevice.collectAsState()
-    LaunchedEffect(flow, completion, completionDeliveryKey) {
-        val published = completion
-        if (published != null && flow.onboarding.ownsCompletion(published)) {
-            if (dependencies.ownsFlowCoordinator(flow)) {
-                val receipt = published.receipt
-                val accepted = if (onCompletionReceipt != null) {
-                    onCompletionReceipt(receipt)
-                } else {
-                    onCompleted()
-                    true
-                }
-                if (accepted) dependencies.onFlowCompletionHandled(flow)
-            } else {
-                dependencies.onFlowCompletionHandled(flow)
-            }
-        }
-    }
+    LaunchedEffect(completed) { if (completed) onCompleted() }
     dependencies.InterceptBack(enabled = path.isNotEmpty()) { flow.back() }
 
     SharedUiScaffold(modifier.fillMaxSize()) {
         when (path.lastOrNull() ?: OnboardingStep.WELCOME) {
             OnboardingStep.WELCOME -> WelcomeScreen(flow::getStarted)
             OnboardingStep.PERMISSIONS -> PermissionsScreen(permissionSnapshot, requester, dependencies::openAppSettings, flow::continueFromPermissions)
-            OnboardingStep.PAIR -> PairStep(flow, dependencies, permissionSnapshot, requester, completingWithoutDevice)
+            OnboardingStep.PAIR -> PairStep(flow, dependencies, permissionSnapshot, requester)
             OnboardingStep.REGION -> RegionStep(flow, dependencies, permissionSnapshot)
             OnboardingStep.PRESET -> PresetStep(flow, dependencies)
         }
-    }
-    if (completionError) {
-        AlertDialog(
-            onDismissRequest = flow::dismissCompletionError,
-            title = { Text(stringResource(S.alertRetryUnableToSave)) },
-            confirmButton = {
-                TextButton(flow::retryCompletion) { Text(stringResource(L.commonTryAgain)) }
-            },
-            dismissButton = {
-                TextButton(flow::dismissCompletionError) { Text(stringResource(L.commonCancel)) }
-            },
-        )
     }
     val fallback = dependencies.pairing.scanFallback
     val scanRequested by (fallback?.isRequested ?: remember { kotlinx.coroutines.flow.MutableStateFlow(false) }).collectAsState()
@@ -105,7 +60,6 @@ fun OnboardingFlow(
 private fun PairStep(
     flow: OnboardingFlowCoordinator, deps: OnboardingFeatureDependencies,
     permissions: OnboardingPermissionSnapshot, requester: (OnboardingPermissionKind) -> Unit,
-    completingWithoutDevice: Boolean,
 ) {
     val state by flow.deviceScan.state.collectAsState()
     val connection by deps.pairing.connection.collectAsState()
@@ -116,6 +70,7 @@ private fun PairStep(
     val action = flow.deviceScan.primaryAction(demoEnabled, state.otherAppDeviceId)
     LaunchedEffect(state.sheet == PairSheet.WIFI) {
         if (state.sheet == PairSheet.WIFI) {
+            flow.wifi.reset()
             if (permissions.localNetwork == PermissionStatus.NOT_DETERMINED) requester(OnboardingPermissionKind.LOCAL_NETWORK)
         }
     }
@@ -131,21 +86,16 @@ private fun PairStep(
                     com.meshcoreone.android.feature.onboarding.PairPrimaryAction.ADD_DEVICE -> flow.addDevice(requester)
                 }
             },
-            onContinue = scan::continueConnected, onOpenSheet = flow::openPairingSheet, onDismissSheet = flow::dismissPairingSheet,
+            onContinue = scan::continueConnected, onOpenSheet = scan::showSheet, onDismissSheet = scan::dismissSheet,
             onDismissFailure = scan::dismissFailure, onDismissDemoAlert = scan::dismissDemoAlert,
-            onOpenAppSettings = deps::openAppSettings, canDismissSheet = flow::canDismissPairingSheet,
+            onOpenAppSettings = deps::openAppSettings,
         ),
     ) { sheet ->
         when (sheet) {
-            PairSheet.NO_DEVICE -> NoDeviceSheetContent(
-                flow::confirmNoDevice, flow::dismissPairingSheet, isCompleting = completingWithoutDevice,
-                canConfirm = flow.canCompleteWithoutDevice(),
-            )
-            PairSheet.TROUBLESHOOTING -> TroubleshootingSheetContent(
-                pairedCount, clearing, flow::clearStalePairings, deps::openAppSettings, flow::dismissPairingSheet,
-            )
+            PairSheet.NO_DEVICE -> NoDeviceSheetContent(flow::confirmNoDevice, scan::dismissSheet)
+            PairSheet.TROUBLESHOOTING -> TroubleshootingSheetContent(pairedCount, clearing, flow::clearStalePairings, deps::openAppSettings, scan::dismissSheet)
             PairSheet.WIFI -> WiFiConnectionSheetContent(
-                wifiState, flow.wifi::setAddress, flow.wifi::setPort, flow.wifi::connect, flow::dismissPairingSheet,
+                wifiState, flow.wifi::setAddress, flow.wifi::setPort, flow.wifi::connect, scan::dismissSheet,
                 initialFocus = WiFiField.IP_ADDRESS,
             )
             PairSheet.NONE -> Unit

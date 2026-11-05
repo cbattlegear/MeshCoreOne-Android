@@ -368,6 +368,15 @@ retain their existing order. Gradle still schedules prerequisites, so this is
 not a measured wall-clock speedup. The trusted scope planner travels with the
 owned launcher so immutable older product snapshots use the same strict plan
 validation and requested task order without a product rebase.
+The owned control directory also carries the compatible module JUnit reader,
+SDK/source-lineage parser, evidence/publication dependencies and task-graph
+compiler-source collector. Both default and affected local routes load these
+owned readers and use that collector, rather than importing older candidate
+helpers or changing candidate product bytes. A missing owned dependency fails
+closed before execution; it never falls back to a candidate copy.
+An older candidate without the notification module has no notification runner
+or notification-specific inventory obligation; selection still comes from its
+immutable committed module inputs.
 The actual resolved production graph is checked against the selected consumer
 closure too: a consumer missed by static declaration inspection fails the
 affected run and explicitly requires full scaffold, never a passing partial result.
@@ -415,6 +424,62 @@ Lightweight selector regression command:
 ```powershell
 $env:PYTHONPATH = "$PWD\tools\android-port"
 python -m unittest discover -s .\tools\android-port\tests -p test_local_scope.py -v
+```
+
+The Kotlin declaration reader recognizes one bounded non-suite collaborator:
+a direct, non-inner nested class in a non-inheriting top-level test class, with
+the exact `@Implements(NotificationManager::class)` / `: ShadowNotificationManager()`
+shape and unaliased, unshadowed explicit Android/Robolectric imports. The external
+`org.robolectric.shadows.ShadowNotificationManager` in the pinned Robolectric 4.17
+is a shadow, not a JUnit superclass. This is not a general `@Implements` exemption.
+Only `@Implementation` resolved through its exact unaliased canonical
+`org.robolectric.annotation.Implementation` import is admitted inside this
+collaborator; test/lifecycle/rule annotations, unknown or additional bases,
+aliases, ambiguous names, inherited enclosing classes and bodyless declarations
+remain fail-closed. Other nested inherited suites retain the existing checks.
+Direct getter/setter annotations are checked as well as property/function
+annotations; ordinary resolved Rule accessors on the outer test stay supported.
+When the evidence reader uses this exception, it checks the exact immutable
+candidate's Kotlin and Java source declarations, including main sources and other
+modules, not just the selected Kotlin test compiler map. A declaration shadowing
+any of the four canonical Android/Robolectric identities or their package prefixes
+(including an object, interface, record, enum or type alias) rejects the exception,
+irrespective of its file path or whether the substitute declares tests. Java
+Unicode escapes are translated once using JLS 3.3 eligibility (translated-output
+backslash parity and preceding escape origin); malformed eligible escapes fail
+closed, and ineligible escapes remain literal. This precedes Java-aware tokenization: block comments
+do not nest, line comments end at CR or LF, and strings have no Kotlin templates.
+Kotlin line comments also end at the earliest CR or LF.
+Java identifier-part/ignorable characters are indexed using Unicode categories;
+identifier-ignorable characters do not distinguish canonical names. Unrelated
+grouped Kotlin annotations are permitted only during symbol-only indexing;
+selected suites and resolved ancestors keep their annotation uncertainty checks.
+Missing, stale or mismatched compiled/source blobs also fail; an unrelated
+same-simple-name declaration is not a collision. Compiler maps are keyed by the
+executing module, not each source's physical directory: shared Kotlin inputs
+inside `android/` retain exact path/blob checks without directory containment.
+Ordinary superclass resolution retains its module-local scope. Approved
+JVM-remapped `src/androidTest` coverage uses this proof too.
+Unremapped native-only coverage cannot use this exception without that proof.
+Shared native-only instrumentation paths outside a hosted module retain their
+ordinary no-resolver parsing; this does not grant the shadow exception.
+This rejects repository-source ambiguity; it is not an execution of Kotlin's
+classpath resolver or proof about generated/external dependency bytes. Those
+remain subject to the existing trusted build/dependency and compiler-input gates.
+Source-only parsing does not prove external classpath identity.
+Kotlin multi-dollar-prefixed strings are unsupported and fail closed, including
+inside ordinary interpolation expressions; they cannot hide declarations during
+symbol indexing. Ordinary strings/templates and comments keep their existing rules.
+Named test identities, nonzero execution, skipped-case refusal and immutable
+compiled-source equality are unchanged. A source-reader repair still requires
+independent trusted-reader review/admission before product acceptance.
+
+Focused source-only declaration-reader and hostile collaborator controls (no
+Gradle, runtime installation or device execution):
+
+```powershell
+$env:PYTHONPATH = "$PWD\tools\android-port;$PWD\tools\android-port\tests"
+python -B -c "import unittest; from controller.test_runner import run_suite; raise SystemExit(run_suite(unittest.TestLoader().loadTestsFromNames(['test_repair_acceptance', 'test_module_junit', 'test_local_scope', 'test_ci'])))"
 ```
 
 Focused source/launcher integration fixtures (no real Gradle/native/runtime
@@ -472,3 +537,76 @@ The focused lane fixtures are declared by
 The local hook suite also contains real Linux shell/flock/pidfd fixtures using
 test-owned stub work, not Gradle; native Windows instead proves rejection before
 Linux launch. Neither outcome is real remote parallel product acceptance.
+
+### Approved remapped JVM inputs
+
+Notification messaging tests under `src/androidTest` are also JVM inputs only for
+the explicitly supported notification build profiles. The verifier recognizes
+the complete immutable `build.gradle.kts` blobs `9c5e1f4f6ed16f68ff629e6768afdd9185d2da61`
+(current notification mapping) and `1edcfc21437134ff7eb4bc431ffd6358c6967bab`
+(the same mapping plus #515 task wiring). This is a bounded allowlist, not a Gradle
+interpreter. A missing/changed/dynamic/unsafe build mapping fails closed; changing
+that build requires a reviewed profile update. An unrelated instrumentation tree
+does not become JVM test evidence.
+
+Affected and full selection explicitly request `:platform:notifications:testDebugUnitTest`.
+For immutable historical candidates without this module, full affected plans,
+hosted CI and the default fast route remove only that known remapped runner from
+the shared baseline; the task constants remain unchanged. A full hosted log may
+omit it only when the trusted exact-candidate planner establishes its absence.
+Present approved mappings still add the mandatory runner; unapproved mappings
+cannot turn into an absent-module exemption.
+Its existing JUnit and compiled-source collectors must discover every declared
+remapped and conventional `src/test`/`src/testDebug` Kotlin test methods,
+including new candidate methods, plus the six mandatory delivery/payload/dispatcher
+identities. Missing, zero, substituted or skipped cases fail. Unsupported Java
+test sources fail closed. Canonical Kotlin declaration IDs remain separate from
+JUnit execution names: conventional tests use the shared hosted-method matcher,
+including suffix-only executions for non-SDK parameter families. Notification
+tests in either root with explicit literal Robolectric
+`@Config(sdk = [31, 37])` require both the unsuffixed API-37 execution and `[31]`;
+an explicit single API-31 or API-37 configuration requires the unsuffixed execution.
+Method-level SDK overrides take precedence over top-level class SDKs; an unrelated
+nested class cannot replace that configuration. Escaped parameter names and a
+trailing array comma retain their Kotlin meaning. A test class with a superclass
+must supply a literal method/class SDK override: unresolved inherited SDK settings
+fail closed rather than becoming an unconfigured family. Tests with an
+applicable package-hierarchy `robolectric.properties` likewise
+require a literal method/class SDK override. This bounded reader does not
+interpret Java properties or infer an SDK family from them, even if a report
+looks complete. Root resources apply to every package; sibling/descendant
+packages do not configure a parent or sibling test. The notification module's
+`main`, `debug`, `test` and `testDebug` resource inputs are immutable and covered
+by the dirty-input guard. JUnit-free conventional
+helpers receive separate immutable compilation and JUnit-free lineage proof;
+positive named module cases remain mandatory. This does not establish a
+helper-to-consumer relationship or prove that an individual helper was executed.
+Both preliminary SDK-family scans and final method validation use the same
+immutable compiled-source lineage resolver. Supported lifecycle annotations on
+tests extending a compiled JUnit-free base remain recognizable; missing base
+compilation and inherited JUnit declarations still fail closed.
+Unresolved SDK-bearing annotations (including cross-file Config aliases) also
+fail closed rather than becoming unconfigured tests. Dynamic SDK
+expressions, SDK ranges, unsupported families and missing/duplicate/unexpected
+family executions fail closed. These names prove JVM runner discovery, not device
+coverage. The exact candidate build, production, conventional test
+and approved remapped input blobs are recorded as `remapped_jvm_inputs` in the same
+run log. Tracked changes and untracked additions under those inputs are refused,
+and the actual compiled Kotlin test-source inventory must exactly match candidate
+blobs across both source roots.
+Notification Kotlin compiler inputs outside `android/` are rejected by the
+collector before source filtering, rather than omitted from the equality proof.
+The default full local pre-push route installs the
+same candidate task-graph collector and requires fresh compiler-source evidence
+before accepting its module results; it does not reconstruct compilation inputs
+from the working tree. These are JVM/Robolectric observations, never API/device or
+notification trampoline evidence. A candidate verifier change cannot approve itself:
+trusted reader deployment and admission are separate from these source fixtures.
+
+Focused source-only remapping and selector regression command (no Gradle lock,
+runtime installation or device execution):
+
+```powershell
+$env:PYTHONPATH = "$PWD\tools\android-port;$PWD\tools\android-port\tests"
+python -B -c "import unittest; from controller.test_runner import run_suite; raise SystemExit(run_suite(unittest.TestLoader().loadTestsFromNames(['test_module_junit', 'test_local_scope', 'test_repair_acceptance', 'test_ci'])))"
+```

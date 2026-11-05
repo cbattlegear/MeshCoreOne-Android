@@ -15,6 +15,7 @@ TASKS = {
         "verifyScaffoldTests", "verifyRoomSchema", "validateModuleGraph",
         "runtimeDependencyInventory", "resolveScaffoldDependencies",
         ":app:assembleDebug", ":app:compileDebugAndroidTestKotlin", "lintScaffold",
+        ":platform:notifications:testDebugUnitTest",
     ],
     "prepare": ["resolveScaffoldDependencies"],
     "protocol": [":core:protocol:test"],
@@ -67,6 +68,8 @@ def dependency_blocks(text):
 
 
 def module_inventory(repo, revision):
+    from .module_junit import remapped_roots, unit_source
+
     paths = [
         git_path(path) for path in git(repo, "ls-tree", "-rz", "--name-only", revision, "--", "android").split("\0")
         if path
@@ -79,6 +82,7 @@ def module_inventory(repo, revision):
         if MODULE.fullmatch(module) is None:
             continue
         text = git(repo, "show", revision + ":" + path)
+        roots = remapped_roots(module, git(repo, "rev-parse", revision + ":" + path))
         text = re.sub(r"/\*.*?\*/|//[^\n]*", "", text, flags=re.DOTALL)
         dependencies = dependency_blocks(text)
         references = PROJECT.findall(dependencies)
@@ -104,9 +108,9 @@ def module_inventory(repo, revision):
             "runner": "test" if jvm else "testDebugUnitTest",
             "lint": not jvm,
             "tests": any(
-                name.startswith(f"android/{module}/src/{source}/")
-                and name.endswith((".kt", ".java"))
-                for source in ("test", "testDebug") for name in paths
+                name.startswith(f"android/{module}/")
+                and unit_source(name[len(f"android/{module}/"):], roots)
+                for name in paths
             ),
             "dependencies": sorted(
                 {name.lstrip(":").replace(":", "/") for name in references} | convention_dependencies
@@ -281,10 +285,15 @@ def candidate_plan(
         # Unknown graph syntax must widen execution, not turn into omitted tests.
         modules = None
         graph_error = str(error)
+    selection = select_paths(paths, requested, modules=modules, graph_error=graph_error)
+    if "scaffold" in selection["scopes"]:
+        from .module_junit import remapped_tasks, select_remapped_tasks
+
+        selection["tasks"] = select_remapped_tasks(selection["tasks"], remapped_tasks(repo, head))
     return {
         "schema_version": 1, "kind": "local-affected-only", "base": base, "head": head,
         "tree": git(repo, "rev-parse", head + "^{tree}"), "paths": paths,
-        **select_paths(paths, requested, modules=modules, graph_error=graph_error),
+        **selection,
     }
 
 
@@ -313,9 +322,11 @@ def validate_plan(repo, plan, *, trusted_base=None, merge_base_only=False):
     return actual
 
 
-def collect_targeted_reports(repo, scopes):
+def collect_targeted_reports(repo, scopes, compiled_sources=None, revision=None):
     from .ci_evidence import suite_counts
+    from .module_junit import check_module_inputs, module_sources, require_remapped_cases
 
+    revision = revision or git(repo, "rev-parse", "HEAD")
     suites = {}
     locations = {
         "protocol": (("core/protocol", "test", 84),),
@@ -324,9 +335,12 @@ def collect_targeted_reports(repo, scopes):
     }
     if not isinstance(scopes, list) or not all(isinstance(scope, str) for scope in scopes):
         raise PortError("Malformed report scopes")
-    modules = module_inventory(repo, git(repo, "rev-parse", "HEAD")) if any(
+    modules = module_inventory(repo, revision) if any(
         scope.startswith("module:") for scope in scopes
     ) else {}
+    selected = [scope[len("module:"):] for scope in scopes if scope.startswith("module:")]
+    expected = module_sources(repo, revision) if selected else {}
+    check_module_inputs(repo, selected, revision)
     for scope in scopes:
         if scope.startswith("module:"):
             module = scope[len("module:"):]
@@ -335,6 +349,9 @@ def collect_targeted_reports(repo, scopes):
             if modules[module]["tests"] or module == "app":
                 directory = repo / "android" / module / "build/test-results" / modules[module]["runner"]
                 suites[module] = suite_counts(directory, 1)
+                require_remapped_cases(
+                    repo, module, directory, expected.get(module, {}), compiled_sources, revision,
+                )
             continue
         if scope not in ("scaffold", *locations):
             raise PortError("Unknown report scope: " + str(scope))
@@ -465,6 +482,7 @@ def validation_preflight_options(options):
 
 def run_scaffold(
     repo, plan, environment, output, execute, options, *, trusted_base, merge_base_only=False,
+    task_graph_script=None,
 ):
     """Execute fixed affected tasks through the already-owned local supervisor."""
     started = False
@@ -478,6 +496,7 @@ def run_scaffold(
         return _run_scaffold(
             repo, plan, environment, output, owned_execute, options,
             trusted_base=trusted_base, merge_base_only=merge_base_only,
+            task_graph_script=task_graph_script,
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, PortError, OSError, KeyboardInterrupt) as failure:
         if started:
@@ -527,6 +546,7 @@ def run_scaffold(
 
 def _run_scaffold(
     repo, plan, environment, output, execute, options, *, trusted_base, merge_base_only=False,
+    task_graph_script=None,
 ):
     from . import ci
     from .ci_evidence import (
@@ -564,7 +584,7 @@ def _run_scaffold(
         if graph.is_symlink():
             raise PortError("Linked resolved task graph")
         graph.unlink(missing_ok=True)
-    init_script = str(repo / "tools/android-port/controller/verify_candidate_task_graph.gradle")
+    init_script = str(task_graph_script or repo / "tools/android-port/controller/verify_candidate_task_graph.gradle")
     lineage_path = prepare_test_lineage(output)
     sources_path = prepare_test_sources(output)
     graph_summaries = {}
@@ -588,17 +608,25 @@ def _run_scaffold(
             "result": "no-duplicate-ci-evidence",
             "phases": graph_summaries,
         },
-        "suites": collect_targeted_reports(repo, plan["scopes"]),
+        "suites": {},
         "lint": {
             module: lint_evidence(repo / "android" / module / "build/reports/lint-results-debug.xml")
             for module in lint
         },
     }
+    from .ci_evidence import read_test_sources
+
+    notification_sources = read_test_sources(
+        sources_path, {"platform/notifications": "testDebugUnitTest"},
+    )
+    report["suites"] = collect_targeted_reports(
+        repo, plan["scopes"], notification_sources, plan["head"],
+    )
     validate_graph_runtime(repo / "android/build/reports/scaffold")
     validate_runtime_scopes(repo, plan)
     if plan["full_scaffold"]:
         report["scaffold_suites"] = collect_suites(repo / "android")
-        report["module_unit_tests"] = check_module_tests(repo)
+        report["module_unit_tests"] = check_module_tests(repo, notification_sources, plan["head"])
         report["lint"] = collect_lint(repo / "android")
         execute([
             sys.executable, str(repo / "android/parity-tests/semantic.py"),
@@ -633,5 +661,10 @@ def _run_scaffold(
             inventory.setdefault(match[1], []).append(case)
     bind_test_lineage(inventory, read_test_lineage(lineage_path), runners)
     report["compiled_test_sources"] = read_test_sources(sources_path, runners)
+    from .module_junit import validate_remapped_compilation
+
+    report["remapped_jvm_inputs"] = validate_remapped_compilation(
+        repo, report["compiled_test_sources"], runners,
+    )
     validate_plan(repo, plan, trusted_base=trusted_base, merge_base_only=merge_base_only)
     return report

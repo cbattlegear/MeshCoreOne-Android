@@ -53,7 +53,8 @@ interface AppConnectionPort {
     suspend fun updateDevice(info: SelfInfo, appliedRadioPresetId: String?, expectedToken: SessionToken): Boolean =
         throw UnsupportedOperationException("Session-bound radio preset updates are not supported")
     fun updateDevice(device: DeviceDTO)
-    fun updateOCVSettings(device: DeviceDTO, expectedToken: SessionToken)
+    fun updateOCVSettings(device: DeviceDTO, expectedToken: SessionToken): Unit =
+        throw UnsupportedOperationException("Session-bound OCV publication is not supported")
     fun updateAutoAddConfig(config: AutoAddConfig)
     suspend fun updateAutoAddConfig(config: AutoAddConfig, expectedToken: SessionToken): Boolean =
         throw UnsupportedOperationException("Session-bound auto-add updates are not supported")
@@ -62,7 +63,7 @@ interface AppConnectionPort {
         throw UnsupportedOperationException("Session-bound client repeat updates are not supported")
     fun updatePathHashMode(mode: UByte)
     suspend fun updatePathHashMode(mode: UByte, expectedToken: SessionToken): Boolean =
-        throw UnsupportedOperationException("Session-bound path hash replacement is not supported")
+        throw UnsupportedOperationException("Session-bound path hash updates are not supported")
     fun updateDefaultFloodScopeName(name: String?)
     suspend fun updateDefaultFloodScopeName(name: String?, expectedToken: SessionToken): Boolean =
         throw UnsupportedOperationException("Session-bound default scope updates are not supported")

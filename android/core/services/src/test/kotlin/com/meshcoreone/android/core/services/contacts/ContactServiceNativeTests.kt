@@ -2,6 +2,13 @@
 package com.meshcoreone.android.core.services.contacts
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.ContactAvatarUpdateResult
+import com.meshcoreone.android.core.contracts.domain.ContactFavoriteUpdateResult
+import com.meshcoreone.android.core.contracts.domain.ContactLocalUpdate
+import com.meshcoreone.android.core.contracts.domain.ContactLocalUpdateResult
+import com.meshcoreone.android.core.contracts.domain.ContactPersisting
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.RemoteNodeRole
@@ -48,6 +55,126 @@ class ContactServiceNativeTests {
     private fun stored(keyByte: Int, name: String, flags: UByte = 0u, isFavorite: Boolean = false) = ContactDTO(
         radioId = radioId, publicKey = contactsKey(keyByte), name = name, flags = flags, isFavorite = isFavorite,
         lastHeardTimestamp = null,
+    )
+
+    private suspend fun applyLocalEdit(service: ContactService, key: EntityKey, update: ContactLocalUpdate) {
+        when (update) {
+            is ContactLocalUpdate.Preferences ->
+                service.updateContactPreferences(key, update.nickname, update.isBlocked, update.isFavorite)
+            is ContactLocalUpdate.OCVSettings -> service.updateContactOCVSettings(key, update.preset, update.customArray)
+            is ContactLocalUpdate.TelemetryPermissions -> service.setTelemetryPermissions(key, update.granted)
+        }
+    }
+
+    @TestFactory
+    fun atomicAvatarCases(): List<DynamicTest> = listOf(
+        contactsNative("explicit avatar identity never re-queries and substitutes a replacement public key") {
+            val backing = ContactsFakeStore()
+            val original = stored(0x90, "Original").also(backing::seed)
+            val key = EntityKey(radioId, original.id)
+            var fetches = 0
+            val contacts = object : ContactPersisting by backing {
+                override suspend fun fetchContact(key: EntityKey): ContactDTO? {
+                    fetches++
+                    return backing.fetchContact(key)
+                }
+            }
+            val coordinator = ContactsFakeSyncCoordinator()
+            val service = ContactService(
+                ContactsFakeSession(), backing, contacts, coordinator, null, ContactsFakePreferences(),
+            )
+            val replacement = original.copy(publicKey = contactsKey(0xA0), name = "Replacement")
+            backing.seed(replacement)
+            for (image in listOf(Bytes.of(1), null)) {
+                assertFailsWith<ContactServiceError.ContactNotFound> {
+                    service.updateContactAvatar(key, original.publicKey, image)
+                }
+                assertEquals(0, fetches)
+                assertEquals(replacement, backing.fetchContact(key))
+            }
+            assertTrue(coordinator.notifications.isEmpty())
+            service.updateContactAvatar(key, replacement.publicKey, Bytes.of(2))
+            assertEquals(replacement.withAvatar(Bytes.of(2)), backing.fetchContact(key))
+            assertEquals(0, fetches)
+            assertEquals(listOf("contactsChanged"), coordinator.notifications)
+        },
+        contactsNative("avatar set and clear pass the fetched identity to the atomic operation and notify only on success") {
+            for (result in ContactAvatarUpdateResult.entries) {
+                for (image in listOf(Bytes.of(1, 2), null)) {
+                    val backing = ContactsFakeStore()
+                    val original = stored(0x91, "Avatar")
+                    backing.seed(original)
+                    val key = EntityKey(radioId, original.id)
+                    var writes = 0
+                    val contacts = object : ContactPersisting by backing {
+                        override suspend fun saveContact(dto: ContactDTO): Unit =
+                            error("Avatar writes must never save a stale full DTO")
+                        override suspend fun updateContactAvatar(
+                            key: EntityKey, expectedPublicKey: Bytes, imageData: Bytes?,
+                        ): ContactAvatarUpdateResult {
+                            assertEquals(EntityKey(radioId, original.id), key)
+                            assertEquals(original.publicKey, expectedPublicKey)
+                            assertEquals(image, imageData)
+                            writes++
+                            return result
+                        }
+                    }
+                    val coordinator = ContactsFakeSyncCoordinator()
+                    val service = ContactService(
+                        ContactsFakeSession(), backing, contacts, coordinator, null, ContactsFakePreferences(),
+                    )
+                    if (result == ContactAvatarUpdateResult.UPDATED) {
+                        service.updateContactAvatar(key, image)
+                        assertEquals(listOf("contactsChanged"), coordinator.notifications)
+                    } else {
+                        assertFailsWith<ContactServiceError.ContactNotFound> { service.updateContactAvatar(key, image) }
+                        assertTrue(coordinator.notifications.isEmpty())
+                    }
+                    assertEquals(1, writes)
+                }
+            }
+        },
+        contactsNative("avatar missing at initial fetch never writes or notifies") {
+            val backing = ContactsFakeStore()
+            val coordinator = ContactsFakeSyncCoordinator()
+            val contacts = object : ContactPersisting by backing {
+                override suspend fun updateContactAvatar(
+                    key: EntityKey, expectedPublicKey: Bytes, imageData: Bytes?,
+                ): ContactAvatarUpdateResult = error("Missing contact must not reach avatar write")
+            }
+            val service = ContactService(
+                ContactsFakeSession(), backing, contacts, coordinator, null, ContactsFakePreferences(),
+            )
+            assertFailsWith<ContactServiceError.ContactNotFound> {
+                service.updateContactAvatar(EntityKey(radioId, UUID.randomUUID()), Bytes.of(1))
+            }
+            assertTrue(coordinator.notifications.isEmpty())
+        },
+        contactsNative("avatar storage failure and cancellation propagate unchanged without success notification") {
+            val failures = listOf(
+                PersistenceStoreException(PersistenceStoreError.SaveFailed("disk full")),
+                CancellationException("avatar cancelled"),
+            )
+            for (failure in failures) {
+                val backing = ContactsFakeStore()
+                val original = stored(0x92, "Avatar").also(backing::seed)
+                val coordinator = ContactsFakeSyncCoordinator()
+                val contacts = object : ContactPersisting by backing {
+                    override suspend fun updateContactAvatar(
+                        key: EntityKey, expectedPublicKey: Bytes, imageData: Bytes?,
+                    ): ContactAvatarUpdateResult = throw failure
+                }
+                val service = ContactService(
+                    ContactsFakeSession(), backing, contacts, coordinator, null, ContactsFakePreferences(),
+                )
+                val caught = assertFailsWith<Exception> {
+                    service.updateContactAvatar(EntityKey(radioId, original.id), Bytes.of(1))
+                }
+                assertSame(failure, caught)
+                assertTrue(coordinator.notifications.isEmpty())
+                assertEquals(original, backing.fetchContact(EntityKey(radioId, original.id)))
+            }
+        },
     )
 
     @TestFactory
@@ -204,7 +331,7 @@ class ContactServiceNativeTests {
             assertEquals(emptyList(), events.events.toList())
         },
         contactsNative("removeContact deletes, cleans up, emits nodeDeleted and notifies; device NOT_FOUND maps to contactNotFound") {
-            val store = ContactsFakeStore()
+            val store = ContactsFakeStore(listOf(contactsDevice(radioId)))
             val contact = stored(0x22, "Bob").also(store::seed)
             val cleanup = ContactsRecordingCleanup()
             val coordinator = ContactsFakeSyncCoordinator()
@@ -223,21 +350,34 @@ class ContactServiceNativeTests {
             service.finishEvents()
             assertEquals(listOf<ContactServiceEvent>(ContactServiceEvent.NodeDeleted), events.events.toList())
         },
-        contactsNative("removeLocalContact runs delete, cleanup, nodeDeleted and contactsChanged even when the lookup fails") {
+        contactsNative("removeLocalContact propagates lookup failure without deletion, cleanup or success events; a verified retry succeeds") {
             val store = ContactsFakeStore(listOf(contactsDevice(radioId)))
             val contact = stored(0x33, "Carol").also(store::seed)
-            store.fetchContactByKeyFailure = IllegalStateException("lookup failed")
+            val lookupFailure = IllegalStateException("lookup failed")
+            store.fetchContactByKeyFailure = lookupFailure
             val cleanup = ContactsRecordingCleanup()
             val coordinator = ContactsFakeSyncCoordinator()
             val service = contactsService(store = store, syncCoordinator = coordinator, cleanupCoordinator = cleanup)
             val events = service.events()
 
-            service.removeLocalContact(EntityKey(radioId, contact.id), contact.publicKey)
+            assertSame(lookupFailure, assertFailsWith<IllegalStateException> {
+                service.removeLocalContact(EntityKey(radioId, contact.id), contact.publicKey)
+            })
             service.finishEvents()
+            assertEquals(contact, store.fetchContact(radioId, contact.publicKey))
+            assertTrue(store.deletedContactIDs.isEmpty())
+            assertTrue(cleanup.invocations.isEmpty())
+            assertTrue(coordinator.notifications.isEmpty())
+            assertEquals(emptyList(), events.events.toList())
 
+            store.fetchContactByKeyFailure = null
+            val retry = contactsService(store = store, syncCoordinator = coordinator, cleanupCoordinator = cleanup)
+            val retryEvents = retry.events()
+            retry.removeLocalContact(EntityKey(radioId, contact.id), contact.publicKey)
+            retry.finishEvents()
             assertEquals(listOf(contact.id), store.deletedContactIDs)
             assertEquals(listOf(ContactCleanupReason.DELETED), cleanup.invocations.map { it.reason })
-            assertEquals(listOf<ContactServiceEvent>(ContactServiceEvent.NodeDeleted), events.events.toList())
+            assertEquals(listOf<ContactServiceEvent>(ContactServiceEvent.NodeDeleted), retryEvents.events.toList())
             assertEquals(listOf("contactsChanged"), coordinator.notifications)
         },
         contactsNative("device error codes map to the Swift ContactServiceError cases per operation") {
@@ -295,6 +435,130 @@ class ContactServiceNativeTests {
 
     @TestFactory
     fun flagAndPreferenceCases(): List<DynamicTest> = listOf(
+        contactsNative("local field updates forward captured identity and map rejected outcomes without full saves or cleanup") {
+            val updates = listOf(
+                ContactLocalUpdate.Preferences("Nickname", true, null),
+                ContactLocalUpdate.OCVSettings("custom", null), ContactLocalUpdate.TelemetryPermissions(true),
+            )
+            for (update in updates) {
+                for (result in listOf(
+                    ContactLocalUpdateResult.Updated(), ContactLocalUpdateResult.ContactNotFound,
+                    ContactLocalUpdateResult.IdentityMismatch,
+                )) {
+                    val backing = ContactsFakeStore()
+                    val original = stored(0x97, "Local").also(backing::seed)
+                    val key = EntityKey(radioId, original.id)
+                    val session = ContactsFakeSession()
+                    val cleanup = ContactsRecordingCleanup()
+                    val sync = ContactsFakeSyncCoordinator()
+                    val expectedUpdate = update
+                    var writes = 0
+                    val contacts = object : ContactPersisting by backing {
+                        override suspend fun saveContact(dto: ContactDTO): Unit = error("Must not save stale DTO")
+                        override suspend fun updateContactLocalFields(
+                            key: EntityKey, expectedPublicKey: Bytes, update: ContactLocalUpdate,
+                        ): ContactLocalUpdateResult {
+                            assertEquals(EntityKey(radioId, original.id), key)
+                            assertEquals(original.publicKey, expectedPublicKey)
+                            assertEquals(expectedUpdate, update)
+                            assertEquals(if (update is ContactLocalUpdate.TelemetryPermissions) 1 else 0,
+                                session.changeContactFlagsInvocations.size)
+                            writes++
+                            return result
+                        }
+                    }
+                    val service = ContactService(session, backing, contacts, sync, cleanup, ContactsFakePreferences())
+                    if (result is ContactLocalUpdateResult.Updated) {
+                        applyLocalEdit(service, key, update)
+                    } else {
+                        assertFailsWith<ContactServiceError.ContactNotFound> { applyLocalEdit(service, key, update) }
+                    }
+                    assertEquals(1, writes)
+                    assertTrue(cleanup.invocations.isEmpty())
+                    assertEquals(if (result is ContactLocalUpdateResult.Updated && update is ContactLocalUpdate.Preferences)
+                        listOf("contactsChanged") else emptyList(), sync.notifications)
+                    assertEquals(original, backing.fetchContact(key))
+                }
+            }
+        },
+        contactsNative("local field persistence errors and cancellation propagate without cleanup or notification") {
+            val updates = listOf(
+                ContactLocalUpdate.Preferences("", true, false), ContactLocalUpdate.OCVSettings("custom", "3.2"),
+                ContactLocalUpdate.TelemetryPermissions(false),
+            )
+            for (update in updates) {
+                for (failure in listOf(
+                    PersistenceStoreException(PersistenceStoreError.SaveFailed("disk full")),
+                    CancellationException("local cancelled"),
+                )) {
+                    val backing = ContactsFakeStore()
+                    val original = stored(0x98, "Local").also(backing::seed)
+                    val contacts = object : ContactPersisting by backing {
+                        override suspend fun updateContactLocalFields(
+                            key: EntityKey, expectedPublicKey: Bytes, update: ContactLocalUpdate,
+                        ): ContactLocalUpdateResult = throw failure
+                    }
+                    val cleanup = ContactsRecordingCleanup()
+                    val sync = ContactsFakeSyncCoordinator()
+                    val service = ContactService(ContactsFakeSession(), backing, contacts, sync, cleanup, ContactsFakePreferences())
+                    assertSame(failure, assertFailsWith<Exception> {
+                        applyLocalEdit(service, EntityKey(radioId, original.id), update)
+                    })
+                    assertEquals(original, backing.fetchContact(EntityKey(radioId, original.id)))
+                    assertTrue(cleanup.invocations.isEmpty())
+                    assertTrue(sync.notifications.isEmpty())
+                }
+            }
+        },
+        contactsNative("favorite acknowledgement uses only the atomic identity-aware preference write") {
+            for (result in ContactFavoriteUpdateResult.entries) {
+                val backing = ContactsFakeStore()
+                val original = stored(0x95, "Favorite").also(backing::seed)
+                val key = EntityKey(radioId, original.id)
+                var writes = 0
+                val session = ContactsFakeSession()
+                val contacts = object : ContactPersisting by backing {
+                    override suspend fun saveContact(dto: ContactDTO): Unit =
+                        error("Favorite acknowledgement must not save a stale DTO")
+                    override suspend fun updateContactFavorite(
+                        key: EntityKey, expectedPublicKey: Bytes, isFavorite: Boolean,
+                    ): ContactFavoriteUpdateResult {
+                        assertEquals(listOf(0x01u.toUByte()), session.changeContactFlagsInvocations.map { it.flags.rawValue })
+                        assertEquals(EntityKey(radioId, original.id), key)
+                        assertEquals(original.publicKey, expectedPublicKey)
+                        assertTrue(isFavorite)
+                        writes++
+                        return result
+                    }
+                }
+                val service = ContactService(session, backing, contacts, null, null, ContactsFakePreferences())
+                if (result == ContactFavoriteUpdateResult.UPDATED) {
+                    service.setContactFavorite(key, true)
+                } else {
+                    assertFailsWith<ContactServiceError.ContactNotFound> { service.setContactFavorite(key, true) }
+                }
+                assertEquals(1, writes)
+            }
+        },
+        contactsNative("favorite persistence failure and cancellation propagate unchanged after acknowledgement") {
+            for (failure in listOf(
+                PersistenceStoreException(PersistenceStoreError.SaveFailed("disk full")),
+                CancellationException("favorite cancelled"),
+            )) {
+                val backing = ContactsFakeStore()
+                val original = stored(0x96, "Favorite").also(backing::seed)
+                val contacts = object : ContactPersisting by backing {
+                    override suspend fun updateContactFavorite(
+                        key: EntityKey, expectedPublicKey: Bytes, isFavorite: Boolean,
+                    ): ContactFavoriteUpdateResult = throw failure
+                }
+                val service = ContactService(ContactsFakeSession(), backing, contacts, null, null, ContactsFakePreferences())
+                assertSame(failure, assertFailsWith<Exception> {
+                    service.setContactFavorite(EntityKey(radioId, original.id), true)
+                })
+                assertEquals(original, backing.fetchContact(EntityKey(radioId, original.id)))
+            }
+        },
         contactsNative("setTelemetryPermissions sets and clears bits 1-3 preserving the favourite bit") {
             val store = ContactsFakeStore()
             val contact = stored(0x66, "Fay", flags = 0x01u).also(store::seed)
@@ -325,6 +589,23 @@ class ContactServiceNativeTests {
                 contactsService(session = session, store = store).setContactFavorite(EntityKey(radioId, contact.id), true)
             }
             assertEquals(contact, store.contacts[contact.id])
+        },
+        contactsNative("telemetry rejection persists nothing and preserves the existing session error convention") {
+            val backing = ContactsFakeStore()
+            val original = stored(0x99, "Telemetry").also(backing::seed)
+            val contacts = object : ContactPersisting by backing {
+                override suspend fun updateContactLocalFields(
+                    key: EntityKey, expectedPublicKey: Bytes, update: ContactLocalUpdate,
+                ): ContactLocalUpdateResult = error("Rejected telemetry must not persist")
+            }
+            val session = ContactsFakeSession().apply {
+                changeContactFlagsFailures = mapOf(original.publicKey to MeshCoreException.Timeout())
+            }
+            val service = ContactService(session, backing, contacts, null, null, ContactsFakePreferences())
+            assertFailsWith<ContactServiceError.SessionError> {
+                service.setTelemetryPermissions(EntityKey(radioId, original.id), true)
+            }
+            assertEquals(original, backing.fetchContact(EntityKey(radioId, original.id)))
         },
         contactsNative("migrateAppFavoritesToDevice marks complete only when every favourite reaches the device") {
             val store = ContactsFakeStore()
@@ -358,7 +639,7 @@ class ContactServiceNativeTests {
             service.updateContactPreferences(key, nickname = "\u001FRico\u001F")
             assertEquals("\u001FRico\u001F", store.contacts[contact.id]?.nickname)
         },
-        contactsNative("model-rebuilding updates persist a nil lastHeardTimestamp as 0; the avatar update keeps nil") {
+        contactsNative("field-only avatar and OCV updates preserve an unrelated nil lastHeardTimestamp") {
             val store = ContactsFakeStore()
             val contact = stored(0x89, "Ida").also(store::seed)
             val service = contactsService(store = store)
@@ -367,7 +648,7 @@ class ContactServiceNativeTests {
             service.updateContactAvatar(key, Bytes.of(1))
             assertNull(store.contacts[contact.id]?.lastHeardTimestamp)
             service.updateContactOCVSettings(key, "liIon", null)
-            assertEquals(0u, store.contacts[contact.id]?.lastHeardTimestamp)
+            assertNull(store.contacts[contact.id]?.lastHeardTimestamp)
             assertEquals("liIon", store.contacts[contact.id]?.ocvPreset)
             assertFailsWith<ContactServiceError.ContactNotFound> {
                 service.updateContactOCVSettings(EntityKey(radioId, UUID.randomUUID()), "x", null)

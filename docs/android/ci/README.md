@@ -36,8 +36,10 @@ full-scaffold `resolveScaffoldDependencies`) run in a parallel Gradle preflight
 before the selected build, test and lint tasks. A preflight failure therefore
 prevents that expensive task graph from starting. The remaining tasks run in a
 separate Gradle invocation. Both hosted phases and dependency-only `prepare`
-use `--parallel --max-workers=8`. WP-002 now resolves dependencies in
-project-owned tasks, so the former forced one-worker workaround is removed.
+use `--parallel --max-workers=2`. This bounds simultaneous in-process Kotlin
+compilation and Android resource merging without removing tasks. WP-002 resolves
+dependencies in project-owned tasks; the former forced one-worker workaround
+remains removed.
 Validation still precedes build/test work to limit wasted work on failures.
 Local invocations retain their caller-selected worker and parallelism options.
 Each invocation streams
@@ -670,9 +672,22 @@ or cross-PR cache is provided. Candidate Gradle receives only the **unchanged**
 The Windows PowerShell child strips startup-added variables and repeats the
 independent parent preflight before invoking the batch wrapper.
 
-Hosted builds allow up to eight Gradle workers, use in-process Kotlin, a 2GiB
-build heap and 512MiB test heap; these are build-process budgets, not app runtime
-flags or AI budgets.
+Hosted builds allow up to two Gradle workers, use in-process Kotlin, a 3GiB
+build heap, 768MiB metaspace and an unchanged 512MiB per-test-JVM heap. Test tasks
+retain one fork each. These are build-process budgets, not app runtime flags or
+AI budgets. The public `ubuntu-24.04` runner is documented as four CPUs/16GB
+([runner specifications](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)).
+Preflight logs the actual visible CPU affinity and host total/available memory;
+these observations are not a reservation or proof of cgroup capacity.
+Runs `41974709208` and `41978408646` both reported `Java heap space` in
+`:feature:tools:mergeDebugUnitTestResources` with the old 2GiB/eight-worker
+profile. They did not report a product assertion or OS OOM kill. Concurrent
+compiler/resource work shares the daemon heap; increasing test heaps would not
+repair that budget. The bounded profile leaves room for the daemon, test JVMs,
+metaspace and native processes without changing dependency verification,
+preflight/build separation, cache rules, selected test/report scope or failure
+propagation. A fresh exact-candidate full hosted run, not the profile alone,
+establishes whether the repair is sufficient for the current workload.
 The separate local `--local` mode retains measured shared-Windows constraints.
 PyYAML6.0.3 is hash-pinned MIT-licensed CI parsing tooling, not an Android-linked
 dependency. Tool/SDK terms and existing GPLv3/MIT/Apache notices remain distinct

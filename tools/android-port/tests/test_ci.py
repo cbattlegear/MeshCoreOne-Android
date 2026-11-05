@@ -38,6 +38,11 @@ class SourceDispositionTests(unittest.TestCase):
         self.assertIn("candidate.outputs.files.files.any { classDirs.contains(it.canonicalFile) }", guard)
         self.assertIn("Overlapping Kotlin test compiler outputs", guard)
         self.assertIn("!it.state.executed || it.state.failure != null", guard)
+        outside = 'task.path == ":platform:notifications:testDebugUnitTest" &&'
+        self.assertIn(outside, guard)
+        self.assertIn('source.isFile() && source.name.endsWith(".kt") && !absolute.startsWith(androidRoot)', guard)
+        self.assertLess(guard.index(outside), guard.index('if (absolute.startsWith(androidRoot)'))
+        self.assertIn("Notification Kotlin test source is outside android/", guard)
         self.assertIn('":app:testDebugUnitTest", ":core:ui:testDebugUnitTest"', guard)
         for marker in ('observe("START")', 'observe("DEPENDENCIES")',
                        'observe("SOURCES")', 'observe("END")', "WP003_TEST_SUITE|"):
@@ -321,6 +326,7 @@ class SourceDispositionTests(unittest.TestCase):
                 patch.object(ci, "candidate_environment", return_value={}),
                 patch.object(ci, "verify_wrapper"),
                 patch.object(ci, "execute", side_effect=execute) as commands,
+                patch("controller.module_junit.remapped_tasks", return_value=[]),
                 patch.object(ci, "collect_suites", side_effect=AssertionError("Unselected scaffold suites")),
                 patch.object(ci, "check_module_tests", side_effect=AssertionError("Unselected Android module tests")),
                 patch.object(ci, "collect_lint", side_effect=AssertionError("Unselected scaffold lint")),
@@ -377,6 +383,7 @@ class SourceDispositionTests(unittest.TestCase):
             self.assertEqual(commands.call_count, 2)
             command, _, log = commands.call_args_list[-1].args
             self.assertEqual(log.name, "gradle-scaffold-preflight.log")
+            self.assertNotIn(":platform:notifications:testDebugUnitTest", command)
             tasks = []
             for argument in command[3:]:
                 if argument.startswith("-"):
@@ -388,7 +395,7 @@ class SourceDispositionTests(unittest.TestCase):
             )
             self.assertNotIn(":app:assembleDebug", command)
             self.assertIn("--parallel", command)
-            self.assertIn("--max-workers=8", command)
+            self.assertIn("--max-workers=2", command)
             self.assertNotIn("--max-workers=1", command)
             self.assertNotIn('"result": "success"', printed.getvalue())
 
@@ -425,6 +432,11 @@ class SourceDispositionTests(unittest.TestCase):
                     self.assertEqual(run.call_args.args[1], plan)
                     self.assertEqual(planner.call_args.kwargs["merge_base_only"], event_name == "pull_request")
                     self.assertEqual(run.call_args.kwargs["merge_base_only"], event_name == "pull_request")
+                    options = run.call_args.args[5]
+                    self.assertIn("--parallel", options)
+                    self.assertIn("--max-workers=2", options)
+                    self.assertIn("-PscaffoldTestHeap=512m", options)
+                    self.assertNotIn("--max-workers=8", options)
                     self.assertEqual(planner.call_args.args[3] if len(planner.call_args.args) > 3 else None,
                                      None if scopes == ["scaffold"] else ["protocol", "module:core/protocol"])
                     self.assertEqual(

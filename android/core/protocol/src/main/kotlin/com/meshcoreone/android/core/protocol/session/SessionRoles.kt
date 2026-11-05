@@ -11,6 +11,7 @@
 package com.meshcoreone.android.core.protocol.session
 
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.event.*
 import com.meshcoreone.android.core.protocol.model.*
 import java.time.Instant
@@ -53,7 +54,40 @@ interface ContactSessionOps {
     /** Only NOT_FOUND returns null; other device errors propagate with their raw code. */
     suspend fun getContact(publicKey: Bytes): MeshContact?
     suspend fun addContact(contact: MeshContact)
+    /**
+     * Completes an accepted write before releasing its response owner. The completion must not
+     * issue another session request. Legacy implementations cannot prove cancellation was unsent.
+     */
+    suspend fun addContact(contact: MeshContact, dispatch: ContactWriteDispatch, onCommitted: suspend () -> Unit) {
+        dispatch.exchangeDispatch.claim()
+        try {
+            dispatch.beforeDispatch()
+            try {
+                addContact(contact)
+                dispatch.markAccepted()
+            } catch (rejected: MeshCoreException.DeviceError) {
+                dispatch.markRejected(rejected)
+                throw rejected
+            } catch (invalid: MeshCoreException.InvalidInput) {
+                dispatch.markRejected(invalid)
+                throw invalid
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                dispatch.markUncertain(failure)
+                throw failure
+            }
+            onCommitted()
+        } finally {
+            dispatch.exchangeDispatch.exchangeFinished()
+        }
+    }
     suspend fun removeContact(publicKey: Bytes)
+    /** Legacy roles cannot prove a failed removal was unsent. */
+    suspend fun removeContact(publicKey: Bytes, dispatch: ChannelWriteDispatch) {
+        dispatch.claim()
+        removeContact(publicKey)
+    }
     suspend fun resetPath(publicKey: Bytes)
     suspend fun sendPathDiscovery(destination: Bytes): MessageSentInfo
     suspend fun shareContact(publicKey: Bytes)
@@ -61,6 +95,90 @@ interface ContactSessionOps {
     suspend fun exportContact(publicKey: Bytes? = null): String
     suspend fun importContact(cardData: Bytes)
     suspend fun changeContactFlags(contact: MeshContact, flags: ContactFlags)
+}
+
+/** Android-only cancellation fence for a contact write, using the existing serialized-write accounting. */
+class ContactWriteDispatch(
+    beforeDispatchAction: (ContactWriteDispatch) -> Unit = {},
+    onExchangeFinishedAction: (ContactWriteDispatch) -> Unit = {},
+    onOutcomeChangedAction: (ContactWriteDispatch) -> Unit = {},
+) {
+    private val beforeDispatchCallback = java.util.concurrent.atomic.AtomicReference<((ContactWriteDispatch) -> Unit)?>(beforeDispatchAction)
+    private val onExchangeFinishedCallback = java.util.concurrent.atomic.AtomicReference<((ContactWriteDispatch) -> Unit)?>(onExchangeFinishedAction)
+    private val onOutcomeChangedCallback = java.util.concurrent.atomic.AtomicReference<((ContactWriteDispatch) -> Unit)?>(onOutcomeChangedAction)
+    internal val exchangeDispatch = ChannelWriteDispatch {
+        beforeDispatchCallback.set(null)
+        onOutcomeChangedCallback.set(null)
+        onExchangeFinishedCallback.getAndSet(null)?.invoke(this)
+    }
+
+    private val terminalOutcome = java.util.concurrent.atomic.AtomicReference<ContactWriteDispatchOutcome?>(null)
+    private val failure = java.util.concurrent.atomic.AtomicReference<Exception?>(null)
+
+    /** Read after cancellation; false means unknown or potentially written, never rolled back. */
+    val definitelyUnsent: Boolean
+        get() = outcome == ContactWriteDispatchOutcome.DEFINITELY_UNSENT
+
+    val cancellationDisposition: ChannelWriteCancellationDisposition
+        get() = exchangeDispatch.cancellationDisposition
+
+    val terminalFailure: Exception? get() = failure.get()
+
+    val outcome: ContactWriteDispatchOutcome
+        get() {
+            val terminal = terminalOutcome.get()
+            val disposition = exchangeDispatch.cancellationDisposition
+            if (terminal == ContactWriteDispatchOutcome.MAY_HAVE_WRITTEN &&
+                disposition == ChannelWriteCancellationDisposition.DEFINITELY_UNSENT) {
+                return ContactWriteDispatchOutcome.DEFINITELY_UNSENT
+            }
+            return terminal ?: when (disposition) {
+                ChannelWriteCancellationDisposition.UNKNOWN -> ContactWriteDispatchOutcome.UNKNOWN
+                ChannelWriteCancellationDisposition.DEFINITELY_UNSENT -> ContactWriteDispatchOutcome.DEFINITELY_UNSENT
+                ChannelWriteCancellationDisposition.MAY_HAVE_WRITTEN -> ContactWriteDispatchOutcome.MAY_HAVE_WRITTEN
+            }
+        }
+
+    internal fun beforeDispatch() {
+        try {
+            beforeDispatchCallback.get()?.invoke(this)
+        } catch (failure: Exception) {
+            markDefinitelyUnsent(failure)
+            throw failure
+        }
+    }
+
+    internal fun markAccepted() {
+        terminalOutcome.set(ContactWriteDispatchOutcome.ACCEPTED)
+        onOutcomeChangedCallback.get()?.invoke(this)
+    }
+
+    internal fun markRejected(failure: Exception) {
+        this.failure.set(failure)
+        terminalOutcome.set(ContactWriteDispatchOutcome.REJECTED)
+        onOutcomeChangedCallback.get()?.invoke(this)
+    }
+
+    internal fun markUncertain(failure: Exception) {
+        this.failure.set(failure)
+        if (terminalOutcome.compareAndSet(null, ContactWriteDispatchOutcome.MAY_HAVE_WRITTEN)) {
+            onOutcomeChangedCallback.get()?.invoke(this)
+        }
+    }
+
+    private fun markDefinitelyUnsent(failure: Exception) {
+        this.failure.set(failure)
+        terminalOutcome.set(ContactWriteDispatchOutcome.DEFINITELY_UNSENT)
+        onOutcomeChangedCallback.get()?.invoke(this)
+    }
+}
+
+enum class ContactWriteDispatchOutcome {
+    UNKNOWN,
+    DEFINITELY_UNSENT,
+    MAY_HAVE_WRITTEN,
+    ACCEPTED,
+    REJECTED,
 }
 
 interface ChannelSessionOps {
@@ -95,6 +213,16 @@ interface AdvertisingSessionOps {
     suspend fun getContact(publicKey: Bytes): MeshContact?
 }
 
+/** Admission ends at actual send settlement, or when an owned request can no longer send. */
+class RadioWritePermit(private val releaseAction: () -> Unit) {
+    private val claimed = java.util.concurrent.atomic.AtomicBoolean()
+    private val released = java.util.concurrent.atomic.AtomicBoolean()
+
+    internal fun claim() { check(claimed.compareAndSet(false, true)) { "Radio write permits are single-use" } }
+    internal fun release() { if (released.compareAndSet(false, true)) releaseAction() }
+    fun releaseIfUnclaimed() { if (!claimed.get()) release() }
+}
+
 interface ConfigurationSessionOps {
     suspend fun sendAppStart(): SelfInfo
     suspend fun queryDevice(): DeviceCapabilities
@@ -108,7 +236,19 @@ interface ConfigurationSessionOps {
         frequency: Double, bandwidth: Double, spreadingFactor: UByte, codingRate: UByte,
         clientRepeat: Boolean? = null,
     )
+    suspend fun setRadio(
+        frequency: Double, bandwidth: Double, spreadingFactor: UByte, codingRate: UByte,
+        clientRepeat: Boolean?, dispatch: ChannelWriteDispatch,
+    ) {
+        throw UnsupportedOperationException("Radio writes require actual dispatch accounting")
+    }
     suspend fun getRepeatFreq(): List<FrequencyRange>
+    suspend fun setRadio(
+        frequency: Double, bandwidth: Double, spreadingFactor: UByte, codingRate: UByte,
+        clientRepeat: Boolean?, sendPermit: RadioWritePermit,
+    ) {
+        throw UnsupportedOperationException("Radio restore requires actual transport-send settlement")
+    }
     suspend fun setOtherParams(
         manualAddContacts: Boolean, telemetryModeEnvironment: UByte, telemetryModeLocation: UByte,
         telemetryModeBase: UByte, advertisementLocationPolicy: UByte, multiAcks: UByte? = null,

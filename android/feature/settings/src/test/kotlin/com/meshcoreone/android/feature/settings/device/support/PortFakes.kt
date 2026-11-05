@@ -2,6 +2,7 @@
 package com.meshcoreone.android.feature.settings.device.support
 
 import com.meshcoreone.android.core.contracts.domain.NotificationPreferencesPort
+import com.meshcoreone.android.core.contracts.domain.PreRepeatSettingsAttempt
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.NotificationPreferences
 import com.meshcoreone.android.core.model.RegionSelection
@@ -38,6 +39,11 @@ internal class FakeRegions(initial: RegionSelection? = null) : RegionSelectionPo
 }
 
 internal class FakeStore : DeviceSettingsStorePort {
+    override fun preRepeatSettingsRestoreAuthority(expectedToken: com.meshcoreone.android.core.contracts.domain.SessionToken?, expectedDevice: DeviceDTO) =
+        com.meshcoreone.android.core.contracts.domain.RepeatSnapshotRestoreAuthority { write ->
+            write(com.meshcoreone.android.core.protocol.session.RadioWritePermit {})
+        }
+    override suspend fun validatePreRepeatSettings(expectedToken: com.meshcoreone.android.core.contracts.domain.SessionToken?) = Unit
     val calls = mutableListOf<String>()
     var ocvError: Throwable? = null
     override suspend fun updateOcvSettings(deviceId: UUID, preset: String, customArray: String?) {
@@ -46,6 +52,23 @@ internal class FakeStore : DeviceSettingsStorePort {
     }
     override fun savePreRepeatSettings() { calls += "savePreRepeat" }
     override fun clearPreRepeatSettings() { calls += "clearPreRepeat" }
+    var beforeRepeatEdit: suspend () -> Unit = {}
+    override suspend fun savePreRepeatSettings(expectedToken: com.meshcoreone.android.core.contracts.domain.SessionToken?) {
+        beforeRepeatEdit()
+        savePreRepeatSettings()
+    }
+    override suspend fun savePreRepeatSettings(
+        expectedToken: com.meshcoreone.android.core.contracts.domain.SessionToken?, attempt: PreRepeatSettingsAttempt,
+    ) = savePreRepeatSettings(expectedToken)
+    override suspend fun abortPreRepeatSettings(
+        expectedToken: com.meshcoreone.android.core.contracts.domain.SessionToken?, attempt: PreRepeatSettingsAttempt,
+    ) {
+        attempt.takeAbortSnapshot()
+    }
+    override suspend fun clearPreRepeatSettings(expectedToken: com.meshcoreone.android.core.contracts.domain.SessionToken?) {
+        beforeRepeatEdit()
+        clearPreRepeatSettings()
+    }
     override fun addKnownRegion(region: String) { calls += "add($region)" }
     override fun removeKnownRegion(region: String) { calls += "remove($region)" }
 }

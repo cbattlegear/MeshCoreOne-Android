@@ -434,8 +434,8 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
     /** Process shutdown: closes the runtime (tearing down any live graph), then every process resource. */
     suspend fun close() {
         withContext(NonCancellable) {
-            dependencies.onboardingPlatform?.flags?.shutdown()
             hostBinding?.close()
+            dependencies.onboardingPlatform?.flags?.shutdown()
             appState.shutdown()
             connectionManager.close()
             processJob.cancelAndJoin()

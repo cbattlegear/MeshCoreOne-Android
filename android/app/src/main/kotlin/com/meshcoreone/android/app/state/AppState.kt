@@ -7,6 +7,8 @@ import com.meshcoreone.android.app.navigation.ChatSelection
 import com.meshcoreone.android.app.navigation.NavigationCoordinator
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
+import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import com.meshcoreone.android.core.model.ChatConversationID
 import com.meshcoreone.android.core.model.ContactDTO
@@ -538,7 +540,7 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
                     when (val event = wrapped.event) {
                         is SettingsEvent.DeviceUpdated -> {
                             val presetId = event.appliedRadioPresetID
-                            persistSessionDeviceEdit(if (presetId == null) "device settings" else "radio preset") {
+                            persistSessionDeviceEdit(if (presetId == null) "device settings" else "radio preset", event.persistence) {
                                 connection.updateDevice(event.info, presetId, wrapped.token)
                             }
                         }
@@ -551,16 +553,16 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
                                 accepted
                             }
                         }
-                        is SettingsEvent.ClientRepeatUpdated -> persistSessionDeviceEdit("client repeat") {
+                        is SettingsEvent.ClientRepeatUpdated -> persistSessionDeviceEdit("client repeat", event.persistence) {
                             connection.updateClientRepeat(event.enabled, wrapped.token)
                         }
                         is SettingsEvent.PathHashModeUpdated -> {
-                            persistSessionDeviceEdit("path hash") {
+                            persistSessionDeviceEdit("path hash", event.persistence) {
                                 connection.updatePathHashMode(event.mode, wrapped.token)
                             }
                         }
                         is SettingsEvent.AllowedRepeatFreqUpdated -> connection.setAllowedRepeatFreqRanges(event.ranges, wrapped.token)
-                        is SettingsEvent.DefaultFloodScopeUpdated -> persistSessionDeviceEdit("default scope") {
+                        is SettingsEvent.DefaultFloodScopeUpdated -> persistSessionDeviceEdit("default scope", event.persistence) {
                             connection.updateDefaultFloodScopeName(event.name, wrapped.token)
                         }
                     }
@@ -571,12 +573,23 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
         })
     }
 
-    private suspend fun persistSessionDeviceEdit(operation: String, edit: suspend () -> Boolean) {
+    private suspend fun persistSessionDeviceEdit(
+        operation: String,
+        completion: CompletableDeferred<Unit>? = null,
+        edit: suspend () -> Boolean,
+    ) {
         try {
-            if (!edit()) logger.fine("Ignored $operation update from a retired session")
+            if (edit()) {
+                completion?.complete(Unit)
+            } else {
+                completion?.completeExceptionally(SettingsServiceException(SettingsServiceError.NotConnected))
+                logger.fine("Ignored $operation update from a retired session")
+            }
         } catch (cancelled: CancellationException) {
+            completion?.completeExceptionally(cancelled)
             throw cancelled
         } catch (failure: Exception) {
+            completion?.completeExceptionally(failure)
             logger.log(Level.WARNING, "Failed to persist $operation update", failure)
         }
     }

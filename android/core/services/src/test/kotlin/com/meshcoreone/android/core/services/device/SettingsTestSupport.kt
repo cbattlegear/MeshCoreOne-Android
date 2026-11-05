@@ -11,6 +11,7 @@ import com.meshcoreone.android.core.protocol.config.SessionConfiguration
 import com.meshcoreone.android.core.protocol.event.ConnectionState
 import com.meshcoreone.android.core.protocol.event.MeshTransportError
 import com.meshcoreone.android.core.protocol.model.ResponseCode
+import com.meshcoreone.android.core.protocol.model.FloodScope
 import com.meshcoreone.android.core.protocol.session.MeshCoreSession
 import com.meshcoreone.android.core.protocol.session.SessionClock
 import com.meshcoreone.android.core.protocol.session.SessionCorrelationException
@@ -76,7 +77,7 @@ internal fun capabilitiesPacket(
 
 internal fun customVarsPacket(text: String = "") = packet(ResponseCode.CUSTOM_VARS, Bytes.utf8(text))
 internal fun floodScopePacket(name: String?) =
-    packet(ResponseCode.DEFAULT_FLOOD_SCOPE, name?.let { Bytes.utf8(it).paddedOrTruncated(31) + filled(0, 16) } ?: Bytes.EMPTY)
+    packet(ResponseCode.DEFAULT_FLOOD_SCOPE, name?.let { Bytes.utf8(it).paddedOrTruncated(31) + FloodScope.Region(it).scopeKey() } ?: Bytes.EMPTY)
 
 internal class TestSignals(initial: SessionToken = token()) : ConnectionSignals {
     override val snapshot = MutableStateFlow(
@@ -146,7 +147,11 @@ internal class SettingsFixture(
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)
-internal suspend fun TestScope.settingsFixture(initial: Bytes = selfPacket(), generation: Long = 1): SettingsFixture {
+internal suspend fun TestScope.settingsFixture(
+    initial: Bytes = selfPacket(),
+    generation: Long = 1,
+    onDefaultScopeAdmission: (() -> Unit)? = null,
+): SettingsFixture {
     val radio = TestRadio()
     val clock = SchedulerClock(testScheduler)
     val diagnostics = mutableListOf<SessionDiagnostic>()
@@ -165,7 +170,7 @@ internal suspend fun TestScope.settingsFixture(initial: Bytes = selfPacket(), ge
     start.await()
     val signals = TestSignals(token(generation))
     val context = DeviceSettingsContext(token(generation), signals, backgroundScope, StandardTestDispatcher(testScheduler))
-    return SettingsFixture(radio, session, signals, context, SettingsService(session, context), clock, diagnostics)
+    return SettingsFixture(radio, session, signals, context, SettingsService(session, context, onDefaultScopeAdmission), clock, diagnostics)
 }
 
 internal class CheckedRequest<T>(private val request: Deferred<Result<T>>) {

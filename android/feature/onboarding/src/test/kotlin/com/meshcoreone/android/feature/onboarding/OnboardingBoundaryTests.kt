@@ -41,7 +41,7 @@ class DeviceScanCoordinatorTest {
     private fun coordinator(
         pairing: FakePairing = FakePairing(), demo: FakeDemo = FakeDemo(), permissions: FakePermissions = FakePermissions(granted),
         onConnected: () -> Unit = {},
-    ) = DeviceScanCoordinator(scope, pairing, demo, permissions, onConnected = onConnected)
+    ) = DeviceScanCoordinator(scope, pairing, demo, permissions, onConnected)
 
     @Test fun pairingSuccessAdvancesAndMarksInitiated() {
         var connected = 0
@@ -302,7 +302,7 @@ class PresetStepCoordinatorTest {
     )
 
     private fun coordinator(port: FakePresets, region: FakeRegion = FakeRegion(presets = presets), done: suspend () -> Unit = {}) =
-        PresetStepCoordinator(scope, region, port, onCompleted = done)
+        PresetStepCoordinator(scope, region, port, done)
 
     @Test fun visiblePresetsFollowRegionWithLocaleFallback() {
         val region = FakeRegion(presets = presets)
@@ -329,185 +329,28 @@ class PresetStepCoordinatorTest {
         assertEquals(1, done)
     }
 
-    @Test fun completionWriteFailureCanRetryWithoutReapplyingThePreset() {
+    @Test fun completionAcknowledgementKeepsPresetBusyAndRejectsDuplicateApply() {
+        val acknowledged = CompletableDeferred<Unit>()
         val port = FakePresets()
-        var completions = 0
-        val c = coordinator(port, done = {
-            completions += 1
-            if (completions == 1) error("preference write failed")
-        })
+        val c = PresetStepCoordinator(scope, FakeRegion(presets = presets), port) { acknowledged.await() }
         c.select("loc"); c.apply()
+        assertTrue(c.state.value.isApplying)
+        assertEquals(0, c.state.value.commitTick)
+        c.apply()
         assertEquals(listOf("loc"), port.applied)
-        assertTrue(c.state.value.completionNeedsRetry)
-        c.retry()
-        assertEquals(listOf("loc"), port.applied)
-        assertEquals(2, completions)
-        assertEquals(1, c.state.value.commitTick)
-    }
-
-    @Test fun changedPresetSelectionAppliesTheNewPresetBeforeRetryingCompletion() {
-        val port = FakePresets()
-        val region = FakeRegion(presets = presets).also {
-            it.setSelection(RegionSelection("US", RegionSelection.Source.MANUAL))
-        }
-        var completions = 0
-        val c = coordinator(port, region = region, done = {
-            completions += 1
-            if (completions == 1) error("preference write failed")
-        })
-        c.select("a"); c.apply()
-        assertEquals(listOf("a"), port.applied)
-        assertTrue(c.state.value.completionNeedsRetry)
-
-        c.dismissError()
-        c.select("b"); c.apply()
-        assertEquals(listOf("a", "b"), port.applied)
-        assertEquals(2, completions)
-        assertFalse(c.state.value.completionNeedsRetry)
-        assertEquals(1, c.state.value.commitTick)
-    }
-
-    @Test fun repeatedCompletionRetryWhileWriteIsHeldStartsOnlyOneMoreWrite() =
-        kotlinx.coroutines.runBlocking {
-            val port = FakePresets()
-            var completions = 0
-            val retryStarted = CompletableDeferred<Unit>()
-            val releaseRetry = CompletableDeferred<Unit>()
-            val c = coordinator(port, done = {
-                completions += 1
-                if (completions == 1) error("preference write failed")
-                retryStarted.complete(Unit)
-                releaseRetry.await()
-            })
-            c.select("loc"); c.apply()
-            assertEquals(1, completions)
-            assertTrue(c.state.value.completionNeedsRetry)
-
-            c.retry()
-            assertTrue(retryStarted.isCompleted)
-            assertTrue(c.state.value.isApplying)
-            c.retry()
-            c.retry()
-            assertEquals(2, completions)
-
-            releaseRetry.complete(Unit)
-            assertEquals(1, c.state.value.commitTick)
-            assertFalse(c.state.value.isApplying)
-            assertEquals(listOf("loc"), port.applied)
-        }
-
-    @Test fun radioReplacementWhileCompletionWriteIsHeldRequiresApplyingPresetAgain() =
-        kotlinx.coroutines.runBlocking {
-            val port = FakePresets()
-            port.target = OnboardingPresetTarget(
-                UUID.fromString("00000000-0000-0000-0000-000000000001"), 1,
-                UUID.fromString("00000000-0000-0000-0000-000000000002"),
-            )
-            val writeStarted = CompletableDeferred<Unit>()
-            val releaseWrite = CompletableDeferred<Unit>()
-            var completions = 0
-            val c = coordinator(port, done = {
-                completions += 1
-                if (completions == 1) {
-                    writeStarted.complete(Unit)
-                    releaseWrite.await()
-                    error("preference write failed")
-                }
-            })
-            c.select("loc")
-            c.apply()
-            writeStarted.await()
-
-            port.target = OnboardingPresetTarget(
-                UUID.fromString("00000000-0000-0000-0000-000000000001"), 2,
-                UUID.fromString("00000000-0000-0000-0000-000000000003"),
-            )
-            releaseWrite.complete(Unit)
-            assertTrue(c.state.value.completionNeedsRetry)
-
-            c.retry()
-            assertEquals(listOf("loc", "loc"), port.applied)
-            assertEquals(2, completions)
-            assertEquals(1, c.state.value.commitTick)
-        }
-
-    @Test fun failedChangedPresetInvalidatesEarlierSuccessBeforeCompletionCanRetry() {
-        val applied = mutableListOf<String>()
-        var configured: String? = null
-        val port = object : OnboardingPresetPort {
-            override val canApply = kotlinx.coroutines.flow.MutableStateFlow(true)
-            override suspend fun apply(presetId: String): OnboardingPresetOutcome {
-                applied += presetId
-                configured = presetId
-                return if (presetId == "b") OnboardingPresetOutcome.Retryable(UiText.Verbatim("radio busy"))
-                else OnboardingPresetOutcome.Applied
-            }
-        }
-        var completions = 0
-        val region = FakeRegion(presets = presets).also {
-            it.setSelection(RegionSelection("US", RegionSelection.Source.MANUAL))
-        }
-        val c = PresetStepCoordinator(scope, region, port) {
-            completions += 1
-            if (completions == 1) error("preference write failed")
-        }
-        c.select("a")
-        c.apply()
-        assertEquals(1, completions)
-        assertEquals("a", configured)
-
-        c.select("b")
-        c.apply()
-        assertEquals(listOf("a", "b"), applied)
-        assertEquals("b", configured)
-        assertNotNull(c.state.value.retryAlert)
-        assertFalse(c.state.value.completionNeedsRetry)
-
-        c.dismissRetryAlert()
-        c.select("a")
-        c.apply()
-        assertEquals(listOf("a", "b", "a"), applied)
-        assertEquals("a", configured)
-        assertEquals(2, completions)
-        assertEquals(1, c.state.value.commitTick)
-    }
-
-    @Test fun selectionCannotChangeWhileRadioApplyIsSuspended() = kotlinx.coroutines.runBlocking {
-        val started = CompletableDeferred<Unit>()
-        val applyOutcome = CompletableDeferred<OnboardingPresetOutcome>()
-        val applied = mutableListOf<String>()
-        val port = object : OnboardingPresetPort {
-            override val canApply = kotlinx.coroutines.flow.MutableStateFlow(true)
-            override suspend fun apply(presetId: String): OnboardingPresetOutcome {
-                applied += presetId
-                started.complete(Unit)
-                return applyOutcome.await()
-            }
-        }
-        val region = FakeRegion(presets = presets).also {
-            it.setSelection(RegionSelection("US", RegionSelection.Source.MANUAL))
-        }
-        lateinit var c: PresetStepCoordinator
-        var completedWith: String? = null
-        c = PresetStepCoordinator(scope, region, port) {
-            completedWith = c.state.value.selectedId
-        }
-        c.select("a")
-        c.apply()
-
-        try {
-            started.await()
-            assertTrue(c.state.value.isApplying)
-            c.select("b")
-            assertEquals("a", c.state.value.selectedId)
-        } finally {
-            if (!applyOutcome.isCompleted) applyOutcome.complete(OnboardingPresetOutcome.Applied)
-        }
-
-        assertEquals(listOf("a"), applied)
-        assertEquals("a", completedWith)
-        assertEquals(1, c.state.value.commitTick)
+        acknowledged.complete(Unit)
         assertFalse(c.state.value.isApplying)
+        assertEquals(1, c.state.value.commitTick)
+    }
+
+    @Test fun completionPersistenceFailureRemainsVisibleWithoutSuccessfulPresetTick() {
+        val c = PresetStepCoordinator(scope, FakeRegion(presets = presets), FakePresets()) {
+            throw java.io.IOException("completion unavailable")
+        }
+        c.select("loc"); c.apply()
+        assertEquals(UiText.Verbatim("completion unavailable"), c.state.value.error)
+        assertFalse(c.state.value.isApplying)
+        assertEquals(0, c.state.value.commitTick)
     }
 
     @Test fun notConnectedSurfacesErrorWithoutCompleting() {
@@ -585,209 +428,150 @@ class OnboardingFlowCoordinatorTest {
         assertEquals(OnboardingStep.PAIR, flow.currentStep)
     }
 
-    @Test fun noDeviceCompletionFailureStaysPendingUntilRetrySucceeds() {
-        var writes = 0
-        val flags = object : OnboardingFlagStore {
-            override fun getBoolean(key: String) = false
-            override fun setBoolean(key: String, value: Boolean) = Unit
-            override suspend fun persistBoolean(key: String, value: Boolean) {
-                writes += 1
-                if (writes == 1) error("preference write failed")
-            }
-        }
-        val flow = OnboardingFlowCoordinator(scope, Deps(flags = flags))
-        flow.deviceScan.showSheet(PairSheet.NO_DEVICE)
-        flow.confirmNoDevice()
-        assertTrue(flow.hasCompletionError.value)
-        assertFalse(flow.onboarding.hasCompletedOnboarding)
-        assertEquals(PairSheet.NO_DEVICE, flow.deviceScan.state.value.sheet)
-        flow.retryCompletion()
-        assertFalse(flow.hasCompletionError.value)
-        assertTrue(flow.onboarding.hasCompletedOnboarding)
-        assertEquals(PairSheet.NONE, flow.deviceScan.state.value.sheet)
-        assertEquals(2, writes)
-    }
-
-    @Test fun noDeviceCompletionCannotStartDuringHeldRetryConnection() = kotlinx.coroutines.runBlocking {
-        val connectionStarted = CompletableDeferred<Unit>()
-        val releaseConnection = CompletableDeferred<OnboardingConnectOutcome>()
-        val pairing = FakePairing().apply {
-            beforeRetry = {
-                connectionStarted.complete(Unit)
-                releaseConnection.await()
-            }
-        }
-        var writes = 0
-        val flags = object : OnboardingFlagStore {
-            override fun getBoolean(key: String) = false
-            override fun setBoolean(key: String, value: Boolean) = Unit
-            override suspend fun persistBoolean(key: String, value: Boolean) { writes += 1 }
-        }
-        val flow = OnboardingFlowCoordinator(scope, Deps(flags = flags, pairing = pairing))
-        flow.getStarted()
-        flow.continueFromPermissions()
-        flow.deviceScan.showSheet(PairSheet.NO_DEVICE)
-        flow.deviceScan.retryConnection(UUID.randomUUID())
-        connectionStarted.await()
-
-        assertFalse(flow.canCompleteWithoutDevice())
-        flow.confirmNoDevice()
-        assertFalse(flow.isCompletingWithoutDevice.value)
-        assertEquals(0, writes)
-
-        releaseConnection.complete(OnboardingConnectOutcome.Connected)
-        assertEquals(OnboardingStep.REGION, flow.currentStep)
-        assertEquals(0, writes)
-    }
-
-    @Test fun heldFailingNoDeviceWriteBlocksDemoRetryAndContinueCallbacks() = kotlinx.coroutines.runBlocking {
-        val writeStarted = CompletableDeferred<Unit>()
-        val releaseWrite = CompletableDeferred<Unit>()
-        var writes = 0
-        val flags = object : OnboardingFlagStore {
-            override fun getBoolean(key: String) = false
-            override fun setBoolean(key: String, value: Boolean) = Unit
-            override suspend fun persistBoolean(key: String, value: Boolean) {
-                writes += 1
-                if (writes == 1) {
-                    writeStarted.complete(Unit)
-                    releaseWrite.await()
-                    error("preference write failed")
-                }
-            }
-        }
-        val demoStarted = CompletableDeferred<Unit>()
-        val demo = FakeDemo().apply {
-            beforeConnect = { demoStarted.complete(Unit) }
-        }
-        val pairing = FakePairing()
-        val flow = OnboardingFlowCoordinator(scope, Deps(flags = flags, demo = demo, pairing = pairing))
-        flow.getStarted()
-        flow.continueFromPermissions()
-        flow.deviceScan.showSheet(PairSheet.NO_DEVICE)
-        flow.confirmNoDevice()
-        writeStarted.await()
-
-        assertFalse(flow.canCompleteWithoutDevice())
-        flow.deviceScan.connectDemo()
-        flow.deviceScan.retryConnection(UUID.randomUUID())
-        flow.deviceScan.continueConnected()
-        assertFalse(demoStarted.isCompleted)
-        assertEquals(0, demo.connectCalls)
-        assertEquals(0, pairing.retryCalls)
-        assertEquals(OnboardingStep.PAIR, flow.currentStep)
-
-        releaseWrite.complete(Unit)
-        assertTrue(flow.hasCompletionError.value)
-        assertFalse(flow.onboarding.hasCompletedOnboarding)
-        assertEquals(PairSheet.NO_DEVICE, flow.deviceScan.state.value.sheet)
-        assertEquals(OnboardingStep.PAIR, flow.currentStep)
-
-        flow.retryCompletion()
-        assertFalse(flow.hasCompletionError.value)
-        assertTrue(flow.onboarding.hasCompletedOnboarding)
-        assertEquals(2, writes)
-        assertEquals(OnboardingStep.PAIR, flow.currentStep)
-    }
-
-    @Test fun cancelCannotDismissNoDeviceCompletionWhileDurableWriteIsHeld() = kotlinx.coroutines.runBlocking {
-        val writeStarted = CompletableDeferred<Unit>()
-        val releaseWrite = CompletableDeferred<Unit>()
-        val flags = object : OnboardingFlagStore {
-            override fun getBoolean(key: String) = false
-            override fun setBoolean(key: String, value: Boolean) = Unit
-            override suspend fun persistBoolean(key: String, value: Boolean) {
-                writeStarted.complete(Unit)
-                releaseWrite.await()
-            }
-        }
-        val flow = OnboardingFlowCoordinator(scope, Deps(flags = flags))
-        flow.getStarted()
-        flow.continueFromPermissions()
-        flow.deviceScan.showSheet(PairSheet.NO_DEVICE)
-        flow.confirmNoDevice()
-        writeStarted.await()
-
-        assertTrue(flow.isCompletingWithoutDevice.value)
-        assertFalse(flow.canDismissPairingSheet())
-        assertFalse(flow.back())
-        assertEquals(OnboardingStep.PAIR, flow.currentStep)
-        flow.dismissPairingSheet()
-        assertEquals(PairSheet.NO_DEVICE, flow.deviceScan.state.value.sheet)
-
-        releaseWrite.complete(Unit)
-        assertTrue(flow.onboarding.hasCompletedOnboarding)
-        assertFalse(flow.isCompletingWithoutDevice.value)
-        assertEquals(PairSheet.NONE, flow.deviceScan.state.value.sheet)
-    }
-
-    @Test fun backIsBlockedDuringPresetApplyAndHeldCompletionWrite() = kotlinx.coroutines.runBlocking {
-        val applyStarted = CompletableDeferred<Unit>()
-        val releaseApply = CompletableDeferred<OnboardingPresetOutcome>()
-        val writeStarted = CompletableDeferred<Unit>()
-        val releaseWrite = CompletableDeferred<Unit>()
-        val flags = object : OnboardingFlagStore {
-            override fun getBoolean(key: String) = false
-            override fun setBoolean(key: String, value: Boolean) = Unit
-            override suspend fun persistBoolean(key: String, value: Boolean) {
-                writeStarted.complete(Unit)
-                releaseWrite.await()
-            }
-        }
-        val presets = object : OnboardingPresetPort {
+    @Test fun presetReplacementWhileApplyingCannotCompleteForTheSuccessor() {
+        val first = OnboardingPresetTarget(UUID.randomUUID(), 1, UUID.randomUUID())
+        val release = CompletableDeferred<Unit>()
+        var received: OnboardingPresetTarget? = null
+        val port = object : OnboardingPresetPort {
             override val canApply = kotlinx.coroutines.flow.MutableStateFlow(true)
-            override fun currentTarget(): OnboardingPresetTarget? = null
-            override suspend fun apply(presetId: String): OnboardingPresetOutcome {
-                applyStarted.complete(Unit)
-                return releaseApply.await()
+            var target = first
+            override fun currentTarget() = target
+            override suspend fun apply(presetId: String): OnboardingPresetOutcome = error("Use captured target")
+            override suspend fun apply(presetId: String, expectedTarget: OnboardingPresetTarget?): OnboardingPresetOutcome {
+                received = expectedTarget
+                release.await()
+                return OnboardingPresetOutcome.Applied
             }
         }
-        val flow = OnboardingFlowCoordinator(scope, Deps(flags = flags, presets = presets))
-        flow.onboarding.replacePath(listOf(OnboardingStep.REGION, OnboardingStep.PRESET))
-        flow.preset.select("p")
-        flow.preset.apply()
-        applyStarted.await()
-
-        assertFalse(flow.back())
-        assertEquals(OnboardingStep.PRESET, flow.currentStep)
-
-        releaseApply.complete(OnboardingPresetOutcome.Applied)
-        writeStarted.await()
+        val deps = Deps(presets = port)
+        val flow = OnboardingFlowCoordinator(scope, deps)
+        flow.preset.apply("p")
+        assertEquals(first, received)
         assertTrue(flow.preset.state.value.isApplying)
-        assertFalse(flow.back())
-        assertEquals(OnboardingStep.PRESET, flow.currentStep)
-
-        releaseWrite.complete(Unit)
-        assertTrue(flow.onboarding.hasCompletedOnboarding)
-        assertEquals(OnboardingStep.PRESET, flow.currentStep)
+        port.target = first.copy(generation = 2)
+        release.complete(Unit)
+        assertFalse(flow.onboarding.hasCompletedOnboarding)
+        assertNull(flow.onboarding.completionReceipt)
+        assertFalse(deps.flags.getBoolean(OnboardingState.KEY_HAS_COMPLETED))
+        assertEquals(0, flow.preset.state.value.commitTick)
+        assertNotNull(flow.preset.state.value.error)
     }
 
-    @Test fun backStaysOnPresetWhenHeldCompletionWriteFails() = kotlinx.coroutines.runBlocking {
-        val writeStarted = CompletableDeferred<Unit>()
-        val releaseWrite = CompletableDeferred<Unit>()
+    @Test fun presetSealRejectsReplacementAfterValidationAndFreshTargetCanComplete() {
+        val first = OnboardingPresetTarget(UUID.randomUUID(), 1, UUID.randomUUID())
+        val received = mutableListOf<OnboardingPresetTarget?>()
+        val port = object : OnboardingPresetPort {
+            override val canApply = kotlinx.coroutines.flow.MutableStateFlow(true)
+            var target = first
+            var replaceAtSeal = true
+            override fun currentTarget() = target
+            override suspend fun apply(presetId: String) = OnboardingPresetOutcome.Applied
+            override fun sealCompletion(
+                target: OnboardingPresetTarget?,
+                attempt: com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt,
+            ): Boolean {
+                received += target
+                if (replaceAtSeal) {
+                    this.target = first.copy(generation = 2)
+                    return false
+                }
+                return target == this.target && attempt.trySeal()
+            }
+        }
+        val deps = Deps(presets = port)
+        val flow = OnboardingFlowCoordinator(scope, deps)
+        flow.preset.apply("p")
+        assertEquals(listOf<OnboardingPresetTarget?>(first), received)
+        assertFalse(flow.onboarding.hasCompletedOnboarding)
+        assertNull(flow.onboarding.completionReceipt)
+        assertFalse(deps.flags.getBoolean(OnboardingState.KEY_HAS_COMPLETED))
+        assertEquals(0, flow.preset.state.value.commitTick)
+        assertNotNull(flow.preset.state.value.error)
+        port.replaceAtSeal = false
+        flow.preset.apply("p")
+        assertTrue(flow.onboarding.hasCompletedOnboarding)
+        assertTrue(deps.flags.getBoolean(OnboardingState.KEY_HAS_COMPLETED))
+        assertEquals(listOf<OnboardingPresetTarget?>(first, port.target), received)
+        assertEquals(OnboardingCompletionReceipt.Preset("p", port.target), flow.onboarding.completionReceipt)
+        assertEquals(1, flow.preset.state.value.commitTick)
+    }
+
+    @Test fun noDeviceWaitsForDurableCompletionAndRejectsDuplicateConfirmation() {
+        val acknowledged = CompletableDeferred<Unit>()
+        val memory = InMemoryOnboardingFlagStore()
+        var writes = 0
         val flags = object : OnboardingFlagStore {
-            override fun getBoolean(key: String) = false
-            override fun setBoolean(key: String, value: Boolean) = Unit
+            override fun getBoolean(key: String) = memory.getBoolean(key)
+            override fun setBoolean(key: String, value: Boolean) = memory.setBoolean(key, value)
             override suspend fun persistBoolean(key: String, value: Boolean) {
-                writeStarted.complete(Unit)
-                releaseWrite.await()
-                error("preference write failed")
+                writes++
+                acknowledged.await()
+                memory.setBoolean(key, value)
             }
         }
         val flow = OnboardingFlowCoordinator(scope, Deps(flags = flags))
-        flow.onboarding.replacePath(listOf(OnboardingStep.REGION, OnboardingStep.PRESET))
-        flow.preset.select("p")
-        flow.preset.apply()
-        writeStarted.await()
-
-        assertFalse(flow.back())
-        assertEquals(OnboardingStep.PRESET, flow.currentStep)
-        releaseWrite.complete(Unit)
-
+        flow.confirmNoDevice()
         assertFalse(flow.onboarding.hasCompletedOnboarding)
-        assertNotNull(flow.preset.state.value.error)
-        assertFalse(flow.preset.state.value.isApplying)
-        assertEquals(OnboardingStep.PRESET, flow.currentStep)
+        assertNull(flow.onboarding.completionReceipt)
+        assertFalse(memory.getBoolean(OnboardingState.KEY_HAS_COMPLETED))
+        flow.confirmNoDevice()
+        assertEquals(1, writes)
+        acknowledged.complete(Unit)
+        assertTrue(flow.onboarding.hasCompletedOnboarding)
+        assertTrue(memory.getBoolean(OnboardingState.KEY_HAS_COMPLETED))
+        assertEquals(OnboardingCompletionReceipt.WithoutDevice, flow.onboarding.completionReceipt)
+    }
+
+    @Test fun noDeviceFailureIsVisibleAndCanRetryWithoutOpeningGate() {
+        val memory = InMemoryOnboardingFlagStore()
+        var fail = true
+        val flags = object : OnboardingFlagStore {
+            override fun getBoolean(key: String) = memory.getBoolean(key)
+            override fun setBoolean(key: String, value: Boolean) = memory.setBoolean(key, value)
+            override suspend fun persistBoolean(key: String, value: Boolean) {
+                if (fail) throw java.io.IOException("completion unavailable")
+                memory.setBoolean(key, value)
+            }
+        }
+        val flow = OnboardingFlowCoordinator(scope, Deps(flags = flags))
+        flow.confirmNoDevice()
+        assertFalse(flow.onboarding.hasCompletedOnboarding)
+        assertNull(flow.onboarding.completionReceipt)
+        assertEquals(UiText.Verbatim("completion unavailable"), flow.deviceScan.state.value.failure)
+        assertEquals(1, flow.deviceScan.state.value.failureTick)
+        flow.deviceScan.dismissFailure()
+        fail = false
+        flow.confirmNoDevice()
+        assertTrue(flow.onboarding.hasCompletedOnboarding)
+    }
+
+    @Test fun flowRetirementRejectsPendingExactAttemptBeforeSeal() {
+        val staged = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val memory = InMemoryOnboardingFlagStore()
+        val flags = object : OnboardingFlagStore by memory {
+            override suspend fun persistBoolean(
+                key: String, value: Boolean, requireCurrent: () -> Unit,
+                seal: (com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt) -> Boolean,
+                attempt: com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt,
+            ) {
+                staged.complete(Unit)
+                release.await()
+                assertFalse(seal(attempt))
+                checkNotNull(attempt.rejection())
+                requireCurrent()
+                error("Retired flow must not persist")
+            }
+        }
+        val flow = OnboardingFlowCoordinator(scope, Deps(flags = flags))
+        flow.confirmNoDevice()
+        assertTrue(staged.isCompleted)
+        flow.retire()
+        release.complete(Unit)
+        assertFalse(flow.onboarding.hasCompletedOnboarding)
+        assertFalse(memory.getBoolean(OnboardingState.KEY_HAS_COMPLETED))
+        assertNull(flow.onboarding.completionReceipt)
+        assertNotNull(flow.deviceScan.state.value.failure)
     }
 
     @Test fun wifiConnectNavigatesToRegionAndClosesSheet() {

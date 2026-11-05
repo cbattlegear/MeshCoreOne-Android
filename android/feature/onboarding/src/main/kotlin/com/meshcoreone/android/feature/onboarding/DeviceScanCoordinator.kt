@@ -40,7 +40,6 @@ class DeviceScanCoordinator(
     private val pairing: OnboardingPairingPort,
     private val demo: OnboardingDemoPort,
     private val permissions: OnboardingPermissionPort,
-    private val canStartConnection: () -> Boolean = { true },
     private val onConnected: () -> Unit,
 ) {
     private val mutable = MutableStateFlow(DeviceScanState())
@@ -59,11 +58,14 @@ class DeviceScanCoordinator(
     fun showSheet(sheet: PairSheet) = mutable.update { it.copy(sheet = sheet) }
     fun dismissSheet() = showSheet(PairSheet.NONE)
     fun dismissFailure() = mutable.update { it.copy(failure = null) }
+    internal fun reportCompletionFailure(message: UiText) = mutable.update {
+        it.copy(failure = message, failureTick = it.failureTick + 1)
+    }
     fun dismissDemoAlert() = mutable.update { it.copy(showDemoAlert = false) }
 
     /** Three taps on the title unlock demo mode (App Store reviewer path, preserved from the original). */
     fun onTitleTap() {
-        if (mutable.value.localBusy || !canStartConnection()) return
+        if (mutable.value.localBusy) return
         titleTaps += 1
         if (titleTaps < TITLE_TAPS_TO_UNLOCK) return
         titleTaps = 0
@@ -97,7 +99,6 @@ class DeviceScanCoordinator(
      * resolved first (the UI then requests the permission and calls this again).
      */
     fun startPairing(): PairingBlocker {
-        if (!canStartConnection()) return PairingBlocker.NONE
         val blocker = blockerFor(permissions.snapshot.value)
         mutable.update { it.copy(blocker = blocker) }
         if (blocker != PairingBlocker.NONE) return blocker
@@ -109,7 +110,7 @@ class DeviceScanCoordinator(
     fun connectDemo() = run(initiated = true) { demo.connectDemo() }
 
     private fun run(initiated: Boolean, retriedDeviceId: UUID? = null, action: suspend () -> OnboardingConnectOutcome) {
-        if (mutable.value.localBusy || !canStartConnection()) return
+        if (mutable.value.localBusy) return
         mutable.update { it.copy(localBusy = true, didInitiatePairing = it.didInitiatePairing || initiated, failure = null) }
         job = scope.launch {
             val outcome = try {
@@ -128,7 +129,7 @@ class DeviceScanCoordinator(
         when (outcome) {
             OnboardingConnectOutcome.Connected -> {
                 mutable.update { it.copy(localBusy = false, otherAppDeviceId = null, successTick = it.successTick + 1) }
-                if (canStartConnection()) onConnected()
+                onConnected()
             }
             OnboardingConnectOutcome.Cancelled, OnboardingConnectOutcome.Ignored ->
                 mutable.update { it.copy(localBusy = false) }
@@ -148,9 +149,7 @@ class DeviceScanCoordinator(
     }
 
     /** Continue after an already-connected radio (resume path). */
-    fun continueConnected() {
-        if (canStartConnection()) onConnected()
-    }
+    fun continueConnected() = onConnected()
 
     private companion object { const val TITLE_TAPS_TO_UNLOCK = 3 }
 }

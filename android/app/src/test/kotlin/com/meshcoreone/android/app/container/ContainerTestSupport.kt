@@ -131,6 +131,7 @@ internal class FirmwareRadio(var publicKey: Bytes, private val nodeName: String 
 
     /** Return a frame list to answer a command; null falls through to the default firmware behavior. */
     var respond: (Bytes) -> List<Bytes>? = { null }
+    var beforeSend: suspend (Bytes) -> Unit = {}
 
     /** Contacts the radio reports on a contact-list request (a full sync deletes local contacts not listed here). */
     val knownContacts = mutableListOf<Bytes>()
@@ -169,6 +170,7 @@ internal class FirmwareRadio(var publicKey: Bytes, private val nodeName: String 
 
     override suspend fun send(data: Bytes) {
         check(connected) { "send while disconnected" }
+        beforeSend(data)
         sent += data
         val frames = respond(data) ?: defaultResponse(data)
         for (frame in frames) inbound.send(frame)

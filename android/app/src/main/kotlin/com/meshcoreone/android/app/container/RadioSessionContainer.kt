@@ -15,6 +15,9 @@ import com.meshcoreone.android.core.contracts.domain.TeardownIssue
 import com.meshcoreone.android.core.contracts.domain.TeardownReport
 import com.meshcoreone.android.core.contracts.domain.UnreadCounts
 import com.meshcoreone.android.core.contracts.domain.DebugLogRetention
+import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceError
+import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceException
+import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.TransportType
 import com.meshcoreone.android.core.model.snapshot
@@ -31,6 +34,7 @@ import com.meshcoreone.android.core.runtime.RuntimeServices
 import com.meshcoreone.android.core.runtime.RuntimeSyncResult
 import com.meshcoreone.android.core.services.contacts.AdvertisementService
 import com.meshcoreone.android.core.services.contacts.ChannelService
+import com.meshcoreone.android.core.services.contacts.ChannelFloodScopeResolver
 import com.meshcoreone.android.core.services.contacts.ContactCleanupCoordinator
 import com.meshcoreone.android.core.services.contacts.ContactService
 import com.meshcoreone.android.core.services.contacts.ResolvedFloodScope
@@ -83,6 +87,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.Mutex
@@ -103,6 +109,7 @@ class RadioSessionContainer private constructor(
     private val containerJob: Job,
     private val scope: CoroutineScope,
     private val ownership: FactoryOwnership,
+    reactionPersistenceMutex: Mutex,
 ) : RuntimeServices, AppSession {
     override val transportType: TransportType get() = inputs.transportType
     private val logger: Logger = Logger.getLogger("com.mc1.RadioSessionContainer")
@@ -123,11 +130,18 @@ class RadioSessionContainer private constructor(
 
     internal fun toolEvents(): Flow<MeshEvent> = session.events()
 
-    internal suspend fun applyChannelFloodScope(scope: ResolvedFloodScope) {
+    private var appliedChannelScope: ResolvedFloodScope? = null
+
+    // Both callers enter this generation's Settings scope queue before applying or transmitting.
+    internal suspend fun applyChannelFloodScope(scope: ResolvedFloodScope, force: Boolean = false) {
+        if (!force && appliedChannelScope == scope) return
+        appliedChannelScope = null
         when (scope) {
             ResolvedFloodScope.Unscoped -> session.setFloodScopeUnscoped()
             is ResolvedFloodScope.Scope -> session.setFloodScope(scope.scope)
         }
+        currentCoroutineContext().ensureActive()
+        appliedChannelScope = scope
     }
 
     override val dataStore: PersistenceStoreProtocol = env.store
@@ -135,7 +149,7 @@ class RadioSessionContainer private constructor(
     // region Services (constructed in dependency order; every dependency exists before its consumer)
 
     override val syncCoordinator = SyncCoordinator(scope, env.syncClock, env.logSink)
-    override val reactionService = ReactionService()
+    override val reactionService = ReactionService(persistenceMutex = reactionPersistenceMutex)
     val heardRepeatsService = HeardRepeatsService(dataStore)
     override val rxLogService = RxLogService(
         session, RxLogServiceStore.from(dataStore), HeardRepeatProcessingAdapter(heardRepeatsService), scope,
@@ -182,6 +196,27 @@ class RadioSessionContainer private constructor(
         token, inputs.device.publicKey, session, dataStore, inputs.connection.signals, scope,
         config = env.messageServiceConfig,
         reporter = env.messagingReporter,
+        channelTransmission = { index, transmit ->
+            try {
+                settingsService.withPersistedDefaultFloodScope {
+                    val device = dataStore.fetchDevice(radioId)
+                        ?: throw MessageServiceException(MessageServiceError.NotConnected)
+                    val channel = dataStore.fetchChannel(radioId, index)
+                        ?: throw MessageServiceException(MessageServiceError.ChannelNotFound)
+                    try {
+                        applyChannelFloodScope(ChannelFloodScopeResolver.resolve(
+                            channel.floodScope, device.defaultFloodScopeName, device.supportsUnscopedFloodSend,
+                        ), force = true)
+                    } catch (failure: MeshCoreException) {
+                        // Scope preparation is not a channel write's ERROR 2 or pool-backoff attempt.
+                        throw MessageServiceException(MessageServiceError.SendFailed("Channel scope application failed"), failure)
+                    }
+                    transmit()
+                }
+            } catch (failure: SettingsServiceException) {
+                throw MessageServiceException(MessageServiceError.SendFailed("Channel scope reconciliation failed"), failure)
+            }
+        },
     )
     override val channelService = ChannelService(session, dataStore, ChannelDecryptionAdapter(rxLogService))
     // The settings/device services validate their generation against the published connection snapshot when they
@@ -540,12 +575,19 @@ class RadioSessionContainer private constructor(
          * Builds the graph for one generation. Everything allocated is registered with [ownership] first, so a
          * failure partway through construction (or a teardown racing the factory) still releases the scope.
          */
-        fun create(inputs: RuntimeServiceInputs, ownership: FactoryOwnership, env: SessionEnvironment): RadioSessionContainer {
+        fun create(
+            inputs: RuntimeServiceInputs,
+            ownership: FactoryOwnership,
+            env: SessionEnvironment,
+            reactionPersistenceMutex: Mutex,
+        ): RadioSessionContainer {
             val parent = inputs.connection.scope.coroutineContext[Job]
             val job = SupervisorJob(parent)
             val scope = CoroutineScope(inputs.connection.scope.coroutineContext + job)
             ownership.own(LifecycleStage.STOP_SERVICES) { job.cancelAndJoin() }
-            val container = RadioSessionContainer(inputs.connection.token, inputs, env, job, scope, ownership)
+            val container = RadioSessionContainer(
+                inputs.connection.token, inputs, env, job, scope, ownership, reactionPersistenceMutex,
+            )
             ownership.register(container)
             env.onSessionLifecycle.created(container)
             return container

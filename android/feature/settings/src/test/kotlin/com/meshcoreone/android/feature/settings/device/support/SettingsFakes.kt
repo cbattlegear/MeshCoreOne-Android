@@ -84,6 +84,7 @@ internal class FakeSettingsPort(private val connection: FakeConnection? = null) 
     var gpsState = DeviceGpsState(isSupported = false, isEnabled = false)
     var floodScope: String? = null
     var onCall: suspend (String) -> Unit = {}
+    val radioExpectations = mutableListOf<DeviceDTO?>()
 
     fun failNext(method: String, error: Throwable) = failures.getOrPut(method) { ArrayDeque() }.addLast(error)
 
@@ -96,9 +97,15 @@ internal class FakeSettingsPort(private val connection: FakeConnection? = null) 
     override suspend fun getSelfInfo(): SelfInfo { record("getSelfInfo"); return selfInfo() }
     override suspend fun setRadioParamsVerified(
         frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte, codingRate: UByte,
-        clientRepeat: Boolean?, appliedRadioPresetID: String?,
+        clientRepeat: Boolean?, appliedRadioPresetID: String?, expectedDevice: DeviceDTO?,
+        repeatAttempt: com.meshcoreone.android.core.contracts.domain.PreRepeatSettingsAttempt?,
+        restoreAuthority: com.meshcoreone.android.core.contracts.domain.RepeatSnapshotRestoreAuthority?,
     ): SelfInfo {
-        record("setRadioParamsVerified", "$frequencyKHz,$bandwidthKHz,$spreadingFactor,$codingRate,$clientRepeat,$appliedRadioPresetID")
+        radioExpectations += expectedDevice
+        val mutation: suspend () -> Unit = {
+            record("setRadioParamsVerified", "$frequencyKHz,$bandwidthKHz,$spreadingFactor,$codingRate,$clientRepeat,$appliedRadioPresetID")
+        }
+        if (restoreAuthority == null) mutation() else restoreAuthority.withWrite { mutation() }
         return selfInfo()
     }
     override suspend fun setTxPowerVerified(power: Byte): SelfInfo { record("setTxPowerVerified", "$power"); return selfInfo() }

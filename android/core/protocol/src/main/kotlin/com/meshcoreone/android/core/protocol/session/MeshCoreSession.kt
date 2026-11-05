@@ -19,8 +19,11 @@ import com.meshcoreone.android.core.protocol.transport.MeshTransport
 import java.time.Instant
 import java.util.UUID
 import kotlin.coroutines.CoroutineContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.withContext
 
 class MeshCoreSession private constructor(
     transport: MeshTransport,
@@ -97,8 +100,21 @@ class MeshCoreSession private constructor(
     override suspend fun setRadio(
         frequency: Double, bandwidth: Double, spreadingFactor: UByte, codingRate: UByte, clientRepeat: Boolean?,
     ) = simple(PacketBuilder.setRadio(frequency, bandwidth, spreadingFactor, codingRate, clientRepeat))
+    override suspend fun setRadio(
+        frequency: Double, bandwidth: Double, spreadingFactor: UByte, codingRate: UByte, clientRepeat: Boolean?,
+        dispatch: ChannelWriteDispatch,
+    ) {
+        dispatch.claim()
+        core.exchange(dispatch) { simple(PacketBuilder.setRadio(frequency, bandwidth, spreadingFactor, codingRate, clientRepeat)) }
+    }
     override suspend fun getRepeatFreq(): List<FrequencyRange> = core.exchange {
         query(PacketBuilder.getRepeatFreq(), "repeatFreq") { (it as? MeshEvent.AllowedRepeatFreq)?.ranges }
+    }
+    override suspend fun setRadio(
+        frequency: Double, bandwidth: Double, spreadingFactor: UByte, codingRate: UByte, clientRepeat: Boolean?,
+        sendPermit: RadioWritePermit,
+    ) = core.exchange(sendPermit) {
+        simple(PacketBuilder.setRadio(frequency, bandwidth, spreadingFactor, codingRate, clientRepeat), afterSend = sendPermit::release)
     }
     suspend fun setTuning(rxDelay: UInt, af: UInt) = simple(PacketBuilder.setTuning(rxDelay, af))
     override suspend fun setOtherParams(
@@ -206,12 +222,40 @@ class MeshCoreSession private constructor(
             }
         }
     }
-    override suspend fun addContact(contact: MeshContact) {
+    override suspend fun addContact(contact: MeshContact) = addContact(contact, ContactWriteDispatch()) {}
+
+    override suspend fun addContact(contact: MeshContact, dispatch: ContactWriteDispatch, onCommitted: suspend () -> Unit) {
+        dispatch.exchangeDispatch.claim()
         requireFullPublicKey(contact.publicKey, "addContact")
         validateContactPath(contact.outPathLength, contact.outPath)
-        simple(PacketBuilder.updateContact(contact))
+        core.exchange(dispatch.exchangeDispatch) {
+            dispatch.beforeDispatch()
+            try {
+                simple(PacketBuilder.updateContact(contact))
+                dispatch.markAccepted()
+            } catch (rejected: MeshCoreException.DeviceError) {
+                dispatch.markRejected(rejected)
+                throw rejected
+            } catch (invalid: MeshCoreException.InvalidInput) {
+                dispatch.markRejected(invalid)
+                throw invalid
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                dispatch.markUncertain(failure)
+                throw failure
+            }
+            // The radio has committed. Caller cancellation or teardown cannot undo this local tail.
+            withContext(NonCancellable) { onCommitted() }
+        }
     }
-    override suspend fun removeContact(publicKey: Bytes) { requireFullPublicKey(publicKey, "removeContact"); simple(PacketBuilder.removeContact(publicKey)) }
+    override suspend fun removeContact(publicKey: Bytes) = removeContact(publicKey, ChannelWriteDispatch())
+
+    override suspend fun removeContact(publicKey: Bytes, dispatch: ChannelWriteDispatch) {
+        dispatch.claim()
+        requireFullPublicKey(publicKey, "removeContact")
+        core.exchange(dispatch) { simple(PacketBuilder.removeContact(publicKey)) }
+    }
     override suspend fun resetPath(publicKey: Bytes) { requireFullPublicKey(publicKey, "resetPath"); simple(PacketBuilder.resetPath(publicKey)) }
     override suspend fun shareContact(publicKey: Bytes) { requireFullPublicKey(publicKey, "shareContact"); simple(PacketBuilder.shareContact(publicKey)) }
     override suspend fun exportContact(publicKey: Bytes?): String {

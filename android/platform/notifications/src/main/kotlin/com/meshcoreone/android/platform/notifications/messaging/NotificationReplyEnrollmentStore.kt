@@ -78,7 +78,9 @@ class NotificationReplyEnrollmentStore internal constructor(
         val recordId: UUID,
         val submissionId: UUID,
         val exactText: String,
-    )
+    ) {
+        override fun toString(): String = "UnboundText(<redacted>)"
+    }
     sealed interface TextResult {
         data class Durable(val record: UnboundText) : TextResult
         data class AlreadyRetained(val record: UnboundText) : TextResult

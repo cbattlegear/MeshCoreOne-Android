@@ -69,6 +69,18 @@ All entries expose `targetAuthority=UNPROVED`. No text is logged or included in 
 string representations. RemoteInput whitespace, NUL, combining characters, surrogate pairs
 and isolated UTF-16 code units are retained without trim/normalization/replacement.
 
+PR #579 review identified that the later copy-only `UnboundText` and `CopyText`
+data classes still generated text-bearing strings, including through their containing
+retained/result wrappers. Their explicit `toString()` implementations now return
+constant redacted descriptions. Data-class equality, hashing, `copy()` and exact-text
+properties are unchanged. Two added real-storage regression methods exercise the
+leaf values, `TextResult.Durable`, `TextResult.AlreadyRetained`,
+`TextInventory.Retained` and `CopyInventory.Retained`, including lossless retrieval and
+changed-text inequality. All original 165 reply methods/assertions remain; the
+successor expects 167 reply methods at API 31/37 plus six baseline cases (340).
+This repair's hosted execution is pending the separately integrated supported runner;
+the historical 336-case results for earlier exact heads do not verify it.
+
 Recovery consumer policy remains a separate recovered-items list with explicit copy to a
 user-selected chat. Reading an entry does not adopt, relabel, send, delete or retire it;
 this substrate implements none of those UX actions. Unknown/replaced targets stay unbound.

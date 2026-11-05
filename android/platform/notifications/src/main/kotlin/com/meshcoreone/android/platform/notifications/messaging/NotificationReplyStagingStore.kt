@@ -160,7 +160,9 @@ class NotificationReplyStagingStore internal constructor(
     }
 
     /** Observed storage coordinates only, never continuity, route, draft or dispatch authority. */
-    data class CopyText(val storeId: UUID, val recordId: UUID, val sequence: Long, val exactText: String)
+    data class CopyText(val storeId: UUID, val recordId: UUID, val sequence: Long, val exactText: String) {
+        override fun toString(): String = "CopyText(<redacted>)"
+    }
     sealed interface CopyInventory {
         data class Retained(val records: List<CopyText>) : CopyInventory
         data class Failed(val reason: Failure) : CopyInventory

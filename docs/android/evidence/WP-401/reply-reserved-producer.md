@@ -16,8 +16,8 @@ nor the retained local execution owner is changed.
 `NotificationReplyIssuanceAdapter.prepareReserved(proposal, maxReplyCodeUnits)` requires the
 caller to supply a positive, representable Java UTF-16 code-unit bound. There is no default.
 It invokes the actual store's `reserveIssuedReply(expectedStoreId, proposal, bound)`. Only
-Reserved/AlreadyReserved with the exact store, entire typed proposal and bound can construct
-a PendingIntent. Null or mismatched bounds/identity return CORRUPT_STORAGE. Capacity, consumed,
+Reserved/AlreadyReserved with the exact store, entire typed proposal and bound return
+`ExposureHeld(record)` and NEVER construct or return a PendingIntent. Null or mismatched bounds/identity return CORRUPT_STORAGE. Capacity, consumed,
 conflict and other rejected results pass through without token construction. Indeterminate
 passes through without exposure or replacement-token generation. Cancellation propagates.
 
@@ -26,6 +26,22 @@ and promises no future reply quota. Neither method initializes or migrates stora
 must separately supply an actual bound enrollment handle and explicitly enable reservations.
 The parser preserves raw text, including oversized input, without truncation or normalization;
 only atomic `admitIssued` decides whether submitted bytes were retained.
+
+## Reservation-to-publication race: exposure blocked
+
+Source review of the initial cec1 proposal found a substantive interleaving: a prior action is
+already visible; a second preparation reads AlreadyReserved and pauses; the receiver retains
+the first submission and consumes that quota; the second preparation then constructs/re-exposes
+the old token without remaining reserved capacity. A standalone recheck before returning cannot
+protect a later Android notification publication. Neither the storage owner nor receiver owner
+provides a cross-process issuance/admission/publication exclusion or durable fence.
+
+The corrected API therefore only reports an exact transaction observation, not continuing
+capacity or permission to expose an action. `ExposureHeld` may describe quota consumed after
+the transaction. This is intentionally NOT the completed exposure boundary: actual bounded
+notification publication remains blocked until the combined producer/receiver/platform
+protocol supplies and tests the exclusion. No caller may convert the observed record into
+a PendingIntent or publish it as a guaranteed reserved action.
 
 The bounded reservation is logical quota for ONE initial submission, not disk preallocation,
 an OS input cap, guaranteed writes, repeated/conflicting-input capacity, RF identity or sending.
@@ -39,17 +55,22 @@ Actual trusted admissions: adapter `modify` -> wp-owned; new focused test
 `add-or-update-related-test` -> reviewed-support-test; this document `create` -> wp-owned.
 The legacy advisory mismatch is not mutated or represented as a transferred receipt.
 
-Nine new SDK31/37 test methods are authored against actual enrollment-bound SQLite storage and
-real PendingIntents. They cover exact retry, full row quota, consumed-token no-recreation,
+Ten new SDK31/37 test methods are authored against actual enrollment-bound SQLite storage and
+real PendingIntents. They cover exact observation/retry, full row quota, consumed-token no-recreation,
 registry/bounded conflicts, exact raw oversized input, every typed rejection, ambiguous and
 cancelled results, mismatched returned receipts, real lost-return reconciliation, real
-post-commit storage loss, invalid bounds, stale identity and missing storage. Fixture witnesses
+post-commit storage loss, invalid bounds, stale identity and missing storage. A deterministic
+barrier pauses the real AlreadyReserved return while an actual prior PendingIntent submits text
+and atomic admission consumes the quota; cancellation of the prior token followed by resumption
+must produce only ExposureHeld and never recreate the token (FLAG_NO_CREATE control). Previously
+visible tokens are explicitly test-created fixtures, not a bypassing production producer.
+Fixture witnesses
 are explicitly test-only, not production authenticated installation evidence.
 
 At source freeze these new methods are NOT compiled or executed. Local Android execution is
 blocked by the previously established installed `controller/authority.py` mismatch; it is not
 bypassed. Exact diagnostic composition must preserve the original ten adapter methods
-(20 executions), discover the nine new methods (18 executions), bind compiled source bytes and
+(20 executions), discover the ten new methods (20 executions), bind compiled source bytes and
 report failures/errors/skips honestly. The existing module task is
 `:platform:notifications:testDebugUnitTest`; the discovery owner supplies its admitted hosted
 task/selector wiring. Original hosted logs, not a second result bundle, are authoritative.

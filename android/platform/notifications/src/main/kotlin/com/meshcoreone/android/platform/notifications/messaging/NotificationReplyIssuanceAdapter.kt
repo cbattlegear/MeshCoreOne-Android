@@ -17,6 +17,11 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 
 sealed interface NotificationReplyPreparation {
+    /**
+     * Exact reservation observed at its transaction, NOT continuing capacity or publication authority.
+     * No PendingIntent was constructed. Admission can already have consumed this quota.
+     */
+    data class ExposureHeld(val issuance: IssuedRecord) : NotificationReplyPreparation
     /** Issuance only: no reply bytes retained, notification posted or delivery/send acknowledged. */
     data class Prepared(val issuance: IssuedRecord, val pendingIntent: PendingIntent) : NotificationReplyPreparation
     data class NotIssued(val reason: Failure) : NotificationReplyPreparation
@@ -62,6 +67,7 @@ class NotificationReplyIssuanceAdapter internal constructor(
      * Reserves logical quota for ONE initial submission within the caller's UTF-16 code-unit bound.
      * Not filesystem preallocation, input truncation, repeated-input custody or a successful-write
      * guarantee. Android may still deliver oversized text; the journal decides actual admission.
+     * Always holds exposure: no combined publication/admission fence exists in this adapter.
      */
     suspend fun prepareReserved(proposal: IssuedAction, maxReplyCodeUnits: Int): NotificationReplyPreparation {
         currentCoroutineContext().ensureActive()
@@ -101,6 +107,7 @@ class NotificationReplyIssuanceAdapter internal constructor(
             return NotificationReplyPreparation.NotIssued(Failure.CORRUPT_STORAGE)
         }
         currentCoroutineContext().ensureActive()
+        if (expectedBound != null) return NotificationReplyPreparation.ExposureHeld(reserved)
         val intent = Intent(context, UnactivatedIssuedReplyReceiver::class.java)
             .setAction(ACTION)
             .setData(identity(reserved.storeId, proposal.token))

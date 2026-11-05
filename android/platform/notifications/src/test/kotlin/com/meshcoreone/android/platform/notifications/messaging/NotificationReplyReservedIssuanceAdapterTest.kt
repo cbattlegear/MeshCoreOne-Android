@@ -64,20 +64,21 @@ class NotificationReplyReservedIssuanceAdapterTest {
     fun exactRetryKeepsRealTokenAndQuotaWhileFullJournalCannotExposeAnotherAction() = runTest {
         provision()
         val adapter = NotificationReplyIssuanceAdapter(context, operation.storeId, store)
-        val first = adapter.prepareReserved(action, raw.length) as NotificationReplyPreparation.Prepared
-        val retry = adapter.prepareReserved(action, raw.length) as NotificationReplyPreparation.Prepared
+        val first = adapter.prepareReserved(action, raw.length) as NotificationReplyPreparation.ExposureHeld
+        val retry = adapter.prepareReserved(action, raw.length) as NotificationReplyPreparation.ExposureHeld
         assertEquals(first.issuance, retry.issuance)
         assertEquals(raw.length, first.issuance.maxReplyCodeUnits)
-        assertEquals(first.pendingIntent, retry.pendingIntent)
+        assertNoToken(action)
         val another = action.copy(token = UUID.randomUUID(), post = action.post.copy(postId = UUID.randomUUID()))
         assertEquals(NotificationReplyPreparation.NotIssued(Failure.RECORD_CAPACITY),
             adapter.prepareReserved(another, raw.length))
         assertNoToken(another)
-        val input = deliver(adapter, first.pendingIntent, raw)
+        val priorToken = fixturePendingIntent()
+        val input = deliver(adapter, priorToken, raw)
         val staged = store.admitIssued(input.storeId, input.token, input.exactText) as StageResult.Staged
         assertEquals(StageResult.AlreadyStaged(staged.identity, staged.outgoingMessageId),
             store.admitIssued(input.storeId, input.token, input.exactText))
-        first.pendingIntent.cancel()
+        priorToken.cancel()
         assertEquals(NotificationReplyPreparation.NotIssued(Failure.REPLY_RESERVATION_CONSUMED),
             adapter.prepareReserved(action, raw.length))
         assertNoToken(action)
@@ -94,7 +95,8 @@ class NotificationReplyReservedIssuanceAdapterTest {
         assertEquals(NotificationReplyPreparation.NotIssued(Failure.ISSUANCE_CONFLICT),
             adapter.prepareReserved(action, raw.length))
         val bounded = action.copy(token = UUID.randomUUID(), post = action.post.copy(postId = UUID.randomUUID()))
-        assertTrue(adapter.prepareReserved(bounded, raw.length) is NotificationReplyPreparation.Prepared)
+        assertTrue(adapter.prepareReserved(bounded, raw.length) is NotificationReplyPreparation.ExposureHeld)
+        assertNoToken(bounded)
         assertEquals(NotificationReplyPreparation.NotIssued(Failure.ISSUANCE_CONFLICT),
             adapter.prepareReserved(bounded, raw.length + 1))
         assertEquals(NotificationReplyPreparation.NotIssued(Failure.ISSUANCE_CONFLICT), adapter.prepare(bounded))
@@ -106,13 +108,15 @@ class NotificationReplyReservedIssuanceAdapterTest {
     fun oversizedRawInputIsNotTruncatedAndDoesNotConsumeReservation() = runTest {
         provision()
         val adapter = NotificationReplyIssuanceAdapter(context, operation.storeId, store)
-        val prepared = adapter.prepareReserved(action, raw.length) as NotificationReplyPreparation.Prepared
-        val oversized = deliver(adapter, prepared.pendingIntent, raw + "\uD800")
+        assertTrue(adapter.prepareReserved(action, raw.length) is NotificationReplyPreparation.ExposureHeld)
+        assertNoToken(action)
+        val priorToken = fixturePendingIntent()
+        val oversized = deliver(adapter, priorToken, raw + "\uD800")
         assertEquals(raw + "\uD800", oversized.exactText)
         assertEquals(StageResult.Rejected(Failure.REPLY_TEXT_BOUND_EXCEEDED),
             store.admitIssued(oversized.storeId, oversized.token, oversized.exactText))
-        assertTrue(adapter.prepareReserved(action, raw.length) is NotificationReplyPreparation.Prepared)
-        val valid = deliver(adapter, prepared.pendingIntent, raw)
+        assertTrue(adapter.prepareReserved(action, raw.length) is NotificationReplyPreparation.ExposureHeld)
+        val valid = deliver(adapter, priorToken, raw)
         assertTrue(store.admitIssued(valid.storeId, valid.token, valid.exactText) is StageResult.Staged)
     }
 
@@ -186,11 +190,11 @@ class NotificationReplyReservedIssuanceAdapterTest {
         val faulting = NotificationReplyStagingStore(file, limits, expectedEnrollment = receipt,
             afterIssuanceCommit = { throw SQLiteException("lost commit return") })
         val adapter = NotificationReplyIssuanceAdapter(context, operation.storeId, faulting)
-        val result = adapter.prepareReserved(action, raw.length) as NotificationReplyPreparation.Prepared
+        val result = adapter.prepareReserved(action, raw.length) as NotificationReplyPreparation.ExposureHeld
         val retry = NotificationReplyIssuanceAdapter(context, operation.storeId, store)
-            .prepareReserved(action, raw.length) as NotificationReplyPreparation.Prepared
+            .prepareReserved(action, raw.length) as NotificationReplyPreparation.ExposureHeld
         assertEquals(result.issuance, retry.issuance)
-        assertEquals(result.pendingIntent, retry.pendingIntent)
+        assertNoToken(action)
         assertEquals(action.token, result.issuance.action.token)
     }
 
@@ -232,6 +236,40 @@ class NotificationReplyReservedIssuanceAdapterTest {
         assertFalse(file.exists())
     }
 
+    @Test
+    fun consumedWhileAlreadyReservedReturnIsPausedNeverReexposesPriorPendingIntent() = runTest {
+        provision()
+        val actual = store
+        assertTrue(actual.reserveIssuedReply(operation.storeId, action, raw.length) is IssuanceResult.Reserved)
+        // Model a token already exposed by a prior publisher; this fixture is NOT production exposure.
+        val priorToken = fixturePendingIntent()
+        val observed = CompletableDeferred<IssuanceResult>()
+        val release = CompletableDeferred<Unit>()
+        val adapter = injected { expected, proposal, bound ->
+            val result = actual.reserveIssuedReply(expected, proposal, bound)
+            assertTrue(result is IssuanceResult.AlreadyReserved)
+            observed.complete(result)
+            release.await()
+            result
+        }
+        val preparing = async { adapter.prepareReserved(action, raw.length) }
+        observed.await()
+        assertFalse(preparing.isCompleted)
+        val input = deliver(adapter, priorToken, raw)
+        val retained = actual.admitIssued(input.storeId, input.token, input.exactText)
+        assertTrue(retained is StageResult.Staged)
+        priorToken.cancel()
+        assertNoToken(action)
+        release.complete(Unit)
+        val held = preparing.await() as NotificationReplyPreparation.ExposureHeld
+        assertEquals((observed.await() as IssuanceResult.AlreadyReserved).record, held.issuance)
+        assertNoToken(action) // Stale transaction receipt cannot recreate the cancelled action.
+        assertEquals(IssuanceResult.Rejected(Failure.REPLY_RESERVATION_CONSUMED),
+            actual.reserveIssuedReply(operation.storeId, action, raw.length))
+        val inventory = (actual.read(operation.storeId) as NotificationReplyStagingStore.ReadResult.Inventory).entries
+        assertEquals(listOf(raw), inventory.map { it.exactText })
+    }
+
     private fun injected(reserve: suspend (UUID, NotificationReplyStagingStore.IssuedAction, Int) -> IssuanceResult) =
         NotificationReplyIssuanceAdapter(context, operation.storeId, reserve) { _, _ ->
             error("Bounded preparation must not call registry-only registration")
@@ -244,6 +282,18 @@ class NotificationReplyReservedIssuanceAdapterTest {
                 "meshcore-notification://issued-reply/v1/${operation.storeId}/${proposal.token}",
             ))
         assertNull(PendingIntent.getBroadcast(context, 0, identity, PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_MUTABLE))
+    }
+
+    private fun fixturePendingIntent(): PendingIntent {
+        // Only a test model of a previously published action, never a production capacity guarantee.
+        val identity = Intent(context, UnactivatedIssuedReplyReceiver::class.java)
+            .setAction(NotificationReplyIssuanceAdapter.ACTION)
+            .setData(android.net.Uri.parse(
+                "meshcore-notification://issued-reply/v1/${operation.storeId}/${action.token}",
+            ))
+            .putExtra("mc1.notification.issued-reply.store", operation.storeId.toString())
+            .putExtra("mc1.notification.issued-reply.token", action.token.toString())
+        return PendingIntent.getBroadcast(context, 0, identity, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
     }
 
     private fun deliver(

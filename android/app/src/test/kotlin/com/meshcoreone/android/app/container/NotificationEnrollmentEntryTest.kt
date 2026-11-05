@@ -10,6 +10,7 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.semantics.SemanticsActions
 import com.meshcoreone.android.R
 import com.meshcoreone.android.app.container.NotificationEnrollmentCoordinator as Enrollment
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
@@ -193,6 +194,21 @@ class NotificationEnrollmentEntryTest {
         start()
         compose.runOnUiThread {
             requireNotNull(ShadowDialog.getLatestDialog().window).decorView.dispatchWindowFocusChanged(false)
+        }
+        compose.waitForIdle()
+        assertTrue(requireNotNull(backend.shown).retired)
+        assertEquals(0, backend.stages)
+        assertEquals(0, backend.enrollments)
+    }
+
+    @Test fun queuedActualConfirmCannotAuthorizeAfterDialogFocusLoss() {
+        mount()
+        start()
+        val confirm = compose.onNodeWithText(text(R.string.notification_enrollment_confirm))
+            .fetchSemanticsNode().config[SemanticsActions.OnClick].action
+        compose.runOnUiThread {
+            requireNotNull(ShadowDialog.getLatestDialog().window).decorView.dispatchWindowFocusChanged(false)
+            requireNotNull(confirm).invoke()
         }
         compose.waitForIdle()
         assertTrue(requireNotNull(backend.shown).retired)

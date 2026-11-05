@@ -8,6 +8,8 @@ import com.meshcoreone.android.core.contracts.domain.ConnectedDeviceWriteView
 import com.meshcoreone.android.core.contracts.domain.ContactPersisting
 import com.meshcoreone.android.core.contracts.domain.DevicePersisting
 import com.meshcoreone.android.core.contracts.domain.DeviceWriteConflict
+import com.meshcoreone.android.core.contracts.domain.DeviceWriteSnapshot
+import com.meshcoreone.android.core.contracts.domain.PreRepeatSettingsAttempt
 import com.meshcoreone.android.core.contracts.domain.KnownRegionRemovalOutcome
 import com.meshcoreone.android.core.contracts.domain.editDevice
 import com.meshcoreone.android.core.contracts.domain.preservingChanges
@@ -137,12 +139,14 @@ class ConnectedDeviceEditor(
     private suspend fun sessionEdit(
         operation: String,
         expectedToken: SessionToken?,
+        expectedSnapshot: DeviceWriteSnapshot? = null,
+        onCommittedSnapshot: (DeviceWriteSnapshot) -> Unit = {},
         transform: (DeviceDTO) -> DeviceDTO,
     ): Boolean {
         var notification: (() -> Unit)? = null
         try {
             return sessionEdits.withLock {
-                persistEdit(operation, expectedToken, { notification = it }, transform)
+                persistEdit(operation, expectedToken, { notification = it }, expectedSnapshot, onCommittedSnapshot, transform)
             }
         } finally {
             // A committed notice survives caller cancellation, but never runs under any write lease.
@@ -154,6 +158,8 @@ class ConnectedDeviceEditor(
         operation: String,
         expectedToken: SessionToken?,
         notifyAfterUnlock: (() -> Unit) -> Unit,
+        expectedSnapshot: DeviceWriteSnapshot?,
+        onCommittedSnapshot: (DeviceWriteSnapshot) -> Unit,
         transform: (DeviceDTO) -> DeviceDTO,
     ): Boolean {
         val originalView = access.captureDeviceWriteView(expectedToken) ?: return false
@@ -166,7 +172,7 @@ class ConnectedDeviceEditor(
             var published = false
             devices.editDevice(original.id, ::current, withAuthority = { write ->
                 access.withDeviceWriteAuthority(expectedToken, write)
-            }, onCommitted = { saved ->
+            }, expectedSnapshot = expectedSnapshot, onCommittedSnapshot = onCommittedSnapshot, onCommitted = { saved ->
                 var updated: DeviceDTO? = null
                 val edit = access.transformConnectedDevice(expectedToken) { live ->
                     val merged = saved.preservingChanges(original, live)
@@ -228,6 +234,33 @@ class ConnectedDeviceEditor(
 
     suspend fun savePreRepeatSettings(expectedToken: SessionToken): Boolean =
         sessionEdit("preRepeat", expectedToken) { it.preservingOrSavingPreRepeatSettings() }
+
+    suspend fun savePreRepeatSettings(expectedToken: SessionToken, attempt: PreRepeatSettingsAttempt): Boolean {
+        require(attempt.token == expectedToken)
+        attempt.claimPreparation()
+        var created = false
+        val saved = sessionEdit("prepareRepeat", expectedToken, onCommittedSnapshot = {
+            attempt.recordCommitted(it, created)
+        }) { current ->
+            created = current.preRepeatFrequency == null && current.preRepeatBandwidth == null &&
+                current.preRepeatSpreadingFactor == null && current.preRepeatCodingRate == null && !current.clientRepeat
+            current.preservingOrSavingPreRepeatSettings()
+        }
+        if (saved) attempt.requireCommitted()
+        return saved
+    }
+
+    suspend fun abortPreRepeatSettings(expectedToken: SessionToken, attempt: PreRepeatSettingsAttempt): Boolean {
+        require(attempt.token == expectedToken)
+        val receipt = attempt.takeAbortSnapshot() ?: return true
+        val saved = sessionEdit("abortRepeat", expectedToken, expectedSnapshot = receipt) { it.clearingPreRepeatSettings() }
+        if (!saved) {
+            val failure = DeviceEditPersistenceConflict()
+            diagnostics.report("device.abortRepeat", failure)
+            throw failure
+        }
+        return true
+    }
 
     private fun DeviceDTO.preservingOrSavingPreRepeatSettings(): DeviceDTO =
         // Partial imported snapshots retain their native per-field restore fallback.

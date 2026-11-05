@@ -5,6 +5,7 @@ import android.content.Context
 import androidx.room.withTransaction
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.DeviceWriteSnapshot
+import com.meshcoreone.android.core.contracts.domain.PreRepeatSettingsAttempt
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
@@ -17,7 +18,9 @@ import com.meshcoreone.android.feature.settings.device.*
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
@@ -29,6 +32,126 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class SettingsRepeatPersistenceTest : RoomProcessTest() {
+    @Test fun committedSnapshotCancelledBeforeSetIsAbortedAndFreshEnableRestoresTheLaterManualRf() = runTest {
+        val committed = CompletableDeferred<Job>()
+        val hold = CompletableDeferred<Unit>()
+        var armed = false
+        val held = object : PersistenceStoreProtocol by store {
+            override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+                val saved = store.saveDeviceIfUnchanged(dto, expected)
+                if (saved && armed && expected.device.preRepeatFrequency == null && dto.preRepeatFrequency != null) {
+                    armed = false
+                    committed.complete(currentCoroutineContext()[Job]!!)
+                    hold.await()
+                }
+                return saved
+            }
+        }
+        try {
+            withRepeat(held) { h, holder, _, radio ->
+                val before = assertNotNull(h.manager.connectedDevice)
+                val token = assertNotNull(h.sessions.current).token
+                armed = true
+                holder.onRepeatToggled(true)
+                holder.confirmEnableRepeatMode()
+                h.eventually("actual snapshot committed before cancelled return") { committed.isCompleted }
+                assertEquals(before.frequency, store.fetchDevice(before.id)!!.preRepeatFrequency)
+                assertEquals(before.frequency, h.manager.connectedDevice!!.preRepeatFrequency)
+                assertTrue(radio.radioWrites.isEmpty())
+                committed.await().cancel()
+                h.eventually("cancelled preparation cleanup acknowledged") { !holder.state.value.isApplyingRepeat }
+                assertEquals(before, store.fetchDevice(before.id))
+                assertEquals(before, h.manager.connectedDevice)
+                assertFalse(holder.state.value.isRepeatEnabled)
+                assertTrue(radio.radioWrites.isEmpty(), "Cancellation was before the first SET")
+                val service = assertNotNull(h.sessions.current).settingsService
+                service.setRadioParamsVerified(868_000u, 125_000u, 9u, 6u, false)
+                h.eventually("later manual RF published on the original token") {
+                    h.manager.connectedDevice?.frequency == 868_000u && holder.state.value.device?.frequency == 868_000u
+                }
+                val manual = assertNotNull(h.manager.connectedDevice)
+                assertEquals(token, h.sessions.current?.token)
+                assertNull(manual.preRepeatFrequency)
+                holder.onRepeatToggled(true)
+                holder.confirmEnableRepeatMode()
+                h.eventually("fresh Repeat snapshot follows the later manual RF") {
+                    !holder.state.value.isApplyingRepeat && h.manager.connectedDevice?.clientRepeat == true &&
+                        holder.state.value.device?.clientRepeat == true
+                }
+                val prepared = assertNotNull(store.fetchDevice(before.id))
+                assertEquals(manual.frequency, prepared.preRepeatFrequency)
+                assertEquals(manual.bandwidth, prepared.preRepeatBandwidth)
+                assertEquals(manual.spreadingFactor, prepared.preRepeatSpreadingFactor)
+                assertEquals(manual.codingRate, prepared.preRepeatCodingRate)
+                holder.onRepeatToggled(false)
+                h.eventually("fresh Repeat off restores the later manual RF and clears") {
+                    !holder.state.value.isApplyingRepeat && h.manager.connectedDevice?.clientRepeat == false &&
+                        h.manager.connectedDevice?.frequency == manual.frequency &&
+                        h.manager.connectedDevice?.preRepeatFrequency == null
+                }
+                val restored = assertNotNull(store.fetchDevice(before.id))
+                assertEquals(manual.frequency, restored.frequency)
+                assertEquals(manual.bandwidth, restored.bandwidth)
+                assertEquals(manual.spreadingFactor, restored.spreadingFactor)
+                assertEquals(manual.codingRate, restored.codingRate)
+                assertNull(restored.preRepeatFrequency)
+                assertNull(restored.preRepeatBandwidth)
+                assertNull(restored.preRepeatSpreadingFactor)
+                assertNull(restored.preRepeatCodingRate)
+                assertEquals(listOf(0, 1, 0), radio.radioWrites.map { it[11].toInt() })
+            }
+        } finally { hold.complete(Unit) }
+    }
+
+    @Test fun abortPreservesEveryExistingSnapshotAndRefusesEqualDtoAbaOrRetiredCreationReceipts() = runTest {
+        withRepeat(store) { h, _, _, _ ->
+            val before = assertNotNull(h.manager.connectedDevice)
+            val token = assertNotNull(h.sessions.current).token
+            val editor = h.container.deviceEditor
+            val full = before.savingPreRepeatSettings()
+            val existing = listOf(
+                full, before.copy(preRepeatFrequency = full.preRepeatFrequency),
+                before.copy(preRepeatBandwidth = full.preRepeatBandwidth),
+                before.copy(preRepeatSpreadingFactor = full.preRepeatSpreadingFactor),
+                before.copy(preRepeatCodingRate = full.preRepeatCodingRate),
+            )
+            for (snapshot in existing) {
+                store.saveDevice(snapshot)
+                editor.updateDevice(snapshot)
+                val attempt = PreRepeatSettingsAttempt(token)
+                assertTrue(editor.savePreRepeatSettings(token, attempt))
+                assertTrue(editor.abortPreRepeatSettings(token, attempt))
+                assertEquals(snapshot, store.fetchDevice(before.id), "Never abort a preexisting full or partial snapshot")
+                assertEquals(snapshot, h.manager.connectedDevice)
+            }
+            assertTrue(editor.clearPreRepeatSettings(token))
+            val abaAttempt = PreRepeatSettingsAttempt(token)
+            assertTrue(editor.savePreRepeatSettings(token, abaAttempt))
+            val prepared = assertNotNull(store.fetchDevice(before.id))
+            // Same complete DTO after two targeted commits must still invalidate the creation receipt.
+            store.updateDeviceLastContactSync(before.radioId, prepared.lastContactSync + 1u)
+            store.updateDeviceLastContactSync(before.radioId, prepared.lastContactSync)
+            assertEquals(prepared, store.fetchDevice(before.id))
+            val refused = runCatching { editor.abortPreRepeatSettings(token, abaAttempt) }.exceptionOrNull()
+            assertNotNull(refused, "Abort must compare the actual creation revision, not just snapshot values")
+            assertEquals(prepared, store.fetchDevice(before.id))
+            assertEquals(prepared, h.manager.connectedDevice)
+            assertTrue(editor.clearPreRepeatSettings(token))
+            val retiredAttempt = PreRepeatSettingsAttempt(token)
+            assertTrue(editor.savePreRepeatSettings(token, retiredAttempt))
+            h.manager.disconnect()
+            h.manager.connect(h.target(before.id))
+            h.eventually("successor ready for receipt refusal") {
+                h.sessions.current?.token != token && h.appState.canRunSettingsStartupReads
+            }
+            val successor = assertNotNull(h.manager.connectedDevice)
+            val durable = store.fetchDevice(before.id)
+            assertNotNull(runCatching { editor.abortPreRepeatSettings(token, retiredAttempt) }.exceptionOrNull())
+            assertEquals(successor, h.manager.connectedDevice)
+            assertEquals(durable, store.fetchDevice(before.id))
+        }
+    }
+
     @Test fun repeatWaitsForSnapshotAndClearFailuresReachTheActualActionBeforeRetry() = runTest {
         val saveEntered = CompletableDeferred<Unit>()
         val saveRelease = CompletableDeferred<Unit>()
@@ -134,7 +257,7 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                 armed = true
                 holder.onRepeatToggled(true)
                 holder.confirmEnableRepeatMode()
-                h.eventually("actual editor snapshot read queued behind Room") { snapshotEntered.isCompleted }
+                h.eventually("editor reaches snapshot boundary while actual Room transaction is held") { snapshotEntered.isCompleted }
                 assertTrue(holder.state.value.isApplyingRepeat)
                 assertTrue(radio.radioWrites.isEmpty())
                 assertEquals(before, h.manager.connectedDevice)

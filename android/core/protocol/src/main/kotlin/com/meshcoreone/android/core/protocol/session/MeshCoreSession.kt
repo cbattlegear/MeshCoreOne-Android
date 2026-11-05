@@ -100,6 +100,13 @@ class MeshCoreSession private constructor(
     override suspend fun setRadio(
         frequency: Double, bandwidth: Double, spreadingFactor: UByte, codingRate: UByte, clientRepeat: Boolean?,
     ) = simple(PacketBuilder.setRadio(frequency, bandwidth, spreadingFactor, codingRate, clientRepeat))
+    override suspend fun setRadio(
+        frequency: Double, bandwidth: Double, spreadingFactor: UByte, codingRate: UByte, clientRepeat: Boolean?,
+        dispatch: ChannelWriteDispatch,
+    ) {
+        dispatch.claim()
+        core.exchange(dispatch) { simple(PacketBuilder.setRadio(frequency, bandwidth, spreadingFactor, codingRate, clientRepeat)) }
+    }
     override suspend fun getRepeatFreq(): List<FrequencyRange> = core.exchange {
         query(PacketBuilder.getRepeatFreq(), "repeatFreq") { (it as? MeshEvent.AllowedRepeatFreq)?.ranges }
     }

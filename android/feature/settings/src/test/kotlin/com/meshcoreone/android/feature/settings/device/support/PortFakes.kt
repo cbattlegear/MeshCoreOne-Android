@@ -2,6 +2,7 @@
 package com.meshcoreone.android.feature.settings.device.support
 
 import com.meshcoreone.android.core.contracts.domain.NotificationPreferencesPort
+import com.meshcoreone.android.core.contracts.domain.PreRepeatSettingsAttempt
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.NotificationPreferences
 import com.meshcoreone.android.core.model.RegionSelection
@@ -50,6 +51,14 @@ internal class FakeStore : DeviceSettingsStorePort {
     override suspend fun savePreRepeatSettings(expectedToken: com.meshcoreone.android.core.contracts.domain.SessionToken?) {
         beforeRepeatEdit()
         savePreRepeatSettings()
+    }
+    override suspend fun savePreRepeatSettings(
+        expectedToken: com.meshcoreone.android.core.contracts.domain.SessionToken?, attempt: PreRepeatSettingsAttempt,
+    ) = savePreRepeatSettings(expectedToken)
+    override suspend fun abortPreRepeatSettings(
+        expectedToken: com.meshcoreone.android.core.contracts.domain.SessionToken?, attempt: PreRepeatSettingsAttempt,
+    ) {
+        attempt.takeAbortSnapshot()
     }
     override suspend fun clearPreRepeatSettings(expectedToken: com.meshcoreone.android.core.contracts.domain.SessionToken?) {
         beforeRepeatEdit()

@@ -22,6 +22,57 @@ The coordinator assigned an independent clean-current-main foundation. Runtime/d
 
 ### Bounded actual Repeat consumer follow-up
 
+The first isolated candidate 44fa60ef4cbdef5d3fbafb408b32324f9143fb95
+was published at diagnostic/wp-305-repeat-consumer-44fa60ef4. Its exact hosted
+run 41994338159 failed in Linux job 127133860599 at app compile: the captured
+adapter referred to missing SettingsService.sessionToken at lines 316/318.
+No new Repeat test execution is accepted from that run. Controller/policy and
+Swift codec jobs passed; this is not whole-candidate acceptance.
+
+Independent producer reviews accepted the bounded source seams but found an
+additional actual cancellation gap: a newly committed snapshot could survive
+cancellation before SET, then a later manual RF edit and fresh enable/off would
+restore the abandoned baseline. The follow-up introduces a single-use Repeat
+attempt with a creation-only receipt captured synchronously at the actual Room
+post-commit boundary, before cancellation can prevent the suspend call returning.
+The receipt contains actual device/revision/authority values after transaction
+bookkeeping; no post-return read or inferred increment supplies authority.
+Original onCommitted remains exactly once after the new receipt callback, even
+when the receipt callback throws. Both callbacks mark commit observed before
+user code, so post-commit exceptions never enter pre-commit failure mapping.
+
+Abort compares the complete committed DTO and both revisions on every optimistic
+attempt, under the original token's runtime authority. It does not rebase onto a
+newer row. Existing complete/partial snapshots, equal-value ABA/newer writes and
+successor sessions cannot be cleared by a stale creation receipt. Refusal is an
+explicit persistence conflict, not a successful cleanup.
+
+The opt-in actual protocol SET overload uses existing ChannelWriteDispatch
+accounting. A marker before calling a suspending service is not treated as actual
+wire provenance. Repeat operations alone settle their owned service task on
+cancellation before cleanup reads terminal dispatch disposition; definitely
+unsent preparations can be aborted, possible SET outcomes retain their restore
+data. The NonCancellable tails only settle that owned task or execute conditional
+receipt cleanup, never encompass the user radio operation. Existing APIs without
+the opt-in attempt retain their behavior. The missing service token accessor is
+provided directly from its immutable context.
+
+New actual holder/adapter/Room control holds the return after snapshot commit,
+cancels the initiating Job, verifies no SET and exact cleanup, manually changes RF
+on the same real service/token, then freshly opens/confirms Repeat and disables it,
+asserting all four later manual RF fields and snapshot clearing. Separate Room
+controls preserve each partial/full snapshot and reject a creation receipt after
+equal-DTO ABA or retirement. Real service/protocol controls distinguish cancellation
+behind the service lock, cancellation inside the actual protocol queue and
+cancellation after SET transmission. A real Room callback control checks exact
+receipt revisions and failure ordering. These controls are authored, not yet
+executed on this successor.
+
+The held-transaction test's hook fires before the delegated snapshot read. It
+proves that a real Room transaction is held and the action reaches its read
+boundary without radio mutation; it does not prove a specific transaction-executor
+queue submission. The assertion label now states that narrower evidence.
+
 The coordinator assigned the remaining fire-and-forget Repeat consumer race after
 the independent review of verified da8. This successor starts from evidence-only
 d19ac7ad307d1270f89858ccef4711bb7bff4477, whose product parent is verified da8.

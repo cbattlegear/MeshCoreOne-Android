@@ -11,10 +11,12 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 
 class DeviceSettingsContext(
     val token: SessionToken,
@@ -66,7 +68,7 @@ class DeviceSettingsContext(
         if (alreadyClosed) handler()
     }
 
-    internal suspend fun <T> operation(action: suspend () -> T): T {
+    internal suspend fun <T> operation(settleCancellation: Boolean = false, action: suspend () -> T): T {
         currentCoroutineContext().ensureActive()
         requireCurrent()
         val task = scope.async {
@@ -83,7 +85,10 @@ class DeviceSettingsContext(
             currentCoroutineContext().ensureActive()
             throw SettingsServiceException(SettingsServiceError.NotConnected)
         } finally {
-            task.cancel()
+            if (settleCancellation) {
+                // Receipt cleanup must observe the owned SET call's terminal dispatch provenance.
+                withContext(NonCancellable) { task.cancelAndJoin() }
+            } else task.cancel()
         }
     }
 

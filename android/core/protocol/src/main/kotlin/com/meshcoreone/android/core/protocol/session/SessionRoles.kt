@@ -226,6 +226,12 @@ interface ConfigurationSessionOps {
         frequency: Double, bandwidth: Double, spreadingFactor: UByte, codingRate: UByte,
         clientRepeat: Boolean? = null,
     )
+    suspend fun setRadio(
+        frequency: Double, bandwidth: Double, spreadingFactor: UByte, codingRate: UByte,
+        clientRepeat: Boolean?, dispatch: ChannelWriteDispatch,
+    ) {
+        throw UnsupportedOperationException("Radio writes require actual dispatch accounting")
+    }
     suspend fun getRepeatFreq(): List<FrequencyRange>
     suspend fun setOtherParams(
         manualAddContacts: Boolean, telemetryModeEnvironment: UByte, telemetryModeLocation: UByte,

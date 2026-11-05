@@ -9,6 +9,8 @@ package com.meshcoreone.android.core.contracts.domain
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
+import com.meshcoreone.android.core.protocol.session.ChannelWriteCancellationDisposition
+import com.meshcoreone.android.core.protocol.session.ChannelWriteDispatch
 import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.currentCoroutineContext
@@ -23,7 +25,50 @@ data class DeviceWriteSnapshot(
     val withAuthority: suspend (suspend () -> Boolean) -> Boolean = { it() },
     /** Post-commit, under [withAuthority]; must not suspend or re-enter persistence. */
     val onCommitted: (DeviceDTO) -> Unit = {},
+    /** Actual post-commit revision receipt; invoked before [onCommitted], even if that callback throws. */
+    val onCommittedSnapshot: (DeviceWriteSnapshot) -> Unit = {},
 )
+
+/** One preparation/SET attempt; only a newly created, definitely unissued snapshot can be aborted. */
+class PreRepeatSettingsAttempt(val token: SessionToken?) {
+    private var preparationClaimed = false
+    private var commitRecorded = false
+    private var created: DeviceWriteSnapshot? = null
+    private var dispatchEntered = false
+    private var abortClaimed = false
+    private val dispatch = ChannelWriteDispatch()
+
+    @Synchronized fun claimPreparation() {
+        check(!preparationClaimed) { "A Repeat preparation is single-use" }
+        preparationClaimed = true
+    }
+
+    @Synchronized fun recordCommitted(snapshot: DeviceWriteSnapshot, created: Boolean) {
+        check(preparationClaimed && !commitRecorded && !abortClaimed)
+        check(snapshot.device.radioId == token?.radioId)
+        commitRecorded = true
+        if (created) this.created = snapshot
+    }
+
+    @Synchronized fun requireCommitted() {
+        check(commitRecorded) { "Repeat preparation requires a post-commit revision receipt" }
+    }
+
+    @Synchronized fun startRadioDispatch(): ChannelWriteDispatch {
+        check(commitRecorded && !abortClaimed && !dispatchEntered)
+        dispatchEntered = true
+        return dispatch
+    }
+
+    @Synchronized fun takeAbortSnapshot(): DeviceWriteSnapshot? {
+        if (abortClaimed) return null
+        abortClaimed = true
+        if (dispatchEntered &&
+            dispatch.cancellationDisposition != ChannelWriteCancellationDisposition.DEFINITELY_UNSENT
+        ) return null
+        return created
+    }
+}
 
 class DeviceWriteConflict : IllegalStateException("Device write authority changed")
 
@@ -91,6 +136,8 @@ suspend fun DevicePersisting.editDevice(
     onSaveFailure: (PersistenceStoreException) -> Nothing = { throw it },
     onCommitted: (DeviceDTO) -> Unit = {},
     withAuthority: suspend (suspend () -> Boolean) -> Boolean = { it() },
+    expectedSnapshot: DeviceWriteSnapshot? = null,
+    onCommittedSnapshot: (DeviceWriteSnapshot) -> Unit = {},
     transform: (DeviceDTO) -> DeviceDTO,
 ): DeviceDTO? {
     val persistence = this as? DeviceEditPersisting
@@ -101,6 +148,9 @@ suspend fun DevicePersisting.editDevice(
         if (!isCurrent()) return null
         val snapshot = persistence.fetchDeviceWriteSnapshot(id) ?: return null
         if (!isCurrent()) return null
+        if (expectedSnapshot != null && (snapshot.revision != expectedSnapshot.revision ||
+                snapshot.authorityRevision != expectedSnapshot.authorityRevision ||
+                snapshot.device != expectedSnapshot.device)) return null
         if (authority != null && snapshot.authorityRevision != authority) throw DeviceWriteConflict()
         authority = snapshot.authorityRevision
         val updated = transform(snapshot.device)
@@ -111,6 +161,9 @@ suspend fun DevicePersisting.editDevice(
         val guarded = snapshot.copy(withAuthority = withAuthority, onCommitted = { saved ->
             commitObserved = true
             onCommitted(saved)
+        }, onCommittedSnapshot = { committed ->
+            commitObserved = true
+            onCommittedSnapshot(committed)
         }, isCurrent = {
             caller.ensureActive()
             isCurrent()

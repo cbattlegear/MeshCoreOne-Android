@@ -3,6 +3,8 @@ package com.meshcoreone.android.core.services.device
 
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException
+import com.meshcoreone.android.core.contracts.domain.DeviceWriteSnapshot
+import com.meshcoreone.android.core.contracts.domain.PreRepeatSettingsAttempt
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.protocol.command.PacketBuilder
 import kotlin.test.Test
@@ -10,6 +12,9 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runCurrent
@@ -17,6 +22,76 @@ import kotlinx.coroutines.test.runTest
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class SettingsRadioSerializationTest {
+    private fun preparedAttempt(): PreRepeatSettingsAttempt {
+        val device = DeviceDTO(
+            radioId = RADIO, publicKey = filled(1), nodeName = "Test",
+            frequency = 915_000u, bandwidth = 125_000u, spreadingFactor = 7u, codingRate = 5u,
+        ).savingPreRepeatSettings()
+        return PreRepeatSettingsAttempt(token()).also {
+            it.claimPreparation()
+            it.recordCommitted(DeviceWriteSnapshot(device, 2, 1), created = true)
+        }
+    }
+
+    @Test fun repeatCancelledBehindRealServiceLockNeverDispatchesAndRetainsAbortAuthority() = runTest {
+        val fixture = settingsFixture()
+        try {
+            val prior = request { fixture.settings.setTxPowerVerified(20) }
+            runCurrent()
+            assertEquals(2, fixture.radio.sent.size)
+            val attempt = preparedAttempt()
+            val queued = request { fixture.settings.setRadioParamsVerified(910_525u, 125_000u, 7u, 5u, true, repeatAttempt = attempt) }
+            runCurrent()
+            assertFalse(queued.isCompleted)
+            queued.cancel()
+            assertFailsWith<CancellationException> { queued.await() }
+            runCurrent()
+            assertNotNull(attempt.takeAbortSnapshot())
+            reply(fixture, 2, PacketBuilder.setTxPower(20), okPacket())
+            reply(fixture, 3, PacketBuilder.appStart("MCore"), selfPacket(txPower = 20))
+            prior.await()
+            assertEquals(0, fixture.radio.sent.count { it[0] == 0x0b.toUByte() })
+        } finally { fixture.close() }
+    }
+
+    @Test fun repeatCancelledInsideActualProtocolQueueIsDefinitelyUnsentBeforeCleanup() = runTest {
+        val fixture = settingsFixture()
+        try {
+            val prior = request { fixture.session.getBattery() }
+            runCurrent()
+            assertEquals(2, fixture.radio.sent.size)
+            val attempt = preparedAttempt()
+            val queued = request { fixture.settings.setRadioParamsVerified(910_525u, 125_000u, 7u, 5u, true, repeatAttempt = attempt) }
+            runCurrent()
+            assertFalse(queued.isCompleted)
+            queued.cancel()
+            assertFailsWith<CancellationException> { queued.await() }
+            runCurrent()
+            assertNotNull(attempt.takeAbortSnapshot(), "Real protocol cancellation must settle before creation cleanup")
+            fixture.radio.receive(Bytes.of(12, 0x10, 0x0e))
+            runCurrent()
+            prior.await()
+            assertEquals(0, fixture.radio.sent.count { it[0] == 0x0b.toUByte() })
+        } finally { fixture.close() }
+    }
+
+    @Test fun repeatCancelledAfterActualSetPreservesTheRestorationSnapshotForUncertainWireOutcome() = runTest {
+        val fixture = settingsFixture()
+        try {
+            val attempt = preparedAttempt()
+            val sent = request { fixture.settings.setRadioParamsVerified(910_525u, 125_000u, 7u, 5u, true, repeatAttempt = attempt) }
+            runCurrent()
+            assertEquals(PacketBuilder.setRadio(910.525, 125.0, 7u, 5u, true), fixture.radio.sent.last())
+            sent.cancel()
+            assertFailsWith<CancellationException> { sent.await() }
+            runCurrent()
+            assertNull(attempt.takeAbortSnapshot(), "A possible SET must never authorize clearing restoration data")
+            fixture.radio.ok()
+            runCurrent()
+            assertEquals(1, fixture.radio.sent.count { it[0] == 0x0b.toUByte() })
+        } finally { fixture.close() }
+    }
+
     @Test fun queuedWriteRejectsActualRfOrRepeatChangesBeforeMutationWithoutWaitingForPublishedEvents() = runTest {
         for ((rfChanges, oldRepeat, newRepeat) in listOf(
             Triple(true, false, false), Triple(false, false, true), Triple(false, true, false),

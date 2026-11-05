@@ -3,6 +3,7 @@
 package com.meshcoreone.android.core.services.device
 
 import com.meshcoreone.android.core.contracts.domain.SessionEvent
+import com.meshcoreone.android.core.contracts.domain.PreRepeatSettingsAttempt
 import com.meshcoreone.android.core.contracts.domain.SessionEventSubscription
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException
@@ -35,6 +36,7 @@ class SettingsService(
     private val session: ConfigurationSessionOps,
     private val context: DeviceSettingsContext,
 ) {
+    val sessionToken get() = context.token
     private val operationLock = Mutex()
     private val eventLock = Any()
     private var subscription: Subscription? = null
@@ -94,7 +96,8 @@ class SettingsService(
         }
     }
 
-    private suspend fun <T> operation(action: suspend () -> T): T = context.operation {
+    private suspend fun <T> operation(settleCancellation: Boolean = false, action: suspend () -> T): T =
+        context.operation(settleCancellation) {
         operationLock.withLock {
             context.requireCurrent()
             action()
@@ -127,8 +130,15 @@ class SettingsService(
 
     private suspend fun writeRadio(
         frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte, codingRate: UByte, clientRepeat: Boolean?,
+        repeatAttempt: PreRepeatSettingsAttempt? = null,
     ) = configuration {
-        setRadio(frequencyKHz.toDouble() / 1000.0, bandwidthKHz.toDouble() / 1000.0, spreadingFactor, codingRate, clientRepeat)
+        if (repeatAttempt == null) {
+            setRadio(frequencyKHz.toDouble() / 1000.0, bandwidthKHz.toDouble() / 1000.0, spreadingFactor, codingRate, clientRepeat)
+        } else {
+            require(repeatAttempt.token == context.token)
+            setRadio(frequencyKHz.toDouble() / 1000.0, bandwidthKHz.toDouble() / 1000.0, spreadingFactor, codingRate,
+                clientRepeat, repeatAttempt.startRadioDispatch())
+        }
     }
 
     suspend fun setTxPower(power: Byte) = operation { configuration { setTxPower(power) } }
@@ -286,9 +296,10 @@ class SettingsService(
         frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte, codingRate: UByte,
         clientRepeat: Boolean? = null, appliedRadioPresetID: String? = null,
         expectedDevice: DeviceDTO? = null,
-    ): SelfInfo = operation {
+        repeatAttempt: PreRepeatSettingsAttempt? = null,
+    ): SelfInfo = operation(settleCancellation = repeatAttempt != null) {
         expectedDevice?.let { verifyQueuedRadioBaseline(it) }
-        val actual = writeRadioAndVerify(frequencyKHz, bandwidthKHz, spreadingFactor, codingRate, clientRepeat)
+        val actual = writeRadioAndVerify(frequencyKHz, bandwidthKHz, spreadingFactor, codingRate, clientRepeat, repeatAttempt)
         publish(SettingsEvent.DeviceUpdated(actual, appliedRadioPresetID))
         actual
     }
@@ -307,8 +318,9 @@ class SettingsService(
 
     private suspend fun writeRadioAndVerify(
         frequency: UInt, bandwidth: UInt, sf: UByte, cr: UByte, clientRepeat: Boolean?,
+        repeatAttempt: PreRepeatSettingsAttempt? = null,
     ): SelfInfo {
-        writeRadio(frequency, bandwidth, sf, cr, clientRepeat)
+        writeRadio(frequency, bandwidth, sf, cr, clientRepeat, repeatAttempt)
         val actual = configuration { sendAppStart() }
         if (!(abs(actual.radioFrequency - frequency.toDouble() / 1000.0) < 0.001) ||
             !(abs(actual.radioBandwidth - bandwidth.toDouble() / 1000.0) < 0.001) ||

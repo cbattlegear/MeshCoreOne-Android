@@ -39,6 +39,10 @@ class DirectAckExclusionStorageTest {
         db.directAcks().operation(DirectAckOperationEntity(
             wire.radioId, wire.claimId, wire.requestId, "EMISSION_TRACKING_REQUIRED", wire.predictedCode, 1, null,
         ))
+        db.directAcks().operation(DirectAckOperationEntity(
+            wire.radioId, wire.claimId, UUID.randomUUID(),
+            "ACCEPTANCE_HISTORY_REQUIRED:${wire.requestId}", wire.predictedCode, 1, null,
+        ))
     }
 
     private fun immediateBusyFailure(db: MeshCoreDatabase) {

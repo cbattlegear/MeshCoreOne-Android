@@ -1,5 +1,87 @@
 # Direct ACK storage authority
 
+## Immutable acceptance-history successor for source review only
+
+This successor is based on `8a8441b25e832785dcd2719fb3e1750168f9638c`.
+It implements the separately authorized internal retention repair, not bootstrap
+acceptance or completion of WP-202. No local build, test, SQL execution, Git object
+decompression, schema generation, hosted dispatch, PR or merge was performed.
+The host-memory and execution holds remain in force. Independent immutable-source
+review is required before execution.
+
+New tracked first wires and retry wires atomically receive the unchanged
+`EMISSION_TRACKING_REQUIRED` operation and a separate immutable
+`ACCEPTANCE_HISTORY_REQUIRED:<wire UUID>` birth operation. Exact registration
+replay does not add either missing marker. Older original-tracked-only wires
+remain legacy/unproven even with matching physical acceptance, an empty internal
+journal or sticky saturation. No historical accepted code is manufactured.
+
+After the existing generic acceptance replay/conflict/stale checks, a genuinely
+new acceptance on a tracked wire atomically appends
+`TRACKED_WIRE_ACCEPTANCE:<wire UUID>` with the actual code, then updates the wire
+and claim. Each internal operation uses a new unused operation primary key.
+The unchanged generic rule only commits acceptance while the wire actual is null;
+matching later calls replay and differing actuals conflict. Thus ordinary replay
+cannot grow or overwrite this journal. A later physical resolution may change
+the current wire actual but cannot replace the retained generic actual. Durable
+nonpayload history is not evicted or capped; diagnostic materialization remains
+bounded. Message erasure and lease retirement still erase payload snapshots.
+
+Complete SQL predicates inspect both birth markers and every retained generic
+actual, not only the latest wire actual. An unsaturated unmatched actual remains
+target/foreign conflict and unresolved settlement evidence. Historical generic
+codes also participate in radio-wide known-code collision checks, across distinct
+messages and contacts. On sticky saturation, fully covered wires may legitimately
+have no matching physical row after CoveredBySaturation; that gap alone is not
+malformed/conflicting. Independently malformed journals/physical evidence and
+missing birth coverage remain explicit. Bounded diagnostics return typed
+InvalidData for incomplete older tracked coverage or contradictory acceptance,
+rather than fabricating a legacy physical invocation. Internal kinds are filtered
+in SQL before public receipt decoding; generic results, eligibility and receipt
+shape are unchanged.
+
+The existing exact delivery proof is checked before unrelated later malformed
+radio history. It proves historical committed delivery/idempotency only, not
+compliance with today's stronger exclusion policy. Its stored fields contain no
+policy/prehistory qualification. Code/RTT/proof mismatch still rejects; malformed
+new settlement still fails. Existing product DELIVERED state is preserved. An
+old attempt cannot be adopted by a newly opened repository context, and receipt
+inspection never reconstructs an attempt. No restart attempt/ACK recovery is
+claimed. Canonical clarification lineage through remote
+`56613c6edb25411bf7aef4ad9659675667d38983` supplied the retention, provenance,
+saturation, old-wire mapping and historical-proof requirements. Its mandatory
+bootstrap declarations are not imported without the missing metadata producer.
+
+The guarded-failure Room source now has 23 test annotations, all UNEXECUTED.
+New controls include generic 999 -> physical 888 and matching 999 -> 999,
+deletion/lease retirement/file reopen, a fresh process epoch and different-contact
+foreign collision; generic insertion rollback, commit then caller cancellation,
+exact replay without growth, internal-operation-ID collision, initial/retry
+birth-insertion rollback and conflicting/missing/stale rejection; old-marker-
+only ancestry including a newer fully covered retry; exact delivered replay
+after unrelated malformed evidence, mismatched RTT, proof/receipt corruption and
+malformed new settlement; malformed acceptance journals despite saturation; and
+real public CoveredBySaturation with no invented marker, including retained
+generic 999 alongside physical 888. Conditional retained-journal positives are
+not certificates of clean physical prehistory on a real installation.
+
+Current-positive raw fixture births now explicitly include both provenance
+markers. The observation control's later original-marker-only insertion remains
+legacy: its expected reason set retains the existing conflict/saturation reasons
+and additionally requires legacy ancestry. The receipt query control retains its
+4,101-resolution load and every public receipt assertion; its raw operation count
+increases from 4,102 to 4,103 for the new hidden birth marker. The preexisting MAY
+diagnostic assertion is retained before generic acceptance; after acceptance the
+same physical MAY is independently inspected and bounded InvalidData is required.
+Its successful physical acceptance/delivery assertions are unchanged.
+
+Global physical prehistory UNKNOWN, its fresh/upgrade/merge-restore/reopen
+controls, schema/version admission and the compact message diagnostic producer
+remain separate unfinished prerequisites. The three frozen bootstrap negatives
+remain unexecuted/expected failing. This repair must not be used to claim a
+globally sound current-policy confirmation or accepted macro WP. Genuine schemas,
+consumer files, generic contracts and the held WP-203 surface are unchanged.
+
 ## Candidate boundary
 
 This is an independently authored WP-202 repair based on published main

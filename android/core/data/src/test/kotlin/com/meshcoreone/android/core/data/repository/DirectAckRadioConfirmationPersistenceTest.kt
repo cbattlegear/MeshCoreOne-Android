@@ -66,6 +66,10 @@ class DirectAckRadioConfirmationPersistenceTest {
         db.directAcks().operation(DirectAckOperationEntity(
             wire.radioId, wire.claimId, wire.requestId, "EMISSION_TRACKING_REQUIRED", wire.predictedCode, 1, null,
         ))
+        db.directAcks().operation(DirectAckOperationEntity(
+            wire.radioId, wire.claimId, UUID.randomUUID(),
+            "ACCEPTANCE_HISTORY_REQUIRED:${wire.requestId}", wire.predictedCode, 1, null,
+        ))
         return DirectAckEmissionEntity(
             wire.radioId, wire.claimId, wire.requestId, UUID.randomUUID(), UUID.randomUUID(),
             wire.predictedCode, state, actual, if (state == "MAY_HAVE_WRITTEN") null else UUID.randomUUID(),
@@ -82,6 +86,10 @@ class DirectAckRadioConfirmationPersistenceTest {
         db.directAcks().operation(DirectAckOperationEntity(
             neverInvoked.radioId, neverInvoked.claimId, neverInvoked.requestId,
             "EMISSION_TRACKING_REQUIRED", neverInvoked.predictedCode, 1, null,
+        ))
+        db.directAcks().operation(DirectAckOperationEntity(
+            neverInvoked.radioId, neverInvoked.claimId, UUID.randomUUID(),
+            "ACCEPTANCE_HISTORY_REQUIRED:${neverInvoked.requestId}", neverInvoked.predictedCode, 1, null,
         ))
         assertEquals(DirectAckRadioConfirmationEvidence.NoPersistedWildcard(RADIO_A), evidence())
         val emissions = db.directAckExclusions().emissions(RADIO_A.value, 10)
@@ -215,6 +223,10 @@ class DirectAckRadioConfirmationPersistenceTest {
                             first.directAcks().operation(DirectAckOperationEntity(
                                 wire.radioId, wire.claimId, wire.requestId,
                                 "EMISSION_TRACKING_REQUIRED", wire.predictedCode, 1, null,
+                            ))
+                            first.directAcks().operation(DirectAckOperationEntity(
+                                wire.radioId, wire.claimId, UUID.randomUUID(),
+                                "ACCEPTANCE_HISTORY_REQUIRED:${wire.requestId}", wire.predictedCode, 1, null,
                             ))
                             first.directAckExclusions().emission(marker)
                             entered.complete(Unit)

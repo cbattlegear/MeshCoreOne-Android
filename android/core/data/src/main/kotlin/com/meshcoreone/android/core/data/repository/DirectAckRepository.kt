@@ -161,7 +161,10 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         dao.claim(claim)
         val wire = DirectAckWireEntity(captured.radioId, captured.requestId, firstWireRequestId, predictedAckCode.toLong(), null)
         dao.wire(wire)
-        if (tracked) dao.operation(trackingOperation(wire))
+        if (tracked) {
+            dao.operation(trackingOperation(wire))
+            appendWireFact(wire, "ACCEPTANCE_HISTORY_REQUIRED:", wire.predictedCode)
+        }
         save()
         DirectAckBeginResult.Begun(Attempt(issued.lease, issued.request), receipt(claim, issued.lease))
     }
@@ -238,7 +241,10 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         }
         val wire = DirectAckWireEntity(claim.radioId, claim.requestId, wireRequestId, predictedAckCode.toLong(), null)
         dao.wire(wire)
-        if (tracked) dao.operation(trackingOperation(wire))
+        if (tracked) {
+            dao.operation(trackingOperation(wire))
+            appendWireFact(wire, "ACCEPTANCE_HISTORY_REQUIRED:", wire.predictedCode)
+        }
         save()
         DirectAckMutationResult.Applied(receipt(claim, issued.lease))
     }
@@ -255,6 +261,7 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
             DirectAckMutationResult.AlreadyApplied(receipt(claim, issued.lease))
         } else DirectAckMutationResult.Rejected(DirectAckRejection.CONFLICT)
         deny(claim, issued)?.let { return@mutate it }
+        if (trackingRequired(wire)) appendWireFact(wire, "TRACKED_WIRE_ACCEPTANCE:", ackCode.toLong())
         bindAcceptedWire(wire, ackCode)
         val phase = if (claim.phase == DirectAckPhase.REGISTERED.name) DirectAckPhase.ACCEPTED.name else claim.phase
         val updated = renew(claim, phase)
@@ -264,6 +271,15 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
 
     private suspend fun RepositoryTransaction.bindAcceptedWire(wire: DirectAckWireEntity, code: UInt) {
         database.directAcks().wire(wire.copy(acceptedCode = code.toLong()))
+    }
+
+    private suspend fun RepositoryTransaction.appendWireFact(wire: DirectAckWireEntity, prefix: String, value: Long) {
+        val dao = database.directAcks()
+        var request = UUID.randomUUID()
+        while (dao.operation(wire.radioId, wire.claimId, request) != null) request = UUID.randomUUID()
+        dao.operation(DirectAckOperationEntity(
+            wire.radioId, wire.claimId, request, prefix + wire.requestId, value, 1, null,
+        ))
     }
 
     private fun trackingOperation(wire: DirectAckWireEntity) = DirectAckOperationEntity(
@@ -451,8 +467,11 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
 
     override suspend fun inspectDirectAckRadioConfirmationEvidence(radioId: RadioId): DirectAckRadioConfirmationEvidence =
         context.read("inspectDirectAckRadioConfirmationEvidence") {
-            val row = database.directAckExclusions().confirmationEvidence(radioId.value)
-            if (row.malformedPhysicalEvidence) invalidData("Malformed persisted radio emission evidence")
+            val dao = database.directAckExclusions()
+            val row = dao.confirmationEvidence(radioId.value)
+            if (row.malformedPhysicalEvidence || dao.malformedAcceptanceHistory(radioId.value)) {
+                invalidData("Malformed persisted radio emission evidence")
+            }
             val reasons = linkedSetOf<DirectAckRadioConfirmationWildcardReason>()
             if (row.unresolvedPhysicalEmission) reasons += DirectAckRadioConfirmationWildcardReason.UNRESOLVED_PHYSICAL_EMISSION
             if (row.conflictingPhysicalEvidence) reasons += DirectAckRadioConfirmationWildcardReason.CONFLICTING_PHYSICAL_EVIDENCE
@@ -465,6 +484,12 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
     override suspend fun inspectDirectAckRadioEvidence(radioId: RadioId): DirectAckRadioEvidenceObservation =
         transaction("inspectDirectAckRadioEvidence") {
             val dao = database.directAckExclusions()
+            if (dao.inconsistentAcceptedHistory(radioId.value) ||
+                dao.incompleteAcceptanceCoverageHistory(radioId.value) ||
+                dao.malformedAcceptanceHistory(radioId.value)
+            ) {
+                invalidData("Tracked wire acceptance ancestry is incomplete or inconsistent")
+            }
             val maximum = DirectAckRadioEvidenceLimits.MAX_DIAGNOSTIC_WIRES_PER_RADIO
             val markers = dao.emissions(radioId.value, maximum)
             val legacy = dao.legacyWires(radioId.value, maximum - markers.size)
@@ -493,9 +518,6 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
             ?: return@transaction DirectAckRadioSettlementResult.Rejected(DirectAckRejection.INVALID_HANDLE)
         val radio = issued.lease.token.radioId.value
         val dao = database.directAcks()
-        if (database.directAckExclusions().confirmationEvidence(radio).malformedPhysicalEvidence) {
-            invalidData("Malformed persisted radio emission evidence")
-        }
         val claim = dao.claim(radio, issued.request)
             ?: return@transaction DirectAckRadioSettlementResult.Rejected(DirectAckRejection.MISSING)
         if (claim.leaseId != issued.lease.request) {
@@ -522,8 +544,13 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
             return@transaction DirectAckRadioSettlementResult.Rejected(it)
         }
         val history = database.directAckExclusions()
+        if (history.confirmationEvidence(radio).malformedPhysicalEvidence || history.malformedAcceptanceHistory(radio)) {
+            invalidData("Malformed persisted radio emission evidence")
+        }
         val reasons = linkedSetOf<DirectAckRadioNonsettlingReason>()
-        if (!history.acceptedCurrentWire(radio, claim.requestId, ackCode.toLong())) {
+        if (!history.acceptedCurrentWire(radio, claim.requestId, ackCode.toLong()) ||
+            history.conflictedClaim(radio, claim.requestId)
+        ) {
             reasons += if (history.unresolvedCurrentClaim(radio, claim.requestId)) {
                 DirectAckRadioNonsettlingReason.TARGET_ACCEPTANCE_UNRESOLVED
             } else DirectAckRadioNonsettlingReason.TARGET_CODE_UNREGISTERED

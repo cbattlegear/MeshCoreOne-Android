@@ -82,6 +82,10 @@ class DirectAckRadioConfirmationObservationTest {
                     wire.radioId, wire.claimId, wire.requestId,
                     "EMISSION_TRACKING_REQUIRED", wire.predictedCode, 1, null,
                 ))
+                writer.directAcks().operation(DirectAckOperationEntity(
+                    wire.radioId, wire.claimId, UUID.randomUUID(),
+                    "ACCEPTANCE_HISTORY_REQUIRED:${wire.requestId}", wire.predictedCode, 1, null,
+                ))
                 writer.directAckExclusions().emission(marker)
             }
             advanceTimeBy(1)
@@ -127,6 +131,7 @@ class DirectAckRadioConfirmationObservationTest {
             runCurrent()
             val beforeRollback = nextSnapshot(events)
             assertEquals(setOf(DirectAckRadioConfirmationWildcardReason.CONFLICTING_PHYSICAL_EVIDENCE,
+                DirectAckRadioConfirmationWildcardReason.UNTRACKED_LEGACY_ANCESTRY,
                 DirectAckRadioConfirmationWildcardReason.STICKY_SATURATION),
                 assertIs<DirectAckRadioConfirmationEvidence.PersistedWildcard>(beforeRollback).reasons.toSet())
             runCurrent()

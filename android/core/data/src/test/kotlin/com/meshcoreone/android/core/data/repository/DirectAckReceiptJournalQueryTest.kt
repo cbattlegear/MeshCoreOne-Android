@@ -73,7 +73,7 @@ class DirectAckReceiptJournalQueryTest {
                 }
                 db.openHelper.readableDatabase.query("SELECT COUNT(*) FROM direct_ack_operations").use {
                     assertTrue(it.moveToFirst())
-                    assertEquals(4_102, it.getInt(0))
+                    assertEquals(4_103, it.getInt(0))
                 }
                 queries.clear()
                 val change = DirectAckBookkeeping.RetryStarted(1, 4)

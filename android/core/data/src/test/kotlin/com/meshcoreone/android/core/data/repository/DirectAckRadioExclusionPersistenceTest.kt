@@ -194,8 +194,14 @@ class DirectAckRadioExclusionPersistenceTest {
         val claim = begin(activate())
         nonsettlingWithoutMutation(claim, 123u, DirectAckRadioNonsettlingReason.TARGET_CODE_UNREGISTERED)
         val marked = mark(claim)
-        assertIs<DirectAckMutationResult.Applied>(store.recordDirectSendAccepted(claim.attempt, claim.wire, 456u))
         assertEquals(DirectAckRadioWireOutcome.MayHaveWritten, history().wires.single().outcome)
+        assertIs<DirectAckMutationResult.Applied>(store.recordDirectSendAccepted(claim.attempt, claim.wire, 456u))
+        assertEquals(DirectAckRadioWireOutcome.MayHaveWritten, assertIs<DirectAckEmissionObservation.Found>(
+            store.inspectDirectAckWireEmission(claim.attempt, claim.wire, marked.receipt.emissionRequestId),
+        ).receipt.evidence.outcome)
+        assertEquals(PersistenceStoreError.InvalidData, assertFailsWith<PersistenceStoreException> {
+            store.inspectDirectAckRadioEvidence(RADIO_A)
+        }.error)
         nonsettlingWithoutMutation(claim, 456u, DirectAckRadioNonsettlingReason.TARGET_ACCEPTANCE_UNRESOLVED)
         assertIs<DirectAckEmissionMutationResult.Applied>(store.resolveDirectAckWireEmission(
             marked.handle, UUID.randomUUID(), DirectAckEmissionResolution.Accepted(456u),
@@ -864,6 +870,10 @@ class DirectAckRadioExclusionPersistenceTest {
                 db.directAcks().operation(DirectAckOperationEntity(
                     wire.radioId, wire.claimId, wire.requestId, "EMISSION_TRACKING_REQUIRED", wire.predictedCode, 1, null,
                 ))
+                db.directAcks().operation(DirectAckOperationEntity(
+                    wire.radioId, wire.claimId, UUID.randomUUID(),
+                    "ACCEPTANCE_HISTORY_REQUIRED:${wire.requestId}", wire.predictedCode, 1, null,
+                ))
                 db.directAckExclusions().emission(DirectAckEmissionEntity(
                     wire.radioId, wire.claimId, wire.requestId, UUID.randomUUID(), UUID.randomUUID(),
                     wire.predictedCode, "ACCEPTED", 999, UUID.randomUUID(),
@@ -947,6 +957,10 @@ class DirectAckRadioExclusionPersistenceTest {
                             first.directAcks().operation(DirectAckOperationEntity(
                                 wire.radioId, wire.claimId, wire.requestId, "EMISSION_TRACKING_REQUIRED",
                                 wire.predictedCode, 1, null,
+                            ))
+                            first.directAcks().operation(DirectAckOperationEntity(
+                                wire.radioId, wire.claimId, UUID.randomUUID(),
+                                "ACCEPTANCE_HISTORY_REQUIRED:${wire.requestId}", wire.predictedCode, 1, null,
                             ))
                             entered.complete(Unit)
                             release.await()

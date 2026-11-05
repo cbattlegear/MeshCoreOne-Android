@@ -151,6 +151,8 @@ interface DirectAckDao {
         WHERE radioId = :radio AND claimId = :claim
           AND kind NOT IN ('RADIO_DELIVERY','RADIO_FAILURE','EMISSION_TRACKING_REQUIRED')
           AND substr(kind,1,20) != 'EMISSION_RESOLUTION:'
+          AND substr(kind,1,28) != 'ACCEPTANCE_HISTORY_REQUIRED:'
+          AND substr(kind,1,24) != 'TRACKED_WIRE_ACCEPTANCE:'
         ORDER BY requestId
     """)
     suspend fun receiptOperations(radio: UUID, claim: UUID): List<DirectAckOperationEntity>

@@ -830,6 +830,81 @@ class TraceExecutionTest {
     }
 
     @Test
+    fun `single dispatch width survives a same-session device mode update during lookup`() {
+        dispatchWidthDuringLookup(batch = false, outcome = "success")
+    }
+
+    @Test
+    fun `single failed or timed out dispatch retains the original saved path decoding`() {
+        for (outcome in listOf("failure", "timeout")) dispatchWidthDuringLookup(batch = false, outcome)
+    }
+
+    @Test
+    fun `batch success failure and timeout results and saves use the actual dispatch width`() {
+        for (outcome in listOf("success", "failure", "timeout")) dispatchWidthDuringLookup(batch = true, outcome)
+    }
+
+    private fun dispatchWidthDuringLookup(batch: Boolean, outcome: String) {
+        val h = TraceHarness(configureDependencies = true)
+        val persistence = InMemoryTracePathStore { h.time.now() }
+        val saved = savedPath(Bytes.of(0xA1, 0xB2), radioId = RADIO)
+        persistence.insert(saved)
+        val lookup = CompletableDeferred<Unit>()
+        var reachedLookup = false
+        h.deps.device = device(pathHashMode = 0u)
+        h.deps.store = object : TracePathPersisting by persistence {
+            override suspend fun fetchSavedTracePaths(radioId: RadioId) =
+                persistence.fetchSavedTracePaths(radioId).also { reachedLookup = true; lookup.await() }
+        }
+        val recorded = FakeTraceSender()
+        var sends = 0
+        h.deps.sender = TraceSender { tag, auth, flags, path ->
+            val sent = recorded.sendTrace(tag, auth, flags, path)
+            if (++sends == 1 && outcome == "failure") throw IOException("first send failed")
+            sent
+        }
+        h.holder.addNode(alpha)
+        h.holder.addNode(bravo)
+        h.holder.setAutoReturnPath(false)
+        h.holder.setBatchEnabled(batch)
+        h.holder.setBatchSize(2)
+        val running = h.start { h.holder.runBatchTrace() }
+        assertTrue(reachedLookup)
+        assertTrue(recorded.sent.isEmpty())
+        h.deps.device = device(pathHashMode = 2u)
+        assertEquals(4, h.holder.hashSize, "Actual device mode changes without a new connection")
+        lookup.complete(Unit)
+        h.main.runCurrent()
+        if (outcome == "success") {
+            h.respond(recorded.sent.last().tag, listOf(node(0xA1, 6.0), node(0xB2, 4.0), node(null, 3.0)), RADIO)
+        } else if (outcome == "timeout") h.time.advanceBy(30.seconds)
+        if (batch) {
+            assertEquals(1, h.state.completedResults.single().hashSize, "First result uses the mode actually sent")
+            h.time.advanceBy(500.milliseconds)
+            assertEquals(2, recorded.sent.size)
+            h.respond(recorded.sent.last().tag, listOf(node(0xA1, 6.0), node(0xB2, 4.0), node(null, 3.0)), RADIO)
+            assertTrue(running.isCompleted)
+            assertTrue(h.state.completedResults.all { it.hashSize == 1 && it.tracedPathString == "A1,B2" })
+        }
+        assertTrue(recorded.sent.all { it.flags == 0u.toUByte() && it.path == saved.pathBytes })
+        if (batch || outcome == "success") {
+            assertEquals(1, assertNotNull(h.state.result).hashSize)
+            assertTrue(h.complete { h.holder.savePath("Captured width") })
+            val result = persistence.paths.values.single { it.name == "Captured width" }
+            assertEquals(1L, result.hashSize)
+            assertEquals(saved.pathBytes, result.pathBytes)
+            assertEquals(listOf(Bytes.of(0xA1), Bytes.of(0xB2)), SavedPathCodec.hopHashes(result.pathBytes, result.hashSize.toInt()))
+            assertEquals(if (batch) 2 else 1, result.runs.size)
+        } else {
+            assertFalse(h.state.isRunning)
+            assertNull(h.state.result, "Single failure/timeout retains the source error-only presentation")
+            assertEquals(1L, persistence.paths.getValue(saved.id).hashSize)
+            assertFalse(persistence.paths.getValue(saved.id).runs.single().success)
+            assertFalse(h.complete { h.holder.savePath("No success") })
+        }
+    }
+
+    @Test
     fun `accepted save keeps original radio and width when publication follows its token read`() {
         val nextRadio = RadioId(UUID.randomUUID())
         val epoch = com.meshcoreone.android.core.contracts.domain.ProcessEpoch(UUID.randomUUID())

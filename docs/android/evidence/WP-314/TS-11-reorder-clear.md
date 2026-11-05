@@ -68,6 +68,23 @@ different-radio successors, stale saved-row rejection and valid fresh B actions.
 declarations are not passing evidence or a runtime reproduction. All older refs, failed runs,
 the public PR head and the unrelated held map test remain intact.
 
+Terminal diagnostics retained as failures: r11 `bd6c7a923`, run42004394041, app2003/1 failed
+the accepted same-radio action assertion. Original-production control `1d795c238`, run42004542683,
+app2003/2 and tools750/2 failed; its two explicitly discovered holder save/dispatch assertions
+discriminate original production attribution, but the app acceptance gate was ambiguous.
+R12 `04715ed7c`, run42005086992, app2004/2 failed the accepted-action assertions.
+R12 negative `202a0733d`, run42005115369, app2004/2 failed the reconciliation save assertion
+at line126 and the same-radio accepted action at line266. The former follows actual verified
+A-token/B-device/Room identity and reproduces that save edge only; later send/selection
+assertions were not reached. Absence of other reported failures is not a full positive pass.
+
+The next coherent successor makes the action gate unambiguous (actual preparation refresh,
+in-action arming, explicit captured-A assertion), fences same-token reload versions and adds
+same-key replacement/fresh-version controls. It also checks retained hop/code/recent callbacks
+against observable preference storage across same/different-radio graph replacement. These
+new controls require their own positive/negative runtime evidence; no aggregate acceptance
+is transferred from any earlier diagnostic.
+
 | Check | Result |
 |---|---|
 | Pinned Windows preflight: `python .\\tools\\android-port\\controller\\ci.py preflight --local --state $env:ANDROID_CI_STATE --output $output` with a fresh absolute TEMP output and pinned Python 3.12.4 | PASS (exit 0; readiness only) |

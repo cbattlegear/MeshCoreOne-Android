@@ -96,6 +96,7 @@ class TracePathStateHolder(
 
     fun retireConnection() {
         connectionIdentity = null
+        currentRadioId = null
         connectionRetired = true
         connectionRevision += 1
         stopListening()
@@ -112,9 +113,11 @@ class TracePathStateHolder(
     internal fun isConnectionCurrent(device: DeviceDTO? = deps.connectedDevice()): Boolean {
         if (connectionRetired) return false
         val token = sessionToken
+        val identity = connectionIdentity
         if (token == deps.sessionToken() &&
+            (identity == null || deps.isOriginatingSessionCurrent(identity.second, token)) &&
             (token == null || token.radioId == device?.radioId &&
-                (connectionIdentity == null || connectionIdentity?.first == token.radioId))
+                (identity == null || identity.first == token.radioId))
         ) return true
         retireConnection()
         return false
@@ -217,8 +220,19 @@ class TracePathStateHolder(
     }
 
     fun addNode(node: RepeaterResolvable) {
+        val size = acceptedHashSize() ?: return
+        appendNode(node, size)
+    }
+
+    private fun acceptedHashSize(): Int? {
+        val device = deps.connectedDevice()
+        val size = TraceHashModes.hashSize(current.traceHashMode ?: device?.pathHashMode ?: 0u)
+        return size.takeIf { isConnectionCurrent(device) }
+    }
+
+    private fun appendNode(node: RepeaterResolvable, size: Int) {
         clearError()
-        val hop = TracePathEditing.hopFor(node, hashSize)
+        val hop = TracePathEditing.hopFor(node, size)
         invalidatePathExecution()
         update { it.copy(outboundPath = it.outboundPath + hop, activeSavedPath = null, result = null, batchPresentationActive = false) }
     }
@@ -242,13 +256,15 @@ class TracePathStateHolder(
 
     /** Adds every resolvable code; shares [HopCodeParser] with the bulk-add preview. */
     fun addRepeatersFromCodes(input: String): CodeInputResult {
+        val radioId = currentRadioId
+        val size = acceptedHashSize() ?: return CodeInputResult()
         var result = CodeInputResult()
         val appended = ArrayList<TracePathHop>()
-        for (entry in classifyCodes(input)) {
+        for (entry in classifyCodes(input, size)) {
             when (val status = entry.status) {
                 is HopCodeStatus.WillAdd -> {
                     appended += status.hop
-                    status.hop.publicKey?.let(::recordRecent)
+                    status.hop.publicKey?.let { recordRecent(it, radioId) }
                     result = result.copy(added = result.added + entry.code)
                 }
                 HopCodeStatus.AlreadyInPath -> result = result.copy(alreadyInPath = result.alreadyInPath + entry.code)
@@ -497,15 +513,19 @@ class TracePathStateHolder(
     val isPathFull: Boolean get() = false
 
     fun appendHop(node: RepeaterResolvable) {
-        addNode(node)
-        recordRecent(node.publicKey)
+        val radioId = currentRadioId
+        val size = acceptedHashSize() ?: return
+        appendNode(node, size)
+        recordRecent(node.publicKey, radioId)
     }
 
     fun addCodes(input: String): CodeInputResult = addRepeatersFromCodes(input)
 
-    fun classifyCodes(input: String): List<HopCodeClassification> {
+    fun classifyCodes(input: String): List<HopCodeClassification> = classifyCodes(input, hashSize)
+
+    private fun classifyCodes(input: String, size: Int): List<HopCodeClassification> {
         val resolver = resolver()
-        return HopCodeParser.classify(input, hashSize, current.outboundPath.map { it.hashBytes }.toSet(), null) { hash ->
+        return HopCodeParser.classify(input, size, current.outboundPath.map { it.hashBytes }.toSet(), null) { hash ->
             resolver.resolve(hash)?.let { ResolvedHopCode(it.publicKey, it.resolvableName) }
         }
     }
@@ -548,6 +568,12 @@ class TracePathStateHolder(
 
     fun recordRecent(publicKey: Bytes) {
         val radioId = currentRadioId ?: return
+        if (!isConnectionCurrent()) return
+        recordRecent(publicKey, radioId)
+    }
+
+    private fun recordRecent(publicKey: Bytes, radioId: RadioId?) {
+        if (radioId == null) return
         val updated = recents.record(publicKey, current.recentPublicKeys, radioId)
         update { it.copy(recentPublicKeys = updated) }
     }

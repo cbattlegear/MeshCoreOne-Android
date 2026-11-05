@@ -2,12 +2,16 @@
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.PersistenceKeys
 import com.meshcoreone.android.core.model.DeviceDTO
+import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.database.toEntity
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.MessageSentInfo
 import com.meshcoreone.android.core.protocol.event.TraceInfo
+import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.core.runtime.ProcessConnectionPreferences
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.core.runtime.RuntimePreferenceSnapshot
@@ -48,6 +52,91 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class TraceSessionLifetimeTest : RoomProcessTest() {
     @Test
+    fun sameTokenReloadCannotAuthorizeOldVersionActionsAgainstAReplacementRow() = runTest {
+        val h = ContainerHarness(this, store)
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            h.assertReady()
+            val recents = object : RecentHopsStorage {
+                override fun stringList(key: String): List<String>? = null
+                override fun setStringList(key: String, value: List<String>) = Unit
+            }
+            val diagnostics = TraceDiagnostics { _, error -> throw AssertionError(error) }
+            val actual = h.container.createToolsFeatureDependencies(
+                recents, h.container.createToolsDiagnosticsDependencies(),
+            ).trace
+            val token = assertNotNull(actual.sessionToken())
+            var tag = 0u
+            var sends = 0
+            val feature = object : TracePathFeatureDependencies by actual {
+                override fun traceSender() = TraceSender { sentTag, _, _, _ ->
+                    sends += 1
+                    tag = sentTag
+                    MessageSentInfo(0u, Bytes.EMPTY, 0u)
+                }
+            }
+            val versionA = h.appState.servicesVersion.value
+            val captured = TracePathScreen.Dependencies(feature, recents, diagnostics, token.radioId, versionA)
+            val path = store.createSavedTracePath(token.radioId, "Before restore", Bytes.of(0xAA), 1, null)
+            val dependencies = object : SavedPathsDependencies {
+                override fun sessionToken() = actual.sessionToken()
+                override fun isOriginatingSessionCurrent(generation: Int, token: SessionToken?) =
+                    actual.isOriginatingSessionCurrent(generation, token)
+                override fun connectedDevice() = actual.connectedDevice()
+                override fun savedPaths() = actual.savedPaths()
+            }
+            val saved = SavedPathsStateHolder(SavedCopy, diagnostics).apply {
+                configure(dependencies, captured.originatingToken, captured.generation)
+            }
+            saved.loadSavedPaths()
+            assertTrue(saved.isCurrentPath(path))
+            val saving = TracePathStateHolder(backgroundScope, SystemTraceTimeSource, Copy, recents, diagnostics)
+            saving.configure(feature)
+            saving.bindConnection(captured.radioId, captured.generation, captured.originatingToken)
+            saving.loadSavedPath(path)
+            saving.runTrace()
+            saving.handleTraceResponse(TraceInfo(tag, 0u, 0u, 0u, emptyList()), token.radioId)
+            assertTrue(assertNotNull(saving.state.value.result).success)
+            h.eventually("accepted A run committed before row replacement") { saving.state.value.activeSavedPath?.runs?.size == 1 }
+            val replacement = path.copy(name = "Restored replacement", pathBytes = Bytes.of(0xBB))
+            store.deleteSavedTracePath(EntityKey(path.radioId, path.id))
+            db.tracePaths().upsert(replacement.toEntity())
+            h.appState.bumpServicesVersion()
+            val versionB = h.appState.servicesVersion.value
+            assertNotEquals(versionA, versionB)
+            assertEquals(token, actual.sessionToken(), "Reload deliberately keeps the radio session")
+            assertEquals(token, actual.originatingSessionToken(versionB))
+            assertFalse(saving.savePath("Stale restored result"))
+            assertFalse(saved.isCurrentPath(path))
+            saved.renamePath(path, "Stale rename")
+            assertFalse(saved.deletePath(path), "Old callback cannot delete the replacement at the same key")
+            val delayed = TracePathStateHolder(backgroundScope, SystemTraceTimeSource, Copy, recents, diagnostics)
+            delayed.configure(feature)
+            delayed.bindConnection(captured.radioId, captured.generation, captured.originatingToken)
+            delayed.loadSavedPath(path)
+            delayed.runTrace()
+            assertNull(delayed.state.value.activeSavedPath)
+            assertEquals(1, sends, "No new send from old v1")
+            assertEquals(replacement, store.fetchSavedTracePath(EntityKey(path.radioId, path.id)))
+            assertFalse(store.fetchSavedTracePaths(token.radioId).any { it.name == "Stale restored result" })
+            val fresh = captured.copy(generation = versionB)
+            val current = SavedPathsStateHolder(SavedCopy, diagnostics).apply {
+                configure(dependencies, fresh.originatingToken, fresh.generation)
+            }
+            current.loadSavedPaths()
+            assertTrue(current.isCurrentPath(replacement))
+            delayed.bindConnection(fresh.radioId, fresh.generation, fresh.originatingToken)
+            delayed.loadSavedPath(replacement)
+            delayed.runTrace()
+            assertEquals(2, sends, "Fresh v2 can explicitly run the restored route")
+            assertTrue(current.deletePath(replacement))
+        } finally {
+            h.container.close()
+        }
+    }
+
+    @Test
     fun delayedSameRadioUiBindingCannotAcquireTheReplacementGraph() = delayedUiBinding(crossRadio = false)
 
     @Test
@@ -61,9 +150,14 @@ class TraceSessionLifetimeTest : RoomProcessTest() {
             h.manager.connect(target)
             h.settle()
             h.assertReady()
+            val recentValues = mutableMapOf<String, List<String>>()
+            val recentWrites = mutableListOf<String>()
             val recents = object : RecentHopsStorage {
-                override fun stringList(key: String): List<String>? = null
-                override fun setStringList(key: String, value: List<String>) = Unit
+                override fun stringList(key: String) = recentValues[key]
+                override fun setStringList(key: String, value: List<String>) {
+                    recentWrites += key
+                    recentValues[key] = value.toList()
+                }
             }
             val diagnostics = TraceDiagnostics { _, error -> throw AssertionError(error) }
             val actual = h.container.createToolsFeatureDependencies(
@@ -80,6 +174,27 @@ class TraceSessionLifetimeTest : RoomProcessTest() {
             val oldVersion = h.appState.servicesVersion.value
             val captured = TracePathScreen.Dependencies(feature, recents, diagnostics, tokenA.radioId, oldVersion)
             assertEquals(tokenA, captured.originatingToken)
+            val first = ContactDTO(radioId = tokenA.radioId, publicKey = key(0xAA), name = "First",
+                typeRawValue = ContactType.REPEATER.rawValue, lastHeardTimestamp = null)
+            val second = ContactDTO(radioId = tokenA.radioId, publicKey = key(0xBB), name = "Second",
+                typeRawValue = ContactType.REPEATER.rawValue, lastHeardTimestamp = null)
+            val third = ContactDTO(radioId = tokenA.radioId, publicKey = key(0xCC), name = "Third",
+                typeRawValue = ContactType.REPEATER.rawValue, lastHeardTimestamp = null)
+            store.saveContact(first)
+            store.saveContact(second)
+            store.saveContact(third)
+            val editing = TracePathStateHolder(backgroundScope, SystemTraceTimeSource, Copy, recents, diagnostics)
+            editing.configure(feature)
+            editing.bindConnection(captured.radioId, captured.generation, captured.originatingToken)
+            editing.loadContacts(tokenA.radioId)
+            editing.appendHop(first)
+            assertEquals(1, recentWrites.size, "Fresh A append really persists recents")
+            val oldRoute = editing.state.value.outboundPath
+            val oldRecents = recentValues.toMap()
+            val retainedAppend = { editing.appendHop(second) }
+            assertTrue(editing.classifyCodes("CC").single().status is com.meshcoreone.android.feature.tools.trace.HopCodeStatus.WillAdd)
+            val retainedCodes = { editing.addCodes("CC") }
+            val retainedRecent = { editing.recordRecent(key(0xDD)) }
             h.appState.bumpServicesVersion()
             val reloadVersion = h.appState.servicesVersion.value
             assertEquals(oldVersion + 1, reloadVersion)
@@ -98,9 +213,18 @@ class TraceSessionLifetimeTest : RoomProcessTest() {
             assertNotEquals(tokenA, tokenB)
             assertEquals(crossRadio, tokenA.radioId != tokenB.radioId)
             assertNull(actual.originatingSessionToken(oldVersion))
+            retainedAppend()
+            val staleCodes = retainedCodes()
+            retainedRecent()
+            assertEquals(1, recentWrites.size, "Stale callbacks cannot persist A or B recent preferences")
+            assertEquals(oldRoute, editing.state.value.outboundPath)
+            assertEquals(oldRecents, recentValues)
+            assertTrue(staleCodes.added.isEmpty())
             val pathB = store.createSavedTracePath(tokenB.radioId, "Replacement row", Bytes.of(0xBB), 1, null)
             val dependencies = object : SavedPathsDependencies {
                 override fun sessionToken() = actual.sessionToken()
+                override fun isOriginatingSessionCurrent(generation: Int, token: SessionToken?) =
+                    actual.isOriginatingSessionCurrent(generation, token)
                 override fun connectedDevice() = actual.connectedDevice()
                 override fun savedPaths() = actual.savedPaths()
             }
@@ -108,7 +232,7 @@ class TraceSessionLifetimeTest : RoomProcessTest() {
             liveCaptureControl.loadSavedPaths()
             assertTrue(liveCaptureControl.isCurrentPath(pathB), "A fresh live capture demonstrates the old delayed-configure eligibility")
             val saved = SavedPathsStateHolder(SavedCopy, diagnostics).apply {
-                configure(dependencies, captured.originatingToken)
+                configure(dependencies, captured.originatingToken, captured.generation)
             }
             saved.loadSavedPaths()
             assertFalse(saved.isCurrentPath(pathB))
@@ -127,12 +251,24 @@ class TraceSessionLifetimeTest : RoomProcessTest() {
                 feature, recents, diagnostics, tokenB.radioId, h.appState.servicesVersion.value,
             )
             assertEquals(tokenB, fresh.originatingToken)
+            editing.bindConnection(fresh.radioId, fresh.generation, fresh.originatingToken)
+            editing.loadContacts(tokenB.radioId)
+            editing.appendHop(second.copy(radioId = tokenB.radioId))
+            assertEquals(2, recentWrites.size, "Fresh B append remains writable")
+            store.saveContact(third.copy(radioId = tokenB.radioId))
+            editing.loadContacts(tokenB.radioId)
+            assertEquals(listOf("CC"), editing.addCodes("CC").added)
+            assertEquals(3, recentWrites.size, "Fresh B code entry remains writable")
+            assertEquals(
+                com.meshcoreone.android.feature.tools.trace.RecentHopsStore.defaultsKey(tokenB.radioId),
+                recentWrites.last(),
+            )
             trace.bindConnection(fresh.radioId, fresh.generation, fresh.originatingToken)
             trace.loadSavedPath(pathB)
             trace.runTrace()
             assertEquals(1, sends, "Explicitly published B binding can run")
             val current = SavedPathsStateHolder(SavedCopy, diagnostics).apply {
-                configure(dependencies, fresh.originatingToken)
+                configure(dependencies, fresh.originatingToken, fresh.generation)
             }
             current.loadSavedPaths()
             assertTrue(current.deletePath(pathB))
@@ -304,13 +440,13 @@ class TraceSessionLifetimeTest : RoomProcessTest() {
             val oldToken = assertNotNull(actual.sessionToken())
             val version = h.appState.servicesVersion.value
             val holdTokenRead = AtomicBoolean()
-            val tokenRead = CompletableDeferred<Unit>()
+            val tokenRead = CompletableDeferred<SessionToken?>()
             var tag = 0u
             val feature = object : TracePathFeatureDependencies by actual {
                 override fun sessionToken(): com.meshcoreone.android.core.contracts.domain.SessionToken? {
                     val captured = actual.sessionToken()
                     if (holdTokenRead.compareAndSet(true, false)) {
-                        tokenRead.complete(Unit)
+                        tokenRead.complete(captured)
                         check(releaseTokenRead.await(30, TimeUnit.SECONDS)) { "Publication control did not release token read" }
                     }
                     return captured
@@ -339,11 +475,15 @@ class TraceSessionLifetimeTest : RoomProcessTest() {
                 trace.handleTraceResponse(TraceInfo(tag, 0u, 0u, 0u, emptyList()), oldToken.radioId)
                 assertTrue(assertNotNull(trace.state.value.result).success)
             }
-            holdTokenRead.set(true)
+            h.eventually("initial accepted run refresh completes before the action token gate") {
+                trace.state.value.activeSavedPath?.runs?.size == 1
+            }
             val accepted = backgroundScope.async(worker) {
+                holdTokenRead.set(true)
                 if (crossRadio) trace.savePath("Accepted A result") else saved.deletePath(path)
             }
             h.eventually("A action token read") { tokenRead.isCompleted }
+            assertEquals(oldToken, tokenRead.await(), "The intended action accepted A before replacement")
             h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
             h.settle()
             replacing = true

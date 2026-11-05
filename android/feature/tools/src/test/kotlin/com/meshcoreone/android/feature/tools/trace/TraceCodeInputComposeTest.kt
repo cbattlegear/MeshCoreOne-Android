@@ -609,6 +609,56 @@ class TraceCodeInputComposeTest {
         }
     }
 
+    @Test fun mountedSameTokenReloadRejectsOldCallbacksBeforeEffectRebind() {
+        val token = com.meshcoreone.android.core.contracts.domain.SessionToken(
+            com.meshcoreone.android.core.contracts.domain.ProcessEpoch(UUID.randomUUID()),
+            com.meshcoreone.android.core.contracts.domain.Generation(1), RADIO,
+        )
+        var publishedVersion = 1
+        val persistence = InMemoryTracePathStore { T0 }
+        val path = savedPath(Bytes.of(0xAA), radioId = RADIO).copy(name = "Before restore")
+        persistence.insert(path)
+        val deps = FakeTraceDependencies().apply {
+            device = device()
+            store = persistence
+            directory = FakeNodeDirectory()
+        }
+        val feature = object : TracePathFeatureDependencies by deps {
+            override fun sessionToken() = token
+            override fun originatingSessionToken(generation: Int) = token.takeIf { generation == publishedVersion }
+            override fun isOriginatingSessionCurrent(
+                generation: Int,
+                token: com.meshcoreone.android.core.contracts.domain.SessionToken?,
+            ) = generation == publishedVersion && token == this.sessionToken()
+        }
+        val captured = TracePathScreen.Dependencies(feature, MapRecentsStorage(), RecordingDiagnostics(), RADIO, 1)
+        val connection = mutableStateOf(captured)
+        content.setContent { MaterialTheme { TracePathScreen(connection.value) } }
+        settle()
+        click(host.get().getString(C.contactsTraceSaved))
+        val oldSelect = assertNotNull(button(path.name).config[SemanticsActions.OnClick].action)
+        val oldDelete = assertNotNull(actionButton("${host.get().getString(L.commonDelete)}: ${path.name}")
+            .config[SemanticsActions.OnClick].action)
+        val replacement = path.copy(name = "Restored replacement", pathBytes = Bytes.of(0xBB))
+        persistence.insert(replacement)
+        publishedVersion = 2
+        host.get().runOnUiThread {
+            assertTrue(oldSelect())
+            assertTrue(oldDelete())
+        }
+        settle()
+        assertEquals(replacement, persistence.paths[path.id])
+        assertTrue(ShadowDialog.getLatestDialog()?.isShowing == true)
+        host.get().runOnUiThread { connection.value = captured.copy(generation = 2) }
+        settle()
+        click(host.get().getString(C.contactsTraceSaved))
+        click(replacement.name)
+        assertFalse(ShadowDialog.getLatestDialog()?.isShowing == true)
+        click(host.get().getString(C.contactsTraceSaved))
+        clickDescription("${host.get().getString(L.commonDelete)}: ${replacement.name}")
+        assertFalse(persistence.paths.containsKey(path.id))
+    }
+
     @Test fun delayedSameRadioScreenBindingKeepsItsOriginatingGraph() = delayedScreenBinding(crossRadio = false)
 
     @Test fun delayedDifferentRadioScreenBindingKeepsItsOriginatingGraph() = delayedScreenBinding(crossRadio = true)

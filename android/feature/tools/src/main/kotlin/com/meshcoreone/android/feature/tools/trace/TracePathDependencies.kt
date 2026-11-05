@@ -32,6 +32,8 @@ interface TracePathFeatureDependencies {
     fun sessionToken(): SessionToken? = null
     /** Identity actually published for the UI's generation, not a later live graph. */
     fun originatingSessionToken(generation: Int): SessionToken? = sessionToken()
+    /** Legacy adapters without UI publication keep their existing token-only lifetime. */
+    fun isOriginatingSessionCurrent(generation: Int, token: SessionToken?): Boolean = true
     fun connectedDevice(): DeviceDTO?
     fun bestAvailableLocation(): Coordinate?
     fun nodeDirectory(): TraceNodeDirectory?

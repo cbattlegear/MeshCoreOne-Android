@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.update
 /** Live providers for the saved-path list; `null` mirrors a disconnected state (calls are no-ops). */
 interface SavedPathsDependencies {
     fun sessionToken(): SessionToken? = null
+    fun isOriginatingSessionCurrent(generation: Int, token: SessionToken?): Boolean = true
     fun savedPaths(): TracePathPersisting?
     fun connectedDevice(): DeviceDTO?
 }
@@ -47,10 +48,16 @@ class SavedPathsStateHolder(
     private var revision = 0L
     private var mutationRevision = 0L
     private var sessionToken: SessionToken? = null
+    private var originatingGeneration: Int? = null
 
-    fun configure(dependencies: SavedPathsDependencies, originatingToken: SessionToken? = dependencies.sessionToken()) {
+    fun configure(
+        dependencies: SavedPathsDependencies,
+        originatingToken: SessionToken? = dependencies.sessionToken(),
+        generation: Int? = null,
+    ) {
         deps = dependencies
         sessionToken = originatingToken
+        originatingGeneration = generation
     }
 
     fun retireConnection() {
@@ -66,8 +73,10 @@ class SavedPathsStateHolder(
     fun isCurrentConnection(radioId: RadioId): Boolean {
         val deviceRadio = deps?.connectedDevice()?.radioId
         val token = sessionToken
+        val generation = originatingGeneration
         return active && deviceRadio == radioId && (token == null || token.radioId == radioId) &&
-            deps?.sessionToken() == token
+            deps?.sessionToken() == token &&
+            (generation == null || deps?.isOriginatingSessionCurrent(generation, token) == true)
     }
 
     private fun isCurrent(operation: Long, radioId: RadioId): Boolean =

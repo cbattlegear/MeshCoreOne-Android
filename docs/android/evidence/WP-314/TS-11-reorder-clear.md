@@ -333,3 +333,15 @@ eligibility assertion, both partial variants stopped at old completion, and the
 compact control reached the visible-height assertion. Tests are unchanged.
 Both r21 runs have incomplete mandatory downstream reports and remain immutable
 failed diagnostics, not acceptance for any successor.
+
+Exact axis-diagnostic `070744702bdcdd4635756c27a3d5e5596b5af513`,
+run `42030067067`, discovered 785 tools tests and failed only the compact
+control's short-hash `didOverflowWidth` assertion (line 289); the long name's
+width/height predicates passed. All four retired batch-save schedules proceeded
+through their history, stale-save rejection and fresh-B save assertions after
+the explicit virtual sleep release. Mandatory aggregate reports remained
+incomplete, so this is not full-candidate acceptance.
+The successor gives both detail Text nodes the available column width instead
+of leaving the short hash intrinsically shrink-wrapped. The original visual
+overflow, visible bounds, action size, boundary and real removal assertions
+remain unchanged and require fresh execution.

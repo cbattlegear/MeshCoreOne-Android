@@ -337,8 +337,9 @@ internal fun TracePathListContent(
                                     index + 1,
                                     hop.displayText,
                                 ),
+                                modifier = Modifier.fillMaxWidth(),
                             )
-                            Text(hop.hashHex, style = MaterialTheme.typography.bodySmall)
+                            Text(hop.hashHex, modifier = Modifier.fillMaxWidth(), style = MaterialTheme.typography.bodySmall)
                         }
                         FlowRow(
                             Modifier.fillMaxWidth(),

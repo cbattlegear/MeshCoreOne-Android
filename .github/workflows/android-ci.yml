@@ -239,8 +239,8 @@ jobs:
           lines = log_path.read_text(encoding="utf-8").splitlines()
           task = ":core:database:kspDebugKotlin"
           observations = [line.strip() for line in lines if re.match(r"^> Task :core:database:kspDebugKotlin(?:\s|$)", line.strip())]
-          if observations != ["> Task " + task]:
-              raise RuntimeError("Missing, duplicate, skipped, cached or failed current-run KSP task observation")
+          if not observations or any(observation != "> Task " + task for observation in observations):
+              raise RuntimeError("Missing or unsuccessful/suffixed current-run KSP task heading observation")
           if not target.is_file() or target.stat().st_size > 4194304:
               raise RuntimeError("Missing or oversized generated schema 2.json")
           if target.stat().st_mtime_ns < guard["started_ns"]:
@@ -257,7 +257,8 @@ jobs:
               "absent_before": True, "schema_version": 2,
               "schema_sha256": hashlib.sha256(data).hexdigest(),
               "gradle_outcome": os.environ["ROOM_GRADLE_OUTCOME"],
-              "original_log_path": "gradle-scaffold.log", "task_log_observation": observations[0],
+              "original_log_path": "gradle-scaffold.log", "task_log_headings": observations, "task_log_heading_count": len(observations),
+              "task_log_scope": "Console heading displays only; repeated headings do not count executions or prove compiler completion",
           }
           (directory / "2.json").write_bytes(data)
           (directory / "provenance.json").write_text(json.dumps(provenance, indent=2) + "\n", encoding="utf-8")

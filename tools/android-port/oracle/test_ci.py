@@ -1,8 +1,10 @@
 """AndroidOnly: WP-004 Fail-closed workflow, helper-discovery and JUnit contract tests."""
 
+import ast
 import copy
 import hashlib
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -134,9 +136,9 @@ class FoundationWorkflowTests(unittest.TestCase):
             "retention-days": "7",
         },
     }
-    # Exact four-step diagnostic from workflow blob a1813d57b30ff309ea1f07d92a1830ccb2d89692.
+    # Exact four-step diagnostic from workflow blob 4630f08da089a8d8bb28820f48d0a6aa39a6e7e4.
     # Binds executable absence/KSP/provenance/failure checks, not just artifact-looking paths.
-    ROOM_STEPS_SHA256 = "3544d121a7d313a4ea61591fd899f8ef9d930935fb966d85af96ba40989431d0"
+    ROOM_STEPS_SHA256 = "422fd2f1d7aa93ec37e138132cdcbef46015d2dc3a55e1b057e8d76db86bdac4"
 
     @classmethod
     def setUpClass(cls):
@@ -325,6 +327,8 @@ class FoundationWorkflowTests(unittest.TestCase):
             self.assert_artifact_boundary(partial)
         steps = self.workflow["jobs"]["build"]["steps"]
         for index, step in enumerate(steps):
+            if step.get("id") == "room_schema":
+                self.assert_room_heading_controls(step["run"])
             if step.get("id") in ("room_absence", "room_schema", "room_upload") or (
                 step.get("name") == "Report Room schema diagnostic outcome"
             ):
@@ -344,6 +348,33 @@ class FoundationWorkflowTests(unittest.TestCase):
                             changed[index]["with"]["path"] = "${{ runner.temp }}/room-schema-export/*"
                         with self.assertRaises((AssertionError, ValueError)):
                             self.assert_artifact_boundary(value)
+
+    def assert_room_heading_controls(self, run):
+        source = run.split("@'\n", 1)[1].split("\n'@ | python -", 1)[0]
+        nodes = ast.parse(source).body
+        start = next(index for index, node in enumerate(nodes)
+                     if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name)
+                     and node.targets[0].id == "task")
+        # Exercise the actual collector predicate without executing file/identity collection.
+        selected = nodes[start:start + 3]
+        self.assertIsInstance(selected[1], ast.Assign)
+        self.assertEqual(selected[1].targets[0].id, "observations")
+        self.assertIsInstance(selected[2], ast.If)
+        program = compile(ast.Module(body=selected, type_ignores=[]), "<collector-heading-check>", "exec")
+        canonical = "> Task :core:database:kspDebugKotlin"
+        for count in (1, 2, 3):
+            with self.subTest(canonical_heading_displays=count):
+                scope = {"lines": [canonical] * count, "re": re}
+                exec(program, scope)
+                self.assertEqual(scope["observations"], [canonical] * count)
+        invalid = [[], ["> Task :core:database:kspReleaseKotlin"]]
+        for suffix in ("FROM-CACHE", "SKIPPED", "FAILED", "NO-SOURCE", "UP-TO-DATE", "arbitrary"):
+            suffixed = canonical + " " + suffix
+            invalid.extend(([suffixed], [canonical, suffixed], [suffixed, canonical],
+                            [canonical, suffixed, canonical]))
+        for lines in invalid:
+            with self.subTest(rejected_heading_displays=lines), self.assertRaises(RuntimeError):
+                exec(program, {"lines": lines, "re": re})
 
     def test_baseline_without_room_diagnostic_remains_valid(self):
         value = copy.deepcopy(self.workflow)

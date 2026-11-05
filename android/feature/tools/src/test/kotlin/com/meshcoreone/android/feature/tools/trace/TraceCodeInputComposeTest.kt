@@ -51,6 +51,7 @@ import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SavedTracePathDTO
 import com.meshcoreone.android.core.model.TracePathRunDTO
+import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.TracePathPersisting
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
@@ -94,6 +95,81 @@ class TraceCodeInputComposeTest {
     @Before fun setup() = attachHost()
 
     @After fun dispose() = destroyHost()
+
+    @Test fun mountedTraceComparisonKeepsItsAcceptedBaselineAcrossHeldHistoryAppend() =
+        heldComparisonAppend(fail = false)
+
+    @Test fun mountedTraceComparisonKeepsItsAcceptedBaselineWhenHistoryAppendFails() =
+        heldComparisonAppend(fail = true)
+
+    private fun heldComparisonAppend(fail: Boolean) {
+        for (priorCount in listOf(1, 2)) {
+            val previous = run(T0.minusSeconds(60), roundTripMs = 100)
+            val history = if (priorCount == 1) listOf(previous)
+                else listOf(run(T0.minusSeconds(120), roundTripMs = 250), previous)
+            val gate = CompletableDeferred<Unit>()
+            val h = comparisonHarness(history, currentMs = 150) { store ->
+                object : TracePathPersisting by store {
+                    override suspend fun appendTracePathRun(key: EntityKey, run: TracePathRunDTO) {
+                        gate.await()
+                        if (fail) throw java.io.IOException("held comparison append failure")
+                        store.appendTracePathRun(key, run)
+                    }
+                }
+            }
+            mountTraceResults(h)
+            assertEquals(priorCount, assertNotNull(h.state.activeSavedPath).runs.size)
+            assertEquals(previous, h.state.previousRun)
+            assertComparison(h, "150 ms", "50%", C.contactsResultsComparisonIncreased)
+            gate.complete(Unit)
+            h.main.runCurrent()
+            settle()
+            scrollToTraceResults(h)
+            assertEquals(previous, h.state.previousRun)
+            assertComparison(h, "150 ms", "50%", C.contactsResultsComparisonIncreased)
+            assertEquals(priorCount + if (fail) 0 else 1, assertNotNull(h.state.activeSavedPath).runs.size)
+            if (fail) assertTrue(h.diagnostics.failures.any { it.second is java.io.IOException })
+            else assertTrue(h.diagnostics.failures.isEmpty())
+        }
+    }
+
+    @Test fun mountedTraceComparisonRejectsOlderAppendCompletionAfterANewerAcceptedResult() {
+        val gate = CompletableDeferred<Unit>()
+        var appends = 0
+        val h = comparisonHarness(listOf(run(T0.minusSeconds(60), roundTripMs = 100)), currentMs = 150) { store ->
+            object : TracePathPersisting by store {
+                override suspend fun appendTracePathRun(key: EntityKey, run: TracePathRunDTO) {
+                    if (++appends == 1) gate.await()
+                    store.appendTracePathRun(key, run)
+                }
+            }
+        }
+        mountTraceResults(h)
+        assertComparison(h, "150 ms", "50%", C.contactsResultsComparisonIncreased)
+        h.complete { h.holder.runTrace() }
+        h.time.advanceBy(75.milliseconds)
+        h.respond(
+            (h.deps.sender as FakeTraceSender).sent.last().tag,
+            listOf(node(0xAA, 6.0), node(null, 3.0)), RADIO,
+        )
+        settle()
+        scrollToTraceResults(h)
+        val previous = assertNotNull(h.state.previousRun)
+        assertEquals(150L, previous.roundTripMs)
+        assertComparison(h, "75 ms", "50%", C.contactsResultsComparisonDecreased)
+        gate.complete(Unit)
+        h.main.runCurrent()
+        settle()
+        scrollToTraceResults(h)
+        assertEquals(previous, h.state.previousRun)
+        assertComparison(h, "75 ms", "50%", C.contactsResultsComparisonDecreased)
+        assertEquals(3, assertNotNull(h.state.activeSavedPath).runs.size)
+        h.holder.clearPath()
+        settle()
+        assertNull(h.state.acceptedComparison)
+        assertNull(h.state.previousRun)
+        assertFalse(texts().any { it.startsWith("vs.") })
+    }
 
     @Test fun mountedTraceComparisonUsesThePreviousSuccessNotAnOlderOrFailedRun() {
         val previous = run(T0.minusSeconds(60), roundTripMs = 100)
@@ -212,12 +288,17 @@ class TraceCodeInputComposeTest {
         assertTrue(comparison.boundsInRoot.bottom <= 900f)
     }
 
-    private fun comparisonHarness(history: List<TracePathRunDTO>, currentMs: Int) = configured().also { h ->
+    private fun comparisonHarness(
+        history: List<TracePathRunDTO>,
+        currentMs: Int,
+        wrapStore: ((InMemoryTracePathStore) -> TracePathPersisting)? = null,
+    ) = configured().also { h ->
         h.deps.sender = FakeTraceSender()
         h.holder.addNode(contact(0xAA, name = "Tower"))
-        h.deps.store = InMemoryTracePathStore { h.time.now() }.also {
+        val store = InMemoryTracePathStore { h.time.now() }.also {
             it.insert(savedPath(h.state.fullPathData, runs = history, radioId = RADIO))
         }
+        h.deps.store = wrapStore?.invoke(store) ?: store
         h.complete { h.holder.runTrace() }
         h.time.advanceBy(currentMs.milliseconds)
         h.respond(
@@ -225,7 +306,8 @@ class TraceCodeInputComposeTest {
             listOf(node(0xAA, 6.0), node(null, 3.0)), RADIO,
         )
         assertEquals(currentMs.toLong(), assertNotNull(h.state.result).durationMs)
-        assertEquals(history.size + 1, assertNotNull(h.state.activeSavedPath).runs.size)
+        assertNotNull(h.state.activeSavedPath)
+        if (wrapStore == null) assertEquals(history.size + 1, assertNotNull(h.state.activeSavedPath).runs.size)
     }
 
     private fun mountTraceResults(h: TraceHarness, fontScale: Float = 1f) {

@@ -13,11 +13,17 @@ exists. That row shows current RTT, absolute zero-decimal percentage and localiz
 increase/decrease for nonzero deltas, and previous RTT with abbreviated date.
 Zero previous RTT produces zero percent; equal RTT omits the change indicator.
 
-The real Android `TraceResultCard` now consumes the existing `previousRun` and
-`RttComparison.of` policies at that same duration branch. History still comes
-from the real holder's saved-path match, accepted run append and storage refresh.
-No new state, history-selection, storage, radio, graph-lifetime or batch-progress
-policy is introduced. Existing Save and held TS-08 work are unchanged.
+The real Android `TraceResultCard` consumes `previousRun` and `RttComparison.of`
+at that same duration branch. History comes from the holder's saved-path match,
+accepted run append and storage refresh. Review found that the original
+second-most-recent persisted-success lookup could briefly select an older baseline
+while the current accepted run's append was held or failed. The response handler
+now binds the preceding success, actual result ID, saved-path/radio identity and
+accepted run before publishing a successful single result. Later history refresh
+cannot change that result's baseline. A subsequent result can use its preceding
+accepted success even if that write is still pending. Path-selection/connection
+invalidation clears this receipt; batch-average presentation and persistence
+remain unchanged. Existing Save and held TS-08 work are unchanged.
 
 A wrapping Material row supports compact/large-font presentation. Date and
 percentage use the current Android locale; the existing comparison resource is
@@ -26,7 +32,7 @@ Increase/decrease has localized accessibility text and a visible directional
 marker, not color alone. Sparkline/history navigation is not part of this bounded
 assignment and is not claimed implemented.
 
-All four edited paths are admitted by trusted integration-base `wp-owned`
+All seven edited paths are admitted by trusted integration-base `wp-owned`
 capability rules (modify UI/deviations, test existing mounted class, create
 per-WP evidence). Canonical owner is `tools-ui-engineer`; session
 `d1e00c92-03fb-4cce-a228-7d9895e6ab82`; capability revision
@@ -37,7 +43,7 @@ a normal merge with a tree identical to current main, preserving prior refs.
 
 ## Mounted controls
 
-Eight new methods in existing `TraceCodeInputComposeTest` mount the actual trace
+Eleven new methods in existing `TraceCodeInputComposeTest` mount the actual trace
 list, dispatch through `FakeTraceSender`, correlate actual responses on the real
 holder and append/fetch through `InMemoryTracePathStore` (not Room). They cover:
 
@@ -49,6 +55,12 @@ holder and append/fetch through `InMemoryTracePathStore` (not Room). They cover:
 - Batch average precedence even though successful saved history exists.
 - French compact 320dp / 200% font, localized date/percentage/direction and
   reachable comparison bounds.
+- One/two-prior-success histories with held successful/failed appends retain the
+  actual preceding success before and after storage completion, with real failure
+  diagnostics preserved.
+- An older append completing after a newer accepted result cannot replace its
+  baseline; the newer result compares with the preceding accepted success even
+  while that success's append remains suspended. Clear retires the receipt.
 
 No existing tests/assertions are removed or changed. Source declarations are
 not runtime evidence until ordinary exact-head CI discovery is audited.

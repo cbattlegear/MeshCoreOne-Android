@@ -176,10 +176,21 @@ internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
         val hops = holder.resolver().responseHops(traceInfo, device, holder.strings.myDevice)
         val size = TraceHashModes.hashSize(mode)
         val result = TraceResult(hops, durationMs, true, null, holder.pendingPathHash ?: Bytes.EMPTY, size)
+        val saved = holder.current.activeSavedPath
+        val run = saved?.let {
+            TracePathRunDTO(UUID.randomUUID(), holder.time.now(), true, durationMs, holder.intermediateSnr(hops))
+        }
+        val comparison = if (!holder.current.batchEnabled && saved != null && run != null) {
+            val accepted = holder.current.acceptedComparison?.takeIf {
+                it.pathId == saved.id && it.radioId == saved.radioId
+            }?.run
+            val previous = (saved.runs.filter { it.success } + listOfNotNull(accepted)).maxByOrNull { it.date }
+            AcceptedTraceComparison(result.id, saved.id, saved.radioId, run, previous)
+        } else null
         if (holder.current.batchEnabled) {
             holder.update { it.copy(result = result, completedResults = it.completedResults + result) }
         } else {
-            holder.update { it.copy(result = result, resultID = UUID.randomUUID(), isRunning = false) }
+            holder.update { it.copy(result = result, resultID = UUID.randomUUID(), isRunning = false, acceptedComparison = comparison) }
         }
         holder.pendingPathHash = null
         holder.pendingTag = null
@@ -189,9 +200,8 @@ internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
         // The source resumed first, but its resumed task ran later on the main actor; clearing
         // first keeps that order even on a dispatcher that resumes inline.
         resumeContinuation()
-        holder.current.activeSavedPath?.let { savedPath ->
-            val run = TracePathRunDTO(UUID.randomUUID(), holder.time.now(), true, durationMs, holder.intermediateSnr(hops))
-            holder.appendRunInBackground(savedPath, run)
+        if (saved != null && run != null) {
+            holder.appendRunInBackground(saved, run)
         }
     }
 

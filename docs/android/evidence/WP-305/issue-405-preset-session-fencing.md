@@ -728,3 +728,23 @@ assertion or production change is introduced. This is a source-derived fixture
 correction, not an observed cae result; active exact cae run `41950450572` is
 preserved. API cancellation/reset/early-retirement reachability and all #495,
 navigation witness, hardware and local-execution holds remain unchanged.
+
+### Exact cae execution and dialog-scoped retry fixture
+
+Exact `cae182d69b03f90b105455495c0f55c28dd673ab` run `41950450572`,
+Linux job `126992991131`, finished **FAILURE**, app **1,944 / 20 failed**.
+The same 19 retained owner-surface failures remain. The sole owned failure is
+`mounted preset retry reads the original sealed receipt even after its radio is replaced`:
+touch injection found two nodes with text Try Again (the newly reachable primary
+button and the existing error-dialog action). This is an ambiguous test selector,
+not evidence that retry persisted or failed. The isolated fixture correction
+selects the localized text specifically beneath dialog semantics, preserving
+the intended dialog retry and every original ID/target/count assertion.
+
+On this exact cae run the prior real-storage settlement method did not fail,
+and OnboardingFlagsTest has no failed-method record. This does not execute the
+separate wall-clock timeout successor `24846b5fa285faab25582780c908244e9cbc0332`,
+and no full suite/candidate acceptance follows from absence of another failure.
+The dismissed-dialog and late-readiness primary-action controls remain distinct
+from the corrected dialog-action control. No production code is changed by
+either fixture successor; exact successor compilation/discovery is still needed.

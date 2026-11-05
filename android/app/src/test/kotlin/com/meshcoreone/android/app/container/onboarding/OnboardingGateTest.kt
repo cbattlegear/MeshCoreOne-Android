@@ -22,6 +22,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isDialog
+import androidx.compose.ui.test.onNode
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -328,9 +332,9 @@ class OnboardingGateTest {
                 presets.canApply.value = false
                 readbackAvailable = true
             }
-            compose.onNodeWithText(host.get().getString(
+            compose.onNode(hasText(host.get().getString(
                 com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings.commonTryAgain,
-            )).performClick()
+            )) and hasAnyAncestor(isDialog())).performClick()
             compose.waitForIdle()
             assertEquals(1, applies)
             assertEquals(1, writes.size)

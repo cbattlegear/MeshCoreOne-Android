@@ -264,18 +264,38 @@ class EnvironmentTests(unittest.TestCase):
                 "verify_candidate_task_graph.gradle"
             ))
 
-    def test_only_wp203_test_task_is_cacheable_and_its_side_effects_are_declared(self):
-        script = (REPO / "tools/android-port/controller/verify_candidate_task_graph.gradle").read_text(
-            encoding="utf-8",
+    def assert_task_cache_policies(self, script):
+        test_scope = "    project.tasks.withType(org.gradle.api.tasks.testing.Test).configureEach { task ->"
+        self.assertEqual(script.count(test_scope), 1)
+        compiler_scope, test_and_graph = script.split(test_scope)
+        test_scope_body, graph_scope = test_and_graph.split("gradle.taskGraph.whenReady { graph ->")
+        compiler_policy = (
+            "    project.tasks.configureEach { task ->\n"
+            '        if (task.path == ":platform:notifications:compileDebugAndroidTestKotlin") {\n'
+            "            task.outputs.upToDateWhen { false }\n"
+            '            task.outputs.cacheIf("Notification instrumentation inputs require a fresh compiler observation") { false }'
         )
+        self.assertEqual(compiler_scope.count(compiler_policy), 1)
+        self.assertEqual(compiler_scope.count(".outputs.cacheIf("), 1)
+        self.assertEqual(compiler_scope.count(".outputs.upToDateWhen"), 1)
         cache_policy = (
             'task.outputs.cacheIf("Only WP-203 test inputs and interop outputs are explicitly declared") {\n'
             '            task.path == ":core:data:testDebugUnitTest"\n'
             "        }"
         )
-        self.assertIn(cache_policy, script)
-        self.assertEqual(script.count("task.outputs.cacheIf("), 1)
-        self.assertLess(script.index(cache_policy), script.index('if (task.path == ":core:data:testDebugUnitTest")'))
+        self.assertEqual(test_scope_body.count(cache_policy), 1)
+        self.assertEqual(test_scope_body.count(".outputs.cacheIf("), 1)
+        self.assertNotIn(".outputs.cacheIf(", graph_scope)
+        self.assertLess(
+            test_scope_body.index(cache_policy),
+            test_scope_body.index('if (task.path == ":core:data:testDebugUnitTest")'),
+        )
+
+    def test_only_wp203_test_task_is_cacheable_and_its_side_effects_are_declared(self):
+        script = (REPO / "tools/android-port/controller/verify_candidate_task_graph.gradle").read_text(
+            encoding="utf-8",
+        )
+        self.assert_task_cache_policies(script)
         self.assertIn('task.outputs.dir(interopOutput)', script)
         self.assertIn("task.inputs.dir(interopInput)", script)
         self.assertIn("task.doFirst", script)
@@ -284,6 +304,38 @@ class EnvironmentTests(unittest.TestCase):
         self.assertLess(script.index("task.inputs.files.files.any"), script.index("gradle.taskGraph.whenReady"))
         self.assertIn("WP-203 interop artifacts are not declared Gradle task outputs", script)
         self.assertIn("WP-203 interoperability fixture is not a Gradle task input", script)
+
+    def test_task_cache_policies_reject_widened_missing_and_extra_policies(self):
+        script = (REPO / "tools/android-port/controller/verify_candidate_task_graph.gradle").read_text(
+            encoding="utf-8",
+        )
+        veto = (
+            '            task.outputs.cacheIf("Notification instrumentation inputs require a fresh compiler observation") { false }'
+        )
+        compiler_path = 'if (task.path == ":platform:notifications:compileDebugAndroidTestKotlin")'
+        test_path = '            task.path == ":core:data:testDebugUnitTest"\n'
+        test_scope = "    project.tasks.withType(org.gradle.api.tasks.testing.Test).configureEach { task ->"
+        mutations = {
+            "missing-compiler-veto": script.replace(veto, ""),
+            "cacheable-compiler": script.replace(veto, veto.replace("{ false }", "{ true }")),
+            "up-to-date-compiler": script.replace("task.outputs.upToDateWhen { false }", "task.outputs.upToDateWhen { true }"),
+            "widened-compiler-scope": script.replace(compiler_path, "if (true)"),
+            "cacheable-other-test": script.replace(test_path, '            task.path == ":app:testDebugUnitTest"\n'),
+            "cacheable-all-tests": script.replace(test_path, "            true\n"),
+            "extra-policy": script + '\ntask.outputs.cacheIf("Unexpected") { true }\n',
+            "extra-compiler-policy": script.replace(veto, veto + '\n            task.outputs.cacheIf("Unexpected") { true }'),
+            "extra-test-policy": script.replace(test_scope, test_scope + '\n        task.outputs.cacheIf("Unexpected") { true }'),
+            "duplicate-compiler-veto": script.replace(veto, veto + "\n" + veto),
+            "compiler-veto-in-test-scope": script.replace(veto, "").replace(test_scope, test_scope + "\n" + veto),
+            "test-policy-outside-test-scope": script.replace(test_scope, "").replace(
+                "gradle.taskGraph.whenReady { graph ->", test_scope + "\ngradle.taskGraph.whenReady { graph ->"
+            ),
+        }
+        for name, mutated in mutations.items():
+            with self.subTest(name=name):
+                self.assertNotEqual(script, mutated)
+                with self.assertRaises(AssertionError):
+                    self.assert_task_cache_policies(mutated)
 
     def test_app_tests_reuse_the_worker_jvm_instead_of_forking_for_each_class(self):
         app_build = (REPO / "android/app/build.gradle.kts").read_text(encoding="utf-8")

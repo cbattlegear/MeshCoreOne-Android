@@ -149,6 +149,7 @@ def main():
         REPORT_LOCATIONS, bounded_directory, check_module_tests,
         module_method_inventory, module_sources, remapped_tasks, select_remapped_tasks,
         validate_remapped_compilation,
+        notification_instrumentation_evidence, notification_instrumentation_tasks,
     )
 
     stages = args.stages.split(",")
@@ -190,6 +191,8 @@ def main():
                 continue
             project = args.repo / "android"
             tasks = select_remapped_tasks(ci.TASKS[stage], remapped_tasks(args.repo))
+            if ":platform:notifications:testDebugUnitTest" in tasks:
+                tasks = list(dict.fromkeys([*tasks, *notification_instrumentation_tasks(args.repo)]))
             directories = {project / relative for relative, _ in SUITES.values()}
             for module in module_sources(args.repo):
                 directories.update(project / module / relative for relative in REPORT_LOCATIONS)
@@ -241,6 +244,9 @@ def main():
             report["compiled_test_sources"] = read_test_sources(sources_path, runners)
             report["remapped_jvm_inputs"] = validate_remapped_compilation(
                 args.repo, report["compiled_test_sources"], runners)
+            instrumentation = notification_instrumentation_evidence(args.repo, sources_path, tasks)
+            if instrumentation:
+                report["notification_instrumentation"] = instrumentation
             report["reports"] = collect_lint(args.repo / "android")
             validate_graph_runtime(args.repo / "android/build/reports/scaffold")
             execute([sys.executable, str(args.repo / "tools/android-port/l10n_convert.py"), "--check",

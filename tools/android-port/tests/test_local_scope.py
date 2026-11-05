@@ -288,7 +288,7 @@ class LocalScopeBindingTests(unittest.TestCase):
         self.assertNotIn(notification_task, full["tasks"])
 
         def plan(scopes):
-            self.assertEqual(scopes, list(SCOPED_TASKS))
+            self.assertIn(scopes, (None, list(SCOPED_TASKS)))
             return candidate_plan(self.repo, self.base, head, scopes)
 
         log = build_log(["core/services"], tasks=full["tasks"])
@@ -319,6 +319,114 @@ class LocalScopeBindingTests(unittest.TestCase):
             validate_build_log(log, ["core/services"], plan_for_scopes=plan)
         self.assertEqual(TASKS["scaffold"], original)
         self.assertIs(SCOPED_TASKS["scaffold"], TASKS["scaffold"])
+
+    def test_mixed_notification_and_controller_changes_preserve_derived_full_plan_scopes(self):
+        import copy
+        from controller.ci import SCOPED_TASKS, TASKS
+        from controller.module_junit import (
+            NOTIFICATION_INSTRUMENTATION_BASELINE, NOTIFICATION_INSTRUMENTATION_TASK,
+            notification_instrumentation_candidate,
+        )
+        from controller.repair_acceptance import validate_build_log
+        from test_repair_acceptance import build_log
+
+        fixture = Path(__file__).parent / "fixtures/notification-instrumentation-build.gradle.kts"
+        prefix = "android/platform/notifications/"
+        self.write(prefix + "build.gradle.kts", fixture.read_text(encoding="utf-8"))
+        for relative in NOTIFICATION_INSTRUMENTATION_BASELINE:
+            self.write(prefix + relative, "package fixture\nclass " + Path(relative).stem + "\n")
+        for module, plugin in (("model", "mesh.jvm.library"), ("contracts", "mesh.jvm.library"),
+                               ("l10n", "mesh.android.library")):
+            self.write(f"android/core/{module}/build.gradle.kts", f'plugins {{ id("{plugin}") }}\n')
+        base = self.commit()
+        self.git("update-ref", "refs/remotes/origin/main", base)
+        self.write(prefix + "src/main/kotlin/Delivery.kt", "class Delivery\n")
+        self.write("tools/android-port/tests/test_mixed.py", "fixture\n")
+        head = self.commit()
+
+        def provider(scopes):
+            return candidate_plan(self.repo, base, head, scopes, trusted_base=base)
+
+        derived = provider(None)
+        self.assertIn("module:platform/notifications", derived["scopes"])
+        self.assertFalse(derived["full_scaffold"])
+        with self.assertRaisesRegex(PortError, "Incomplete affected scopes"):
+            provider(list(SCOPED_TASKS))
+        expected = notification_instrumentation_candidate(self.repo, head)
+        report = {
+            "tasks": [*TASKS["scaffold"], NOTIFICATION_INSTRUMENTATION_TASK],
+            "scopes": ["scaffold"],
+            "notification_instrumentation": {
+                key: expected[key] for key in ("task", "sources", "excluded_reply_sources")
+            },
+            "compiled_test_sources": {"platform/notifications": expected["jvm_sources"]},
+        }
+
+        def validate(value, trusted=provider):
+            return validate_build_log(
+                build_log([], **value), [], plan_for_scopes=trusted,
+                notification_inputs_for_candidate=lambda: notification_instrumentation_candidate(self.repo, head),
+            )
+
+        self.assertTrue(validate(report)["positive_discovery"])
+        for kind in ("missing-task-and-proof", "changed-blob", "missing-derived-scope"):
+            altered = copy.deepcopy(report)
+            trusted = provider
+            if kind == "missing-task-and-proof":
+                altered["tasks"].remove(NOTIFICATION_INSTRUMENTATION_TASK)
+                altered.pop("notification_instrumentation")
+            elif kind == "changed-blob":
+                path = next(iter(altered["notification_instrumentation"]["sources"]))
+                altered["notification_instrumentation"]["sources"][path] = "0" * 40
+            else:
+                def trusted(scopes):
+                    plan = provider(scopes)
+                    if scopes is not None:
+                        plan["scopes"].remove("module:platform/notifications")
+                    return plan
+            with self.subTest(kind=kind), self.assertRaises(PortError):
+                validate(altered, trusted)
+
+        base = head
+        self.git("update-ref", "refs/remotes/origin/main", base)
+        self.write("android/core/services/src/test/kotlin/SyncTest.kt", "class SyncTest\n")
+        head = self.commit()
+        unrelated = provider(None)
+        self.assertNotIn(":platform:notifications:testDebugUnitTest", unrelated["tasks"])
+        self.assertIsNotNone(notification_instrumentation_candidate(self.repo, head))
+        count = {"discovered": 1, "run": 1, "passed": 1, "failed": 0, "errors": 0, "skipped": 0}
+        unrelated_report = {
+            **unrelated, "result": "success",
+            "resolved_task_graph": {"result": "no-duplicate-ci-evidence"},
+            "suites": {"core/services": count},
+            "compiled_test_sources": {"core/services": {
+                "android/core/services/src/test/kotlin/SyncTest.kt":
+                    self.git("rev-parse", head + ":android/core/services/src/test/kotlin/SyncTest.kt"),
+            }},
+            "junit_cases": [{
+                "report": "android/core/services/build/test-results/test/TEST-SyncTest.xml",
+                "index": 0, "class": "SyncTest", "method": "syncs", "outcome": "passed",
+            }],
+        }
+        self.assertTrue(validate_build_log(
+            build_log([], **unrelated_report), ["core/services"], plan_for_scopes=provider,
+            notification_inputs_for_candidate=lambda: notification_instrumentation_candidate(self.repo, head),
+        )["positive_discovery"])
+
+        base = head
+        self.git("update-ref", "refs/remotes/origin/main", base)
+        self.write("tools/android-port/tests/test_mixed.py", "changed controller fixture only\n")
+        head = self.commit()
+        self.assertEqual(provider(None)["scopes"], [])
+        self.assertIsNotNone(notification_instrumentation_candidate(self.repo, head))
+        self.assertTrue(validate(report)["positive_discovery"])
+        for scopes in (None, "scaffold", ["scaffold", "scaffold"], [""], [7], ["module:unknown"]):
+            def malformed(requested):
+                return {"scopes": scopes} if requested is None else provider(requested)
+            with self.subTest(derived_scopes=scopes), self.assertRaises(PortError):
+                validate(report, malformed)
+        with self.assertRaises(PortError):
+            validate(report, lambda requested: {} if requested is None else provider(requested))
 
     def test_remapped_runner_survives_dependency_parser_full_fallback(self):
         notification_fixture(self.write)

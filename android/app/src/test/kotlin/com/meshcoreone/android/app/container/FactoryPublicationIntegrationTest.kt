@@ -37,6 +37,7 @@ class FactoryPublicationIntegrationTest : RoomProcessTest() {
         val successorAllocated = CompletableDeferred<Unit>()
         val releaseSuccessor = CompletableDeferred<Unit>()
         val allocations = AtomicInteger()
+        val unavailable = IllegalStateException("Successor link unavailable")
         val h = ContainerHarness(
             this,
             store,
@@ -50,7 +51,7 @@ class FactoryPublicationIntegrationTest : RoomProcessTest() {
         h.links.configureRadio = { radio ->
             if (allocations.incrementAndGet() > 1) {
                 radio.connectGate = releaseSuccessor
-                if (successorFails) radio.connectFailure = IllegalStateException("Successor link unavailable")
+                if (successorFails) radio.connectFailure = unavailable
                 successorAllocated.complete(Unit)
             }
         }
@@ -87,7 +88,7 @@ class FactoryPublicationIntegrationTest : RoomProcessTest() {
             releaseSuccessor.complete(Unit)
             val failure = successor.await()
             if (successorFails) {
-                assertNotNull(failure)
+                assertSame(unavailable, failure, "The real successor failure must reach its caller unchanged")
                 assertEquals(DeviceConnectionState.DISCONNECTED, h.manager.connectionState)
                 assertNull(h.sessions.current, "A failed successor cannot leave the retired graph as current")
                 assertEquals(0, h.sessions.outstanding)

@@ -38,6 +38,8 @@ data class ChartEmptyState(val valueText: String?) {
     val message: RemoteNodesText = RemoteNodesText.Resource(AppRemoteNodesStrings.remoteNodesHistoryCheckBack)
 }
 
+data class SensorChartIdentity(val channel: Long, val key: String)
+
 /**
  * The non-drawing half of Swift `MetricChartView`: a titled chart of one or more series with an optional
  * fixed y-axis domain. Drawing (Compose Canvas) uses [MetricChartGeometry] for coordinates.
@@ -47,6 +49,7 @@ data class MetricChartModel(
     val unit: String,
     val series: List<ChartSeries>,
     val yAxisDomain: ClosedFloatingPointRange<Double>? = null,
+    val identity: SensorChartIdentity? = null,
 ) {
     /** More than one series switches to the overlaid layout with a categorical scale and legend. */
     val isMultiSeries: Boolean get() = series.size > 1

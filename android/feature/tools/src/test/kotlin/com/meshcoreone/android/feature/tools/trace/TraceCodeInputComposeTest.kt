@@ -235,7 +235,7 @@ class TraceCodeInputComposeTest {
         mountTraceResults(h)
         assertComparison(h, "150 ms", "50%", C.contactsResultsComparisonIncreased)
         h.complete { h.holder.runTrace() }
-        h.time.advanceBy(60.seconds)
+        h.time.advanceBy(FloodTraceTimeout.sanitized((h.deps.sender as FakeTraceSender).suggestedTimeoutMs))
         settle()
         scrollToTraceResults(h)
         assertNull(h.state.result)

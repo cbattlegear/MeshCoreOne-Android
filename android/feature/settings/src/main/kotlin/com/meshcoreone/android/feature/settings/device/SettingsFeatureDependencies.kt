@@ -3,6 +3,7 @@ package com.meshcoreone.android.feature.settings.device
 
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.SessionToken
+import com.meshcoreone.android.core.contracts.domain.PreRepeatSettingsAttempt
 import com.meshcoreone.android.core.model.AdvertLocationPolicy
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RegionSelection
@@ -67,6 +68,7 @@ data class DeviceGpsState(val isSupported: Boolean, val isEnabled: Boolean)
  */
 interface SettingsRadioPort {
     val sessionToken: SessionToken? get() = null
+    suspend fun reconcileRadioSettingsIfNeeded() = Unit
     fun currentDevice(expectedToken: SessionToken): DeviceDTO =
         throw UnsupportedOperationException("Session-bound current radio device is not supported")
     /** Session-owned uncertainty survives a Settings composition/holder being disposed. */
@@ -76,6 +78,7 @@ interface SettingsRadioPort {
         frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte, codingRate: UByte,
         clientRepeat: Boolean? = null, appliedRadioPresetID: String? = null,
         expectedDevice: DeviceDTO? = null,
+        repeatAttempt: PreRepeatSettingsAttempt? = null,
     ): SelfInfo
     suspend fun setTxPowerVerified(power: Byte): SelfInfo
     suspend fun applyRadioPresetVerified(presetId: String): SelfInfo
@@ -191,6 +194,12 @@ interface DeviceSettingsStorePort {
     fun clearPreRepeatSettings()
     suspend fun savePreRepeatSettings(expectedToken: SessionToken?) {
         throw UnsupportedOperationException("Awaited Repeat snapshots are not supported")
+    }
+    suspend fun savePreRepeatSettings(expectedToken: SessionToken?, attempt: PreRepeatSettingsAttempt) {
+        throw UnsupportedOperationException("Repeat preparation receipts are not supported")
+    }
+    suspend fun abortPreRepeatSettings(expectedToken: SessionToken?, attempt: PreRepeatSettingsAttempt) {
+        throw UnsupportedOperationException("Conditional Repeat preparation aborts are not supported")
     }
     suspend fun clearPreRepeatSettings(expectedToken: SessionToken?) {
         throw UnsupportedOperationException("Awaited Repeat snapshots are not supported")

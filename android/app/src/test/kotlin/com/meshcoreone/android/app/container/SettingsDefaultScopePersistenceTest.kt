@@ -46,6 +46,68 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
+    @Test fun failedActualRfPersistenceReconcilesBeforeTheSameSessionActionRetryDerivesItsBaseline() = runTest {
+        var failRf = false
+        val rejected = object : PersistenceStoreProtocol by store {
+            override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+                if (failRf && dto.frequency == 868_100u) {
+                    throw com.meshcoreone.android.core.contracts.domain.PersistenceStoreException(
+                        com.meshcoreone.android.core.contracts.domain.PersistenceStoreError.SaveFailed("Radio parameters unavailable"),
+                    )
+                }
+                return store.saveDeviceIfUnchanged(dto, expected)
+            }
+        }
+        var dependencies: SettingsFeatureDependencies? = null
+        withSettings(rejected, exposeDependencies = { dependencies = it }) { h, _, _, radio ->
+            val d = assertNotNull(dependencies)
+            val failures = mutableListOf<Throwable>()
+            val advanced = AdvancedRadioStateHolder(
+                SettingsEnvironment(backgroundScope, describe = { failures += it; UiText.Verbatim("Radio failed") }),
+                d.connection, d.settingsService, RadioWriteGate(),
+            )
+            advanced.start()
+            try {
+                h.eventually("manual Settings ready before RF persistence failure") { advanced.state.value.hasLoaded }
+                val before = assertNotNull(h.manager.connectedDevice)
+                val session = assertNotNull(h.sessions.current)
+                failRf = true
+                advanced.onFrequencyTextChanged("868.1")
+                advanced.onTxPowerTextChanged("10")
+                advanced.apply(session.token)
+                h.eventually("verified RF persistence failure reaches the actual action") {
+                    failures.isNotEmpty() && !advanced.state.value.isApplying
+                }
+                assertFalse(advanced.state.value.showSuccess)
+                assertNotNull(advanced.state.value.errorMessage)
+                assertTrue(failures.single() is com.meshcoreone.android.core.contracts.domain.PersistenceStoreException)
+                assertEquals(before, store.fetchDevice(before.id))
+                assertEquals(before, h.manager.connectedDevice)
+                assertEquals(1, radio.radioWrites.size)
+                assertTrue(radio.powerWrites.isEmpty())
+                assertTrue(session.settingsService.radioSettingsNeedsRecovery)
+                failRf = false
+                advanced.dismissError()
+                advanced.apply(session.token)
+                h.eventually("actual readback reconciliation permits the same-session retry") {
+                    advanced.state.value.showSuccess && !advanced.state.value.isApplying
+                }
+                val saved = assertNotNull(store.fetchDevice(before.id))
+                assertEquals(868_100u, saved.frequency)
+                assertEquals(10.toByte(), saved.txPower)
+                assertEquals(before.bandwidth, saved.bandwidth)
+                assertEquals(before.spreadingFactor, saved.spreadingFactor)
+                assertEquals(before.codingRate, saved.codingRate)
+                assertEquals(saved, h.manager.connectedDevice)
+                assertEquals(session.token, h.sessions.current?.token)
+                assertEquals(2, radio.radioWrites.size)
+                assertEquals(1, radio.powerWrites.size)
+                assertFalse(session.settingsService.radioSettingsNeedsRecovery)
+                assertNull(advanced.state.value.errorMessage)
+            } finally { advanced.stop() }
+        }
+    }
+
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @Test fun manualRadioWaitsForActualConsumerAndIgnoresAnOlderObservationButAcceptsALaterChange() = runTest {
         val rfEntered = CompletableDeferred<Unit>()

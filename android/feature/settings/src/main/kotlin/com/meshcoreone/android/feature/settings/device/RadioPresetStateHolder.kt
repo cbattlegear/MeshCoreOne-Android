@@ -4,11 +4,13 @@ package com.meshcoreone.android.feature.settings.device
 
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.SessionToken
+import com.meshcoreone.android.core.contracts.domain.PreRepeatSettingsAttempt
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RegionSelection
 import com.meshcoreone.android.core.ui.UiText
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -18,6 +20,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class RadioPresetState(
     val device: DeviceDTO? = null,
@@ -205,6 +208,7 @@ class RadioPresetStateHolder(
         try {
             target.requireCurrent(mutable.value.device, mutable.value.sessionToken)
             val service = target.service
+            service.reconcileRadioSettingsIfNeeded()
             if (repeat) {
                 val device = target.currentDevice(mutable.value.device, mutable.value.sessionToken)
                 val frequency = catalog.repeatFrequencyKHz(id) ?: throw SettingsNotConnectedException()
@@ -255,9 +259,11 @@ class RadioPresetStateHolder(
         mutable.update { it.copy(isApplyingRepeat = true, errorMessage = null) }
         writeGate.set(true)
         env.scope.launch {
+            val attempt = PreRepeatSettingsAttempt(target.token)
             try {
                 target.requireCurrent(mutable.value.device, mutable.value.sessionToken)
-                deviceStore.savePreRepeatSettings(target.token)
+                target.service.reconcileRadioSettingsIfNeeded()
+                deviceStore.savePreRepeatSettings(target.token, attempt)
                 currentCoroutineContext().ensureActive()
                 val current = target.currentDevice(mutable.value.device, mutable.value.sessionToken)
                 setRepeatToggle(true)
@@ -265,19 +271,33 @@ class RadioPresetStateHolder(
                 val frequency = catalog.repeatFrequencyKHz(presetId) ?: throw SettingsNotConnectedException()
                 target.service.setRadioParamsVerified(
                     frequency, current.bandwidth, current.spreadingFactor, current.codingRate,
-                    clientRepeat = true, expectedDevice = current,
+                    clientRepeat = true, expectedDevice = current, repeatAttempt = attempt,
                 )
                 retryAlert.reset()
             } catch (cancelled: CancellationException) {
+                abortUnissuedRepeat(target, attempt, cancelled)
                 setRepeatToggle(connection.connectedDevice.value?.clientRepeat ?: false)
                 throw cancelled
             } catch (failure: Exception) {
+                abortUnissuedRepeat(target, attempt, failure)
                 setRepeatToggle(connection.connectedDevice.value?.clientRepeat ?: false)
                 val message = failures.route(failure) { startEnableRepeat(target, presetId) }
                 mutable.update { it.copy(selectedPresetId = currentMatchingPresetId(), errorMessage = message ?: it.errorMessage) }
             } finally {
                 releaseRepeat()
             }
+        }
+    }
+
+    private suspend fun abortUnissuedRepeat(
+        target: SettingsRadioTarget, attempt: PreRepeatSettingsAttempt, failure: Exception,
+    ) {
+        try {
+            // Only the committed creation receipt and definitely-unsent dispatch qualify for this tail.
+            withContext(NonCancellable) { deviceStore.abortPreRepeatSettings(target.token, attempt) }
+        } catch (cleanupFailure: Exception) {
+            if (cleanupFailure !== failure) failure.addSuppressed(cleanupFailure)
+            mutable.update { it.copy(errorMessage = env.describe(cleanupFailure)) }
         }
     }
 
@@ -291,6 +311,7 @@ class RadioPresetStateHolder(
 
     private suspend fun runDisableRepeat(target: SettingsRadioTarget) {
         try {
+            target.service.reconcileRadioSettingsIfNeeded()
             val device = target.currentDevice(mutable.value.device, mutable.value.sessionToken)
             target.service.setRadioParamsVerified(
                 device.preRepeatFrequency ?: device.frequency, device.preRepeatBandwidth ?: device.bandwidth,

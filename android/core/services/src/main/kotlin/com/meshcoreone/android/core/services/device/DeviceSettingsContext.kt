@@ -14,12 +14,14 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -73,13 +75,15 @@ class DeviceSettingsContext(
         if (alreadyClosed) handler()
     }
 
-    internal suspend fun <T> operation(action: suspend () -> T): T {
+    internal suspend fun <T> operation(settleCancellation: Boolean = false, action: suspend () -> T): T {
         currentCoroutineContext().ensureActive()
         val task = submit(action = action)
         try {
             return await(task)
         } finally {
-            task.cancel()
+            if (settleCancellation) {
+                withContext(NonCancellable) { task.cancelAndJoin() }
+            } else task.cancel()
         }
     }
 

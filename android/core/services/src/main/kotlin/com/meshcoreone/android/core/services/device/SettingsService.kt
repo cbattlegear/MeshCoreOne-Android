@@ -3,6 +3,7 @@
 package com.meshcoreone.android.core.services.device
 
 import com.meshcoreone.android.core.contracts.domain.SessionEvent
+import com.meshcoreone.android.core.contracts.domain.PreRepeatSettingsAttempt
 import com.meshcoreone.android.core.contracts.domain.SessionEventSubscription
 import com.meshcoreone.android.core.contracts.domain.KnownRegionRemovalOutcome
 import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
@@ -55,6 +56,8 @@ class SettingsService(
     private var eventsFinished = false
     private var pathHashRevision = 0L
     private var persistedPathHashRevision = 0L
+    private var radioRevision = 0L
+    private var persistedRadioRevision = 0L
     private var defaultScopeUncertain = false
     private var defaultScopeBaselineEstablished = false
     private var defaultScopeRecovery: kotlinx.coroutines.Deferred<Unit>? = null
@@ -63,6 +66,8 @@ class SettingsService(
         get() = synchronized(eventLock) { defaultScopeUncertain }
     val pathHashModeNeedsRecovery: Boolean
         get() = synchronized(eventLock) { pathHashRevision != persistedPathHashRevision }
+    val radioSettingsNeedsRecovery: Boolean
+        get() = synchronized(eventLock) { radioRevision != persistedRadioRevision }
 
     init {
         context.onClose(::finishEvents)
@@ -166,7 +171,7 @@ class SettingsService(
         }
     }
 
-    private suspend fun <T> operation(action: suspend () -> T): T = context.operation {
+    private suspend fun <T> operation(settleCancellation: Boolean = false, action: suspend () -> T): T = context.operation(settleCancellation) {
         operationLock.withLock {
             context.requireCurrent()
             action()
@@ -199,8 +204,15 @@ class SettingsService(
 
     private suspend fun writeRadio(
         frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte, codingRate: UByte, clientRepeat: Boolean?,
+        repeatAttempt: PreRepeatSettingsAttempt? = null,
     ) = configuration {
-        setRadio(frequencyKHz.toDouble() / 1000.0, bandwidthKHz.toDouble() / 1000.0, spreadingFactor, codingRate, clientRepeat)
+        if (repeatAttempt == null) {
+            setRadio(frequencyKHz.toDouble() / 1000.0, bandwidthKHz.toDouble() / 1000.0, spreadingFactor, codingRate, clientRepeat)
+        } else {
+            require(repeatAttempt.token == context.token)
+            setRadio(frequencyKHz.toDouble() / 1000.0, bandwidthKHz.toDouble() / 1000.0, spreadingFactor, codingRate,
+                clientRepeat, repeatAttempt.startRadioDispatch())
+        }
     }
 
     suspend fun setTxPower(power: Byte) = operation { configuration { setTxPower(power) } }
@@ -282,6 +294,7 @@ class SettingsService(
     private suspend fun <T> acknowledged(
         defaultScope: Boolean = false,
         additionalCompletions: List<CompletableDeferred<Unit>> = emptyList(),
+        settleCancellation: Boolean = false,
         action: suspend (CompletableDeferred<Unit>, Subscription) -> T,
     ): T {
         val completion = CompletableDeferred<Unit>()
@@ -290,7 +303,7 @@ class SettingsService(
                 ?: throw SettingsServiceException(SettingsServiceError.NotConnected)
         }
         try {
-            val result = operation {
+            val result = operation(settleCancellation) {
                 synchronized(eventLock) {
                     if (eventsFinished || subscription !== owner) {
                         throw SettingsServiceException(SettingsServiceError.NotConnected)
@@ -578,9 +591,10 @@ class SettingsService(
         frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte, codingRate: UByte,
         clientRepeat: Boolean? = null, appliedRadioPresetID: String? = null,
         expectedDevice: DeviceDTO? = null,
-    ): SelfInfo = operation {
+        repeatAttempt: PreRepeatSettingsAttempt? = null,
+    ): SelfInfo = operation(settleCancellation = repeatAttempt != null) {
         expectedDevice?.let { verifyQueuedRadioBaseline(it) }
-        val actual = writeRadioAndVerify(frequencyKHz, bandwidthKHz, spreadingFactor, codingRate, clientRepeat)
+        val actual = writeRadioAndVerify(frequencyKHz, bandwidthKHz, spreadingFactor, codingRate, clientRepeat, repeatAttempt = repeatAttempt)
         publish(SettingsEvent.DeviceUpdated(actual, appliedRadioPresetID))
         actual
     }
@@ -590,15 +604,39 @@ class SettingsService(
         frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte, codingRate: UByte,
         clientRepeat: Boolean? = null, appliedRadioPresetID: String? = null,
         expectedDevice: DeviceDTO? = null,
-    ): SelfInfo = context.operation {
+        repeatAttempt: PreRepeatSettingsAttempt? = null,
+    ): SelfInfo = context.operation(settleCancellation = repeatAttempt != null) {
         val repeatCompletion = clientRepeat?.let { CompletableDeferred<Unit>() }
-        acknowledged(additionalCompletions = listOfNotNull(repeatCompletion)) { completion, owner ->
+        val (actual, revision) = acknowledged(
+            additionalCompletions = listOfNotNull(repeatCompletion), settleCancellation = repeatAttempt != null,
+        ) { completion, owner ->
             expectedDevice?.let { verifyQueuedRadioBaseline(it) }
+            val revision = synchronized(eventLock) { Math.incrementExact(radioRevision).also { radioRevision = it } }
             val actual = writeRadioAndVerify(
-                frequencyKHz, bandwidthKHz, spreadingFactor, codingRate, clientRepeat, repeatCompletion, owner,
+                frequencyKHz, bandwidthKHz, spreadingFactor, codingRate, clientRepeat, repeatCompletion, owner, repeatAttempt,
             )
             publish(SettingsEvent.DeviceUpdated(actual, appliedRadioPresetID, completion), completion, owner)
-            actual
+            actual to revision
+        }
+        synchronized(eventLock) {
+            persistedRadioRevision = maxOf(persistedRadioRevision, revision)
+        }
+        actual
+    }
+
+    /** Reconcile uncertainty before a holder derives untouched RF/Repeat fields for its next attempt. */
+    suspend fun reconcileRadioSettingsIfNeeded(): Unit = context.operation {
+        if (!radioSettingsNeedsRecovery) return@operation
+        val repeatCompletion = CompletableDeferred<Unit>()
+        val revision = acknowledged(additionalCompletions = listOf(repeatCompletion)) { completion, owner ->
+            val actual = configuration { sendAppStart() }
+            val repeat = configuration { queryDevice() }.clientRepeat
+            publish(SettingsEvent.ClientRepeatUpdated(repeat, repeatCompletion), repeatCompletion, owner)
+            publish(SettingsEvent.DeviceUpdated(actual, null, completion), completion, owner)
+            synchronized(eventLock) { radioRevision }
+        }
+        synchronized(eventLock) {
+            persistedRadioRevision = maxOf(persistedRadioRevision, revision)
         }
     }
 
@@ -618,8 +656,9 @@ class SettingsService(
         frequency: UInt, bandwidth: UInt, sf: UByte, cr: UByte, clientRepeat: Boolean?,
         repeatCompletion: CompletableDeferred<Unit>? = null,
         owner: Subscription? = null,
+        repeatAttempt: PreRepeatSettingsAttempt? = null,
     ): SelfInfo {
-        writeRadio(frequency, bandwidth, sf, cr, clientRepeat)
+        writeRadio(frequency, bandwidth, sf, cr, clientRepeat, repeatAttempt)
         val actual = configuration { sendAppStart() }
         if (!(abs(actual.radioFrequency - frequency.toDouble() / 1000.0) < 0.001) ||
             !(abs(actual.radioBandwidth - bandwidth.toDouble() / 1000.0) < 0.001) ||

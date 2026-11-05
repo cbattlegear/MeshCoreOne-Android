@@ -98,6 +98,7 @@ internal class FakeSettingsPort(private val connection: FakeConnection? = null) 
     override suspend fun setRadioParamsVerified(
         frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte, codingRate: UByte,
         clientRepeat: Boolean?, appliedRadioPresetID: String?, expectedDevice: DeviceDTO?,
+        repeatAttempt: com.meshcoreone.android.core.contracts.domain.PreRepeatSettingsAttempt?,
     ): SelfInfo {
         radioExpectations += expectedDevice
         record("setRadioParamsVerified", "$frequencyKHz,$bandwidthKHz,$spreadingFactor,$codingRate,$clientRepeat,$appliedRadioPresetID")

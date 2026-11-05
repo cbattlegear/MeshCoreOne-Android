@@ -224,8 +224,9 @@ private fun TracePathContent(
 }
 
 @Composable
-private fun TracePathListContent(state: TracePathState, holder: TracePathStateHolder, codeInput: TraceCodeInputState) {
+internal fun TracePathListContent(state: TracePathState, holder: TracePathStateHolder, codeInput: TraceCodeInputState) {
     val scope = rememberCoroutineScope()
+    var showClearConfirmation by remember { mutableStateOf(false) }
     LazyColumn(
         Modifier.fillMaxSize().padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -259,10 +260,15 @@ private fun TracePathListContent(state: TracePathState, holder: TracePathStateHo
             }
         } else {
             itemsIndexed(state.outboundPath, key = { _, hop -> hop.id }) { index, hop ->
+                val resources = LocalContext.current.resources
+                val hopLabel = AppContactsStrings.contactsTraceListHopLabel(resources, index + 1, hop.displayText)
+                val moveUpLabel = stringResource(C.contactsDetailAvatarCropMoveUp)
+                val moveDownLabel = stringResource(C.contactsDetailAvatarCropMoveDown)
+                val deleteLabel = stringResource(L.commonDelete)
                 Card(Modifier.fillMaxWidth()) {
                     Row(
                         Modifier.fillMaxWidth().padding(16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Column(Modifier.weight(1f)) {
@@ -275,10 +281,41 @@ private fun TracePathListContent(state: TracePathState, holder: TracePathStateHo
                             )
                             Text(hop.hashHex, style = MaterialTheme.typography.bodySmall)
                         }
-                        OutlinedButton(onClick = { holder.removeRepeater(index) }) {
-                            Text(stringResource(L.commonDelete))
+                        OutlinedButton(
+                            onClick = { holder.moveRepeater(setOf(index), index - 1) },
+                            enabled = index > 0,
+                            modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics {
+                                contentDescription = "$moveUpLabel: $hopLabel"
+                            },
+                        ) {
+                            Text("↑")
+                        }
+                        OutlinedButton(
+                            onClick = { holder.moveRepeater(setOf(index), index + 2) },
+                            enabled = index < state.outboundPath.lastIndex,
+                            modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics {
+                                contentDescription = "$moveDownLabel: $hopLabel"
+                            },
+                        ) {
+                            Text("↓")
+                        }
+                        OutlinedButton(
+                            onClick = { holder.removeRepeater(index) },
+                            modifier = Modifier.sizeIn(minHeight = 48.dp).semantics {
+                                contentDescription = "$deleteLabel: $hopLabel"
+                            },
+                        ) {
+                            Text(deleteLabel)
                         }
                     }
+                }
+            }
+            item(key = "trace-clear-path") {
+                OutlinedButton(
+                    onClick = { showClearConfirmation = true },
+                    modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp),
+                ) {
+                    Text(stringResource(C.contactsTraceClearPath))
                 }
             }
         }
@@ -337,6 +374,26 @@ private fun TracePathListContent(state: TracePathState, holder: TracePathStateHo
             }
         }
         item { Column(Modifier.padding(bottom = 24.dp)) {} }
+    }
+    if (showClearConfirmation) {
+        AlertDialog(
+            onDismissRequest = { showClearConfirmation = false },
+            title = { Text(stringResource(C.contactsTraceClearPath)) },
+            text = { Text(stringResource(C.contactsTraceClearPathMessage)) },
+            dismissButton = {
+                TextButton(onClick = { showClearConfirmation = false }) {
+                    Text(stringResource(L.commonCancel))
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showClearConfirmation = false
+                    holder.clearPath()
+                }) {
+                    Text(stringResource(C.contactsTraceClearPath))
+                }
+            },
+        )
     }
 }
 

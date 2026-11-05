@@ -1,4 +1,5 @@
 // AndroidOnly: WP-314 TS-09 Mounted code/paste actions use the production parser and width policy.
+// AndroidOnly: WP-314 TS-11 Mounted path editing controls drive the real state holder.
 package com.meshcoreone.android.feature.tools.trace
 
 import android.app.Activity
@@ -46,6 +47,8 @@ import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SavedTracePathDTO
+import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
+import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import java.time.Duration
 import java.util.UUID
@@ -226,6 +229,63 @@ class TraceCodeInputComposeTest {
         assertTrue(button("No new nodes to add").config.contains(SemanticsProperties.Disabled))
         assertTrue(announcementTexts().isEmpty())
         assertEquals(2, harness.state.outboundPath.size)
+    }
+
+    @Test fun mountedPathControlsReorderWithinBoundariesAndPreserveRemovalInvalidation() {
+        val harness = configured()
+        listOf(
+            contact(0xA1, name = "Alpha"),
+            contact(0xB2, name = "Bravo"),
+            contact(0xC3, name = "Charlie"),
+        ).forEach(harness.holder::addNode)
+        harness.holder.editStateForTesting {
+            it.copy(activeSavedPath = savedPath(Bytes.of(0xA1, 0xB2, 0xC3)), result = result(emptyList()))
+        }
+        mountPathList(harness)
+
+        assertTrue(actionButton(pathActionDescription(C.contactsDetailAvatarCropMoveUp, 1, "Alpha"))
+            .config.contains(SemanticsProperties.Disabled))
+        assertTrue(actionButton(pathActionDescription(C.contactsDetailAvatarCropMoveDown, 3, "Charlie"))
+            .config.contains(SemanticsProperties.Disabled))
+        assertTrue(actionButton(pathActionDescription(C.contactsDetailAvatarCropMoveDown, 1, "Alpha"))
+            .boundsInRoot.height >= 48f)
+
+        clickDescription(pathActionDescription(C.contactsDetailAvatarCropMoveDown, 1, "Alpha"))
+        assertEquals(listOf("Bravo", "Alpha", "Charlie"), harness.state.outboundPath.map { it.resolvedName })
+        assertNull(harness.state.activeSavedPath)
+        assertNull(harness.state.result)
+
+        clickDescription(pathActionDescription(C.contactsDetailAvatarCropMoveUp, 3, "Charlie"))
+        assertEquals(listOf("Bravo", "Charlie", "Alpha"), harness.state.outboundPath.map { it.resolvedName })
+        clickDescription(pathActionDescription(L.commonDelete, 2, "Charlie"))
+        assertEquals(listOf("Bravo", "Alpha"), harness.state.outboundPath.map { it.resolvedName })
+    }
+
+    @Test fun mountedClearPathRequiresConfirmationAndResetsTheTraceHashOverride() {
+        val harness = configured()
+        harness.holder.addNode(contact(0xA1, name = "Alpha"))
+        harness.holder.setTraceHashMode(2u)
+        harness.holder.setAutoReturnPath(false)
+        harness.holder.editStateForTesting {
+            it.copy(activeSavedPath = savedPath(Bytes.of(0xA1)), result = result(emptyList()))
+        }
+        mountPathList(harness)
+
+        click(host.get().getString(C.contactsTraceClearPath))
+        assertTrue(texts().contains(host.get().getString(C.contactsTraceClearPathMessage)))
+        click("Cancel")
+        assertEquals(1, harness.state.outboundPath.size)
+        assertEquals(2u.toUByte(), harness.state.traceHashMode)
+
+        click(host.get().getString(C.contactsTraceClearPath))
+        click(host.get().getString(C.contactsTraceClearPath))
+        assertTrue(harness.state.outboundPath.isEmpty())
+        assertNull(harness.state.traceHashMode)
+        assertEquals(0u.toUByte(), harness.holder.effectiveTraceMode)
+        assertNull(harness.state.activeSavedPath)
+        assertNull(harness.state.result)
+        assertFalse(harness.state.autoReturnPath)
+        assertTrue(texts().contains(host.get().getString(C.contactsTraceListEmptyPath)))
     }
 
     @Test fun emptyAndWhitespacePasteClearPriorSuccessAndErrorsWithoutChangingDraft() {
@@ -1004,6 +1064,19 @@ class TraceCodeInputComposeTest {
         settle()
     }
 
+    private fun mountPathList(harness: TraceHarness) {
+        content.setContent {
+            key(harness) {
+                val state = harness.holder.state.collectAsStateWithLifecycle().value
+                val codeInput = rememberTraceCodeInputState(harness.holder)
+                CompositionLocalProvider(LocalDensity provides Density(1f, 1f)) {
+                    MaterialTheme { TracePathListContent(state, harness.holder, codeInput) }
+                }
+            }
+        }
+        settle()
+    }
+
     private fun paste(text: String) {
         val clipboard = host.get().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("trace codes", text))
@@ -1040,6 +1113,28 @@ class TraceCodeInputComposeTest {
         assertEquals(1, matches.size, "Expected one action labeled '$label'; visible text: ${texts()}")
         return matches[0]
     }
+
+    private fun actionButton(description: String): SemanticsNode {
+        val matches = nodes().filter {
+            it.config.getOrElse(SemanticsProperties.ContentDescription) { emptyList() }.any { text ->
+                text == description
+            }
+        }
+        assertEquals(1, matches.size, "Expected one action described '$description'")
+        return matches[0]
+    }
+
+    private fun clickDescription(description: String) {
+        host.get().runOnUiThread {
+            val node = actionButton(description)
+            assertFalse(node.config.contains(SemanticsProperties.Disabled), "$description must be enabled")
+            assertTrue(assertNotNull(node.config[SemanticsActions.OnClick].action)())
+        }
+        settle()
+    }
+
+    private fun pathActionDescription(action: Int, index: Int, name: String) =
+        "${host.get().getString(action)}: ${C.contactsTraceListHopLabel(host.get().resources, index, name)}"
 
     private fun settle() {
         repeat(12) {

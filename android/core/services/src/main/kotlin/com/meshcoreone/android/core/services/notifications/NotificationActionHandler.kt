@@ -211,9 +211,13 @@ class NotificationActionHandler(
                     }
                 }
                 receipt.committed()
-                notificationService.removeDeliveredNotification(messageID)
-                notificationService.updateBadgeCount()
-                syncCoordinator.notifyConversationsChanged()
+                // A collaborator may cancel the current write operation while returning success.
+                // Start a fresh post-commit context before any suspending bookkeeping.
+                withContext(NonCancellable) {
+                    notificationService.removeDeliveredNotification(messageID)
+                    notificationService.updateBadgeCount()
+                    syncCoordinator.notifyConversationsChanged()
+                }
             }
         }
     }

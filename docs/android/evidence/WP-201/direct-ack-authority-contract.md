@@ -294,3 +294,40 @@ Trusted related-test and WP-owned evidence admissions were rechecked. Source
 validation is distinct from the still-required integrated compiler/test rerun.
 The owner's reported schema artifact `13386339538` is external context only;
 neither its bytes nor Room suite acceptance were validated in this worktree.
+
+## Separate accepted-wire binding from inline send completion
+
+Follow-up parent: `f138d1c4d84935af54bab258a5a641012225d553`.
+The service owner reported exact integrated execution `3afa` exposing a status
+ordering difference: setting SENT in accepted-wire binding changes retry PENDING
+before finalization and overwrites RETRYING through later retry/cancellation.
+Pinned `MessageService+SendDM.swift:123-126` performs inline SENT bookkeeping
+after actual acceptance, while the retry loop sets RETRYING at lines 451-455 and
+has a separate exhaustion transition at line 697. Those phases must not collapse.
+
+Storage/service coordination froze the additive
+`DirectAckBookkeeping.SendCompleted(wireRequestId: UUID)` variant through the
+existing `applyDirectAckBookkeeping(attempt, requestId, change)` journal.
+`recordDirectSendAccepted` records the actual accepted wire code/phase but
+preserves product message status, including retry PENDING/RETRYING. Explicit
+inline completion resolves that exact claim-scoped persisted wire, requires its
+actual accepted code rather than a prediction, and may promote only current
+PENDING to SENT using that code. It preserves FAILED/DELIVERED guards and
+lease/incarnation/revision fencing. Unknown/foreign/unaccepted wires are rejected;
+operation-ID replay is idempotent and changed payload conflicts. No caller-picked
+status/code, generic write fallback or changed retry-exhaustion semantics is added.
+
+Trusted `wp-owned/modify` production/evidence and
+`reviewed-support-test/add-or-update-related-test` admissions were rechecked.
+One supplemental value test retains exact wire/operation identities and payload
+equality; all earlier assertions remain unchanged. It does not execute producer
+status transitions. Storage must test acceptance preserving PENDING/RETRYING,
+inline accepted-wire completion, terminal guards and replay/foreign-wire fencing;
+the service owner retains all original retry/cancellation/status assertions.
+
+This successor is contract-only. The previously listed manifest,
+verification-configuration, provenance and staged-diff commands all passed for
+this successor, separately from compilation and behavioral execution.
+No local Gradle execution is permitted under the retained
+hold. Seventeen supplemental methods are now authored, not credited as executed
+or passing here. Exact integrated hosted verification remains required.

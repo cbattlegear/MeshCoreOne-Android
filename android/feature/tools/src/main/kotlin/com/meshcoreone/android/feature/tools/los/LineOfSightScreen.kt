@@ -98,6 +98,9 @@ fun LineOfSightEntry(
     preselectedContact: ContactDTO? = null,
 ) {
     val scope = rememberCoroutineScope()
+    var preselectionCleared by rememberSaveable(preselectedContact?.radioId, preselectedContact?.id) {
+        mutableStateOf(false)
+    }
     val holder = remember(dependencies, preselectedContact?.radioId, preselectedContact?.id) {
         LineOfSightStateHolder(
             scope = scope,
@@ -105,7 +108,7 @@ fun LineOfSightEntry(
             pathAnalyzer = dependencies.pathAnalyzer,
             analysisContext = dependencies.analysisContext,
             failureReporter = dependencies.failureReporter,
-            preselectedContact = preselectedContact,
+            preselectedContact = preselectedContact.takeUnless { preselectionCleared },
         ).also {
             it.configure(dependencies.contactSource, dependencies.radioId, dependencies.deviceFrequencyKHz())
         }
@@ -117,6 +120,11 @@ fun LineOfSightEntry(
 
     DisposableEffect(holder) {
         onDispose(holder::dispose)
+    }
+    LaunchedEffect(holder) {
+        holder.state.collectLatest {
+            if (it.pointA == null) preselectionCleared = true
+        }
     }
     LaunchedEffect(holder) {
         holder.loadRepeaters()

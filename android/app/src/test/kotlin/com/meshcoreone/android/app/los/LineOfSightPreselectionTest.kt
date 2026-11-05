@@ -95,6 +95,10 @@ class LineOfSightPreselectionTest {
     private fun mount(contact: ContactDTO?) {
         if (contact == null) navigation.navigateToTool(ToolSelection.LINE_OF_SIGHT)
         else navigation.navigateToLineOfSight(contact)
+        mountShell()
+    }
+
+    private fun mountShell() {
         host.get().setContent {
             MeshCoreTheme(motionScale = 0f) {
                 Box(Modifier.width(900.dp).height((1200 + render.intValue).dp)) {
@@ -123,6 +127,28 @@ class LineOfSightPreselectionTest {
         mount(null)
         assertEmptyEndpoints()
         compose.runOnIdle { assertEquals(emptyList<Coordinate>(), elevationReads) }
+    }
+
+    @Test fun clearedContactIsNotReappliedAfterActualActivityRecreation() {
+        mount(selected)
+        compose.onNodeWithText(selected.name).assertIsDisplayed()
+        compose.onNodeWithTag("los-clear-all").performClick()
+        assertEmptyEndpoints()
+        compose.waitForIdle()
+        val before = host.get()
+        host.windowFocusChanged(false)
+        host.recreate().visible()
+        host.get().actionBar?.hide()
+        host.windowFocusChanged(true)
+        mountShell()
+        compose.waitForIdle()
+        assertFalse("The Activity must actually be replaced", before === host.get())
+        compose.runOnIdle {
+            assertEquals(selected, (navigation.state.value.activeStack.last().destination as NavigationDestination.Tool).preselectedContact)
+            assertEquals(listOf(Coordinate(37.8, -122.4)), elevationReads)
+        }
+        assertEmptyEndpoints()
+        compose.onNodeWithText(selected.name).assertDoesNotExist()
     }
 
     @Test fun unlocatedContactLeavesMountedPointAEmpty() {

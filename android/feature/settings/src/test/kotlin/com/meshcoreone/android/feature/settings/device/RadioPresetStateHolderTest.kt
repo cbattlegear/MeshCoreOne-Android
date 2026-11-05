@@ -120,7 +120,8 @@ class RadioPresetStateHolderTest {
         holder.onRepeatToggled(false)
         scheduler.runCurrent()
         assertTrue(holder.retryAlertState.value.isPresented)
-        assertTrue(state.isRepeatEnabled)
+        assertFalse(state.isRepeatEnabled, "A failed clear cannot undo the successfully verified Repeat-off")
+        assertFalse(state.isApplyingRepeat || gate.inFlight.value)
         store.beforeRepeatEdit = {}
         val replacement = FakeSettingsPort()
         currentService = replacement

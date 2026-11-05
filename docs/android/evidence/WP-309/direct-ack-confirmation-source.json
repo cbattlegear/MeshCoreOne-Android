@@ -3,6 +3,8 @@
   "wp": "WP-309",
   "scope": "Independent direct-ACK delivery-confirmation-unavailable notice and graph-owned observation state",
   "status": "SOURCE_ONLY_UNEXECUTED",
+  "prior_source_head": "3289cc335b925c9866f52b0ee207677f61c0fa26",
+  "independent_review_correction": "Unexpected observer failures now mark the current owner unavailable in finally and escape unchanged through the existing uncaught path. Added prior-NoWildcard, historical-wildcard, replacement and mounted controls; cancellation remains separate.",
   "base": "f8b1d31190f3e02370df147eb95428c9611de2c3",
   "reference_pin": "db14559b39d32322b06477c6ae676112f583db50",
   "canonical_dependency": {
@@ -19,7 +21,7 @@
     "fencing": "Exact radio, session token, observation epoch, request identity and cancellation",
     "absence": "NoPersistedWildcard is a historical atomic observation only, never delivery/eligibility permission",
     "refresh": "Inspecting replaces the status with Checking; known wildcard warnings and explicitly historical non-authorizing wording remain stable to avoid repeated announcements",
-    "failures": "Missing capability, mismatched radio, typed store error, interrupted observation and unexpected completion remain explicitly unavailable",
+    "failures": "Missing capability, mismatched radio, typed store error, interrupted observation, unexpected exception and unexpected completion remain explicitly unavailable. Unexpected causes escape unchanged to the owner's existing uncaught handler.",
     "retention": "Same-radio known wildcard warning survives refresh, read failure and close; different-radio evidence is never relabeled",
     "actions": "Read-only recheck. No send changes, evidence mutation, TTL, reset, delivery settlement or schema change",
     "localization": "Attributed Android-only input generates separate additive resource files for all 12 supported locales",

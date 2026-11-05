@@ -64,7 +64,8 @@ fun DirectAckConfirmationNotice(
         DirectAckConfirmationStatus.CapabilityUnavailable -> R.string.direct_ack_confirmation_missing
         is DirectAckConfirmationStatus.ReadUnavailable,
         is DirectAckConfirmationStatus.RadioMismatch,
-        DirectAckConfirmationStatus.StreamEnded -> R.string.direct_ack_confirmation_unavailable
+        DirectAckConfirmationStatus.StreamEnded,
+        DirectAckConfirmationStatus.UnexpectedUnavailable -> R.string.direct_ack_confirmation_unavailable
         is DirectAckConfirmationStatus.Inspected -> when (status.evidence) {
             is DirectAckRadioConfirmationEvidence.PersistedWildcard -> R.string.direct_ack_confirmation_uncertain
             is DirectAckRadioConfirmationEvidence.NoPersistedWildcard -> R.string.direct_ack_confirmation_checked

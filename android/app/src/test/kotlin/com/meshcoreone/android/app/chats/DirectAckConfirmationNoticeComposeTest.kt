@@ -36,6 +36,7 @@ import java.util.Locale
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
@@ -66,6 +67,7 @@ class DirectAckConfirmationNoticeComposeTest {
     private lateinit var previousLocale: Locale
     private lateinit var holder: DirectAckConfirmationStateHolder
     private lateinit var graphScope: CoroutineScope
+    private val unexpectedReports = mutableListOf<Throwable>()
     private val radio = RadioId(UUID(309, 51))
     private val otherRadio = RadioId(UUID(309, 52))
     private val token = SessionToken(ProcessEpoch(UUID(309, 53)), Generation(1), radio)
@@ -118,7 +120,8 @@ class DirectAckConfirmationNoticeComposeTest {
     ) {
         if (::holder.isInitialized) holder.invalidate()
         if (::graphScope.isInitialized) graphScope.cancel()
-        graphScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        graphScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate +
+            CoroutineExceptionHandler { _, cause -> unexpectedReports += cause })
         holder = DirectAckConfirmationStateHolder(observer, graphScope)
         holder.observe(binding.value)
         render(direction)
@@ -319,5 +322,28 @@ class DirectAckConfirmationNoticeComposeTest {
         mount(observer)
         assertBody(R.string.direct_ack_confirmation_unavailable)
         compose.onNodeWithText(text(R.string.direct_ack_confirmation_checked)).assertDoesNotExist()
+    }
+
+    @Test fun unexpectedExceptionAfterNoWildcardReplacesTheHistoricalNoticeWithUnavailable() {
+        val fail = CompletableDeferred<Unit>()
+        val unexpected = IllegalStateException("unexpected mounted fixture")
+        val observer = object : DirectAckRadioConfirmationEvidenceObserving {
+            override fun observeDirectAckRadioConfirmationEvidence(radioId: RadioId) = flow {
+                emit(DirectAckRadioConfirmationObservation.Snapshot(
+                    DirectAckRadioConfirmationEvidence.NoPersistedWildcard(radioId),
+                ))
+                fail.await()
+                throw unexpected
+            }
+        }
+        mount(observer)
+        assertBody(R.string.direct_ack_confirmation_checked)
+        compose.runOnIdle { fail.complete(Unit) }
+        assertBody(R.string.direct_ack_confirmation_unavailable)
+        compose.onNodeWithText(text(R.string.direct_ack_confirmation_checked)).assertDoesNotExist()
+        compose.runOnIdle {
+            assertEquals(1, unexpectedReports.size)
+            assertSame(unexpected, unexpectedReports.single())
+        }
     }
 }

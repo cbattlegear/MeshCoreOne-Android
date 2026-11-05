@@ -261,6 +261,83 @@ class DirectAckConfirmationStateTest {
         assertSame(DirectAckConfirmationStatus.Interrupted, holder.state.value.status)
     }
 
+    @Test fun unexpectedFailureAfterAbsenceBecomesUnavailableAndEscapesWithTheOriginalCause() {
+        val gate = CompletableDeferred<Unit>()
+        val unexpected = IllegalStateException("unexpected fixture observer")
+        val reported = mutableListOf<Throwable>()
+        val reportingScope = CoroutineScope(scope.coroutineContext + CoroutineExceptionHandler { _, cause ->
+            reported += cause
+        })
+        val observer = object : DirectAckRadioConfirmationEvidenceObserving {
+            override fun observeDirectAckRadioConfirmationEvidence(radioId: RadioId) = flow {
+                emit(DirectAckRadioConfirmationObservation.Snapshot(
+                    DirectAckRadioConfirmationEvidence.NoPersistedWildcard(radioId),
+                ))
+                gate.await()
+                throw unexpected
+            }
+        }
+        val holder = DirectAckConfirmationStateHolder(observer, reportingScope)
+        holder.observe(observation)
+        assertTrue(holder.state.value.status is DirectAckConfirmationStatus.Inspected)
+        gate.complete(Unit)
+        assertSame(DirectAckConfirmationStatus.UnexpectedUnavailable, holder.state.value.status)
+        assertNull(holder.state.value.lastKnownPersistedWildcard)
+        assertEquals(1, reported.size)
+        assertSame(unexpected, reported.single())
+    }
+
+    @Test fun unexpectedFailureRetainsKnownWildcardButAReplacedOwnersFailureCannotPublish() {
+        val oldFailure = CompletableDeferred<Unit>()
+        val unexpected = IllegalArgumentException("old observer fixture")
+        val reported = mutableListOf<Throwable>()
+        val reportingScope = CoroutineScope(scope.coroutineContext + CoroutineExceptionHandler { _, cause ->
+            reported += cause
+        })
+        var collections = 0
+        val observer = object : DirectAckRadioConfirmationEvidenceObserving {
+            override fun observeDirectAckRadioConfirmationEvidence(radioId: RadioId) = flow {
+                if (collections++ == 0) {
+                    emit(DirectAckRadioConfirmationObservation.Snapshot(wildcard(radioId)))
+                    withContext(NonCancellable) {
+                        oldFailure.await()
+                        throw unexpected
+                    }
+                } else {
+                    emit(DirectAckRadioConfirmationObservation.Snapshot(
+                        DirectAckRadioConfirmationEvidence.NoPersistedWildcard(radioId),
+                    ))
+                    awaitCancellation()
+                }
+            }
+        }
+        val holder = DirectAckConfirmationStateHolder(observer, reportingScope)
+        holder.observe(observation)
+        assertEquals(wildcard(), holder.state.value.lastKnownPersistedWildcard)
+        val replacement = DirectAckConfirmationObservation(otherRadio, null, 2)
+        holder.observe(replacement)
+        val current = holder.state.value
+        oldFailure.complete(Unit)
+        assertSame(current, holder.state.value)
+        assertNull(current.lastKnownPersistedWildcard)
+        assertEquals(replacement, current.observation)
+        assertEquals(1, reported.size)
+        assertSame(unexpected, reported.single())
+
+        val failNow = object : DirectAckRadioConfirmationEvidenceObserving {
+            override fun observeDirectAckRadioConfirmationEvidence(radioId: RadioId) = flow {
+                emit(DirectAckRadioConfirmationObservation.Snapshot(wildcard(radioId)))
+                throw unexpected
+            }
+        }
+        val failed = DirectAckConfirmationStateHolder(failNow, reportingScope)
+        failed.observe(observation)
+        assertSame(DirectAckConfirmationStatus.UnexpectedUnavailable, failed.state.value.status)
+        assertEquals(wildcard(), failed.state.value.lastKnownPersistedWildcard)
+        assertEquals(2, reported.size)
+        assertSame(unexpected, reported.last())
+    }
+
     @Test fun observationCannotPairOneRadioWithAnotherRadiosSessionOrANegativeEpoch() {
         assertThrows(IllegalArgumentException::class.java) {
             observation.copy(radioId = otherRadio)

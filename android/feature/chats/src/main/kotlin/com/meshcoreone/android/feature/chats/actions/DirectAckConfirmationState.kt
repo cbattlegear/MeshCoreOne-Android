@@ -42,6 +42,7 @@ sealed interface DirectAckConfirmationStatus {
     data class RadioMismatch(val receivedRadioId: RadioId) : DirectAckConfirmationStatus
     data object Interrupted : DirectAckConfirmationStatus
     data object StreamEnded : DirectAckConfirmationStatus
+    data object UnexpectedUnavailable : DirectAckConfirmationStatus
     data class Inspected(val evidence: DirectAckRadioConfirmationEvidence) : DirectAckConfirmationStatus
 }
 
@@ -103,6 +104,7 @@ class DirectAckConfirmationStateHolder(
             return
         }
         job = scope.launch {
+            var handled = false
             try {
                 var mismatched = false
                 source.observeDirectAckRadioConfirmationEvidence(observation.radioId).takeWhile { event ->
@@ -133,7 +135,9 @@ class DirectAckConfirmationStateHolder(
                 if (request === ticket && !mismatched) {
                     mutableState.value = mutableState.value.copy(status = DirectAckConfirmationStatus.StreamEnded)
                 }
+                handled = true
             } catch (cancelled: CancellationException) {
+                handled = true
                 if (request === ticket) {
                     mutableState.value = mutableState.value.copy(
                         status = DirectAckConfirmationStatus.Interrupted, isActive = scope.isActive,
@@ -141,8 +145,16 @@ class DirectAckConfirmationStateHolder(
                 }
                 throw cancelled
             } catch (failure: PersistenceStoreException) {
+                handled = true
                 if (request === ticket) {
                     mutableState.value = mutableState.value.copy(status = DirectAckConfirmationStatus.ReadUnavailable(failure))
+                }
+            } finally {
+                // Unknown causes still escape unchanged to the owner's uncaught handler, never stale clear UI.
+                if (!handled && request === ticket) {
+                    mutableState.value = mutableState.value.copy(
+                        status = DirectAckConfirmationStatus.UnexpectedUnavailable, isActive = scope.isActive,
+                    )
                 }
             }
         }

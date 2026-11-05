@@ -76,7 +76,7 @@ class ChannelDraftRecoveryAdapterTest : RoomProcessTest() {
         val selected = mutableStateOf<UnboundRecoveryKey?>(null)
         val destination = mutableStateOf<UiText?>(null)
         val failure = mutableStateOf<UiText?>(null)
-        val copies = mutableListOf<UnboundRecoveryKey>()
+        val copies = mutableListOf<UnboundRecoveryText>()
         try {
             host.get().setContent {
                 MeshCoreTheme {
@@ -89,7 +89,7 @@ class ChannelDraftRecoveryAdapterTest : RoomProcessTest() {
                             onSelect = { selected.value = it },
                             onRefresh = {},
                             onChooseChat = { destination.value = UiText.Verbatim("User-selected chat") },
-                            onCopy = { copies += checkNotNull(selected.value) },
+                            onCopy = { copies += it },
                             modifier = Modifier.fillMaxSize(),
                         )
                     }
@@ -106,15 +106,16 @@ class ChannelDraftRecoveryAdapterTest : RoomProcessTest() {
             node("Choose chat").performClick()
             assertTrue(copies.isEmpty())
             node("Copy to selected chat").performClick()
-            assertEquals(listOf(second.key), copies)
+            assertEquals(listOf(second), copies)
             assertEquals(listOf(first, second), records.value)
+            compose.runOnIdle { records.value = listOf(first) }
+            node("Copy to selected chat").assertIsNotEnabled()
             compose.runOnIdle {
-                records.value = listOf(first)
                 failure.value = UiText.Verbatim("Selected original no longer available. Refresh before copying.")
             }
             node("Copy to selected chat").assertIsNotEnabled()
             node("Selected original no longer available. Refresh before copying.").assertIsDisplayed()
-            assertEquals(listOf(second.key), copies)
+            assertEquals(listOf(second), copies)
         } finally {
             host.pause().stop().destroy()
         }

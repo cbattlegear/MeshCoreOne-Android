@@ -21,6 +21,11 @@ selected source disappears. Its callbacks are fixture-owned; no actual journal
 read, copy mutation or enrollment is exercised. Android execution is unclaimed.
 The future route must reread the actual whole projection and match full identity
 and content before atomically protecting the destination draft.
+The explicit copy event now carries the complete displayed `UnboundRecoveryText`
+(full key and exact text), rather than requiring the route to reconstruct it
+from independently mutable selection state. The mounted content assertion
+checks that exact event value. This does not replace copy-time persistence
+validation or grant a destination; both remain future adapter obligations.
 
 `RecoveryContinuityNotice` is separately authored stateless Material content
 for the coordinator-proposed loss-aware new-action-generation acknowledgment.

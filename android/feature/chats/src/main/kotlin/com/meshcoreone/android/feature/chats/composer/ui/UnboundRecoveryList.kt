@@ -46,10 +46,10 @@ fun UnboundRecoveryList(
     onSelect: (UnboundRecoveryKey) -> Unit,
     onRefresh: () -> Unit,
     onChooseChat: () -> Unit,
-    onCopy: () -> Unit,
+    onCopy: (UnboundRecoveryText) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val selectedPresent = selected != null && records.any { it.key == selected }
+    val selectedRecord = selected?.let { key -> records.singleOrNull { it.key == key } }
     LazyColumn(modifier.selectableGroup(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item("heading") {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -93,11 +93,13 @@ fun UnboundRecoveryList(
                     Text(uiString(labels.refresh))
                 }
                 destinationLabel?.let { Text(uiString(it)) }
-                TextButton(onChooseChat, enabled = selectedPresent && !working,
+                TextButton(onChooseChat, enabled = selectedRecord != null && !working,
                     modifier = Modifier.sharedTouchTarget()) {
                     Text(uiString(labels.chooseChat))
                 }
-                Button(onCopy, enabled = selectedPresent && destinationLabel != null && !working,
+                Button(
+                    onClick = { selectedRecord?.let(onCopy) },
+                    enabled = selectedRecord != null && destinationLabel != null && !working,
                     modifier = Modifier.sharedTouchTarget()) {
                     Text(uiString(labels.copyToSelectedChat))
                 }

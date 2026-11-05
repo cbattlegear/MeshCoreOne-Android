@@ -21,7 +21,19 @@ internal class ContactRows(var rows: List<ContactDTO> = emptyList()) : ContactPe
     override suspend fun findContactNameByKeyPrefix(prefix: Bytes): String? = unsupported()
     override suspend fun findContactByPublicKey(publicKey: Bytes): ContactDTO? = unsupported()
     override suspend fun saveContact(radioId: RadioId, frame: ContactFrame): ContactSaveResult = unsupported()
+    override suspend fun saveContactPreservingNewer(
+        radioId: RadioId, frame: ContactFrame, expectedFrame: ContactFrame?,
+    ): ContactSaveResult? = unsupported()
     override suspend fun saveContact(dto: ContactDTO): Unit = unsupported()
+    override suspend fun updateContactAvatar(
+        key: EntityKey, expectedPublicKey: Bytes, imageData: Bytes?,
+    ): ContactAvatarUpdateResult = unsupported()
+    override suspend fun updateContactFavorite(
+        key: EntityKey, expectedPublicKey: Bytes, isFavorite: Boolean,
+    ): ContactFavoriteUpdateResult = unsupported()
+    override suspend fun updateContactLocalFields(
+        key: EntityKey, expectedPublicKey: Bytes, update: ContactLocalUpdate,
+    ): ContactLocalUpdateResult = unsupported()
     override suspend fun batchSaveContacts(radioId: RadioId, frames: SnapshotList<ContactFrame>): Long = unsupported()
     override suspend fun deleteContact(key: EntityKey): Unit = unsupported()
     override suspend fun deleteContacts(

@@ -8,9 +8,11 @@ import android.content.res.Configuration
 import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
+import android.view.inspector.WindowInspector
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.BroadcastFrameClock
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
@@ -20,6 +22,7 @@ import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.createLifecycleAwareWindowRecomposer
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsOwner
@@ -33,6 +36,7 @@ import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.feature.nodes.NodesNavigation
+import com.meshcoreone.android.feature.nodes.model.NodeSortOrder
 import com.meshcoreone.android.feature.nodes.share.ContactQrShareStateHolder
 import com.meshcoreone.android.feature.nodes.support.Fixtures
 import com.meshcoreone.android.feature.nodes.support.Harness
@@ -85,8 +89,20 @@ class ContactShareApi31ComposeTest : NodesScreensComposeTestBase.ContactShareCom
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ContactShareApi37ComposeTest : NodesScreensComposeTestBase.ContactShareComposeTestBase()
 
-abstract class NodesScreensComposeTestBase {
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [31], qualifiers = "w360dp-h900dp-mdpi")
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+class ContactHopSortApi31ComposeTest : NodesScreensComposeTestBase.ContactHopSortComposeTestBase()
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [37], qualifiers = "w360dp-h900dp-mdpi")
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+class ContactHopSortApi37ComposeTest : NodesScreensComposeTestBase.ContactHopSortComposeTestBase()
+
+abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false) {
     protected lateinit var controller: ActivityController<ComponentActivity>
+    private val frameClock = if (deterministicFrames) BroadcastFrameClock() else null
+    private var frameNanos = 0L
 
     @Before
     fun attachHost() {
@@ -101,11 +117,18 @@ abstract class NodesScreensComposeTestBase {
         controller.windowFocusChanged(false)
         controller.pause().stop().destroy()
         idleMainLooper()
+        frameClock?.cancel()
     }
 
     protected fun mount(content: @Composable () -> Unit) {
         controller.get().runOnUiThread {
-            controller.get().setContent {
+            val parent = frameClock?.let {
+                controller.get().window.decorView.createLifecycleAwareWindowRecomposer(
+                    coroutineContext = it,
+                    lifecycle = controller.get().lifecycle,
+                )
+            }
+            controller.get().setContent(parent = parent) {
                 CompositionLocalProvider(
                     LocalDensity provides Density(
                         density = controller.get().resources.displayMetrics.density,
@@ -219,8 +242,16 @@ abstract class NodesScreensComposeTestBase {
     protected open fun rootView(): View = controller.get().window.decorView
 
     protected fun advanceFrames() {
-        controller.get().runOnUiThread { Snapshot.sendApplyNotifications() }
-        idleMainLooper()
+        repeat(if (frameClock == null) 1 else 6) {
+            controller.get().runOnUiThread {
+                Snapshot.sendApplyNotifications()
+                frameClock?.let {
+                    frameNanos += 16_000_000L
+                    it.sendFrame(frameNanos)
+                }
+            }
+            idleMainLooper()
+        }
         controller.get().runOnUiThread {
             val view = findComposeView(rootView())
             if (view.width > 0 && view.height > 0) {
@@ -245,6 +276,107 @@ abstract class NodesScreensComposeTestBase {
         repeat(6) {
             Shadows.shadowOf(Looper.getMainLooper()).idle()
             Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(16))
+        }
+    }
+
+    abstract class ContactHopSortComposeTestBase : NodesScreensComposeTestBase(deterministicFrames = true) {
+        private var sortMenuOpen = false
+
+        override fun rootView(): View =
+            if (sortMenuOpen) {
+                checkNotNull(WindowInspector.getGlobalWindowViews().lastOrNull { it.isShown })
+            } else {
+                super.rootView()
+            }
+
+        @Test
+        fun hopOnlyRefreshReordersVisibleContactsWithoutReselectingSort() {
+            exerciseHopRefresh(NodeSortOrder.HOPS)
+        }
+
+        @Test
+        fun hopOnlyRefreshPreservesNameSort() {
+            exerciseHopRefresh(NodeSortOrder.NAME)
+        }
+
+        private fun exerciseHopRefresh(sortOrder: NodeSortOrder) {
+            val harness = Harness().connect()
+            val radio = checkNotNull(harness.session.radioId)
+            val fixed = Fixtures.contact(
+                radioId = radio, name = "Fixed", publicKey = Fixtures.repeated(0x11), outPathLength = 2u,
+            )
+            val flood = Fixtures.contact(
+                radioId = radio, name = "Flood", publicKey = Fixtures.repeated(0x22), outPathLength = 0xFFu,
+            )
+            val contacts = listOf(fixed, flood)
+            harness.store.contacts += contacts
+            val discovered = Fixtures.node(radioId = radio, publicKey = flood.publicKey, name = flood.name)
+            harness.store.discovered += discovered
+            val loadedHops = mutableListOf<Long?>()
+            harness.store.fetchContactsGate = { loadedHops += harness.store.discovered.single().inboundHopCount }
+            mount { NodesListScreen(harness.dependencies, NodesNavigation.NONE) }
+
+            val context = controller.get()
+            awaitText(fixed.name)
+            awaitText(flood.name)
+            click(awaitAction(context.getString(C.contactsListSort)))
+            sortMenuOpen = true
+            val sortAction = awaitAction(context.getString(sortOrder.titleRes))
+            sortMenuOpen = false
+            click(sortAction)
+            assertVisibleOrder(fixed.name, flood.name)
+
+            val hopUpdates = listOf(1L, 3L, null)
+            hopUpdates.forEachIndexed { index, hops ->
+                harness.store.discovered[0] = discovered.copy(inboundHopCount = hops)
+                click(awaitAction(context.getString(C.contactsListSyncNodes)))
+                awaitSync(harness, index + 1)
+                assertEquals(listOf(null) + hopUpdates.take(index + 1), loadedHops, "Every hop update must be loaded")
+                assertEquals(contacts, harness.store.contacts, "Only discovered inbound hops may change")
+                if (sortOrder == NodeSortOrder.HOPS && hops == 1L) {
+                    assertVisibleOrder(flood.name, fixed.name)
+                } else {
+                    assertVisibleOrder(fixed.name, flood.name)
+                }
+            }
+            assertEquals(listOf("sync", "sync", "sync"), harness.contactService.calls)
+            assertEquals(listOf(true, false, true, false, true, false), harness.adverts.syncingFlags)
+        }
+
+        private fun awaitSync(harness: Harness, count: Int) {
+            val expectedCalls = List(count) { "sync" }
+            val expectedFlags = List(count) { listOf(true, false) }.flatten()
+            repeat(100) {
+                Thread.sleep(10)
+                advanceFrames()
+                if (harness.contactService.calls == expectedCalls && harness.adverts.syncingFlags == expectedFlags) return
+            }
+            assertEquals(expectedCalls, harness.contactService.calls, "Each refresh must invoke the live Sync action")
+            assertEquals(expectedFlags, harness.adverts.syncingFlags, "Each refresh must complete before checking order")
+        }
+
+        private fun assertVisibleOrder(first: String, second: String) {
+            var lastBounds: Pair<Rect?, Rect?> = null to null
+            repeat(100) {
+                Thread.sleep(10)
+                advanceFrames()
+                val nodes = allSemanticsNodes()
+                fun visibleBounds(text: String): Rect? =
+                    nodes.firstOrNull {
+                        it.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { value -> value.text == text } &&
+                            isDisplayed(it)
+                    }?.boundsInRoot
+                val firstBounds = visibleBounds(first)
+                val secondBounds = visibleBounds(second)
+                lastBounds = firstBounds to secondBounds
+                if (firstBounds != null && secondBounds != null && firstBounds.top < secondBounds.top) return
+            }
+            error(
+                "$first must appear above $second after refresh; $first=${lastBounds.first}, $second=${lastBounds.second}; " +
+                    "nodes=${allSemanticsNodes().joinToString {
+                        "${it.config.getOrElse(SemanticsProperties.Text) { emptyList() }}@${it.boundsInRoot}"
+                    }}",
+            )
         }
     }
 

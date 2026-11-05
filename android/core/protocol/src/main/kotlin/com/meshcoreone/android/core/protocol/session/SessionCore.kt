@@ -407,8 +407,16 @@ internal class SessionCore(
 
     suspend fun <T> exchange(operation: suspend ExchangeOwner.() -> T): T = exchange(generation(), operation = operation)
 
-    suspend fun <T> exchange(dispatch: ChannelWriteDispatch, operation: suspend ExchangeOwner.() -> T): T =
-        exchange(generation(), dispatch, operation)
+    suspend fun <T> exchange(dispatch: ChannelWriteDispatch, operation: suspend ExchangeOwner.() -> T): T {
+        val generation = try {
+            generation()
+        } catch (failure: MeshCoreException.SessionNotStarted) {
+            // Generation lookup failed before any serializer task could own or send this attempt.
+            dispatch.cancelled(ChannelWriteCancellationDisposition.DEFINITELY_UNSENT)
+            throw failure
+        }
+        return exchange(generation, dispatch, operation)
+    }
 
     suspend fun <T> exchange(
         generation: SessionGeneration,

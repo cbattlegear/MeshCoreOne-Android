@@ -46,6 +46,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNotSame
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
@@ -53,6 +54,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -71,6 +73,130 @@ import org.robolectric.shadows.ShadowBluetoothGatt
 @OptIn(ExperimentalCoroutinesApi::class)
 @Config(sdk = [31], shadows = [BleRecoveryDeviceShadow::class, BleRecoveryGattShadow::class])
 class BleRecoveryIntegrationTest : RoomProcessTest() {
+    @Test fun appStateSettingsCollectorCanCancelAndResubscribeOnTheSameNativeGraph() = runTest {
+        val f = Fixture(this)
+        try {
+            f.connect()
+            val state = f.container.appState
+            val graph = assertNotNull(f.container.sessions.current)
+            val peer = f.peers.single()
+            f.until("AppState collectors are installed") { state.activeSessionJobCount == 4 }
+            assertTrue(state.hasSettingsEventsJob)
+            assertEquals(6, state.messageEventDispatcher.activeJobCount)
+            val subscribers = graph.syncCoordinator.dataEventBroadcaster.subscriberCount
+            assertTrue(subscribers >= 2)
+            val version = state.servicesVersion.value
+
+            f.refreshDeviceInfo(graph, peer, "Observed")
+            f.awaitDeviceName("Observed")
+            val stored = assertNotNull(store.fetchDevice(f.target.deviceId))
+            val connected = assertNotNull(f.manager.connectedDevice)
+
+            state.messageEventDispatcher.cancelAll()
+            f.pump()
+            assertEquals(0, state.messageEventDispatcher.activeJobCount)
+            assertEquals(4, state.activeSessionJobCount,
+                "dispatcher cancellation must not cancel the standalone AppState collectors")
+            assertEquals(subscribers - 1, graph.syncCoordinator.dataEventBroadcaster.subscriberCount,
+                "dispatcher owns one sync-data subscription")
+
+            state.tearDownAppStateSessionState()
+            f.pump()
+            assertEquals(0, state.messageEventDispatcher.activeJobCount)
+            assertFalse(state.hasSettingsEventsJob)
+            assertEquals(0, state.activeSessionJobCount)
+            assertEquals(subscribers - 2, graph.syncCoordinator.dataEventBroadcaster.subscriberCount,
+                "AppState teardown also retires the standalone sync-data subscription")
+            assertFalse(graph.isTornDown, "AppState cancellation must not retire the radio graph")
+            assertSame(graph, f.container.sessions.current)
+            assertEquals(DeviceConnectionState.READY, f.manager.connectionState)
+
+            f.refreshDeviceInfo(graph, peer, "Not observed")
+            assertEquals(connected, f.manager.connectedDevice,
+                "a completed native settings query must not bypass the cancelled AppState collector")
+            assertEquals(stored, store.fetchDevice(f.target.deviceId))
+
+            f.runOperation { state.wireServicesIfConnected() }
+            f.until("AppState collectors are reinstalled") { state.activeSessionJobCount == 4 }
+            assertTrue(state.hasSettingsEventsJob)
+            assertEquals(6, state.messageEventDispatcher.activeJobCount)
+            assertEquals(subscribers, graph.syncCoordinator.dataEventBroadcaster.subscriberCount)
+            assertEquals(version, state.servicesVersion.value, "same-graph rewire is not a new service generation")
+            f.refreshDeviceInfo(graph, peer, "Resubscribed")
+            f.awaitDeviceName("Resubscribed")
+            assertEquals(stored.radioId, store.fetchDevice(f.target.deviceId)?.radioId)
+            assertSame(graph, f.container.sessions.current)
+            assertEquals(1, f.peers.size)
+            assertEquals(1, f.container.sessions.outstanding)
+        } finally { f.close() }
+    }
+
+    @Test fun nativeGraphReplacementRetiresAppStateCollectorsAndConsumesFreshSettingsOnly() = runTest {
+        val f = Fixture(this)
+        try {
+            f.connect()
+            val state = f.container.appState
+            val old = assertNotNull(f.container.sessions.current)
+            val oldPeer = f.peers.single()
+            f.until("first AppState collectors are installed") { state.activeSessionJobCount == 4 }
+            assertEquals(6, state.messageEventDispatcher.activeJobCount)
+            val subscribers = old.syncCoordinator.dataEventBroadcaster.subscriberCount
+            assertTrue(subscribers >= 2)
+            f.refreshDeviceInfo(old, oldPeer, "Before loss")
+            f.awaitDeviceName("Before loss")
+            val stored = assertNotNull(store.fetchDevice(f.target.deviceId))
+            val version = state.servicesVersion.value
+
+            oldPeer.shadow.lose()
+            f.until("native loss retires AppState and graph collectors") {
+                old.isTornDown && old.liveJobCount == 0 && f.container.sessions.current == null &&
+                    state.activeSessionJobCount == 0 && !state.hasSettingsEventsJob &&
+                    state.syncCoordinator == null
+            }
+            assertEquals(0, state.messageEventDispatcher.activeJobCount)
+            assertEquals(0, old.syncCoordinator.dataEventBroadcaster.subscriberCount)
+            assertEquals(1, f.peers.size, "collector retirement must not implicitly rearm BLE")
+            assertEquals(stored, store.fetchDevice(f.target.deviceId))
+
+            f.runOperation { f.manager.checkBLEConnectionHealth() }
+            f.until("fresh graph and AppState collectors are ready") {
+                f.manager.connectionState == DeviceConnectionState.READY && state.activeSessionJobCount == 4
+            }
+            val fresh = assertNotNull(f.container.sessions.current)
+            val currentPeer = f.peers.last()
+            assertNotSame(old, fresh)
+            assertTrue(fresh.token.generation.value > old.token.generation.value)
+            assertEquals(old.token.radioId, fresh.token.radioId)
+            assertSame(fresh.syncCoordinator, state.syncCoordinator)
+            assertTrue(state.hasSettingsEventsJob)
+            assertEquals(6, state.messageEventDispatcher.activeJobCount)
+            assertEquals(subscribers, fresh.syncCoordinator.dataEventBroadcaster.subscriberCount)
+            assertEquals(0, old.syncCoordinator.dataEventBroadcaster.subscriberCount)
+            assertEquals(version + 1, state.servicesVersion.value)
+            assertEquals(2, f.peers.size)
+            assertEquals(1, f.container.sessions.outstanding)
+
+            f.refreshDeviceInfo(fresh, currentPeer, "Fresh collector")
+            f.awaitDeviceName("Fresh collector")
+            val current = assertNotNull(f.manager.connectedDevice)
+            val persisted = assertNotNull(store.fetchDevice(f.target.deviceId))
+            oldPeer.shadow.notify(oldPeer.rx, FirmwareRadio(key(7), "Retired collector").selfPacket().toByteArray())
+            oldPeer.shadow.lateConnected()
+            f.pump()
+            assertEquals(current, f.manager.connectedDevice)
+            assertEquals(persisted, store.fetchDevice(f.target.deviceId))
+            assertSame(fresh, f.container.sessions.current)
+            assertEquals(DeviceConnectionState.READY, f.manager.connectionState)
+
+            f.refreshDeviceInfo(fresh, currentPeer, "Still subscribed")
+            f.awaitDeviceName("Still subscribed")
+            assertEquals(stored.radioId, store.fetchDevice(f.target.deviceId)?.radioId)
+            assertEquals(4, state.activeSessionJobCount)
+            assertEquals(6, state.messageEventDispatcher.activeJobCount)
+            assertEquals(subscribers, fresh.syncCoordinator.dataEventBroadcaster.subscriberCount)
+        } finally { f.close() }
+    }
+
     @Test fun nativeLossAndHealthReconnectReplaceGraphWithoutAcceptingOldGattIdentityOrFrames() = runTest {
         val f = Fixture(this)
         try {
@@ -299,6 +425,23 @@ class BleRecoveryIntegrationTest : RoomProcessTest() {
             assertEquals(0, peer.shadow.disconnects)
         }
 
+        suspend fun refreshDeviceInfo(graph: RadioSessionContainer, peer: Peer, name: String) {
+            val before = peer.shadow.writes.count { it.first().toInt() == 1 }
+            peer.selfInfoResponse = FirmwareRadio(key(7), name).selfPacket()
+            runOperation { graph.settingsService.refreshDeviceInfo() }
+            assertEquals(before + 1, peer.shadow.writes.count { it.first().toInt() == 1 },
+                "settings must perform a real native AppStart request")
+        }
+
+        suspend fun awaitDeviceName(name: String) {
+            until("AppState updates the connected device to $name") { manager.connectedDevice?.nodeName == name }
+            runOperation {
+                while (store.fetchDevice(target.deviceId)?.nodeName != name) delay(1)
+            }
+            assertEquals(name, manager.connectedDevice?.nodeName)
+            assertEquals(name, store.fetchDevice(target.deviceId)?.nodeName)
+        }
+
         suspend fun close() {
             try { runOperation { container.close() } }
             finally {
@@ -314,6 +457,7 @@ class BleRecoveryIntegrationTest : RoomProcessTest() {
 
     private class Peer(gatt: BluetoothGatt, test: TestScope) {
         val shadow: BleRecoveryGattShadow = Shadow.extract(gatt)
+        var selfInfoResponse: Bytes? = null
         val rx = BluetoothGattCharacteristic(
             NusUuid.RX, BluetoothGattCharacteristic.PROPERTY_NOTIFY, BluetoothGattCharacteristic.PERMISSION_READ,
         )
@@ -332,6 +476,9 @@ class BleRecoveryIntegrationTest : RoomProcessTest() {
             shadow.addDiscoverableService(service)
             val commands = Channel<Bytes>(Channel.UNLIMITED)
             val firmware = FirmwareRadio(key(7))
+            firmware.respond = { command ->
+                if (command[0].toInt() == 1) selfInfoResponse?.let { listOf(it) } else null
+            }
             test.backgroundScope.launch(job, start = CoroutineStart.UNDISPATCHED) {
                 firmware.connect()
                 launch(start = CoroutineStart.UNDISPATCHED) {

@@ -147,8 +147,8 @@ private class AppNodesContactService(private val service: ContactService) : Node
     override suspend fun updateContactPreferences(contact: EntityKey, nickname: String?, isBlocked: Boolean?) =
         service.updateContactPreferences(contact, nickname, isBlocked)
 
-    override suspend fun updateContactAvatar(contact: EntityKey, imageData: Bytes?) =
-        service.updateContactAvatar(contact, imageData)
+    override suspend fun updateContactAvatar(contact: EntityKey, expectedPublicKey: Bytes, imageData: Bytes?) =
+        mapContactFailure { service.updateContactAvatar(contact, expectedPublicKey, imageData) }
 
     override suspend fun setContactFavorite(contact: EntityKey, isFavorite: Boolean) =
         service.setContactFavorite(contact, isFavorite)

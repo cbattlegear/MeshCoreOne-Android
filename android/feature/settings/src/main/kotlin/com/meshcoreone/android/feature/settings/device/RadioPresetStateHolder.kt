@@ -6,6 +6,8 @@ import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.contracts.domain.PreRepeatSettingsAttempt
 import com.meshcoreone.android.core.contracts.domain.RepeatSnapshotRestoreAuthority
+import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
+import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RegionSelection
 import com.meshcoreone.android.core.ui.UiText
@@ -210,8 +212,13 @@ class RadioPresetStateHolder(
             target.requireCurrent(mutable.value.device, mutable.value.sessionToken)
             val service = target.service
             service.reconcileRadioSettingsIfNeeded()
+            val device = target.currentDevice(mutable.value.device, mutable.value.sessionToken)
+            if (device.clientRepeat != repeat) {
+                throw SettingsServiceException(
+                    SettingsServiceError.VerificationFailed("clientRepeat=$repeat", "clientRepeat=${device.clientRepeat}"),
+                )
+            }
             if (repeat) {
-                val device = target.currentDevice(mutable.value.device, mutable.value.sessionToken)
                 val frequency = catalog.repeatFrequencyKHz(id) ?: throw SettingsNotConnectedException()
                 // Repeat Mode changes only the frequency; bandwidth, SF and CR stay as the radio has them.
                 service.setRadioParamsVerified(

@@ -279,6 +279,107 @@ class RemoteNodesComposeTest {
         compose.onNodeWithTag("remote-map:retry").assertDoesNotExist()
     }
 
+    @Test fun historyRouteAndRealPreferenceEmissionHaveIndependentReadinessBoundaries() {
+        val real = requireNotNull(fixture.mapPreferences)
+        val observationEntered = CompletableDeferred<Unit>()
+        val allowRead = CompletableDeferred<Unit>()
+        val realSnapshotRead = CompletableDeferred<Unit>()
+        val allowEmission = CompletableDeferred<Unit>()
+        val emissionDelivered = CompletableDeferred<Unit>()
+        val writeStarted = CompletableDeferred<Unit>()
+        val releaseWrite = CompletableDeferred<Unit>()
+        val writeFinished = CompletableDeferred<Unit>()
+        val observationFailed = CompletableDeferred<Unit>()
+        var failFirstObservation = true
+        val labels = text(com.meshcoreone.android.core.l10n.generated.AppMapStrings.mapControlsShowLabels)
+        fun awaitStage(ready: () -> Boolean) {
+            compose.waitUntil(5_000) {
+                settleMapComposition()
+                ready()
+            }
+        }
+        fun record(stage: String) {
+            println(
+                "WP312_MAP_READINESS|sdk=${Build.VERSION.SDK_INT}|$stage|" +
+                    "historyReads=${fixture.historyReads}|entered=${observationEntered.isCompleted}|" +
+                    "snapshot=${realSnapshotRead.isCompleted}|emitted=${emissionDelivered.isCompleted}|" +
+                    "write=${writeStarted.isCompleted}|failed=${observationFailed.isCompleted}",
+            )
+        }
+        fixture.mapPreferences = object : MapPreferenceStore by real {
+            override fun observe(host: MapFilterHost) = kotlinx.coroutines.flow.flow {
+                if (host == MapFilterHost.MAIN_MAP && failFirstObservation) {
+                    failFirstObservation = false
+                    observationEntered.complete(Unit)
+                    allowRead.await()
+                    val actual = real.observe(host).first()
+                    realSnapshotRead.complete(Unit)
+                    allowEmission.await()
+                    emit(actual)
+                    emissionDelivered.complete(Unit)
+                    writeStarted.await()
+                    observationFailed.complete(Unit)
+                    throw IOException("Fixture observation failure after actual ready emission")
+                }
+                real.observe(host).collect { emit(it) }
+            }
+
+            override suspend fun setLabels(enabled: Boolean) {
+                writeStarted.complete(Unit)
+                releaseWrite.await()
+                real.setLabels(enabled)
+                writeFinished.complete(Unit)
+            }
+        }
+        try {
+            show(RemoteNodeLaunch(fixture.contact, RemoteNodeLaunchAction.SAVED_HISTORY))
+            record("show-returned")
+            awaitStage { observationEntered.isCompleted }
+            settleMapComposition()
+            compose.onNodeWithTag("remote-contact-route").assertExists()
+            compose.onNodeWithTag("remote-history-content").assertExists()
+            assertTrue(fixture.historyReads > 0)
+            assertFalse(realSnapshotRead.isCompleted)
+            compose.onNodeWithText(labels, useUnmergedTree = true).assertDoesNotExist()
+            compose.onNodeWithTag("synthetic-map").assertDoesNotExist()
+            record("route-ready-read-held")
+
+            allowRead.complete(Unit)
+            awaitStage { realSnapshotRead.isCompleted }
+            settleMapComposition()
+            assertFalse(emissionDelivered.isCompleted)
+            compose.onNodeWithText(labels, useUnmergedTree = true).assertDoesNotExist()
+            compose.onNodeWithTag("synthetic-map").assertDoesNotExist()
+            record("actual-datastore-ready-emission-held")
+
+            allowEmission.complete(Unit)
+            waitForSyntheticMap()
+            assertTrue(emissionDelivered.isCompleted)
+            compose.onNodeWithText(labels, useUnmergedTree = true).performScrollTo().assertExists()
+            record("emission-mounted-controls")
+            compose.onNodeWithText(labels, useUnmergedTree = true).performClick()
+            awaitStage {
+                writeStarted.isCompleted && observationFailed.isCompleted &&
+                    compose.onAllNodesWithTag("remote-map:retry").fetchSemanticsNodes().isNotEmpty()
+            }
+            releaseWrite.complete(Unit)
+            awaitStage { writeFinished.isCompleted }
+            compose.waitForIdle()
+            compose.onNodeWithTag("remote-map:retry").assertExists()
+            compose.onNodeWithTag("synthetic-map").assertDoesNotExist()
+            record("successful-write-does-not-clear-observation-failure")
+            compose.onNodeWithTag("remote-map:retry").performScrollTo().performClick()
+            waitForSyntheticMap()
+            compose.onNodeWithTag("synthetic-map").performScrollTo().assertExists()
+            compose.onNodeWithTag("remote-map:retry").assertDoesNotExist()
+            record("explicit-retry-restores-map")
+        } finally {
+            allowRead.complete(Unit)
+            allowEmission.complete(Unit)
+            releaseWrite.complete(Unit)
+        }
+    }
+
     @Test fun ownerInfoRemainsReadableWhileFocusedAndApplyUsesTheEditedNativeBinding() {
         show(); open(); expand(L.remoteNodesSettingsContactInfo)
         val field = compose.onNodeWithTag("remote-owner-info").performScrollTo().performClick()

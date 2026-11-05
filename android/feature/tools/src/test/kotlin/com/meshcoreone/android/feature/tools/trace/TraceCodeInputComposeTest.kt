@@ -529,6 +529,86 @@ class TraceCodeInputComposeTest {
         }
     }
 
+    @Test fun savedDialogRetiresVisibleRowsHeldLoadsAndRetainedActionsAcrossConnections() {
+        for (sameRadio in listOf(false, true)) for (heldLoad in listOf(false, true)) {
+            val nextRadio = if (sameRadio) RADIO else RadioId(UUID.randomUUID())
+            val persistence = InMemoryTracePathStore { T0 }
+            val oldPath = savedPath(Bytes.of(0xAA), radioId = RADIO).copy(name = "Radio A route")
+            val newPath = savedPath(Bytes.of(0xBB), radioId = nextRadio).copy(name = "Radio B route")
+            persistence.insert(oldPath)
+            val gate = CompletableDeferred<Unit>()
+            var fetches = 0
+            val recorded = FakeTraceSender()
+            val events = TraceResponseBroadcaster()
+            val feature = FakeTraceDependencies().apply {
+                device = device()
+                directory = FakeNodeDirectory(contacts = listOf(contact(0xAA, name = "Tower"), contact(0xBB, name = "Ridge")))
+                sender = recorded
+                responses = { events.subscribe() }
+                store = object : TracePathPersisting by persistence {
+                    override suspend fun fetchSavedTracePaths(radioId: RadioId) =
+                        persistence.fetchSavedTracePaths(radioId).also {
+                            if (++fetches == 2 && heldLoad) gate.await()
+                        }
+                }
+            }
+            val connection = mutableStateOf(TracePathScreen.Dependencies(
+                feature, MapRecentsStorage(), RecordingDiagnostics(), RADIO, 1,
+            ))
+            content.setContent { MaterialTheme { TracePathScreen(connection.value) } }
+            settle()
+            click(host.get().getString(C.contactsTraceSaved))
+            val oldSelect = assertNotNull(button(oldPath.name).config[SemanticsActions.OnClick].action)
+            val deleteLabel = host.get().getString(L.commonDelete)
+            val oldDelete = assertNotNull(actionButton("$deleteLabel: ${oldPath.name}").config[SemanticsActions.OnClick].action)
+            if (heldLoad) {
+                click(host.get().getString(L.commonDone))
+                click(host.get().getString(C.contactsTraceSaved))
+                assertFalse(texts().contains(oldPath.name))
+            }
+            host.get().runOnUiThread {
+                persistence.insert(newPath)
+                feature.device = device().copy(radioId = nextRadio)
+                connection.value = connection.value.copy(radioId = nextRadio, generation = 2)
+            }
+            settle()
+            assertFalse(ShadowDialog.getLatestDialog()?.isShowing == true)
+            gate.complete(Unit)
+            settle()
+            assertFalse(ShadowDialog.getLatestDialog()?.isShowing == true, "A late load must not reopen an old dialog")
+            click(host.get().getString(C.contactsTraceSaved))
+            assertTrue(texts().contains(newPath.name))
+            host.get().runOnUiThread {
+                assertTrue(oldSelect())
+                assertTrue(oldDelete())
+            }
+            settle()
+            assertTrue(ShadowDialog.getLatestDialog()?.isShowing == true, "Old selection must not dismiss the new dialog")
+            assertTrue(texts().contains(newPath.name))
+            assertTrue(persistence.paths.containsKey(oldPath.id))
+            assertTrue(persistence.paths.containsKey(newPath.id))
+            click(newPath.name)
+            scrollToIndex(11)
+            click(host.get().getString(C.contactsTraceListRunTrace))
+            assertEquals(Bytes.of(0xBB), recorded.sent.single().path)
+            host.get().runOnUiThread {
+                assertTrue(oldSelect())
+                assertTrue(oldDelete())
+            }
+            settle()
+            events.yield(TraceResponse(
+                traceInfo(recorded.sent.single().tag, listOf(node(0xBB, 6.0), node(null, 3.0))), nextRadio,
+            ))
+            settle()
+            assertEquals(1, persistence.paths.getValue(newPath.id).runs.size)
+            assertTrue(persistence.paths.getValue(oldPath.id).runs.isEmpty())
+            click(host.get().getString(C.contactsTraceSaved))
+            clickDescription("$deleteLabel: ${newPath.name}")
+            assertFalse(persistence.paths.containsKey(newPath.id))
+            assertTrue(persistence.paths.containsKey(oldPath.id), "Stale callbacks must never delete radio A's accepted data")
+        }
+    }
+
     @Test fun mountedBatchSwitchRetiresSingleAndBatchOperationsWithoutExtraSends() {
         for (initialBatch in listOf(false, true)) {
             val harness = configured()

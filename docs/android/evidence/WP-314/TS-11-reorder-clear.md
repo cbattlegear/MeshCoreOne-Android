@@ -104,3 +104,10 @@ the editable route or committed history. New mounted and virtual-time cases cove
 lookup/send, both radio-change and same-radio reconnect, old response/timeout/refresh, and
 successful fresh traces. Active `9ac` diagnostic/ref remain immutable and do not verify these
 successor changes.
+The `c32` review found that its retained saved-dialog/list still crossed that connection
+boundary. Its successor also scopes and retires the saved-list holder and dialog state,
+fences retained selection/deletion and noncooperative completion, preserves accepted durable
+mutations, and prevents an old list snapshot from restoring a committed deletion. Mounted
+visible/held A-list controls preserve A data while a fresh B row can select, run and delete;
+same-radio reconnect and direct-holder completion/error cases are included. These source
+assertions remain unverified until the new exact-head hosted diagnostic completes.

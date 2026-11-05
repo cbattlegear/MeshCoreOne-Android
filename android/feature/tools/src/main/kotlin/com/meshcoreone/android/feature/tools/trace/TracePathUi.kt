@@ -115,13 +115,14 @@ object TracePathScreen {
             ).also { it.configure(dependencies.feature) }
         }
         val savedStrings = rememberSavedPathStrings()
-        val savedPaths = remember(dependencies.feature) {
+        val savedPaths = remember(dependencies.feature, dependencies.generation, dependencies.radioId) {
             SavedPathsStateHolder(savedStrings, dependencies.diagnostics).also { saved ->
                 saved.configure(object : SavedPathsDependencies {
                     override fun savedPaths() = dependencies.feature.savedPaths()
                     override fun connectedDevice() = dependencies.feature.connectedDevice()
                 })
             }
+            DisposableEffect(savedPaths) { onDispose { savedPaths.retireConnection() } }
         }
 
         DisposableEffect(holder, dependencies.generation, dependencies.radioId) {
@@ -161,7 +162,7 @@ private fun TracePathContent(
     radioId: RadioId?,
 ) {
     var showMap by remember { mutableStateOf(false) }
-    var showSaved by remember { mutableStateOf(false) }
+    var showSaved by remember(connectionGeneration, radioId) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val codeInput = rememberTraceCodeInputState(holder, connectionGeneration, radioId)
     Column(Modifier.fillMaxSize()) {
@@ -199,18 +200,29 @@ private fun TracePathContent(
                     savedState.savedPaths.isEmpty() -> Text(stringResource(C.contactsTraceListEmptyPath))
                     else -> LazyColumn {
                         items(savedState.savedPaths, key = { it.id }) { path ->
+                            val deleteLabel = stringResource(L.commonDelete)
                             Row(
                                 Modifier.fillMaxWidth().sizeIn(minHeight = 56.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween,
                             ) {
-                                TextButton(onClick = { holder.loadSavedPath(path); showSaved = false }) {
+                                TextButton(onClick = {
+                                    if (savedPaths.isCurrentPath(path)) {
+                                        holder.loadSavedPath(path)
+                                        showSaved = false
+                                    }
+                                }) {
                                     Text(path.name)
                                 }
-                                TextButton(onClick = {
+                                TextButton(modifier = Modifier.semantics {
+                                    contentDescription = "$deleteLabel: ${path.name}"
+                                }, onClick = {
                                     scope.launch {
-                                        savedPaths.deletePath(path)
-                                        holder.handleSavedPathDeleted(path.id)
+                                        if (savedPaths.isCurrentPath(path) && savedPaths.deletePath(path) &&
+                                            savedPaths.isCurrentConnection(path.radioId)
+                                        ) {
+                                            holder.handleSavedPathDeleted(path.id)
+                                        }
                                     }
                                 }) {
                                     Text(stringResource(L.commonDelete))

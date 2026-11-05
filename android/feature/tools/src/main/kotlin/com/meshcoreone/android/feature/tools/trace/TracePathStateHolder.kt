@@ -292,6 +292,7 @@ class TracePathStateHolder(
 
     /** Restores a saved path at its saved width; a mirrored palindrome turns auto-return on. */
     fun loadSavedPath(savedPath: SavedTracePathDTO) {
+        if (connectionIdentity != null && deps.connectedDevice()?.radioId != savedPath.radioId) return
         invalidatePathExecution()
         notifyHashModeAction()
         pendingPathHash = null

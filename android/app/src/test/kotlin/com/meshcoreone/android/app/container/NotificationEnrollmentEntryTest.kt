@@ -402,6 +402,30 @@ class NotificationEnrollmentEntryTest {
         }
     }
 
+    @Test fun mountedResumeAfterJournalLossKeepsOperationUncertainWithoutNewIdentity() {
+        val real = mountReal()
+        val request = shownRequest()
+        compose.onNodeWithText(text(R.string.notification_enrollment_confirm)).performClick()
+        awaitRealOutcome()
+        assertIs<Enrollment.Result.BoundSnapshot>(
+            assertIs<NotificationEnrollmentProducer.State.Outcome>(producer.state.value).result,
+        )
+        val lost = requireNotNull(generationFile)
+        assertTrue(SQLiteDatabase.deleteDatabase(lost))
+        repeat(2) {
+            compose.onNodeWithText(text(R.string.notification_enrollment_resume)).performClick()
+            awaitRealOutcome()
+            val result = assertIs<Enrollment.Result.Indeterminate>(
+                assertIs<NotificationEnrollmentProducer.State.Outcome>(producer.state.value).result,
+            )
+            assertEquals(request.operation, result.operation)
+            assertFalse(lost.exists())
+            assertEquals(4, ids)
+            compose.onNodeWithText(text(R.string.notification_enrollment_action)).assertIsNotEnabled()
+        }
+        assertEquals(listOf("STAGED", "CONSUMED"), real.statuses())
+    }
+
     @Test fun actualPauseBeforeRealStageAdmissionLeavesNoAcknowledgmentWitnessOrJournal() {
         assertRetiredBeforeRealStage(dispose = false)
     }

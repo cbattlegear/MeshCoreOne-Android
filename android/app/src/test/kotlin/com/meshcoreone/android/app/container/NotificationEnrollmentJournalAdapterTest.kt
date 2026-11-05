@@ -12,6 +12,7 @@ import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Test
@@ -35,8 +36,49 @@ class NotificationEnrollmentJournalAdapterTest {
     @After fun cleanup() { SQLiteDatabase.deleteDatabase(file) }
 
     @Test fun missingReconcileDoesNotCreateStorageOrInferFreshness() = runTest {
-        assertEquals(Enrollment.JournalResult.NotRetained(Enrollment.Failure.NOT_RETAINED),
+        assertEquals(Enrollment.JournalResult.Indeterminate(operation),
             journal.reconcile(operation, operation.creationNonce))
+        assertFalse(file.exists())
+    }
+
+    @Test fun lostPreparedStorageRetainsUncertaintyWithoutAllocatingReplacement() = runTest {
+        assertIs<Enrollment.JournalResult.Observed>(journal.prepare(operation))
+        assertTrue(SQLiteDatabase.deleteDatabase(file))
+        repeat(2) {
+            assertEquals(Enrollment.JournalResult.Indeterminate(operation),
+                journal.reconcile(operation, operation.creationNonce))
+            assertFalse(file.exists())
+        }
+    }
+
+    @Test fun corruptPreparedStorageRetainsUncertaintyAndDoesNotRepairItsBytes() = runTest {
+        assertIs<Enrollment.JournalResult.Observed>(journal.prepare(operation))
+        SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
+            db.execSQL("UPDATE reply_enrollment SET digest = X'00' WHERE singleton = 1")
+        }
+        val corrupt = file.readBytes()
+        repeat(2) {
+            assertEquals(Enrollment.JournalResult.Indeterminate(operation),
+                journal.reconcile(operation, operation.creationNonce))
+            assertTrue(corrupt.contentEquals(file.readBytes()))
+        }
+    }
+
+    @Test fun replacedPreparedStorageCannotResolveTheOriginalOperationOrBeOverwritten() = runTest {
+        assertIs<Enrollment.JournalResult.Observed>(journal.prepare(operation))
+        assertTrue(SQLiteDatabase.deleteDatabase(file))
+        val foreign = operation.copy(operationId = UUID.randomUUID(), creationNonce = UUID.randomUUID())
+        val foreignReceipt = assertIs<Enrollment.JournalResult.Observed>(journal.prepare(foreign))
+        repeat(2) {
+            assertEquals(Enrollment.JournalResult.Indeterminate(operation),
+                journal.reconcile(operation, operation.creationNonce))
+            assertEquals(foreignReceipt, journal.reconcile(foreign, foreign.creationNonce))
+        }
+    }
+
+    @Test fun mismatchedExpectedNonceIsInvalidInputWithoutCreatingStorage() = runTest {
+        assertEquals(Enrollment.JournalResult.NotRetained(Enrollment.Failure.IDENTITY_MISMATCH),
+            journal.reconcile(operation, UUID.randomUUID()))
         assertFalse(file.exists())
     }
 

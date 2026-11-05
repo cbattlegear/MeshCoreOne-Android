@@ -196,6 +196,17 @@ object DirectAckStorage {
         val ownFields = setOf("statusRawValue", "failureSeen", "ackCode", "roundTripTime", "retryAttempt", "maxRetryAttempts", "sendCount")
         val redacted = messageColumns.filterNot { it in ownFields }.joinToString(" OR ") { "OLD.`$it` IS NOT NEW.`$it`" }
         return buildMap {
+        put("direct_ack_lease_revoke", "CREATE TRIGGER direct_ack_lease_revoke AFTER UPDATE ON direct_ack_leases " +
+            "WHEN OLD.active != 0 AND NEW.active = 0 BEGIN " +
+            "UPDATE direct_ack_deliveries SET ${nulls("snapshot_", messageColumns)} " +
+                "WHERE radioId = OLD.radioId AND claimId IN " +
+                "(SELECT requestId FROM $CLAIMS WHERE radioId = OLD.radioId AND leaseId = OLD.requestId);" +
+            "UPDATE $CLAIMS SET current = 0,${nulls("snapshot_", messageColumns)} " +
+                "WHERE radioId = OLD.radioId AND leaseId = OLD.requestId;" +
+            "UPDATE direct_ack_intents SET current = 0,${nulls("message_", messageColumns)},${nulls("pending_", pendingColumns)} " +
+                "WHERE radioId = OLD.radioId AND leaseId = OLD.requestId;" +
+            "UPDATE direct_pending_completions SET current = 0,${nulls("message_", messageColumns)},${nulls("pending_", pendingColumns)} " +
+                "WHERE radioId = OLD.radioId AND leaseId = OLD.requestId; END")
         put("direct_ack_message_insert", "CREATE TRIGGER direct_ack_message_insert AFTER INSERT ON messages BEGIN " +
             invalidate("NEW.radioId", "NEW.id") + eraseMessage("NEW.radioId", "NEW.id") +
             identity("NEW.radioId", "NEW.id", "message") + " END")

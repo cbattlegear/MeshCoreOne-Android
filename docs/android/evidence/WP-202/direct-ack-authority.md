@@ -194,12 +194,12 @@ ghost-identity change intentionally retains conversation data in the published
 source; this repair does not invent a cascade. Other-radio/channel queue semantics
 are unchanged.
 
-The original 20 repository controls are adapted to issued capture/begin. Seven
+The original 20 repository controls are adapted to issued capture/begin. Eight
 additional actual-Room methods are authored: before-begin text/same-value/identical
 DTO ABA, same-ID pending replacement/preflight, fresh issued inputs after an old
 cache window, eleven deletion/redaction/replace routes across every history, own
 pending completion erasure/replay, cancellation-after-capture recovery, and
-foreign-context/restore/generation fencing. Their assertions are not discovered
+foreign-context/restore/generation fencing, and retired-lease erasure. Their assertions are not discovered
 or passing evidence. The consumer owns actual wire derivation and service barriers.
 
 The tracked genuine v2 predecessor remains byte-for-byte unchanged at the digest
@@ -214,3 +214,12 @@ Trusted `reserve.py admit` also confirmed the migration and schema boundary test
 operations. These source results do not prove Kotlin/Room behavior. No current Kotlin/Room execution,
 new export, publication or acceptance is claimed. The retained local Gradle
 execution-owner gate remains untouched.
+
+The renewed independent review also names session revocation. A canonical lease
+active-to-inactive SQLite trigger nulls the retired lease's payload snapshots in
+all four histories, including delivery through its claim identity. Explicit
+revoke, successor activation and process close therefore erase snapshots in
+their own transaction without deleting the actual product message/pending row.
+Nonpayload operation/code/RTT/phase tombstones remain, with stale/non-CURRENT
+permission. The additional Room control checks each route and unchanged product
+rows; it is authored, not passing runtime evidence.

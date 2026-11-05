@@ -30,6 +30,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 import kotlin.test.*
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -239,8 +240,11 @@ class RxRegionConsumerTest : RoomProcessTest() {
             val old = f.live
             val id = assertNotNull(f.harness.manager.connectedDevice).id
             val access = object : ConnectedDeviceAccess by f.harness.container.deviceAccess {
-                override fun replaceConnectedDevice(device: DeviceDTO): ConnectedDeviceEdit? {
-                    val edit = f.harness.container.deviceAccess.replaceConnectedDevice(device)
+                override fun transformConnectedDevice(
+                    expectedToken: SessionToken?,
+                    transform: (DeviceDTO) -> DeviceDTO,
+                ): ConnectedDeviceEdit? {
+                    val edit = f.harness.container.deviceAccess.transformConnectedDevice(expectedToken, transform)
                     accepted.complete(assertNotNull(edit).token)
                     check(resumeCallback.await(10, TimeUnit.SECONDS)) { "Accepted-edit callback was not released" }
                     return edit
@@ -248,12 +252,15 @@ class RxRegionConsumerTest : RoomProcessTest() {
             }
             val editor = ConnectedDeviceEditor(
                 access, store, store, { null }, RadioPresetMatcher { _, _, _, _ -> emptySet() },
-                backgroundScope, { EPOCH }, onKnownRegionsChanged = f.harness.container::knownRegionsChanged,
+                CoroutineScope(backgroundScope.coroutineContext + Dispatchers.Default), { EPOCH },
+                onKnownRegionsChanged = f.harness.container::knownRegionsChanged,
             )
             val edit = async(Dispatchers.Default) { editor.addKnownRegion("Germany") }
             f.harness.eventually("DTO accepted before callback lookup") { accepted.isCompleted }
             assertEquals(old.token, accepted.await())
+            assertEquals(listOf("Germany"), assertNotNull(store.fetchDevice(f.radio)).knownRegions)
             f.harness.manager.disconnect()
+            store.removeDeviceKnownRegion(f.radio, "Germany")
             f.harness.manager.connect(f.harness.target(id))
             f.harness.eventually("same-radio replacement handlers ready") {
                 f.harness.sessions.current?.let {
@@ -267,7 +274,7 @@ class RxRegionConsumerTest : RoomProcessTest() {
             f.ingest(f.packet(Bytes.of(1, 2, 3, 4)))
             resumeCallback.countDown()
             assertNotNull(edit.await()).join()
-            assertEquals(listOf("Germany"), assertNotNull(store.fetchDevice(f.radio)).knownRegions)
+            assertTrue(assertNotNull(store.fetchDevice(f.radio)).knownRegions.isEmpty())
             assertTrue(assertNotNull(f.harness.manager.connectedDevice).knownRegions.isEmpty())
             assertNull(f.ingest(f.packet(Bytes.of(5, 6, 7, 8), region = "Germany")).regionScope)
         } finally {

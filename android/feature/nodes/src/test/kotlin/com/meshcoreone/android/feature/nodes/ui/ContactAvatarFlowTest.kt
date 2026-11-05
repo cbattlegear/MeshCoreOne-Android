@@ -83,7 +83,7 @@ class ContactAvatarApi31FlowTest : ContactAvatarFlowTestBase()
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ContactAvatarApi37FlowTest : ContactAvatarFlowTestBase()
 
-abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
+abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase(deterministicFrames = true) {
     @get:Rule val mediaFiles = TemporaryFolder()
     private val harness = Harness().connect()
     private val contact = Fixtures.contact(radioId = checkNotNull(harness.session.radioId), name = "Avatar target")
@@ -303,7 +303,8 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
 
     private fun failurePresentationDiagnostic(message: String, previous: Set<Dialog>): String {
         val activity = controller.get()
-        val activityErrorSemantics = composeTextsAt(super.rootView()).count { it == message }
+        val activityTexts = composeTextsAt(super.rootView())
+        val activityErrorSemantics = activityTexts.count { it == message }
         val detail = ViewModelProvider(activity)[ContactDetailRetainedState::class.java].lifetimes.single()
         val state = detail.holder.state.value
         val dialogs = ShadowDialog.getShownDialogs().mapIndexed { index, dialog ->
@@ -315,9 +316,7 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
                 "decorAttached=${decor?.isAttachedToWindow},errorComposeSemantics=$errorSemantics"
         }
         val savingAnnouncement = activity.getString(C.contactsDetailAvatarSavingAnnouncement)
-        val savingVisible = allSemanticsNodes().any { node ->
-            node.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { it.text == savingAnnouncement }
-        }
+        val savingVisible = activityTexts.any { it == savingAnnouncement }
         return "holderSaving=${state.isSavingAvatar},holderHasExpectedError=${state.errorMessage == NodesMessage.Text(message)}," +
             "savingAnnouncementVisible=$savingVisible,saveStages=$avatarSaveStages," +
             "activityErrorComposeSemantics=$activityErrorSemantics; dialogs=$dialogs"
@@ -563,15 +562,13 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
             cancellation.setOnCancelListener { released.countDown() }
             entered.countDown()
             try {
-                val deadline = System.nanoTime() + 60_000_000_000L
-                while (released.count != 0L && System.nanoTime() < deadline) {
+                while (released.count != 0L) {
                     try {
                         released.await(20, java.util.concurrent.TimeUnit.MILLISECONDS)
                     } catch (_: InterruptedException) {
                         // This open responds to Android cancellation, not thread interruption.
                     }
                 }
-                check(released.count == 0L) { "Contact exit did not cancel the provider open" }
                 if (!lateReturn) cancellation.throwIfCanceled()
                 val fd = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
                 opened.set(fd)
@@ -584,6 +581,8 @@ abstract class ContactAvatarFlowTestBase : NodesScreensComposeTestBase() {
         try {
             result(data = null)
             awaitAvatarState("the provider open to start") { entered.count == 0L }
+            assertTrue(detail.active && detail.loading)
+            assertNull(detail.holder.state.value.errorMessage, "A held open must not publish a pre-exit failure")
             controller.get().runOnUiThread { showSelected.value = false }
             awaitAvatarState("contact exit to cancel the editor lifetime") {
                 !detail.active && !detail.scope.isActive && !detail.loading

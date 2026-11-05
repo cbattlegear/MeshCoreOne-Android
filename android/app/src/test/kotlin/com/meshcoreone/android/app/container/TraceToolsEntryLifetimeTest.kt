@@ -12,6 +12,8 @@ import androidx.compose.ui.text.AnnotatedString
 import com.meshcoreone.android.core.contracts.FeatureId
 import com.meshcoreone.android.core.contracts.FeatureRoute
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.feature.tools.ToolsEntry
@@ -23,7 +25,9 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
 import org.junit.Rule
 import org.junit.Test
@@ -39,12 +43,26 @@ class TraceToolsEntryLifetimeTest : RoomProcessTest() {
 
     @Test fun realToolsEntryObservesQuietDisconnectAndSameRadioReconnect() = quietDisconnect(false)
     @Test fun realToolsEntryObservesQuietDisconnectAndDifferentRadioReconnect() = quietDisconnect(true)
+    @Test fun realToolsEntryObservesHeldWithdrawalAndSameRadioReconnect() = quietDisconnect(false, true)
+    @Test fun realToolsEntryObservesHeldWithdrawalAndDifferentRadioReconnect() = quietDisconnect(true, true)
 
-    private fun quietDisconnect(crossRadio: Boolean) = runTest {
+    private fun quietDisconnect(crossRadio: Boolean, holdWithdrawal: Boolean = false) = runTest {
         val firstDevice = UUID.randomUUID()
+        var holdDisconnect = false
+        val disconnectEntered = CompletableDeferred<Unit>()
+        val releaseDisconnect = CompletableDeferred<Unit>()
+        val heldStore = object : PersistenceStoreProtocol by store {
+            override suspend fun fetchConnectedRemoteNodeSessions(radioId: RadioId) =
+                if (holdDisconnect) {
+                    holdDisconnect = false
+                    disconnectEntered.complete(Unit)
+                    releaseDisconnect.await()
+                    store.fetchConnectedRemoteNodeSessions(radioId)
+                } else store.fetchConnectedRemoteNodeSessions(radioId)
+        }
         val h = ContainerHarness(this, store, identity = { target ->
             key(if ((target as ConnectionTarget.Bluetooth).deviceId == firstDevice || !crossRadio) 7 else 8)
-        })
+        }, persistenceOverride = heldStore)
         val host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
         host.get().actionBar?.hide()
         host.windowFocusChanged(true)
@@ -78,7 +96,19 @@ class TraceToolsEntryLifetimeTest : RoomProcessTest() {
             val oldText = assertNotNull(input().fetchSemanticsNode().config[SemanticsActions.SetText].action)
             val oldDone = assertNotNull(compose.onNodeWithText("Done").fetchSemanticsNode().config[SemanticsActions.OnClick].action)
             val version = h.appState.servicesVersion.value
-            h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            if (holdWithdrawal) {
+                holdDisconnect = true
+                val teardown = backgroundScope.async { h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED) }
+                h.eventually("Real teardown is held before registry withdrawal") { disconnectEntered.isCompleted }
+                assertNull(h.manager.snapshot.value.token)
+                assertEquals(a, h.sessions.current?.token)
+                compose.waitForIdle()
+                assertDraft("A1")
+                assertEquals(a, h.sessions.current?.token, "Compose flushed while the real A registry is still published")
+                releaseDisconnect.complete(Unit)
+                h.eventually("Real teardown withdraws A") { teardown.isCompleted }
+                assertTrue(teardown.await().isComplete)
+            } else h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
             h.settle()
             assertNull(h.sessions.current)
             assertNull(actual.radioId())
@@ -122,6 +152,7 @@ class TraceToolsEntryLifetimeTest : RoomProcessTest() {
             input().performTextReplacement("Fresh B after clear")
             assertDraft("Fresh B after clear")
         } finally {
+            releaseDisconnect.complete(Unit)
             host.windowFocusChanged(false)
             host.pause().stop().destroy()
             h.container.close()

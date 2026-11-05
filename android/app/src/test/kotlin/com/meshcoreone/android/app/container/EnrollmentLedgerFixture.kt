@@ -40,7 +40,8 @@ internal class EnrollmentLedgerFixture(val root: File) {
         { copy ->
             ForegroundWitnessAcknowledgmentVerifier(
                 acknowledgmentFile, AndroidEnrollmentBackend.warning(copy), acknowledgmentAuthentication,
-                StorageIssueReporter { failures += it }, UUID.randomUUID(), null, ::synchronize,
+                StorageIssueReporter { failures += it }, UUID.randomUUID(),
+                { point -> gate?.takeIf { it.point == point.name }?.await() }, ::synchronize,
                 { point -> gate?.takeIf { it.point == point.name }?.await() },
             ).also { verifier = it }
         },

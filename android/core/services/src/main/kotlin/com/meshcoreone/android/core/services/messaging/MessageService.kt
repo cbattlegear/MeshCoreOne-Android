@@ -54,6 +54,7 @@ class MessageService(
     private val directAckAuthority: DirectAckAuthority? = dataStore as? DirectAckAuthority,
     private val directPendingCompletionAuthority: DirectPendingCompletionAuthority? =
         dataStore as? DirectPendingCompletionAuthority,
+    private val channelTransmission: suspend (UByte, suspend () -> Unit) -> Unit = { _, transmit -> transmit() },
 ) : MessagingSendPort {
     init { require(localPublicKey.size == ProtocolLimits.PUBLIC_KEY_SIZE) }
     private val ownership = MessagingOwnership(token, scope, signals, reporter)
@@ -1316,11 +1317,13 @@ class MessageService(
                     dataStore.saveMessage(dto)
                     ownership.check("sendChannelMessage.persisted")
                     withPoolBackoff(2u) {
-                        checkIdentity("sendChannelMessage.wire")
-                        inlineWire { dispatch ->
-                            val timestamp = Instant.ofEpochSecond(dto.timestamp.toLong())
-                            if (dispatch == null) session.sendChannelMessage(channelIndex, text, timestamp)
-                            else session.sendChannelMessage(channelIndex, text, timestamp, dispatch = dispatch)
+                        channelTransmission(channelIndex) {
+                            checkIdentity("sendChannelMessage.wire")
+                            inlineWire { dispatch ->
+                                val timestamp = Instant.ofEpochSecond(dto.timestamp.toLong())
+                                if (dispatch == null) session.sendChannelMessage(channelIndex, text, timestamp)
+                                else session.sendChannelMessage(channelIndex, text, timestamp, dispatch = dispatch)
+                            }
                         }
                     }
                 }
@@ -1355,8 +1358,10 @@ class MessageService(
                     if (isResend && !preserveTimestamp) dataStore.updateMessageTimestamp(key(id), stamp)
                     ownership.check("queuedChannel.timestamp")
                     withPoolBackoff(2u) {
-                        checkIdentity("queuedChannel.wire")
-                        session.sendChannelMessage(index, row.text, Instant.ofEpochSecond(stamp.toLong()))
+                        channelTransmission(index) {
+                            checkIdentity("queuedChannel.wire")
+                            session.sendChannelMessage(index, row.text, Instant.ofEpochSecond(stamp.toLong()))
+                        }
                     }
                 }
                 ownership.check("queuedChannel.accepted")

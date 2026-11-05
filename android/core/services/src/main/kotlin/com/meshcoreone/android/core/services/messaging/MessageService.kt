@@ -562,6 +562,9 @@ class MessageService(
             recovered("ackUncertain.$messageID")
             return
         }
+        if (receipt.message == null || delivery.message == null) {
+            throw authorityFailure("current delivery payload erased")
+        }
         val committed = dataStore.fetchMessage(key(messageID))
         checkOwnership("commitAcknowledgement.refetched")
         if (committed?.status != MessageStatus.DELIVERED || committed.ackCode != delivery.ackCode ||

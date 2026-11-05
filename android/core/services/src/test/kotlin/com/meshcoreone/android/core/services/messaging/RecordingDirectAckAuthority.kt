@@ -258,6 +258,9 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
         if (row.status == MessageStatus.FAILED && change != DirectAckBookkeeping.ResendCountIncrement) {
             return DirectAckMutationResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
         }
+        if (row.status == MessageStatus.DELIVERED && change != DirectAckBookkeeping.ResendCountIncrement) {
+            return DirectAckMutationResult.AlreadyDelivered(receipt(value))
+        }
         val updated = when (change) {
             is DirectAckBookkeeping.RetryStarted ->
                 if (row.status in listOf(MessageStatus.FAILED, MessageStatus.DELIVERED)) row else
@@ -269,9 +272,7 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
         if (updated != row) commit(value, updated)
         value.receipt = value.receipt.copy(bookkeeping =
             (value.receipt.bookkeeping + DirectAckBookkeepingReceipt(requestId, change)).snapshot())
-        return if (row.status == MessageStatus.DELIVERED && change != DirectAckBookkeeping.ResendCountIncrement) {
-            DirectAckMutationResult.AlreadyDelivered(receipt(value))
-        } else DirectAckMutationResult.Applied(receipt(value))
+        return DirectAckMutationResult.Applied(receipt(value))
     }
 
     override suspend fun completeDirectPending(

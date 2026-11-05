@@ -232,13 +232,56 @@ storage query is complete, atomic, read-only or error-propagating. Storage
 implementation and UI integration remain separately owned and this additive
 contract is source-only pending review.
 
+## Optional eventual radio observation
+
+The frozen snapshot source `78336196243c9de8e2f28a11a0817186e1bff80d` remains
+immutable. The additive `DirectAckRadioConfirmationEvidenceObserving` capability
+exposes `observeDirectAckRadioConfirmationEvidence(radioId):
+Flow<DirectAckRadioConfirmationObservation>` separately from that suspend query.
+Events are `Inspecting(radioId)` and `Snapshot(evidence)`; the latter derives its
+radio from its evidence, including when copied, rather than accepting a second
+potentially contradictory radio tag.
+
+The coordinator selected subscriber-owned cold snapshot polling: immediately
+emit `Inspecting`, perform a complete atomic read, emit `Snapshot`, then delay
+cancellably for 1,000 milliseconds and repeat serially while subscribed.
+Every completed read is emitted; there is no cached initial result, replay,
+conflation or distinct suppression. The active radio graph shares one
+subscription rather than creating duplicate scans for each consumer.
+Same-process invalidation may accelerate a read but cannot replace or
+indefinitely postpone the periodic fallback.
+
+Complete repeated reads eventually observe currently persisted changes made
+through other Room or raw SQL handles, without relying on single-handle Room
+notifications or assuming multi-instance invalidation is enabled. This is
+not a per-commit event log: intermediate commits can coalesce. Query duration,
+scheduling and collector backpressure contribute latency, so it is not an
+instantaneous-current or hard one-second observation-age guarantee.
+Every no-wildcard result is historical and grants no all-clear, eligibility,
+uniqueness or delivery claim.
+
+Consumers begin each new graph/lifecycle subscription in checking state and
+fence results by collection lifetime, radio and session. During refresh they
+may retain an explicitly historical notice without flashing a spinner.
+Typed query/close failures and cancellation propagate unchanged; error or
+unexpected normal completion must become unavailable/uncertain rather than
+retain an apparent clear. Cancellation stops reads; no detached worker,
+mutation, expiry, reset or send-policy change is authorized.
+
+Two added value controls check event identity/radio propagation and copied
+snapshot radio derivation, bringing the test file to 23 tests. They do not prove
+poll timing, cancellation, failure propagation, graph sharing or cross-handle
+visibility. Storage owns real complete-read/cross-handle/observer controls and
+UI owns lifecycle/consumer controls; these remain source-only and unexecuted
+here. The snapshot and settlement declarations are unchanged.
+
 The wire ACK has no session, graph, claim, or physical-emission origin field.
 Therefore identical actual codes across distinct claims, unresolved possible
 emissions, and sticky saturation are fundamentally nonsettling; the contract
 preserves safety rather than inventing origin or expiry.
 
 No local Gradle/Kotlin build or tests were run because of the explicit local
-Gradle owner hold. Source-only `git diff --check` passed and 21 test annotations were
+Gradle owner hold. Source-only `git diff --check` passed and 23 test annotations were
 present in the contract test file; neither check establishes compilation or
 test execution. Hosted exact-candidate compilation/test discovery is pending.
 Physical radio testing and a real Room implementation of the optional

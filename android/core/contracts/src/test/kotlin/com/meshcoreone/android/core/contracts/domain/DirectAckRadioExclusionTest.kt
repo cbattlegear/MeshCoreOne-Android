@@ -15,6 +15,36 @@ class DirectAckRadioExclusionTest {
     private val targetClaim = UUID(0, 2)
 
     @Test
+    fun confirmationObservationRetainsRadioAndDistinguishesReadFromSnapshot() {
+        val inspecting = DirectAckRadioConfirmationObservation.Inspecting(radio)
+        val evidence = DirectAckRadioConfirmationEvidence.NoPersistedWildcard(radio)
+        val snapshot = DirectAckRadioConfirmationObservation.Snapshot(evidence)
+
+        assertEquals(radio, inspecting.radioId)
+        assertEquals(evidence.radioId, snapshot.radioId)
+        assertEquals(evidence, snapshot.evidence)
+        assertNotEquals<DirectAckRadioConfirmationObservation>(inspecting, snapshot)
+    }
+
+    @Test
+    fun confirmationObservationDerivesRadioFromEvidenceIncludingCopiedSnapshot() {
+        val snapshot = DirectAckRadioConfirmationObservation.Snapshot(
+            DirectAckRadioConfirmationEvidence.NoPersistedWildcard(radio),
+        )
+        val otherRadio = RadioId(UUID(0, 20))
+        val evidence = DirectAckRadioConfirmationEvidence.PersistedWildcard(
+            otherRadio,
+            SnapshotSet(listOf(DirectAckRadioConfirmationWildcardReason.UNTRACKED_LEGACY_ANCESTRY)),
+        )
+        val copied = snapshot.copy(evidence = evidence)
+
+        assertEquals(radio, snapshot.radioId)
+        assertEquals(otherRadio, copied.radioId)
+        assertEquals(evidence, copied.evidence)
+        assertNotEquals(snapshot, copied)
+    }
+
+    @Test
     fun confirmationEvidenceAlwaysIdentifiesItsExactRadio() {
         val otherRadio = RadioId(UUID(0, 20))
         val evidence = DirectAckRadioConfirmationEvidence.NoPersistedWildcard(radio)

@@ -2,6 +2,7 @@
 package com.meshcoreone.android.feature.remotenodes.ui
 
 import android.os.Looper
+import android.provider.Settings
 import android.view.View
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -93,6 +94,7 @@ class RemoteNeighborConfidenceComposeTest {
     @get:Rule val compose = createEmptyComposeRule()
     private lateinit var activity: ActivityController<ComponentActivity>
     private lateinit var previousLocale: Locale
+    private var previousAnimationScale = 1f
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
 
     @Before fun openWindow() {
@@ -100,11 +102,15 @@ class RemoteNeighborConfidenceComposeTest {
         Locale.setDefault(Locale.US)
         activity = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
         activity.get().actionBar?.hide()
+        val resolver = activity.get().contentResolver
+        previousAnimationScale = Settings.Global.getFloat(resolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
+        Settings.Global.putFloat(resolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
         activity.windowFocusChanged(true)
         assertTrue(activity.get().window.decorView.hasWindowFocus())
     }
 
     @After fun closeWindow() {
+        Settings.Global.putFloat(activity.get().contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, previousAnimationScale)
         activity.windowFocusChanged(false)
         activity.pause().stop().destroy()
         scope.cancel()
@@ -380,7 +386,10 @@ class RemoteNeighborConfidenceComposeTest {
             ).performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(layouts)) }
             assertEquals(fontScale, layouts.single().layoutInput.density.fontScale, 0f)
             if (layouts.single().hasVisualOverflow) {
-                println("TS07 overflowing $name at $fontScale: ${layouts.single()}")
+                val layout = layouts.single()
+                println("TS07 overflowing $name at $fontScale: width=${layout.didOverflowWidth}, height=${layout.didOverflowHeight}, " +
+                    "paragraph=${layout.multiParagraph.width}x${layout.multiParagraph.height}, size=${layout.size}, " +
+                    "maxLines=${layout.multiParagraph.didExceedMaxLines}; $layout")
             }
             assertFalse(layouts.single().hasVisualOverflow)
             indicator.performClick()

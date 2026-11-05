@@ -292,12 +292,12 @@ class RemoteLocaleMeasurementComposeTest {
         }
         val slider = SemanticsMatcher.keyIsDefined(SemanticsActions.SetProgress)
         compose.onNode(slider and hasContentDescription("Alpha.", substring = true))
-            .performSemanticsAction(SemanticsActions.SetProgress) { it(0f) }
-        compose.onNode(hasText("Alpha: 4.0 dB", substring = true)).assertIsDisplayed()
+            .performScrollTo().performSemanticsAction(SemanticsActions.SetProgress) { it(0f) }
+        compose.onNode(hasText("Alpha: 4.0 dB", substring = true)).performScrollTo().assertIsDisplayed()
         compose.runOnIdle {
             chart.value = neighbor.copy(name = "Beta").asStableMetricChart()
         }
-        compose.onNode(hasText("Beta: 4.0 dB", substring = true)).assertIsDisplayed()
+        compose.onNode(hasText("Beta: 4.0 dB", substring = true)).performScrollTo().assertIsDisplayed()
         compose.onNode(hasText("Beta: 9.0 dB", substring = true)).assertDoesNotExist()
     }
 
@@ -350,13 +350,15 @@ class RemoteLocaleMeasurementComposeTest {
             }
         }
         installHistoryRoute()
-        compose.waitUntil(5_000) { readsA == 1 }
+        compose.waitForIdle()
+        compose.runOnIdle { assertEquals("A starts once", 1, readsA) }
         compose.runOnIdle { store.value = sameAuthorityWrapper }
         compose.waitForIdle()
         compose.runOnIdle { assertEquals("A fresh wrapper for the same authority must not reload", 1, readsA) }
 
         compose.runOnIdle { store.value = storeB }
-        compose.waitUntil(5_000) { readsB == 1 }
+        compose.waitForIdle()
+        compose.runOnIdle { assertEquals("Replacing A loads B once", 1, readsB) }
         compose.onNode(hasText(": 68.9 \u00b0F", substring = true)).performScrollTo().assertIsDisplayed()
         compose.runOnIdle {
             assertTrue("Replacing the backing authority cancels A", jobA.isCancelled)
@@ -372,11 +374,13 @@ class RemoteLocaleMeasurementComposeTest {
         compose.onNode(hasText(": 68.9 \u00b0F", substring = true)).assertDoesNotExist()
 
         compose.runOnIdle { store.value = storeB }
-        compose.waitUntil(5_000) { readsB == 2 }
+        compose.waitForIdle()
+        compose.runOnIdle { assertEquals("Reconnecting reloads B once", 2, readsB) }
         compose.onNode(hasText(": 68.9 \u00b0F", substring = true)).performScrollTo().assertIsDisplayed()
 
         compose.runOnIdle { store.value = storeC }
-        compose.waitUntil(5_000) { readsC == 1 }
+        compose.waitForIdle()
+        compose.runOnIdle { assertEquals("Replacing B loads C once", 1, readsC) }
         compose.onNode(hasText(": 86.9 \u00b0F", substring = true)).performScrollTo().assertIsDisplayed()
 
         val changedClock = object : RemoteNodesClock {
@@ -385,13 +389,15 @@ class RemoteLocaleMeasurementComposeTest {
             override suspend fun sleep(duration: Duration) = error("Rendering must not sleep")
         }
         compose.runOnIdle { activeClock.value = changedClock }
-        compose.waitUntil(5_000) { readsC == 2 }
+        compose.waitForIdle()
+        compose.runOnIdle { assertEquals("Changing the clock reloads C once", 2, readsC) }
         compose.onNode(hasText(": 86.9 \u00b0F", substring = true)).performScrollTo().assertIsDisplayed()
         compose.runOnIdle {
             TimeZone.setDefault(TimeZone.getTimeZone("America/Los_Angeles"))
             tag.value = "en-US-u-ms-metric"
         }
-        compose.waitUntil(5_000) { readsC == 3 }
+        compose.waitForIdle()
+        compose.runOnIdle { assertEquals("Changing the zone reloads C once", 3, readsC) }
         compose.onNode(hasText(": 30.5 \u00b0C", substring = true)).performScrollTo().assertIsDisplayed()
     }
 

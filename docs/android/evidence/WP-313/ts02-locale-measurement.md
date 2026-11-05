@@ -1,7 +1,7 @@
 # WP-313 TS-02: Android locale and measurement presentation
 
 Source-only lifecycle successor of `e0e2649de41d4fc723d79cfe64b4b8c89cd27467`,
-composed against main `7f9b9e1c91e9a1c91b5f08894dd6329a52c7a2c0`.
+composed against main `48753d7c958cc9a9513e32c6424a2d572119b05d`.
 It preserves the previously reviewed locale and chart changes; prior immutable
 source candidates and hosted evidence are preserved, not rewritten or reused.
 Original source baseline: `99f03ad2da235e66c5cbcb58e88ac4d9aa55d2c5`.
@@ -169,6 +169,11 @@ It does not calculate expected values with production helpers.
 7. Mount history, close its composition, change the store's captured latest
    snapshot, and reopen the same node with unchanged store/clock. Assert exactly
    one new load and the new latest sample rather than stale cached history.
+
+Mounted counter assertions synchronize through Compose/Android idle before
+reading exact counts, rather than polling counters while Android UI work is
+pending. Neighbor readouts explicitly scroll into the viewport at 200% font
+before asserting visibility; selection/value assertions remain unchanged.
 
 ## Admission, verification and limits
 

@@ -1000,6 +1000,97 @@ class RepairExecutionTests(unittest.TestCase):
         with self.assertRaisesRegex(PortError, "symbol indexing only"):
             _kotlin_junit_methods(source, java_source=True)
 
+    def test_notification_shadow_rejects_java_ineligible_unicode_escape_collision(self):
+        source = (
+            "package org.robolectric.shadows;\n"
+            + "// " + "\\" * 2 + "u000a /*\n"
+            + "public class ShadowNotificationManager /* */ {}\n"
+        )
+        self.assertIn(b"// \\\\u000a /*\n", source.encode())
+        path = "android/core/model/src/main/java/ShadowNotificationManager.java"
+        for whole in (False, True):
+            manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs({
+                TEST: self.notification_shadow_source().encode(), path: source.encode(),
+            }, whole=whole)
+            del compiled["core/maps"][path]
+            with self.subTest(whole=whole), patch(
+                "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+            ), self.assertRaisesRegex(PortError, "shadows the external Robolectric identity"):
+                validate_compiled_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
+    def test_java_unicode_translation_preserves_eligibility_and_single_pass(self):
+        from controller.repair_acceptance import _java_unicode_input
+
+        for raw, expected in (
+            (r"\u005a", "Z"),
+            (r"\uuuu005a", "Z"),
+            (r"\\u005a", r"\\u005a"),
+            (r"\\\u005a", "\\\\" + "Z"),
+            (r"\u005cu005a", r"\u005a"),
+            (r"\u005c\u005a", "\\Z"),
+            (r"\u005c\u005c\u006e", "\\\\n"),
+            (r"\u005c\\u005a", "\\\\Z"),
+            (r"\u005c\\\u005a", "\\" * 4 + "u005a"),
+            (r"\\uBAD", r"\\uBAD"),
+            (r"\u000a", "\n"),
+            (r"\u000d", "\r"),
+        ):
+            with self.subTest(raw=raw):
+                self.assertEqual(_java_unicode_input(raw), expected)
+        for count in range(1, 9):
+            raw = "\\" * count + "u000a"
+            expected = "\\" * (count - 1) + "\n" if count % 2 else raw
+            with self.subTest(backslashes=count):
+                self.assertEqual(_java_unicode_input(raw), expected)
+        for raw in (r"\u", r"\uuBAD", r"\u00XZ", r"\u005c\uXYZ0"):
+            with self.subTest(raw=raw), self.assertRaisesRegex(PortError, "eligible Java Unicode"):
+                _java_unicode_input(raw)
+
+    def test_notification_shadow_rejects_java_ignorable_canonical_identifiers(self):
+        for ignorable in ("\u200c", r"\u200c", "\x01", r"\u0001"):
+            for whole in (False, True):
+                path = "android/core/model/src/main/java/ShadowNotificationManager.java"
+                source = (
+                    "package org.robolectric.shadows;\npublic class ShadowNotifi"
+                    + ignorable + "cationManager {}"
+                )
+                manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs({
+                    TEST: self.notification_shadow_source().encode(), path: source.encode(),
+                }, whole=whole)
+                del compiled["core/maps"][path]
+                with self.subTest(ignorable=ignorable, whole=whole), patch(
+                    "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+                ), self.assertRaisesRegex(PortError, "shadows the external Robolectric identity"):
+                    validate_compiled_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
+    def test_notification_shadow_allows_unrelated_grouped_annotation_symbol_index(self):
+        path = "android/core/model/src/main/kotlin/Unrelated.kt"
+        for whole in (False, True):
+            manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs({
+                TEST: self.notification_shadow_source().encode(),
+                path: b'@file:[Suppress("unused")]\npackage unrelated\nclass Other {}',
+            }, whole=whole)
+            del compiled["core/maps"][path]
+            with self.subTest(whole=whole), patch(
+                "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+            ):
+                validate_compiled_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
+    def test_notification_shadow_rejects_rule_with_property_modifiers(self):
+        for modifier in ("lateinit", "final lateinit", "public lateinit"):
+            source = self.notification_shadow_source().replace(
+                "companion object { var calls = 0 }",
+                "@org.junit.Rule " + modifier + " var rule: TestRule",
+            )
+            for whole in (False, True):
+                manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs({
+                    TEST: source.encode(),
+                }, whole=whole)
+                with self.subTest(modifier=modifier, whole=whole), patch(
+                    "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+                ), self.assertRaises(PortError):
+                    validate_compiled_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
     def test_notification_shadow_external_inventory_requires_immutable_actual_blobs(self):
         base = TEST.replace("MapTest.kt", "UnrelatedShadow.kt")
         for whole in (False, True):

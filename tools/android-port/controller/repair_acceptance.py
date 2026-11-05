@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import threading
+import unicodedata
 from dataclasses import asdict
 
 from .capabilities import CapabilityEngine
@@ -865,6 +866,30 @@ def validate_build_log(log, modules, *, plan_for_scopes=None):
             "methods": inventory, "compiled_test_sources": compiled}
 
 
+def _java_unicode_input(text):
+    # JLS 3.3: eligibility depends on translated output, not raw slash parity alone.
+    result, index, backslashes, translated = [], 0, 0, False
+    while index < len(text):
+        character = text[index]
+        escaped = False
+        if character == "\\" and (translated or backslashes % 2 == 0):
+            cursor = index + 1
+            while cursor < len(text) and text[cursor] == "u":
+                cursor += 1
+            if cursor > index + 1:
+                digits = text[cursor:cursor + 4]
+                if re.fullmatch(r"[0-9a-fA-F]{4}", digits) is None:
+                    raise PortError("Malformed eligible Java Unicode escape")
+                character = chr(int(digits, 16))
+                index = cursor + 3
+                escaped = True
+        result.append(character)
+        backslashes = backslashes + 1 if character == "\\" else 0
+        translated = escaped
+        index += 1
+    return "".join(result)
+
+
 def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=False,
                           inheritance=None, source_declarations=None, source_symbols=None,
                           java_source=False):
@@ -927,12 +952,24 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
             raise PortError("Unterminated Kotlin string template in hosted test source")
         return index
 
-    identifier = re.compile(r"(?:[^\W\d]|[$])[\w$]*" if java_source else r"[^\W\d]\w*")
-    token = re.compile(
-        identifier.pattern + r"|[^\s]" if java_source else r"`[^`\r\n]+`|[^\W\d]\w*|[^\s]"
-    )
+    identifier = re.compile(r"[^\W\d]\w*")
+    token = re.compile(r"`[^`\r\n]+`|[^\W\d]\w*|[^\s]")
+
+    def java_ignorable(character):
+        return (unicodedata.category(character) == "Cf"
+                or 0 <= ord(character) <= 8 or 14 <= ord(character) <= 27
+                or 127 <= ord(character) <= 159)
+
+    def java_start(character):
+        return unicodedata.category(character) in ("Lu", "Ll", "Lt", "Lm", "Lo", "Nl", "Sc", "Pc")
+
+    def java_part(character):
+        return (java_start(character) or java_ignorable(character)
+                or unicodedata.category(character) in ("Mn", "Mc", "Nd"))
 
     def name_token(value):
+        if java_source:
+            return bool(value) and java_start(value[0]) and all(java_part(item) for item in value[1:])
         return identifier.fullmatch(value) is not None or (
             value.startswith("`") and value.endswith("`") and len(value) > 2
         )
@@ -946,6 +983,17 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
         elif text[index] in "\"'":
             index = literal(index)
             tokens.append("<literal>")
+        elif java_source:
+            end = index + 1
+            if java_start(text[index]):
+                while end < len(text) and java_part(text[end]):
+                    end += 1
+                tokens.append("".join(item for item in text[index:end] if not java_ignorable(item)))
+            else:
+                if java_ignorable(text[index]) or ord(text[index]) > 127:
+                    raise PortError("Unsupported Java symbol-index input character")
+                tokens.append(text[index])
+            index = end
         else:
             match = token.match(text, index)
             tokens.append(match[0])
@@ -958,7 +1006,7 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
         )
         for index, value in enumerate(tokens)
     )
-    if grouped_annotations and source_declarations is None:
+    if grouped_annotations and source_declarations is None and source_symbols is None:
         raise PortError("Grouped Kotlin annotations are not supported in hosted test sources")
 
     class_bodies, package = {}, ""
@@ -1328,6 +1376,7 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
     modifiers = {
         "public", "internal", "private", "protected", "final", "open", "abstract", "override",
         "suspend", "inline", "tailrec", "external", "infix", "operator", "actual", "expect",
+        "lateinit", "const",
     }
     for start, value in enumerate(tokens):
         if (
@@ -1568,7 +1617,7 @@ def validate_hosted_methods(scope, candidate_tree, repo, executed, compiled_sour
                 except UnicodeError as error:
                     raise PortError("External-identity source is not UTF-8") from error
                 if source.endswith(".java"):
-                    text = re.sub(r"\\u+([0-9a-fA-F]{4})", lambda match: chr(int(match[1], 16)), text)
+                    text = _java_unicode_input(text)
                 _kotlin_junit_methods(
                     text, source_symbols=symbols, java_source=source.endswith(".java"),
                 )

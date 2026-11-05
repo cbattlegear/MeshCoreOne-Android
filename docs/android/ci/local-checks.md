@@ -434,8 +434,14 @@ modules, not just the selected Kotlin test compiler map. A declaration shadowing
 any of the four canonical Android/Robolectric identities or their package prefixes
 (including an object, interface, record, enum or type alias) rejects the exception,
 irrespective of its file path or whether the substitute declares tests. Java
-Unicode escapes are normalized before Java-aware tokenization: block comments
+Unicode escapes are translated once using JLS 3.3 eligibility (translated-output
+backslash parity and preceding escape origin); malformed eligible escapes fail
+closed, and ineligible escapes remain literal. This precedes Java-aware tokenization: block comments
 do not nest, line comments end at CR or LF, and strings have no Kotlin templates.
+Java identifier-part/ignorable characters are indexed using Unicode categories;
+identifier-ignorable characters do not distinguish canonical names. Unrelated
+grouped Kotlin annotations are permitted only during symbol-only indexing;
+selected suites and resolved ancestors keep their annotation uncertainty checks.
 Missing, stale or mismatched compiled/source blobs also fail; an unrelated
 same-simple-name declaration is not a collision. Compiler maps are keyed by the
 executing module, not each source's physical directory: shared Kotlin inputs

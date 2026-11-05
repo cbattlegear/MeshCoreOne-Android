@@ -124,7 +124,6 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
     }
 
     private val draftLock = Any()
-    private val draftRevisions = mutableMapOf<ChatConversationID, Long>()
     private data class UnresolvedCreation(
         val target: ComposerTarget, val revision: Long, val slotGeneration: Int,
         val receipt: PendingMessageCreation,
@@ -145,21 +144,18 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             app.draftStore.draft(conversationId)
         }
         override fun set(conversationId: ChatConversationID, text: String?) = synchronized(draftLock) {
-            draftRevisions[conversationId] = (draftRevisions[conversationId] ?: 0L) + 1
             if (text == null) app.draftStore.clearDraft(conversationId)
             else app.draftStore.setDraft(text, conversationId)
             changes.value++
             Unit
         }
         override fun revision(conversationId: ChatConversationID) = synchronized(draftLock) {
-            draftRevisions[conversationId] ?: 0L
+            app.draftStore.revision(conversationId)
         }
         override fun restoreIfUnchanged(conversationId: ChatConversationID, revision: Long, text: String) =
             synchronized(draftLock) {
-                if (this.revision(conversationId) != revision || get(conversationId) != null) false
-                else {
-                    set(conversationId, text)
-                    true
+                app.draftStore.restoreIfUnchanged(conversationId, revision, text).also { restored ->
+                    if (restored) changes.value++
                 }
             }
     }
@@ -876,6 +872,9 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                         val recovery = DeferredCommitted(target, slotGeneration, messageId)
                         deferredCommitted[messageId] = recovery
                         recoverCommittedCreation(recovery)
+                    }
+                    override suspend fun recordLocalEnqueueFailure(messageId: UUID) {
+                        recordCommittedCreationFailure(messageId)
                     }
                     override suspend fun canRestoreDraft(): Boolean {
                         if (!isSameSlot()) return false

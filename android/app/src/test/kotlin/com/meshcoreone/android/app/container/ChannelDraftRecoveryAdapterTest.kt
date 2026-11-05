@@ -73,7 +73,9 @@ class ChannelDraftRecoveryAdapterTest : RoomProcessTest() {
         createdAt = Instant.ofEpochSecond(id), channelOccupantID = origin, status = MessageStatus.FAILED,
     )
 
-    private enum class UnboundCopyOutcome { EXACT, SOURCE_CHANGED, NEWER_DRAFT, TYPED_THEN_CLEARED }
+    private enum class UnboundCopyOutcome {
+        EXACT, SOURCE_CHANGED, NEWER_DRAFT, TYPED_THEN_CLEARED, SLOT_REPLACED, SLOT_REPLACED_BACK,
+    }
 
     @Test fun mountedCopyConfirmationIsVisibleWithoutFailureAndClearsWithNextSelection() {
         val host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
@@ -344,7 +346,15 @@ class ChannelDraftRecoveryAdapterTest : RoomProcessTest() {
     @Test fun mountedIndeterminateNoticeKeepsUncertaintyAfterAcknowledgmentAndExplicitCopy() =
         mountedTransientRecovery(TransientRetention.INDETERMINATE)
 
-    private fun mountedTransientRecovery(retention: TransientRetention) = runTest {
+    @Test fun mountedTransientCopyRefusesReplacedDestinationUntilExplicitReselection() =
+        mountedTransientRecovery(TransientRetention.NOT_RETAINED, replaceSlot = true)
+
+    @Test fun mountedTransientCopyRefusesReplacedBackDestinationUntilExplicitReselection() =
+        mountedTransientRecovery(TransientRetention.INDETERMINATE, replaceSlot = true, replaceBack = true)
+
+    private fun mountedTransientRecovery(
+        retention: TransientRetention, replaceSlot: Boolean = false, replaceBack: Boolean = false,
+    ) = runTest {
         store.saveChannel(radio, channel(1))
         val target = ComposerTarget.Channel(assertNotNull(store.fetchChannel(radio, 2u)))
         val rig = ContainerHarness(this, store)
@@ -432,11 +442,18 @@ class ChannelDraftRecoveryAdapterTest : RoomProcessTest() {
             assertNull(drafts.get(target.conversationId))
             node("Choose chat").performClick()
             val newer = "newer destination draft"
-            drafts.set(target.conversationId, newer)
+            if (replaceSlot) {
+                store.saveChannel(radio, channel(2))
+                rig.appState.handleChannelSlotOccupantChanged(radio, setOf(2u))
+                if (replaceBack) {
+                    store.saveChannel(radio, channel(1))
+                    rig.appState.handleChannelSlotOccupantChanged(radio, setOf(2u))
+                }
+            } else drafts.set(target.conversationId, newer)
             node("Copy to selected chat").performClick()
             compose.waitUntil(5_000) { failure.value != null }
             node(conflict).assertIsDisplayed()
-            assertEquals(newer, drafts.get(target.conversationId))
+            assertEquals(if (replaceSlot) null else newer, drafts.get(target.conversationId))
             assertTrue(completed.isEmpty())
             compose.runOnIdle {
                 drafts.set(target.conversationId, null)
@@ -476,6 +493,12 @@ class ChannelDraftRecoveryAdapterTest : RoomProcessTest() {
 
     @Test fun mountedUnboundCopyRefusesTypingThenClearingAfterDestinationSelection() =
         mountedUnboundCopy(UnboundCopyOutcome.TYPED_THEN_CLEARED)
+
+    @Test fun mountedUnboundCopyRefusesSlotReplacementDuringHeldSourceRead() =
+        mountedUnboundCopy(UnboundCopyOutcome.SLOT_REPLACED)
+
+    @Test fun mountedUnboundCopyRefusesSlotReplacementBackDuringHeldSourceRead() =
+        mountedUnboundCopy(UnboundCopyOutcome.SLOT_REPLACED_BACK)
 
     private fun mountedUnboundCopy(outcome: UnboundCopyOutcome) = runTest {
         store.saveChannel(radio, channel(1))
@@ -552,9 +575,20 @@ class ChannelDraftRecoveryAdapterTest : RoomProcessTest() {
             node("Copy to selected chat").performClick()
             compose.waitUntil(5_000) { readStarted.isCompleted }
             val newer = "newer destination text"
+            if (outcome == UnboundCopyOutcome.SLOT_REPLACED ||
+                outcome == UnboundCopyOutcome.SLOT_REPLACED_BACK
+            ) {
+                store.saveChannel(radio, channel(2))
+                rig.appState.handleChannelSlotOccupantChanged(radio, setOf(2u))
+                if (outcome == UnboundCopyOutcome.SLOT_REPLACED_BACK) {
+                    store.saveChannel(radio, channel(1))
+                    rig.appState.handleChannelSlotOccupantChanged(radio, setOf(2u))
+                }
+            }
             compose.runOnIdle {
                 when (outcome) {
-                    UnboundCopyOutcome.EXACT -> Unit
+                    UnboundCopyOutcome.EXACT, UnboundCopyOutcome.SLOT_REPLACED,
+                    UnboundCopyOutcome.SLOT_REPLACED_BACK -> Unit
                     UnboundCopyOutcome.SOURCE_CHANGED -> inventory = listOf(source.copy(exactText = "replacement"))
                     UnboundCopyOutcome.NEWER_DRAFT -> drafts.set(target.conversationId, newer)
                     UnboundCopyOutcome.TYPED_THEN_CLEARED -> {

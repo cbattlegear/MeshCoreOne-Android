@@ -22,6 +22,50 @@ restart check; the current-main storage owner is producing compatible APIs.
 No duplicate producer implementation or guard removal is used to mask it.
 The new mounted confirmation control is authored, not yet executed.
 
+Review `4453010408` also applies to ordinary enqueue-stage failure, not just
+creation failure. The captured App send port now routes that local failure
+through its existing origin-aware retained committed-row recovery. Registration
+precedes any fallible recovery read/write. A later real invalidation retries only
+local status/publication; durable-queue presence remains checked and no send is
+automatically resubmitted. A replaced channel fails its original-slot guard
+before status changes or replacement-timeline publication.
+
+Five additional mounted lifetime controls hold before actual queue admission:
+direct/channel pending-read and status-write failures retain the same PENDING
+row until storage recovers, then expose FAILED without a pending send or wire
+attempt; channel replacement during the held enqueue retains the original
+PENDING row and rejects actual Retry. Existing durable-queue, cancellation,
+held-save/restart and positive-send assertions are preserved. These new controls
+are authored, not yet executed.
+
+Review `4486841505` exposed a second draft mutation path: `AppState` clears
+vacated slots through the shared `DraftStore`, outside the App adapter's private
+revision map. Moved the existing process-local revision/empty-destination
+compare-and-restore into that shared store's existing lock. Every explicit set,
+clear and slot-vacate now advances its affected revision, including an already
+empty slot; no-op clears still perform no persistence write. The App adapter
+delegates its same interface to this single mutation boundary. No backend
+origin, durable operation authorization or new persistence format is introduced.
+The original Swift content, whitespace and batched-persistence behavior is
+preserved; revision fencing is a native concurrency adaptation.
+
+Added two core draft controls for vacate/re-vacate, direct typing/clear,
+unrelated-chat isolation and nonempty-destination refusal. Four mounted controls
+exercise actual App slot invalidation after destination selection: held-inventory
+copy and transient copy each reject A-to-B and A-to-B-to-A, leaving the destination
+empty and the exact source intact. Explicit later reselection is still required
+for transient copy. These controls are authored, not yet executed. These
+process-local draft tokens are not wire permission or restart-safe channel
+origin proof; the independent storage/dispatch producer dependency remains.
+
+For these review repairs, trusted `reserve.py admit` accepted primary composer
+and evidence paths as `wp-owned`, existing App/core test paths with
+`add-or-update-related-test` as `reviewed-support-test`, and App/shared-draft
+consumer paths with `modify-related-consumer` as `reviewed-support-consumer`.
+The historical advisory claim remains preserved, not released or impersonated.
+`python tools\android-port\portmap.py`, `python tools\android-port\controller\validate.py`
+and `git diff --check` all returned 0. Source validation is not Android execution.
+
 ## Current-main restart repair continuation
 
 Reconciled actual main `83fc29b14f082ef1806f2d68516668128f63b1d4` in

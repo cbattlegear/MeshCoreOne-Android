@@ -227,6 +227,22 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
         exercise(true, Boundary.BEFORE_CREATE, replaceSlot = true, preserveNewer = false,
             successfulReplacedSave = true, restartSendAgain = true)
 
+    @Test fun directLocalEnqueueFailureRetainsRecoveryAcrossPendingReadFailure() =
+        exercise(false, Boundary.BEFORE_QUEUE, localEnqueueFailure = true,
+            recoveryFailure = RecoveryFailure.PENDING_READ)
+    @Test fun channelLocalEnqueueFailureRetainsRecoveryAcrossPendingReadFailure() =
+        exercise(true, Boundary.BEFORE_QUEUE, localEnqueueFailure = true,
+            recoveryFailure = RecoveryFailure.PENDING_READ)
+    @Test fun directLocalEnqueueFailureRetainsRecoveryAcrossStatusWriteFailure() =
+        exercise(false, Boundary.BEFORE_QUEUE, localEnqueueFailure = true,
+            recoveryFailure = RecoveryFailure.STATUS_WRITE)
+    @Test fun channelLocalEnqueueFailureRetainsRecoveryAcrossStatusWriteFailure() =
+        exercise(true, Boundary.BEFORE_QUEUE, localEnqueueFailure = true,
+            recoveryFailure = RecoveryFailure.STATUS_WRITE)
+    @Test fun channelReplacedBeforeEnqueueRetainsOriginalPendingRowAndRejectsRetry() =
+        exercise(true, Boundary.BEFORE_QUEUE, localEnqueueFailure = true,
+            replaceSlot = true, preserveNewer = false)
+
     private class DiskHistoryStore(context: Context, name: String) {
         private val ownerJob = SupervisorJob()
         private val owner = CoroutineScope(ownerJob + Dispatchers.Default)
@@ -259,6 +275,7 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
         markSavedReadBeforeReconcile: Boolean = false,
         successfulReplacedSave: Boolean = false, explicitRetry: Boolean = false,
         restartSendAgain: Boolean = false,
+        localEnqueueFailure: Boolean = false,
     ) = runTest {
         require(!explicitRetry || !dispose) { "Explicit Retry must reach the mounted timeline control" }
         require(!restartSendAgain || (channel && successfulReplacedSave && replaceSlot && dispose)) {
@@ -389,13 +406,23 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
             }
             val decorate: (ComposerSendPort) -> ComposerSendPort = { underlying ->
                 object : ComposerSendPort by underlying {
+                    private suspend fun beforeEnqueue() {
+                        if (!localEnqueueFailure) return
+                        pause(Boundary.BEFORE_QUEUE)
+                        if (!replaceSlot) {
+                            recoveryUnavailable = recoveryFailure != null
+                            throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+                        }
+                    }
                     override suspend fun enqueueDM(envelope: DirectMessageEnvelope) {
                         enqueues++
+                        beforeEnqueue()
                         underlying.enqueueDM(envelope)
                     }
                     override suspend fun enqueueChannel(envelope: ChannelMessageEnvelope) {
                         enqueues++
                         envelopes += envelope
+                        beforeEnqueue()
                         underlying.enqueueChannel(envelope)
                     }
                 }
@@ -572,9 +599,9 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                 assertTrue(rows.isEmpty())
                 assertTrue(h.links.radios.single().sent.none { it[0].toInt() in 2..3 })
             } else if (replaceSlot) {
-                val committed = boundary == Boundary.AFTER_CREATE || successfulReplacedSave
+                val committed = boundary == Boundary.AFTER_CREATE || successfulReplacedSave || localEnqueueFailure
                 assertEquals(if (committed) 1 else 0, creations)
-                assertEquals(0, enqueues)
+                assertEquals(if (localEnqueueFailure) 1 else 0, enqueues)
                 assertEquals(if (committed) 1 else 0, rows.size)
                 if (committed) {
                     assertEquals(MessageStatus.PENDING, rows.single().status)
@@ -700,6 +727,15 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                         assertEquals(1, h.links.radios.single().sent.count { it[0].toInt() == 3 })
                     }
                 }
+            } else if (localEnqueueFailure) {
+                assertEquals(1, creations)
+                assertEquals(1, enqueues)
+                val saved = rows.single()
+                assertEquals(requireNotNull(captured).id, saved.id)
+                assertEquals(original, saved.text)
+                assertEquals(MessageStatus.FAILED, saved.status)
+                assertTrue(store.fetchPendingSendsForMessage(EntityKey(radio, saved.id)).isEmpty())
+                assertTrue(h.links.radios.all { link -> link.sent.none { it[0].toInt() in 2..3 } })
             } else if (queueFailure) {
                 assertEquals(1, creations)
                 assertEquals(1, enqueues)

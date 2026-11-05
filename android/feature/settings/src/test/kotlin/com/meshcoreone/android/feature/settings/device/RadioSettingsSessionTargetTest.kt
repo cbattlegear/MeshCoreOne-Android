@@ -206,6 +206,7 @@ class RadioSettingsSessionTargetTest {
             if (retry) r.preset.retry.retry()
             r.scheduler.runCurrent()
             assertEquals("setRadioParamsVerified(910525,125000,9,6,true,null)", r.a.calls.last())
+            assertEquals(current, r.a.radioExpectations.last())
             assertTrue(r.b.calls.isEmpty())
             assertFalse(r.preset.state.value.isApplying)
         }
@@ -233,6 +234,7 @@ class RadioSettingsSessionTargetTest {
                 r.a.calls.last { it.startsWith("setRadioParamsVerified") },
             )
             assertEquals("setTxPowerVerified(10)", r.a.calls.last())
+            assertEquals(current, r.a.radioExpectations.last())
             assertTrue(r.b.calls.isEmpty())
             assertTrue(r.advanced.state.value.showSuccess)
         }

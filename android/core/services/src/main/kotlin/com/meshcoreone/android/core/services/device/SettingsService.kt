@@ -567,10 +567,24 @@ class SettingsService(
     suspend fun setRadioParamsVerified(
         frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte, codingRate: UByte,
         clientRepeat: Boolean? = null, appliedRadioPresetID: String? = null,
+        expectedDevice: DeviceDTO? = null,
     ): SelfInfo = operation {
+        expectedDevice?.let { verifyQueuedRadioBaseline(it) }
         val actual = writeRadioAndVerify(frequencyKHz, bandwidthKHz, spreadingFactor, codingRate, clientRepeat)
         publish(SettingsEvent.DeviceUpdated(actual, appliedRadioPresetID))
         actual
+    }
+
+    private suspend fun verifyQueuedRadioBaseline(expected: DeviceDTO) {
+        if (expected.radioId != context.token.radioId) throw SettingsServiceException(SettingsServiceError.NotConnected)
+        val actual = configuration { sendAppStart() }
+        val repeat = configuration { queryDevice() }.clientRepeat
+        if (actual.publicKey != expected.publicKey ||
+            !(abs(actual.radioFrequency - expected.frequency.toDouble() / 1000.0) < 0.0005) ||
+            !(abs(actual.radioBandwidth - expected.bandwidth.toDouble() / 1000.0) < 0.0005) ||
+            actual.radioSpreadingFactor != expected.spreadingFactor || actual.radioCodingRate != expected.codingRate ||
+            repeat != expected.clientRepeat
+        ) verification("unchanged radio settings", "radio settings changed while the operation was queued")
     }
 
     private suspend fun writeRadioAndVerify(

@@ -75,6 +75,7 @@ interface SettingsRadioPort {
     suspend fun setRadioParamsVerified(
         frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte, codingRate: UByte,
         clientRepeat: Boolean? = null, appliedRadioPresetID: String? = null,
+        expectedDevice: DeviceDTO? = null,
     ): SelfInfo
     suspend fun setTxPowerVerified(power: Byte): SelfInfo
     suspend fun applyRadioPresetVerified(presetId: String): SelfInfo

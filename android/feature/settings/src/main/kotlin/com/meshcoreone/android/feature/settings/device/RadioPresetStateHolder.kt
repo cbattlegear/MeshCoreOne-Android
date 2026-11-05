@@ -209,7 +209,10 @@ class RadioPresetStateHolder(
                 val device = target.currentDevice(mutable.value.device, mutable.value.sessionToken)
                 val frequency = catalog.repeatFrequencyKHz(id) ?: throw SettingsNotConnectedException()
                 // Repeat Mode changes only the frequency; bandwidth, SF and CR stay as the radio has them.
-                service.setRadioParamsVerified(frequency, device.bandwidth, device.spreadingFactor, device.codingRate, clientRepeat = true)
+                service.setRadioParamsVerified(
+                    frequency, device.bandwidth, device.spreadingFactor, device.codingRate,
+                    clientRepeat = true, expectedDevice = device,
+                )
             } else {
                 service.applyRadioPresetVerified(id)
             }
@@ -265,7 +268,8 @@ class RadioPresetStateHolder(
                 mutable.update { it.copy(selectedPresetId = presetId) }
                 val frequency = catalog.repeatFrequencyKHz(presetId) ?: throw SettingsNotConnectedException()
                 target.service.setRadioParamsVerified(
-                    frequency, current.bandwidth, current.spreadingFactor, current.codingRate, clientRepeat = true,
+                    frequency, current.bandwidth, current.spreadingFactor, current.codingRate,
+                    clientRepeat = true, expectedDevice = current,
                 )
                 retryAlert.reset()
             } catch (cancelled: CancellationException) {
@@ -296,6 +300,7 @@ class RadioPresetStateHolder(
                 device.preRepeatFrequency ?: device.frequency, device.preRepeatBandwidth ?: device.bandwidth,
                 device.preRepeatSpreadingFactor ?: device.spreadingFactor, device.preRepeatCodingRate ?: device.codingRate,
                 clientRepeat = false,
+                expectedDevice = device,
             )
             target.requireCurrent(mutable.value.device, mutable.value.sessionToken)
             deviceStore.clearPreRepeatSettings(target.token)

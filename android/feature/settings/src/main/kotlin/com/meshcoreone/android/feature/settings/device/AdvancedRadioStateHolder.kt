@@ -191,6 +191,7 @@ class AdvancedRadioStateHolder(
             service.setRadioParamsVerified(
                 frequencyToSend, request.bandwidthHz, request.spreadingFactor, request.codingRate,
                 clientRepeat = device.clientRepeat,
+                expectedDevice = device,
             )
             target.requireCurrent(mutable.value.device, mutable.value.sessionToken)
             service.setTxPowerVerified(request.power)

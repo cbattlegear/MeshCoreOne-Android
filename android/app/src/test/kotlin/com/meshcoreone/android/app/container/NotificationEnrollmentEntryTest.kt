@@ -210,6 +210,21 @@ class NotificationEnrollmentEntryTest {
         assertEquals(0, backend.stages)
     }
 
+    @Test fun actualActivityRecreationRetiresPresentationButRetainsProcessOperation() {
+        mount()
+        start()
+        val original = requireNotNull(backend.shown)
+        compose.runOnUiThread { host.recreate() }
+        compose.waitForIdle()
+        assertTrue(original.retired)
+        mount()
+        start()
+        assertEquals(original.request, backend.shown?.request)
+        assertFalse(requireNotNull(backend.shown) === original)
+        assertEquals(4, ids)
+        assertEquals(0, backend.stages)
+    }
+
     @Test fun actualMountedActionConsumesRealAcknowledgmentAndBindsRealWitnessAndJournal() {
         val real = mountReal()
         val request = shownRequest()

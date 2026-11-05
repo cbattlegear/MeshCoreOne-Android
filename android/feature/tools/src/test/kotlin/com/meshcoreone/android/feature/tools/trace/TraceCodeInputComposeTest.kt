@@ -273,6 +273,41 @@ class TraceCodeInputComposeTest {
         }
     }
 
+    @Test fun mountedSaveCanStartAgainAfterItsPartialPathIsDeleted() {
+        val h = successfulSaveHarness(batch = true)
+        val store = h.deps.store as InMemoryTracePathStore
+        var failAppend = true
+        h.deps.store = object : TracePathPersisting by store {
+            override suspend fun appendTracePathRun(
+                path: com.meshcoreone.android.core.contracts.domain.EntityKey,
+                run: com.meshcoreone.android.core.model.TracePathRunDTO,
+            ) {
+                if (failAppend) throw java.io.IOException("partial path fixture")
+                store.appendTracePathRun(path, run)
+            }
+        }
+        mountSaveAction(h)
+        click(host.get().getString(C.contactsResultsSavePath))
+        click(host.get().getString(L.commonSave))
+        val partial = store.paths.values.single()
+        assertEquals(1, partial.runs.size)
+        assertTrue(texts().contains(host.get().getString(C.contactsTraceMapSaveFailedMessage)))
+        click(host.get().getString(L.commonCancel))
+        h.complete { store.deleteSavedTracePath(com.meshcoreone.android.core.contracts.domain.EntityKey(RADIO, partial.id)) }
+        host.get().runOnUiThread { h.holder.handleSavedPathDeleted(partial.id) }
+        settle()
+        assertTrue(store.paths.isEmpty())
+        assertTrue(h.state.canSavePath)
+        failAppend = false
+        scrollToSaveAction(h)
+        click(host.get().getString(C.contactsResultsSavePath))
+        click(host.get().getString(L.commonSave))
+        val saved = store.paths.values.single()
+        assertFalse(saved.id == partial.id, "An explicitly deleted partial path must not trap later Save attempts")
+        assertEquals(2, saved.runs.size)
+        assertEquals(saved, h.state.activeSavedPath)
+    }
+
     private fun heldBatchSaveAcrossResult(fail: Boolean) {
         val h = configured()
         val store = InMemoryTracePathStore { h.time.now() }

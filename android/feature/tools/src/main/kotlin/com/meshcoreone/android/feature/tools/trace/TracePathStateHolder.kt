@@ -382,6 +382,7 @@ class TracePathStateHolder(
     }
 
     fun handleSavedPathDeleted(id: UUID) {
+        if (batchSaveProgress?.path?.id == id) batchSaveProgress = null
         if (current.activeSavedPath?.id != id) return
         pathSelectionRevision += 1
         update { it.copy(activeSavedPath = null) }
@@ -437,7 +438,12 @@ class TracePathStateHolder(
             }
         }
         val key = EntityKey(radioId, progress.path.id)
-        val stored = checkNotNull(store.fetchSavedTracePath(key)) { "Created trace path is missing" }
+        suspend fun storedPath(): SavedTracePathDTO =
+            store.fetchSavedTracePath(key) ?: kotlin.run {
+                if (batchSaveProgress === progress) batchSaveProgress = null
+                error("Created trace path is missing")
+            }
+        val stored = storedPath()
         if (stored.name != name) store.updateSavedTracePathName(key, name)
         val persisted = stored.runs.mapTo(mutableSetOf()) { it.id }
         var acceptedResults = results
@@ -456,7 +462,7 @@ class TracePathStateHolder(
                     persisted += savedRun.id
                 }
             }
-            val updated = checkNotNull(store.fetchSavedTracePath(key)) { "Created trace path is missing" }
+            val updated = storedPath()
             val storedRunIds = updated.runs.mapTo(mutableSetOf()) { it.id }
             check(storedRunIds.containsAll(persisted)) { "Saved trace runs are missing" }
             if (isSameBatch()) {

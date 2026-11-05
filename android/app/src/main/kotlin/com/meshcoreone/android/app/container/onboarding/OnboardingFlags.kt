@@ -263,12 +263,8 @@ class WriteBehindOnboardingFlags(
             WriteBehindOnboardingFlags(
                 KEYS.mapValues { (_, key) -> store.get(key) }, scope,
                 persist = { name, value ->
-                    val key = KEYS[name] ?: throw IllegalArgumentException("Unknown onboarding flag: $name")
-                    if (name == OnboardingState.KEY_HAS_COMPLETED && value) {
-                        ShowOnceTips(store).completeOnboarding()
-                    } else {
-                        store.set(key, value)
-                    }
+                    require(name in KEYS) { "Unknown onboarding flag: $name" }
+                    ShowOnceTips(store).persistOnboardingFlag(value)
                 },
                 onFailure = { logger.log(Level.WARNING, "Failed to persist onboarding flag: ${it.message}") },
                 stageCompletion = { ShowOnceTips(store).stageOnboardingCompletion(it) },

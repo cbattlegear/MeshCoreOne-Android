@@ -483,7 +483,7 @@ internal class RecordingDirectAckAuthority(
             if (value.receipt.requestId in inconsistent) {
                 reasons += DirectAckRadioNonfailingReason.TARGET_CONFLICTING_PHYSICAL_EVIDENCE
             }
-            if (evidence.preauthorityHistoryUnknown && actualCodes.isNotEmpty()) {
+            if (evidence.preauthorityHistoryUnknown) {
                 reasons += DirectAckRadioNonfailingReason.PREAUTHORITY_HISTORY_UNKNOWN
             }
             if (actualCodes.isNotEmpty()) {

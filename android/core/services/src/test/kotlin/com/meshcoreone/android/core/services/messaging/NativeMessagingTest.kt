@@ -91,6 +91,37 @@ class NativeMessagingTest {
             assertEquals(3, h.sends(CommandCode.SEND_MESSAGE).size)
             h.close()
         },
+        native("conditionalAuthorityUnknownHistoryBlocksBothUnmarkedAndDefinitelyUnsentNewFailures") {
+            val h = Harness(this); h.start()
+            val authority = h.store.directAckAuthority
+            authority.preauthorityHistoryUnknown = true
+            val lease = assertIs<DirectAckActivationResult.Activated>(
+                authority.activateDirectAckSession(h.token, UUID.randomUUID())).lease
+            for (marked in listOf(false, true)) {
+                val message = h.message(status = MessageStatus.PENDING, text = "conditional no-write marked=$marked")
+                val intent = assertIs<DirectAckIntentResult.Captured>(authority.captureDirectAckIntent(
+                    lease, EntityKey(RADIO, message.id), UUID.randomUUID(), DirectAckMode.SEND, null))
+                val wireID = UUID.randomUUID()
+                val attempt = assertIs<DirectAckBeginResult.Begun>(
+                    authority.beginDirectAckAttemptRequiringEmissionTracking(intent.intent, wireID, 123u)).attempt
+                if (marked) {
+                    val emission = assertIs<DirectAckEmissionMarkResult.Marked>(
+                        authority.markDirectAckWireMayHaveWritten(attempt, wireID, UUID.randomUUID()))
+                    assertIs<DirectAckEmissionMutationResult.Applied>(authority.resolveDirectAckWireEmission(
+                        emission.handle, UUID.randomUUID(), DirectAckEmissionResolution.DefinitelyUnsent))
+                }
+                val before = assertIs<DirectAckRadioEvidenceObservation.Found>(
+                    authority.inspectDirectAckRadioEvidence(RADIO)).snapshot
+                val denied = assertIs<DirectAckRadioFailureResult.Nonfailing>(
+                    authority.recordDirectFailureExcludingRadioHistory(attempt))
+                assertEquals(setOf(DirectAckRadioNonfailingReason.PREAUTHORITY_HISTORY_UNKNOWN), denied.reasons.toSet())
+                assertEquals(message, h.stored(message.id))
+                assertEquals(before, assertIs<DirectAckRadioEvidenceObservation.Found>(
+                    authority.inspectDirectAckRadioEvidence(RADIO)).snapshot)
+            }
+            assertTrue(h.sends(CommandCode.SEND_MESSAGE).isEmpty())
+            h.close()
+        },
         native("preDispatchMarkerFailureLeavesNotificationReadyAndNeverCallsTransport") {
             val h = Harness(this); h.start()
             val receipt = NotificationActionReceipt()

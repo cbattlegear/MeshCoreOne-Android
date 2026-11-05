@@ -486,11 +486,10 @@ class MessagingRoomIntegrationTest {
             old.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().single {
                 it.operation == "ackFailureUncertain.$oldMessageID"
             }.cause)
-        assertTrue(DirectAckRadioNonfailingReason.TARGET_UNRESOLVED_PHYSICAL_EMISSION in oldUncertainty.reasons)
-        assertTrue(oldUncertainty.reasons.all { it in setOf(
+        assertEquals(setOf(
             DirectAckRadioNonfailingReason.TARGET_UNRESOLVED_PHYSICAL_EMISSION,
             DirectAckRadioNonfailingReason.PREAUTHORITY_HISTORY_UNKNOWN,
-        ) })
+        ), oldUncertainty.reasons.toSet())
         assertEquals(marked, assertIs<DirectAckRadioEvidenceObservation.Found>(
             store.inspectDirectAckRadioEvidence(radio)).snapshot.wires.single())
         store.close(); db.close()
@@ -724,11 +723,10 @@ class MessagingRoomIntegrationTest {
                     g.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().last {
                         it.operation == "ackFailureUncertain.${message.id}"
                     }.cause)
-                assertTrue(DirectAckRadioNonfailingReason.TARGET_UNRESOLVED_PHYSICAL_EMISSION in blocked.reasons)
-                assertTrue(blocked.reasons.all { it in setOf(
+                assertEquals(setOf(
                     DirectAckRadioNonfailingReason.TARGET_UNRESOLVED_PHYSICAL_EMISSION,
                     DirectAckRadioNonfailingReason.PREAUTHORITY_HISTORY_UNKNOWN,
-                ) })
+                ), blocked.reasons.toSet())
                 assertTrue(completedStatuses(g, events).none { it is MessageStatusEvent.Failed })
             } else {
                 // This fault is before the persisted physical marker, not a DeviceError no-write attestation.
@@ -1057,6 +1055,127 @@ class MessagingRoomIntegrationTest {
         current.session.stop(); current.scope.cancel()
     }
 
+    @Test fun realFailureAuthorityStorageErrorStillMakesTeardownIncompleteAlongsideExpectedUncertainty() = runTest(scheduler) {
+        seed()
+        val actual = store
+        val fault = PersistenceStoreException(PersistenceStoreError.SaveFailed("failure authority unavailable"))
+        var blockedID: UUID? = null
+        val boundary = object : DirectRoles(actual) {
+            override suspend fun recordDirectFailureExcludingRadioHistory(
+                attempt: DirectAckAttempt,
+            ): DirectAckRadioFailureResult {
+                if (attemptKey(attempt).id == blockedID) throw fault
+                return actual.recordDirectFailureExcludingRadioHistory(attempt)
+            }
+        }
+        val current = RadioGeneration(164, boundary)
+        current.firmware.acknowledge = false
+        current.start()
+        val unavailable = current.service.sendDirectMessage("real storage failure", contact)
+        val uncertain = current.service.sendDirectMessage("expected history uncertainty", contact)
+        blockedID = unavailable.id
+        wallOffsetMillis = 60_000
+        current.service.checkExpiredAcks()
+        assertEquals(unavailable, store.fetchMessage(EntityKey(radio, unavailable.id)))
+        assertEquals(uncertain, store.fetchMessage(EntityKey(radio, uncertain.id)))
+        assertEquals(1, current.service.pendingAckCount)
+        assertTrue(current.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+            it.operation == "ackExpiry.${unavailable.id}" && it.cause === fault
+        })
+        assertTrue(current.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+            it.operation == "ackFailureUncertain.${uncertain.id}" &&
+                (it.cause as? DirectAckFailureNonsettlementException)?.reasons?.contains(
+                    DirectAckRadioNonfailingReason.PREAUTHORITY_HISTORY_UNKNOWN) == true
+        })
+        assertTrue(current.queue.shutdown().isComplete)
+        val report = current.service.close()
+        assertFalse(report.isComplete)
+        assertTrue(report.issues.isNotEmpty())
+        assertTrue(report.issues.all { it.stage == LifecycleStage.STOP_SERVICES && it.cause === fault })
+        assertSame(report, current.service.close())
+        assertEquals(2, current.firmware.sent().size)
+        assertEquals(unavailable, store.fetchMessage(EntityKey(radio, unavailable.id)))
+        assertEquals(uncertain, store.fetchMessage(EntityKey(radio, uncertain.id)))
+        current.session.stop(); current.scope.cancel()
+    }
+
+    @Test fun differentContactsWithSameSenderTimestampAndTextRetainDeterministicCollisionAlongsideUnknownHistory() = runTest(scheduler) {
+        seed()
+        val secondContact = ContactDTO(radioId = radio, publicKey = Bytes(ByteArray(32) { 0x33 }),
+            name = "Different recipient", lastHeardTimestamp = 0u)
+        store.saveContact(secondContact)
+        assertNotEquals(contact.id, secondContact.id)
+        val text = "identical sender timestamp text and attempt"
+        val old = RadioGeneration(165)
+        old.firmware.acknowledge = false
+        old.start()
+        val first = old.service.sendDirectMessage(text, contact)
+        val code = assertNotNull(old.firmware.lastAck)
+        assertEquals(1, old.firmware.sent().size)
+        assertTrue(old.queue.shutdown().isComplete)
+        assertTrue(old.service.close().isComplete)
+        old.session.stop(); old.scope.cancel()
+
+        val current = RadioGeneration(166)
+        current.firmware.acknowledge = false
+        current.start(); current.service.startEventMonitoring()
+        val events = current.service.statusEvents()
+        try {
+            assertNull(current.firmware.acceptedAck)
+            val second = current.service.sendDirectMessage(text, secondContact)
+            assertNotEquals(first.id, second.id)
+            assertEquals(first.timestamp, second.timestamp)
+            assertEquals(first.ackCode, second.ackCode)
+            assertEquals(code, current.firmware.lastAck)
+            val firstPacket = old.firmware.sent().single()
+            val secondPacket = current.firmware.sent().single()
+            assertEquals(0u.toUByte(), firstPacket[2])
+            assertEquals(firstPacket[2], secondPacket[2])
+            assertEquals(firstPacket.readUInt32LE(3), secondPacket.readUInt32LE(3))
+            assertEquals(contact.publicKey.prefix(6), firstPacket.slice(7, 13))
+            assertEquals(secondContact.publicKey.prefix(6), secondPacket.slice(7, 13))
+            assertNotEquals(firstPacket.slice(7, 13), secondPacket.slice(7, 13))
+            assertEquals(Bytes.utf8(text), firstPacket.slice(13, firstPacket.size))
+            assertEquals(firstPacket.slice(13, firstPacket.size), secondPacket.slice(13, secondPacket.size))
+            val history = assertIs<DirectAckRadioEvidenceObservation.Found>(
+                store.inspectDirectAckRadioEvidence(radio)).snapshot
+            assertTrue(history.preauthorityHistoryUnknown)
+            assertEquals(2, history.wires.size)
+            assertEquals(2, history.wires.map { it.claimRequestId }.toSet().size)
+            assertTrue(history.wires.all { it.outcome == DirectAckRadioWireOutcome.Accepted(requireNotNull(first.ackCode)) })
+            assertEquals(1, history.wires.map { it.predictedAckCode }.toSet().size)
+            current.firmware.pushAck(code, 777u); runCurrent()
+            val ackDenial = assertIs<DirectAckNonsettlementException>(
+                current.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().single {
+                    it.operation == "ackAmbiguous.${second.id}"
+                }.cause)
+            assertTrue(DirectAckRadioNonsettlingReason.KNOWN_OTHER_CLAIM_CODE in ackDenial.reasons)
+            assertTrue(DirectAckRadioNonsettlingReason.PREAUTHORITY_HISTORY_UNKNOWN in ackDenial.reasons)
+            wallOffsetMillis = 60_000
+            current.service.checkExpiredAcks(); runCurrent()
+            val failureDenial = assertIs<DirectAckFailureNonsettlementException>(
+                current.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().last {
+                    it.operation == "ackFailureUncertain.${second.id}"
+                }.cause)
+            assertTrue(DirectAckRadioNonfailingReason.KNOWN_OTHER_CLAIM_CODE in failureDenial.reasons)
+            assertTrue(DirectAckRadioNonfailingReason.PREAUTHORITY_HISTORY_UNKNOWN in failureDenial.reasons)
+            assertEquals(first, store.fetchMessage(EntityKey(radio, first.id)))
+            assertEquals(second, store.fetchMessage(EntityKey(radio, second.id)))
+            assertEquals(MessageStatus.SENT, second.status)
+            assertNull(second.roundTripTime)
+            assertEquals(history, assertIs<DirectAckRadioEvidenceObservation.Found>(
+                store.inspectDirectAckRadioEvidence(radio)).snapshot)
+            assertTrue(completedStatuses(current, events).none {
+                it is MessageStatusEvent.Failed ||
+                    it is MessageStatusEvent.StatusResolved && it.status == MessageStatus.DELIVERED
+            })
+            assertEquals(1, old.firmware.sent().size)
+            assertEquals(1, current.firmware.sent().size)
+            assertTrue(current.queue.shutdown().isComplete)
+            assertTrue(current.service.close().isComplete)
+        } finally { events.close(); current.stop() }
+    }
+
     @Test fun migratedRetainedPreauthoritySendCannotDeliverANewActualClaimFromItsDelayedAckAfterReopen() = runTest(scheduler) {
         preauthorityPhysicalSendAcrossMigration(deleted = false)
     }
@@ -1256,6 +1375,71 @@ class MessagingRoomIntegrationTest {
         assertTrue(current.queue.shutdown().isComplete)
         assertTrue(current.service.close().isComplete)
         current.session.stop(); current.scope.cancel()
+    }
+
+    @Test fun heldChannelFailureReadCannotFailADirectReplacementAtTheSameKey() = runTest(scheduler) {
+        channelFailureCannotTargetDirectReplacement(afterWrite = false)
+    }
+
+    @Test fun heldCommittedChannelFailureCannotPublishFailedForADirectReplacementAtTheSameKey() = runTest(scheduler) {
+        channelFailureCannotTargetDirectReplacement(afterWrite = true)
+    }
+
+    private suspend fun TestScope.channelFailureCannotTargetDirectReplacement(afterWrite: Boolean) {
+        seed()
+        val actual = store
+        val entered = CompletableDeferred<MessageDTO>()
+        val release = CompletableDeferred<Unit>()
+        var channelReads = 0
+        val boundary = object : DirectRoles(actual) {
+            override suspend fun fetchMessage(key: EntityKey): MessageDTO? {
+                val row = actual.fetchMessage(key)
+                if (!afterWrite && row?.channelIndex != null && ++channelReads == 2) {
+                    entered.complete(row)
+                    release.await()
+                }
+                return row
+            }
+            override suspend fun updateMessageStatusUnlessDelivered(key: EntityKey, status: MessageStatus): Boolean {
+                val changed = actual.updateMessageStatusUnlessDelivered(key, status)
+                if (afterWrite && status == MessageStatus.FAILED && changed) {
+                    entered.complete(assertNotNull(actual.fetchMessage(key)))
+                    release.await()
+                }
+                return changed
+            }
+        }
+        val current = RadioGeneration(167, boundary,
+            config = MessageServiceConfig(poolBackoff = PoolBackoffConfig(attemptCap = 0)))
+        current.start(); current.firmware.error = 2u
+        val events = current.service.statusEvents()
+        val sending = backgroundScope.async {
+            assertFailsWith<MessageServiceException> {
+                current.service.sendChannelMessage("original channel failure", 0u, radio)
+            }
+        }
+        try {
+            val original = entered.await()
+            val key = EntityKey(radio, original.id)
+            actual.deleteMessage(key)
+            val replacement = original.copy(contactID = contact.id, channelIndex = null,
+                text = "independent unproved direct replacement", status = MessageStatus.PENDING,
+                ackCode = null, roundTripTime = null)
+            actual.saveMessage(replacement)
+            release.complete(Unit)
+            val failure = sending.await()
+            assertEquals(2u.toUByte(),
+                assertIs<MeshCoreException.DeviceError>(assertIs<MessageServiceError.SessionError>(failure.error).underlying).code)
+            assertEquals(replacement, actual.fetchMessage(key))
+            assertTrue(completedStatuses(current, events).none { it is MessageStatusEvent.Failed })
+            assertEquals(1, current.firmware.channelSent().size)
+            assertTrue(current.firmware.sent().isEmpty())
+        } finally {
+            withContext(NonCancellable) {
+                release.complete(Unit)
+                sending.cancelAndJoin(); events.close(); current.stop()
+            }
+        }
     }
 
     @Test fun channelFailureStillUsesItsOwnGenericFailedPathWithoutDirectPreclaimInference() = runTest(scheduler) {

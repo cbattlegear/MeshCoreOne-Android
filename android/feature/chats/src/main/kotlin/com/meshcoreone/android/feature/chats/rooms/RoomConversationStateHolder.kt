@@ -126,7 +126,7 @@ class RoomConversationStateHolder(
                 }
                 dependencies.data.markAsRead(session)
                 dependencies.data.markFailedSendsSeen(session)
-                dependencies.removeDeliveredNotifications(session)
+                // A mounted read is not a durable OPEN receipt, so retain content taps for retry.
                 dependencies.updateBadgeCount()
                 dependencies.conversationsChanged()
             }

@@ -528,9 +528,18 @@ class ChatMapPreviewTest : RoomProcessTest() {
             storage.preferences.snapshot(), scope, previews)
         val h = ContainerHarness(this, store, chatContent = content)
         try { Fixture(context, controller.get(), storage, scope, previews, content, h, requests).block() }
-        catch (failure: AssertionError) {
+        catch (failure: Throwable) {
+            if (failure !is AssertionError && failure !is ComposeTimeoutException) throw failure
             observe("assertion-failed|requests=${requests.size}")
+            fun attachObservations(label: String) {
+                val stages = synchronized(observations) { observations.toList() }
+                failure.addSuppressed(IllegalStateException(
+                    "WP307_MAP_STAGE|${diagnosticTestName.methodName}|sdk=${Build.VERSION.SDK_INT}|" +
+                        "$label (sequential, not atomic):\n" + stages.joinToString("\n"),
+                ))
+            }
             try {
+                attachObservations("through-failure")
                 var previousObservation: String? = null
                 compose.waitUntil(10_000) {
                     val pins = compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().size
@@ -545,8 +554,11 @@ class ChatMapPreviewTest : RoomProcessTest() {
                     }
                     requests.size >= 2 && pins > 0
                 }
+                attachObservations("post-failure-raced")
             } catch (diagnosticFailure: Throwable) {
                 failure.addSuppressed(diagnosticFailure)
+                try { attachObservations("post-failure-raced") }
+                catch (traceFailure: Throwable) { failure.addSuppressed(traceFailure) }
             }
             throw failure
         }

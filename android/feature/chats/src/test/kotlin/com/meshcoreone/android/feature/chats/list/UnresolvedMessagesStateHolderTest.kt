@@ -74,7 +74,7 @@ class UnresolvedMessagesStateHolderTest {
         kotlinx.coroutines.yield()
         assertTrue(holder.state.value.isLoading)
         gate.complete(Unit); loading.join()
-        val failure = IllegalStateException("controlled disk read")
+        val failure: Throwable = IllegalStateException("controlled disk read")
         data.unprovedRead = { _, _, _ -> throw failure }
         holder.refresh()
         assertTrue(holder.state.value.loadFailed)

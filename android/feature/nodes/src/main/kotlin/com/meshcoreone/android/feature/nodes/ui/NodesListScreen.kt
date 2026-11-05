@@ -74,6 +74,7 @@ import com.meshcoreone.android.feature.nodes.contacts.ContactsStateHolder
 import com.meshcoreone.android.feature.nodes.contacts.RowActionEdge
 import com.meshcoreone.android.feature.nodes.contacts.RowActionKind
 import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
+import com.meshcoreone.android.feature.nodes.deps.NodesConnectionSnapshot
 import com.meshcoreone.android.feature.nodes.deps.ensureContactConnection
 import com.meshcoreone.android.feature.nodes.model.NodeSegment
 import com.meshcoreone.android.feature.nodes.model.NodeSortOrder
@@ -90,8 +91,14 @@ internal fun NodesListScreen(
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
-    val radioId = dependencies.session.currentRadioId()
-    val connection = dependencies.session.connectionIdentity()
+    val binding by remember(dependencies) { dependencies.session.connectionSnapshots() }
+        .collectAsStateWithLifecycle(
+            initialValue = NodesConnectionSnapshot(
+                dependencies.session.currentRadioId(), dependencies.session.connectionIdentity(),
+            ),
+        )
+    val radioId = binding.radioId
+    val connection = binding.identity
     val holder = remember(dependencies, radioId) { ContactsStateHolder(dependencies, scope) }
     val state by holder.state.collectAsStateWithLifecycle()
     var search by remember { mutableStateOf("") }

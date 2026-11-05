@@ -20,6 +20,7 @@ import kotlin.time.Duration
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
 
 /**
  * A registered event stream: registration happens when the subscription is created, so events
@@ -96,12 +97,18 @@ interface NodesNotificationCleanup {
     suspend fun updateBadgeCount()
 }
 
+/** Radio-owned list identity and graph-owned interaction lifetime, published together to mounted consumers. */
+data class NodesConnectionSnapshot(val radioId: RadioId?, val identity: Any?)
+
 /**
  * Live connection facts from the app graph (`AppState`). Every provider is re-read at its point of
  * use, so a disconnect between actions is observed, never a stale snapshot; `null` services mean
  * disconnected.
  */
 interface NodesSession {
+    /** Static sessions emit once; mutable live adapters must emit on radio or graph replacement. */
+    fun connectionSnapshots(): Flow<NodesConnectionSnapshot> =
+        flowOf(NodesConnectionSnapshot(currentRadioId(), connectionIdentity()))
     /** Stable identity of the live service graph; changes even when reconnecting the same radio. */
     fun connectionIdentity(): Any? = contactService()
     fun connectionState(): DeviceConnectionState

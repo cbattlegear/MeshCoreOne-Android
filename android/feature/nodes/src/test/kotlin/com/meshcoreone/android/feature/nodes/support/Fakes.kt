@@ -19,6 +19,7 @@ import com.meshcoreone.android.feature.nodes.deps.NodesAdvertEvent
 import com.meshcoreone.android.feature.nodes.deps.NodesAdvertisementService
 import com.meshcoreone.android.feature.nodes.deps.NodesContactService
 import com.meshcoreone.android.feature.nodes.deps.NodesContactFailure
+import com.meshcoreone.android.feature.nodes.deps.NodesConnectionSnapshot
 import com.meshcoreone.android.feature.nodes.deps.NodesDataStore
 import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
 import com.meshcoreone.android.feature.nodes.deps.NodesMessage
@@ -35,6 +36,7 @@ import java.util.UUID
 import kotlin.time.Duration
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 
 /** Multicast broadcaster: subscribers register when [subscribe] is called. */
@@ -203,15 +205,29 @@ internal class FakeNotificationCleanup : NodesNotificationCleanup {
 
 /** Mutable app-graph facts; null services model a disconnected radio. */
 internal class FakeSession : NodesSession {
+    private val connection = MutableStateFlow(NodesConnectionSnapshot(null, null))
+    override fun connectionSnapshots() = connection
     var state: DeviceConnectionState = DeviceConnectionState.READY
     var device: DeviceDTO? = null
     var radioId: RadioId? = null
+        set(value) {
+            field = value
+            publishConnection()
+        }
     var offlineStore: NodesDataStore? = null
     var servicesStore: NodesDataStore? = null
     var contacts: NodesContactService? = null
+        set(value) {
+            field = value
+            publishConnection()
+        }
     var adverts: NodesAdvertisementService? = null
     var trace: NodesTraceService? = null
     var notifications: NodesNotificationCleanup? = null
+
+    private fun publishConnection() {
+        connection.value = NodesConnectionSnapshot(radioId, contacts)
+    }
 
     override fun connectionState() = state
     override fun connectedDevice() = device

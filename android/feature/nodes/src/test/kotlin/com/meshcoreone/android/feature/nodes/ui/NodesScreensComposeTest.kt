@@ -604,8 +604,7 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
             val admitted = Fixtures.contact(radioId = radio, name = "Admitted")
             harness.contactService.addBehavior = { _, _ -> }
             harness.contactService.getContactBehavior = { _, _ -> admitted }
-            val inset = mutableStateOf(0)
-            mount { NodesListScreen(harness.dependencies, NodesNavigation.NONE, Modifier.padding(inset.value.dp)) }
+            mount { NodesListScreen(harness.dependencies, NodesNavigation.NONE) }
             val context = controller.get()
             click(awaitAction(context.getString(C.contactsListAddContact)))
             val fields = allSemanticsNodes().filter { it.config.contains(SemanticsActions.SetText) }
@@ -632,7 +631,6 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
             harness.session.device = replacement.session.device
             harness.session.servicesStore = replacement.store
             harness.session.offlineStore = replacement.store
-            controller.get().runOnUiThread { inset.value = 1 }
             awaitCondition { actionNode(syncLabel)?.config?.contains(SemanticsProperties.Disabled) == false }
             awaitText(admitted.name)
             click(awaitAction(syncLabel))
@@ -662,8 +660,7 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
                 override fun openContact(contact: ContactDTO) { opened += contact }
                 override fun openChat(contact: ContactDTO) { chats += contact }
             }
-            val inset = mutableStateOf(0)
-            mount { NodesListScreen(harness.dependencies, navigation, Modifier.padding(inset.value.dp)) }
+            mount { NodesListScreen(harness.dependencies, navigation) }
             val oldOpen = checkNotNull(awaitAction(old.name).config[SemanticsActions.OnClick].action)
             val context = controller.get()
             val action = context.getString(if (delete) C.contactsCommonDelete else C.contactsDetailSendMessage)
@@ -685,9 +682,11 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
             harness.session.adverts = replacement.adverts
             harness.session.offlineStore = replacement.store
             harness.session.servicesStore = replacement.store
+            awaitCondition {
+                ShadowDialog.getLatestDialog()?.isShowing != true &&
+                    actionNode(context.getString(C.contactsListSyncNodes))?.config?.contains(SemanticsProperties.Disabled) == false
+            }
             menuOpen = false
-            controller.get().runOnUiThread { inset.value = 1 }
-            awaitCondition { ShadowDialog.getLatestDialog()?.isShowing != true }
             assertTrue(actionNode(action) == null, "The old menu must retire without selecting an item")
             controller.get().runOnUiThread {
                 assertTrue(oldMenuButton.invoke())

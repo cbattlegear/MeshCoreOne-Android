@@ -97,6 +97,16 @@ emits progress or fails ordinarily, prohibit any A-driven read through B and the
 and rebind effects while A is held and later fails. It requires fresh B Sync without losing the
 stored DTO admitted by the actual manual-add consumer.
 
+The mounted list lifecycle-collects radio/graph snapshots rather than depending on an unrelated
+recomposition to discover a changed provider. The App adapter observes registry publication and
+withdrawal directly alongside existing App state signals. The registry support edit only exposes
+its existing serialized current-graph value as a read-only StateFlow; factory creation, retirement,
+accounting and stale-withdrawal guards remain unchanged. Trusted `reviewed-support-consumer` and
+`reviewed-support-test` admission covers this directly necessary adapter/registry support and the
+additional observations in `FactoryPublicationIntegrationTest`. The existing failed-factory and
+successful-successor expectations remain intact. Menu, confirmation and held-sync replacement
+controls no longer mutate padding or any unrelated Compose state to force a rebind.
+
 Both `ContactsImmediateAdmissionApi31ComposeTest` and
 `ContactsImmediateAdmissionApi37ComposeTest` inherit six mounted tests:
 

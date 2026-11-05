@@ -1,4 +1,5 @@
 // AndroidOnly: WP-303 Real factory publication cannot resurrect a graph retired during its created callback.
+// AndroidOnly: WP-311 Nodes observes actual registry publication and withdrawal without unrelated UI state changes.
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
@@ -16,6 +17,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.CoroutineStart
+import com.meshcoreone.android.feature.nodes.deps.NodesConnectionSnapshot
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
@@ -54,6 +58,10 @@ class FactoryPublicationIntegrationTest : RoomProcessTest() {
                 if (successorFails) radio.connectFailure = unavailable
                 successorAllocated.complete(Unit)
             }
+            val observed = mutableListOf<NodesConnectionSnapshot>()
+            backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                h.container.nodesFeature.session.connectionSnapshots().collect { observed += it }
+            }
         }
         try {
             val first = backgroundScope.async(Dispatchers.Default) {
@@ -80,6 +88,7 @@ class FactoryPublicationIntegrationTest : RoomProcessTest() {
             successorAllocated.await()
             assertIs<CancellationException>(first.await(), "The superseded connect must not succeed")
             assertNull(h.sessions.current, "Returning from the held callback cannot republish the retired graph")
+            assertTrue(observed.none { it.identity === retired }, "Nodes must not observe a retired factory graph")
             assertEquals(1, h.sessions.created)
             assertEquals(1, h.sessions.tornDown)
             assertEquals(0, h.sessions.outstanding)
@@ -99,6 +108,9 @@ class FactoryPublicationIntegrationTest : RoomProcessTest() {
                 assertNull(failure)
                 assertEquals(DeviceConnectionState.READY, h.manager.connectionState)
                 val live = assertNotNull(h.sessions.current)
+                h.eventually("nodes to observe registry publication without an unrelated UI change") {
+                    observed.lastOrNull()?.identity === live
+                }
                 assertFalse(live.isTornDown)
                 assertSame(live.token, h.manager.snapshot.value.token)
                 assertEquals(2, h.sessions.created)
@@ -111,6 +123,9 @@ class FactoryPublicationIntegrationTest : RoomProcessTest() {
             h.container.close()
         }
         assertNull(h.sessions.current)
+        h.eventually("nodes to observe registry withdrawal") {
+            observed.isNotEmpty() && observed.last().identity == null
+        }
         assertEquals(0, h.sessions.outstanding)
         assertTrue(h.lifecycle.created.all { it.isTornDown && it.liveJobCount == 0 })
         assertTrue(h.links.radios.all { it.readers == 0 && !it.connected })

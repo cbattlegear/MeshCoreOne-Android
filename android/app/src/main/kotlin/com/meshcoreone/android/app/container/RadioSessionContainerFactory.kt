@@ -1,4 +1,5 @@
 // AndroidOnly: WP-303 The runtime service factory: one graph per connection generation, built only after its prerequisites exist.
+// AndroidOnly: WP-311 Observable registry publication retires mounted contact interactions on quiet graph replacement.
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.runtime.FactoryOwnership
@@ -7,6 +8,9 @@ import com.meshcoreone.android.core.runtime.RuntimeServiceFactory
 import com.meshcoreone.android.core.runtime.RuntimeServiceInputs
 import com.meshcoreone.android.core.runtime.RuntimeServices
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
  * Creates a [RadioSessionContainer] for each generation the runtime connection manager starts. The runtime calls it
@@ -58,11 +62,12 @@ class RadioSessionContainerFactory(
  */
 class SessionRegistry {
     private val lock = Any()
-    private var live: RadioSessionContainer? = null
+    private val live = MutableStateFlow<RadioSessionContainer?>(null)
     private var createdCount = 0
     private var tornDownCount = 0
 
-    val current: RadioSessionContainer? get() = synchronized(lock) { live }
+    val current: RadioSessionContainer? get() = synchronized(lock) { live.value }
+    val currentSessions: StateFlow<RadioSessionContainer?> = live.asStateFlow()
 
     /** Containers created since process start (leak accounting). */
     val created: Int get() = synchronized(lock) { createdCount }
@@ -76,11 +81,11 @@ class SessionRegistry {
         // Teardown can finish while the factory's created callback is still running.
         // Serialize this monotonic retirement check with withdraw so it cannot be undone by late publication.
         if (container.isTornDown) throw ConnectionError.FactoryOwnershipViolation()
-        live = container
+        live.value = container
     }
 
     fun withdraw(container: RadioSessionContainer) = synchronized(lock) {
         tornDownCount += 1
-        if (live === container) live = null
+        if (live.value === container) live.value = null
     }
 }

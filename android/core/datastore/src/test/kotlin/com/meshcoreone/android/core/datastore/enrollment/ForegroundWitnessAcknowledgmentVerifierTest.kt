@@ -16,6 +16,7 @@ import javax.crypto.Mac
 import javax.crypto.SecretKey
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlinx.coroutines.Dispatchers
@@ -430,6 +431,25 @@ class ForegroundWitnessAcknowledgmentVerifierTest {
                 }
             }
             assertEquals(1, f.authentication.creates)
+        }
+    }
+
+    @Test
+    fun unavailablePlatformKeyStoreLookupIsATypedReadFailure() {
+        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        org.robolectric.Shadows.shadowOf(context.getSystemService(android.os.UserManager::class.java))
+            .setUserUnlocked(true)
+        org.robolectric.Shadows.shadowOf(context.getSystemService(android.app.KeyguardManager::class.java))
+            .setIsDeviceLocked(false)
+        for ((failure, problem) in listOf(
+            java.security.KeyStoreException("unavailable") to StorageProblem.ProviderFailure,
+            java.security.ProviderException("unavailable") to StorageProblem.ProviderFailure,
+            IOException("unavailable") to StorageProblem.IoFailure,
+        )) {
+            val authentication = AndroidAcknowledgmentAuthentication(context) { throw failure }
+            val reported = assertFailsWith<StorageFailure> { authentication.hasKey() }
+            assertEquals(problem, reported.problem)
+            assertEquals(StorageOperation.READ, reported.operation)
         }
     }
 

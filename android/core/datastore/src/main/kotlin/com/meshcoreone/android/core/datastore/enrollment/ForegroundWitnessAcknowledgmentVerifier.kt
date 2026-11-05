@@ -725,14 +725,19 @@ internal interface AcknowledgmentAuthentication {
     fun authenticate(bytes: ByteArray): ByteArray
 }
 
-private class AndroidAcknowledgmentAuthentication(context: Context) : AcknowledgmentAuthentication {
+internal class AndroidAcknowledgmentAuthentication(
+    context: Context,
+    private val keyStore: () -> KeyStore = {
+        KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+    },
+) : AcknowledgmentAuthentication {
     private val access = AndroidStorageAccess(context, secrets = true)
 
     override fun requireAccessible() = access.requireAccessible(StorageOperation.READ)
 
-    override fun hasKey(): Boolean {
+    override fun hasKey(): Boolean = platform(StorageOperation.READ) {
         requireAccessible()
-        return keyStore().containsAlias(KEY_ALIAS)
+        keyStore().containsAlias(KEY_ALIAS)
     }
 
     override fun createKey() {
@@ -766,8 +771,6 @@ private class AndroidAcknowledgmentAuthentication(context: Context) : Acknowledg
             doFinal(bytes)
         }
     }
-
-    private fun keyStore(): KeyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
 
     private inline fun <T> platform(operation: StorageOperation, action: () -> T): T = try {
         action()

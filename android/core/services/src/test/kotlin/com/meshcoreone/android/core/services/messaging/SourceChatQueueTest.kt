@@ -22,8 +22,11 @@ class SourceChatQueueTest {
         original("ChatSendQueueServiceTests", "hydrate replays persisted PendingSend rows and drains them") {
             val h = Harness(this); val dto = PendingSendDTO.fromEnvelope(DirectMessageEnvelope(UUID.randomUUID(), UUID.randomUUID()), RADIO)
             h.store.insertPendingSendAssigningSequence(dto); val q = h.queue()
+            val retained = h.store.fetchPendingSends(RADIO)
             q.hydrate(); runCurrent(); q.awaitDrainCompletion()
-            assertTrue(h.store.fetchPendingSends(RADIO).isEmpty()); q.shutdown(); h.close()
+            // Missing-contact safety adaptation: an absent dispatch journal is not non-emission proof.
+            assertEquals(retained, h.store.fetchPendingSends(RADIO))
+            assertEquals(0, q.queuedEnvelopeCount); q.shutdown(); h.close()
         },
         original("ChatSendQueueServiceTests", "transient send error preserves the persisted row while parked on the trigger") {
             val h = failingDM(this); val m = h.message(MessageStatus.PENDING); h.pending(m); val q = h.queue()
@@ -41,8 +44,9 @@ class SourceChatQueueTest {
             val h = Harness(this)
             repeat(2) { h.store.insertPendingSendAssigningSequence(PendingSendDTO.fromEnvelope(DirectMessageEnvelope(UUID.randomUUID(), UUID.randomUUID()), RADIO)) }
             val foreign = PendingSendDTO.fromEnvelope(DirectMessageEnvelope(UUID.randomUUID(), UUID.randomUUID()), PEER_RADIO)
+            val retained = h.store.fetchPendingSends(RADIO)
             h.store.insertPendingSendAssigningSequence(foreign); val q = h.queue(); q.hydrate(); runCurrent(); q.awaitDrainCompletion()
-            assertTrue(h.store.fetchPendingSends(RADIO).isEmpty()); assertEquals(foreign.messageID, h.store.fetchPendingSends(PEER_RADIO).single().messageID)
+            assertEquals(retained, h.store.fetchPendingSends(RADIO)); assertEquals(foreign.messageID, h.store.fetchPendingSends(PEER_RADIO).single().messageID)
             q.shutdown(); h.close()
         },
         original("ChatSendQueueServiceTests", "hydrate fetch returns rows in sequence order") {
@@ -118,13 +122,15 @@ class SourceChatQueueTest {
         original("ChatSendQueueServiceTests", "hydrate runs once per service instance") {
             val h = Harness(this); val q = h.queue()
             h.store.insertPendingSendAssigningSequence(PendingSendDTO.fromEnvelope(DirectMessageEnvelope(UUID.randomUUID(), UUID.randomUUID()), RADIO))
-            q.hydrate(); runCurrent(); q.awaitDrainCompletion(); assertTrue(h.store.fetchPendingSends(RADIO).isEmpty())
+            val retained = h.store.fetchPendingSends(RADIO)
+            q.hydrate(); runCurrent(); q.awaitDrainCompletion(); assertEquals(retained, h.store.fetchPendingSends(RADIO))
             val reads = h.store.calls.count { it == "fetchPendingSends" }
             val kept = PendingSendDTO.fromEnvelope(DirectMessageEnvelope(UUID.randomUUID(), UUID.randomUUID()), RADIO)
             h.store.insertPendingSendAssigningSequence(kept); q.hydrate(); runCurrent()
             q.awaitDrainCompletion()
             assertEquals(reads, h.store.calls.count { it == "fetchPendingSends" })
-            assertEquals(kept.messageID, h.store.fetchPendingSends(RADIO).single().messageID); q.shutdown(); h.close()
+            assertEquals(retained.map { it.messageID } + kept.messageID,
+                h.store.fetchPendingSends(RADIO).map { it.messageID }); q.shutdown(); h.close()
         },
         original("ChatSendQueueServiceTests", "ChatSendQueueServiceError.notConnected description is non-empty") {
             val error = ChatSendQueueServiceException(ChatSendQueueServiceError.NotConnected)

@@ -8,7 +8,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
-    DirectAckAuthority, DirectPendingCompletionAuthority, DirectAckRadioExclusionAuthority {
+    DirectAckAuthority, DirectPendingCompletionAuthority, DirectAckRadioExclusionAuthority, DirectAckRadioFailureAuthority {
     private class Lease(val token: SessionToken, val requestID: UUID) : DirectAckLease
     private class Attempt(
         val lease: Lease,
@@ -44,6 +44,7 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
     private val emissions = mutableMapOf<UUID, Emission>()
     private val resolutions = mutableMapOf<Pair<UUID, UUID>, Pair<Emission, DirectAckEmissionResolution>>()
     private val trackedWires = mutableSetOf<Pair<UUID, UUID>>()
+    private val guardedFailures = mutableSetOf<UUID>()
     private val saturatedRadios = mutableSetOf<RadioId>()
     private val radioMutations = Mutex()
 
@@ -418,6 +419,75 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
         commit(value, requireNotNull(store.messages[value.receipt.key]).copy(status = MessageStatus.FAILED), DirectAckPhase.FAILED)
         afterFailure?.invoke(receipt(value))
         return DirectAckMutationResult.Applied(receipt(value))
+    }
+
+    override suspend fun recordDirectFailureExcludingRadioHistory(attempt: DirectAckAttempt): DirectAckRadioFailureResult {
+        val result = radioMutations.withLock {
+            val value = resolve(attempt)
+                ?: return@withLock DirectAckRadioFailureResult.Rejected(DirectAckRejection.INVALID_HANDLE)
+            if (value.receipt.delivery != null || value.receipt.initialStatus == MessageStatus.DELIVERED) {
+                return@withLock DirectAckRadioFailureResult.AlreadyDelivered(receipt(value))
+            }
+            if (value.receipt.requestId in guardedFailures) {
+                return@withLock DirectAckRadioFailureResult.AlreadyApplied(receipt(value))
+            }
+            rejection(value)?.let { return@withLock DirectAckRadioFailureResult.Rejected(it.reason) }
+            if (value.receipt.phase == DirectAckPhase.FAILED) {
+                return@withLock DirectAckRadioFailureResult.Rejected(DirectAckRejection.CONFLICT)
+            }
+            store.authorityAccess("updateMessageStatusUnlessDelivered")
+            rejection(value)?.let { return@withLock DirectAckRadioFailureResult.Rejected(it.reason) }
+            val evidence = radioEvidence(value.receipt.key.radioId, diagnostic = false)
+            val own = evidence.wires.filter { it.claimRequestId == value.receipt.requestId }
+            val reasons = linkedSetOf<DirectAckRadioNonfailingReason>()
+            own.forEach {
+                when (it.outcome) {
+                    DirectAckRadioWireOutcome.MayHaveWritten ->
+                        reasons += DirectAckRadioNonfailingReason.TARGET_UNRESOLVED_PHYSICAL_EMISSION
+                    is DirectAckRadioWireOutcome.Conflict ->
+                        reasons += DirectAckRadioNonfailingReason.TARGET_CONFLICTING_PHYSICAL_EVIDENCE
+                    DirectAckRadioWireOutcome.LegacyUnknown, is DirectAckRadioWireOutcome.LegacyAcceptedUnknown ->
+                        reasons += DirectAckRadioNonfailingReason.TARGET_UNTRACKED_LEGACY_ANCESTRY
+                    DirectAckRadioWireOutcome.DefinitelyUnsent, is DirectAckRadioWireOutcome.Accepted -> Unit
+                }
+            }
+            if (evidence.coverage == DirectAckRadioEvidenceCoverage.SATURATED) {
+                reasons += DirectAckRadioNonfailingReason.RADIO_HISTORY_SATURATED
+            }
+            val actualCodes = own.mapNotNull { (it.outcome as? DirectAckRadioWireOutcome.Accepted)?.ackCode }.toSet()
+            if (actualCodes.isNotEmpty()) {
+                evidence.wires.filter { it.claimRequestId != value.receipt.requestId }.forEach {
+                    if (it.outcome != DirectAckRadioWireOutcome.DefinitelyUnsent && it.predictedAckCode in actualCodes) {
+                        reasons += DirectAckRadioNonfailingReason.KNOWN_OTHER_CLAIM_CODE
+                    }
+                    when (val outcome = it.outcome) {
+                        DirectAckRadioWireOutcome.MayHaveWritten ->
+                            reasons += DirectAckRadioNonfailingReason.UNRESOLVED_OTHER_CLAIM_EMISSION
+                        is DirectAckRadioWireOutcome.Conflict -> {
+                            reasons += DirectAckRadioNonfailingReason.CONFLICTING_OTHER_CLAIM_EVIDENCE
+                            if (outcome.firstAcceptedAckCode?.let { code -> code in actualCodes } == true) {
+                                reasons += DirectAckRadioNonfailingReason.KNOWN_OTHER_CLAIM_CODE
+                            }
+                        }
+                        DirectAckRadioWireOutcome.LegacyUnknown ->
+                            reasons += DirectAckRadioNonfailingReason.UNTRACKED_OTHER_CLAIM_ANCESTRY
+                        is DirectAckRadioWireOutcome.LegacyAcceptedUnknown -> {
+                            reasons += DirectAckRadioNonfailingReason.UNTRACKED_OTHER_CLAIM_ANCESTRY
+                            if (outcome.ackCode in actualCodes) reasons += DirectAckRadioNonfailingReason.KNOWN_OTHER_CLAIM_CODE
+                        }
+                        is DirectAckRadioWireOutcome.Accepted ->
+                            if (outcome.ackCode in actualCodes) reasons += DirectAckRadioNonfailingReason.KNOWN_OTHER_CLAIM_CODE
+                        DirectAckRadioWireOutcome.DefinitelyUnsent -> Unit
+                    }
+                }
+            }
+            if (reasons.isNotEmpty()) return@withLock DirectAckRadioFailureResult.Nonfailing(reasons.snapshotSet())
+            commit(value, requireNotNull(store.messages[value.receipt.key]).copy(status = MessageStatus.FAILED), DirectAckPhase.FAILED)
+            guardedFailures += value.receipt.requestId
+            DirectAckRadioFailureResult.Applied(receipt(value))
+        }
+        if (result is DirectAckRadioFailureResult.Applied) afterFailure?.invoke(result.receipt)
+        return result
     }
 
     override suspend fun settleDirectAck(

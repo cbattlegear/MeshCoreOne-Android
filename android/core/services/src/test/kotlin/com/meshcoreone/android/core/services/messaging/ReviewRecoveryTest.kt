@@ -15,27 +15,35 @@ import org.junit.jupiter.api.TestFactory
 @OptIn(ExperimentalCoroutinesApi::class)
 class ReviewRecoveryTest {
     @TestFactory fun recovery() = listOf(
-        native("disconnect cancels an inline send but completes its persisted failed status") {
+        native("disconnect cancels an inline send but retains physical MAY as pending uncertainty") {
             val h = Harness(this); h.start(); h.transport.holdMessageReplies = true
             val send = backgroundScope.async { h.service.sendDirectMessage("inline at disconnect", h.contact) }
             runCurrent(); val message = h.store.messages.values.single()
             h.signals.set(null, DeviceConnectionState.DISCONNECTED)
             withTimeout(2000) { h.service.close() }
             assertFailsWith<CancellationException> { send.await() }
-            assertEquals(MessageStatus.FAILED, h.stored(message.id).status)
+            assertEquals(MessageStatus.PENDING, h.stored(message.id).status)
+            assertTrue(h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+                (it.cause as? DirectAckFailureNonsettlementException)?.reasons?.contains(
+                    DirectAckRadioNonfailingReason.TARGET_UNRESOLVED_PHYSICAL_EMISSION) == true
+            })
             assertEquals(0, h.service.pendingAckCount); assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
             assertNotNull(h.store.fetchContact(EntityKey(RADIO, CONTACT))); h.close()
         },
-        native("cancelling an inline backoff send fails its row rather than inventing a recoverable queue") {
+        native("cancelling an inline backoff send retains MAY without inventing a recoverable queue") {
             val h = Harness(this); h.start(); h.transport.directError = 3u
             val events = h.service.statusEvents()
             val send = backgroundScope.async { h.service.sendDirectMessage("inline cancellation", h.contact) }
             runCurrent(); val message = h.store.messages.values.single(); send.cancelAndJoin()
             advanceTimeBy(10_000); runCurrent()
-            assertEquals(MessageStatus.FAILED, h.stored(message.id).status)
+            assertEquals(MessageStatus.PENDING, h.stored(message.id).status)
             assertEquals(message.text, h.stored(message.id).text)
             assertTrue(h.store.fetchPendingSends(RADIO).isEmpty()); assertEquals(0, h.service.pendingAckCount)
-            assertEquals(listOf(MessageStatusEvent.Failed(message.id)), statuses(h.service, events))
+            assertTrue(statuses(h.service, events).isEmpty())
+            assertTrue(h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+                (it.cause as? DirectAckFailureNonsettlementException)?.reasons?.contains(
+                    DirectAckRadioNonfailingReason.TARGET_UNRESOLVED_PHYSICAL_EMISSION) == true
+            })
             assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size); h.close()
         },
         native("a durable inline DM or channel save completing at disconnect fails before any wire command") {

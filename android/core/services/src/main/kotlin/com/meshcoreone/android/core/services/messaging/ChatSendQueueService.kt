@@ -262,11 +262,8 @@ class ChatSendQueueService(
                     dataStore.fetchContact(key(envelope.contactID)).also { ownership.check("dm.contact") }
                 } catch (failure: PersistenceStoreException) { park(id, failure) }
                 if (contact == null) {
-                    dataStore.updateMessageStatusUnlessDelivered(key(id), MessageStatus.FAILED)
-                    ownership.check("dm.deletedContact")
-                    dataStore.deletePendingSendsForMessage(key(id))
-                    ownership.check("dm.deletedPending")
-                    complete(id)
+                    complete(id, clearProgress = false)
+                    record("preclaimUncertain.$id", DirectPreclaimFailureUncertaintyException(token, id))
                     return
                 }
                 val current = retained ?: run {
@@ -295,6 +292,7 @@ class ChatSendQueueService(
             ownership.check("dm.pendingDeleted")
             triggers.clear()
             complete(id)
+            recovered("preclaimUncertain.$id")
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: PersistenceStoreException) { park(id, failure) }
         catch (failure: MessageServiceException) {
@@ -401,7 +399,8 @@ class ChatSendQueueService(
         park(id, failure)
     }
 
-    private suspend fun terminalDM(failure: Exception, envelope: DirectMessageEnvelope) = terminal(failure, envelope.messageID)
+    private suspend fun terminalDM(failure: Exception, envelope: DirectMessageEnvelope) =
+        terminal(failure, envelope.messageID, direct = true)
     private suspend fun terminalChannel(failure: Exception, envelope: ChannelMessageEnvelope) {
         var completed = false
         try {
@@ -462,16 +461,26 @@ class ChatSendQueueService(
         observer(event)
     }
 
-    private suspend fun terminal(failure: Exception, id: UUID) {
+    private suspend fun terminal(failure: Exception, id: UUID, direct: Boolean = false) {
         record("terminal.$id", failure, retain = false)
         var deleted = false
         var failedPersisted = false
         try {
             ownership.check("terminalSend")
-            failedPersisted = dataStore.updateMessageStatusUnlessDelivered(key(id), MessageStatus.FAILED)
+            if (direct) {
+                val claimID = synchronized(lock) { directClaimIDs[id] }
+                    ?: throw PersistenceStoreException(PersistenceStoreError.SaveFailed("Direct terminal failure has no dispatch claim"))
+                if (!messageService.failQueuedDirectClaim(claimID, id)) {
+                    complete(id, clearProgress = false)
+                    return
+                }
+                failedPersisted = dataStore.fetchMessage(key(id))?.status == MessageStatus.FAILED
+            } else {
+                failedPersisted = dataStore.updateMessageStatusUnlessDelivered(key(id), MessageStatus.FAILED)
+            }
             ownership.check("terminalSend.saved")
             messageService.notifyMessageFailed(id)
-            dataStore.deletePendingSendsForMessage(key(id))
+            if (!direct) dataStore.deletePendingSendsForMessage(key(id))
             ownership.check("terminalSend.deleted")
             deleted = true
         } catch (storage: PersistenceStoreException) { record("terminalPersistence.$id", storage) }

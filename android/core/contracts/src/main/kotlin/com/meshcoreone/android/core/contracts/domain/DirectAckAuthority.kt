@@ -227,8 +227,10 @@ interface DirectAckAuthority {
     ): DirectAckMutationResult
 
     /**
-     * Bind the actual returned code to its registered wire request, adding rather than replacing
-     * predicted/prior codes and recording ACCEPTED phase without changing product message status.
+     * Bind the actual returned code to its registered wire request, retaining rather than deleting
+     * the predicted/prior codes in history and recording ACCEPTED phase without changing product
+     * message status. For this wire, once acceptedAckCode is present it supersedes its own prediction
+     * for ACK matching; the retained prediction is historical evidence, not settlement eligibility.
      * Retry PENDING/RETRYING remains unchanged; inline SENT promotion requires SendCompleted for
      * this exact accepted wire. Late acceptance may record binding history after own FAILED/DELIVERED,
      * but must not regress the message or restore mutation permission after invalidation.
@@ -249,11 +251,15 @@ interface DirectAckAuthority {
 
     /**
      * Atomic own SENT/FAILED (or pre-return registered predicted-code) delivery, with no intermediate
-     * public SENT promotion. Only registered predicted or accepted codes are eligible. Applied and
-     * AlreadyApplied carry DELIVERED history and its exact code/RTT/committed DTO. Exact tuple replay
-     * can report historical delivery without granting mutation or describing the current row;
-     * a different delivery tuple is CONFLICT. A RESEND of an initially DELIVERED row may commit its
-     * new registered wire tuple without ever downgrading that row's status.
+     * public SENT promotion. Each registered wire matches its accepted code when present, otherwise
+     * its prediction. Thus an unaccepted wire's prediction remains eligible before return, but its
+     * own prediction is superseded after acceptance; other registered wires remain independently
+     * eligible. This generic method does not check physical emissions or full radio history; the
+     * separate radio-exclusion API has stricter accepted-actual-only eligibility.
+     * Applied and AlreadyApplied carry DELIVERED history and its exact code/RTT/committed DTO. Exact
+     * tuple replay can report historical delivery without granting mutation or describing the current
+     * row; a different delivery tuple is CONFLICT. A RESEND of an initially DELIVERED row may commit
+     * its new registered wire tuple without ever downgrading that row's status.
      */
     suspend fun settleDirectAck(
         attempt: DirectAckAttempt,

@@ -278,8 +278,13 @@ class SourceSendTest {
         original("MessageServiceSendTests", "a genuine send exception still fails the DM through the outer catch") {
             val h = Harness(this, sessionTimeout = 10.0, contact = sourceContact()); h.start(); h.transport.mock.failSends(2)
             assertFailsWith<Exception> { h.service.sendMessageWithRetry("boom", h.contact) }
-            assertEquals(MessageStatus.FAILED, h.store.fetchMessages(EntityKey(RADIO, h.contact.id), 10, 0).first().status)
-            assertEquals(MessageStatus.FAILED, h.store.messages.values.single().status); h.close()
+            // The throwing contract is preserved; transport failure is not persisted non-emission proof.
+            assertEquals(MessageStatus.PENDING, h.store.fetchMessages(EntityKey(RADIO, h.contact.id), 10, 0).first().status)
+            assertEquals(MessageStatus.PENDING, h.store.messages.values.single().status)
+            assertTrue(h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+                (it.cause as? DirectAckFailureNonsettlementException)?.reasons?.contains(
+                    DirectAckRadioNonfailingReason.TARGET_UNRESOLVED_PHYSICAL_EMISSION) == true
+            }); h.close()
         },
         original("MessageServiceSendTests", "checkExpiredAcks cannot fail a DM while its retry loop is still inside waitForEvent") {
             val dispatcher = EventDispatcher()

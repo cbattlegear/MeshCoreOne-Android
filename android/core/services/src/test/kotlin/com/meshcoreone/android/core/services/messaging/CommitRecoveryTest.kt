@@ -452,7 +452,15 @@ class CommitRecoveryTest {
                 val receipt = NotificationActionReceipt()
                 assertFailsWith<MessageServiceException> { withContext(receipt) { destination.send(h.service) } }
                 assertEquals(NotificationActionReceipt.State.READY, receipt.state)
-                assertEquals(MessageStatus.FAILED, h.store.messages.values.single().status)
+                assertEquals(if (destination == Destination.DIRECT) MessageStatus.PENDING else MessageStatus.FAILED,
+                    h.store.messages.values.single().status)
+                if (destination == Destination.DIRECT) {
+                    // Receipt recovery policy is unchanged; raw DeviceError is not a physical journal attestation.
+                    assertTrue(h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+                        (it.cause as? DirectAckFailureNonsettlementException)?.reasons?.contains(
+                            DirectAckRadioNonfailingReason.TARGET_UNRESOLVED_PHYSICAL_EMISSION) == true
+                    })
+                }
                 assertFalse(receipt.preventsReplay); assertEquals(1, h.sends(destination.wire).size)
             },
             native("${destination}_teardownAfterObservedAcceptanceCannotMakeItUnsent") {

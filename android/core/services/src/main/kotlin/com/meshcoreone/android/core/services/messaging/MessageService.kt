@@ -58,6 +58,8 @@ class MessageService(
     private val channelTransmission: suspend (UByte, suspend () -> Unit) -> Unit = { _, transmit -> transmit() },
     private val directAckRadioExclusionAuthority: DirectAckRadioExclusionAuthority? =
         directAckAuthority as? DirectAckRadioExclusionAuthority ?: dataStore as? DirectAckRadioExclusionAuthority,
+    private val directAckRadioFailureAuthority: DirectAckRadioFailureAuthority? =
+        directAckAuthority as? DirectAckRadioFailureAuthority ?: dataStore as? DirectAckRadioFailureAuthority,
 ) : MessagingSendPort {
     init { require(localPublicKey.size == ProtocolLimits.PUBLIC_KEY_SIZE) }
     private val ownership = MessagingOwnership(token, scope, signals, reporter)
@@ -88,6 +90,7 @@ class MessageService(
         val bufferedAcknowledgements = mutableListOf<MeshAcknowledgement>()
         var acknowledgementBufferOverflow = false
         var nonsettlement: DirectAckNonsettlementException? = null
+        var failureNonsettlement: DirectAckFailureNonsettlementException? = null
     }
     private class AcceptedEmission(
         val handle: DirectAckEmissionHandle?,
@@ -154,6 +157,14 @@ class MessageService(
 
     private fun radioAuthority(): DirectAckRadioExclusionAuthority =
         directAckRadioExclusionAuthority ?: throw authorityFailure("radio exclusion capability unavailable")
+
+    private fun failureAuthority(): DirectAckRadioFailureAuthority =
+        directAckRadioFailureAuthority ?: throw authorityFailure("radio failure capability unavailable")
+
+    private fun requireDirectDispatchAuthorities() {
+        radioAuthority()
+        failureAuthority()
+    }
 
     private fun mutationReceipt(result: DirectAckMutationResult): DirectAckReceipt =
         when (result) {
@@ -227,6 +238,7 @@ class MessageService(
         intent: DirectAckIntent,
         correlateResponses: Boolean = true,
     ): Pair<DirectAuthorityState, UUID> {
+        requireDirectDispatchAuthorities()
         val prior = synchronized(lock) { directAuthorities[id] }
         if (prior?.requestID == requestID) {
             val wireID = synchronized(lock) { prior.wires.getOrPut(wireIndex, UUID::randomUUID) }
@@ -854,6 +866,10 @@ class MessageService(
                         retainedFailures.remove("ackAmbiguous.$messageID")
                     }
                     it.nonsettlement = null
+                    if (retainedFailures["ackFailureUncertain.$messageID"] === it.failureNonsettlement) {
+                        retainedFailures.remove("ackFailureUncertain.$messageID")
+                    }
+                    it.failureNonsettlement = null
                 }
                 activeDirectClaims[messageID]?.takeIf { directAuthorities[messageID]?.attempt === tracking.authority }
                     ?.acknowledgement = ack
@@ -961,7 +977,7 @@ class MessageService(
                     maxOf(config.ackGiveUpWindow, current.timeout)) return@withLock
                 val wasFailed = dataStore.fetchMessage(key(current.messageID))?.status == MessageStatus.FAILED
                 ownership.check("expireAcknowledgement")
-                val changed = writeFailedStatus(current.messageID, wasFailed)
+                val changed = writeFailedStatus(current.messageID, wasFailed) == FailureWrite.CHANGED
                 ownership.check("expireAcknowledgement.saved")
                 acknowledgementArrived = settleFailedPendingAck(
                     current.messageID, changed, notify = true, retireDirectClaim = true,
@@ -987,7 +1003,7 @@ class MessageService(
                     if (pendingAck(id)?.isDelivered != false) return@withLock
                     val wasFailed = dataStore.fetchMessage(key(id))?.status == MessageStatus.FAILED
                     ownership.check("failAllPendingMessages.read")
-                    val changed = writeFailedStatus(id, wasFailed)
+                    val changed = writeFailedStatus(id, wasFailed) == FailureWrite.CHANGED
                     ownership.check("failAllPendingMessages.saved")
                     acknowledgementArrived = settleFailedPendingAck(
                         id, changed, notify = true, retireDirectClaim = true,
@@ -1048,35 +1064,70 @@ class MessageService(
         return acknowledgementArrived
     }
 
+    private enum class FailureWrite { CHANGED, UNCHANGED, UNCERTAIN, RETIRED }
+
+    internal suspend fun failQueuedDirectClaim(claimID: UUID, messageID: UUID): Boolean =
+        mutation(messageID).withLock {
+            ownership.check("failQueuedDirectClaim")
+            val state = synchronized(lock) {
+                directAuthorities[messageID]?.takeIf { it.requestID == claimID }
+            } ?: throw authorityFailure("queued direct failure lacks its current dispatch grant")
+            val row = dataStore.fetchMessage(key(messageID))
+            ownership.check("failQueuedDirectClaim.read")
+            val result = writeFailedStatus(messageID, row?.status == MessageStatus.FAILED, state.attempt)
+            if (result == FailureWrite.UNCERTAIN || result == FailureWrite.RETIRED) return@withLock false
+            val pendingID = synchronized(lock) {
+                directClaims[claimID]?.takeIf { it.messageID == messageID }?.pendingSendID
+            } ?: throw authorityFailure("queued direct failure lacks its pending incarnation")
+            completeDirectPending(claimID, messageID, pendingID)
+            true
+        }
+
     private suspend fun writeFailedStatus(
         messageID: UUID, wasFailed: Boolean, expectedAttempt: DirectAckAttempt? = null,
-    ): Boolean {
+    ): FailureWrite {
         val tracking = pendingAck(messageID)?.takeIf { expectedAttempt == null || it.authority === expectedAttempt }
         try {
             val attempt = expectedAttempt ?: tracking?.authority ?: synchronized(lock) {
                 if (tracking == null) directAuthorities[messageID]?.attempt else null
             }
-            if (synchronized(lock) {
-                directAuthorities[messageID]?.takeIf { it.attempt === attempt }?.nonsettlement != null
-            }) return false
             if (attempt == null && tracking == null) {
                 if (synchronized(lock) { messageID in directIntentMessages }) {
                     throw authorityFailure("dispatch intent has no failure grant")
                 }
-                return dataStore.updateMessageStatusUnlessDelivered(key(messageID), MessageStatus.FAILED)
+                return if (dataStore.updateMessageStatusUnlessDelivered(key(messageID), MessageStatus.FAILED)) {
+                    FailureWrite.CHANGED
+                } else FailureWrite.UNCHANGED
             }
-            if (attempt == null && wasFailed) return false
-            if (attempt == null && dataStore.fetchMessage(key(messageID))?.status == MessageStatus.DELIVERED) return false
-            val result = authority().recordDirectFailure(
+            if (attempt == null && wasFailed) return FailureWrite.UNCHANGED
+            if (attempt == null && dataStore.fetchMessage(key(messageID))?.status == MessageStatus.DELIVERED) {
+                return FailureWrite.UNCHANGED
+            }
+            val result = when (val guarded = failureAuthority().recordDirectFailureExcludingRadioHistory(
                 attempt ?: throw authorityFailure("unregistered failure"),
-            )
+            )) {
+                is DirectAckRadioFailureResult.Applied -> DirectAckMutationResult.Applied(guarded.receipt)
+                is DirectAckRadioFailureResult.AlreadyApplied -> DirectAckMutationResult.AlreadyApplied(guarded.receipt)
+                is DirectAckRadioFailureResult.AlreadyDelivered -> DirectAckMutationResult.AlreadyDelivered(guarded.receipt)
+                is DirectAckRadioFailureResult.Rejected -> DirectAckMutationResult.Rejected(guarded.reason)
+                is DirectAckRadioFailureResult.Nonfailing -> {
+                    val uncertainty = DirectAckFailureNonsettlementException(token, messageID, guarded.reasons)
+                    synchronized(lock) {
+                        directAuthorities[messageID]?.takeIf { it.attempt === attempt }?.failureNonsettlement = uncertainty
+                    }
+                    remember("ackFailureUncertain.$messageID", uncertainty)
+                    return FailureWrite.UNCERTAIN
+                }
+            }
             if (result is DirectAckMutationResult.Rejected && result.reason in retiredAuthorityReasons) {
                 ownership.reporter.report(MessagingDiagnostic.StaleResult(token, "failureAuthority.${result.reason}"))
                 tracking?.let(::retireTerminalAck)
-                return false
+                return FailureWrite.RETIRED
             }
             val receipt = requireReceipt(result)
-            return receipt.message?.status == MessageStatus.FAILED && !wasFailed
+            return if (receipt.message?.status == MessageStatus.FAILED && !wasFailed) {
+                FailureWrite.CHANGED
+            } else FailureWrite.UNCHANGED
         } catch (cancelled: CancellationException) {
             retainUncertainFailureWrite(messageID, tracking, wasFailed, cancelled)
             throw cancelled
@@ -1153,7 +1204,7 @@ class MessageService(
                             if (pendingAck(messageID)?.acknowledgement == null) {
                                 val wasFailed = dataStore.fetchMessage(key(messageID))?.status == MessageStatus.FAILED
                                 ownership.checkPersistenceCompletion("failMessage")
-                                val changed = writeFailedStatus(messageID, wasFailed, expectedAttempt)
+                                val changed = writeFailedStatus(messageID, wasFailed, expectedAttempt) == FailureWrite.CHANGED
                                 ownership.checkPersistenceCompletion("failMessage.saved")
                                 val acknowledgementArrived = settleFailedPendingAck(
                                     messageID, changed, notify, retireDirectClaim = false, expectedAttempt = expectedAttempt,
@@ -1315,7 +1366,7 @@ class MessageService(
         withFreshNotificationAction("sendDirectMessage") {
             owned("sendDirectMessage") {
                 validate(text, contact)
-                radioAuthority()
+                requireDirectDispatchAuthorities()
                 val message = outgoing(text, contact, textType, replyToID)
                 val requestID = UUID.randomUUID()
                 withInlineDirectRequest(requestID) {
@@ -1371,7 +1422,7 @@ class MessageService(
     ): MessageDTO {
         require(timeout.isFinite() && timeout >= 0)
         validate(text, contact)
-        if (config.maxAttempts > 0) radioAuthority()
+        if (config.maxAttempts > 0) requireDirectDispatchAuthorities()
         val message = owned("saveMessageWithRetry", pendingOperations) {
             outgoing(text, contact, textType, replyToID).also {
                 dataStore.saveMessage(it)

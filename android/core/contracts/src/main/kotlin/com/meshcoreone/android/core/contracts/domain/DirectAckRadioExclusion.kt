@@ -5,6 +5,7 @@ import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.model.SnapshotSet
 import java.util.UUID
+import kotlinx.coroutines.flow.Flow
 
 /** Storage-issued exact-emission refinement handle; public IDs and DTO equality cannot recreate it. */
 interface DirectAckEmissionHandle
@@ -372,6 +373,14 @@ interface DirectAckRadioExclusionAuthority {
         radioId: RadioId,
     ): DirectAckRadioEvidenceObservation
 
+    /**
+     * Accepted-actual-only settlement, unlike the unchanged generic settleDirectAck contract.
+     * A prediction alone is never permission: buffer a pre-return raw ACK, persist the physical
+     * emission's actual returned code, then reconcile only a matching actual code. Once accepted,
+     * that target emission's prediction is retained history, not eligibility. Earlier accepted
+     * emissions of the same current claim remain eligible across retries. Full radio-history
+     * exclusion and current-grant validation occur in the same transaction as delivery.
+     */
     suspend fun settleDirectAckExcludingRadioHistory(
         attempt: DirectAckAttempt,
         ackCode: UInt,
@@ -391,4 +400,195 @@ sealed interface DirectAckRadioSettlementResult {
 sealed interface DirectAckRadioSettlementReceipt {
     data class Applied(val receipt: DirectAckReceipt) : DirectAckRadioSettlementReceipt
     data class AlreadyApplied(val receipt: DirectAckReceipt) : DirectAckRadioSettlementReceipt
+}
+
+enum class DirectAckRadioConfirmationWildcardReason {
+    UNRESOLVED_PHYSICAL_EMISSION,
+    CONFLICTING_PHYSICAL_EVIDENCE,
+    UNTRACKED_LEGACY_ANCESTRY,
+    STICKY_SATURATION,
+}
+
+/**
+ * Complete persisted radio-wide wildcard observation at one atomic storage snapshot, not delivery
+ * eligibility, a grant, or a proof that known ACK-code collisions are absent. It may become stale
+ * immediately; settlement must independently validate its complete history and current grant.
+ */
+sealed interface DirectAckRadioConfirmationEvidence {
+    val radioId: RadioId
+
+    /** No persisted wildcard was observed in this snapshot; known code collisions may still exist. */
+    data class NoPersistedWildcard(
+        override val radioId: RadioId,
+    ) : DirectAckRadioConfirmationEvidence
+
+    data class PersistedWildcard(
+        override val radioId: RadioId,
+        val reasons: SnapshotSet<DirectAckRadioConfirmationWildcardReason>,
+    ) : DirectAckRadioConfirmationEvidence {
+        init {
+            require(reasons.isNotEmpty()) { "Persisted wildcard evidence requires at least one reason" }
+        }
+    }
+}
+
+/**
+ * Optional read-only capability, separate from settlement and diagnostic sampling. A missing
+ * capability must be surfaced as unavailable, never as NoPersistedWildcard or an empty history.
+ * Storage failures and cancellation propagate unchanged through existing typed failure paths.
+ * There is no default implementation, grant/handle issuance, authority renewal or mutation.
+ */
+interface DirectAckRadioConfirmationEvidenceInspecting {
+    /**
+     * Return the exact requested radio and every applicable typed wildcard reason from its complete
+     * persisted history in one atomic read transaction, including retired leases and generations.
+     * MAY_HAVE_WRITTEN/unresolved physical emissions, physical evidence conflicts, untracked legacy
+     * ancestry even with a known accepted code or later markers, and already-persisted sticky
+     * saturation must remain distinguishable. Known accepted and definitely-unsent physical rows
+     * alone are not wildcards; tracked-but-unmarked registered wires are not physical emissions.
+     *
+     * No sample, diagnostic row cap, synthetic excluded claim, lease/grant, generation filter or
+     * TTL may narrow this query. The read never creates/clears evidence or saturation. Absence of
+     * persisted wildcards does not establish per-code uniqueness, recipient delivery, message
+     * eligibility or permission to settle; this snapshot cannot replace atomic settlement.
+     */
+    suspend fun inspectDirectAckRadioConfirmationEvidence(
+        radioId: RadioId,
+    ): DirectAckRadioConfirmationEvidence
+}
+
+/** Subscriber-owned observation events; neither event establishes delivery eligibility. */
+sealed interface DirectAckRadioConfirmationObservation {
+    val radioId: RadioId
+
+    /**
+     * A new complete read is starting; previous evidence remains explicitly historical.
+     * Consumers may retain that historical notice without flashing a loading indicator.
+     */
+    data class Inspecting(
+        override val radioId: RadioId,
+    ) : DirectAckRadioConfirmationObservation
+
+    /** Historical atomic observation, not an instantaneous all-clear or permission to settle. */
+    data class Snapshot(
+        val evidence: DirectAckRadioConfirmationEvidence,
+    ) : DirectAckRadioConfirmationObservation {
+        override val radioId: RadioId get() = evidence.radioId
+    }
+}
+
+/**
+ * Optional, separate cold observation capability. Each collector owns its observation lifetime;
+ * consumers explicitly surface absence as unavailable and start each collection in a checking
+ * state. Evidence is not a cache of current authority and settlement remains independent.
+ * The active radio graph shares one subscription across its consumers to avoid duplicate scans;
+ * a replacement graph or lifecycle resubscription starts a fresh observation, not a cached clear.
+ */
+interface DirectAckRadioConfirmationEvidenceObserving {
+    /**
+     * Emit Inspecting for the requested radio before each complete atomic read, then Snapshot
+     * carrying that read's exact-radio evidence. Reads are serial and do not overlap; no cached
+     * initial snapshot, replay, conflation or distinct suppression may replace a completed read.
+     * Consumers fence collection lifetime, radio and session so late results cannot cross owners.
+     *
+     * The initial read starts immediately on collection. After each Snapshot, wait a cancellable
+     * 1,000 milliseconds before starting the next read, only while subscribed. Complete reads repeat
+     * independently of writer notification, so persisted changes from other Room/raw SQL handles
+     * are eventually observed even without multi-instance invalidation. Same-process invalidation
+     * may accelerate a read but cannot replace or indefinitely postpone this fallback.
+     *
+     * This is snapshot polling, not a per-commit event log or synchronous freshness guarantee.
+     * Intermediate commits may coalesce; query duration, scheduling and collector backpressure
+     * add latency, so there is no hard one-second observation-age bound. Every NoPersistedWildcard
+     * remains historical, never an all-clear, permission or proof of recipient delivery.
+     *
+     * Storage failures and cancellation terminate unchanged, never a no-wildcard fallback.
+     * Store closure must end observation with the existing typed close/read failure, not complete
+     * successfully or emit cached evidence. Consumers surface error or unexpected normal completion
+     * as unavailable/uncertain rather than retain an apparent clear. Cancellation ends this
+     * collector's reads; no detached worker or publisher is created. No expiry, evidence mutation,
+     * schema reset or send-policy change is implied.
+     */
+    fun observeDirectAckRadioConfirmationEvidence(
+        radioId: RadioId,
+    ): Flow<DirectAckRadioConfirmationObservation>
+}
+
+enum class DirectAckRadioNonfailingReason {
+    TARGET_UNRESOLVED_PHYSICAL_EMISSION,
+    TARGET_CONFLICTING_PHYSICAL_EVIDENCE,
+    TARGET_UNTRACKED_LEGACY_ANCESTRY,
+    KNOWN_OTHER_CLAIM_CODE,
+    UNRESOLVED_OTHER_CLAIM_EMISSION,
+    CONFLICTING_OTHER_CLAIM_EVIDENCE,
+    UNTRACKED_OTHER_CLAIM_ANCESTRY,
+    RADIO_HISTORY_SATURATED,
+}
+
+sealed interface DirectAckRadioFailureResult {
+    data class Applied(val receipt: DirectAckReceipt) : DirectAckRadioFailureResult
+    /** Historical exact guarded-failure commit; not current proof or renewed permission. */
+    data class AlreadyApplied(val receipt: DirectAckReceipt) : DirectAckRadioFailureResult
+    /** Own delivery or protected initial DELIVERED baseline; never fabricate a delivery tuple. */
+    data class AlreadyDelivered(val receipt: DirectAckReceipt) : DirectAckRadioFailureResult
+
+    /** Failure was not written; uncertainty is not recipient delivery or an invented ACK. */
+    data class Nonfailing(
+        val reasons: SnapshotSet<DirectAckRadioNonfailingReason>,
+    ) : DirectAckRadioFailureResult {
+        init {
+            require(reasons.isNotEmpty()) { "Nonfailing evidence requires at least one reason" }
+        }
+    }
+
+    data class Rejected(val reason: DirectAckRejection) : DirectAckRadioFailureResult
+}
+
+/**
+ * Optional, additive atomic failure capability. It does not replace DirectAckAuthority's generic
+ * recordDirectFailure method or authorize failure through a public diagnostic/UI snapshot.
+ * A missing capability must be explicitly unavailable, never a generic failure-write fallback.
+ *
+ * A new failure write validates the opaque attempt's current lease/incarnation/revision and
+ * complete persisted radio history in the same serialized transaction as the mutation. Do not
+ * sample, truncate, filter retired generations, invent an ACK code or infer no-write from missing
+ * diagnostic rows. Foreign/missing/stale/ineligible authority uses existing DirectAckRejection
+ * meanings and must never mutate a replacement row.
+ *
+ * Sticky radio saturation ALWAYS blocks a new failure with RADIO_HISTORY_SATURATED, including
+ * tracked attempts with no physical rows or only DefinitelyUnsent rows. CoveredBySaturation can
+ * authorize a physical invocation without an emission row/handle; these rows cannot prove that
+ * no additional covered invocation occurred. This contract provides no target-specific proof
+ * that overrides saturation. Delivery and historical guarded-replay ordering below is unchanged.
+ *
+ * Target MAY, conflict (including malformed evidence), or untracked legacy ancestry without a
+ * definite-no-write proof is Nonfailing, not FAILED. On a nonsaturated radio only, complete tracked
+ * provenance proving no physical invocation, or every target emission DefinitelyUnsent, permits
+ * the known-safe no-write failure path regardless of unrelated foreign radio history. A later
+ * unsent retry cannot clear an older possible emission; a transport error alone is not proof.
+ *
+ * Otherwise, foreign wildcard ancestry/emissions block failure. For
+ * accepted target emissions, ANY accepted actual code colliding with any other claim's known
+ * predicted/actual code blocks failure; one unambiguous code cannot prove another physical send
+ * failed. Report every applicable typed reason, distinguishing target uncertainty from foreign
+ * uncertainty. Malformed target/foreign evidence is conflicting evidence, never accepted/unsent.
+ * A Nonfailing result writes neither FAILED nor an invented delivery and renews no grant.
+ *
+ * Own delivery wins first as AlreadyDelivered without mutation. Preserve the existing
+ * AlreadyDelivered guard for an initially DELIVERED RESEND baseline too, without fabricating this
+ * attempt's own delivery tuple. Otherwise exact replay of a previously committed guarded failure
+ * is AlreadyApplied/read-only even after later blockers,
+ * revocation or invalidation, with the receipt's actual permission and payload-erasure semantics.
+ * Persist guarded-operation identity atomically with failure to reconcile commit-then-throw;
+ * an older generic recordDirectFailure commit without guarded proof is Rejected(CONFLICT), not a
+ * guarded replay or newly established proof.
+ * New writes preserve existing terminal/resend guards and known-safe failure positives. Historical
+ * replay never regrants authority, replaces a newer failure or rewrites product state.
+ *
+ * Storage failures and cancellation propagate unchanged.
+ */
+interface DirectAckRadioFailureAuthority {
+    suspend fun recordDirectFailureExcludingRadioHistory(
+        attempt: DirectAckAttempt,
+    ): DirectAckRadioFailureResult
 }

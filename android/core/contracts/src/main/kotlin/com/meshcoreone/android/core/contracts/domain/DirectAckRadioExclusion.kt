@@ -555,13 +555,19 @@ sealed interface DirectAckRadioFailureResult {
  * diagnostic rows. Foreign/missing/stale/ineligible authority uses existing DirectAckRejection
  * meanings and must never mutate a replacement row.
  *
- * Target MAY, conflict (including malformed evidence), or untracked legacy ancestry without a
- * definite-no-write proof is Nonfailing, not FAILED. Only complete tracked provenance proving no
- * physical invocation, or every target emission DefinitelyUnsent, permits the known-safe no-write
- * failure path regardless of unrelated foreign radio history. A later unsent retry cannot clear
- * an older possible emission; a transport error alone is not definite-no-write proof.
+ * Sticky radio saturation ALWAYS blocks a new failure with RADIO_HISTORY_SATURATED, including
+ * tracked attempts with no physical rows or only DefinitelyUnsent rows. CoveredBySaturation can
+ * authorize a physical invocation without an emission row/handle; these rows cannot prove that
+ * no additional covered invocation occurred. This contract provides no target-specific proof
+ * that overrides saturation. Delivery and historical guarded-replay ordering below is unchanged.
  *
- * Otherwise, foreign wildcard ancestry/emissions and sticky radio saturation block failure. For
+ * Target MAY, conflict (including malformed evidence), or untracked legacy ancestry without a
+ * definite-no-write proof is Nonfailing, not FAILED. On a nonsaturated radio only, complete tracked
+ * provenance proving no physical invocation, or every target emission DefinitelyUnsent, permits
+ * the known-safe no-write failure path regardless of unrelated foreign radio history. A later
+ * unsent retry cannot clear an older possible emission; a transport error alone is not proof.
+ *
+ * Otherwise, foreign wildcard ancestry/emissions block failure. For
  * accepted target emissions, ANY accepted actual code colliding with any other claim's known
  * predicted/actual code blocks failure; one unambiguous code cannot prove another physical send
  * failed. Report every applicable typed reason, distinguishing target uncertainty from foreign

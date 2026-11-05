@@ -322,10 +322,16 @@ unknown/SENT/PENDING, never FAILED. Malformed target/foreign evidence maps to th
 corresponding conflicting reason; this does not change read-only warning or
 settlement error semantics. No row repair is authorized.
 
-If complete tracked evidence proves no target physical invocation or every
-target emission definitely unsent, unrelated foreign history cannot have
-delivered that target and the known-safe failure path remains. Otherwise
-foreign wildcard/saturation blocks failure. For accepted target emissions,
+Sticky radio saturation always blocks a new guarded failure, including when
+the tracked target has no physical rows or all represented emissions are
+definitely unsent. `CoveredBySaturation` can permit a physical invocation
+without an emission row/handle; the current contract provides no complete
+target-specific proof that overrides that wildcard.
+
+On a nonsaturated radio only, if complete tracked evidence proves no target
+physical invocation or every target emission definitely unsent, unrelated
+foreign history cannot have delivered that target and the known-safe failure
+path remains. Otherwise foreign wildcard blocks failure. For accepted target emissions,
 ANY accepted actual code confused with another claim's known predicted/actual
 code blocks failure; an unambiguous alternative does not prove a different
 physical send failed. No invented predicted ACK, bounded/UI snapshot, missing
@@ -382,3 +388,21 @@ performed under the retained local owner hold. Storage owns real atomic
 guard/current-grant/cross-handle/race/replay controls; service owns central and
 queue failure routing controls. The contract-only handoff does not claim
 those producers are integrated or verified.
+
+### Saturation exception clarification
+
+Service source review identified that the immutable
+`9ca8f2f38e70105ab6ed2bfb133bbc3bb529b55d` no-marker/all-unsent wording was
+unsafe if interpreted as overriding sticky saturation: a physical invocation
+authorized by `CoveredBySaturation` need not have an individual emission row.
+This documentation-only successor explicitly makes `RADIO_HISTORY_SATURATED`
+mandatory for every new failure on a saturated radio, before considering the
+nonsaturated known-safe exception. Delivery and exact guarded historical replay
+remain read-only and keep their precedence. No new cap, clearing, expiry,
+target-covered-invocation fact, schema or send-policy change is introduced.
+
+Only the failure capability KDoc and this evidence changed. Generic authority,
+all declarations, snapshot/observer source, settlement and the 26 unexecuted
+test methods are unchanged. `git diff --check` and source-preservation checks
+passed; no build or test execution occurred. Storage/service own actual
+saturation/no-marker/all-unsent producer and consumer controls.

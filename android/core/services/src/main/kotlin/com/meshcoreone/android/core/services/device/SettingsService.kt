@@ -643,17 +643,29 @@ class SettingsService(
 
     /** Reconcile uncertainty before a holder derives untouched RF/Repeat fields for its next attempt. */
     suspend fun reconcileRadioSettingsIfNeeded(): Unit = context.operation {
-        if (!radioSettingsNeedsRecovery) return@operation
+        if (!radioSettingsNeedsRecovery && !pathHashModeNeedsRecovery) return@operation
         val repeatCompletion = CompletableDeferred<Unit>()
-        val revision = acknowledged(additionalCompletions = listOf(repeatCompletion)) { completion, owner ->
+        val hashCompletion = CompletableDeferred<Unit>()
+        val (revision, hashRevision) = acknowledged(
+            additionalCompletions = listOf(repeatCompletion, hashCompletion),
+        ) { completion, owner ->
             val actual = configuration { sendAppStart() }
-            val repeat = configuration { queryDevice() }.clientRepeat
-            publish(SettingsEvent.ClientRepeatUpdated(repeat, repeatCompletion), repeatCompletion, owner)
+            val info = configuration { queryDevice() }
+            val hashRevision = synchronized(eventLock) {
+                pathHashRevision.takeIf { it != persistedPathHashRevision }
+            }
+            if (hashRevision != null) {
+                publish(SettingsEvent.PathHashModeUpdated(info.pathHashMode, hashCompletion), hashCompletion, owner)
+            } else {
+                hashCompletion.complete(Unit)
+            }
+            publish(SettingsEvent.ClientRepeatUpdated(info.clientRepeat, repeatCompletion), repeatCompletion, owner)
             publish(SettingsEvent.DeviceUpdated(actual, null, completion), completion, owner)
-            synchronized(eventLock) { radioRevision }
+            synchronized(eventLock) { radioRevision } to hashRevision
         }
         synchronized(eventLock) {
             persistedRadioRevision = maxOf(persistedRadioRevision, revision)
+            hashRevision?.let { persistedPathHashRevision = maxOf(persistedPathHashRevision, it) }
         }
     }
 
@@ -702,6 +714,33 @@ class SettingsService(
             if (configuration { queryDevice() }.supportsPathHashMode) writePathHashAndVerify(mode)
         }
         publish(SettingsEvent.DeviceUpdated(actual, preset.id))
+        actual
+    }
+
+    /** A preset settles RF and its optional hash projection only after both durable acknowledgements. */
+    suspend fun applyRadioPresetPersisted(preset: RadioPreset): SelfInfo = context.operation {
+        val hashCompletion = CompletableDeferred<Unit>()
+        val (actual, revision, hashRevision) = acknowledged(
+            additionalCompletions = listOf(hashCompletion),
+        ) { completion, owner ->
+            val revision = synchronized(eventLock) { Math.incrementExact(radioRevision).also { radioRevision = it } }
+            val actual = writeRadioAndVerify(
+                preset.frequencyKHz, preset.bandwidthHz, preset.spreadingFactor, preset.codingRate, null,
+            )
+            val hashRevision = preset.pathHashMode?.let { mode ->
+                if (configuration { queryDevice() }.supportsPathHashMode) {
+                    writePathHashAndVerify(mode, hashCompletion, owner)
+                    synchronized(eventLock) { pathHashRevision }
+                } else null
+            }
+            if (hashRevision == null) hashCompletion.complete(Unit)
+            publish(SettingsEvent.DeviceUpdated(actual, preset.id, completion), completion, owner)
+            Triple(actual, revision, hashRevision)
+        }
+        synchronized(eventLock) {
+            persistedRadioRevision = maxOf(persistedRadioRevision, revision)
+            hashRevision?.let { persistedPathHashRevision = maxOf(persistedPathHashRevision, it) }
+        }
         actual
     }
 

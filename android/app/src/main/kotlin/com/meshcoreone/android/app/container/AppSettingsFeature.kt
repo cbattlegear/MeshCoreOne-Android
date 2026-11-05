@@ -356,7 +356,7 @@ private class SettingsRadioAdapter(
             appliedRadioPresetID, expectedDevice, repeatAttempt, restoreAuthority)
     override suspend fun setTxPowerVerified(power: Byte) = service.setTxPowerPersisted(power)
     override suspend fun applyRadioPresetVerified(presetId: String) =
-        service.applyRadioPresetVerified(requireNotNull((RadioPresets.all + RadioPresets.repeatPresets).firstOrNull { it.id == presetId }))
+        service.applyRadioPresetPersisted(requireNotNull((RadioPresets.all + RadioPresets.repeatPresets).firstOrNull { it.id == presetId }))
     override suspend fun setOtherParamsVerified(device: DeviceDTO, autoAddContacts: Boolean?, telemetryModes: TelemetryModes?,
         advertLocationPolicy: AdvertLocationPolicy?, multiAcks: UByte?) =
         service.setOtherParamsVerified(device, autoAddContacts, telemetryModes, advertLocationPolicy, multiAcks)

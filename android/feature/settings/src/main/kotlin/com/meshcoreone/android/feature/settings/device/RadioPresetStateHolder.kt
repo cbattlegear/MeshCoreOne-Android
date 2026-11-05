@@ -199,7 +199,7 @@ class RadioPresetStateHolder(
 
     private fun applyPreset(id: String, repeat: Boolean, target: SettingsRadioTarget) {
         if (mutable.value.isApplying || mutable.value.isApplyingRepeat || writeGate.inFlight.value) return
-        mutable.update { it.copy(isApplying = true) }
+        mutable.update { it.copy(isApplying = true, errorMessage = null) }
         writeGate.set(true)
         env.scope.launch { runApply(id, repeat, target) }
     }

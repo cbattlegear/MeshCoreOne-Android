@@ -36,6 +36,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
@@ -47,6 +48,185 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class SettingsRepeatPersistenceTest : RoomProcessTest() {
+    @Test fun normalPresetRoomFailureReachesTheActionAndReselectionRetries() = runTest {
+        withRepeat(store) { h, holder, failures, radio ->
+            val before = assertNotNull(h.manager.connectedDevice)
+            val service = assertNotNull(h.sessions.current).settingsService
+            assertTrue(holder.state.value.presets.any { it.id == "eu-narrow" })
+            db.openHelper.writableDatabase.execSQL(
+                "CREATE TRIGGER reject_normal_preset BEFORE UPDATE ON devices " +
+                    "BEGIN SELECT RAISE(FAIL, 'preset storage failure'); END",
+            )
+            try {
+                holder.onPresetSelected("eu-narrow")
+                h.eventually("normal preset persistence error reaches the actual action") {
+                    !holder.state.value.isApplying && failures.isNotEmpty()
+                }
+                assertNotNull(holder.state.value.errorMessage)
+                assertEquals(869_618u, radio.frequency)
+                assertEquals(before, store.fetchDevice(before.id))
+                assertEquals(before, h.manager.connectedDevice)
+                assertTrue(service.radioSettingsNeedsRecovery)
+            } finally {
+                db.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_normal_preset")
+            }
+            holder.onPresetSelected("eu-narrow")
+            h.eventually("same normal preset reconciles and persists") {
+                !holder.state.value.isApplying && holder.state.value.errorMessage == null &&
+                    !service.radioSettingsNeedsRecovery
+            }
+            val saved = assertNotNull(store.fetchDevice(before.id))
+            assertEquals(869_618u, saved.frequency)
+            assertEquals("eu-narrow", saved.appliedRadioPresetID)
+            assertEquals(saved, h.manager.connectedDevice)
+            assertEquals(before.lastContactSync, saved.lastContactSync)
+            assertEquals(before.pathHashMode, saved.pathHashMode)
+            assertFalse(service.pathHashModeNeedsRecovery)
+            assertEquals(2, radio.radioWrites.size)
+        }
+    }
+
+    @Test fun failedPresetHashIsReconciledBeforeApplyingAPresetWithoutAHash() = runTest {
+        withRepeat(store) { h, holder, failures, radio ->
+            val before = assertNotNull(h.manager.connectedDevice)
+            val service = assertNotNull(h.sessions.current).settingsService
+            assertTrue(holder.state.value.presets.any { it.id == "ca" })
+            db.openHelper.writableDatabase.execSQL(
+                "CREATE TRIGGER reject_preset_hash BEFORE UPDATE ON devices WHEN NEW.pathHashMode != OLD.pathHashMode " +
+                    "BEGIN SELECT RAISE(FAIL, 'preset hash storage failure'); END",
+            )
+            try {
+                holder.onPresetSelected("ca")
+                h.eventually("optional preset hash failure reaches the action") {
+                    !holder.state.value.isApplying && failures.isNotEmpty()
+                }
+                assertNotNull(holder.state.value.errorMessage)
+                assertEquals(2u.toUByte(), radio.pathHashMode)
+                assertEquals(before.pathHashMode, store.fetchDevice(before.id)!!.pathHashMode)
+                assertTrue(service.pathHashModeNeedsRecovery)
+                assertTrue(service.radioSettingsNeedsRecovery)
+            } finally {
+                db.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_preset_hash")
+            }
+            holder.onPresetSelected("eu-narrow")
+            h.eventually("hash recovery and subsequent no-hash preset settle both revisions") {
+                !holder.state.value.isApplying && holder.state.value.errorMessage == null &&
+                    !service.pathHashModeNeedsRecovery && !service.radioSettingsNeedsRecovery
+            }
+            val saved = assertNotNull(store.fetchDevice(before.id))
+            assertEquals(2u.toUByte(), saved.pathHashMode)
+            assertEquals(869_618u, saved.frequency)
+            assertEquals("eu-narrow", saved.appliedRadioPresetID)
+            assertEquals(saved, h.manager.connectedDevice)
+            assertEquals(1, h.links.radios.single().sent.count { it[0] == 0x3d.toUByte() })
+        }
+    }
+
+    @Test fun normalPresetWaitsForOptionalHashRoomAcknowledgementAndSettlesBothRevisions() = runTest {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var armed = false
+        val held = object : PersistenceStoreProtocol by store {
+            override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+                if (armed && dto.pathHashMode == 2u.toUByte()) {
+                    armed = false
+                    entered.complete(Unit)
+                    release.await()
+                }
+                return store.saveDeviceIfUnchanged(dto, expected)
+            }
+        }
+        try {
+            withRepeat(held) { h, holder, failures, radio ->
+                val before = assertNotNull(h.manager.connectedDevice)
+                val service = assertNotNull(h.sessions.current).settingsService
+                armed = true
+                holder.onPresetSelected("ca")
+                h.eventually("normal preset hash reached actual held Room writer") { entered.isCompleted }
+                assertTrue(holder.state.value.isApplying)
+                assertEquals(2u.toUByte(), radio.pathHashMode)
+                assertEquals(before.pathHashMode, store.fetchDevice(before.id)!!.pathHashMode)
+                assertTrue(service.radioSettingsNeedsRecovery)
+                assertTrue(service.pathHashModeNeedsRecovery)
+                release.complete(Unit)
+                h.eventually("normal preset waits for both durable projections") {
+                    !holder.state.value.isApplying && !service.radioSettingsNeedsRecovery &&
+                        !service.pathHashModeNeedsRecovery
+                }
+                assertTrue(failures.isEmpty())
+                val saved = assertNotNull(store.fetchDevice(before.id))
+                assertEquals("ca", saved.appliedRadioPresetID)
+                assertEquals(2u.toUByte(), saved.pathHashMode)
+                assertEquals(saved, h.manager.connectedDevice)
+            }
+        } finally { release.complete(Unit) }
+    }
+
+    @Test fun retiredNormalPresetPublicationsCannotClaimSuccessAndFreshRetrySettlesBothRevisions() = runTest {
+        withRepeat(store) { h, holder, failures, radio ->
+            val before = assertNotNull(h.manager.connectedDevice)
+            val service = assertNotNull(h.sessions.current).settingsService
+            val retired = service.events()
+            holder.onPresetSelected("ca")
+            h.eventually("normal preset verified but its publications have no consumer") {
+                radio.pathHashMode == 2u.toUByte() && holder.state.value.isApplying
+            }
+            assertEquals(before, store.fetchDevice(before.id))
+            h.appState.wireServicesIfConnected()
+            h.eventually("normal preset subscription retirement reaches its actual action") {
+                !holder.state.value.isApplying && failures.isNotEmpty()
+            }
+            assertNotNull(holder.state.value.errorMessage)
+            assertTrue(service.radioSettingsNeedsRecovery)
+            assertTrue(service.pathHashModeNeedsRecovery)
+            assertTrue(retired.events.toList().isEmpty())
+            holder.onPresetSelected("ca")
+            h.eventually("fresh normal preset retry reconciles both retired publications") {
+                !holder.state.value.isApplying && holder.state.value.errorMessage == null &&
+                    !service.radioSettingsNeedsRecovery && !service.pathHashModeNeedsRecovery
+            }
+            val saved = assertNotNull(store.fetchDevice(before.id))
+            assertEquals("ca", saved.appliedRadioPresetID)
+            assertEquals(2u.toUByte(), saved.pathHashMode)
+            assertEquals(saved, h.manager.connectedDevice)
+        }
+    }
+
+    @Test fun normalPresetMergesARealContactWatermarkConflictWithoutLosingUnrelatedFields() = runTest {
+        var armed = false
+        var conflicts = 0
+        val interleaving = object : PersistenceStoreProtocol by store {
+            override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+                if (armed && dto.appliedRadioPresetID == "eu-narrow") {
+                    armed = false
+                    store.updateDeviceLastContactSync(dto.radioId, 9876u)
+                    val saved = store.saveDeviceIfUnchanged(dto, expected)
+                    assertFalse(saved, "The real Room watermark invalidates the preset write ticket")
+                    conflicts++
+                    return saved
+                }
+                return store.saveDeviceIfUnchanged(dto, expected)
+            }
+        }
+        withRepeat(interleaving) { h, holder, failures, _ ->
+            val before = assertNotNull(h.manager.connectedDevice)
+            armed = true
+            holder.onPresetSelected("eu-narrow")
+            h.eventually("normal preset resolves the actual Room conflict and acknowledges") {
+                !holder.state.value.isApplying &&
+                    h.manager.connectedDevice?.appliedRadioPresetID == "eu-narrow"
+            }
+            assertEquals(1, conflicts)
+            assertTrue(failures.isEmpty())
+            val saved = assertNotNull(store.fetchDevice(before.id))
+            assertEquals(9876u, saved.lastContactSync)
+            assertEquals(before.pathHashMode, saved.pathHashMode)
+            assertEquals(before.nodeName, saved.nodeName)
+            assertEquals(before.publicKey, saved.publicKey)
+            assertEquals(saved, h.manager.connectedDevice)
+        }
+    }
+
     @Test fun queuedRealEditorCannotPreventDisconnectFromClosingAnActualSuspendedRestoreSend() = runTest {
         println("WP305_REPEAT_DISCONNECT|queuedRealEditorCannotPreventDisconnectFromClosingAnActualSuspendedRestoreSend|START")
         val editorEntered = CompletableDeferred<Unit>()
@@ -888,6 +1068,8 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
 
     private class RepeatRadio {
         val radioWrites = mutableListOf<Bytes>()
+        var pathHashMode: UByte = 0u
+            private set
         private var params: Bytes? = null
         private var repeat = false
         var repeatOnNextConnection = false
@@ -907,6 +1089,7 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
 
         fun configure(radio: FirmwareRadio) {
             params = null
+            pathHashMode = 0u
             repeat = repeatOnNextConnection
             repeatOnNextConnection = false
             radio.firmwareVersion = 11u
@@ -914,9 +1097,10 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
             radio.respond = { command ->
                 when (command[0].toInt()) {
                     0x0b -> {
+                        require(command.size == 11 || command.size == 12)
                         radioWrites += command
                         params = command.slice(1, 11)
-                        repeat = command[11] != 0u.toUByte()
+                        if (command.size == 12) repeat = command[11] != 0u.toUByte()
                         if (withholdNextAck) {
                             withholdNextAck = false
                             pendingAck = radio
@@ -927,8 +1111,9 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                     0x16 -> if (params != null || repeat) listOf(
                         Bytes.of(13, 11, 50, 8) + le32(0) + Bytes.utf8("01 Jan 2025").paddedOrTruncated(12) +
                             Bytes.utf8("T-Deck").paddedOrTruncated(40) +
-                            Bytes.utf8("v1.13.0").paddedOrTruncated(20) + Bytes.of(if (repeat) 1 else 0, 0),
+                            Bytes.utf8("v1.13.0").paddedOrTruncated(20) + Bytes.of(if (repeat) 1 else 0, pathHashMode.toInt()),
                     ) else null
+                    0x3d -> { pathHashMode = command[2]; listOf(Bytes.of(0)) }
                     0x3c -> listOf(Bytes.of(0x1a))
                     0x1f -> listOf(Bytes.of(0x12, command[1].toInt()) + Bytes(ByteArray(48)))
                     else -> null

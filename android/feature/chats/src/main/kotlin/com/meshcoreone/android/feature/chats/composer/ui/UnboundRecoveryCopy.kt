@@ -36,8 +36,18 @@ class UnboundRecoveryCopy(
         if (current == null || current.exactText != source.exactText) {
             throw UnboundRecoveryCopyException(UnboundRecoveryCopyException.Failure.SOURCE_CHANGED)
         }
+        restore(current.exactText, destination)
+    }
+
+    /** Copies only the caller's still-live exact text; never claims that notification storage retained it. */
+    suspend fun copyTransient(source: TransientRecoveryText, destination: Destination) {
+        require(destination.owner === this) { "Destination belongs to another recovery copy owner" }
+        restore(source.exactText, destination)
+    }
+
+    private suspend fun restore(exactText: String, destination: Destination) {
         currentCoroutineContext().ensureActive()
-        if (!drafts.restoreIfUnchanged(destination.conversationId, destination.revision, current.exactText)) {
+        if (!drafts.restoreIfUnchanged(destination.conversationId, destination.revision, exactText)) {
             throw UnboundRecoveryCopyException(UnboundRecoveryCopyException.Failure.DESTINATION_CHANGED)
         }
     }

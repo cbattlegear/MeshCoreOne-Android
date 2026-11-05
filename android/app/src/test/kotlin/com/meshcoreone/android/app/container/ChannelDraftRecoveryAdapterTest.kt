@@ -31,6 +31,10 @@ import com.meshcoreone.android.feature.chats.composer.ui.UnboundRecoveryText
 import com.meshcoreone.android.feature.chats.composer.ui.UnboundRecoveryList
 import com.meshcoreone.android.feature.chats.composer.ui.UnboundRecoveryCopy
 import com.meshcoreone.android.feature.chats.composer.ui.UnboundRecoveryCopyException
+import com.meshcoreone.android.feature.chats.composer.ui.TransientRecoveryLabels
+import com.meshcoreone.android.feature.chats.composer.ui.TransientRecoveryNotice
+import com.meshcoreone.android.feature.chats.composer.ui.TransientRecoveryText
+import com.meshcoreone.android.feature.chats.composer.ui.TransientRetention
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.ui.UiText
 import java.time.Instant
@@ -67,6 +71,133 @@ class ChannelDraftRecoveryAdapterTest : RoomProcessTest() {
     )
 
     private enum class UnboundCopyOutcome { EXACT, SOURCE_CHANGED, NEWER_DRAFT, TYPED_THEN_CLEARED }
+
+    @Test fun mountedNotRetainedNoticeCopiesOnlyExplicitLiveTextWithoutClaimingRetention() =
+        mountedTransientRecovery(TransientRetention.NOT_RETAINED)
+
+    @Test fun mountedIndeterminateNoticeKeepsUncertaintyAfterAcknowledgmentAndExplicitCopy() =
+        mountedTransientRecovery(TransientRetention.INDETERMINATE)
+
+    private fun mountedTransientRecovery(retention: TransientRetention) = runTest {
+        store.saveChannel(radio, channel(1))
+        val target = ComposerTarget.Channel(assertNotNull(store.fetchChannel(radio, 2u)))
+        val rig = ContainerHarness(this, store)
+        val host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
+        host.get().actionBar?.hide()
+        host.windowFocusChanged(true)
+        val source = TransientRecoveryText(
+            UUID(0, 500), "  \u4e2d\uD83D\uDE80 e\u0301 \uD800 x \uDC00\r\n  ", retention,
+        )
+        val acknowledged = mutableStateOf(false)
+        val working = mutableStateOf(false)
+        val destination = mutableStateOf<UnboundRecoveryCopy.Destination?>(null)
+        val failure = mutableStateOf<UiText?>(null)
+        val acknowledgments = mutableListOf<TransientRecoveryText>()
+        val copies = mutableListOf<TransientRecoveryText>()
+        val completed = mutableListOf<TransientRecoveryText>()
+        val notSaved = "This reply was not saved."
+        val uncertain = "Saving this reply could not be confirmed."
+        val memoryWarning = "This captured text may be lost if the process stops. Android does not guarantee its survival."
+        val sendWarning = "Delivery may be uncertain. Manual copy does not send, retry or remove the original."
+        val acknowledge = "Acknowledge this notice"
+        val conflict = "A newer destination draft was preserved."
+        try {
+            val drafts = rig.container.chatsFeature.drafts
+            val copier = UnboundRecoveryCopy(
+                readInventory = { fail("Transient copy must not fabricate or read a durable record") },
+                drafts = drafts,
+            )
+            host.get().setContent {
+                MeshCoreTheme {
+                    CompositionLocalProvider(LocalDensity provides Density(1f, 2f)) {
+                        val scope = rememberCoroutineScope()
+                        TransientRecoveryNotice(
+                            text = source,
+                            labels = TransientRecoveryLabels(
+                                UiText.Verbatim("Reply text recovery"),
+                                UiText.Verbatim(notSaved), UiText.Verbatim(uncertain),
+                                UiText.Verbatim(memoryWarning), UiText.Verbatim(sendWarning),
+                                UiText.Verbatim("Choose chat"), UiText.Verbatim("Copy to selected chat"),
+                                UiText.Verbatim(acknowledge),
+                            ),
+                            destinationLabel = destination.value?.let { UiText.Verbatim("Selected chat") },
+                            acknowledged = acknowledged.value, working = working.value, failure = failure.value,
+                            onChooseChat = { destination.value = copier.selectDestination(target) },
+                            onCopy = { displayed ->
+                                val chosen = checkNotNull(destination.value)
+                                copies += displayed
+                                scope.launch {
+                                    working.value = true
+                                    try {
+                                        copier.copyTransient(displayed, chosen)
+                                        completed += displayed
+                                    } catch (rejected: UnboundRecoveryCopyException) {
+                                        assertEquals(UnboundRecoveryCopyException.Failure.DESTINATION_CHANGED,
+                                            rejected.failure)
+                                        failure.value = UiText.Verbatim(conflict)
+                                    } finally {
+                                        working.value = false
+                                    }
+                                }
+                            },
+                            onAcknowledge = {
+                                acknowledgments += it
+                                acknowledged.value = true
+                            },
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
+                }
+            }
+            fun node(text: String): SemanticsNodeInteraction {
+                compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText(text))
+                return compose.onNodeWithText(text)
+            }
+            val status = if (retention == TransientRetention.NOT_RETAINED) notSaved else uncertain
+            node(status).assertIsDisplayed()
+            node(memoryWarning).assertIsDisplayed()
+            node(sendWarning).assertIsDisplayed()
+            node("Copy to selected chat").assertIsNotEnabled()
+            assertTrue(copies.isEmpty())
+            node(acknowledge).performClick()
+            assertEquals(listOf(source), acknowledgments)
+            node(status).assertIsDisplayed()
+            node(source.exactText).assertIsDisplayed()
+            assertNull(drafts.get(target.conversationId))
+            node("Choose chat").performClick()
+            val newer = "newer destination draft"
+            drafts.set(target.conversationId, newer)
+            node("Copy to selected chat").performClick()
+            compose.waitUntil(5_000) { failure.value != null }
+            node(conflict).assertIsDisplayed()
+            assertEquals(newer, drafts.get(target.conversationId))
+            assertTrue(completed.isEmpty())
+            compose.runOnIdle {
+                drafts.set(target.conversationId, null)
+                failure.value = null
+            }
+            node("Choose chat").performClick()
+            assertNull(drafts.get(target.conversationId))
+            node("Copy to selected chat").performClick()
+            compose.waitUntil(5_000) { completed.isNotEmpty() }
+            assertEquals(listOf(source), completed)
+            assertEquals(listOf(source, source), copies)
+            assertEquals(source.exactText.toCharArray().toList(),
+                assertNotNull(drafts.get(target.conversationId)).toCharArray().toList())
+            node(status).assertIsDisplayed()
+            node(acknowledge).assertIsNotEnabled()
+            compose.runOnIdle { working.value = true }
+            node("Choose chat").assertIsNotEnabled()
+            node("Copy to selected chat").assertIsNotEnabled()
+            assertEquals(listOf(source), completed)
+            assertTrue(store.fetchMessages(radio, target.channel.index, 20, 0).isEmpty())
+            assertTrue(store.fetchPendingSends(radio).isEmpty())
+            assertTrue(rig.links.links.isEmpty())
+        } finally {
+            host.pause().stop().destroy()
+            rig.container.close()
+        }
+    }
 
     @Test fun mountedUnboundCopyTransfersExactUtf16IntoActualAppDraft() =
         mountedUnboundCopy(UnboundCopyOutcome.EXACT)

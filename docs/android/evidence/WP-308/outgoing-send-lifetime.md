@@ -2,6 +2,38 @@
 
 ## Recovery-list consumer preparation (not activated)
 
+### Transient-only receiver outcome seam (not activated)
+
+`TransientRecoveryNotice` now accepts `TransientRecoveryText(attemptId, exactText,
+retention)` with only `NOT_RETAINED` or `INDETERMINATE` retention states.
+The attempt ID correlates the caller's still-held evidence; it is explicitly not
+a journal/store/submission/issuance receipt. The receiver retains actual producer
+evidence and reconciliation identity separately. This model never enters the
+durable `UnboundRecoveryList` inventory. No default labels, saveable state,
+logging, notification post, foreground launch or automatic retry is provided.
+
+The caller supplies typed localized labels for not saved, saving unconfirmed,
+process-memory loss, possible delivery uncertainty, choose/copy and acknowledge.
+Both explicit copy and acknowledgment emit the full displayed immutable value.
+Acknowledgment acknowledges the notice only; it neither retires raw text nor
+consumes/relabels producer evidence or permits a retry. The route must scope its
+acknowledgment to the exact attempt and evidence, not reuse it for another outcome.
+
+`UnboundRecoveryCopy.copyTransient` copies this still-live String into an explicitly
+selected destination through the same revision-fenced atomic draft restore.
+It does not fabricate a durable source or claim notification retention, and does
+not call the journal reader. A successful destination copy is not reconciliation
+of an indeterminate source write, delivery proof or a durable completion receipt.
+
+Two additional mounted controls are authored, one per retention outcome, at
+200% font using the real App draft store. They check visible memory/delivery
+warnings, no automatic copy, acknowledgment without disappearance/relabeling,
+newer-draft refusal, explicit reselection and exact UTF-16 destination text,
+working-state refusal and empty message/pending queues. They are uncompiled and
+unexecuted; production localization, receiver routing/evidence ownership and
+permitted Android verification remain required. Android cannot promise that an
+unretained input survives process death or that a notice automatically opens.
+
 The immutable notification storage source
 `e3f3c451fcb294aae68457e949677ac4a1cfa9b2` supplies a no-route
 `CopyText(storeId, recordId, sequence, exactText)` projection through

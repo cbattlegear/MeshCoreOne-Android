@@ -18,7 +18,10 @@ import com.meshcoreone.android.app.container.onboarding.RequestedPermissions
 import com.meshcoreone.android.feature.onboarding.OnboardingPermissionKind
 import com.meshcoreone.android.core.connectivity.permissions.ConnectivityPermission
 import com.meshcoreone.android.core.connectivity.pairing.BluetoothScanPairingService
+import com.meshcoreone.android.core.connectivity.pairing.BluetoothEndpoint
+import com.meshcoreone.android.core.connectivity.pairing.DeviceEndpointIdentity
 import com.meshcoreone.android.core.connectivity.pairing.DevicePairingService
+import com.meshcoreone.android.core.connectivity.pairing.KnownEndpointStore
 import com.meshcoreone.android.core.connectivity.ble.BleScanCoordinator
 import com.meshcoreone.android.core.connectivity.ble.BleScanGateway
 import com.meshcoreone.android.core.connectivity.ble.DiscoveredDevice
@@ -43,6 +46,8 @@ import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.DeviceIdentity
 import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.model.snapshot
+import com.meshcoreone.android.feature.settings.device.DeviceSelectionListBuilder
+import com.meshcoreone.android.feature.settings.device.ui.DeviceSelectionSheet
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.core.services.simulator.DemoModeManager
 import com.meshcoreone.android.core.services.simulator.InMemoryDemoModeDefaults
@@ -104,6 +109,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         ),
         pairingService: DevicePairingService? = null,
         scans: BleScanCoordinator = newScans(),
+        knownEndpoints: KnownEndpointStore = SyntheticEndpoints(),
         openSettings: () -> Unit = {},
         requests: RequestedPermissions = RequestedPermissions(),
         controlledLocalNetworkDialog: Boolean = false,
@@ -126,7 +132,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         )
         val h = ContainerHarness(
             this, store, persistenceOverride = persistence, systemLinks = systemLinks,
-            pairingService = pairingService, scans = scans, onboardingPlatform = platform,
+            pairingService = pairingService, scans = scans, onboardingPlatform = platform, knownEndpoints = knownEndpoints,
         )
         val storage = MeshCoreStorage.get(compose.activity)
         val previousDelegate = ActivityCompat.getPermissionCompatDelegate()
@@ -431,7 +437,13 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
                 compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
                 compose.waitForIdle()
                 h.settle()
-                assertEquals(OnboardingPermissionKind.BLUETOOTH, feature.selectionRequestedPermission.value)
+                h.eventuallyMounted("SCAN action advances after a CONNECT-only grant") {
+                    feature.selectionRequestedPermission.value != null || service.isPresenting.value || feature.failure.value != null
+                }
+                val context = "action=${feature.selectionAction.value}, denied=${feature.selectionPermissionDenied.value}, " +
+                    "blocker=${feature.selectionScanBlocker.value}, permissions=${facts.granted}, " +
+                    "requested=${shadowOf(compose.activity).lastRequestedPermission?.requestedPermissions?.toList()}"
+                assertEquals(context, OnboardingPermissionKind.BLUETOOTH, feature.selectionRequestedPermission.value)
                 assertFalse(feature.selectionPermissionDenied.value)
                 assertFalse(service.isPresenting.value)
                 permissionResult(facts, true, bluetoothPermissions)
@@ -517,6 +529,9 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
                 assertNull(h.appState.connectionUI.queuedSystemPairingSetup)
                 assertFalse(h.container.connectionPort.isPairingFlowActive)
             } else {
+                h.eventuallyMounted("selected setup prompt appears after CONNECT grant") {
+                    h.appState.connectionUI.pendingSystemPairingSetup != null
+                }
                 assertEquals(listOf(selected), requireNotNull(h.appState.connectionUI.pendingSystemPairingSetup).accessories.map { it.id })
                 compose.onNodeWithTag("system-pairing-cancel").performClick()
                 assertFalse(h.container.connectionPort.isPairingFlowActive)
@@ -931,15 +946,18 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
 
     @Test fun fallbackScanSelectionConnectsTheAdvertisedIdentityThroughTheRealPairingService() = runTest {
         val service = BluetoothScanPairingService()
-        val id = UUID.randomUUID()
+        val address = "4A:00:00:00:00:01"
+        val id = DeviceEndpointIdentity.deviceId(address)
+        val endpoints = SharedPreferencesKnownEndpoints(compose.activity)
         var stopped = false
         val scans = BleScanCoordinator(object : BleScanGateway {
             override fun startScan(onDevice: (DiscoveredDevice) -> Unit, onFailure: (Throwable) -> Unit) {
-                onDevice(DiscoveredDevice(id, syntheticAddress(id), "Fallback radio", -40))
+                onDevice(DiscoveredDevice(id, address, "Fallback radio", -40))
             }
             override fun stopScan() { stopped = true }
         })
-        withSettings(pairingService = service, scans = scans) { h, feature ->
+        withSettings(pairingService = service, scans = scans, knownEndpoints = endpoints) { h, feature ->
+            assertNull(endpoints.endpoint(id))
             mount(h, feature)
             open(h)
             compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
@@ -953,10 +971,44 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             }
             assertEquals(id, (h.links.links.single().target as ConnectionTarget.Bluetooth).deviceId)
             assertEquals(id, h.manager.connectedDevice?.id)
+            assertEquals(BluetoothEndpoint(id, address, null), endpoints.endpoint(id))
+            assertNull(SharedPreferencesKnownEndpoints(compose.activity).endpoint(id))
             assertFalse(service.isPresenting.value)
             compose.waitForIdle()
             h.eventually("fallback scan released after selection") { stopped && !h.container.connectionPort.isPairingFlowActive }
             assertEquals(AppTab.SETTINGS, h.container.navigation.state.value.selectedTab)
+        }
+    }
+
+    @Test fun longDeviceSelectionSheetScrollsToTheLastRadioAndConnectionActions() = runTest {
+        withSettings { h, _ ->
+            val seed = saved(h)
+            val radios = (1..30).map { index ->
+                seed.copy(id = UUID.randomUUID(), nodeName = "Long-list radio $index")
+            }
+            var scanned = false
+            var connectedViaWifi = false
+            compose.activity.setContent {
+                MeshCoreTheme {
+                    DeviceSelectionSheet(
+                        list = DeviceSelectionListBuilder.Result(radios, emptyList()),
+                        connectedElsewhere = emptySet(),
+                        onSelect = {},
+                        onSetUp = {},
+                        onScan = { scanned = true },
+                        onConnectViaWifi = { connectedViaWifi = true },
+                        onDismiss = {},
+                    )
+                }
+            }
+            compose.waitForIdle()
+            compose.onNodeWithText("Long-list radio 30").performScrollTo().assertIsDisplayed()
+            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth))
+                .performScrollTo().performClick()
+            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionConnectViaWifi))
+                .performScrollTo().performClick()
+            assertTrue(scanned)
+            assertTrue(connectedViaWifi)
         }
     }
 

@@ -18,6 +18,7 @@ import com.meshcoreone.android.core.contracts.domain.BluetoothAddress
 import com.meshcoreone.android.core.contracts.domain.BluetoothPairingHandle
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.connectivity.pairing.KnownEndpointStore
 import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -130,6 +131,7 @@ internal class ContainerHarness(
     pairingService: com.meshcoreone.android.core.connectivity.pairing.DevicePairingService? = null,
     scans: com.meshcoreone.android.core.connectivity.ble.BleScanCoordinator = newScans(),
     onboardingPlatform: com.meshcoreone.android.app.container.onboarding.OnboardingPlatform? = null,
+    knownEndpoints: KnownEndpointStore = SyntheticEndpoints(),
 ) {
     val scheduler: TestCoroutineScheduler = test.testScheduler
     val links = HarnessLinks(identity)
@@ -147,7 +149,9 @@ internal class ContainerHarness(
             store = persistenceOverride,
             passwords = MemoryVault(),
             connectionPreferences = preferencesOverride ?: preferences,
-            connectivity = newConnectivity(pairingService ?: pairing, systemLinks = systemLinks, onForeground = { foregroundCalls += it }, currentLink = {
+            connectivity = newConnectivity(
+                pairingService ?: pairing, systemLinks = systemLinks, knownEndpoints = knownEndpoints,
+                onForeground = { foregroundCalls += it }, currentLink = {
                 links.links.lastOrNull()?.takeIf {
                     observeBleLink && it.target is ConnectionTarget.Bluetooth && it.radio.connected && it.live != null
                 }?.let { link ->
@@ -165,6 +169,7 @@ internal class ContainerHarness(
             }),
             linkProbe = systemLinks,
             scans = scans,
+            knownEndpoints = knownEndpoints,
             onboardingPlatform = onboardingPlatform,
             linkFactory = links,
             simulatorSeedStore = simulatorSeedStore,

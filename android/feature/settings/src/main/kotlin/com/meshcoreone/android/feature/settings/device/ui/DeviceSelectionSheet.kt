@@ -3,9 +3,11 @@
 package com.meshcoreone.android.feature.settings.device.ui
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -35,21 +37,33 @@ fun DeviceSelectionSheet(
     onSelect: (DeviceDTO) -> Unit, onSetUp: (SystemPairedAccessory) -> Unit, onScan: () -> Unit, onConnectViaWifi: () -> Unit, onDismiss: () -> Unit,
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(stringResource(AppSettingsStrings.deviceSelectionTitle), style = MaterialTheme.typography.titleLarge)
-            if (list.connectable.isEmpty() && list.needsSetup.isEmpty()) {
-                Text(stringResource(AppSettingsStrings.deviceSelectionNoPairedDevices), style = MaterialTheme.typography.titleMedium)
-                Text(stringResource(AppSettingsStrings.deviceSelectionNoPairedDescription))
+        LazyColumn(
+            modifier = Modifier.fillMaxWidth(),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            item(key = "title") {
+                Text(stringResource(AppSettingsStrings.deviceSelectionTitle), style = MaterialTheme.typography.titleLarge)
             }
-            for (device in list.connectable) {
+            if (list.connectable.isEmpty() && list.needsSetup.isEmpty()) {
+                item(key = "empty-title") {
+                    Text(stringResource(AppSettingsStrings.deviceSelectionNoPairedDevices), style = MaterialTheme.typography.titleMedium)
+                }
+                item(key = "empty-description") {
+                    Text(stringResource(AppSettingsStrings.deviceSelectionNoPairedDescription))
+                }
+            }
+            items(list.connectable, key = { "radio-${it.id}" }) { device ->
                 val elsewhere = device.id in connectedElsewhere
                 val detail = if (elsewhere) res(AppSettingsStrings.deviceSelectionConnectedElsewhere) else null
                 val canConnect = !elsewhere || device.connectionMethods.any { it.isWiFi }
                 ActionRow(UiText.Verbatim(device.nodeName), canConnect, { onSelect(device) }, detail = detail)
             }
             if (list.needsSetup.isNotEmpty()) {
-                Text(stringResource(AppSettingsStrings.deviceSelectionPreviouslyPaired), style = MaterialTheme.typography.titleSmall)
-                for (accessory in list.needsSetup) {
+                item(key = "needs-setup-title") {
+                    Text(stringResource(AppSettingsStrings.deviceSelectionPreviouslyPaired), style = MaterialTheme.typography.titleSmall)
+                }
+                items(list.needsSetup, key = { "setup-${it.id}" }) { accessory ->
                     val row = DeviceSelectionListBuilder.needsSetupPresentation(accessory.name)
                     val label = uiString(row.accessibilityLabel)
                     val hint = uiString(row.accessibilityHint)
@@ -58,8 +72,12 @@ fun DeviceSelectionSheet(
                     }
                 }
             }
-            ActionRow(res(AppSettingsStrings.deviceSelectionScanBluetooth), true, onScan)
-            ActionRow(res(AppSettingsStrings.deviceSelectionConnectViaWifi), true, onConnectViaWifi)
+            item(key = "scan-bluetooth") {
+                ActionRow(res(AppSettingsStrings.deviceSelectionScanBluetooth), true, onScan)
+            }
+            item(key = "connect-via-wifi") {
+                ActionRow(res(AppSettingsStrings.deviceSelectionConnectViaWifi), true, onConnectViaWifi)
+            }
         }
     }
 }

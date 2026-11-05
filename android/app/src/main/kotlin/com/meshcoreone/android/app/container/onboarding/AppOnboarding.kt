@@ -59,6 +59,7 @@ class OnboardingPlatform(
     val openAppSettings: () -> Unit = {},
     val sdkInt: Int = Build.VERSION.SDK_INT,
     val regionResources: (() -> Resources)? = null,
+    val isBondedAddress: (String) -> Boolean = { false },
 )
 
 /** [OnboardingPermissionFacts] over the real platform readers. */
@@ -231,7 +232,14 @@ object AppOnboardingFactory {
     ): AppOnboarding {
         val host = AppStateOnboardingHost(container)
         val service = container.pairing.pairing as? BluetoothScanPairingService
-        val scanFallback = service?.let { svc -> platform.scans?.let { ScanFallbackPort(svc, it) } }
+        val scanFallback = service?.let { svc ->
+            platform.scans?.let { scans ->
+                ScanFallbackPort(
+                    svc, scans, checkNotNull(container.knownEndpoints) { "Scan fallback requires a known-endpoint store" },
+                    scope, platform.isBondedAddress,
+                )
+            }
+        }
         val permissions = AndroidOnboardingPermissionPort(
             platform.permissionFacts, platform.requests, scanFallback = service != null,
         )

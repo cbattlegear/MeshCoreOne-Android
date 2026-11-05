@@ -265,7 +265,7 @@ private fun AppDeviceSelection(feature: AppSettingsFeature, onDismiss: () -> Uni
             confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(L.commonCancel)) } })
     } else DeviceSelectionSheet(loaded, elsewhere,
         onSelect = { device -> onDismiss(); feature.selectSavedDevice(device) },
-        onSetUp = { accessory -> feature.queueDeviceSetup(accessory); onDismiss() },
+        onSetUp = { accessory -> onDismiss(); feature.queueDeviceSetup(accessory) },
         onScan = { feature.queueDeviceScan(); onDismiss() },
         onConnectViaWifi = { onDismiss(); onWifi() },
         onDismiss = onDismiss,
@@ -347,18 +347,10 @@ private fun AppSelectionPlatform(feature: AppSettingsFeature) {
         ModalBottomSheet(fallback::cancel, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
             val ready = permissions.bluetooth == PermissionStatus.GRANTED && permissions.bluetoothAdapterEnabled
             val discoveries by remember(fallback, ready) {
-                if (ready) channelFlow {
-                    supervisorScope {
-                        val scan = async { fallback.discoveries().collect { send(it) } }
-                        try {
-                            scan.await()
-                        } catch (cancelled: CancellationException) {
-                            throw cancelled
-                        } catch (failure: Exception) {
-                            feature.cancelSelectionScan()
-                            feature.report("Could not scan for a radio", failure)
-                        }
-                    }
+                if (ready) fallback.discoveries().catch { failure ->
+                    if (failure is CancellationException) throw failure
+                    feature.report("Could not scan for a radio", failure)
+                    feature.cancelSelectionScan()
                 } else flowOf(emptyList())
             }.collectAsState(emptyList())
             DeviceScannerSheetContent(discoveries, permissions, feature::selectSelectionScanDevice, fallback::cancel)

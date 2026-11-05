@@ -69,7 +69,7 @@ class NotificationReplyEnrollmentStore internal constructor(
         data class AlreadyBound(val receipt: CreationReceipt) : EnrollmentResult
         data class Observed(val receipt: CreationReceipt) : EnrollmentResult
         data class NotRetained(val reason: Failure) : EnrollmentResult
-        data class Indeterminate(val operation: EnrollmentOperation) : EnrollmentResult
+        data class Indeterminate(val operation: EnrollmentOperation, val reason: Failure? = null) : EnrollmentResult
     }
     /** No destination, post, issued token, outgoing ID, claim or dispatch surface exists here. */
     data class UnboundText(
@@ -337,20 +337,27 @@ class NotificationReplyEnrollmentStore internal constructor(
         database { db -> transaction(db) {
             val receipt = checked(db)
             if (receipt.operation != operation || receipt.creationNonce != nonce) {
-                EnrollmentResult.NotRetained(Failure.MISMATCH)
+                observationFailure(operation, Failure.MISMATCH, replayPrepare)
             } else if (!replayPrepare) EnrollmentResult.Observed(receipt)
             else if (receipt.state == Phase.PREPARING) EnrollmentResult.AlreadyPreparing(receipt)
             else EnrollmentResult.AlreadyBound(receipt)
         } }
     } catch (error: Invalid) {
-        EnrollmentResult.NotRetained(error.reason)
+        observationFailure(operation, error.reason, replayPrepare)
     } catch (_: SQLiteDatabaseCorruptException) {
-        EnrollmentResult.NotRetained(Failure.CORRUPT_STORAGE)
+        observationFailure(operation, Failure.CORRUPT_STORAGE, replayPrepare)
     } catch (_: SQLiteException) {
-        EnrollmentResult.NotRetained(Failure.STORAGE_UNAVAILABLE)
+        observationFailure(operation, Failure.STORAGE_UNAVAILABLE, replayPrepare)
     } catch (_: SecurityException) {
-        EnrollmentResult.NotRetained(Failure.STORAGE_UNAVAILABLE)
+        observationFailure(operation, Failure.STORAGE_UNAVAILABLE, replayPrepare)
     }
+
+    private fun observationFailure(
+        operation: EnrollmentOperation,
+        reason: Failure,
+        replayPrepare: Boolean,
+    ): EnrollmentResult = if (replayPrepare) EnrollmentResult.NotRetained(reason)
+        else EnrollmentResult.Indeterminate(operation, reason)
 
     private fun reconcileAmbiguous(expected: CreationReceipt): EnrollmentResult =
         when (val observed = observeExisting(expected.operation, expected.creationNonce)) {
@@ -358,13 +365,15 @@ class NotificationReplyEnrollmentStore internal constructor(
                 Phase.PREPARING -> EnrollmentResult.AlreadyPreparing(observed.receipt)
                 Phase.BOUND -> EnrollmentResult.AlreadyBound(observed.receipt)
             }
+            is EnrollmentResult.Indeterminate -> observed
             else -> EnrollmentResult.Indeterminate(expected.operation)
         }
 
     private fun reconcileBound(bound: CreationReceipt): EnrollmentResult =
         when (val observed = observeExisting(bound.operation, bound.creationNonce)) {
             is EnrollmentResult.Observed -> if (observed.receipt == bound) EnrollmentResult.AlreadyBound(bound)
-                else EnrollmentResult.Indeterminate(bound.operation)
+                else EnrollmentResult.Indeterminate(bound.operation, Failure.MISMATCH)
+            is EnrollmentResult.Indeterminate -> observed
             else -> EnrollmentResult.Indeterminate(bound.operation)
         }
 

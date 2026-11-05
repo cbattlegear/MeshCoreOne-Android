@@ -95,12 +95,20 @@ its return. Only the uninterrupted original authorized flow may start allocation
 recovery evidence blocks. The storage API cannot manufacture that external invocation history.
 
 `EnrollmentResult` exposes Preparing/AlreadyPreparing, Bound/AlreadyBound and Observed with
-the exact receipt, NotRetained(reason), or Indeterminate(operation). Reconcile never creates.
+the exact receipt, NotRetained(reason), or Indeterminate(operation, reason). Reconcile never creates.
 Lost successful returns reconcile only the same operation **and the nonce known by that
-call**; missing/unreadable/replaced storage remains Indeterminate. Bind replays require
+call**; missing/unreadable/replaced storage remains Indeterminate, with the typed observation
+failure retained separately from commit uncertainty. Invalid budgets or an expected nonce
+that contradicts the supplied operation remain NotRetained input failures; observing another
+operation/nonce on disk is instead Indeterminate(MISMATCH). No observation proves that a prior
+creation never committed. Bind replays require
 the same accepted witness UUID. Concurrent conflicting acceptances cannot overwrite the first.
 All external/test observers execute only after transactions and handles close. Internal
 deterministic interruption enums model crash steps without executing caller callbacks under locks.
+
+The local successor corrects the restart assertions to require uncertainty for missing/replaced
+storage and adds corrupt/unavailable restart coverage without recreation. This new method
+requires fresh exact-candidate execution; earlier 340-case results do not cover it.
 
 ## Bound journal enforcement and surviving old text
 

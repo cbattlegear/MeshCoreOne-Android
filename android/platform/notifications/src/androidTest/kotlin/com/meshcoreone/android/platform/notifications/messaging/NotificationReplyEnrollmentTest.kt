@@ -79,7 +79,7 @@ class NotificationReplyEnrollmentTest {
 
     @Test
     fun missingReconcileAndCopyDoNotCreateOrInferAuthorizedFreshInstallation() = runTest {
-        assertEquals(notRetained(NotificationReplyEnrollmentStore.Failure.MISSING_STORAGE),
+        assertEquals(indeterminate(NotificationReplyEnrollmentStore.Failure.MISSING_STORAGE),
             store.reconcile(operation))
         val unknown = NotificationReplyEnrollmentStore.CreationReceipt(
             operation, 2, NotificationReplyEnrollmentStore.Phase.BOUND, operation.creationNonce, UUID.randomUUID())
@@ -219,7 +219,7 @@ class NotificationReplyEnrollmentTest {
             val before = file.readBytes()
             // Both APIs used to accept a null nonce here and return the replacement's receipt.
             assertEquals(notRetained(NotificationReplyEnrollmentStore.Failure.MISMATCH), store.prepare(operation))
-            assertEquals(notRetained(NotificationReplyEnrollmentStore.Failure.MISMATCH), store.reconcile(operation))
+            assertEquals(indeterminate(NotificationReplyEnrollmentStore.Failure.MISMATCH), store.reconcile(operation))
             assertEquals(notRetained(NotificationReplyEnrollmentStore.Failure.MISMATCH),
                 store.reconcile(operation, differentNonce.creationNonce))
             assertTrue(before.contentEquals(file.readBytes()))
@@ -268,7 +268,7 @@ class NotificationReplyEnrollmentTest {
             assertEquals(notRetained(NotificationReplyEnrollmentStore.Failure.STORAGE_UNAVAILABLE),
                 interrupted.prepare(operation))
             assertTrue(file.exists())
-            assertEquals(notRetained(NotificationReplyEnrollmentStore.Failure.EXISTING_UNATTRIBUTED_STORAGE),
+            assertEquals(indeterminate(NotificationReplyEnrollmentStore.Failure.EXISTING_UNATTRIBUTED_STORAGE),
                 store.reconcile(operation))
             assertEquals(notRetained(NotificationReplyEnrollmentStore.Failure.EXISTING_UNATTRIBUTED_STORAGE),
                 store.prepare(operation))
@@ -317,9 +317,9 @@ class NotificationReplyEnrollmentTest {
             cleanup()
             throw SQLiteException("lost storage")
         }
-        assertEquals(NotificationReplyEnrollmentStore.EnrollmentResult.Indeterminate(operation),
+        assertEquals(indeterminate(NotificationReplyEnrollmentStore.Failure.MISSING_STORAGE),
             afterPrepare.prepare(operation))
-        assertEquals(notRetained(NotificationReplyEnrollmentStore.Failure.MISSING_STORAGE),
+        assertEquals(indeterminate(NotificationReplyEnrollmentStore.Failure.MISSING_STORAGE),
             store.reconcile(operation))
         assertFalse(file.exists())
         val preparing = prepareFixture()
@@ -327,11 +327,33 @@ class NotificationReplyEnrollmentTest {
             cleanup()
             throw SQLiteException("lost storage")
         } }
-        assertEquals(NotificationReplyEnrollmentStore.EnrollmentResult.Indeterminate(operation),
+        assertEquals(indeterminate(NotificationReplyEnrollmentStore.Failure.MISSING_STORAGE),
             afterBind.bind(preparing, acceptance(preparing)))
-        assertEquals(notRetained(NotificationReplyEnrollmentStore.Failure.MISSING_STORAGE),
+        assertEquals(indeterminate(NotificationReplyEnrollmentStore.Failure.MISSING_STORAGE),
             store.reconcile(operation, preparing.creationNonce))
         assertFalse(file.exists())
+    }
+
+    @Test
+    fun restartReconciliationPreservesCorruptAndUnavailableObservationWithoutRecreatingStorage() = runTest {
+        prepareFixture()
+        cleanup()
+        val corrupt = byteArrayOf(1, 2, 3, 4)
+        file.writeBytes(corrupt)
+        assertEquals(indeterminate(NotificationReplyEnrollmentStore.Failure.CORRUPT_STORAGE),
+            store.reconcile(operation))
+        assertTrue(corrupt.contentEquals(file.readBytes()))
+        cleanup()
+        assertTrue(file.mkdir())
+        assertEquals(indeterminate(NotificationReplyEnrollmentStore.Failure.STORAGE_UNAVAILABLE),
+            store.reconcile(operation))
+        assertTrue(file.isDirectory)
+        assertTrue(requireNotNull(file.list()).isEmpty())
+        assertEquals(notRetained(NotificationReplyEnrollmentStore.Failure.MISMATCH),
+            store.reconcile(operation, UUID.randomUUID()))
+        assertEquals(notRetained(NotificationReplyEnrollmentStore.Failure.INVALID_LIMITS),
+            NotificationReplyEnrollmentStore(file, limits, 0, issuance, limits).reconcile(operation))
+        assertTrue(file.isDirectory)
     }
 
     @Test
@@ -346,11 +368,11 @@ class NotificationReplyEnrollmentTest {
                 replacement.copyTo(file)
                 throw SQLiteException("replacement")
             }
-            assertEquals(NotificationReplyEnrollmentStore.EnrollmentResult.Indeterminate(operation),
+            assertEquals(indeterminate(NotificationReplyEnrollmentStore.Failure.MISMATCH),
                 faulting.prepare(operation))
             assertEquals(NotificationReplyEnrollmentStore.EnrollmentResult.Observed(otherReceipt),
                 store.reconcile(otherOperation))
-            assertEquals(notRetained(NotificationReplyEnrollmentStore.Failure.MISMATCH),
+            assertEquals(indeterminate(NotificationReplyEnrollmentStore.Failure.MISMATCH),
                 store.reconcile(operation))
             assertEquals(notRetained(NotificationReplyEnrollmentStore.Failure.MISMATCH),
                 store.reconcile(operation, UUID.randomUUID()))
@@ -387,7 +409,7 @@ class NotificationReplyEnrollmentTest {
     fun jointLocalLossRemainsMissingAndExternalOwnerMustNotInventFreshnessOrReplacementIds() = runTest {
         val bound = bindFixture(prepareFixture())
         cleanup()
-        assertEquals(notRetained(NotificationReplyEnrollmentStore.Failure.MISSING_STORAGE),
+        assertEquals(indeterminate(NotificationReplyEnrollmentStore.Failure.MISSING_STORAGE),
             store.reconcile(operation, bound.creationNonce))
         assertEquals(NotificationReplyStagingStore.StageResult.Rejected(
             NotificationReplyStagingStore.Failure.MISSING_STORAGE),
@@ -660,7 +682,7 @@ class NotificationReplyEnrollmentTest {
         cleanup()
         val preparing = prepareFixture()
         database { it.execSQL("UPDATE reply_enrollment SET nonce=?", arrayOf(UUID.randomUUID().toString())) }
-        assertEquals(notRetained(NotificationReplyEnrollmentStore.Failure.CORRUPT_STORAGE),
+        assertEquals(indeterminate(NotificationReplyEnrollmentStore.Failure.CORRUPT_STORAGE),
             store.reconcile(operation, preparing.creationNonce))
     }
 
@@ -695,6 +717,9 @@ class NotificationReplyEnrollmentTest {
 
     private fun notRetained(reason: NotificationReplyEnrollmentStore.Failure) =
         NotificationReplyEnrollmentStore.EnrollmentResult.NotRetained(reason)
+
+    private fun indeterminate(reason: NotificationReplyEnrollmentStore.Failure) =
+        NotificationReplyEnrollmentStore.EnrollmentResult.Indeterminate(operation, reason)
 
     private fun <T> database(block: (SQLiteDatabase) -> T): T =
         SQLiteDatabase.openDatabase(file.absolutePath, null, SQLiteDatabase.OPEN_READWRITE).use(block)

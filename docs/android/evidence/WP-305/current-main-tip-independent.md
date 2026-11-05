@@ -1,12 +1,22 @@
 # Independent durable onboarding-tip prerequisite
 
 Repository: `cbattlegear/MeshCoreOne-Android`; WP-305.
-Integration base: `663d2029ff461ce82c0befd167e2d3b627b2ea72`.
+Integration base: `5012fb0f994388d47d143b6b281af3cbaeed822f`.
+First normal-PR base: `663d2029ff461ce82c0befd167e2d3b627b2ea72`.
 Original isolated base: `2e7823cec06294dd4039000de32c98c9786f5dc5`.
 Read-only Swift reference: `db14559b39d32322b06477c6ae676112f583db50`.
 Initial assignment: `assignment:fc9361f4-ec03-4739-994b-ddb9b4e4cec9:call_DoCtxb5Q3YEVJ09aV2ZCYoUq`.
 Cross-writer correction: `assignment:fc9361f4-ec03-4739-994b-ddb9b4e4cec9:call_qti7XrNF7kfWHmfY533DiLs9`.
 Normal integration: `assignment:fc9361f4-ec03-4739-994b-ddb9b4e4cec9:call_y6GkzD7PPgLnZiVmF0nKRp4P`.
+
+The first normal-PR successor `d524b315adf9c01c269876d0c495988611e17f5c`
+passed exact run 42013172998, including the empty-marker review correction.
+Before integration, main advanced through factory PR #583. Its four changed
+paths do not intersect this seven-path prerequisite. A normal two-parent main
+merge preserves all five Kotlin blobs, the deviation record and original
+negative-discriminator file unchanged from d524; only this evidence identifies
+the new integration base. That older green remains historical: the refreshed
+immutable head requires new exact-candidate checks and independent review.
 
 The normal integration candidate reconciles only this seven-path slice from
 `ceed0690097b38749216bbb1158ba6499f17d101` against fresh main. None of the

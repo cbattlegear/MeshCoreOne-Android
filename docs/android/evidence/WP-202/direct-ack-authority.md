@@ -320,3 +320,16 @@ That shared builder now installs `DirectAckStorage.callback`; all original
 import, timestamp and repeated-restore assertions remain unchanged.
 The preceding repair did not establish whole-run acceptance. This additional
 fixture correction requires its own exact-head hosted execution.
+
+The exact `5f282399aeb17d5909e3cd656ac109ff3b75a3c2`
+[run 41969637946](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41969637946)
+completed with `core:data` passing and `:app:testDebugUnitTest` reporting 1,973
+tests / 23 failures. Nineteen restore failures again reported missing canonical
+triggers at `DirectAckStorage.kt:302`; the affected app/parity tests share
+`RoomProcessTest`, which delegates to `openMemoryDatabase` in
+`ContainerTestSupport.kt`, a third callback-less builder. That shared builder
+now installs the production callback. Four remaining `BackupRegistrationTest`
+assertion failures also stem from the restore aborting before their intended
+post-commit assertions (including an `IllegalStateException` instead of the
+expected refresh `IOException`), per the exact failure log. Existing app and
+parity assertions are unchanged; another exact-head run is required.

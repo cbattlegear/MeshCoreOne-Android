@@ -123,7 +123,9 @@ class NotificationReplyRejectedInputRecoveryTest {
                 putParcelable(NotificationActionReceiver.REMOTE_INPUT_KEY, Intent("not-text"))
             },
         )
-        return Intent(intent).setClipData(ClipData.newIntent(REMOTE_INPUT_RESULTS_LABEL, resultIntent))
+        return Intent(intent).apply {
+            clipData = ClipData.newIntent(REMOTE_INPUT_RESULTS_LABEL, resultIntent)
+        }
     }
 
     private companion object {

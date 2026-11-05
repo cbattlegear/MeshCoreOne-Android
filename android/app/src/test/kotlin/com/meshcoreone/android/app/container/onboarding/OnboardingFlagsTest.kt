@@ -233,9 +233,9 @@ class OnboardingFlagsTest {
             worker.cancel()
             runCurrent()
 
-            assertTrue(completion.isCompleted, "The queued acknowledgement must be rejected during worker cleanup")
+            assertTrue("The queued acknowledgement must be rejected during worker cleanup", completion.isCompleted)
             assertTrue(completion.await().exceptionOrNull() is CancellationException)
-            assertTrue(stopping.isCompleted, "Shutdown must observe the drained queue after worker cleanup")
+            assertTrue("Shutdown must observe the drained queue after worker cleanup", stopping.isCompleted)
             stopping.await()
             assertFalse(persisted)
             assertFalse(flags.hasCompleted.value)

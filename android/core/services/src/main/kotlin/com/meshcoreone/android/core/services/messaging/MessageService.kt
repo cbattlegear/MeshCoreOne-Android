@@ -147,6 +147,7 @@ class MessageService(
 
     private suspend fun prepareDirect(
         id: UUID, requestID: UUID, contact: ContactDTO, mode: DirectAckMode, pendingSendID: UUID?,
+        isResend: Boolean = false,
     ): PreparedDirect {
         val result = authority().captureDirectAckIntent(directLease(), key(id), requestID, mode, pendingSendID)
         val (intent, receipt) = when (result) {
@@ -159,8 +160,11 @@ class MessageService(
         val pending = receipt.pending
         if (receipt.permission != DirectAckPermission.CURRENT || receipt.key != key(id) ||
             receipt.requestId != requestID || receipt.mode != mode || receipt.pendingSendId != pendingSendID ||
-            pendingSendID != null && (pending?.id != pendingSendID || pending.messageID != id)) {
+            pendingSendID != null && (pending == null || pending.id != pendingSendID || pending.messageID != id)) {
             throw authorityFailure("non-current or mismatched dispatch intent")
+        }
+        if (pending != null && (pending.contactID != message.contactID || pending.isResend != isResend)) {
+            throw authorityFailure("pending dispatch intent changed")
         }
         if (message.radioId != token.radioId || message.contactID != contact.id || contact.radioId != token.radioId) {
             throw MessageServiceException(MessageServiceError.ContactNotFound)
@@ -405,11 +409,14 @@ class MessageService(
         val row = dataStore.fetchMessage(key(tracking.messageID))
         if (row != null && row.status !in listOf(MessageStatus.FAILED, MessageStatus.DELIVERED)) {
             val requestID = UUID.randomUUID()
-            val contact = dataStore.fetchContact(key(requireNotNull(row.contactID)))
-                ?: throw MessageServiceException(MessageServiceError.ContactNotFound)
-            val prepared = prepareDirect(row.id, requestID, contact, DirectAckMode.SEND, null)
+            val result = authority().captureDirectAckIntent(directLease(), key(row.id), requestID, DirectAckMode.SEND, null)
+            val intent = when (result) {
+                is DirectAckIntentResult.Captured -> result.intent
+                is DirectAckIntentResult.AlreadyCaptured -> result.intent
+                is DirectAckIntentResult.Rejected -> throw authorityFailure(result.reason.name)
+            }
             tracking.ackCodes.forEachIndexed { index, code ->
-                registerDirectDispatch(tracking.messageID, requestID, code, index, prepared.intent)
+                registerDirectDispatch(tracking.messageID, requestID, code, index, intent)
             }
         }
         synchronized(lock) {
@@ -982,6 +989,11 @@ class MessageService(
         return owned("sendMessageWithRetry") {
             val current = fetchSaved(message.id)
             if (current.contactID != contact.id) throw MessageServiceException(MessageServiceError.ContactNotFound)
+            if (config.maxAttempts == 0L) {
+                return@owned sendBoundary(message.id, true) {
+                    finalizeSend(message.id, contact.id, contact.publicKey, null, contact.outPathLength, noDispatch = true)
+                }
+            }
             val claim = newDirectClaim(
                 UUID.randomUUID(), message, contact, false, initialStatus = current.status,
             )
@@ -1035,7 +1047,8 @@ class MessageService(
         val mode = if (resend || initialStatus in listOf(MessageStatus.FAILED, MessageStatus.DELIVERED)) {
             DirectAckMode.RESEND
         } else DirectAckMode.SEND
-        val prepared = prepareDirect(row.id, claimID, contact, mode, pendingSendID)
+        if (config.maxAttempts > 0) checkIdentity("retryDirectMessage")
+        val prepared = prepareDirect(row.id, claimID, contact, mode, pendingSendID, resend)
         return DirectSendClaim(
             claimID, row.id, prepared.contact.id, prepared.contact.publicKey, prepared.message.text,
             resend, pendingSendID, mode, prepared.intent, prepared.contact,
@@ -1068,6 +1081,17 @@ class MessageService(
                         rememberNoDispatch(claimID, id, pendingSendID, DirectPendingCompletionReason.AlreadyDeliveredSend)
                         return@owned row
                     }
+                    if (config.maxAttempts == 0L) {
+                        return@owned sendBoundary(id, false) {
+                            if (!preserveTimestamp) {
+                                dataStore.updateMessageTimestamp(key(id), timestamp())
+                                ownership.check("queuedDirectMessage.timestamp")
+                            }
+                            val result = finalizeSend(id, contact.id, contact.publicKey, null, contact.outPathLength, noDispatch = true)
+                            rememberNoDispatch(claimID, id, pendingSendID, DirectPendingCompletionReason.ZeroAttempts(0L))
+                            result
+                        }
+                    }
                     val retained = synchronized(lock) { directClaims[claimID] }
                     if (retained == null && !preserveTimestamp) {
                         timestamp().also {
@@ -1094,13 +1118,7 @@ class MessageService(
                                 throw failure
                             }
                         }
-                        val result = finalizeSend(
-                            id, contact.id, contact.publicKey, info, contact.outPathLength,
-                            noDispatch = config.maxAttempts == 0L,
-                        )
-                        if (config.maxAttempts == 0L) {
-                            rememberNoDispatch(claimID, id, pendingSendID, DirectPendingCompletionReason.ZeroAttempts(config.maxAttempts))
-                        }
+                        val result = finalizeSend(id, contact.id, contact.publicKey, info, contact.outPathLength)
                         if (isResend && info != null && synchronized(lock) { !claim.resentPublished }) {
                             events.yield(MessageStatusEvent.Resent(id))
                             synchronized(lock) { claim.resentPublished = true }

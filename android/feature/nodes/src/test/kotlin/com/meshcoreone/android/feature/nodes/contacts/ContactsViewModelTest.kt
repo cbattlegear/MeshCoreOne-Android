@@ -3,18 +3,22 @@ package com.meshcoreone.android.feature.nodes.contacts
 
 import com.meshcoreone.android.core.model.Coordinate
 import com.meshcoreone.android.core.protocol.model.ContactType
+import com.meshcoreone.android.feature.nodes.add.AddContactStateHolder
 import com.meshcoreone.android.feature.nodes.model.NodeSegment
 import com.meshcoreone.android.feature.nodes.model.NodeSortOrder
 import com.meshcoreone.android.feature.nodes.support.Fixtures
 import com.meshcoreone.android.feature.nodes.support.Harness
 import com.meshcoreone.android.feature.nodes.support.OriginalCase
 import com.meshcoreone.android.feature.nodes.support.scenario
+import com.meshcoreone.android.feature.nodes.support.settle
 import com.meshcoreone.android.feature.nodes.support.Fixtures.contact
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
 import org.junit.Test
 
 class ContactsViewModelTest {
@@ -274,12 +278,13 @@ class ContactsViewModelTest {
         val holder = Harness(clock).holder(scope)
         val original = contact(name = "Alex")
         val updated = contact(id = original.id, radioId = original.radioId, publicKey = original.publicKey, name = "Alex Updated")
-        holder.setContacts(original)
+        holder.seed { it.copy(contacts = listOf(original), pendingRemovalIds = setOf(original.id)) }
         holder.upsert(updated)
         val contacts = holder.state.value.contacts
         assertEquals(1, contacts.size)
         assertEquals("Alex Updated", contacts.first().name)
         assertEquals(original.id, contacts.first().id)
+        assertFalse(holder.isDeletePending(updated.id))
     }
 
     @Test @OriginalCase("ContactsViewModelTests::upsert replaces an existing contact with the same public key and radio()")
@@ -289,12 +294,14 @@ class ContactsViewModelTest {
         val key = Fixtures.randomKey()
         val original = contact(radioId = radio, publicKey = key, name = "Alex")
         val updated = contact(id = UUID.randomUUID(), radioId = radio, publicKey = key, name = "Sam")
-        holder.setContacts(original)
+        holder.seed { it.copy(contacts = listOf(original), pendingRemovalIds = setOf(original.id, updated.id)) }
         holder.upsert(updated)
         val contacts = holder.state.value.contacts
         assertEquals(1, contacts.size)
         assertEquals(updated.id, contacts.first().id)
         assertEquals("Sam", contacts.first().name)
+        assertFalse(holder.isDeletePending(original.id))
+        assertFalse(holder.isDeletePending(updated.id))
     }
 
     @Test @OriginalCase("ContactsViewModelTests::loadContacts keeps an upserted contact until the fetch includes it()", "native-equivalent")
@@ -316,5 +323,45 @@ class ContactsViewModelTest {
         harness.store.contacts += added
         holder.loadContacts(radio)
         assertEquals(1, holder.state.value.contacts.count { it.id == added.id })
+    }
+
+    @Test
+    fun `real add result survives an already held first fetch until store includes its identity`() = scenario {
+        val harness = Harness(clock).connect()
+        val radio = checkNotNull(harness.session.radioId)
+        val existing = contact(radioId = radio, name = "Alex")
+        val added = contact(radioId = radio, publicKey = Fixtures.repeated(0xAB), name = "Sam")
+        harness.store.contacts += existing
+        harness.contactService.addBehavior = { _, _ -> }
+        harness.contactService.getContactBehavior = { _, _ -> added }
+        val holder = harness.holder(scope)
+        holder.seed { it.copy(pendingRemovalIds = setOf(added.id)) }
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        harness.store.fetchContactsGate = {
+            entered.complete(Unit)
+            release.await()
+        }
+        val loading = scope.launch { holder.loadContacts(radio) }
+        entered.await()
+        val form = AddContactStateHolder(harness.dependencies)
+        form.setContactName(added.name)
+        form.setPublicKeyHex(added.publicKey.hexString)
+        holder.upsert(checkNotNull(form.addContact()))
+        assertEquals(listOf(added.id), holder.filtered().map { it.id })
+        assertFalse(holder.isDeletePending(added.id))
+        release.complete(Unit)
+        loading.join()
+        harness.store.fetchContactsGate = null
+        assertEquals(setOf(existing.id, added.id), holder.filtered().map { it.id }.toSet())
+        holder.loadContacts(radio)
+        assertEquals(1, holder.filtered().count { it.id == added.id })
+
+        harness.store.contacts += added
+        holder.loadContacts(radio)
+        holder.loadContacts(radio)
+        settle()
+        assertEquals(1, holder.filtered().count { it.id == added.id })
+        assertEquals(listOf("add:Sam", "getContact"), harness.contactService.calls)
     }
 }

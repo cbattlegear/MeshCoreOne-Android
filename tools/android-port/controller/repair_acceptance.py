@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import threading
+import unicodedata
 from dataclasses import asdict
 
 from .capabilities import CapabilityEngine
@@ -718,7 +719,75 @@ def read_job_log(native, job_id):
         process.stdout.close()
 
 
-def validate_build_log(log, modules, *, plan_for_scopes=None):
+def _notification_instrumentation_report(report, compiled, expected):
+    from .module_junit import (
+        NOTIFICATION_INSTRUMENTATION_BASELINE, NOTIFICATION_INSTRUMENTATION_ROOTS,
+    )
+
+    proof = report.get("notification_instrumentation")
+    tasks = report.get("tasks")
+    selected = isinstance(tasks, list) and isinstance(expected, dict) and expected.get("task") in tasks
+    if expected is None:
+        if proof is not None or (
+            isinstance(tasks, list) and any(
+                task == ":platform:notifications:compileDebugAndroidTestKotlin" for task in tasks
+            )
+        ):
+            raise PortError("Notification instrumentation evidence requires immutable candidate inputs")
+        return
+    if not selected:
+        raise PortError("Trusted candidate plan requires the notification instrumentation compiler task")
+    fields(proof, {"task", "sources", "excluded_reply_sources"}, label="notification instrumentation")
+    sources, excluded = proof["sources"], proof["excluded_reply_sources"]
+    if (
+        proof["task"] != expected["task"]
+        or ":platform:notifications:testDebugUnitTest" not in tasks
+        or not isinstance(sources, dict) or not sources
+        or not isinstance(excluded, list) or not all(isinstance(path, str) for path in excluded)
+        or sources != expected["sources"]
+        or excluded != expected["excluded_reply_sources"]
+    ):
+        raise PortError("Missing or malformed notification instrumentation proof")
+    prefix = "android/platform/notifications/"
+    replies = set(expected["reply_jvm_sources"])
+    for path, blob in sources.items():
+        if (
+            not isinstance(path, str) or git_path(path) != path
+            or not path.startswith(tuple(prefix + root for root in NOTIFICATION_INSTRUMENTATION_ROOTS))
+            or not path.endswith(".kt")
+            or not isinstance(blob, str) or SHA.fullmatch(blob) is None or path in replies
+        ):
+            raise PortError("Malformed or excluded notification instrumentation source")
+    if not {prefix + path for path in NOTIFICATION_INSTRUMENTATION_BASELINE} <= sources.keys():
+        raise PortError("Missing baseline notification instrumentation compiler inputs")
+    jvm = compiled.get("platform/notifications")
+    if not isinstance(jvm, dict) or jvm != expected["jvm_sources"] or any(
+        jvm.get(path) != blob for path, blob in expected["reply_jvm_sources"].items()
+    ):
+        raise PortError("Notification JVM sources differ from the immutable candidate compilation")
+
+
+def _trusted_full_candidate_plan(plan_for_scopes):
+    from .ci import SCOPED_TASKS
+
+    derived = plan_for_scopes(None)
+    if not isinstance(derived, dict):
+        raise PortError("Missing/malformed trusted candidate-derived scopes")
+    scopes = derived.get("scopes")
+    if (
+        not isinstance(scopes, list)
+        or not all(isinstance(scope, str) and scope for scope in scopes)
+        or len(scopes) != len(set(scopes))
+    ):
+        raise PortError("Missing/malformed trusted candidate-derived scopes")
+    requested = [*SCOPED_TASKS, *sorted(set(scopes) - set(SCOPED_TASKS))]
+    plan = plan_for_scopes(requested)
+    if not isinstance(plan, dict) or plan.get("scopes") != requested:
+        raise PortError("Trusted full-scaffold plan omits candidate-derived scopes")
+    return plan
+
+
+def validate_build_log(log, modules, *, plan_for_scopes=None, notification_inputs_for_candidate=None):
     lines = []
     for line in log.splitlines():
         # gh emits job, step and timestamp columns; only the authoritative run step is evidence.
@@ -757,6 +826,49 @@ def validate_build_log(log, modules, *, plan_for_scopes=None):
                 or not isinstance(blob, str) or SHA.fullmatch(blob) is None
             ):
                 raise PortError("Malformed compiled test source inventory")
+    tasks = report.get("tasks")
+    reported_instrumentation = report.get("notification_instrumentation")
+    instrumentation_task = ":platform:notifications:compileDebugAndroidTestKotlin"
+    if notification_inputs_for_candidate is None:
+        if reported_instrumentation is not None or (
+            isinstance(tasks, list) and instrumentation_task in tasks
+        ):
+            raise PortError("Notification instrumentation proof requires trusted immutable candidate inputs")
+        expected_instrumentation = None
+    else:
+        expected_instrumentation = notification_inputs_for_candidate()
+    trusted_full_plan = None
+    affected_only = report.get("kind") == "local-affected-only"
+    if affected_only and expected_instrumentation is not None:
+        scopes = report.get("scopes")
+        if (
+            plan_for_scopes is None or not isinstance(scopes, list) or not scopes
+            or not all(isinstance(scope, str) and scope for scope in scopes)
+            or len(set(scopes)) != len(scopes)
+        ):
+            raise PortError("Affected hosted evidence requires the trusted exact-candidate task plan")
+        selected_plan = plan_for_scopes(scopes)
+        if not isinstance(selected_plan, dict) or not isinstance(selected_plan.get("tasks"), list):
+            raise PortError("Malformed trusted affected candidate task plan")
+        # An unrelated narrow scope selects no notification runner and therefore no proof;
+        # the equality check against this exact plan below still binds the reported tasks.
+        if instrumentation_task not in selected_plan["tasks"]:
+            expected_instrumentation = None
+    elif expected_instrumentation is not None:
+        from .ci import SCOPED_TASKS
+
+        if plan_for_scopes is None:
+            raise PortError("Notification instrumentation proof requires the trusted candidate task plan")
+        trusted_full_plan = _trusted_full_candidate_plan(plan_for_scopes)
+        if (
+            not isinstance(trusted_full_plan, dict)
+            or trusted_full_plan.get("full_scaffold") is not True
+            or not isinstance(trusted_full_plan.get("tasks"), list)
+            or instrumentation_task not in trusted_full_plan["tasks"]
+            or ":platform:notifications:testDebugUnitTest" not in trusted_full_plan["tasks"]
+        ):
+            raise PortError("Trusted candidate plan omits required notification instrumentation proof")
+    _notification_instrumentation_report(report, compiled, expected_instrumentation)
     if report.get("kind") == "local-affected-only":
         scopes = report.get("scopes")
         if (
@@ -822,12 +934,53 @@ def validate_build_log(log, modules, *, plan_for_scopes=None):
     from .ci import SCOPED_TASKS, TASKS
 
     tasks = report.get("tasks")
+    allowed_tasks = {task for values in SCOPED_TASKS.values() for task in values}
+    if isinstance(tasks, list) and all(isinstance(task, str) for task in tasks):
+        extra_tasks = set(tasks) - allowed_tasks
+        if extra_tasks:
+            from .module_junit import NOTIFICATION_INSTRUMENTATION_TASK
+
+            if extra_tasks != {NOTIFICATION_INSTRUMENTATION_TASK} or plan_for_scopes is None:
+                raise PortError("Additional compiler task requires the trusted exact-candidate plan")
+            scopes = report.get("scopes")
+            if (
+                not isinstance(scopes, list) or not scopes or "scaffold" not in scopes
+                or not all(isinstance(scope, str) and scope in SCOPED_TASKS for scope in scopes)
+                or len(scopes) != len(set(scopes))
+            ):
+                raise PortError("Additional compiler task requires explicit trusted scopes")
+            expected_tasks = {task for scope in scopes for task in SCOPED_TASKS[scope]} | extra_tasks
+            # Hosted full jobs can leave oracle scopes to separate jobs; the maximal
+            # immutable plan establishes profile support without widening their task set.
+            plan = _trusted_full_candidate_plan(plan_for_scopes)
+            if (
+                plan.get("full_scaffold") is not True or not extra_tasks <= set(plan["tasks"])
+                or set(tasks) != expected_tasks
+            ):
+                raise PortError("Additional compiler task disagrees with the trusted candidate plan")
+            allowed_tasks.update(extra_tasks)
     if (
         report.get("result") != "success" or report.get("strict_verification") is not True
         or not isinstance(tasks, list) or not all(isinstance(task, str) for task in tasks)
-        or len(set(tasks)) != len(tasks) or not set(TASKS["scaffold"]).issubset(tasks)
-        or not set(tasks).issubset({task for values in SCOPED_TASKS.values() for task in values})
+        or len(set(tasks)) != len(tasks)
     ):
+        raise PortError("Hosted affected verification did not execute the declared strict task set")
+    required = set(TASKS["scaffold"])
+    allowed = allowed_tasks
+    if not required.issubset(tasks) and plan_for_scopes is not None:
+        from .module_junit import JVM_REMAPPED_TASKS, select_remapped_tasks
+
+        plan = _trusted_full_candidate_plan(plan_for_scopes)
+        if (
+            not isinstance(plan.get("tasks"), list)
+            or not all(isinstance(task, str) for task in plan["tasks"])
+            or len(set(plan["tasks"])) != len(plan["tasks"])
+        ):
+            raise PortError("Missing/malformed trusted full-scaffold candidate task plan")
+        remapped = [task for task in plan["tasks"] if task in JVM_REMAPPED_TASKS.values()]
+        required = set(select_remapped_tasks(TASKS["scaffold"], remapped))
+        allowed = set(select_remapped_tasks(allowed, remapped))
+    if not required.issubset(tasks) or not set(tasks).issubset(allowed):
         raise PortError("Hosted affected verification did not execute the declared strict task set")
     inventory = report.get("unit_test_methods", {})
     if not isinstance(inventory, dict):
@@ -865,25 +1018,63 @@ def validate_build_log(log, modules, *, plan_for_scopes=None):
             "methods": inventory, "compiled_test_sources": compiled}
 
 
+def _java_unicode_input(text):
+    # JLS 3.3: eligibility depends on translated output, not raw slash parity alone.
+    result, index, backslashes, translated = [], 0, 0, False
+    while index < len(text):
+        character = text[index]
+        escaped = False
+        if character == "\\" and (translated or backslashes % 2 == 0):
+            cursor = index + 1
+            while cursor < len(text) and text[cursor] == "u":
+                cursor += 1
+            if cursor > index + 1:
+                digits = text[cursor:cursor + 4]
+                if re.fullmatch(r"[0-9a-fA-F]{4}", digits) is None:
+                    raise PortError("Malformed eligible Java Unicode escape")
+                character = chr(int(digits, 16))
+                index = cursor + 3
+                escaped = True
+        result.append(character)
+        backslashes = backslashes + 1 if character == "\\" else 0
+        translated = escaped
+        index += 1
+    return "".join(result)
+
+
 def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=False,
-                          inheritance=None, source_declarations=None):
+                          inheritance=None, source_declarations=None, source_symbols=None,
+                          java_source=False, sdk_configurations=None):
+    if java_source and (source_symbols is None or source_declarations is not None):
+        raise PortError("Java source scanning supports symbol indexing only")
+    if sdk_configurations is not None and not isinstance(sdk_configurations, dict):
+        raise PortError("Kotlin SDK configuration output must be a mapping")
+    if sdk_configurations is not None:
+        sdk_configurations.clear()
+    language = "Java" if java_source else "Kotlin"
+
     def comment(index):
         if text.startswith("//", index):
             end = text.find("\n", index)
+            carriage = text.find("\r", index)
+            if carriage >= 0 and (end < 0 or carriage < end):
+                end = carriage
             return len(text) if end < 0 else end
         depth, index = 1, index + 2
         while index < len(text) and depth:
-            if text.startswith("/*", index):
+            if not java_source and text.startswith("/*", index):
                 depth, index = depth + 1, index + 2
             elif text.startswith("*/", index):
                 depth, index = depth - 1, index + 2
             else:
                 index += 1
         if depth:
-            raise PortError("Unterminated Kotlin block comment in hosted test source")
+            raise PortError("Unterminated " + language + " block comment in hosted test source")
         return index
 
     def literal(index):
+        if not java_source and text[max(0, index - 2):index] == "$$":
+            raise PortError("Unsupported Kotlin multi-dollar string prefix in hosted test source")
         quote = '"""' if text.startswith('"""', index) else text[index]
         index += len(quote)
         while index < len(text):
@@ -893,13 +1084,13 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
                     while end < len(text) and text[end] == '"':
                         end += 1
                 return end
-            if text[index] == "\\" and quote != '"""':
+            if text[index] == "\\" and (java_source or quote != '"""'):
                 index += 2
-            elif text.startswith("${", index) and quote != "'":
+            elif not java_source and text.startswith("${", index) and quote != "'":
                 index = template(index + 2)
             else:
                 index += 1
-        raise PortError("Unterminated Kotlin literal in hosted test source")
+        raise PortError("Unterminated " + language + " literal in hosted test source")
 
     def template(index):
         depth = 1
@@ -918,10 +1109,24 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
             raise PortError("Unterminated Kotlin string template in hosted test source")
         return index
 
-    token = re.compile(r"`[^`\r\n]+`|[^\W\d]\w*|[^\s]")
     identifier = re.compile(r"[^\W\d]\w*")
+    token = re.compile(r"`[^`\r\n]+`|[^\W\d]\w*|[0-9]+|[^\s]")
+
+    def java_ignorable(character):
+        return (unicodedata.category(character) == "Cf"
+                or 0 <= ord(character) <= 8 or 14 <= ord(character) <= 27
+                or 127 <= ord(character) <= 159)
+
+    def java_start(character):
+        return unicodedata.category(character) in ("Lu", "Ll", "Lt", "Lm", "Lo", "Nl", "Sc", "Pc")
+
+    def java_part(character):
+        return (java_start(character) or java_ignorable(character)
+                or unicodedata.category(character) in ("Mn", "Mc", "Nd"))
 
     def name_token(value):
+        if java_source:
+            return bool(value) and java_start(value[0]) and all(java_part(item) for item in value[1:])
         return identifier.fullmatch(value) is not None or (
             value.startswith("`") and value.endswith("`") and len(value) > 2
         )
@@ -935,6 +1140,17 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
         elif text[index] in "\"'":
             index = literal(index)
             tokens.append("<literal>")
+        elif java_source:
+            end = index + 1
+            if java_start(text[index]):
+                while end < len(text) and java_part(text[end]):
+                    end += 1
+                tokens.append("".join(item for item in text[index:end] if not java_ignorable(item)))
+            else:
+                if java_ignorable(text[index]) or ord(text[index]) > 127:
+                    raise PortError("Unsupported Java symbol-index input character")
+                tokens.append(text[index])
+            index = end
         else:
             match = token.match(text, index)
             tokens.append(match[0])
@@ -947,11 +1163,12 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
         )
         for index, value in enumerate(tokens)
     )
-    if grouped_annotations and source_declarations is None:
+    if grouped_annotations and source_declarations is None and source_symbols is None:
         raise PortError("Grouped Kotlin annotations are not supported in hosted test sources")
 
     class_bodies, package = {}, ""
-    if declaring_classes is not None or source_declarations is not None or inheritance is not None:
+    if (declaring_classes is not None or sdk_configurations is not None or source_declarations is not None
+            or inheritance is not None or source_symbols is not None):
         for index, value in enumerate(tokens):
             if value != "package" or index and tokens[index - 1] == ".":
                 continue
@@ -1003,6 +1220,7 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
             return (package + "." if package else "") + stack[0]
 
     test_annotations = {"Test", "org.junit.Test", "org.junit.jupiter.api.Test", "kotlin.test.Test"}
+    config_annotations = {"org.robolectric.annotation.Config"}
     family_annotations = {
         "TestFactory", "org.junit.jupiter.api.TestFactory",
         "ParameterizedTest", "org.junit.jupiter.params.ParameterizedTest",
@@ -1043,6 +1261,8 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
         imports.setdefault(alias, set()).add(imported)
         if imported in test_annotations:
             test_annotations.add(alias)
+        if imported in config_annotations:
+            config_annotations.add(alias)
         if imported in family_annotations:
             family_annotations.add(alias)
     scopes, stack, declared_names = [], [], {}
@@ -1063,6 +1283,15 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
             declared_names.setdefault(scope, set()).add(tokens[index + 1].strip("`"))
     if stack:
         raise PortError("Unbalanced Kotlin scope in hosted test source")
+    if source_symbols is not None:
+        source_symbols.update(
+            (package + "." if package else "") + name for name in declared_names.get((), ())
+        )
+        for index, value in enumerate(tokens[:-1]):
+            if value in ("enum", "record") and not scopes[index] and name_token(tokens[index + 1]):
+                source_symbols.add((package + "." if package else "") + tokens[index + 1])
+        if source_declarations is None:
+            return {}
 
     inherited_bodies, inherited_companions, companion_bodies, header_bodies = set(), set(), {}, []
     anonymous_bodies = set()
@@ -1181,8 +1410,47 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
     if source_declarations is not None:
         source_declarations.update(declarations)
         return {}
-    # Object-expression collaborators retain lexical inheritance, but are not discoverable suites.
-    inherited_suites = inherited_bodies - anonymous_bodies
+    # This one external Robolectric base has no JUnit lineage. Do not infer that
+    # property from @Implements or from an arbitrary shadow/base class name.
+    notification_shadows = set()
+    shadow_imports = {
+        "Implements": "org.robolectric.annotation.Implements",
+        "NotificationManager": "android.app.NotificationManager",
+        "ShadowNotificationManager": "org.robolectric.shadows.ShadowNotificationManager",
+        "Implementation": "org.robolectric.annotation.Implementation",
+    }
+    shadow_names = set(shadow_imports) | {"org", "android"}
+    if (
+        not unresolved_scope and not grouped_annotations
+        and all(imports.get(name) == {target} for name, target in shadow_imports.items())
+        and not any(names & shadow_names for names in declared_names.values())
+        and not any(
+            name != target.rsplit(".", 1)[-1]
+            for name, targets in imports.items() for target in targets
+            if target in shadow_imports.values()
+        )
+    ):
+        for start, body in header_bodies:
+            scope = scopes[start]
+            if (
+                len(scope) == 1 and scope[0] in class_bodies
+                and scope[0] not in inherited_bodies
+                and scopes[scope[0]] == ()
+                and tokens[start + 2:body] == [":", "ShadowNotificationManager", "(", ")"]
+                and start >= 9 and tokens[start - 9] in ("{", "}", ";")
+                and tokens[start - 8:start] == [
+                    "@", "Implements", "(", "NotificationManager", ":", ":", "class", ")",
+                ]
+            ):
+                notification_shadows.add(body)
+    if notification_shadows and reject_inherited and inheritance is None:
+        raise PortError("External Robolectric identity requires immutable candidate source proof")
+    if notification_shadows and inheritance is not None:
+        for target in shadow_imports.values():
+            inheritance({"external_non_junit": target}, True)
+    # Keep these bodies in lexical inheritance checks; only their known external
+    # lineage is non-JUnit, not their annotations or nested declarations.
+    inherited_suites = inherited_bodies - anonymous_bodies - notification_shadows
     if reject_inherited and (inherited_suites or bodyless_inheritance or unresolved_scope):
         if (
             inheritance is None or unresolved_scope or bodyless_inheritance or not inherited_suites
@@ -1217,11 +1485,14 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
                 return set()
         inherited_names = set()
         for body in inherited:
+            if body in notification_shadows:
+                continue
             if inheritance is None or body not in declarations:
                 return set()
             inherited_names.update(inheritance(declarations[body], False))
         shadowed = set().union(*(declared_names.get(parent, set()) for parent in visible))
-        return imported_non_tests - shadowed - inherited_names
+        resolved = imported_non_tests - shadowed - inherited_names
+        return resolved & {"Implementation"} if notification_shadows.intersection(scope) else resolved
 
     for index, value in enumerate(tokens):
         if value != "@" or index + 2 >= len(tokens) or tokens[index + 2] != ":":
@@ -1261,10 +1532,69 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
             if target in family_annotations and alias not in family_annotations:
                 family_annotations.add(alias)
                 changed = True
+            if target in config_annotations and alias not in config_annotations:
+                config_annotations.add(alias)
+                changed = True
+    class_sdk_configurations, method_sdk_configurations = {}, {}
+
+    def parse_sdk_values(arguments):
+        def sdk_integer(cursor):
+            if cursor >= len(arguments) or re.fullmatch(r"[0-9]+", arguments[cursor]) is None:
+                raise PortError("Unsupported Robolectric SDK configuration in hosted test source")
+            value = int(arguments[cursor])
+            if value <= 0:
+                raise PortError("Unsupported Robolectric SDK configuration in hosted test source")
+            return value, cursor + 1
+
+        found, cursor, nesting = [], 0, []
+        while cursor < len(arguments):
+            value = arguments[cursor].strip("`")
+            named = not nesting and cursor + 1 < len(arguments) and arguments[cursor + 1] == "="
+            if named and value in ("minSdk", "maxSdk"):
+                raise PortError("Unsupported Robolectric SDK range in hosted test source")
+            if named and value == "sdk":
+                cursor += 2
+                if cursor >= len(arguments):
+                    raise PortError("Incomplete Robolectric SDK configuration in hosted test source")
+                if arguments[cursor] == "[":
+                    cursor += 1
+                    values = []
+                    while cursor < len(arguments) and arguments[cursor] != "]":
+                        item, cursor = sdk_integer(cursor)
+                        values.append(item)
+                        if cursor < len(arguments) and arguments[cursor] != "]":
+                            if arguments[cursor] != ",":
+                                raise PortError("Unsupported Robolectric SDK configuration in hosted test source")
+                            cursor += 1
+                            if cursor >= len(arguments):
+                                raise PortError("Unsupported Robolectric SDK configuration in hosted test source")
+                    if cursor >= len(arguments) or not values:
+                        raise PortError("Unsupported Robolectric SDK configuration in hosted test source")
+                    cursor += 1
+                else:
+                    item, cursor = sdk_integer(cursor)
+                    values = [item]
+                if len(set(values)) != len(values):
+                    raise PortError("Duplicate Robolectric SDK configuration in hosted test source")
+                found.append(tuple(values))
+                if cursor < len(arguments) and arguments[cursor] != ",":
+                    raise PortError("Unsupported Robolectric SDK configuration in hosted test source")
+                continue
+            if value in ("(", "[", "{"):
+                nesting.append(value)
+            elif value in (")", "]", "}"):
+                if not nesting or nesting.pop() != {")": "(", "]": "[", "}": "{"}[value]:
+                    raise PortError("Unbalanced Robolectric SDK configuration in hosted test source")
+            cursor += 1
+        if len(found) > 1:
+            raise PortError("Duplicate Robolectric SDK configuration in hosted test source")
+        return found[0] if found else None
+
     methods, declaration_positions, processed_annotations = {}, {}, set()
     modifiers = {
         "public", "internal", "private", "protected", "final", "open", "abstract", "override",
         "suspend", "inline", "tailrec", "external", "infix", "operator", "actual", "expect",
+        "lateinit", "const",
     }
     for start, value in enumerate(tokens):
         if (
@@ -1273,6 +1603,7 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
         ):
             continue
         index, annotations = start, set()
+        configured_sdk, has_config = None, False
         while index < len(tokens) and (tokens[index] == "@" or tokens[index] in modifiers):
             if tokens[index] in modifiers:
                 index += 1
@@ -1287,7 +1618,20 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
                 name += "." + tokens[index + 1].strip("`")
                 index += 2
             annotations.add(name)
+            config_annotation = name in config_annotations
+            if sdk_configurations is not None and config_annotation and (
+                any(names & (set(config_annotations) | {"org"}) for names in declared_names.values())
+                or name in imports and imports[name] != {"org.robolectric.annotation.Config"}
+            ):
+                raise PortError("Ambiguous Robolectric Config annotation in hosted test source")
+            if sdk_configurations is not None and name.rsplit(".", 1)[-1] == "Config" and not config_annotation:
+                raise PortError("Unresolved Robolectric Config annotation in hosted test source")
+            if config_annotation:
+                if has_config:
+                    raise PortError("Duplicate Robolectric Config annotation in hosted test source")
+                has_config = True
             if index < len(tokens) and tokens[index] == "(":
+                argument_start = index + 1
                 stack = []
                 while index < len(tokens):
                     value = tokens[index]
@@ -1297,18 +1641,35 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
                         if not stack or stack.pop() != {")": "(", "]": "[", "}": "{"}[value]:
                             raise PortError("Unbalanced Kotlin annotation in hosted test source")
                         if not stack:
+                            if sdk_configurations is not None:
+                                annotation_sdk = parse_sdk_values(tokens[argument_start:index])
+                                if config_annotation:
+                                    configured_sdk = annotation_sdk
+                                elif annotation_sdk is not None:
+                                    raise PortError("Unresolved SDK-bearing annotation in hosted test source: " + name)
                             index += 1
                             break
                     index += 1
                 if stack:
                     raise PortError("Unclosed Kotlin annotation in hosted test source")
+        if has_config and index < len(tokens) and tokens[index] == "class" and not scopes[index]:
+            if index + 1 >= len(tokens) or not name_token(tokens[index + 1]):
+                raise PortError("Cannot establish Robolectric Config class identity")
+            class_name = (package + "." if package else "") + tokens[index + 1].strip("`")
+            class_sdk_configurations[class_name] = configured_sdk
+        if (
+            notification_shadows.intersection(scopes[start])
+            and index < len(tokens) and tokens[index] in ("fun", "val", "var", "get", "set")
+            and annotations != {"Implementation"}
+        ):
+            raise PortError("Cannot establish JUnit-free Robolectric collaborator annotations")
         non_test_annotations = (
             non_tests_at(start) if not annotations & (test_annotations | family_annotations) else set()
         )
         if (
             annotations and not annotations & (test_annotations | family_annotations)
             and not annotations.issubset(non_test_annotations)
-            and index < len(tokens) and tokens[index] in ("fun", "val", "var")
+            and index < len(tokens) and tokens[index] in ("fun", "val", "var", "get", "set")
         ):
             unknown = ", ".join(sorted(annotations - non_test_annotations))
             raise PortError(f"Ambiguous Kotlin function annotation or property annotation ({unknown}); "
@@ -1324,8 +1685,25 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
                 raise PortError("Ambiguous JUnit test and factory declaration")
             declaration_positions[name] = index
             methods[name] = kind
+            if has_config:
+                method_sdk_configurations[name] = configured_sdk
             if declaring_classes is not None:
                 declaring_classes[name] = verify_declaring_class(index)
+    if sdk_configurations is not None:
+        for name in methods:
+            position = declaration_positions[name]
+            test_class = (
+                declaring_classes[name] if declaring_classes is not None
+                else verify_declaring_class(position)
+            )
+            sdk_configurations[name] = (
+                method_sdk_configurations.get(name) or class_sdk_configurations.get(test_class)
+            )
+            declaration = next((record for record in declarations.values() if record["name"] == test_class), None)
+            if sdk_configurations[name] is None and (
+                declaration is None or declaration["parents"] != [] or declaration["uncertain"]
+            ):
+                raise PortError("Cannot establish inherited Robolectric SDK configuration for " + test_class)
     return methods
 
 
@@ -1380,9 +1758,10 @@ def _kotlin_parent_names(header):
 
 
 class _KotlinJUnitLineage:
-    def __init__(self, candidate_tree, compiled, read_source):
+    def __init__(self, candidate_tree, compiled, read_source, external_sources=None):
         self.candidate_tree, self.compiled, self.read_source = candidate_tree, compiled, read_source
         self.sources, self.classes = {}, None
+        self.symbols, self.external_sources = set(), external_sources
 
     def index(self):
         if self.classes is not None:
@@ -1393,7 +1772,7 @@ class _KotlinJUnitLineage:
                 raise PortError("Stale or missing compiled Kotlin superclass source: " + path)
             text = self.read_source(path, blob)
             declarations = {}
-            _kotlin_junit_methods(text, source_declarations=declarations)
+            _kotlin_junit_methods(text, source_declarations=declarations, source_symbols=self.symbols)
             self.sources[path] = text
             for record in declarations.values():
                 classes.setdefault(record["name"], []).append((path, record))
@@ -1422,6 +1801,16 @@ class _KotlinJUnitLineage:
         return result
 
     def resolve(self, record, complete, visiting=()):
+        if "external_non_junit" in record:
+            if self.external_sources is None:
+                self.index()
+                symbols = self.symbols
+            else:
+                symbols = self.external_sources()
+            target = record["external_non_junit"]
+            if any(target == name or target.startswith(name + ".") for name in symbols):
+                raise PortError("Candidate source shadows the external Robolectric identity")
+            return set()
         names = set()
         for path, parent in self.parents(record):
             name = parent["name"]
@@ -1439,18 +1828,53 @@ class _KotlinJUnitLineage:
         return names
 
 
-def validate_hosted_methods(scope, candidate_tree, repo, executed, compiled_sources):
+def _kotlin_junit_lineage(candidate_tree, repo, compiled_sources):
     from .staging import object_bytes
 
-    verification = verification_only(scope)
     lineages = {}
+    external_sources = None
 
-    def require_compiled(path, blob):
-        module = re.match(r"android/((?:core|feature|platform)/[^/]+|app)/", path)
-        if (module is None or not isinstance(compiled_sources, dict)
-                or not isinstance(compiled_sources.get(module[1]), dict)
-                or compiled_sources[module[1]].get(path) != blob):
-            raise PortError("Hosted test source was not compiled for the selected test task")
+    def external_inventory():
+        nonlocal external_sources
+        if external_sources is None:
+            if not isinstance(compiled_sources, dict):
+                raise PortError("Malformed compiled source inventory for external Robolectric identity")
+            for module, inventory in compiled_sources.items():
+                if (
+                    not isinstance(module, str)
+                    or re.fullmatch(r"(?:core|feature|platform)/[a-z0-9-]+|app", module) is None
+                    or not isinstance(inventory, dict)
+                ):
+                    raise PortError("Malformed compiled source inventory for external Robolectric identity")
+                for source, blob in inventory.items():
+                    if (
+                        not isinstance(source, str)
+                        or not source.startswith("android/") or not source.endswith(".kt")
+                        or not isinstance(blob, str) or SHA.fullmatch(blob) is None
+                        or candidate_tree.get(source) != blob
+                    ):
+                        raise PortError("Stale or missing compiled Kotlin superclass source: " + str(source))
+                    git_path(source)
+            symbols = set()
+            for source, blob in candidate_tree.items():
+                if not source.endswith((".kt", ".java")):
+                    continue
+                git_path(source)
+                data = object_bytes(repo, blob)
+                actual = hashlib.sha1(b"blob " + str(len(data)).encode("ascii") + b"\0" + data).hexdigest()
+                if actual != blob:
+                    raise PortError("External-identity source blob identity mismatch")
+                try:
+                    text = data.decode("utf-8")
+                except UnicodeError as error:
+                    raise PortError("External-identity source is not UTF-8") from error
+                if source.endswith(".java"):
+                    text = _java_unicode_input(text)
+                _kotlin_junit_methods(
+                    text, source_symbols=symbols, java_source=source.endswith(".java"),
+                )
+            external_sources = symbols
+        return external_sources
 
     def lineage(path):
         module = re.match(r"android/((?:core|feature|platform)/[^/]+|app)/", path)[1]
@@ -1471,8 +1895,46 @@ def validate_hosted_methods(scope, candidate_tree, repo, executed, compiled_sour
                 source: blob for source, blob in compiled_sources[module].items()
                 if source.startswith("android/" + module + "/")
             }
-            lineages[module] = _KotlinJUnitLineage(candidate_tree, sources, read_source)
+            lineages[module] = _KotlinJUnitLineage(
+                candidate_tree, sources, read_source, external_inventory,
+            )
         return lineages[module].resolve
+
+    return lineage
+
+
+def validate_hosted_methods(scope, candidate_tree, repo, executed, compiled_sources, *, compiled_helpers=()):
+    from .staging import object_bytes
+
+    verification = verification_only(scope)
+    lineage = _kotlin_junit_lineage(candidate_tree, repo, compiled_sources)
+
+    def require_compiled(path, blob):
+        module = re.match(r"android/((?:core|feature|platform)/[^/]+|app)/", path)
+        if (module is None or not isinstance(compiled_sources, dict)
+                or not isinstance(compiled_sources.get(module[1]), dict)
+                or compiled_sources[module[1]].get(path) != blob):
+            raise PortError("Hosted test source was not compiled for the selected test task")
+
+    if (
+        not isinstance(compiled_helpers, (list, tuple))
+        or any(not isinstance(path, str) for path in compiled_helpers)
+        or len(set(compiled_helpers)) != len(compiled_helpers)
+    ):
+        raise PortError("Malformed compiled JUnit-free helper inventory")
+    for path in compiled_helpers:
+        git_path(path)
+        blob = candidate_tree.get(path)
+        if (
+            not path.endswith(".kt") or not ("/src/test/" in path or "/src/testDebug/" in path)
+            or not isinstance(blob, str) or SHA.fullmatch(blob) is None
+        ):
+            raise PortError("Compiled JUnit-free helper is not a candidate conventional Kotlin source")
+        require_compiled(path, blob)
+        if _kotlin_junit_methods(
+            object_bytes(repo, blob).decode("utf-8"), reject_inherited=True, inheritance=lineage(path),
+        ):
+            raise PortError("Compiled JUnit-free helper declares JUnit tests: " + path)
 
     for coverage in scope["coverage"]:
         if verification:
@@ -1487,7 +1949,11 @@ def validate_hosted_methods(scope, candidate_tree, repo, executed, compiled_sour
                 if "/src/androidTest/" not in path:
                     require_compiled(path, blob)
                 text = object_bytes(repo, blob).decode("utf-8")
-                resolver = lineage(path) if "/src/androidTest/" not in path else None
+                module = re.match(r"android/((?:core|feature|platform)/[^/]+|app)/", path)
+                remapped = module is not None and path in (compiled_sources or {}).get(module[1], {})
+                if remapped:
+                    require_compiled(path, blob)
+                resolver = lineage(path) if "/src/androidTest/" not in path or remapped else None
                 declared = _kotlin_junit_methods(text, reject_inherited=True, inheritance=resolver)
                 classes = {}
                 if declared:

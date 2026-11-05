@@ -287,6 +287,12 @@ def run_candidate(repo, revision, prefix, stages, worktree, *, advisory=False, c
     from controller import jvm_lanes
     (control / "jvm_lanes.py").write_bytes(
         Path(jvm_lanes.__file__).read_bytes().replace(b"\r\n", b"\n"))
+    controller = Path(jvm_lanes.__file__).parent
+    for name in (
+        "ci_evidence.py", "publication.py", "repair_acceptance.py", "module_junit.py",
+        "verify_candidate_task_graph.gradle",
+    ):
+        (control / name).write_bytes((controller / name).read_bytes().replace(b"\r\n", b"\n"))
     if affected_plan is not None:
         from controller import local_scope
         (control / "local_scope.py").write_bytes(

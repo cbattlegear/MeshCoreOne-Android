@@ -62,9 +62,25 @@ internal class ContactRepository(
         }
 
     override suspend fun saveContact(radioId: RadioId, frame: ContactFrame): ContactSaveResult =
+        checkNotNull(saveContactFrame(radioId, frame, preserveNewer = false))
+
+    override suspend fun saveContactPreservingNewer(
+        radioId: RadioId, frame: ContactFrame, expectedFrame: ContactFrame?,
+    ): ContactSaveResult? = saveContactFrame(radioId, frame, preserveNewer = true, expectedFrame = expectedFrame)
+
+    private suspend fun saveContactFrame(
+        radioId: RadioId, frame: ContactFrame, preserveNewer: Boolean, expectedFrame: ContactFrame? = null,
+    ): ContactSaveResult? =
         context.write("saveContactFrame") {
             val existing = database.contacts().forPublicKey(radioId.value, frame.publicKey).firstOrNull()
-            val dto = existing?.toDTO()?.updating(frame) ?: ContactDTO.fromFrame(radioId, frame)
+            val stored = existing?.toDTO()
+            if (preserveNewer && stored != null &&
+                (stored.lastModified > frame.lastModified ||
+                    (stored.lastModified == frame.lastModified && stored.toContactFrame() != expectedFrame &&
+                        stored.toContactFrame() != frame))) {
+                return@write null
+            }
+            val dto = stored?.updating(frame) ?: ContactDTO.fromFrame(radioId, frame)
             database.contacts().upsert(dto.toEntity())
             save()
             ContactSaveResult(dto.id, existing == null)
@@ -74,6 +90,19 @@ internal class ContactRepository(
         val existing = database.contacts().byId(dto.radioId.value, dto.id)
         database.contacts().upsert(existing?.applying(dto) ?: dto.toEntity())
         save()
+    }
+
+    override suspend fun updateContactAvatar(
+        key: EntityKey, expectedPublicKey: Bytes, imageData: Bytes?,
+    ): ContactAvatarUpdateResult = context.write("updateContactAvatar") {
+        val row = database.contacts().byId(key.radioId.value, key.id)
+            ?: return@write ContactAvatarUpdateResult.CONTACT_NOT_FOUND
+        if (row.publicKey != expectedPublicKey) return@write ContactAvatarUpdateResult.IDENTITY_MISMATCH
+        if (database.contacts().updateAvatar(key.radioId.value, key.id, expectedPublicKey, imageData) != 1) {
+            invalidData("Avatar identity changed inside the write transaction")
+        }
+        save()
+        ContactAvatarUpdateResult.UPDATED
     }
 
     override suspend fun batchSaveContacts(radioId: RadioId, frames: SnapshotList<ContactFrame>): Long {
@@ -90,6 +119,51 @@ internal class ContactRepository(
             save()
             frames.size.toLong()
         }
+    }
+
+    override suspend fun updateContactFavorite(
+        key: EntityKey, expectedPublicKey: Bytes, isFavorite: Boolean,
+    ): ContactFavoriteUpdateResult = context.write("updateContactFavorite") {
+        val row = database.contacts().byId(key.radioId.value, key.id)
+            ?: return@write ContactFavoriteUpdateResult.CONTACT_NOT_FOUND
+        if (row.publicKey != expectedPublicKey) return@write ContactFavoriteUpdateResult.IDENTITY_MISMATCH
+        if (database.contacts().updateFavorite(
+                key.radioId.value, key.id, expectedPublicKey, isFavorite, if (isFavorite) 1L else 0L,
+            ) != 1) {
+            invalidData("Favorite identity changed inside the write transaction")
+        }
+        save()
+        ContactFavoriteUpdateResult.UPDATED
+    }
+
+    override suspend fun updateContactLocalFields(
+        key: EntityKey, expectedPublicKey: Bytes, update: ContactLocalUpdate,
+    ): ContactLocalUpdateResult = context.write("updateContactLocalFields") {
+        val row = database.contacts().byId(key.radioId.value, key.id)
+            ?: return@write ContactLocalUpdateResult.ContactNotFound
+        if (row.publicKey != expectedPublicKey) return@write ContactLocalUpdateResult.IdentityMismatch
+        var transition = ContactBlockTransition.NONE
+        val count = when (update) {
+            is ContactLocalUpdate.Preferences -> {
+                transition = when {
+                    update.isBlocked == true && !row.isBlocked -> ContactBlockTransition.BLOCKED
+                    update.isBlocked == false && row.isBlocked -> ContactBlockTransition.UNBLOCKED
+                    else -> ContactBlockTransition.NONE
+                }
+                database.contacts().updatePreferences(
+                    key.radioId.value, key.id, expectedPublicKey, update.nickname, update.isBlocked, update.isFavorite,
+                )
+            }
+            is ContactLocalUpdate.OCVSettings -> database.contacts().updateOCVSettings(
+                key.radioId.value, key.id, expectedPublicKey, update.preset, update.customArray,
+            )
+            is ContactLocalUpdate.TelemetryPermissions -> database.contacts().updateTelemetryPermissions(
+                key.radioId.value, key.id, expectedPublicKey, if (update.granted) 0x0EL else 0L,
+            )
+        }
+        if (count != 1) invalidData("Local contact identity changed inside the write transaction")
+        save()
+        ContactLocalUpdateResult.Updated(transition)
     }
 
     override suspend fun deleteContact(key: EntityKey) =

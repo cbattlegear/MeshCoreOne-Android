@@ -4,7 +4,9 @@ package com.meshcoreone.android.feature.tools.trace
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.TracePathPersisting
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.DeviceDTO
+import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SavedTracePathDTO
 import com.meshcoreone.android.core.model.TracePathRunDTO
 import kotlin.coroutines.cancellation.CancellationException
@@ -15,6 +17,8 @@ import kotlinx.coroutines.flow.update
 
 /** Live providers for the saved-path list; `null` mirrors a disconnected state (calls are no-ops). */
 interface SavedPathsDependencies {
+    fun sessionToken(): SessionToken? = null
+    fun isOriginatingSessionCurrent(generation: Int, token: SessionToken?): Boolean = true
     fun savedPaths(): TracePathPersisting?
     fun connectedDevice(): DeviceDTO?
 }
@@ -40,54 +44,117 @@ class SavedPathsStateHolder(
     private val mutableState = MutableStateFlow(SavedPathsState())
     val state: StateFlow<SavedPathsState> = mutableState.asStateFlow()
     private var deps: SavedPathsDependencies? = null
+    private var active = true
+    private var revision = 0L
+    private var mutationRevision = 0L
+    private val deletedPaths = mutableSetOf<EntityKey>()
+    private var sessionToken: SessionToken? = null
+    private var originatingGeneration: Int? = null
 
-    fun configure(dependencies: SavedPathsDependencies) {
+    fun configure(
+        dependencies: SavedPathsDependencies,
+        originatingToken: SessionToken? = dependencies.sessionToken(),
+        generation: Int? = null,
+    ) {
         deps = dependencies
+        sessionToken = originatingToken
+        originatingGeneration = generation
     }
 
-    suspend fun loadSavedPaths() {
+    fun retireConnection() {
+        active = false
+        revision += 1
+        mutableState.value = SavedPathsState()
+    }
+
+    fun isCurrentPath(path: SavedTracePathDTO): Boolean =
+        isCurrentConnection(path.radioId) &&
+            mutableState.value.savedPaths.any { it.id == path.id && it.radioId == path.radioId }
+
+    fun isCurrentConnection(radioId: RadioId): Boolean {
+        val deviceRadio = deps?.connectedDevice()?.radioId
+        val token = sessionToken
+        val generation = originatingGeneration
+        return active && deviceRadio == radioId && (token == null || token.radioId == radioId) &&
+            deps?.sessionToken() == token &&
+            (generation == null || deps?.isOriginatingSessionCurrent(generation, token) == true)
+    }
+
+    private fun isCurrent(operation: Long, radioId: RadioId): Boolean =
+        operation == revision && isCurrentConnection(radioId)
+
+    suspend fun loadSavedPaths() = loadSavedPaths(null)
+
+    private suspend fun loadSavedPaths(mutation: Long?) {
+        if (!active) return
         val radioId = deps?.connectedDevice()?.radioId ?: return
+        if (!isCurrentConnection(radioId)) return
         val store = deps?.savedPaths() ?: return
-        mutableState.update { it.copy(isLoading = true, errorMessage = null) }
+        val operation = ++revision
+        mutableState.update {
+            it.copy(isLoading = true, errorMessage = if (mutation == null || mutation == mutationRevision) null else it.errorMessage)
+        }
         try {
             val paths = store.fetchSavedTracePaths(radioId)
-            mutableState.update { it.copy(savedPaths = paths.toList()) }
+            if (isCurrent(operation, radioId)) mutableState.update {
+                it.copy(savedPaths = paths.filterNot { path -> EntityKey(path.radioId, path.id) in deletedPaths })
+            }
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
             diagnostics.failure("loadSavedPaths", error)
-            mutableState.update { it.copy(errorMessage = strings.loadFailed) }
+            if (isCurrent(operation, radioId) && (mutation == null || mutation == mutationRevision)) {
+                mutableState.update { it.copy(errorMessage = strings.loadFailed) }
+            }
         } finally {
-            mutableState.update { it.copy(isLoading = false) }
+            if (isCurrent(operation, radioId)) mutableState.update { it.copy(isLoading = false) }
         }
     }
 
     /** Renames, then reloads the whole list. */
     suspend fun renamePath(path: SavedTracePathDTO, newName: String) {
+        if (!isCurrentConnection(path.radioId)) return
         val store = deps?.savedPaths() ?: return
+        val operation = ++mutationRevision
         try {
             store.updateSavedTracePathName(EntityKey(path.radioId, path.id), newName)
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
             diagnostics.failure("renamePath", error)
-            mutableState.update { it.copy(errorMessage = strings.renameFailed) }
+            if (isCurrentConnection(path.radioId) && operation == mutationRevision) {
+                mutableState.update { it.copy(errorMessage = strings.renameFailed) }
+            }
             return
         }
-        loadSavedPaths()
+        if (isCurrentConnection(path.radioId)) loadSavedPaths(operation)
     }
 
     /** Deletes and drops the row locally without a reload. */
-    suspend fun deletePath(path: SavedTracePathDTO) {
-        val store = deps?.savedPaths() ?: return
+    suspend fun deletePath(path: SavedTracePathDTO): Boolean {
+        if (!isCurrentConnection(path.radioId)) return false
+        val store = deps?.savedPaths() ?: return false
+        val operation = ++mutationRevision
         try {
             store.deleteSavedTracePath(EntityKey(path.radioId, path.id))
-            mutableState.update { state -> state.copy(savedPaths = state.savedPaths.filter { it.id != path.id }) }
+            if (isCurrentConnection(path.radioId)) {
+                deletedPaths += EntityKey(path.radioId, path.id)
+                mutableState.update { state ->
+                    state.copy(
+                        savedPaths = state.savedPaths.filterNot { it.id == path.id && it.radioId == path.radioId },
+                        errorMessage = if (operation == mutationRevision) null else state.errorMessage,
+                    )
+                }
+            }
+            return true
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
             diagnostics.failure("deletePath", error)
-            mutableState.update { it.copy(errorMessage = strings.deleteFailed) }
+            if (isCurrentConnection(path.radioId) && operation == mutationRevision) {
+                mutableState.update { it.copy(errorMessage = strings.deleteFailed) }
+            }
+            return false
         }
     }
 }

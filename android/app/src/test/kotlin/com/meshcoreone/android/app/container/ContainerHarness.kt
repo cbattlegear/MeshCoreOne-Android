@@ -73,10 +73,12 @@ internal class MemoryDraftDefaults : DraftDefaults {
     override fun setStringDictionary(value: Map<String, String>, key: String) { values[key] = value }
 }
 
-internal class RecordingLifecycle : SessionLifecycleListener {
+internal class RecordingLifecycle(
+    private val onCreated: (RadioSessionContainer) -> Unit = {},
+) : SessionLifecycleListener {
     val created = java.util.Collections.synchronizedList(mutableListOf<RadioSessionContainer>())
     val tornDown = java.util.Collections.synchronizedList(mutableListOf<RadioSessionContainer>())
-    override fun created(container: RadioSessionContainer) { created += container }
+    override fun created(container: RadioSessionContainer) { created += container; onCreated(container) }
     override fun tornDown(container: RadioSessionContainer) { tornDown += container }
 }
 
@@ -123,6 +125,7 @@ internal class ContainerHarness(
     regionStore: com.meshcoreone.android.app.state.RegionSelectionStore? = null,
     preferencesOverride: ProcessConnectionPreferences? = null,
     simulatorSeedStore: com.meshcoreone.android.core.services.simulator.SimulatorSeedStore = RoomSimulatorSeedStore(store),
+    onSessionCreated: (RadioSessionContainer) -> Unit = {},
 ) {
     val scheduler: TestCoroutineScheduler = test.testScheduler
     val links = HarnessLinks(identity)
@@ -130,7 +133,7 @@ internal class ContainerHarness(
     val pairing = HarnessPairingService()
     val foregroundCalls = java.util.Collections.synchronizedList(mutableListOf<Boolean>())
     val preferences = MemoryConnectionPreferences()
-    val lifecycle = RecordingLifecycle()
+    val lifecycle = RecordingLifecycle(onSessionCreated)
     val chatSendQueueProgress = ChatSendQueueProgress()
     val diagnostics = java.util.Collections.synchronizedList(mutableListOf<RuntimeDiagnostic>())
     val messagingDiagnostics = java.util.Collections.synchronizedList(mutableListOf<com.meshcoreone.android.core.contracts.domain.MessagingDiagnostic>())

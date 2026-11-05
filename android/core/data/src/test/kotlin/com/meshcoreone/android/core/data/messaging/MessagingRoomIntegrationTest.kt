@@ -2089,7 +2089,21 @@ class MessagingRoomIntegrationTest {
         code: Bytes, tripTime: UInt?, listenerWins: Boolean, rejectWriteAfterDelivery: Boolean = false,
     ) {
         seed()
-        val g = RadioGeneration(67, config = MessageServiceConfig(maxAttempts = 1, floodAfter = 5))
+        var writeGuardInstalled = false
+        val actual = store
+        val guarded = object : DirectRoles(actual) {
+            override suspend fun settleDirectAck(
+                attempt: DirectAckAttempt, ackCode: UInt, roundTripTime: UInt?,
+            ): DirectAckMutationResult = actual.settleDirectAck(attempt, ackCode, roundTripTime).also {
+                if (rejectWriteAfterDelivery && !writeGuardInstalled &&
+                    (it is DirectAckMutationResult.Applied || it is DirectAckMutationResult.AlreadyApplied)) {
+                    db.openHelper.writableDatabase.execSQL("CREATE TRIGGER reject_delivered_rewrite AFTER UPDATE ON messages " +
+                        "BEGIN SELECT RAISE(FAIL, 'finalization rewrote listener delivery'); END")
+                    writeGuardInstalled = true
+                }
+            }
+        }
+        val g = RadioGeneration(67, guarded, config = MessageServiceConfig(maxAttempts = 1, floodAfter = 5))
         g.start()
         val expectedCode = if (listenerWins) {
             val input = ByteWriter().appendUInt32LE(base.epochSecond.toUInt()).appendUInt8(0u)
@@ -2107,37 +2121,45 @@ class MessagingRoomIntegrationTest {
             g.firmware.acceptanceGate = gate
         }
         val sending = async { g.service.sendMessageWithRetry("Test message", contact) }
-        var writeGuardInstalled = false
         val delivered = try {
             runCurrent()
             if (listenerWins) {
                 assertFalse(sending.isCompleted)
                 val beforeAcceptance = store.fetchMessages(EntityKey(radio, contact.id)).single()
-                assertEquals(MessageStatus.DELIVERED, beforeAcceptance.status)
-                assertEquals(tripTime, beforeAcceptance.roundTripTime)
-                assertEquals(0, g.service.pendingAckCount)
-                if (rejectWriteAfterDelivery) {
-                    db.openHelper.writableDatabase.execSQL("CREATE TRIGGER reject_delivered_rewrite AFTER UPDATE ON messages " +
-                        "BEGIN SELECT RAISE(FAIL, 'finalization rewrote listener delivery'); END")
-                    writeGuardInstalled = true
-                }
+                assertEquals(MessageStatus.PENDING, beforeAcceptance.status)
+                assertNull(beforeAcceptance.ackCode)
+                assertNull(beforeAcceptance.roundTripTime)
+                assertEquals(1, g.service.pendingAckCount)
                 gate.complete(Unit)
                 runCurrent()
+                val afterAcceptance = assertNotNull(store.fetchMessage(EntityKey(radio, beforeAcceptance.id)))
+                assertEquals(MessageStatus.DELIVERED, afterAcceptance.status)
+                assertEquals(tripTime, afterAcceptance.roundTripTime)
+                assertEquals(0, g.service.pendingAckCount)
+                if (rejectWriteAfterDelivery) assertTrue(writeGuardInstalled)
             }
-            sending.await()
+            val result = sending.await()
+            assertEquals(MessageStatus.DELIVERED, result.status)
+            assertEquals(tripTime, result.roundTripTime)
+            assertEquals(expectedCode.readUInt32LE(0), result.ackCode)
+            assertEquals(result, store.fetchMessage(EntityKey(radio, result.id)))
+            assertEquals(contact.copy(lastMessageDate = base), store.fetchContact(EntityKey(radio, contact.id)))
+            assertEquals(0, g.service.pendingAckCount)
+            assertEquals(listOf(MessageStatusEvent.StatusResolved(result.id, MessageStatus.DELIVERED, tripTime)),
+                completedStatuses(g, events))
+            assertEquals(1, g.firmware.sent().size)
+            result
         } finally {
-            if (writeGuardInstalled) db.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_delivered_rewrite")
+            withContext(NonCancellable) {
+                gate.complete(Unit)
+                sending.cancelAndJoin()
+                try { g.stop() }
+                finally {
+                    if (writeGuardInstalled) db.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_delivered_rewrite")
+                }
+            }
         }
-        assertEquals(MessageStatus.DELIVERED, delivered.status)
-        assertEquals(tripTime, delivered.roundTripTime)
-        assertEquals(expectedCode.readUInt32LE(0), delivered.ackCode)
         assertEquals(delivered, store.fetchMessage(EntityKey(radio, delivered.id)))
-        assertEquals(contact.copy(lastMessageDate = base), store.fetchContact(EntityKey(radio, contact.id)))
-        assertEquals(0, g.service.pendingAckCount)
-        assertEquals(listOf(MessageStatusEvent.StatusResolved(delivered.id, MessageStatus.DELIVERED, tripTime)),
-            completedStatuses(g, events))
-        assertEquals(1, g.firmware.sent().size)
-        g.stop()
     }
 
     private suspend fun TestScope.exerciseInFlightChecker(grace: Double, ageMillis: Long) {

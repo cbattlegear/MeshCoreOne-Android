@@ -77,5 +77,22 @@ clear/reselect while preserving valid refreshes across new runs on the same sele
 Auto Return changes retire the old wire route; unchanged assignments remain no-ops.
 Adjacent unmounted save APIs retain accepted durable history without reselecting a
 cleared/changed route after held create/fetch.
-All existing assertions remain. Successor compile, actual method discovery and execution
-are pending; neither historical passing run nor source inventory proves this successor.
+Existing assertions are retained except the explicitly documented active-batch continuation
+expectation adapted below. Successor compile, actual method discovery and execution are
+pending; neither historical passing run nor source inventory proves this successor.
+
+The original current-main diagnostic `41987819845` passed its exact `e564` software checks
+but did not clear the independent lifecycle finding. Subsequent `34ed` diagnostic
+`41988598761` failed the existing mounted batch-edit control because it expected the
+continuing batch to automatically send the edited route. Its 725 tools cases included one
+failure and mandatory aggregate reports were incomplete; no passing acceptance is inferred.
+The control is updated to the explicit safety adaptation: retire on edit, retain/hide old
+history, reject late responses and require a new explicit run of the changed route with
+isolated statistics. Its original route/statistics discrimination remains asserted.
+Batch mode changes now retire pending execution in both directions. History refresh also
+orders actual snapshots by fetch ticket so a held older return cannot regress visible runs.
+Exact `d444` run `41989167627` discovered 727 tools cases with two failures; exact `f080`
+run `41989676506` discovered 731 with the same two failing methods. In addition to the batch
+control, the mounted retained-row callback exposed Compose rebinding its Clickable delegate
+after a keyed row moved. Explicit immutable semantics callbacks now preserve the rendered
+hop/index guard. These failed runs remain authoritative for their own heads only.

@@ -48,6 +48,8 @@ class TracePathStateHolder(
     private val recents = RecentHopsStore(recentHopsStorage)
     private var currentRadioId: RadioId? = null
     private var pathSelectionRevision = 0L
+    private var historyRefreshSequence = 0L
+    private var publishedHistoryRefresh = 0L
     private val hashModeActionObservers = linkedSetOf<() -> Unit>()
     internal var deps: TracePathFeatureDependencies = TracePathFeatureDependencies.Disconnected
         private set
@@ -381,10 +383,14 @@ class TracePathStateHolder(
         val key = EntityKey(savedPath.radioId, savedPath.id)
         try {
             store.appendTracePathRun(key, run)
+            val refresh = ++historyRefreshSequence
             store.fetchSavedTracePath(key)?.let { updated ->
                 update {
                     val active = it.activeSavedPath
-                    if (pathSelectionRevision == revision && active != null && active.id == key.id && active.radioId == key.radioId) {
+                    if (pathSelectionRevision == revision && refresh > publishedHistoryRefresh &&
+                        active != null && active.id == key.id && active.radioId == key.radioId
+                    ) {
+                        publishedHistoryRefresh = refresh
                         it.copy(activeSavedPath = updated)
                     } else it
                 }
@@ -413,6 +419,8 @@ class TracePathStateHolder(
 
     /** Turning batch mode off clears batch progress and results (the source's `didSet`). */
     fun setBatchEnabled(enabled: Boolean) {
+        if (current.batchEnabled == enabled) return
+        if (current.isRunning) batch.cancelBatchTrace()
         update { it.copy(batchEnabled = enabled) }
         if (!enabled) clearBatchState()
     }

@@ -37,6 +37,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -265,6 +266,21 @@ internal fun TracePathListContent(state: TracePathState, holder: TracePathStateH
                 val moveUpLabel = stringResource(C.contactsDetailAvatarCropMoveUp)
                 val moveDownLabel = stringResource(C.contactsDetailAvatarCropMoveDown)
                 val deleteLabel = stringResource(L.commonDelete)
+                val moveUp = {
+                    if (index > 0 && holder.state.value.outboundPath.getOrNull(index)?.id == hop.id) {
+                        holder.moveRepeater(setOf(index), index - 1)
+                    }
+                }
+                val moveDown = {
+                    if (index < state.outboundPath.lastIndex && holder.state.value.outboundPath.getOrNull(index)?.id == hop.id) {
+                        holder.moveRepeater(setOf(index), index + 2)
+                    }
+                }
+                val remove = {
+                    if (holder.state.value.outboundPath.getOrNull(index)?.id == hop.id) {
+                        holder.removeRepeater(index)
+                    }
+                }
                 Card(Modifier.fillMaxWidth()) {
                     Row(
                         Modifier.fillMaxWidth().padding(16.dp),
@@ -282,39 +298,31 @@ internal fun TracePathListContent(state: TracePathState, holder: TracePathStateH
                             Text(hop.hashHex, style = MaterialTheme.typography.bodySmall)
                         }
                         OutlinedButton(
-                            onClick = {
-                                if (holder.state.value.outboundPath.getOrNull(index)?.id == hop.id) {
-                                    holder.moveRepeater(setOf(index), index - 1)
-                                }
-                            },
+                            onClick = moveUp,
                             enabled = index > 0,
                             modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics {
                                 contentDescription = "$moveUpLabel: $hopLabel"
+                                // Freeze the rendered action, not Clickable's mutable delegate.
+                                onClick { moveUp(); true }
                             },
                         ) {
                             Text("↑")
                         }
                         OutlinedButton(
-                            onClick = {
-                                if (holder.state.value.outboundPath.getOrNull(index)?.id == hop.id) {
-                                    holder.moveRepeater(setOf(index), index + 2)
-                                }
-                            },
+                            onClick = moveDown,
                             enabled = index < state.outboundPath.lastIndex,
                             modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics {
                                 contentDescription = "$moveDownLabel: $hopLabel"
+                                onClick { moveDown(); true }
                             },
                         ) {
                             Text("↓")
                         }
                         OutlinedButton(
-                            onClick = {
-                                if (holder.state.value.outboundPath.getOrNull(index)?.id == hop.id) {
-                                    holder.removeRepeater(index)
-                                }
-                            },
+                            onClick = remove,
                             modifier = Modifier.sizeIn(minHeight = 48.dp).semantics {
                                 contentDescription = "$deleteLabel: $hopLabel"
+                                onClick { remove(); true }
                             },
                         ) {
                             Text(deleteLabel)

@@ -425,6 +425,48 @@ class TraceCodeInputComposeTest {
         }
     }
 
+    @Test fun mountedBatchSwitchRetiresSingleAndBatchOperationsWithoutExtraSends() {
+        for (initialBatch in listOf(false, true)) {
+            val harness = configured()
+            val recorded = FakeTraceSender()
+            harness.deps.sender = recorded
+            harness.holder.addNode(contact(0xA1, name = "Alpha"))
+            harness.holder.addNode(contact(0xB2, name = "Bravo"))
+            harness.holder.setBatchEnabled(initialBatch)
+            harness.holder.setBatchSize(2)
+            mountPathList(harness)
+            scrollToIndex(9)
+            val execution = harness.start { harness.holder.runBatchTrace() }
+            host.get().runOnUiThread {
+                val batchSwitch = nodes().filter {
+                    it.config.getOrElseNullable(SemanticsProperties.Role) { null } == Role.Switch
+                }.last()
+                assertTrue(assertNotNull(batchSwitch.config[SemanticsActions.OnClick].action)())
+            }
+            settle()
+            assertEquals(!initialBatch, harness.state.batchEnabled)
+            assertFalse(harness.state.isRunning)
+            val changed = harness.state
+            harness.respond(recorded.sent.single().tag, listOf(node(0xA1, 5.0), node(null, 3.0)), RADIO)
+            harness.time.advanceBy(60.seconds)
+            settle()
+            assertTrue(execution.isCompleted)
+            assertEquals(changed, harness.state)
+            assertEquals(1, recorded.sent.size)
+            assertNull(harness.state.result)
+            assertTrue(harness.state.completedResults.isEmpty())
+            harness.holder.setBatchSize(1)
+            val next = harness.start { harness.holder.runBatchTrace() }
+            assertEquals(2, recorded.sent.size)
+            harness.respond(recorded.sent.last().tag, listOf(node(0xA1, 6.0), node(null, 3.0)), RADIO)
+            settle()
+            assertTrue(next.isCompleted)
+            assertFalse(harness.state.isRunning)
+            assertTrue(assertNotNull(harness.state.result).success)
+            assertEquals(if (initialBatch) 0 else 1, harness.state.completedResults.size)
+        }
+    }
+
     @Test fun emptyAndWhitespacePasteClearPriorSuccessAndErrorsWithoutChangingDraft() {
         listOf("", " \n\t\r ", "\u200B\n \r\u200B").forEach { blank ->
             val harness = configured()

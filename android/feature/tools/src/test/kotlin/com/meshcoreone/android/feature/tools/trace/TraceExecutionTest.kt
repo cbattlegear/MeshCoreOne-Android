@@ -556,6 +556,82 @@ class TraceExecutionTest {
     }
 
     @Test
+    fun `a held older store snapshot cannot overwrite a newer published run history`() {
+        val h = TraceHarness(configureDependencies = true)
+        val recorded = FakeTraceSender()
+        val persistence = InMemoryTracePathStore { h.time.now() }
+        val gate = CompletableDeferred<Unit>()
+        h.deps.device = device()
+        h.deps.sender = recorded
+        h.holder.addNode(alpha)
+        val saved = savedPath(h.state.fullPathData, radioId = RADIO)
+        persistence.insert(saved)
+        var fetches = 0
+        h.deps.store = object : TracePathPersisting by persistence {
+            override suspend fun fetchSavedTracePath(key: EntityKey): SavedTracePathDTO? {
+                val readSnapshot = persistence.fetchSavedTracePath(key)
+                if (++fetches == 1) gate.await()
+                return readSnapshot
+            }
+        }
+        h.complete { h.holder.runTrace() }
+        h.respond(recorded.sent.last().tag, listOf(node(0xA1, 5.0), node(null, 3.0)), RADIO)
+        assertEquals(1, persistence.paths.getValue(saved.id).runs.size)
+        h.complete { h.holder.runTrace() }
+        h.respond(recorded.sent.last().tag, listOf(node(0xA1, 6.0), node(null, 3.0)), RADIO)
+        assertEquals(2, h.state.activeSavedPath?.runs?.size)
+        val newer = h.state.activeSavedPath
+        val comparison = h.state.previousRun
+        assertNotNull(comparison)
+        gate.complete(Unit)
+        h.main.runCurrent()
+        assertEquals(newer, h.state.activeSavedPath)
+        assertEquals(comparison, h.state.previousRun)
+    }
+
+    @Test
+    fun `changing batch mode retires the pending operation without sending another trace`() {
+        for (initialBatch in listOf(false, true)) for (held in listOf(false, true)) {
+            val h = TraceHarness(configureDependencies = true)
+            val gate = CompletableDeferred<MessageSentInfo>()
+            val tags = mutableListOf<UInt>()
+            h.deps.device = device()
+            h.holder.addNode(alpha)
+            h.holder.addNode(bravo)
+            h.holder.setBatchEnabled(initialBatch)
+            h.holder.setBatchSize(2)
+            h.deps.sender = TraceSender { tag, _, _, _ ->
+                tags += tag
+                if (held) gate.await() else MessageSentInfo(0u, Bytes.EMPTY, 0u)
+            }
+            val running = h.start { h.holder.runBatchTrace() }
+            val beforeNoOp = h.state
+            h.holder.setBatchEnabled(initialBatch)
+            assertEquals(beforeNoOp, h.state)
+            h.holder.setBatchEnabled(!initialBatch)
+            assertFalse(h.state.isRunning)
+            val changed = h.state
+            gate.complete(MessageSentInfo(0u, Bytes.EMPTY, 0u))
+            h.main.runCurrent()
+            h.respond(tags.single(), listOf(node(0xA1, 5.0), node(null, 3.0)), RADIO)
+            h.time.advanceBy(60.seconds)
+            assertTrue(running.isCompleted)
+            assertEquals(changed, h.state)
+            assertEquals(1, tags.size)
+            assertNull(h.state.result)
+            assertTrue(h.state.completedResults.isEmpty())
+            h.holder.setBatchSize(1)
+            val next = h.start { h.holder.runBatchTrace() }
+            assertEquals(2, tags.size)
+            h.respond(tags.last(), listOf(node(0xA1, 6.0), node(null, 3.0)), RADIO)
+            assertTrue(next.isCompleted)
+            assertFalse(h.state.isRunning)
+            assertTrue(assertNotNull(h.state.result).success)
+            assertEquals(if (initialBatch) 0 else 1, h.state.completedResults.size)
+        }
+    }
+
+    @Test
     fun `held save continuations preserve durable history without restoring an edited selection`() {
         for (batch in listOf(false, true)) for (holdFetch in listOf(false, true)) {
             if (!batch && holdFetch) continue

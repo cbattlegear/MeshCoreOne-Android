@@ -120,6 +120,7 @@ class AppSettingsFeature private constructor(
     internal val selectionRequestedPermission = MutableStateFlow<OnboardingPermissionKind?>(null)
     private var selectionScanQueued = false
     private var selectionScanOwned = false
+    private var selectionScanJob: Job? = null
     private val selectionScanGate by lazy {
         val platform = requireNotNull(container.onboarding)
         DeviceScanCoordinator(scope, platform.pairing, platform.demo, platform.permissions, {})
@@ -179,12 +180,17 @@ class AppSettingsFeature private constructor(
             when (scanBlocker) {
                 PairingBlocker.NONE -> {
                     clearSelectionPermission()
-                    if (platform.pairing.scanFallback?.isRequested?.value != true) {
-                        selectionScanOwned = true
+                    if (platform.pairing.scanFallback?.isRequested?.value != true && selectionScanJob?.isActive != true) {
+                        selectionScanOwned = platform.pairing.scanFallback != null
                         app.connectionUI.queuedSystemPairingSetup = null
-                        app.connectionUI.queuedDeviceScanAfterSelectionDismiss = true
-                        container.connectionPort.isPairingFlowActive = true
-                        app.handleDeviceSelectionSheetDismissed()
+                        selectionScanJob = scope.launch {
+                            try {
+                                container.connectionPort.stopBleScanning()
+                                app.startDeviceScanAndAwait()
+                            } finally {
+                                selectionScanOwned = false
+                            }
+                        }
                     }
                 }
                 PairingBlocker.BLUETOOTH_PERMISSION -> selectionPermissionDenied.value = false
@@ -260,8 +266,16 @@ class AppSettingsFeature private constructor(
     internal fun cancelSelectionScan() {
         selectionScanQueued = false
         if (selectionAction.value == SelectionAction.Scan) clearSelectionPermission()
-        if (selectionScanOwned) container.onboarding?.pairing?.scanFallback?.cancel()
+        if (selectionScanOwned) {
+            selectionScanJob?.cancel()
+            container.onboarding?.pairing?.scanFallback?.cancel()
+        }
         selectionScanOwned = false
+    }
+
+    internal fun selectSelectionScanDevice(id: UUID) {
+        selectionScanOwned = false
+        requireNotNull(container.onboarding?.pairing?.scanFallback).select(id)
     }
 
     internal fun queueDeviceSetup(accessory: SystemPairedAccessory) {

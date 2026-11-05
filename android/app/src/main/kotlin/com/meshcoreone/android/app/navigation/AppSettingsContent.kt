@@ -337,7 +337,7 @@ private fun AppSelectionPlatform(feature: AppSettingsFeature) {
             val discoveries by remember(fallback, ready) {
                 if (ready) fallback.discoveries() else flowOf(emptyList())
             }.collectAsState(emptyList())
-            DeviceScannerSheetContent(discoveries, permissions, fallback::select, fallback::cancel)
+            DeviceScannerSheetContent(discoveries, permissions, feature::selectSelectionScanDevice, fallback::cancel)
         }
     }
 }

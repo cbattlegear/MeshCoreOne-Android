@@ -348,6 +348,69 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         }
     }
 
+    @Test fun fallbackScanNavigationAwayBeforeQueuedDiscoveryCannotLaunchAnInvisiblePicker() = runTest {
+        val service = BluetoothScanPairingService()
+        var starts = 0
+        val scans = BleScanCoordinator(object : BleScanGateway {
+            override fun startScan(onDevice: (DiscoveredDevice) -> Unit, onFailure: (Throwable) -> Unit) { starts++ }
+            override fun stopScan() = Unit
+        })
+        withSettings(pairingService = service, scans = scans) { h, feature ->
+            mount(h, feature)
+            open(h)
+            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            compose.waitForIdle()
+            assertNull(feature.selectionAction.value)
+            assertFalse(service.isPresenting.value)
+            assertEquals(0, starts)
+            compose.runOnUiThread { h.container.navigation.selectTab(AppTab.CHATS) }
+            compose.waitForIdle()
+            h.settle()
+            assertFalse(service.isPresenting.value)
+            assertFalse(h.container.connectionPort.isPairingFlowActive)
+            assertEquals(0, starts)
+            compose.runOnUiThread { h.container.navigation.selectTab(AppTab.SETTINGS) }
+            compose.waitForIdle()
+            h.settle()
+            compose.onNodeWithText(compose.activity.getString(O.deviceScannerTitle)).assertDoesNotExist()
+            assertEquals(0, starts)
+            assertTrue(h.links.links.isEmpty())
+        }
+    }
+
+    @Test fun selectedFallbackRadioContinuesConnectingAfterNavigationRemovesThePickerHost() = runTest {
+        val service = BluetoothScanPairingService()
+        val id = UUID.randomUUID()
+        val scans = BleScanCoordinator(object : BleScanGateway {
+            override fun startScan(onDevice: (DiscoveredDevice) -> Unit, onFailure: (Throwable) -> Unit) {
+                onDevice(DiscoveredDevice(id, syntheticAddress(id), "Chosen radio", -40))
+            }
+            override fun stopScan() = Unit
+        })
+        withSettings(pairingService = service, scans = scans) { h, feature ->
+            val gate = CompletableDeferred<Unit>()
+            h.links.configureRadio = { it.connectGate = gate }
+            mount(h, feature)
+            open(h)
+            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            compose.waitForIdle()
+            h.eventually("chosen radio rendered") { compose.onAllNodesWithText("Chosen radio").fetchSemanticsNodes().size == 1 }
+            compose.onNodeWithText("Chosen radio").performClick()
+            h.eventually("chosen radio connection entered") { h.links.links.size == 1 }
+            assertFalse(service.isPresenting.value)
+            compose.runOnUiThread { h.container.navigation.selectTab(AppTab.CHATS) }
+            compose.waitForIdle()
+            gate.complete(Unit)
+            h.eventually("chosen radio remains process-owned after navigation") {
+                h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY &&
+                    !h.container.connectionPort.isPairingFlowActive
+            }
+            assertEquals(id, h.manager.connectedDevice?.id)
+            assertEquals(id, (h.links.links.single().target as ConnectionTarget.Bluetooth).deviceId)
+            assertFalse(h.appState.connectionUI.showingConnectionFailedAlert)
+        }
+    }
+
     @Test fun fallbackScanActivityRecreationReattachesWithoutCancellingThePairingOrDuplicatingThePicker() = runTest {
         val service = BluetoothScanPairingService()
         var starts = 0

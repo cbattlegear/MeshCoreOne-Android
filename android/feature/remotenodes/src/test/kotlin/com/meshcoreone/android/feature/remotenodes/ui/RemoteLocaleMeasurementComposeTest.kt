@@ -48,6 +48,8 @@ import com.meshcoreone.android.core.protocol.lpp.LPPSensorType
 import com.meshcoreone.android.core.protocol.lpp.LPPValue
 import com.meshcoreone.android.feature.remotenodes.common.RemoteNodesClock
 import com.meshcoreone.android.feature.remotenodes.dependencies.RemoteNodeHistoryStore
+import com.meshcoreone.android.feature.remotenodes.history.ChartDataPoint
+import com.meshcoreone.android.feature.remotenodes.history.NeighborChart
 import com.meshcoreone.android.feature.remotenodes.status.FakeFaults
 import com.meshcoreone.android.feature.remotenodes.status.NodeStatusStateHolder
 import java.time.Instant
@@ -202,13 +204,16 @@ class RemoteLocaleMeasurementComposeTest {
                 assertEquals(expected, discoveredReads)
             }
         }
-        activity.get().setContent {
-            ResourceLocale {
-                RemoteNodeHistoryRoute(
-                    key, RadioId(UUID(0, 1)), false, store, Modifier, { _, _, _, _, _, _, _ -> }, clock,
-                )
+        fun installHistoryRoute() {
+            activity.get().setContent {
+                ResourceLocale {
+                    RemoteNodeHistoryRoute(
+                        key, RadioId(UUID(0, 1)), false, store, Modifier, { _, _, _, _, _, _, _ -> }, clock,
+                    )
+                }
             }
         }
+        installHistoryRoute()
         compose.onNode(hasText(": 77.9 \u00b0F", substring = true)).performScrollTo().assertIsDisplayed()
         compose.onNodeWithText(text(L.remoteNodesHistoryAll)).performScrollTo().performClick().assertIsSelected()
         val slider = SemanticsMatcher.keyIsDefined(SemanticsActions.SetProgress)
@@ -237,6 +242,41 @@ class RemoteLocaleMeasurementComposeTest {
             .performScrollTo().assertIsDisplayed()
         compose.onNode(hasTestTag("remote-error")).performScrollTo().assertIsDisplayed()
         assertReads(2)
+        val beforeRecreation = activity.get()
+        activity.recreate()
+        assertTrue("The host must be recreated", beforeRecreation !== activity.get())
+        installHistoryRoute()
+        compose.waitForIdle()
+        compose.onNodeWithText(text(L.remoteNodesHistoryAll)).performScrollTo().assertIsSelected()
+        compose.onNode(hasText(": 20.5 \u00b0C", substring = true)).performScrollTo().assertIsDisplayed()
+        compose.onNode(hasText(": 25.5 \u00b0C", substring = true)).assertDoesNotExist()
+        compose.onNode(hasTestTag("remote-error")).performScrollTo().assertIsDisplayed()
+        assertReads(2)
+    }
+
+    @Test fun neighborSelectionSurvivesAResolvedTitleChangeForTheSamePrefix() {
+        val prefix = Bytes.of(0x01, 0x02)
+        val points = listOf(
+            ChartDataPoint(UUID(0, 1), now.minusSeconds(7_200), 4.0),
+            ChartDataPoint(UUID(0, 2), now.minusSeconds(3_600), 9.0),
+        )
+        val neighbor = NeighborChart(prefix, "Alpha", points)
+        val stableIdentity = "neighbor:0102"
+        val chart = mutableStateOf(neighbor.chart.copy(selectionIdentity = stableIdentity))
+        activity.get().setContent {
+            ResourceLocale {
+                Column(Modifier.verticalScroll(rememberScrollState())) { RemoteMetricChart(chart.value) }
+            }
+        }
+        val slider = SemanticsMatcher.keyIsDefined(SemanticsActions.SetProgress)
+        compose.onNode(slider and hasContentDescription("Alpha.", substring = true))
+            .performSemanticsAction(SemanticsActions.SetProgress) { it(0f) }
+        compose.onNode(hasText("Alpha: 4.0 dB", substring = true)).assertIsDisplayed()
+        compose.runOnIdle {
+            chart.value = neighbor.copy(name = "Beta").chart.copy(selectionIdentity = stableIdentity)
+        }
+        compose.onNode(hasText("Beta: 4.0 dB", substring = true)).assertIsDisplayed()
+        compose.onNode(hasText("Beta: 9.0 dB", substring = true)).assertDoesNotExist()
     }
 
     @Test fun sameTimestampChartsKeepTheirOwnSelectionWhenLocaleReordersThemAndResetForAnotherNode() {

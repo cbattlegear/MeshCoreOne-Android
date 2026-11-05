@@ -615,8 +615,12 @@ class TraceCodeInputComposeTest {
     @Test fun differentRadioReconnectRejectsRetainedCodePaste() = retainedListActionAcrossReconnect(true, "paste")
     @Test fun sameRadioReconnectRejectsRetainedCodeAdd() = retainedListActionAcrossReconnect(false, "codes")
     @Test fun differentRadioReconnectRejectsRetainedCodeAdd() = retainedListActionAcrossReconnect(true, "codes")
+    @Test fun sameRadioReconnectRejectsRetainedDiscoveredAdd() = retainedListActionAcrossReconnect(false, "discovered")
+    @Test fun differentRadioReconnectRejectsRetainedDiscoveredAdd() = retainedListActionAcrossReconnect(true, "discovered")
 
     private fun retainedListActionAcrossReconnect(crossRadio: Boolean, action: String) {
+        val discoveredAction = action == "discovered"
+        val runIndex = if (discoveredAction) 13 else 11
         val epoch = com.meshcoreone.android.core.contracts.domain.ProcessEpoch(UUID.randomUUID())
         var token = com.meshcoreone.android.core.contracts.domain.SessionToken(
             epoch, com.meshcoreone.android.core.contracts.domain.Generation(1), RADIO,
@@ -632,7 +636,10 @@ class TraceCodeInputComposeTest {
             store = persistence
             sender = recorded
             responses = { events.subscribe() }
-            directory = FakeNodeDirectory(contacts = listOf(contact(0xA1, name = "Alpha"), contact(0xB2, name = "Bravo")))
+            directory = FakeNodeDirectory(
+                contacts = listOf(contact(0xA1, name = "Alpha"), contact(0xB2, name = "Bravo")),
+                nodes = if (discoveredAction) listOf(discovered(key(0xC3), "Discovered Charlie")) else emptyList(),
+            )
         }
         val feature = object : TracePathFeatureDependencies by deps {
             override fun sessionToken() = token
@@ -671,6 +678,7 @@ class TraceCodeInputComposeTest {
             "batch" -> 9
             "hash" -> 8
             "repeater" -> 7
+            "discovered" -> 9
             "run", "cancel" -> 11
             else -> 4
         })
@@ -684,6 +692,7 @@ class TraceCodeInputComposeTest {
             "batch" -> switchAction(true)
             "hash" -> assertNotNull(button("4 B").config[SemanticsActions.OnClick].action)
             "repeater" -> assertNotNull(button("Bravo").config[SemanticsActions.OnClick].action)
+            "discovered" -> assertNotNull(button("Discovered Charlie").config[SemanticsActions.OnClick].action)
             "run" -> assertNotNull(button(runLabel).config[SemanticsActions.OnClick].action)
             "cancel" -> assertNotNull(button(host.get().getString(C.contactsTraceListRunningTrace)).config[SemanticsActions.OnClick].action)
             "paste" -> assertNotNull(button("Paste from clipboard").config[SemanticsActions.OnClick].action)
@@ -698,7 +707,7 @@ class TraceCodeInputComposeTest {
             connection.value = connection.value.copy(radioId = nextRadio, generation = version)
         }
         settle()
-        scrollToIndex(11)
+        scrollToIndex(runIndex)
         click(runLabel)
         val sent = recorded.sent.last()
         val sendCount = recorded.sent.size
@@ -728,6 +737,7 @@ class TraceCodeInputComposeTest {
             "batch" -> 9
             "hash" -> 8
             "repeater" -> 7
+            "discovered" -> 9
             "run", "cancel" -> 11
             else -> 4
         })
@@ -736,6 +746,7 @@ class TraceCodeInputComposeTest {
             "batch" -> host.get().runOnUiThread { assertTrue(switchAction(true)()) }
             "hash" -> click("4 B")
             "repeater" -> click("Bravo")
+            "discovered" -> click("Discovered Charlie")
             "run", "cancel" -> {
                 click(runLabel)
                 assertEquals(sendCount + 1, recorded.sent.size)
@@ -756,10 +767,11 @@ class TraceCodeInputComposeTest {
                 (if (action == "auto") switches.first() else switches.last()).config[SemanticsProperties.ToggleableState],
                 "Fresh B toggle changes the real holder")
         }
-        if (codeAction || action == "repeater") {
-            scrollToIndex(12)
+        if (codeAction || action == "repeater" || discoveredAction) {
+            scrollToIndex(runIndex + 1)
             click(runLabel)
-            assertEquals(Bytes.of(0xA1, 0xB2), recorded.sent.last().path, "Fresh B $action changes the real route")
+            val expected = if (discoveredAction) Bytes.of(0xA1, 0xC3) else Bytes.of(0xA1, 0xB2)
+            assertEquals(expected, recorded.sent.last().path, "Fresh B $action changes the real route")
             click(host.get().getString(C.contactsTraceListRunningTrace))
         } else if (action == "hash") {
             scrollToIndex(11)

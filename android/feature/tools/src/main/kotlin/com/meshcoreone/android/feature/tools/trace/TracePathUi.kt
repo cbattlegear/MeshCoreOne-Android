@@ -447,9 +447,12 @@ internal fun TracePathListContent(
                 )
             }
             items(discoveredCandidates, key = { it.id }) { repeater ->
+                val addDiscovered = { if (canEdit()) holder.addNode(repeater) }
                 OutlinedButton(
-                    onClick = { holder.addNode(repeater) },
-                    modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp),
+                    onClick = addDiscovered,
+                    modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp).semantics {
+                        onClick { addDiscovered(); true }
+                    },
                 ) {
                     Text(repeater.name)
                 }

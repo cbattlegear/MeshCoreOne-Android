@@ -296,6 +296,34 @@ publication requests only its ordinary automatic candidate workflow, with no loc
 dispatch. No held #495 source is present in this composition. Complete-head Kotlin execution and
 independent review remain outstanding at authoring.
 
+Published complete candidate: `0ac28eebeee8a7ef2cde353e1e5183871b0d0cfe`.
+Its automatic run is `41939227027`, Linux job `126955530142`; in progress at the
+last observation, not acceptance. PR #532 retains the actual fc7 failures.
+
+The core owner subsequently supplied reviewed
+`7cff2cca21bfa906687980bdf653ef0727376352` (parent `b25179d8e`), composed locally
+as `40e428e2af2df9d3be9f05614a22b0e931a1ea22`. The existing RX regression now
+holds the actual atomic transform/publication boundary used by the repaired editor,
+asserts that Germany was durably added, then commits a real newer removal before
+reconnecting. The delayed old-generation notification must not restore the newer
+Room/live/cache state. This preserves stale-callback rejection rather than expecting
+the superseded optimistic-publication ordering. Trusted related-test admission passed.
+This local successor is not covered by the published 0ac run and is not execution evidence.
+
+The Settings owner supplied isolated
+`c32e6ec9c5963529708173fda23362468a7124b0` (parent `0e38149e1`), composed without
+conflict as `621f28ab420e9f232e3250af1991b1cd7dbe90d7`. Subscription replacement
+detaches pending acknowledgements and installs the new owner under the event lock,
+then closes channels/completes failures outside it. A real unconfined failed caller
+reenters subscription creation; the control requires the superseded outer replacement
+to close and the newest subscriber to acknowledge a verified retry. Cancellation while
+waiting after radio verification cancels the acknowledgement, does not invent a rollback
+packet, and permits an explicit verified restoration. The holder preserves unresolved
+recovery instead of treating cancellation as radio rollback. All five paths were
+trusted-admitted using the same related-consumer/test and validation-evidence operations.
+The owner's new controls are authored, not executed; published 0ac does not include them.
+The current 0ac hosted run is preserved rather than being superseded before its result.
+
 ## Authored controls
 
 - `PresetSessionFencingTest`: disconnected apply and retry; replacement radio and same-radio new

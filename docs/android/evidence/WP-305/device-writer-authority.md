@@ -412,3 +412,38 @@ controls, not the separately owned actual Settings queue integration, clean-main
 whole candidate, hardware or merge acceptance. The API handoff remains `725495e4`, transferred
 storage control `5d7847b8`, fixture correction `350eb42a`; no active ref was advanced or cancelled.
 Hosted logs remain authoritative and no duplicate CI-result bundle is retained.
+
+### OCV ABA publication and awaited pre-Repeat follow-up
+
+The independent review is bound to `b2beb5f257b36cd3ccce7bb641f7b2ea3747e3fc`, whose editor
+publishes after returning from persistence and lacks this branch's commit callback/runtime lease.
+This follow-up is based on preserved `f590feb332c05035d4839c1189d93d8f9f7d1aa2`, not a reset to
+that older composition. All existing transaction guards, cancellation behavior, commit callback,
+alias controls and original assertions remain. The storage producer owns durable retirement
+controls; the Settings producer owns Repeat consumer/radio error-gating.
+
+The live runtime now owns an OCV publication revision. A `ConnectedDeviceWriteView` captures the
+live DTO and revision under the same short monitor; the editor reads the current revision inside
+its atomic live transform. Any intervening OCV publication preserves the live OCV fields even
+when their values returned A -> B -> A. Explicit accepted OCV publications advance the revision
+even for equal values; ordinary replacements advance it when OCV fields change. State belongs
+to the runtime, not an individual editor, so multiple editors over the same access cannot evade
+the stamp. There is no schema change and no JVM monitor held across suspension. Required access
+implementations are updated; unsupported old implementations cannot silently fall back to an
+unstamped value comparison.
+
+The new real-Room ABA control captures live A, commits/publishes B before the editor's fresh
+snapshot, then commits/publishes A after the editor's actual save but before its caller returns.
+Both durable and live final A and the intended preset are asserted, along with two actual writes
+and advancing/equal-valued publication revisions. The existing actual postcommit callback is
+part of the required foundation: do not transplant only the new stamp onto unguarded b2 and
+claim the missing storage/runtime authority is repaired.
+
+New awaited `savePreRepeatSettings(SessionToken): Boolean` and
+`clearPreRepeatSettings(SessionToken): Boolean` overloads use the same authoritative editor path:
+false for a retired session, persistence errors and cancellation propagated, success only after
+the actual commit/publication. Legacy Job APIs are unchanged. Three real-Room controls hold a
+save, force a real SQL failure, and reconnect the same radio with a successor token while paused.
+They assert durable/live state and awaited outcomes; actual radio admission remains the Settings
+producer's consumer responsibility. Source validators and diff check pass; the thirty writer
+methods and sixteen persistence methods require a fresh exact hosted diagnostic.

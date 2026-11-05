@@ -4,6 +4,7 @@ package com.meshcoreone.android.core.connectivity.device
 import com.meshcoreone.android.core.connectivity.ConnectivityDiagnostics
 import com.meshcoreone.android.core.connectivity.ConnectivityError
 import com.meshcoreone.android.core.contracts.domain.ConnectedDeviceEdit
+import com.meshcoreone.android.core.contracts.domain.ConnectedDeviceWriteView
 import com.meshcoreone.android.core.contracts.domain.ContactPersisting
 import com.meshcoreone.android.core.contracts.domain.DevicePersisting
 import com.meshcoreone.android.core.contracts.domain.DeviceWriteConflict
@@ -39,6 +40,10 @@ import kotlinx.coroutines.sync.withLock
  */
 interface ConnectedDeviceAccess {
     val connectedDevice: DeviceDTO?
+    /** Read and transform share the runtime's short publication monitor; never a suspending lock. */
+    val ocvPublicationRevision: Long
+    fun captureDeviceWriteView(expectedToken: SessionToken?): ConnectedDeviceWriteView?
+    fun publishOCVSettings(device: DeviceDTO, expectedToken: SessionToken): ConnectedDeviceEdit?
     val connectedDeviceToken: SessionToken? get() = null
     fun currentDevice(expectedToken: SessionToken): DeviceDTO? =
         throw UnsupportedOperationException("Session-bound connected-device reads are not supported")
@@ -139,8 +144,8 @@ class ConnectedDeviceEditor(
         expectedToken: SessionToken?,
         transform: (DeviceDTO) -> DeviceDTO,
     ): Boolean {
-        val original = if (expectedToken == null) access.connectedDevice else access.currentDevice(expectedToken)
-        original ?: return false
+        val originalView = access.captureDeviceWriteView(expectedToken) ?: return false
+        val original = originalView.device
         fun current(): Boolean {
             val live = if (expectedToken == null) access.connectedDevice else access.currentDevice(expectedToken)
             return live != null && live.id == original.id && live.radioId == original.radioId
@@ -152,7 +157,11 @@ class ConnectedDeviceEditor(
             }, onCommitted = { saved ->
                 var updated: DeviceDTO? = null
                 val edit = access.transformConnectedDevice(expectedToken) { live ->
-                    saved.preservingChanges(original, live).also { updated = it }
+                    val merged = saved.preservingChanges(original, live)
+                    // A -> B -> A is still a newer OCV publication, despite value equality.
+                    (if (access.ocvPublicationRevision != originalView.ocvRevision) {
+                        merged.copy(ocvPreset = live.ocvPreset, customOCVArrayString = live.customOCVArrayString)
+                    } else merged).also { updated = it }
                 }
                 if (edit != null) {
                     val device = checkNotNull(updated)
@@ -183,10 +192,7 @@ class ConnectedDeviceEditor(
     }
 
     fun updateOCVSettings(device: DeviceDTO, expectedToken: SessionToken) {
-        access.transformConnectedDevice(expectedToken) { live ->
-            if (live.id != device.id || live.radioId != device.radioId) live
-            else live.copy(ocvPreset = device.ocvPreset, customOCVArrayString = device.customOCVArrayString)
-        }
+        access.publishOCVSettings(device, expectedToken)
     }
 
     fun updateDevice(device: DeviceDTO) {
@@ -208,7 +214,13 @@ class ConnectedDeviceEditor(
 
     fun savePreRepeatSettings(): Job? = edit("preRepeat") { it.savingPreRepeatSettings() }
 
+    suspend fun savePreRepeatSettings(expectedToken: SessionToken): Boolean =
+        sessionEdit("preRepeat", expectedToken) { it.savingPreRepeatSettings() }
+
     fun clearPreRepeatSettings(): Job? = edit("clearPreRepeat") { it.clearingPreRepeatSettings() }
+
+    suspend fun clearPreRepeatSettings(expectedToken: SessionToken): Boolean =
+        sessionEdit("clearPreRepeat", expectedToken) { it.clearingPreRepeatSettings() }
 
     fun addKnownRegion(region: String): Job? {
         val token = access.connectedDeviceToken

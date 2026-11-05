@@ -153,6 +153,13 @@ class ManagerDeviceAccess(private val manager: ConnectionManager) : ConnectedDev
     private val mutableChanges = kotlinx.coroutines.flow.MutableStateFlow(0L)
     internal val changes: kotlinx.coroutines.flow.StateFlow<Long> = mutableChanges
     override val connectedDevice: DeviceDTO? get() = manager.connectedDevice
+    override val ocvPublicationRevision: Long get() = manager.ocvPublicationRevision
+    override fun captureDeviceWriteView(expectedToken: SessionToken?) = manager.captureDeviceWriteView(expectedToken)
+    override fun publishOCVSettings(device: DeviceDTO, expectedToken: SessionToken): ConnectedDeviceEdit? {
+        val edit = manager.publishOCVSettings(device, expectedToken)
+        if (edit != null) mutableChanges.update { Math.incrementExact(it) }
+        return edit
+    }
     override val connectedDeviceToken: SessionToken? get() = manager.snapshot.value.token
     override fun currentDevice(expectedToken: SessionToken): DeviceDTO? = manager.currentDevice(expectedToken)
     override suspend fun withDeviceWriteAuthority(expectedToken: SessionToken?, write: suspend () -> Boolean): Boolean =

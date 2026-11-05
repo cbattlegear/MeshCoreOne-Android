@@ -10,6 +10,7 @@ import com.meshcoreone.android.core.connectivity.support.runtimeScenario
 import com.meshcoreone.android.core.connectivity.support.selfInfo
 import com.meshcoreone.android.core.connectivity.support.testDevice
 import com.meshcoreone.android.core.contracts.domain.ConnectedDeviceEdit
+import com.meshcoreone.android.core.contracts.domain.ConnectedDeviceWriteView
 import com.meshcoreone.android.core.contracts.domain.Generation
 import com.meshcoreone.android.core.contracts.domain.ProcessEpoch
 import com.meshcoreone.android.core.contracts.domain.SessionToken
@@ -33,6 +34,20 @@ class SessionBoundDeviceEditTest {
         var beforeReplace: () -> Unit = {}
         override val connectedDevice get() = device
         override val connectedDeviceToken get() = token
+        override var ocvPublicationRevision = 0L
+            private set
+        override fun captureDeviceWriteView(expectedToken: SessionToken?): ConnectedDeviceWriteView? =
+            (if (expectedToken == null) device else currentDevice(expectedToken))
+                ?.let { ConnectedDeviceWriteView(it, ocvPublicationRevision) }
+        override fun publishOCVSettings(device: DeviceDTO, expectedToken: SessionToken): ConnectedDeviceEdit? {
+            val live = currentDevice(expectedToken) ?: return null
+            val revision = ocvPublicationRevision
+            val edit = replaceConnectedDevice(
+                live.copy(ocvPreset = device.ocvPreset, customOCVArrayString = device.customOCVArrayString), expectedToken,
+            ) ?: return null
+            if (ocvPublicationRevision == revision) ocvPublicationRevision++
+            return edit
+        }
         override fun currentDevice(expectedToken: SessionToken): DeviceDTO? {
             beforeReplace()
             return device.takeIf { token == expectedToken }
@@ -43,6 +58,9 @@ class SessionBoundDeviceEditTest {
             beforeReplace()
             val current = this.device ?: return null
             if (token != expectedToken || current.id != device.id || current.radioId != device.radioId) return null
+            if (current.ocvPreset != device.ocvPreset || current.customOCVArrayString != device.customOCVArrayString) {
+                ocvPublicationRevision++
+            }
             this.device = device
             return ConnectedDeviceEdit(expectedToken, 1, current.knownRegions)
         }

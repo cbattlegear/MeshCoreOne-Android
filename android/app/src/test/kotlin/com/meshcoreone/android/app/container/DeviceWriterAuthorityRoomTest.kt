@@ -278,10 +278,19 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
         } finally {
             release.countDown()
             worker.shutdown()
-            assertTrue(worker.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS))
-            h.container.close()
-            repository.close()
-            database.close()
+            try {
+                assertTrue(worker.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS))
+            } finally {
+                try {
+                    h.container.close()
+                } finally {
+                    try {
+                        repository.close()
+                    } finally {
+                        database.close()
+                    }
+                }
+            }
         }
     }
 

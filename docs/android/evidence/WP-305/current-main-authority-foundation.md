@@ -39,6 +39,11 @@ the real runtime gate. All original blocked-retirement, unchanged-snapshot, disc
 and no-late-activation assertions remain; an additional target-row assertion proves the
 queued insert really committed before retirement. The test releases the command and joins
 the executor before closing runtime/store/database. No production behavior changes.
+Runtime-owner review of `ebb62314694b5332809f97dda4ac33cba616e54d` found the bounded
+oracle/topology sound, source-only, and requested unconditional resource cleanup if the worker
+termination assertion fails. A subsequent cleanup-only commit nests finally blocks so runtime,
+repository and database close are each attempted even if an earlier close or assertion throws;
+the worker-termination assertion remains. The diagnostic targets that successor, not ebb.
 
 Fresh `reserve.py admit` returned reviewed-support-test. `git diff --check` and pinned
 `C:\Python312\python.exe tools\android-port\controller\validate.py` passed (1,866 reference

@@ -366,3 +366,31 @@ and mixed thirty-byte UTF-8 prefixes, unchanged rejected-write revision/default/
 and explicit fresh storage admission. It is not a radio-acknowledgment test. The newer fifteen
 persistence methods are retained unchanged, producing sixteen source methods; the writer class
 has twenty-six source methods. These counts require fresh exact hosted execution.
+
+The storage producer independently confirmed exact `725495e4` to `5d7847b8` custody: the
+sixty-five-line transferred method is identical to `b57abf9d`, additive only, with sixteen source
+methods and clean diff check. Its bounded `725495e4` guard trace found no substantive issue:
+projection validation runs inside the actual `editDevice` retry transform, exits before save or
+callback on mismatch, and retains revision CAS, postcommit publication and cancellation behavior.
+This is not Settings whole-queue review or execution acceptance.
+
+The predecessor exact `eed46ffded20110883b9c1801cfd18ee5831343a` run
+[41956807027](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41956807027)
+completed with writer **25 paired START/END SUCCESS**, persistence **15 paired START/END SUCCESS**,
+and zero authority-method failures in job `127013636505`. App discovered 1,943 tests with the same
+three known preset/onboarding failures. This verifies the combined same-target control, not the
+new different-target guard. Fresh exact `5d7847b8ec612ec41a742ddf8b0a3efc4d2dc8bc` run
+`41958395416` is the candidate for the new twenty-six/sixteen controls. All earlier diagnostic
+refs and runs remain immutable; no local Gradle owner was taken over.
+
+Exact `5d7847b8` run
+[41958395416](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41958395416)
+completed with writer **26 START / 25 END SUCCESS / 1 END FAILURE**, persistence
+**16 START / 16 END SUCCESS**. App discovered 1,945 tests with four failures: the new different-target
+control plus the same three known preset/onboarding failures. Job `127018752217` records the new
+failure at test line 927: the second alias-order case expected its long target channel to retain
+`Region`, but fetched `Inherit`. The fixture created a new channel UUID at the same index on each
+parameter case; index lookup still selected the prior case's reset row. The correction reuses the
+actual indexed channel, sets its scope through `setChannelFloodScope`, and asserts the exact seeded
+scope before the competing removal. Every original post-removal assertion remains intact.
+Production guard/authority behavior is unchanged; this fixture successor requires fresh execution.

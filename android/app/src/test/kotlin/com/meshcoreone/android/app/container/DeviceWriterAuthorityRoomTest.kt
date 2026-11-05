@@ -6,6 +6,7 @@ import com.meshcoreone.android.app.navigation.addSettingsKnownRegion
 import com.meshcoreone.android.app.navigation.removeSettingsKnownRegion
 import com.meshcoreone.android.core.contracts.domain.DeviceEditPersisting
 import com.meshcoreone.android.core.contracts.domain.DeviceWriteSnapshot
+import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.KnownRegionRemovalOutcome
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
@@ -911,8 +912,14 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
                     assertTrue(store.saveDeviceIfUnchanged(seeded, ticket))
                     h.container.deviceEditor.updateDevice(seeded)
                     for ((index, name) in listOf(removed, other).withIndex()) {
-                        store.saveChannel(ChannelDTO(radioId = before.radioId, index = (index + 1).toUByte(), name = name)
-                            .withFloodScope(ChannelFloodScope.Region(name)))
+                        val channelIndex = (index + 1).toUByte()
+                        val channel = store.fetchChannel(before.radioId, channelIndex)
+                            ?: ChannelDTO(radioId = before.radioId, index = channelIndex, name = name).also {
+                                store.saveChannel(it)
+                            }
+                        store.setChannelFloodScope(EntityKey(before.radioId, channel.id), ChannelFloodScope.Region(name))
+                        assertEquals(ChannelFloodScope.Region(name), store.fetchChannel(before.radioId, channelIndex)!!.floodScope,
+                            "Each parameter case must reset its actual indexed channel before the competing removal")
                     }
                     paused.beforeSave = { store.removeDeviceKnownRegion(before.radioId, other) }
                     val outcome = h.container.deviceEditor.persistKnownRegionRemoval(removed, session.token, acknowledged)

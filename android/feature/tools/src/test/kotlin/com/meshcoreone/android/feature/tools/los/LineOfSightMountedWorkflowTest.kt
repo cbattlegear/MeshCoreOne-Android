@@ -1,11 +1,10 @@
 // AndroidOnly: WP-315 mounted TS-42 operator action and cancellation coverage.
 package com.meshcoreone.android.feature.tools.los
 
-import android.os.Bundle
+import android.app.Activity
 import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
-import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.BroadcastFrameClock
@@ -20,8 +19,14 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsOwner
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleRegistry
 import androidx.lifecycle.setViewTreeLifecycleOwner
+import androidx.savedstate.SavedStateRegistryController
+import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import com.meshcoreone.android.core.l10n.generated.AppContactsStrings
+import com.meshcoreone.android.core.l10n.generated.AppToolsStrings
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.model.ContactType
 import java.time.Duration
@@ -52,7 +57,10 @@ import org.robolectric.RobolectricTestRunner
 @Config(sdk = [31], qualifiers = "en-rUS-w360dp-h900dp-mdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class LineOfSightMountedWorkflowTest {
-    private lateinit var host: ActivityController<LineOfSightComposeTestActivity>
+    private lateinit var host: ActivityController<Activity>
+    private lateinit var screenOwner: ScreenOwner
+    private lateinit var content: ComposeView
+    private val frames = BroadcastFrameClock()
     private lateinit var scope: CoroutineScope
     private lateinit var clock: ManualClock
     private lateinit var elevation: FakeElevationSource
@@ -61,8 +69,20 @@ class LineOfSightMountedWorkflowTest {
 
     @Before
     fun attachHost() {
-        host = Robolectric.buildActivity(LineOfSightComposeTestActivity::class.java).setup().visible()
+        host = Robolectric.buildActivity(Activity::class.java).setup().visible()
         host.windowFocusChanged(true)
+        screenOwner = ScreenOwner()
+        content = ComposeView(host.get()).apply {
+            setViewTreeLifecycleOwner(screenOwner)
+            setViewTreeSavedStateRegistryOwner(screenOwner)
+            setParentCompositionContext(
+                createLifecycleAwareWindowRecomposer(
+                    coroutineContext = frames,
+                    lifecycle = screenOwner.lifecycle,
+                ),
+            )
+        }
+        host.get().setContentView(content)
         clock = ManualClock()
         elevation = FakeElevationSource(clock)
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -73,8 +93,11 @@ class LineOfSightMountedWorkflowTest {
     fun disposeHost() {
         host.get().runOnUiThread(holder::dispose)
         scope.cancel()
+        content.disposeComposition()
+        screenOwner.registry.currentState = Lifecycle.State.DESTROYED
         host.windowFocusChanged(false)
         host.pause().stop().destroy()
+        frames.cancel()
         idleMainLooper()
     }
 
@@ -107,7 +130,7 @@ class LineOfSightMountedWorkflowTest {
         }
         awaitState("relay result is available") { holder.state.value.analysisStatus is AnalysisStatus.RelayResult }
 
-        host.get().content.setContent {
+        content.setContent {
             val state by holder.state.collectAsState()
             MaterialTheme {
                 LineOfSightPanel(state, holder, Modifier.fillMaxSize())
@@ -133,7 +156,7 @@ class LineOfSightMountedWorkflowTest {
             holder.setPointB(OAKLAND)
         }
         awaitState("endpoint elevations load") { holder.state.value.canAnalyze }
-        host.get().content.setContent {
+        content.setContent {
             val state by holder.state.collectAsState()
             MaterialTheme {
                 LineOfSightPanel(state, holder, Modifier.fillMaxSize())
@@ -183,6 +206,16 @@ class LineOfSightMountedWorkflowTest {
                 action.boundsInRoot.height / host.get().resources.displayMetrics.density >= 48f,
                 "clear-all must retain a 48dp touch target",
             )
+            assertEquals(
+                listOf(host.get().getString(AppContactsStrings.contactsDiscoveryClear)),
+                action.config[SemanticsProperties.ContentDescription],
+                "clear-all must have a distinct localized accessibility label",
+            )
+            assertEquals(
+                listOf(host.get().getString(AppToolsStrings.toolsLineOfSightClear)),
+                action.config[SemanticsProperties.Text].map { it.text },
+                "clear-all must retain its visible localized button copy",
+            )
             handled = assertNotNull(action.config[SemanticsActions.OnClick].action).invoke()
         }
         settle()
@@ -202,7 +235,7 @@ class LineOfSightMountedWorkflowTest {
             if (view is ViewGroup) repeat(view.childCount) { index -> find(view.getChildAt(index))?.let { return it } }
             return null
         }
-        return checkNotNull(find(host.get().content)) { "LOS panel must be attached to a Compose view" }
+        return checkNotNull(find(content)) { "LOS panel must be attached to a Compose view" }
     }
 
     private fun isDisplayed(node: SemanticsNode): Boolean {
@@ -223,7 +256,7 @@ class LineOfSightMountedWorkflowTest {
             host.get().runOnUiThread {
                 Snapshot.sendApplyNotifications()
                 frameNanos += 16_000_000L
-                host.get().frames.sendFrame(frameNanos)
+                frames.sendFrame(frameNanos)
             }
             Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(16))
         }
@@ -240,24 +273,16 @@ class LineOfSightMountedWorkflowTest {
     }
 }
 
-class LineOfSightComposeTestActivity : ComponentActivity() {
-    val frames = BroadcastFrameClock()
-    lateinit var content: ComposeView
-        private set
+private class ScreenOwner : SavedStateRegistryOwner {
+    val registry = LifecycleRegistry(this)
+    override val lifecycle: Lifecycle get() = registry
+    private val savedState = SavedStateRegistryController.create(this).apply {
+        performAttach()
+        performRestore(null)
+    }
+    override val savedStateRegistry get() = savedState.savedStateRegistry
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        content = ComposeView(this).apply {
-            id = android.R.id.custom
-            setViewTreeLifecycleOwner(this@LineOfSightComposeTestActivity)
-            setViewTreeSavedStateRegistryOwner(this@LineOfSightComposeTestActivity)
-            setParentCompositionContext(
-                createLifecycleAwareWindowRecomposer(
-                    coroutineContext = frames,
-                    lifecycle = this@LineOfSightComposeTestActivity.lifecycle,
-                ),
-            )
-        }
-        setContentView(content)
+    init {
+        registry.currentState = Lifecycle.State.RESUMED
     }
 }

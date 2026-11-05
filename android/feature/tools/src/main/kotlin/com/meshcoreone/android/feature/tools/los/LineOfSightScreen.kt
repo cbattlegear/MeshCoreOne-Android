@@ -77,6 +77,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
+import com.meshcoreone.android.core.l10n.generated.AppContactsStrings
 import com.meshcoreone.android.core.l10n.generated.AppToolsStrings
 import com.meshcoreone.android.core.maps.MapCamera
 import com.meshcoreone.android.core.maps.MapLibreMapSurface
@@ -299,9 +300,12 @@ private fun PointsSection(state: LineOfSightState, holder: LineOfSightStateHolde
                 state.pointA != null || state.pointB != null || state.repeaterPoint != null ||
                     state.analysisStatus != AnalysisStatus.Idle || state.isAnalyzing || state.elevationFetchFailed
             if (!state.isRelocating && hasClearableState) {
+                val clearAllDescription = stringResource(AppContactsStrings.contactsDiscoveryClear)
                 TextButton(
                     onClick = holder::clear,
-                    modifier = Modifier.heightIn(min = 48.dp).modifierTestTag("los-clear-all"),
+                    modifier = Modifier.heightIn(min = 48.dp)
+                        .semantics { contentDescription = clearAllDescription }
+                        .modifierTestTag("los-clear-all"),
                 ) {
                     Text(stringResource(AppToolsStrings.toolsLineOfSightClear))
                 }

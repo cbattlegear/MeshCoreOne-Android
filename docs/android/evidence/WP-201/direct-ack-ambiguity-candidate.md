@@ -46,7 +46,8 @@ An earlier different claim with unknown actual acceptance is a wildcard for
 incoming code ambiguity. A known predicted or accepted overlap is separately
 reported, including after current acceptance. Both reasons can coexist.
 An affirmative prepared-only competitor and another radio are excluded.
-Prepared or legacy-unknown target wires do not become settling candidates.
+Prepared or legacy-unknown matching wires alone do not become settling candidates;
+an eligible matching earlier wire of the same valid claim can supply evidence.
 
 Nonsettling means no DELIVERED mutation from that ACK. It does not gate wire
 sending, accepted-send binding or explicit `SendCompleted`. Confirmation
@@ -92,3 +93,32 @@ No Kotlin compilation or test execution occurred here. Retained local execution
 hold `local-check:f516a7e271f444dd9cb2efcc8b995a16` is not bypassed.
 Nine authored methods are not nine executed or passing methods.
 Exact-candidate hosted compilation/discovery/execution remains required.
+
+## Same-valid-claim retry correction
+
+Independent coordinator review of parent `400c73d5bda08e1e6df68615134ae704bffdd4c8`
+found that the original same-claim control selected the earlier wire as target,
+masking a latest-retry caller gap. The classifier now treats target as claim/radio
+context and searches all matching wires of that same still-valid claim. A
+matching potential-emission wire from an earlier retry prevents PRE_WIRE or
+UNREGISTERED_CODE merely because the latest retry is prepared or predicts
+another code. A prepared retry's own unmatched-by-emission code remains PRE_WIRE.
+Producer validation of claim continuity is still mandatory; this does not
+reconnect a new claim, independently invalidated grant or replacement.
+
+Three added methods cover the exact latest-emitting and latest-prepared retry
+regressions plus simultaneous cross-claim collision/wildcard protection when
+the match comes from an earlier wire. All original nine methods/assertions
+remain; twelve methods are authored, not executed here. The unchanged
+cross-claim loop still examines the whole supplied radio history.
+Actual trusted production/test/evidence admissions were rechecked before edits.
+Both owners were notified of this claim-scoped usage contract. This separate
+successor remains nonactivated, with no expiry, send block or authority claim.
+
+For this successor, `git diff --check`,
+`python tools\android-port\controller\validate.py`,
+`python tools\android-port\controller\verification_config.py --check` and
+`python tools\android-port\portmap.py` passed. Provenance output is retained as
+session file `ambiguity-retry-portmap.json`. Kotlin compilation/test execution
+remains unverified under the same retained local execution hold; separate
+exact-candidate hosted execution is required.

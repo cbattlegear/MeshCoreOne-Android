@@ -37,6 +37,55 @@ class DirectAckAmbiguityCandidateTest {
     }
 
     @Test
+    fun latestEmittingRetryTargetRetainsEarlierAcceptedSameClaimCode() {
+        val earlier = target.copy(acceptedCode = 123u)
+        val retry = target.copy(wireRequestId = UUID(0, 4), predictedCode = 789u)
+
+        assertSame(
+            DirectAckAmbiguityDecision.NoKnownAmbiguity,
+            assess(retry, 123u, SnapshotList.of(earlier, retry)),
+        )
+    }
+
+    @Test
+    fun latestPreparedRetryTargetDoesNotFenceEarlierEligibleSameClaimAck() {
+        val earlier = target.copy(acceptedCode = 123u)
+        val retry = target.copy(
+            wireRequestId = UUID(0, 4),
+            predictedCode = 789u,
+            emission = DirectAckEmissionEvidence.PREPARED,
+        )
+
+        assertSame(
+            DirectAckAmbiguityDecision.NoKnownAmbiguity,
+            assess(retry, 123u, SnapshotList.of(earlier, retry)),
+        )
+        assertEquals(
+            setOf(DirectAckNonsettlingReason.PRE_WIRE),
+            assertIs<DirectAckAmbiguityDecision.Nonsettling>(
+                assess(retry, 789u, SnapshotList.of(earlier, retry)),
+            ).reasons,
+        )
+    }
+
+    @Test
+    fun earlierSameClaimMatchStillChecksCrossClaimCollisionAndWildcard() {
+        val earlier = target.copy(acceptedCode = 123u)
+        val retry = target.copy(wireRequestId = UUID(0, 4), predictedCode = 789u)
+        val competitor = wire(6, 7, 123u)
+
+        assertEquals(
+            setOf(
+                DirectAckNonsettlingReason.UNRESOLVED_PRIOR_EMISSION,
+                DirectAckNonsettlingReason.KNOWN_CROSS_CLAIM_CODE,
+            ),
+            assertIs<DirectAckAmbiguityDecision.Nonsettling>(
+                assess(retry, 123u, SnapshotList.of(earlier, retry, competitor)),
+            ).reasons,
+        )
+    }
+
+    @Test
     fun identicalActualCrossClaimCodeRemainsAmbiguousAfterBothAccept() {
         val old = wire(6, 7, 123u, 123u)
         assertEquals(

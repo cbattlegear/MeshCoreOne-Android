@@ -51,20 +51,29 @@ sealed interface DirectAckAmbiguityDecision {
  * Confirmation uncertainty can remain indefinite. No production caller is wired to this candidate.
  */
 object DirectAckAmbiguityCandidate {
+    /**
+     * target selects the still-valid logical claim/radio, not the wire that originated this ACK.
+     * Include its complete wire history: an earlier eligible retry may match while target is only
+     * prepared or has a different code. The producer, not this classifier, proves claim validity.
+     */
     fun assess(
         target: DirectAckAmbiguityWire,
         ackCode: UInt,
         radioHistory: SnapshotList<DirectAckAmbiguityWire>,
     ): DirectAckAmbiguityDecision {
         val reasons = linkedSetOf<DirectAckNonsettlingReason>()
-        when (target.emission) {
-            DirectAckEmissionEvidence.PREPARED -> reasons.add(DirectAckNonsettlingReason.PRE_WIRE)
-            DirectAckEmissionEvidence.LEGACY_UNKNOWN ->
-                reasons.add(DirectAckNonsettlingReason.UNKNOWN_TARGET_EMISSION)
-            DirectAckEmissionEvidence.POTENTIAL_EMISSION -> Unit
-        }
-        if (target.predictedCode != ackCode && target.acceptedCode != ackCode) {
+        val matchingClaimWires = (sequenceOf(target) + radioHistory.asSequence()).filter {
+            it.radioId == target.radioId && it.claimRequestId == target.claimRequestId &&
+                (it.predictedCode == ackCode || it.acceptedCode == ackCode)
+        }.toList()
+        if (matchingClaimWires.isEmpty()) {
             reasons.add(DirectAckNonsettlingReason.UNREGISTERED_CODE)
+        } else if (matchingClaimWires.none { it.emission == DirectAckEmissionEvidence.POTENTIAL_EMISSION }) {
+            if (matchingClaimWires.any { it.emission == DirectAckEmissionEvidence.LEGACY_UNKNOWN }) {
+                reasons.add(DirectAckNonsettlingReason.UNKNOWN_TARGET_EMISSION)
+            } else {
+                reasons.add(DirectAckNonsettlingReason.PRE_WIRE)
+            }
         }
         for (wire in radioHistory) {
             if (wire.radioId != target.radioId || wire.claimRequestId == target.claimRequestId) continue

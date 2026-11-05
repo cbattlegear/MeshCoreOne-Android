@@ -388,7 +388,7 @@ class SourceDispositionTests(unittest.TestCase):
             )
             self.assertNotIn(":app:assembleDebug", command)
             self.assertIn("--parallel", command)
-            self.assertIn("--max-workers=8", command)
+            self.assertIn("--max-workers=2", command)
             self.assertNotIn("--max-workers=1", command)
             self.assertNotIn('"result": "success"', printed.getvalue())
 
@@ -425,6 +425,11 @@ class SourceDispositionTests(unittest.TestCase):
                     self.assertEqual(run.call_args.args[1], plan)
                     self.assertEqual(planner.call_args.kwargs["merge_base_only"], event_name == "pull_request")
                     self.assertEqual(run.call_args.kwargs["merge_base_only"], event_name == "pull_request")
+                    options = run.call_args.args[5]
+                    self.assertIn("--parallel", options)
+                    self.assertIn("--max-workers=2", options)
+                    self.assertIn("-PscaffoldTestHeap=512m", options)
+                    self.assertNotIn("--max-workers=8", options)
                     self.assertEqual(planner.call_args.args[3] if len(planner.call_args.args) > 3 else None,
                                      None if scopes == ["scaffold"] else ["protocol", "module:core/protocol"])
                     self.assertEqual(

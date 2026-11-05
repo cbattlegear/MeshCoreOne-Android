@@ -606,6 +606,7 @@ class NotificationReplyStagingStore internal constructor(
         }
         var totalBytes = 0L
         val roots = mutableMapOf<Pair<NotificationReplyPost, UUID?>, Row>()
+        val contentKeys = mutableSetOf<RowContent>()
         val recordIds = mutableSetOf<UUID>()
         val outgoingIds = mutableSetOf<UUID>()
         val issuance = if (db.version >= 3) readIssuance(db, state.storeId).records.associateBy { it.action.token }
@@ -651,12 +652,11 @@ class NotificationReplyStagingStore internal constructor(
                     if (root != null || row.outgoingId == null || !outgoingIds.add(row.outgoingId)) corrupt()
                     roots[key] = row
                 } else {
-                    if (root == null || row.parentId != root.recordId || row.outgoingId != null ||
-                        state.rows.any { it.post == row.post && it.issuedToken == row.issuedToken &&
-                            it.payload.contentEquals(row.payload) &&
-                            it.text.contentEquals(row.text) }
-                    ) corrupt()
+                    if (root == null || row.parentId != root.recordId || row.outgoingId != null) corrupt()
                 }
+                if (!contentKeys.add(RowContent(
+                        row.post, row.issuedToken, ByteBuffer.wrap(row.payload), ByteBuffer.wrap(row.text),
+                    ))) corrupt()
                 state.rows.add(row)
                 totalBytes += row.contentBytes
             }
@@ -1522,6 +1522,14 @@ class NotificationReplyStagingStore internal constructor(
     }
 
     private class State(val storeId: UUID, val count: Long, val contentBytes: Long, val rows: MutableList<Row>)
+
+    // Unmodified buffers compare/hash bytes by content, not ByteArray identity.
+    private data class RowContent(
+        val post: NotificationReplyPost,
+        val issuedToken: UUID?,
+        val payload: ByteBuffer,
+        val text: ByteBuffer,
+    )
 
     private class Row(
         val sequence: Long,

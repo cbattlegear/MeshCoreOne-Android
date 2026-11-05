@@ -9,6 +9,7 @@ import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.model.RadioId
 import java.io.File
 import java.nio.ByteBuffer
+import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import kotlinx.coroutines.Dispatchers
@@ -68,6 +69,88 @@ class NotificationReplyStagingStoreTest {
         listOf(record, same, changed, retained).forEach {
             assertFalse(it.toString().contains("private-copy-sentinel"))
             assertFalse(it.toString().contains(exact))
+        }
+    }
+
+    @Test
+    fun conflictContentHashCollisionsDoNotMergeDifferentTextPayloadsOrPosts() = runTest {
+        val first = "\u1f00"
+        val second = "\u0001"
+        fun bytes(value: String) = ByteBuffer.allocate(value.length * Char.SIZE_BYTES).apply {
+            value.forEach { putChar(it) }
+        }.array()
+        assertEquals(ByteBuffer.wrap(bytes(first)).hashCode(), ByteBuffer.wrap(bytes(second)).hashCode())
+        store.stage(post, payload, "root")
+        val one = store.stage(post, payload, first) as NotificationReplyStagingStore.StageResult.ConflictRetained
+        val two = store.stage(post, payload, second) as NotificationReplyStagingStore.StageResult.ConflictRetained
+        assertNotEquals(one.identity, two.identity)
+        assertEquals(one.identity,
+            (store.stage(post, payload, first) as NotificationReplyStagingStore.StageResult.ConflictRetained).identity)
+        assertTrue(store.stage(post, payload.copy(messageID = UUID(0, 4)), first) is
+            NotificationReplyStagingStore.StageResult.ConflictRetained)
+        assertTrue(store.stage(post.copy(postId = UUID.randomUUID()), payload, first) is
+            NotificationReplyStagingStore.StageResult.Staged)
+        assertEquals(listOf("root", first, second, first, first), inventory().map { it.exactText })
+    }
+
+    @Test
+    fun tenThousandRowInventoryValidatesAllContentAndRejectsLateDuplicateWithValidDigest() = runTest {
+        cleanup()
+        val largeLimits = NotificationReplyLimits(10_000, 20_000, 20_000_000)
+        val largeStore = NotificationReplyStagingStore(file, largeLimits)
+        assertEquals(NotificationReplyStagingStore.InitializeResult.Ready, largeStore.initializeNew())
+        val root = largeStore.stage(post, payload, "root") as NotificationReplyStagingStore.StageResult.Staged
+        fun bytes(value: String) = ByteBuffer.allocate(value.length * Char.SIZE_BYTES).apply {
+            value.forEach { putChar(it) }
+        }.array()
+        SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
+            val payloadBytes = db.rawQuery("SELECT payload FROM reply_records WHERE sequence=1", null).use {
+                assertTrue(it.moveToFirst())
+                it.getBlob(0)
+            }
+            fun insert(sequence: Int, text: String) {
+                val recordId = UUID(1, sequence.toLong())
+                val header = bytes(
+                    "$sequence|$recordId|${post.version}|${post.postId}|${post.action}|${root.identity.recordId}|null",
+                )
+                val textBytes = bytes(text)
+                val contentBytes = header.size.toLong() + payloadBytes.size + textBytes.size
+                val digest = MessageDigest.getInstance("SHA-256").run {
+                    update(bytes(root.identity.storeId.toString()))
+                    update(header)
+                    update(ByteBuffer.allocate(Long.SIZE_BYTES).putLong(payloadBytes.size.toLong()).array())
+                    update(payloadBytes)
+                    update(textBytes)
+                    digest()
+                }
+                db.execSQL("INSERT INTO reply_records VALUES(?,?,?,?,?,?,?,?,?,?,?)", arrayOf<Any?>(
+                    sequence, recordId.toString(), post.postId.toString(), post.version, post.action,
+                    root.identity.recordId.toString(), null, payloadBytes, textBytes, contentBytes, digest,
+                ))
+            }
+            fun updateCounts() {
+                db.execSQL("UPDATE reply_metadata SET record_count=(SELECT count(*) FROM reply_records), " +
+                    "content_bytes=(SELECT sum(content_bytes) FROM reply_records)")
+            }
+            db.beginTransaction()
+            try {
+                (2..10_000).forEach { insert(it, "conflict-$it") }
+                updateCounts()
+                db.setTransactionSuccessful()
+            } finally {
+                db.endTransaction()
+            }
+            val entries = (largeStore.read() as NotificationReplyStagingStore.ReadResult.Inventory).entries
+            assertEquals(10_000, entries.size)
+            assertEquals("root", entries.first().exactText)
+            assertEquals((2..10_000).map { "conflict-$it" }, entries.drop(1).map { it.exactText })
+            listOf("root", "conflict-2").forEach { duplicate ->
+                db.execSQL("DELETE FROM reply_records WHERE sequence=10000")
+                insert(10_000, duplicate)
+                updateCounts()
+                assertEquals(NotificationReplyStagingStore.ReadResult.Failed(
+                    NotificationReplyStagingStore.Failure.CORRUPT_STORAGE), largeStore.read())
+            }
         }
     }
 

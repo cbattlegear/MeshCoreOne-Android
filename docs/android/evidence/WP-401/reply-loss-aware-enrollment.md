@@ -110,6 +110,15 @@ The local successor corrects the restart assertions to require uncertainty for m
 storage and adds corrupt/unavailable restart coverage without recreation. This new method
 requires fresh exact-candidate execution; earlier 340-case results do not cover it.
 
+Inventory duplicate validation now uses content-aware keys (post, issued token, payload bytes
+and exact UTF-16 bytes) instead of scanning all prior rows for each conflict. Explicit caller
+capacity has no small production cap: a real SQLite 10,000-row fixture checks complete inventory
+and rejects late root/conflict duplicates with valid digests; a separate hash-collision test
+preserves distinct content, routing payloads and posts. These two additional methods bring this
+local correction candidate to 170 reply methods at API 31/37 plus six baseline cases (346).
+Neither prior 340-case evidence nor non-executing source checks verify these additions. The
+separate androidTest/JVM source-set exclusion is owned by the build producer.
+
 ## Bound journal enforcement and surviving old text
 
 Schema4 colocates the real journal, issuance, custody, enrollment and copy tables, avoiding a

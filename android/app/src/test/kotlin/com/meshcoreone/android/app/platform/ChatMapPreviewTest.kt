@@ -287,6 +287,9 @@ class ChatMapPreviewTest : RoomProcessTest() {
             }
             compose.onNodeWithTag("chat-map-loading", useUnmergedTree = true).assertDoesNotExist()
             compose.onNodeWithContentDescription(retry, useUnmergedTree = true).performClick()
+            compose.waitUntil(10_000) {
+                compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).isDisplayed()
+            }
             compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).assertIsDisplayed()
             assertEquals(2, requests.size)
         }

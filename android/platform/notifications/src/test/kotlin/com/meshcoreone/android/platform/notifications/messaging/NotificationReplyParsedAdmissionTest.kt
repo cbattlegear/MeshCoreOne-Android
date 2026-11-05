@@ -3,6 +3,7 @@ package com.meshcoreone.android.platform.notifications.messaging
 
 import android.app.Application
 import android.app.RemoteInput
+import android.content.ClipData
 import android.content.Intent
 import android.database.sqlite.SQLiteDatabase
 import android.net.Uri
@@ -21,6 +22,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -122,16 +124,87 @@ class NotificationReplyParsedAdmissionTest {
         assertEquals(
             NotificationReplyAdmission.Result.ParsingRejected(
                 NotificationReplyDeliveryParsing.ParseFailure.MALFORMED_IDENTITY,
+                NotificationReplyDeliveryParsing.InputStatus.READABLE,
+                NotificationReplyAdmission.Result.TransientNotRetained(raw),
             ),
             admission.admit(input(raw).setAction("legacy-action")),
         )
         assertEquals(
             NotificationReplyAdmission.Result.ParsingRejected(
                 NotificationReplyDeliveryParsing.ParseFailure.STALE_INSTALLATION,
+                NotificationReplyDeliveryParsing.InputStatus.READABLE,
+                NotificationReplyAdmission.Result.TransientNotRetained(raw),
             ),
             admission.admit(input(raw).putExtra("mc1.notification.issued-reply.store", UUID.randomUUID().toString())),
         )
         assertEquals(0, calls)
+    }
+
+    @Test
+    fun missingAndEmptyRejectedInputStayExplicitWithoutInventedRecoveryText() = runTest {
+        provision()
+        var calls = 0
+        val admission = NotificationReplyAdmission(parser::parseDelivery) { _, _, _ ->
+            calls++
+            error("Rejected identity must never reach admission")
+        }
+        val missing = input(raw).setAction("legacy").apply { clipData = null }
+        for ((intent, status) in listOf(
+            missing to NotificationReplyDeliveryParsing.InputStatus.MISSING,
+            input("").setAction("legacy") to NotificationReplyDeliveryParsing.InputStatus.EMPTY,
+        )) {
+            assertEquals(
+                NotificationReplyAdmission.Result.ParsingRejected(
+                    NotificationReplyDeliveryParsing.ParseFailure.MALFORMED_IDENTITY, status, null,
+                ),
+                admission.admit(intent),
+            )
+        }
+        assertEquals(0, calls)
+    }
+
+    @Test
+    fun unreadableParcelInputPreservesIdentityErrorWithoutStorageOrEmptyFallback() = runTest {
+        provision()
+        var calls = 0
+        val admission = NotificationReplyAdmission(parser::parseDelivery) { _, _, _ ->
+            calls++
+            error("Unreadable input must never reach admission")
+        }
+        val hostileResults = Intent().putExtra(
+            "android.remoteinput.resultsData",
+            Bundle().apply {
+                putParcelable(NotificationActionReceiver.REMOTE_INPUT_KEY, Intent("not-text"))
+            },
+        )
+        val hostile = input(raw).setClipData(ClipData.newIntent("android.remoteinput.results", hostileResults))
+        assertEquals(
+            NotificationReplyAdmission.Result.ParsingRejected(
+                NotificationReplyDeliveryParsing.ParseFailure.MALFORMED_INPUT,
+                NotificationReplyDeliveryParsing.InputStatus.MALFORMED, null,
+            ),
+            admission.admit(hostile),
+        )
+        assertEquals(
+            NotificationReplyAdmission.Result.ParsingRejected(
+                NotificationReplyDeliveryParsing.ParseFailure.STALE_INSTALLATION,
+                NotificationReplyDeliveryParsing.InputStatus.MALFORMED, null,
+            ),
+            admission.admit(Intent(hostile).putExtra("mc1.notification.issued-reply.store", UUID.randomUUID().toString())),
+        )
+        assertEquals(0, calls)
+    }
+
+    @Test
+    fun outcomeFormattingNeverDisclosesVolatileReplyText() = runTest {
+        provision()
+        val admission = NotificationReplyAdmission(parser, store)
+        val rejected = admission.admit(input(raw).setAction("legacy")) as NotificationReplyAdmission.Result.ParsingRejected
+        assertEquals(raw, rejected.transientNotRetained?.exactText)
+        assertFalse(rejected.toString().contains(raw))
+        assertFalse(rejected.transientNotRetained.toString().contains(raw))
+        val retained = admission.admit(input(raw))
+        assertFalse(retained.toString().contains(raw))
     }
 
     @Test

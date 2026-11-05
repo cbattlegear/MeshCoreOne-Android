@@ -95,7 +95,7 @@ class ChatMailtoConsumerTest : RoomProcessTest() {
             assertNull(intent.selector)
             if (unavailable) {
                 compose.onNode(isDialog()).assertExists()
-                compose.onNodeWithText(host.get().getString(com.meshcoreone.android.app.R.string.platform_chat_link_unavailable))
+                compose.onNodeWithText(host.get().getString(com.meshcoreone.android.R.string.platform_chat_link_unavailable))
                     .assertIsDisplayed()
                 compose.onNodeWithText("No mail application").assertDoesNotExist()
             } else compose.onNode(isDialog()).assertDoesNotExist()

@@ -3,6 +3,7 @@ package com.meshcoreone.android.feature.tools.trace
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.TracePathPersisting
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.RepeaterResolvable
@@ -49,6 +50,8 @@ class TracePathStateHolder(
     private var currentRadioId: RadioId? = null
     private var connectionIdentity: Pair<RadioId?, Int>? = null
     private var connectionRevision = 0L
+    private var sessionToken: SessionToken? = null
+    private var connectionRetired = false
     private var pathSelectionRevision = 0L
     private var historyRefreshSequence = 0L
     private var publishedHistoryRefresh = 0L
@@ -77,6 +80,7 @@ class TracePathStateHolder(
     /** Each provider is read live at its point of use. */
     fun configure(dependencies: TracePathFeatureDependencies) {
         deps = dependencies
+        if (connectionIdentity == null && !connectionRetired) sessionToken = dependencies.sessionToken()
     }
 
     fun bindConnection(radioId: RadioId?, generation: Int) {
@@ -84,11 +88,14 @@ class TracePathStateHolder(
         if (connectionIdentity == identity) return
         retireConnection()
         connectionIdentity = identity
+        connectionRetired = false
+        sessionToken = deps.sessionToken()
         currentRadioId = radioId
     }
 
     fun retireConnection() {
         connectionIdentity = null
+        connectionRetired = true
         connectionRevision += 1
         stopListening()
         invalidatePathExecution()
@@ -99,6 +106,13 @@ class TracePathStateHolder(
                 availableRepeaters = emptyList(), availableRooms = emptyList(), discoveredRepeaters = emptyList(),
             )
         }
+    }
+
+    internal fun isConnectionCurrent(): Boolean {
+        if (connectionRetired) return false
+        if (sessionToken == deps.sessionToken()) return true
+        retireConnection()
+        return false
     }
 
     internal fun observeHashModeActions(onAction: () -> Unit): () -> Unit {
@@ -122,7 +136,7 @@ class TracePathStateHolder(
         traceEventsJob = scope.launch {
             try {
                 events.collect {
-                    if (connectionRevision == revision) handleTraceResponse(it.traceInfo, it.radioId)
+                    if (connectionRevision == revision && isConnectionCurrent()) handleTraceResponse(it.traceInfo, it.radioId)
                 }
             } catch (error: CancellationException) {
                 throw error
@@ -162,6 +176,7 @@ class TracePathStateHolder(
     internal fun resolver(snapshot: TracePathState = current) = TraceNodeResolver(snapshot, deps.bestAvailableLocation())
 
     suspend fun loadContacts(radioId: RadioId) {
+        if (!isConnectionCurrent()) return
         val revision = connectionRevision
         currentRadioId = radioId
         update { it.copy(recentPublicKeys = recents.load(radioId)) }
@@ -169,7 +184,7 @@ class TracePathStateHolder(
         val directory = deps.nodeDirectory() ?: return
         try {
             val contacts = directory.fetchContacts(radioId)
-            if (connectionRevision != revision) return
+            if (connectionRevision != revision || !isConnectionCurrent()) return
             update { state ->
                 state.copy(
                     availableRepeaters = contacts.filter { it.type == ContactType.REPEATER },
@@ -177,13 +192,13 @@ class TracePathStateHolder(
                 )
             }
             val nodes = directory.fetchDiscoveredNodes(radioId)
-            if (connectionRevision != revision) return
+            if (connectionRevision != revision || !isConnectionCurrent()) return
             update { state -> state.copy(discoveredRepeaters = nodes.filter { it.nodeType == ContactType.REPEATER }) }
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
             diagnostics.failure("loadContacts", error)
-            if (connectionRevision == revision) {
+            if (connectionRevision == revision && isConnectionCurrent()) {
                 update { it.copy(availableRepeaters = emptyList(), availableRooms = emptyList(), discoveredRepeaters = emptyList()) }
             }
         }
@@ -292,6 +307,7 @@ class TracePathStateHolder(
 
     /** Restores a saved path at its saved width; a mirrored palindrome turns auto-return on. */
     fun loadSavedPath(savedPath: SavedTracePathDTO) {
+        if (!isConnectionCurrent()) return
         if (connectionIdentity != null && deps.connectedDevice()?.radioId != savedPath.radioId) return
         invalidatePathExecution()
         notifyHashModeAction()
@@ -325,6 +341,7 @@ class TracePathStateHolder(
 
     /** Saves the current (or batch's first successful) result; batch mode appends the other runs. */
     suspend fun savePath(name: String): Boolean {
+        if (!isConnectionCurrent()) return false
         val radioId = deps.connectedDevice()?.radioId ?: return false
         val store = deps.savedPaths() ?: return false
         val snapshot = current
@@ -337,7 +354,7 @@ class TracePathStateHolder(
         val result = snapshot.result?.takeIf { it.success } ?: return false
         return try {
             val saved = store.createSavedTracePath(radioId, name, result.tracedPathBytes, size, run(result, time.now()))
-            if (pathSelectionRevision == revision && deps.connectedDevice()?.radioId == radioId) {
+            if (isConnectionCurrent() && pathSelectionRevision == revision && deps.connectedDevice()?.radioId == radioId) {
                 update { it.copy(activeSavedPath = saved) }
             }
             true
@@ -366,7 +383,7 @@ class TracePathStateHolder(
             }
         }
         store.fetchSavedTracePath(key)?.let { updated ->
-            if (pathSelectionRevision == revision && deps.connectedDevice()?.radioId == radioId) {
+            if (isConnectionCurrent() && pathSelectionRevision == revision && deps.connectedDevice()?.radioId == radioId) {
                 update { it.copy(activeSavedPath = updated) }
             }
         }
@@ -420,6 +437,7 @@ class TracePathStateHolder(
             store.appendTracePathRun(key, run)
             val refresh = ++historyRefreshSequence
             store.fetchSavedTracePath(key)?.let { updated ->
+                if (!isConnectionCurrent()) return
                 update {
                     val active = it.activeSavedPath
                     if (pathSelectionRevision == revision && refresh > publishedHistoryRefresh &&

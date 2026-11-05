@@ -36,6 +36,7 @@ fun AppContainer.createToolsFeatureDependencies(
             sessions.current?.dataStore?.fetchDiscoveredNodes(radioId)?.toList().orEmpty()
     }
     val trace = object : TracePathFeatureDependencies {
+        override fun sessionToken() = sessions.current?.token
         override fun connectedDevice() = appState.connectedDevice
         override fun bestAvailableLocation(): com.meshcoreone.android.core.model.Coordinate? = null
         override fun nodeDirectory() = directory

@@ -111,3 +111,20 @@ mutations, and prevents an old list snapshot from restoring a committed deletion
 visible/held A-list controls preserve A data while a fresh B row can select, run and delete;
 same-radio reconnect and direct-holder completion/error cases are included. These source
 assertions remain unverified until the new exact-head hosted diagnostic completes.
+
+Exact `28f5` run `41996072286` passed all six jobs, with actual 742 tools and 2000 app cases,
+zero failures/errors/skips, complete mandatory suites and matching candidate-compiled source
+blobs for 47 mounted, 33 execution, 4 batch-card and 10 saved-list methods. This does not
+clear later saved-holder findings or verify later successors. Exact `8809` run `41997510663`
+failed an unrelated app mounted `MountedInlineMalwareWarningTest` wrong-thread assertion
+(2000 app cases, one failure); no passing aggregate acceptance or result transfer is claimed.
+
+Trusted main `5640a3cf238a0c08f57f77fb78175964fdd6cdf6` was composed without rewriting
+prior diagnostic refs. The directly necessary app trace adapter and production-wiring test
+are admitted as `reviewed-support-consumer` / `modify-related-consumer` and
+`reviewed-support-test` / `add-or-update-related-test`; bare WP-owned operations do not
+authorize those app paths. The successor captures the live graph SessionToken to cover
+same-radio registry publication before delayed Compose retirement. Its AppContainer/Room
+held-persist reproduction and mounted/virtual-time controls require fresh execution and
+independent review. Same-connection rename/delete outcome ordering is independently tested
+across intervening loads without weakening retired-connection fencing.

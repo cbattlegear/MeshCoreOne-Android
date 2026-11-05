@@ -4,6 +4,7 @@ package com.meshcoreone.android.feature.tools.trace
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.TracePathPersisting
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SavedTracePathDTO
@@ -16,6 +17,7 @@ import kotlinx.coroutines.flow.update
 
 /** Live providers for the saved-path list; `null` mirrors a disconnected state (calls are no-ops). */
 interface SavedPathsDependencies {
+    fun sessionToken(): SessionToken? = null
     fun savedPaths(): TracePathPersisting?
     fun connectedDevice(): DeviceDTO?
 }
@@ -44,9 +46,11 @@ class SavedPathsStateHolder(
     private var active = true
     private var revision = 0L
     private var mutationRevision = 0L
+    private var sessionToken: SessionToken? = null
 
     fun configure(dependencies: SavedPathsDependencies) {
         deps = dependencies
+        sessionToken = dependencies.sessionToken()
     }
 
     fun retireConnection() {
@@ -60,7 +64,7 @@ class SavedPathsStateHolder(
             mutableState.value.savedPaths.any { it.id == path.id && it.radioId == path.radioId }
 
     fun isCurrentConnection(radioId: RadioId): Boolean =
-        active && deps?.connectedDevice()?.radioId == radioId
+        active && deps?.sessionToken() == sessionToken && deps?.connectedDevice()?.radioId == radioId
 
     private fun isCurrent(operation: Long, radioId: RadioId): Boolean =
         operation == revision && isCurrentConnection(radioId)
@@ -70,6 +74,7 @@ class SavedPathsStateHolder(
     private suspend fun loadSavedPaths(mutation: Long?) {
         if (!active) return
         val radioId = deps?.connectedDevice()?.radioId ?: return
+        if (!isCurrentConnection(radioId)) return
         val store = deps?.savedPaths() ?: return
         val operation = ++revision
         mutableState.update {

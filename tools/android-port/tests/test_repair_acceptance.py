@@ -4,6 +4,8 @@ import base64
 import copy
 import hashlib
 import json
+import subprocess
+import tempfile
 import unittest
 import zlib
 from dataclasses import asdict, replace
@@ -2058,6 +2060,48 @@ class RepairExecutionTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(PortError):
                 validate_build_log(build_log([], **(report | change)), ["core/protocol"])
 
+    def test_unrelated_affected_plan_does_not_require_notification_instrumentation_proof(self):
+        from controller.module_junit import NOTIFICATION_INSTRUMENTATION_TASK
+
+        counts = {"discovered": 1, "run": 1, "passed": 1, "failed": 0, "errors": 0, "skipped": 0}
+        plan = {
+            "base": BASE, "head": HEAD, "tree": "8" * 40, "scopes": ["module:core/maps"],
+            "tasks": [":core:maps:testDebugUnitTest", "validateModuleGraph", "runtimeDependencyInventory"],
+        }
+        report = {
+            "kind": "local-affected-only", "result": "success", **plan,
+            "resolved_task_graph": {"result": "no-duplicate-ci-evidence"},
+            "suites": {"core/maps": counts},
+            "compiled_test_sources": {"core/maps": {TEST: "4" * 40}},
+            "junit_cases": [{
+                "report": "android/core/maps/build/test-results/testDebugUnitTest/TEST-MapTest.xml",
+                "index": 0, "class": "MapTest", "method": "keepsListReachable", "outcome": "passed",
+            }],
+        }
+        step = "Run parallel Gradle validation and Android tasks"
+
+        def log_for(value):
+            return "\n".join(f"One Linux Android build\t{step}\t2026-10-19T00:00:00Z {line}"
+                             for line in json.dumps(value, indent=2).splitlines())
+
+        candidate = lambda: {"task": NOTIFICATION_INSTRUMENTATION_TASK}
+        self.assertTrue(validate_build_log(
+            log_for(report), ["core/maps"], plan_for_scopes=lambda scopes: plan,
+            notification_inputs_for_candidate=candidate,
+        )["positive_discovery"])
+
+        selected = {**plan, "tasks": [*plan["tasks"], NOTIFICATION_INSTRUMENTATION_TASK]}
+        for kind, value, provider in (
+            ("selected-omits-task-and-proof", report, lambda scopes: selected),
+            ("unrelated-reports-task", {**report, "tasks": selected["tasks"]}, lambda scopes: plan),
+            ("unrelated-reports-proof", {**report, "notification_instrumentation": {}}, lambda scopes: plan),
+        ):
+            with self.subTest(kind=kind), self.assertRaises(PortError):
+                validate_build_log(
+                    log_for(value), ["core/maps"], plan_for_scopes=provider,
+                    notification_inputs_for_candidate=candidate,
+                )
+
     def test_change_scoped_hosted_report_uses_exact_trusted_candidate_plan(self):
         counts = {"discovered": 1, "run": 1, "passed": 1, "failed": 0, "errors": 0, "skipped": 0}
         plan = {
@@ -2110,6 +2154,125 @@ class RepairExecutionTests(unittest.TestCase):
                 log = log.replace(step, "A candidate-written summary")
             with self.subTest(kind=kind), self.assertRaises(PortError):
                 validate_build_log(log, ["core/maps"], plan_for_scopes=provider)
+
+    def test_notification_instrumentation_log_requires_its_exact_trusted_plan_and_inventory(self):
+        from controller.ci import TASKS
+        from controller.module_junit import (
+            NOTIFICATION_INSTRUMENTATION_BASELINE, NOTIFICATION_INSTRUMENTATION_TASK,
+            NOTIFICATION_REPLY_SOURCES, notification_instrumentation_candidate,
+        )
+
+        from controller.model import git
+
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        candidate_repo = Path(temporary.name)
+        build_source = REPO / "tools/android-port/tests/fixtures/notification-instrumentation-build.gradle.kts"
+        build_path = candidate_repo / "android/platform/notifications/build.gradle.kts"
+        build_path.parent.mkdir(parents=True)
+        build_path.write_bytes(build_source.read_bytes())
+        source_paths = NOTIFICATION_INSTRUMENTATION_BASELINE | NOTIFICATION_REPLY_SOURCES
+        for relative in source_paths:
+            path = candidate_repo / "android/platform/notifications" / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("package fixture\nclass " + path.stem + "\n", encoding="utf-8")
+        for command in (
+            ["git", "-C", str(candidate_repo), "init", "--quiet"],
+            ["git", "-C", str(candidate_repo), "config", "user.name", "WP-003 fixture"],
+            ["git", "-C", str(candidate_repo), "config", "user.email", "wp003@example.invalid"],
+            ["git", "-C", str(candidate_repo), "add", "--all"],
+            ["git", "-C", str(candidate_repo), "commit", "--quiet", "-m", "Exact instrumentation profile fixture"],
+        ):
+            subprocess.run(command, check=True, capture_output=True)
+        revision = git(candidate_repo, "rev-parse", "HEAD").decode().strip()
+        expected = notification_instrumentation_candidate(candidate_repo, revision)
+        self.assertIsNotNone(expected)
+        tasks = [*TASKS["scaffold"], NOTIFICATION_INSTRUMENTATION_TASK]
+        from controller.ci import SCOPED_TASKS
+
+        plan = {"full_scaffold": True, "tasks": tasks, "scopes": list(SCOPED_TASKS)}
+        proof = {key: expected[key] for key in ("task", "sources", "excluded_reply_sources")}
+        report = {"tasks": tasks, "scopes": ["scaffold"], "notification_instrumentation": proof,
+                  "compiled_test_sources": {
+                      "platform/notifications": expected["jvm_sources"],
+                  }}
+
+        def candidate_inputs():
+            return notification_instrumentation_candidate(candidate_repo, revision)
+
+        def provider(scopes):
+            from controller.ci import SCOPED_TASKS
+
+            self.assertIn(scopes, (None, list(SCOPED_TASKS)))
+            return plan
+        self.assertTrue(validate_build_log(
+            build_log([], **report), [], plan_for_scopes=provider,
+            notification_inputs_for_candidate=candidate_inputs,
+        )["positive_discovery"])
+        for kind in ("no-plan", "wrong-plan", "missing-proof", "empty", "included-reply",
+                     "invented-source", "changed-blob", "missing-baseline", "missing-jvm",
+                     "wrong-jvm-blob", "extra-jvm-source", "empty-exclusion", "partial-exclusion",
+                     "no-task", "omit-task-and-proof",
+                     "plan-omits-task", "untrusted-candidate", "wrong-scopes"):
+            altered = copy.deepcopy(report)
+            trusted = provider
+            candidate = candidate_inputs
+            if kind == "no-plan":
+                trusted = None
+            elif kind == "wrong-plan":
+                trusted = lambda scopes: {"full_scaffold": False, "tasks": plan["tasks"]}
+            elif kind == "plan-omits-task":
+                trusted = lambda scopes: {"full_scaffold": True, "tasks": TASKS["scaffold"]}
+            elif kind == "untrusted-candidate":
+                candidate = None
+            elif kind == "missing-proof":
+                altered.pop("notification_instrumentation")
+            elif kind == "empty":
+                altered["notification_instrumentation"]["sources"] = {}
+            elif kind == "included-reply":
+                altered["notification_instrumentation"]["sources"][
+                    expected["excluded_reply_sources"][0]
+                ] = expected["reply_jvm_sources"][expected["excluded_reply_sources"][0]]
+            elif kind == "invented-source":
+                altered["notification_instrumentation"]["sources"][
+                    "android/platform/notifications/src/androidTest/kotlin/fabricated/Fake.kt"
+                ] = "4" * 40
+            elif kind == "changed-blob":
+                path = next(iter(altered["notification_instrumentation"]["sources"]))
+                altered["notification_instrumentation"]["sources"][path] = "0" * 40
+            elif kind == "missing-baseline":
+                altered["notification_instrumentation"]["sources"].pop(
+                    next(iter(expected["sources"]))
+                )
+            elif kind == "missing-jvm":
+                altered["compiled_test_sources"]["platform/notifications"].pop(
+                    expected["excluded_reply_sources"][0]
+                )
+            elif kind == "wrong-jvm-blob":
+                path = expected["excluded_reply_sources"][0]
+                altered["compiled_test_sources"]["platform/notifications"][path] = "0" * 40
+            elif kind == "extra-jvm-source":
+                altered["compiled_test_sources"]["platform/notifications"][
+                    "android/platform/notifications/src/test/kotlin/fabricated/Fake.kt"
+                ] = "4" * 40
+            elif kind == "empty-exclusion":
+                altered["notification_instrumentation"]["excluded_reply_sources"] = []
+            elif kind == "partial-exclusion":
+                altered["notification_instrumentation"]["excluded_reply_sources"] = (
+                    expected["excluded_reply_sources"][:-1]
+                )
+            elif kind == "no-task":
+                altered["tasks"].remove(NOTIFICATION_INSTRUMENTATION_TASK)
+            elif kind == "omit-task-and-proof":
+                altered["tasks"].remove(NOTIFICATION_INSTRUMENTATION_TASK)
+                altered.pop("notification_instrumentation")
+            elif kind == "wrong-scopes":
+                altered["scopes"] = ["scaffold", "protocol"]
+            with self.subTest(kind=kind), self.assertRaises(PortError):
+                validate_build_log(
+                    build_log([], **altered), [], plan_for_scopes=trusted,
+                    notification_inputs_for_candidate=candidate,
+                )
 
     def test_authoritative_hosted_report_requires_nonzero_successful_affected_modules(self):
         modules = ["feature/map", "core/maps"]
@@ -2598,6 +2761,20 @@ class RepairAuthorityTests(unittest.TestCase):
         from controller.runtime_inputs import required_inputs
         entries = {p: "6" * 40 for p in required_inputs()}
         entries.update({"docs/android/test-cases.json": "7" * 40, PATH: "5" * 40, TEST: "4" * 40})
+
+        def candidate_git(repo, *arguments):
+            self.assertEqual(repo, native.manifest.repo)
+            if arguments == ("cat-file", "-t", HEAD):
+                return b"commit\n"
+            self.assertEqual(arguments, ("ls-tree", "-rz", "--full-tree", HEAD, "--", "android"))
+            return b"".join(
+                f"100644 blob {blob}\t{path}\0".encode()
+                for path, blob in sorted(entries.items()) if path.startswith("android/")
+            )
+
+        reader = patch("controller.module_junit.git", side_effect=candidate_git)
+        reader.start()
+        self.addCleanup(reader.stop)
         return native, api, prefix, value, scope, staged, entries
 
     def verification_fixture(self):

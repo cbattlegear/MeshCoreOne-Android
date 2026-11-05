@@ -545,6 +545,121 @@ class TraceCodeInputComposeTest {
         }
     }
 
+    @Test fun sameRadioReconnectRejectsRetainedHopEditsAgainstThePreservedRoute() {
+        for (action in listOf("up", "down", "remove")) retainedPathEditAcrossReconnect(false, action)
+    }
+
+    @Test fun differentRadioReconnectRejectsRetainedHopEditsAgainstThePreservedRoute() {
+        for (action in listOf("up", "down", "remove")) retainedPathEditAcrossReconnect(true, action)
+    }
+
+    @Test fun sameRadioReconnectDismissesTheOldClearDialog() = retainedPathEditAcrossReconnect(false, "dialog")
+
+    @Test fun differentRadioReconnectDismissesTheOldClearDialog() = retainedPathEditAcrossReconnect(true, "dialog")
+
+    @Test fun sameRadioReconnectRejectsARetainedClearConfirmation() = retainedPathEditAcrossReconnect(false, "confirm")
+
+    @Test fun differentRadioReconnectRejectsARetainedClearConfirmation() = retainedPathEditAcrossReconnect(true, "confirm")
+
+    private fun retainedPathEditAcrossReconnect(crossRadio: Boolean, action: String) {
+        val epoch = com.meshcoreone.android.core.contracts.domain.ProcessEpoch(UUID.randomUUID())
+        var token = com.meshcoreone.android.core.contracts.domain.SessionToken(
+            epoch, com.meshcoreone.android.core.contracts.domain.Generation(1), RADIO,
+        )
+        var publishedVersion = 1
+        val persistence = InMemoryTracePathStore { T0 }
+        val path = savedPath(Bytes.of(0xA1, 0xB2, 0xC3), radioId = RADIO)
+        persistence.insert(path)
+        val recorded = FakeTraceSender()
+        val events = TraceResponseBroadcaster()
+        val deps = FakeTraceDependencies().apply {
+            device = device()
+            store = persistence
+            sender = recorded
+            responses = { events.subscribe() }
+            directory = FakeNodeDirectory(contacts = listOf(
+                contact(0xA1, name = "Alpha"), contact(0xB2, name = "Bravo"), contact(0xC3, name = "Charlie"),
+            ))
+        }
+        val feature = object : TracePathFeatureDependencies by deps {
+            override fun sessionToken() = token
+            override fun originatingSessionToken(generation: Int) = token.takeIf { generation == publishedVersion }
+            override fun isOriginatingSessionCurrent(
+                generation: Int,
+                token: com.meshcoreone.android.core.contracts.domain.SessionToken?,
+            ) = generation == publishedVersion && token == this.sessionToken()
+        }
+        val connection = mutableStateOf(TracePathScreen.Dependencies(
+            feature, MapRecentsStorage(), RecordingDiagnostics(), RADIO, 1,
+        ))
+        content.setContent { MaterialTheme { TracePathScreen(connection.value) } }
+        settle()
+        click(host.get().getString(C.contactsTraceSaved))
+        click(path.name)
+        val isClear = action == "dialog" || action == "confirm"
+        val resource = when (action) {
+            "up" -> C.contactsDetailAvatarCropMoveUp
+            "down" -> C.contactsDetailAvatarCropMoveDown
+            else -> L.commonDelete
+        }
+        scrollToIndex(if (action == "up") 3 else 2)
+        val label = "${host.get().getString(resource)}: ${
+            C.contactsTraceListHopLabel(host.get().resources, if (action == "up") 2 else 1,
+                if (action == "up") "Bravo" else "Alpha")
+        }"
+        val oldHop = if (isClear) null else assertNotNull(actionButton(label).config[SemanticsActions.OnClick].action)
+        scrollToIndex(5)
+        val clearLabel = host.get().getString(C.contactsTraceClearPath)
+        val oldOpen = assertNotNull(button(clearLabel).config[SemanticsActions.OnClick].action)
+        val oldConfirm = if (isClear) {
+            click(clearLabel)
+            assertNotNull(button(clearLabel).config[SemanticsActions.OnClick].action).also {
+                if (action == "confirm") click(host.get().getString(L.commonCancel))
+            }
+        } else null
+        val nextRadio = if (crossRadio) RadioId(UUID.randomUUID()) else RADIO
+        host.get().runOnUiThread {
+            token = token.copy(generation = com.meshcoreone.android.core.contracts.domain.Generation(2), radioId = nextRadio)
+            publishedVersion = 2
+            deps.device = device().copy(radioId = nextRadio)
+            connection.value = connection.value.copy(radioId = nextRadio, generation = 2)
+            assertEquals(token, connection.value.originatingToken)
+        }
+        settle()
+        assertFalse(ShadowDialog.getLatestDialog()?.isShowing == true, "Reconnect retires A's clear dialog")
+        scrollToIndex(14)
+        click(host.get().getString(C.contactsTraceListRunTrace))
+        assertEquals(Bytes.of(0xA1, 0xB2, 0xC3), recorded.sent.single().path, "B retains the editable route")
+        host.get().runOnUiThread { assertTrue((oldConfirm ?: assertNotNull(oldHop))()) }
+        settle()
+        assertTrue(texts().contains(host.get().getString(C.contactsTraceListRunningTrace)),
+            "A's retained edit must not change B's route or cancel B's trace")
+        assertEquals(path, persistence.paths[path.id])
+        if (isClear) {
+            host.get().runOnUiThread { assertTrue(oldOpen()) }
+            settle()
+            assertFalse(ShadowDialog.getLatestDialog()?.isShowing == true, "A's retained open cannot create a B dialog")
+            scrollToIndex(5)
+            click(clearLabel)
+            click(clearLabel)
+            assertTrue(texts().contains(host.get().getString(C.contactsTraceListEmptyPath)))
+            assertFalse(texts().contains(host.get().getString(C.contactsTraceListRunningTrace)))
+        } else {
+            scrollToIndex(if (action == "up") 3 else 2)
+            clickDescription(label)
+            val expected = if (action == "remove") listOf(0xB2, 0xC3) else listOf(0xB2, 0xA1, 0xC3)
+            scrollToIndex(11 + expected.size)
+            click(host.get().getString(C.contactsTraceListRunTrace))
+            val sent = recorded.sent.last()
+            assertEquals(Bytes.of(*expected.toIntArray()), sent.path, "Fresh B edit reaches the real holder")
+            events.yield(TraceResponse(
+                traceInfo(sent.tag, expected.map { node(it, 6.0) } + node(null, 3.0)), nextRadio,
+            ))
+            settle()
+            assertTrue(texts().contains("SNR: 6.0 dB"), "The fresh B trace still accepts its own response")
+        }
+    }
+
     @Test fun savedDialogRetiresVisibleRowsHeldLoadsAndRetainedActionsAcrossConnections() {
         for (sameRadio in listOf(false, true)) for (heldLoad in listOf(false, true)) {
             val nextRadio = if (sameRadio) RADIO else RadioId(UUID.randomUUID())

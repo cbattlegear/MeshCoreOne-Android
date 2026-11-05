@@ -100,6 +100,23 @@ operation/A radio, and then forwards into Room after B publishes. Saved holders 
 generation/origin validation. These are new unverified changes requiring fresh execution;
 failed earlier controls are not reclassified as product passes.
 
+R15 exact positive `45ac1bb018976e040ccf9f33af8c299e450c28d5` runs42012983052 on
+trusted main663d2029. Its distinct negative `285b1eabe47f86a73d5701ea20d9d55716efbaad`,
+run42013081374, failed app2008/4 and tools753/3: both delayed app controls, same-token
+reload, and independent `ChatMapPreviewTest.rendererExceptionIsARecoverableFallbackRatherThanAStuckSpinner[31]`;
+the mounted failures are delayed same/different-radio and same-token reload. The negative
+keeps identical assertions/APIs and the synchronous AppState withdrawal fix, but restores
+legacy live-token UI configuration and removes version/recent guards. It is not a
+byte-identical historic implementation. Positive runtime disposition remains separate.
+
+Test-only successor `e8ec05f017c32926e739a6ffd6e1d2a174239b67`, run42015053100,
+adds six real TracePathScreen mounted entrypoints for retained A hop edits/clear across
+same/different-radio reconnects. It requires the preserved route and a fresh B trace,
+rejects retained A actions/dialogs, and exercises fresh B controls and response handling.
+The following source successor fences those callbacks by originating radio/version/token,
+resets the dialog per connection, and freezes clear semantics callbacks. Neither this
+additional schedule nor the full WP/device behavior is accepted by earlier results.
+
 | Check | Result |
 |---|---|
 | Pinned Windows preflight: `python .\\tools\\android-port\\controller\\ci.py preflight --local --state $env:ANDROID_CI_STATE --output $output` with a fresh absolute TEMP output and pinned Python 3.12.4 | PASS (exit 0; readiness only) |

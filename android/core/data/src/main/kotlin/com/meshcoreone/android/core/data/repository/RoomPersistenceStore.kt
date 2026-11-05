@@ -108,6 +108,7 @@ class RoomPersistenceStore private constructor(
     ): T = context.restoreBackup(afterCommit) {
         database.directAcks().invalidateRestore()
         database.directAcks().invalidatePendingRestore()
+        database.directAcks().invalidateIntentRestore()
         block(database, clock)
     }
 

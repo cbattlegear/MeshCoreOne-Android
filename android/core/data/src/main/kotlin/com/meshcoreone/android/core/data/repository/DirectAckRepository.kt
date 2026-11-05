@@ -10,6 +10,7 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
     DirectAckAuthority, DirectPendingCompletionAuthority {
     private data class Lease(val issuer: UUID, val token: SessionToken, val request: UUID) : DirectAckLease
     private data class Attempt(val lease: Lease, val request: UUID) : DirectAckAttempt
+    private data class Intent(val lease: Lease, val request: UUID) : DirectAckIntent
     private data class PendingCompletion(val lease: Lease, val request: UUID) : DirectPendingCompletion
 
     private suspend fun <T> transaction(
@@ -54,57 +55,119 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
             DirectAckActivationResult.Activated(Lease(context.directAckIssuer, token, requestId))
         }
 
-    override suspend fun beginDirectAckAttempt(
+    override suspend fun captureDirectAckIntent(
         lease: DirectAckLease,
         key: EntityKey,
         requestId: UUID,
-        firstWireRequestId: UUID,
-        predictedAckCode: UInt,
         mode: DirectAckMode,
         pendingSendId: UUID?,
-    ): DirectAckBeginResult = transaction("beginDirectAckAttempt") {
-        val issued = issuedLease(lease) ?: return@transaction DirectAckBeginResult.Rejected(DirectAckRejection.INVALID_HANDLE)
-        if (key.radioId != issued.token.radioId) return@transaction DirectAckBeginResult.Rejected(DirectAckRejection.CONFLICT)
-        if (!active(issued)) return@transaction DirectAckBeginResult.Rejected(DirectAckRejection.STALE_LEASE)
+    ): DirectAckIntentResult = transaction("captureDirectAckIntent") {
+        val issued = issuedLease(lease) ?: return@transaction DirectAckIntentResult.Rejected(DirectAckRejection.INVALID_HANDLE)
+        if (key.radioId != issued.token.radioId) return@transaction DirectAckIntentResult.Rejected(DirectAckRejection.CONFLICT)
         val dao = database.directAcks()
-        val existing = dao.claim(key.radioId.value, requestId)
+        val existing = dao.intent(key.radioId.value, requestId)
         if (existing != null) {
-            val first = dao.wires(key.radioId.value, requestId).firstOrNull { it.requestId == firstWireRequestId }
-            if (existing.leaseId != issued.request || existing.firstWireId != firstWireRequestId ||
-                existing.snapshot.id != key.id || existing.mode != mode.name ||
-                existing.pendingId != pendingSendId || first?.predictedCode != predictedAckCode.toLong()
-            ) return@transaction DirectAckBeginResult.Rejected(DirectAckRejection.CONFLICT)
-            rejection(permission(existing, issued))?.let { return@transaction DirectAckBeginResult.Rejected(it) }
-            return@transaction DirectAckBeginResult.AlreadyBegun(Attempt(issued, requestId), receipt(existing, issued))
+            if (existing.leaseId != issued.request || existing.messageId != key.id ||
+                existing.mode != mode.name || existing.pendingId != pendingSendId
+            ) return@transaction DirectAckIntentResult.Rejected(DirectAckRejection.CONFLICT)
+            rejection(intentPermission(existing, issued))?.let { return@transaction DirectAckIntentResult.Rejected(it) }
+            return@transaction DirectAckIntentResult.AlreadyCaptured(Intent(issued, requestId), intentReceipt(existing, issued))
         }
+        if (!active(issued)) return@transaction DirectAckIntentResult.Rejected(DirectAckRejection.STALE_LEASE)
         val row = database.messages().byId(key.radioId.value, key.id)
-            ?: return@transaction DirectAckBeginResult.Rejected(DirectAckRejection.MISSING)
+            ?: return@transaction DirectAckIntentResult.Rejected(DirectAckRejection.MISSING)
         if (row.directionRawValue != MessageDirection.OUTGOING.rawValue || row.channelIndex != null ||
             (mode == DirectAckMode.SEND && row.statusRawValue in setOf(3L, 4L))
-        ) return@transaction DirectAckBeginResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
+        ) return@transaction DirectAckIntentResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
         if (MessageStatus.fromRawValue(row.statusRawValue) == null) invalidData("Unknown direct message status")
         val incarnation = dao.incarnation(key.radioId.value, key.id, "message")
             ?: invalidData("Missing persisted message incarnation")
         val pending = pendingSendId?.let { id ->
             database.pendingSends().forMessage(key.radioId.value, key.id).firstOrNull { it.id == id }
-                ?: return@transaction DirectAckBeginResult.Rejected(DirectAckRejection.MISSING)
+                ?: return@transaction DirectAckIntentResult.Rejected(DirectAckRejection.MISSING)
         }
         if (pending != null && pending.kindRawValue != PendingSendKind.DM.rawValue) {
-            return@transaction DirectAckBeginResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
+            return@transaction DirectAckIntentResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
         }
-        val pendingIncarnation = pending?.let {
-            dao.incarnation(it.radioId, it.id, "pending")?.incarnation ?: invalidData("Missing pending incarnation")
+        val pendingIdentity = pending?.let {
+            dao.incarnation(it.radioId, it.id, "pending") ?: invalidData("Missing pending incarnation")
         }
-        dao.invalidateMessage(key.radioId.value, key.id)
+        val captured = DirectAckIntentEntity(
+            key.radioId.value, requestId, issued.request, key.id, pendingSendId, mode.name,
+            incarnation.incarnation, incarnation.revision, pendingIdentity?.incarnation, pendingIdentity?.revision, true, row, pending,
+        )
+        dao.intent(captured)
+        save()
+        DirectAckIntentResult.Captured(Intent(issued, requestId), intentReceipt(captured, issued))
+    }
+
+    override suspend fun beginDirectAckAttempt(
+        intent: DirectAckIntent,
+        firstWireRequestId: UUID,
+        predictedAckCode: UInt,
+    ): DirectAckBeginResult = transaction("beginDirectAckAttempt") {
+        val issued = intent as? Intent
+        if (issued == null || issuedLease(issued.lease) == null) {
+            return@transaction DirectAckBeginResult.Rejected(DirectAckRejection.INVALID_HANDLE)
+        }
+        val dao = database.directAcks()
+        val captured = dao.intent(issued.lease.token.radioId.value, issued.request)
+            ?: return@transaction DirectAckBeginResult.Rejected(DirectAckRejection.MISSING)
+        if (captured.leaseId != issued.lease.request) return@transaction DirectAckBeginResult.Rejected(DirectAckRejection.CONFLICT)
+        val existing = dao.claim(captured.radioId, captured.requestId)
+        if (existing != null) {
+            val first = dao.wires(captured.radioId, captured.requestId).firstOrNull { it.requestId == firstWireRequestId }
+            if (existing.firstWireId != firstWireRequestId || first?.predictedCode != predictedAckCode.toLong()) {
+                return@transaction DirectAckBeginResult.Rejected(DirectAckRejection.CONFLICT)
+            }
+            rejection(permission(existing, issued.lease))?.let { return@transaction DirectAckBeginResult.Rejected(it) }
+            return@transaction DirectAckBeginResult.AlreadyBegun(Attempt(issued.lease, issued.request), receipt(existing, issued.lease))
+        }
+        rejection(intentPermission(captured, issued.lease))?.let { return@transaction DirectAckBeginResult.Rejected(it) }
+        val row = captured.message ?: invalidData("Current direct ACK intent has no message")
+        dao.invalidateMessage(captured.radioId, captured.messageId)
+        dao.invalidateIntents(captured.radioId, captured.messageId)
         val claim = DirectAckClaimEntity(
-            requestId, issued.request, firstWireRequestId, incarnation.incarnation, incarnation.revision, DirectAckPhase.REGISTERED.name, mode.name,
-            row.statusRawValue, true, pendingSendId, pendingIncarnation, row,
+            captured.requestId, issued.lease.request, firstWireRequestId, captured.incarnation, captured.revision,
+            DirectAckPhase.REGISTERED.name, captured.mode, row.statusRawValue, true, captured.pendingId,
+            captured.pendingIncarnation, captured.radioId, captured.messageId, row,
         )
         dao.claim(claim)
-        dao.wire(DirectAckWireEntity(key.radioId.value, requestId, firstWireRequestId, predictedAckCode.toLong(), null))
+        dao.wire(DirectAckWireEntity(captured.radioId, captured.requestId, firstWireRequestId, predictedAckCode.toLong(), null))
         save()
-        DirectAckBeginResult.Begun(Attempt(issued, requestId), receipt(claim, issued))
+        DirectAckBeginResult.Begun(Attempt(issued.lease, issued.request), receipt(claim, issued.lease))
     }
+
+    override suspend fun inspectDirectAckIntent(lease: DirectAckLease, requestId: UUID): DirectAckIntentObservation =
+        transaction("inspectDirectAckIntent") {
+            val issued = issuedLease(lease)
+                ?: return@transaction DirectAckIntentObservation.Rejected(DirectAckRejection.INVALID_HANDLE)
+            val capture = database.directAcks().intent(issued.token.radioId.value, requestId)
+                ?: return@transaction DirectAckIntentObservation.Rejected(DirectAckRejection.MISSING)
+            if (capture.leaseId != issued.request) return@transaction DirectAckIntentObservation.Rejected(DirectAckRejection.CONFLICT)
+            DirectAckIntentObservation.Found(intentReceipt(capture, issued))
+        }
+
+    private suspend fun RepositoryTransaction.intentPermission(capture: DirectAckIntentEntity, lease: Lease): DirectAckPermission {
+        if (!active(lease)) return DirectAckPermission.STALE_LEASE
+        val dao = database.directAcks()
+        val identity = dao.incarnation(capture.radioId, capture.messageId, "message") ?: return DirectAckPermission.MISSING
+        val pendingId = capture.pendingId
+        val pendingIdentity = pendingId?.let { dao.incarnation(capture.radioId, it, "pending") }
+        if (!capture.current || capture.message == null || identity.incarnation != capture.incarnation ||
+            identity.revision != capture.revision ||
+            (pendingId != null && (capture.pending == null ||
+                pendingIdentity == null || pendingIdentity.incarnation != capture.pendingIncarnation ||
+                pendingIdentity.revision != capture.pendingRevision))
+        ) return DirectAckPermission.INVALIDATED
+        return DirectAckPermission.CURRENT
+    }
+
+    private suspend fun RepositoryTransaction.intentReceipt(capture: DirectAckIntentEntity, lease: Lease) = DirectAckIntentReceipt(
+        EntityKey(RadioId(capture.radioId), capture.messageId), capture.requestId,
+        DirectAckMode.entries.firstOrNull { it.name == capture.mode } ?: invalidData("Unknown intent mode"),
+        capture.message?.toDTO(), capture.pendingId, capture.pending?.toDTO(), intentPermission(capture, lease),
+    )
 
     override suspend fun registerDirectAckDispatch(
         attempt: DirectAckAttempt,
@@ -112,7 +175,7 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         predictedAckCode: UInt,
     ): DirectAckMutationResult = mutate("registerDirectAckDispatch", attempt) { issued, claim ->
         val dao = database.directAcks()
-        val existing = dao.wires(claim.snapshot.radioId, claim.requestId).firstOrNull { it.requestId == wireRequestId }
+        val existing = dao.wires(claim.radioId, claim.requestId).firstOrNull { it.requestId == wireRequestId }
         if (existing != null) return@mutate if (existing.predictedCode == predictedAckCode.toLong()) {
             DirectAckMutationResult.AlreadyApplied(receipt(claim, issued.lease))
         } else DirectAckMutationResult.Rejected(DirectAckRejection.CONFLICT)
@@ -121,7 +184,7 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
             return@mutate DirectAckMutationResult.AlreadyDelivered(receipt(claim, issued.lease))
         }
         if (claim.phase == DirectAckPhase.FAILED.name) return@mutate DirectAckMutationResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
-        dao.wire(DirectAckWireEntity(claim.snapshot.radioId, claim.requestId, wireRequestId, predictedAckCode.toLong(), null))
+        dao.wire(DirectAckWireEntity(claim.radioId, claim.requestId, wireRequestId, predictedAckCode.toLong(), null))
         save()
         DirectAckMutationResult.Applied(receipt(claim, issued.lease))
     }
@@ -132,7 +195,7 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         ackCode: UInt,
     ): DirectAckMutationResult = mutate("recordDirectSendAccepted", attempt) { issued, claim ->
         val dao = database.directAcks()
-        val wire = dao.wires(claim.snapshot.radioId, claim.requestId).firstOrNull { it.requestId == wireRequestId }
+        val wire = dao.wires(claim.radioId, claim.requestId).firstOrNull { it.requestId == wireRequestId }
             ?: return@mutate DirectAckMutationResult.Rejected(DirectAckRejection.MISSING)
         if (wire.acceptedCode != null) return@mutate if (wire.acceptedCode == ackCode.toLong()) {
             DirectAckMutationResult.AlreadyApplied(receipt(claim, issued.lease))
@@ -140,8 +203,8 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         deny(claim, issued)?.let { return@mutate it }
         dao.wire(wire.copy(acceptedCode = ackCode.toLong()))
         val writesMessage = claim.phase in setOf(DirectAckPhase.REGISTERED.name, DirectAckPhase.ACCEPTED.name) &&
-            claim.snapshot.statusRawValue !in setOf(3L, 4L)
-        if (writesMessage) database.messages().setAck(claim.snapshot.radioId, claim.snapshot.id, ackCode.toLong(), 2, null)
+            (claim.snapshot ?: invalidData("Current claim has no message")).statusRawValue !in setOf(3L, 4L)
+        if (writesMessage) ownWrite(database.messages().setAck(claim.radioId, claim.messageId, ackCode.toLong(), 2, null))
         val phase = if (claim.phase == DirectAckPhase.REGISTERED.name) DirectAckPhase.ACCEPTED.name else claim.phase
         val updated = renew(claim, phase, if (writesMessage) 1 else 0)
         save()
@@ -157,7 +220,7 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
                 return@mutate DirectAckMutationResult.AlreadyDelivered(receipt(claim, issued.lease))
             }
             deny(claim, issued)?.let { return@mutate it }
-            ownWrite(database.messages().setStatusUnlessDelivered(claim.snapshot.radioId, claim.snapshot.id, 4))
+            ownWrite(database.messages().setStatusUnlessDelivered(claim.radioId, claim.messageId, 4))
             val updated = renew(claim, DirectAckPhase.FAILED.name, 1)
             save()
             DirectAckMutationResult.Applied(receipt(updated, issued.lease))
@@ -169,19 +232,21 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         roundTripTime: UInt?,
     ): DirectAckMutationResult = mutate("settleDirectAck", attempt) { issued, claim ->
         val dao = database.directAcks()
-        val previous = dao.delivery(claim.snapshot.radioId, claim.requestId)
+        val previous = dao.delivery(claim.radioId, claim.requestId)
         if (previous != null) return@mutate if (previous.ackCode == ackCode.toLong() &&
             previous.roundTripTime == roundTripTime?.toLong()
         ) DirectAckMutationResult.AlreadyApplied(receipt(claim, issued.lease))
         else DirectAckMutationResult.Rejected(DirectAckRejection.CONFLICT)
         deny(claim, issued)?.let { return@mutate it }
-        if (dao.wires(claim.snapshot.radioId, claim.requestId).none {
+        if (dao.wires(claim.radioId, claim.requestId).none {
                 it.predictedCode == ackCode.toLong() || it.acceptedCode == ackCode.toLong()
             }
         ) return@mutate DirectAckMutationResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
-        ownWrite(dao.deliver(claim.snapshot.radioId, claim.snapshot.id, ackCode.toLong(), roundTripTime?.toLong()))
+        ownWrite(dao.deliver(claim.radioId, claim.messageId, ackCode.toLong(), roundTripTime?.toLong()))
         val updated = renew(claim, DirectAckPhase.DELIVERED.name, 1)
-        dao.delivery(DirectAckDeliveryEntity(claim.requestId, ackCode.toLong(), roundTripTime?.toLong(), updated.snapshot))
+        dao.delivery(DirectAckDeliveryEntity(
+            claim.requestId, ackCode.toLong(), roundTripTime?.toLong(), claim.radioId, claim.messageId, updated.snapshot,
+        ))
         save()
         DirectAckMutationResult.Applied(receipt(updated, issued.lease))
     }
@@ -194,7 +259,7 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         val operation = operation(claim, requestId, change)
         replay(claim, issued, operation)?.let { return@mutate it }
         deny(claim, issued)?.let { return@mutate it }
-        val row = claim.snapshot
+        val row = claim.snapshot ?: invalidData("Current claim has no message")
         if (change != DirectAckBookkeeping.ResendCountIncrement && row.statusRawValue == 3L) {
             return@mutate DirectAckMutationResult.AlreadyDelivered(receipt(claim, issued.lease))
         }
@@ -227,15 +292,15 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         requestId: UUID,
     ): DirectAckMutationResult = mutate("completeDirectPending", attempt) { issued, claim ->
         val operation = DirectAckOperationEntity(
-            claim.snapshot.radioId, claim.requestId, requestId, "PENDING", null, null, pendingSendId,
+            claim.radioId, claim.requestId, requestId, "PENDING", null, null, pendingSendId,
         )
         replay(claim, issued, operation)?.let { return@mutate it }
         if (claim.pendingId != pendingSendId) return@mutate DirectAckMutationResult.Rejected(DirectAckRejection.CONFLICT)
         deny(claim, issued)?.let { return@mutate it }
-        if (database.directAcks().operations(claim.snapshot.radioId, claim.requestId).any { it.kind == "PENDING" }) {
+        if (database.directAcks().operations(claim.radioId, claim.requestId).any { it.kind == "PENDING" }) {
             return@mutate DirectAckMutationResult.Rejected(DirectAckRejection.CONFLICT)
         }
-        ownWrite(database.pendingSends().delete(claim.snapshot.radioId, pendingSendId))
+        ownWrite(database.pendingSends().delete(claim.radioId, pendingSendId))
         val updated = renew(claim, revisionAdvances = 1)
         database.directAcks().operation(operation)
         save()
@@ -269,8 +334,8 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         val maximum = (reason as? DirectPendingCompletionReason.ZeroAttempts)?.configuredMaximumAttempts
         val existing = dao.pendingCompletion(key.radioId.value, captureRequestId)
         if (existing != null) {
-            if (existing.leaseId != issued.request || existing.message.id != key.id ||
-                existing.pending.id != pendingSendId || existing.reason != reasonName || existing.maximumAttempts != maximum
+            if (existing.leaseId != issued.request || existing.messageId != key.id ||
+                existing.pendingId != pendingSendId || existing.reason != reasonName || existing.maximumAttempts != maximum
             ) return@transaction DirectPendingCaptureResult.Rejected(DirectAckRejection.CONFLICT)
             rejection(pendingPermission(existing, issued))?.let {
                 return@transaction DirectPendingCaptureResult.Rejected(it)
@@ -295,7 +360,7 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
             ?: invalidData("Missing no-dispatch pending incarnation")
         val capture = DirectPendingCompletionEntity(
             captureRequestId, issued.request, messageIdentity.incarnation, messageIdentity.revision,
-            pendingIdentity.incarnation, reasonName, maximum, true, null, row, pending,
+            pendingIdentity.incarnation, reasonName, maximum, true, null, key.radioId.value, key.id, pendingSendId, row, pending,
         )
         dao.pendingCompletion(capture)
         save()
@@ -324,13 +389,13 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         rejection(pendingPermission(capture, issued.lease))?.let {
             return@transaction DirectPendingCompletionResult.Rejected(it)
         }
-        ownWrite(database.pendingSends().delete(capture.pending.radioId, capture.pending.id))
-        val identity = dao.incarnation(capture.message.radioId, capture.message.id, "message")
+        ownWrite(database.pendingSends().delete(capture.radioId, capture.pendingId))
+        val identity = dao.incarnation(capture.radioId, capture.messageId, "message")
             ?: invalidData("No-dispatch completion lost its message")
         if (identity.incarnation != capture.messageIncarnation ||
             identity.revision != checkedIncrement(capture.messageRevision)
         ) invalidData("Independent mutation inside no-dispatch completion")
-        val committed = capture.copy(completedRequestId = completionRequestId, current = false)
+        val committed = capture.copy(completedRequestId = completionRequestId, current = false, pending = null)
         dao.pendingCompletion(committed)
         save()
         DirectPendingCompletionResult.Applied(pendingReceipt(committed, issued.lease))
@@ -356,11 +421,11 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
     ): DirectAckPermission {
         if (!active(lease)) return DirectAckPermission.STALE_LEASE
         val dao = database.directAcks()
-        val message = dao.incarnation(capture.message.radioId, capture.message.id, "message")
+        val message = dao.incarnation(capture.radioId, capture.messageId, "message")
             ?: return DirectAckPermission.MISSING
-        if (!capture.current || message.incarnation != capture.messageIncarnation ||
+        if (!capture.current || capture.message == null || capture.pending == null || message.incarnation != capture.messageIncarnation ||
             message.revision != capture.messageRevision ||
-            dao.incarnation(capture.pending.radioId, capture.pending.id, "pending")?.incarnation != capture.pendingIncarnation
+            dao.incarnation(capture.radioId, capture.pendingId, "pending")?.incarnation != capture.pendingIncarnation
         ) return DirectAckPermission.INVALIDATED
         return DirectAckPermission.CURRENT
     }
@@ -369,7 +434,7 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         capture: DirectPendingCompletionEntity,
         lease: Lease,
     ) = DirectPendingCompletionReceipt(
-        capture.captureRequestId, EntityKey(RadioId(capture.message.radioId), capture.message.id),
+        capture.captureRequestId, EntityKey(RadioId(capture.radioId), capture.messageId),
         when (capture.reason) {
             "DELIVERED" -> DirectPendingCompletionReason.AlreadyDeliveredSend
             "ZERO" -> DirectPendingCompletionReason.ZeroAttempts(
@@ -377,7 +442,7 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
             )
             else -> invalidData("Unknown no-dispatch completion reason")
         },
-        capture.message.toDTO(), capture.pending.toDTO(), capture.completedRequestId,
+        capture.message?.toDTO(), capture.pendingId, capture.pending?.toDTO(), capture.completedRequestId,
         when (pendingPermission(capture, lease)) {
             DirectAckPermission.CURRENT -> DirectPendingCompletionPermission.CURRENT
             DirectAckPermission.INVALIDATED -> DirectPendingCompletionPermission.INVALIDATED
@@ -428,14 +493,14 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
     private suspend fun RepositoryTransaction.permission(claim: DirectAckClaimEntity, lease: Lease): DirectAckPermission {
         if (!active(lease)) return DirectAckPermission.STALE_LEASE
         val dao = database.directAcks()
-        val identity = dao.incarnation(claim.snapshot.radioId, claim.snapshot.id, "message")
+        val identity = dao.incarnation(claim.radioId, claim.messageId, "message")
             ?: return DirectAckPermission.MISSING
-        if (!claim.current || identity.incarnation != claim.incarnation || identity.revision != claim.revision) {
+        if (!claim.current || claim.snapshot == null || identity.incarnation != claim.incarnation || identity.revision != claim.revision) {
             return DirectAckPermission.INVALIDATED
         }
         val pendingId = claim.pendingId
-        if (pendingId != null && dao.operations(claim.snapshot.radioId, claim.requestId).none { it.kind == "PENDING" }) {
-            if (dao.incarnation(claim.snapshot.radioId, pendingId, "pending")?.incarnation != claim.pendingIncarnation) {
+        if (pendingId != null && dao.operations(claim.radioId, claim.requestId).none { it.kind == "PENDING" }) {
+            if (dao.incarnation(claim.radioId, pendingId, "pending")?.incarnation != claim.pendingIncarnation) {
                 return DirectAckPermission.INVALIDATED
             }
         }
@@ -457,20 +522,20 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         phase: String = claim.phase,
         revisionAdvances: Int = 0,
     ): DirectAckClaimEntity {
-        val identity = database.directAcks().incarnation(claim.snapshot.radioId, claim.snapshot.id, "message")
+        val identity = database.directAcks().incarnation(claim.radioId, claim.messageId, "message")
             ?: invalidData("Own direct ACK transaction lost its incarnation")
         val expected = checkedAdd(claim.revision, revisionAdvances.toLong())
         if (identity.incarnation != claim.incarnation || identity.revision != expected) {
             invalidData("Independent message mutation inside direct ACK transaction")
         }
-        val row = database.messages().byId(claim.snapshot.radioId, claim.snapshot.id)
+        val row = database.messages().byId(claim.radioId, claim.messageId)
             ?: invalidData("Own direct ACK transaction lost its message")
         return claim.copy(phase = phase, revision = expected, current = true, snapshot = row).also { database.directAcks().claim(it) }
     }
 
     private fun operation(claim: DirectAckClaimEntity, request: UUID, change: DirectAckBookkeeping): DirectAckOperationEntity =
         DirectAckOperationEntity(
-            claim.snapshot.radioId, claim.requestId, request,
+            claim.radioId, claim.requestId, request,
             when (change) {
                 is DirectAckBookkeeping.RetryStarted -> "RETRY"
                 DirectAckBookkeeping.RetryExhausted -> "EXHAUSTED"
@@ -486,7 +551,7 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         issued: Attempt,
         operation: DirectAckOperationEntity,
     ): DirectAckMutationResult? {
-        val previous = database.directAcks().operations(claim.snapshot.radioId, claim.requestId)
+        val previous = database.directAcks().operations(claim.radioId, claim.requestId)
             .firstOrNull { it.requestId == operation.requestId } ?: return null
         return if (previous == operation) DirectAckMutationResult.AlreadyApplied(receipt(claim, issued.lease))
         else DirectAckMutationResult.Rejected(DirectAckRejection.CONFLICT)
@@ -494,7 +559,7 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
 
     private suspend fun RepositoryTransaction.receipt(claim: DirectAckClaimEntity, lease: Lease): DirectAckReceipt {
         val dao = database.directAcks()
-        val operations = dao.operations(claim.snapshot.radioId, claim.requestId)
+        val operations = dao.operations(claim.radioId, claim.requestId)
         val bookkeeping = operations.filter { it.kind != "PENDING" }.map {
             val change = when (it.kind) {
                 "RETRY" -> DirectAckBookkeeping.RetryStarted(
@@ -506,23 +571,23 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
             }
             DirectAckBookkeepingReceipt(it.requestId, change)
         }.snapshot()
-        val delivery = dao.delivery(claim.snapshot.radioId, claim.requestId)?.let {
-            DirectAckDelivery(it.ackCode.asUInt(), it.roundTripTime?.asUInt(), it.snapshot.toDTO())
+        val delivery = dao.delivery(claim.radioId, claim.requestId)?.let {
+            DirectAckDelivery(it.ackCode.asUInt(), it.roundTripTime?.asUInt(), it.snapshot?.toDTO())
         }
         return DirectAckReceipt(
-            EntityKey(RadioId(claim.snapshot.radioId), claim.snapshot.id), claim.requestId,
+            EntityKey(RadioId(claim.radioId), claim.messageId), claim.requestId,
             DirectAckMode.entries.firstOrNull { it.name == claim.mode } ?: invalidData("Unknown direct ACK mode"),
             MessageStatus.fromRawValue(claim.initialStatus)
                 ?: invalidData("Unknown initial direct ACK status"),
             DirectAckPhase.entries.firstOrNull { it.name == claim.phase } ?: invalidData("Unknown direct ACK phase"),
-            dao.wires(claim.snapshot.radioId, claim.requestId).map {
+            dao.wires(claim.radioId, claim.requestId).map {
                 DirectAckWireReceipt(it.requestId, it.predictedCode.asUInt(), it.acceptedCode?.asUInt())
             }.snapshot(),
             bookkeeping,
             operations.filter { it.kind == "PENDING" }.map {
                 DirectAckPendingReceipt(it.requestId, it.pendingId ?: invalidData("Missing pending completion identity"))
             }.snapshot(),
-            claim.snapshot.toDTO(), delivery, permission(claim, lease),
+            claim.snapshot?.toDTO(), delivery, permission(claim, lease),
         )
     }
 

@@ -37,7 +37,7 @@ class RoomBoundaryTest {
         db.devices().count()
         val export = JSONObject(File(requireNotNull(System.getProperty("roomSchemaDirectory")),
             "com.meshcoreone.android.core.database.MeshCoreDatabase\\2.json".replace('\\', File.separatorChar)).readText()).getJSONObject("database")
-        assertEquals(2, export.getInt("version")); assertEquals(24, export.getJSONArray("entities").length())
+        assertEquals(2, export.getInt("version")); assertEquals(25, export.getJSONArray("entities").length())
         val sqlite = db.openHelper.readableDatabase
         sqlite.query("PRAGMA user_version").use { assertTrue(it.moveToFirst()); assertEquals(2, it.getInt(0)) }
         sqlite.query("SELECT identity_hash FROM room_master_table WHERE id=42").use {
@@ -63,11 +63,12 @@ class RoomBoundaryTest {
             val authorityKeys = mapOf(
                 "direct_ack_incarnations" to listOf("radioId", "id", "kind"),
                 "direct_ack_leases" to listOf("radioId", "requestId"),
-                "direct_ack_claims" to listOf("snapshot_radioId", "requestId"),
-                "direct_ack_deliveries" to listOf("snapshot_radioId", "claimId"),
+                "direct_ack_claims" to listOf("radioId", "requestId"),
+                "direct_ack_deliveries" to listOf("radioId", "claimId"),
                 "direct_ack_wires" to listOf("radioId", "claimId", "requestId"),
                 "direct_ack_operations" to listOf("radioId", "claimId", "requestId"),
-                "direct_pending_completions" to listOf("message_radioId", "captureRequestId"),
+                "direct_pending_completions" to listOf("radioId", "captureRequestId"),
+                "direct_ack_intents" to listOf("radioId", "requestId"),
             )
             if (name !in setOf("devices", "debug_log_entries", "link_preview_data", "node_status_snapshots")) {
                 assertEquals(authorityKeys[name] ?: listOf("radioId", "id"), (0 until pk.length()).map { pk.getString(it) })

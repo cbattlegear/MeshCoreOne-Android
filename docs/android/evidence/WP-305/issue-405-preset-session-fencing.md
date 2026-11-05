@@ -338,7 +338,7 @@ of buffered old-event delivery during same-token AppState collector replacement.
 retains buffered events, and replacement starts the new collector before cancelling the old one.
 An actual consumer/Room ordering control must distinguish a stale overwrite from protection
 already provided by editor serialization/cancellation. This is a source-review concern, not an
-established defect or executed regression; no new publication is made while awaiting that disposition.
+established defect or executed regression. Acceptance remains provisional pending that disposition.
 The same hold includes fresh Settings-holder reentry: the composition-owned holder/scope can be
 discarded after radio verification but before durable acknowledgement. A replacement holder reads
 Room's old mode without the old holder's unresolved-recovery marker, so selecting that displayed
@@ -396,6 +396,36 @@ user failures:
 These are authored controls, not Kotlin execution. Source validation, inventory and diff
 checks passed during authoring; the shared local Gradle hold is unchanged. No #495 navigation,
 AppRoot, witness or failure-presenter source/reservation/publication was imported or edited.
+
+## Fresh-holder recovery handoff
+
+The Settings owner supplied isolated immutable
+`2dfa078fadd21bb4533bcb129f96d10b455fed4a` (parent `98d321ce6`, which already
+contains the separately imported 7cff). Only 2dfa was imported, without conflicts,
+as `cdb7e4fd58ba2db2ba2a69f76fb4eebafbca05e6` after local onboarding repair
+`891ddf9b92bf363b1f692ed974d21119b844314d`. All eight paths were trusted-admitted
+as related consumers/tests or validation evidence, and their bytes match the isolated
+owner handoff. No duplicate RX commit or held navigation source was imported.
+
+Source review read the connection-owned attempt/ack revisions, feature adapter/recovery
+guard, exact original-error cause-chain assertion, real AppState/Room ordering controls
+and actual mounted API-31 Settings disposal/recreation control. New holders consult the
+live session's unresolved revision before treating a same-mode selection as a no-op;
+older acknowledgements cannot clear newer uncertainty. Retired subscription buffers
+skip acknowledged events. Controls retain clean no-op behavior, reject an old queued
+event, serialize a non-cancellable already-entered Room commit before the newer ack, and
+explicitly restore radio mode zero through a fresh actual Settings composition after
+the held real Room failure. The formerly failing assertion retains error type/message
+and the original object at the recovered cause-chain root instead of expecting coroutine
+transport to preserve the recovered wrapper's reference identity.
+
+The owner reports exact 98d run `41940594065` failed core-services (2,809 tests / one
+same identity assertion); owner run `41942349039` targets 2dfa. Neither is execution of
+this complete successor. These controls address the bounded source concerns but still
+need exact-head execution and independent acceptance. The device-writer owner's additional
+findings remain unresolved; publication of an explicitly unverified draft candidate does
+not accept those surfaces or the held first-run bridge. The published 0ac failure remains
+the authoritative predecessor result, not a result to supersede or relabel as green.
 
 ## Authored controls
 

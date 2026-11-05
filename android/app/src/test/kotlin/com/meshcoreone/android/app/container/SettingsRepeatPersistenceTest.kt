@@ -104,6 +104,18 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                 val outcome = editor.await()
                 assertTrue(outcome.getOrNull() == false || outcome.exceptionOrNull() is kotlinx.coroutines.CancellationException)
                 assertEquals(before, store.fetchDevice(before.id))
+                h.manager.connect(h.target(before.id))
+                h.eventually("fresh current session finishes startup after contested disconnect") {
+                    h.sessions.current?.syncCoordinator?.state == SyncState.Synced && h.appState.canRunSettingsStartupReads
+                }
+                val nextToken = assertNotNull(h.sessions.current).token
+                assertFalse(nextToken == token)
+                val fresh = assertNotNull(h.manager.connectedDevice)
+                assertFalse(h.container.deviceEditor.updatePathHashMode(2u, token), "The old token remains unable to write")
+                assertEquals(fresh, store.fetchDevice(fresh.id))
+                assertTrue(h.container.deviceEditor.updatePathHashMode(1u, nextToken))
+                assertEquals(fresh.copy(pathHashMode = 1u), store.fetchDevice(fresh.id))
+                assertEquals(fresh.copy(pathHashMode = 1u), h.manager.connectedDevice)
             } finally {
                 release.complete(Unit)
                 restore.cancel()

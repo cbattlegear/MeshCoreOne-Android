@@ -29,6 +29,19 @@ adapter referred to missing SettingsService.sessionToken at lines 316/318.
 No new Repeat test execution is accepted from that run. Controller/policy and
 Swift codec jobs passed; this is not whole-candidate acceptance.
 
+The orphan-repair candidate f7dba12cb670500a43e4de83ff8a32fbc71b5864
+is immutable at diagnostic/wp-305-repeat-abort-f7dba12cb, exact run 41996314582.
+Before accepting its execution, independent runtime review found one positional
+legacy sessionEdit call that must name transform after the optional receipt
+parameters were inserted. Storage review also found that two throwing post-commit
+callbacks would lose the first exception. The successor names the legacy transform
+and preserves the first Throwable identity while attaching a distinct second as
+suppressed, still invoking both callbacks exactly once. A real Room dual-failure
+control includes cancellation as the first exception and asserts committed row,
+actual receipt revisions, callback order and no save-failure remapping. Neither
+source review nor the earlier candidate results establishes this successor's
+Kotlin execution.
+
 Independent producer reviews accepted the bounded source seams but found an
 additional actual cancellation gap: a newly committed snapshot could survive
 cancellation before SET, then a later manual RF edit and fresh enable/off would

@@ -76,13 +76,23 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
                 resetRemovedRegionScopes(dto.radioId, removed)
                 changed(dto.id, authority = dto.publicKey != expected.device.publicKey)
                 afterCommit {
+                    var receiptFailure: Throwable? = null
                     try {
                         expected.onCommittedSnapshot(DeviceWriteSnapshot(
                             dto, checkNotNull(context.deviceRevisions[dto.id]),
                             context.deviceAuthorityRevisions[dto.id] ?: 0L,
                         ))
+                    } catch (failure: Throwable) {
+                        receiptFailure = failure
+                        throw failure
                     } finally {
-                        expected.onCommitted(dto)
+                        try {
+                            expected.onCommitted(dto)
+                        } catch (failure: Throwable) {
+                            val first = receiptFailure
+                            if (first == null) throw failure
+                            if (first !== failure) first.addSuppressed(failure)
+                        }
                     }
                 }
                 save()

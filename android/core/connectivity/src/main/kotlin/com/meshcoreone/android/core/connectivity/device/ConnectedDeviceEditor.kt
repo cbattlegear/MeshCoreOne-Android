@@ -404,7 +404,7 @@ class ConnectedDeviceEditor(
         // UNDISPATCHED enqueues this call before a later awaited preset can acquire the edit mutex.
         return scope.launch(start = CoroutineStart.UNDISPATCHED) {
             report(operation) {
-                if (access.connectedDevice?.id == device.id) sessionEdit(operation, token, transform)
+                if (access.connectedDevice?.id == device.id) sessionEdit(operation, token, transform = transform)
             }
         }
     }

@@ -74,6 +74,34 @@ class DevicePersistenceAuthorityRoomTest : RoomProcessTest() {
         }
     }
 
+    @Test fun dualPostCommitCallbackFailuresRetainTheFirstIdentityAndSuppressTheSecondWithoutRemapping() = runTest {
+        val original = device(611)
+        store.saveDevice(original)
+        val calls = mutableListOf<String>()
+        var receipt: DeviceWriteSnapshot? = null
+        var mappedFailures = 0
+        val first = kotlinx.coroutines.CancellationException("receipt callback cancelled")
+        val second = PersistenceStoreException(PersistenceStoreError.SaveFailed("original callback failed"))
+        val failure = runCatching {
+            store.editDevice(
+                original.id,
+                onSaveFailure = { mappedFailures++; throw it },
+                onCommittedSnapshot = { calls += "receipt"; receipt = it; throw first },
+                onCommitted = { calls += "original"; throw second },
+            ) { it.copy(pathHashMode = 2u) }
+        }.exceptionOrNull()
+        assertTrue(failure === first)
+        assertEquals(listOf(second), first.suppressed.toList())
+        assertEquals(listOf("receipt", "original"), calls)
+        assertEquals(0, mappedFailures)
+        val committed = assertNotNull(receipt)
+        val actual = assertNotNull(store.fetchDeviceWriteSnapshot(original.id))
+        assertEquals(original.copy(pathHashMode = 2u), actual.device)
+        assertEquals(actual.device, committed.device)
+        assertEquals(actual.revision, committed.revision)
+        assertEquals(actual.authorityRevision, committed.authorityRevision)
+    }
+
     private class PausedStore(private val room: RoomPersistenceStore) : PersistenceStoreProtocol by room {
         var beforeSave: suspend () -> Unit = {}
         var rejected = 0

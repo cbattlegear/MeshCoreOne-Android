@@ -144,23 +144,12 @@ def notification_instrumentation_tasks(repo, revision=None):
     return []
 
 
-def notification_instrumentation_evidence(repo, path, tasks, revision=None):
-    from .ci_evidence import read_test_sources
-
-    runner = ":platform:notifications:testDebugUnitTest"
-    if not ({runner, NOTIFICATION_INSTRUMENTATION_TASK} & set(tasks)):
-        return {}
-    required = notification_instrumentation_tasks(repo, revision)
-    if not required:
-        if NOTIFICATION_INSTRUMENTATION_TASK in tasks:
-            raise PortError("Notification instrumentation compiler task requires an approved build profile")
-        return {}
-    if not {runner, *required} <= set(tasks):
-        raise PortError("Notification instrumentation proof requires both declared compilation and JVM runner")
+def notification_instrumentation_candidate(repo, revision=None):
     module = "platform/notifications"
     prefix = f"android/{module}/"
-    inputs = module_sources(repo, revision)[module]
-    check_module_inputs(repo, [module], revision)
+    inputs = module_sources(repo, revision).get(module, {})
+    if inputs.get(prefix + "build.gradle.kts") != NOTIFICATION_INSTRUMENTATION_BUILD:
+        return None
     replies = {prefix + relative for relative in NOTIFICATION_REPLY_SOURCES}
     present = replies & inputs.keys()
     if present and present != replies:
@@ -176,12 +165,36 @@ def notification_instrumentation_evidence(repo, path, tasks, revision=None):
             expected[source] = blob
     if not {prefix + relative for relative in NOTIFICATION_INSTRUMENTATION_BASELINE} <= expected.keys():
         raise PortError("Missing committed baseline notification instrumentation sources")
+    return {
+        "task": NOTIFICATION_INSTRUMENTATION_TASK,
+        "sources": expected,
+        "excluded_reply_sources": sorted(present),
+        "jvm_sources": _notification_jvm_test_sources(module, inputs),
+        "reply_jvm_sources": {path: inputs[path] for path in sorted(present)},
+    }
+
+
+def notification_instrumentation_evidence(repo, path, tasks, revision=None):
+    from .ci_evidence import read_test_sources
+
+    runner = ":platform:notifications:testDebugUnitTest"
+    if not ({runner, NOTIFICATION_INSTRUMENTATION_TASK} & set(tasks)):
+        return {}
+    expected = notification_instrumentation_candidate(repo, revision)
+    if expected is None:
+        if NOTIFICATION_INSTRUMENTATION_TASK in tasks:
+            raise PortError("Notification instrumentation compiler task requires an approved build profile")
+        return {}
+    if not {runner, expected["task"]} <= set(tasks):
+        raise PortError("Notification instrumentation proof requires both declared compilation and JVM runner")
+    module = "platform/notifications"
+    check_module_inputs(repo, [module], revision)
     actual = read_test_sources(path, {module: "compileDebugAndroidTestKotlin"})
-    if actual != {module: expected}:
+    if actual != {module: expected["sources"]}:
         raise PortError("Actual notification instrumentation compilation differs from immutable sources")
     return {
-        "task": NOTIFICATION_INSTRUMENTATION_TASK, "sources": expected,
-        "excluded_reply_sources": sorted(present),
+        key: value for key, value in expected.items()
+        if key not in ("jvm_sources", "reply_jvm_sources")
     }
 
 

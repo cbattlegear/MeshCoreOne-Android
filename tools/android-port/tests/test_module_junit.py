@@ -19,7 +19,8 @@ from controller.module_junit import (
     remapped_tasks, validate_remapped_compilation,
     NOTIFICATION_INSTRUMENTATION_BASELINE, NOTIFICATION_INSTRUMENTATION_BUILD,
     NOTIFICATION_INSTRUMENTATION_TASK, NOTIFICATION_REPLY_SOURCES,
-    notification_instrumentation_evidence, notification_instrumentation_tasks,
+    notification_instrumentation_candidate, notification_instrumentation_evidence,
+    notification_instrumentation_tasks,
 )
 from test_ci_evidence import junit_report
 
@@ -281,6 +282,9 @@ class {name} {{ @Test fun required() {{}} }}
         proof = validate_build_log(
             log, [module], plan_for_scopes=lambda scopes: candidate_plan(
                 self.repo, base, head, scopes, trusted_base=base,
+            ),
+            notification_inputs_for_candidate=lambda: notification_instrumentation_candidate(
+                self.repo, head,
             ),
         )
         self.assertEqual(proof["methods"][module], methods)

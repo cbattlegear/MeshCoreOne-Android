@@ -632,14 +632,20 @@ device execution. The source-only regression fixture reproduces the reviewed
 `1b50a327` build bytes; its small synthetic reply methods are not execution
 evidence for the separately owned storage candidate.
 
-The log reader admits the additional compiler task only through its existing
-trusted exact-candidate plan callback, with the separate instrumentation proof;
-it does not extend the historical scaffold task set unconditionally. The
-collector also refuses directly runtime-linked JavaCompile inputs and nonempty
-unmatched test class directories for the notification JVM runner. Structural
-controls are not a real Java/Gradle runtime negative; the independently owned
-GradleTestKit control and reviewed hosted diagnostic remain required before
-claiming that behavior has executed.
+The authoritative reader derives the expected instrumentation source/blob map
+and reply exclusions from the immutable candidate commit, not the report. It
+requires the exact profile task in the trusted full-scaffold plan even when the
+report omits both that task and its proof. Reported Kotlin inputs and excluded
+reply JVM inputs must match candidate blobs exactly. Older candidates without
+the approved build profile retain the existing plan. The reader does not extend
+the historical scaffold task set unconditionally. The collector also refuses
+directly runtime-linked JavaCompile inputs and nonempty unmatched test class
+directories for the notification JVM runner. Structural controls are not a real
+Java/Gradle runtime negative. The separately owned GradleTestKit control and
+reviewed hosted comparison `42038400104` executed the conventional and
+additional Java runtime negatives plus a Kotlin-only positive against collector
+blob `344863a6`; the overall Android job had an unrelated protected preview
+failure, so this is not a full Android CI pass or device/API evidence.
 
 Focused source-only remapping and selector regression command (no Gradle lock,
 runtime installation or device execution):

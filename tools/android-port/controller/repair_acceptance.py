@@ -719,31 +719,37 @@ def read_job_log(native, job_id):
         process.stdout.close()
 
 
-def _notification_instrumentation_report(report, compiled):
+def _notification_instrumentation_report(report, compiled, expected):
     from .module_junit import (
-        NOTIFICATION_INSTRUMENTATION_BASELINE, NOTIFICATION_INSTRUMENTATION_TASK,
-        NOTIFICATION_INSTRUMENTATION_ROOTS, NOTIFICATION_REPLY_SOURCES,
+        NOTIFICATION_INSTRUMENTATION_BASELINE, NOTIFICATION_INSTRUMENTATION_ROOTS,
     )
 
     proof = report.get("notification_instrumentation")
     tasks = report.get("tasks")
-    selected = isinstance(tasks, list) and NOTIFICATION_INSTRUMENTATION_TASK in tasks
-    if not selected:
-        if proof is not None:
-            raise PortError("Unexpected notification instrumentation proof without its compiler task")
+    selected = isinstance(tasks, list) and isinstance(expected, dict) and expected.get("task") in tasks
+    if expected is None:
+        if proof is not None or (
+            isinstance(tasks, list) and any(
+                task == ":platform:notifications:compileDebugAndroidTestKotlin" for task in tasks
+            )
+        ):
+            raise PortError("Notification instrumentation evidence requires immutable candidate inputs")
         return
+    if not selected:
+        raise PortError("Trusted candidate plan requires the notification instrumentation compiler task")
     fields(proof, {"task", "sources", "excluded_reply_sources"}, label="notification instrumentation")
-    prefix = "android/platform/notifications/"
     sources, excluded = proof["sources"], proof["excluded_reply_sources"]
-    replies = {prefix + path for path in NOTIFICATION_REPLY_SOURCES}
     if (
-        proof["task"] != NOTIFICATION_INSTRUMENTATION_TASK
+        proof["task"] != expected["task"]
         or ":platform:notifications:testDebugUnitTest" not in tasks
         or not isinstance(sources, dict) or not sources
         or not isinstance(excluded, list) or not all(isinstance(path, str) for path in excluded)
-        or excluded not in ([], sorted(replies))
+        or sources != expected["sources"]
+        or excluded != expected["excluded_reply_sources"]
     ):
         raise PortError("Missing or malformed notification instrumentation proof")
+    prefix = "android/platform/notifications/"
+    replies = set(expected["reply_jvm_sources"])
     for path, blob in sources.items():
         if (
             not isinstance(path, str) or git_path(path) != path
@@ -755,13 +761,13 @@ def _notification_instrumentation_report(report, compiled):
     if not {prefix + path for path in NOTIFICATION_INSTRUMENTATION_BASELINE} <= sources.keys():
         raise PortError("Missing baseline notification instrumentation compiler inputs")
     jvm = compiled.get("platform/notifications")
-    if not isinstance(jvm, dict) or any(
-        not isinstance(jvm.get(path), str) or SHA.fullmatch(jvm[path]) is None for path in excluded
+    if not isinstance(jvm, dict) or jvm != expected["jvm_sources"] or any(
+        jvm.get(path) != blob for path, blob in expected["reply_jvm_sources"].items()
     ):
-        raise PortError("Excluded notification reply sources lack independent JVM compilation")
+        raise PortError("Notification JVM sources differ from the immutable candidate compilation")
 
 
-def validate_build_log(log, modules, *, plan_for_scopes=None):
+def validate_build_log(log, modules, *, plan_for_scopes=None, notification_inputs_for_candidate=None):
     lines = []
     for line in log.splitlines():
         # gh emits job, step and timestamp columns; only the authoritative run step is evidence.
@@ -800,7 +806,33 @@ def validate_build_log(log, modules, *, plan_for_scopes=None):
                 or not isinstance(blob, str) or SHA.fullmatch(blob) is None
             ):
                 raise PortError("Malformed compiled test source inventory")
-    _notification_instrumentation_report(report, compiled)
+    tasks = report.get("tasks")
+    reported_instrumentation = report.get("notification_instrumentation")
+    instrumentation_task = ":platform:notifications:compileDebugAndroidTestKotlin"
+    if notification_inputs_for_candidate is None:
+        if reported_instrumentation is not None or (
+            isinstance(tasks, list) and instrumentation_task in tasks
+        ):
+            raise PortError("Notification instrumentation proof requires trusted immutable candidate inputs")
+        expected_instrumentation = None
+    else:
+        expected_instrumentation = notification_inputs_for_candidate()
+    trusted_full_plan = None
+    if expected_instrumentation is not None:
+        from .ci import SCOPED_TASKS
+
+        if plan_for_scopes is None:
+            raise PortError("Notification instrumentation proof requires the trusted candidate task plan")
+        trusted_full_plan = plan_for_scopes(list(SCOPED_TASKS))
+        if (
+            not isinstance(trusted_full_plan, dict)
+            or trusted_full_plan.get("full_scaffold") is not True
+            or not isinstance(trusted_full_plan.get("tasks"), list)
+            or instrumentation_task not in trusted_full_plan["tasks"]
+            or ":platform:notifications:testDebugUnitTest" not in trusted_full_plan["tasks"]
+        ):
+            raise PortError("Trusted candidate plan omits required notification instrumentation proof")
+    _notification_instrumentation_report(report, compiled, expected_instrumentation)
     if report.get("kind") == "local-affected-only":
         scopes = report.get("scopes")
         if (

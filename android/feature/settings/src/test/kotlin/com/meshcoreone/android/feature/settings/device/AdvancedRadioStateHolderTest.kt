@@ -124,6 +124,50 @@ class AdvancedRadioStateHolderTest {
     }
 
     @Test
+    fun `fresh apply after TX failure preserves already committed recovered RF fields`() {
+        connection.deviceFlow.value = device(
+            frequency = 910_525u, bandwidth = 125_000u, spreadingFactor = 9u, codingRate = 7u, clientRepeat = true,
+        )
+        var reconciled = false
+        serviceProvider = object : SettingsRadioPort by service {
+            override suspend fun reconcileRadioSettingsIfNeeded() {
+                if (!reconciled) {
+                    reconciled = true
+                    connection.deviceFlow.value = connection.deviceFlow.value!!.copy(
+                        frequency = 868_000u, bandwidth = 7_799u, spreadingFactor = 10u, codingRate = 5u, clientRepeat = false,
+                    )
+                    yield()
+                }
+            }
+        }
+        started()
+        holder.onTxPowerTextChanged("10")
+        service.failNext("setTxPowerVerified", SettingsServiceException(SettingsServiceError.VerificationFailed("10", "20")))
+        holder.apply()
+        scheduler.runCurrent()
+        assertTrue(state.errorMessage is UiText.Verbatim)
+        assertFalse(state.showSuccess || state.isApplying || gate.inFlight.value)
+        assertEquals("868.000", state.frequencyText)
+        assertEquals(7_800u, state.bandwidth)
+        assertEquals(10, state.spreadingFactor)
+        assertEquals(5, state.codingRate)
+        assertEquals("10", state.txPowerText)
+        holder.dismissError()
+        holder.apply()
+        scheduler.runCurrent()
+        assertEquals(
+            listOf(
+                "setRadioParamsVerified(868000,7799,10,5,false,null)", "setTxPowerVerified(10)",
+                "setRadioParamsVerified(868000,7799,10,5,false,null)", "setTxPowerVerified(10)",
+            ),
+            service.calls,
+        )
+        assertTrue(state.showSuccess)
+        assertNull(state.errorMessage)
+        assertEquals("868.000", state.frequencyText)
+    }
+
+    @Test
     fun `deliberate off-mode RF edits retain their original intent through recovery and retry`() {
         var reconciliations = 0
         serviceProvider = object : SettingsRadioPort by service {

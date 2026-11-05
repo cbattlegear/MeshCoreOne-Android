@@ -217,9 +217,7 @@ class AdvancedRadioStateHolder(
                 expectedDevice = device,
             )
             target.requireCurrent(mutable.value.device, mutable.value.sessionToken)
-            service.setTxPowerVerified(powerToSend)
-            target.requireCurrent(mutable.value.device, mutable.value.sessionToken)
-            // A queued observation can predate these committed writes; retain the exact-token read boundary.
+            // RF is already committed even if the subsequent power write fails.
             appliedTarget = target
             mutable.update {
                 it.copy(
@@ -228,10 +226,11 @@ class AdvancedRadioStateHolder(
                     bandwidth = RadioOptions.nearestBandwidth(bandwidthToSend),
                     spreadingFactor = sfToSend.toInt(),
                     codingRate = crToSend.toInt(),
-                    txPower = powerToSend.toInt(),
-                    txPowerText = powerToSend.toString(),
                 )
             }
+            service.setTxPowerVerified(powerToSend)
+            target.requireCurrent(mutable.value.device, mutable.value.sessionToken)
+            mutable.update { it.copy(txPower = powerToSend.toInt(), txPowerText = powerToSend.toString()) }
         } catch (cancelled: CancellationException) {
             release()
             throw cancelled

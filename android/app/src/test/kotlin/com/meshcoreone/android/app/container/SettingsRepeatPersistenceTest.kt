@@ -861,6 +861,101 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
         }
     }
 
+    @Test fun delayedRepeatOffObservationAfterFailedClearCannotReuseThePreviousBaseline() = runTest {
+        for (cancelClear in listOf(false, true)) {
+            val clearEntered = CompletableDeferred<Unit>()
+            val clearRelease = CompletableDeferred<Unit>()
+            var failClear = true
+            val held = object : PersistenceStoreProtocol by store {
+                override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+                    if (failClear && expected.device.preRepeatFrequency != null && dto.preRepeatFrequency == null) {
+                        clearEntered.complete(Unit)
+                        clearRelease.await()
+                        if (cancelClear) throw kotlinx.coroutines.CancellationException("Cancelled snapshot retirement")
+                        throw PersistenceStoreException(PersistenceStoreError.SaveFailed("Snapshot retirement unavailable"))
+                    }
+                    return store.saveDeviceIfUnchanged(dto, expected)
+                }
+            }
+            val observedDevice = MutableStateFlow<DeviceDTO?>(null)
+            val observation = MutableStateFlow(SettingsDeviceObservation(null))
+            try {
+                withRepeat(held, connectionOverride = { actual ->
+                    observedDevice.value = actual.connectedDevice.value
+                    observation.value = SettingsDeviceObservation(actual.connectedDevice.value)
+                    object : SettingsConnection by actual {
+                        override val connectedDevice = observedDevice
+                        override val deviceObservations = observation
+                    }
+                }) { h, holder, _, radio ->
+                    val token = assertNotNull(h.sessions.current).token
+                    fun deliver() {
+                        val device = assertNotNull(h.manager.connectedDevice)
+                        observedDevice.value = device
+                        observation.value = SettingsDeviceObservation(device, token)
+                    }
+                    deliver()
+                    h.eventually("initial token observation delivered") { holder.state.value.sessionToken == token }
+                    val before = assertNotNull(h.manager.connectedDevice)
+                    holder.onRepeatToggled(true)
+                    holder.confirmEnableRepeatMode()
+                    h.eventually("first Repeat enable acknowledges") {
+                        !holder.state.value.isApplyingRepeat && h.manager.connectedDevice?.clientRepeat == true
+                    }
+                    deliver()
+                    h.eventually("holder observes Repeat on before restore") { holder.state.value.device?.clientRepeat == true }
+                    holder.onRepeatToggled(false)
+                    h.eventually("actual clear waits after durable Repeat off") { clearEntered.isCompleted }
+                    val restored = assertNotNull(store.fetchDevice(before.id))
+                    assertFalse(restored.clientRepeat)
+                    assertEquals(before.frequency, restored.frequency)
+                    assertEquals(before.frequency, restored.preRepeatFrequency)
+                    assertTrue(holder.state.value.device?.clientRepeat == true, "Only the holder observation is delayed")
+                    clearRelease.complete(Unit)
+                    h.eventually("failed or cancelled clear action settles") { !holder.state.value.isApplyingRepeat }
+                    assertEquals(restored, store.fetchDevice(before.id))
+                    deliver()
+                    h.eventually("late durable Repeat-off observation flips the holder off") {
+                        holder.state.value.device?.clientRepeat == false && !holder.state.value.isRepeatEnabled
+                    }
+                    val manualFrequency = if (before.frequency == 868_000u) 915_000u else 868_000u
+                    assertNotNull(h.sessions.current).settingsService.setRadioParamsPersisted(
+                        manualFrequency, before.bandwidth, before.spreadingFactor, before.codingRate,
+                        clientRepeat = false,
+                    )
+                    val manual = assertNotNull(store.fetchDevice(before.id))
+                    assertEquals(manualFrequency, manual.frequency)
+                    assertEquals(before.frequency, manual.preRepeatFrequency, "The failed clear really retained the obsolete snapshot")
+                    deliver()
+                    h.eventually("holder observes subsequent manual RF") { holder.state.value.device?.frequency == manualFrequency }
+                    failClear = false
+                    holder.onRepeatToggled(true)
+                    holder.confirmEnableRepeatMode()
+                    h.eventually("fresh Repeat enable acknowledges after retirement recovery") {
+                        !holder.state.value.isApplyingRepeat && h.manager.connectedDevice?.clientRepeat == true
+                    }
+                    deliver()
+                    h.eventually("holder observes fresh Repeat on") { holder.state.value.device?.clientRepeat == true }
+                    holder.onRepeatToggled(false)
+                    h.eventually("fresh Repeat off acknowledges") {
+                        !holder.state.value.isApplyingRepeat && h.manager.connectedDevice?.clientRepeat == false
+                    }
+                    val after = assertNotNull(store.fetchDevice(before.id))
+                    assertEquals(manualFrequency, after.frequency, "A new cycle must restore the later manual RF, never the obsolete baseline")
+                    assertEquals(before.bandwidth, after.bandwidth)
+                    assertEquals(before.spreadingFactor, after.spreadingFactor)
+                    assertEquals(before.codingRate, after.codingRate)
+                    assertNull(after.preRepeatFrequency)
+                    assertNull(after.preRepeatBandwidth)
+                    assertNull(after.preRepeatSpreadingFactor)
+                    assertNull(after.preRepeatCodingRate)
+                    assertEquals(after, h.manager.connectedDevice)
+                    assertEquals(listOf(1, 0, 0, 1, 0), radio.radioWrites.map { it[11].toInt() })
+                }
+            } finally { clearRelease.complete(Unit) }
+        }
+    }
+
     @Test fun repeatWaitsForSnapshotAndClearFailuresReachTheActualActionBeforeRetry() = runTest {
         val saveEntered = CompletableDeferred<Unit>()
         val saveRelease = CompletableDeferred<Unit>()
@@ -1134,6 +1229,7 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
         connectExisting: UUID? = null,
         initiallyRepeating: Boolean = false,
         sessionConfiguration: SessionConfiguration = SessionConfiguration.DEFAULT,
+        connectionOverride: (SettingsConnection) -> SettingsConnection = { it },
         action: suspend (ContainerHarness, RadioPresetStateHolder, MutableList<Throwable>, RepeatRadio) -> Unit,
     ) {
         val h = ContainerHarness(this, room, persistenceOverride = persistence, sessionConfiguration = sessionConfiguration)
@@ -1186,7 +1282,7 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
             }
             val repeat = RadioPresetStateHolder(
                 SettingsEnvironment(backgroundScope, describe = { failures += it; UiText.Verbatim("Repeat failed") }),
-                deps.connection, deps.regions, deps.radioCatalog, deps.settingsService, deviceStore, RadioWriteGate(),
+                connectionOverride(deps.connection), deps.regions, deps.radioCatalog, deps.settingsService, deviceStore, RadioWriteGate(),
             )
             holder = repeat
             repeat.start()

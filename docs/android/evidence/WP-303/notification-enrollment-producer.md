@@ -26,6 +26,14 @@ Dependency ancestry is deliberately limited to:
   support `854785a40aa84163deafc6176747e16ec23b61ff`.
 - Existing merged coordinator from PR #571. Its algorithm is unchanged.
 
+Subsequent exact owned corrections are reconciled without unrelated ancestry:
+`9e25cbaea404613859a7a7a04e6032c995e32716` for storage result rendering,
+and `7e7d2b8dc65a601bad61853f49cbcc3cf6a7b0e7` followed by
+`de49a98b2a939793f66c5fa3fa31d95964a3600d` for verifier terminal
+invalidation after late ledger allocation. Notifications module bytes match
+the storage correction; verifier source/test bytes match `de49a98b2`.
+These corrections require a new combined exact execution; prior results are historical.
+
 The actual witness PR #576 subsequently landed as trusted-main merge
 `59ee802c3d1067446b6bd2c99299a05e1f299a57`, whose second parent is exactly
 `b75555a0b22e493a2a9117f25e1fcfde871ee60c`. That merge provenance is reconciled;
@@ -90,7 +98,7 @@ merge `5640a3cf238a0c08f57f77fb78175964fdd6cdf6` of PR #577.
 Its exact ten approved keys are present. Frozen Swift/generated localization inputs
 are not modified; English fallback is not claimed to be reviewed translation.
 
-## Focused evidence (source until executed)
+## Focused evidence
 
 `NotificationEnrollmentProducerTest` declares 16 methods covering independent request identities,
 unknown/lost resume, exact prior observation, competing actions, delayed reads,
@@ -98,7 +106,7 @@ locked/corrupt/mismatched reads, dismissed/rotated callbacks, delayed staging,
 uncertain/rejected returns, explicit later new attempts, delayed failed observation
 after a foreground-owner replacement, and copy field boundaries.
 
-`NotificationEnrollmentEntryTest` declares 15 methods and mounts the real entry and Notifications settings
+`NotificationEnrollmentEntryTest` declares 16 methods and mounts the real entry and Notifications settings
 extension. Controls cover held action, actual displayed descriptor, explicit
 confirm/dismissal, pause, window focus loss, actual Activity recreation and
 disposal/remount. Five integrated
@@ -109,6 +117,12 @@ STAGED -> INVALIDATED and no witness/journal creation.
 The class explicitly requests native SQLite and native graphics. Actual confirm
 rechecks the dialog-owned view's attachment/focus and resumed lifecycle before
 admitting the action; initial focus and attachment loss also retire the presentation.
+The host fixture delivers the actual dialog `ViewRootImpl` focus event after
+`Dialog.show`, processes that event before the queued initial-focus observation,
+and asserts actual window focus. A view-only focus callback does not update the
+attachment focus flag. Positive setup does not bypass the production guard;
+an additional mounted case deliberately withholds initial focus and requires
+retirement without acknowledgment.
 
 The test-only Kotlin helper narrowly suppresses internal visibility diagnostics
 to use datastore's existing constructor seams without widening production APIs
@@ -123,6 +137,37 @@ round trip, foreign witness rejection and changed nonce rejection.
 - `python tools/android-port/portmap.py`: passed.
 - `git diff --check`: passed.
 - Local Gradle: not run, per retained hard execution owner.
-- Kotlin/Compose/SQLite test execution: pending exact complete hosted candidate.
+- Kotlin/Compose/SQLite producer execution: accepted for exact `618ed213f` below.
+  The subsequent dependency-corrected composition is not covered by that result.
+
+| Exact candidate | Hosted run | Actual outcome |
+| --- | --- | --- |
+| `3fc62cb36c770a7c152eba4f9dfaad020f17a34b` | [41999079789](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41999079789) | App test compilation failed: invalid member-extension import and a helper nested in the preceding function. No mounted execution acceptance. |
+| `3b360f056f27d9b5ceb1bfcc66be1b203db76eba` | [41999738888](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41999738888) | Compilation passed; 24 mounted failures across API 31/37. The unfocused host dialog caused real initial-focus retirement before warning assertions. |
+| `aee0f1f0166bf29d45e1d14d1a311ed88eacea23` | [42002017581](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42002017581) | Compilation passed; the same 24 mounted failures remained. A parent composition side effect and view-only focus callback did not establish actual dialog window focus. |
+| `7401b75380ba8dba4bd3ce8a972cc5e5f3473000` | [42004265838](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42004265838) | Compilation passed; 24 mounted failures. The strict root lookup showed that `Dialog.show` returns before the decor is attached; no initial root exists yet. The no-initial-focus negative control executed without appearing among failures. |
+| `10c1d31e5252132b674d46c722dc8b9d32bcd2af` | [42009037096](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42009037096) | Compilation passed; 12 mounted failures remained. Warning/display and queued stale-action controls ran without failures. Five real-ledger methods needed Android Main queue progress after actual IO; the standalone focus-loss test also ran before the clicked warning had composed. No real-ledger acceptance. |
+| `618ed213f5f7bb2d376b3c99a530a91fc8e942e0` | [42011995652](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42011995652) | All six jobs succeeded, including real mounted enrollment/lifecycle cases and SwiftData restore/export oracle. Original Linux job `127193153516` records every required producer method/API variant below. |
+
+The original successful hosted named-case inventory was independently compared to
+the exact committed producer test declarations: 16 producer identity methods,
+16 mounted methods at both API variants (32), and three native Journal mapper
+methods at both variants (six). All 54 required cases are present. The same
+log records six witness-adapter methods and the older verifier's 21 methods at
+both variants (42). This does not cover the later verifier's 25-method source.
+In particular, the five actual-ledger mounted methods cover real explicit-action
+consumption/binding/reopen and both pause/dispose before stage/consumption.
+
+The candidates from `aee0f1f01` onward reconcile actual main
+`2e7823cec06294dd4039000de32c98c9786f5dc5`; the five remote-node changes
+were disjoint from enrollment and its runner. Each attempt uses a distinct
+immutable diagnostic ref; all prior refs and runs are preserved.
+
+The next combined candidate uses the existing reviewed runner and accepted
+workflow, independently of the unready PR #580 correction. It must independently
+compare all 167 storage methods at both API variants plus six baseline cases
+(340), all 25 verifier methods at both API variants (50), and actual compiler
+inputs. No PR #580 source or its acceptance is inferred. The old 336-case storage
+execution does not establish acceptance of the corrected 340-case source.
 
 The exact hosted job/log is authoritative. No second CI-result bundle is retained.

@@ -172,12 +172,10 @@ class SessionLifecycleTest : RoomProcessTest() {
         val generationRadios = ConcurrentHashMap<SessionToken, FirmwareRadio>()
         val bootstrapChannelRequests = ConcurrentLinkedQueue<Pair<SessionToken, UByte>>()
         val queueChannelRequests = ConcurrentLinkedQueue<Pair<SessionToken, UByte>>()
-        val observedCommands = ConcurrentLinkedQueue<Pair<SessionToken?, Int>>()
         h.links.configureRadio = { radio ->
             activeRadio.set(radio)
             val sending = AtomicBoolean(false)
             radio.respond = { command ->
-                observedCommands += h.manager.snapshot.value.token to command[0].toInt()
                 when (command[0].toInt()) {
                     3 -> {
                         check(h.manager.connectionState == DeviceConnectionState.READY)
@@ -386,14 +384,7 @@ class SessionLifecycleTest : RoomProcessTest() {
                 }
                 throw AssertionError("$description within $NATIVE_QUERY_RECOVERY_WINDOW; " +
                     "A queries=${failures("channelQuery", messageAId)}, B queries=${failures("channelQuery", messageBId)}, " +
-                    "receipts=${accountingReceipts.toList()}; snapshot=${h.manager.snapshot.value}; " +
-                    "watchdog=${h.manager.isReconnectionWatchdogRunning}; " +
-                    "pending=${store.fetchPendingSends(radioId)}; " +
-                    "messages=${listOf(messageAId, messageBId).map { store.fetchMessage(EntityKey(radioId, it)) }}; " +
-                    "commands=${observedCommands.toList()}; bootstrap=${bootstrapChannelRequests.toList()}; " +
-                    "queueRequests=${queueChannelRequests.toList()}; " +
-                    "messaging=${synchronized(h.messagingDiagnostics) { h.messagingDiagnostics.toList() }}; " +
-                    "runtime=${synchronized(h.diagnostics) { h.diagnostics.toList() }}")
+                    "receipts=${accountingReceipts.toList()}")
             }
             suspend fun awaitGenerationRetired(token: SessionToken, description: String) {
                 awaitNativeRecovery(description) {

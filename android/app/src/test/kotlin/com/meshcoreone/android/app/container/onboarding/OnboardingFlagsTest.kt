@@ -217,6 +217,33 @@ class OnboardingFlagsTest {
         }
     }
 
+    @Test fun `worker cancelled before first scheduled dispatch abandons queued acknowledgement and completes shutdown drain`() = runTest {
+        val worker = SupervisorJob()
+        val workerScope = CoroutineScope(worker + StandardTestDispatcher(testScheduler))
+        var persisted = false
+        val flags = WriteBehindOnboardingFlags(emptyMap(), workerScope, { _, _ -> persisted = true })
+        try {
+            val completion = async(start = CoroutineStart.UNDISPATCHED) {
+                runCatching { OnboardingState(flags).completeOnboarding() }
+            }
+            assertFalse(completion.isCompleted)
+            val stopping = async(start = CoroutineStart.UNDISPATCHED) { flags.shutdown() }
+            assertFalse(stopping.isCompleted)
+
+            worker.cancel()
+            runCurrent()
+
+            assertTrue(completion.isCompleted, "The queued acknowledgement must be rejected during worker cleanup")
+            assertTrue(completion.await().exceptionOrNull() is CancellationException)
+            assertTrue(stopping.isCompleted, "Shutdown must observe the drained queue after worker cleanup")
+            stopping.await()
+            assertFalse(persisted)
+            assertFalse(flags.hasCompleted.value)
+        } finally {
+            worker.cancel()
+        }
+    }
+
     @Test fun `failure callback cancellation still abandons queued work and completes captured shutdown`() = runTest {
         val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
         val started = CompletableDeferred<Unit>()

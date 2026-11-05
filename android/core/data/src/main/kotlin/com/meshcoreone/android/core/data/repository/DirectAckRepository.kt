@@ -433,8 +433,9 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         if (!claim.current || identity.incarnation != claim.incarnation || identity.revision != claim.revision) {
             return DirectAckPermission.INVALIDATED
         }
-        if (claim.pendingId != null && dao.operations(claim.snapshot.radioId, claim.requestId).none { it.kind == "PENDING" }) {
-            if (dao.incarnation(claim.snapshot.radioId, claim.pendingId, "pending")?.incarnation != claim.pendingIncarnation) {
+        val pendingId = claim.pendingId
+        if (pendingId != null && dao.operations(claim.snapshot.radioId, claim.requestId).none { it.kind == "PENDING" }) {
+            if (dao.incarnation(claim.snapshot.radioId, pendingId, "pending")?.incarnation != claim.pendingIncarnation) {
                 return DirectAckPermission.INVALIDATED
             }
         }

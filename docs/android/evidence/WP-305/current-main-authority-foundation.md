@@ -20,6 +20,39 @@ The coordinator assigned an independent clean-current-main foundation. Runtime/d
 
 ## Source custody and adaptations
 
+### Exact corrected-candidate compile outcomes and Gate test bridge
+
+Exact d523722b96324eec32293120b7df60044d0ce03d run
+[41985855433](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41985855433)
+failed in Linux job 127106380722 at the two nullable expected-list inference sites
+in OnboardingBoundaryTests.kt. The d2f655 repair above remains test-only.
+The next immutable candidate 5518195270b2a56a01d620b8e236e74798c8a0c5, including
+the normal live-main refresh and exact 8eb snapshot correction, ran as
+[41986879852](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41986879852).
+Its Linux job 127109664978 got past that compilation and failed at
+OnboardingGateTest.kt lines 86 and 118: two existing UI test callbacks still called
+the newly suspending completeOnboarding outside a coroutine. Mandatory App and
+other affected JUnit reports were absent; 373 partial passes are not candidate
+acceptance or execution credit for Flags, the consumer controls or Room controls.
+Both references and their results are preserved.
+
+The bounded successor imports runBlocking and wraps only those two calls inside
+their existing compose.runOnUiThread callbacks. This bridge is test-only: their
+flag writer explicitly runs on Dispatchers.Unconfined with an immediate no-op
+persist callback, not a Main-dispatched or real I/O operation. All original cases,
+expected values, UI waits and assertions remain unchanged. Producer 2f serialized
+this path to this session and reviewed that context before the edit; exact-hunk
+review and fresh hosted execution remain required. Trusted main 1a8b capability
+admission returned reviewed-support-test/add-or-update-related-test for this path.
+Local Gradle remains held by its existing execution owner and is not bypassed.
+The documented Windows preflight used the pinned Python, existing same-host state
+and fresh absolute output directory preflight-gate-compile-01 (exit 0).
+Source checks controller/validate.py, portmap.py,
+controller/verification_config.py --check, parity-tests/audit.py --check,
+parity-tests/semantic.py --check and git diff --check all exited 0. An initial
+invocation mistakenly used the nonexistent top-level tools/android-port/validate.py;
+it did not run validation and was corrected to the actual controller path.
+
 ### Authoritative pre-Repeat preservation and bounded test compile repair
 
 Producer 36c8c079-3643-4bc2-876b-f4c80c3bdf4d supplied exact

@@ -21,6 +21,7 @@ import com.meshcoreone.android.feature.onboarding.OnboardingState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.After
 import org.junit.Before
@@ -83,7 +84,7 @@ class OnboardingGateTest {
         compose.onNodeWithTag("shell").assertDoesNotExist()
         assertEquals(AppTab.SETTINGS, coordinator.state.value.selectedTab)
 
-        compose.runOnUiThread { OnboardingState(flags).completeOnboarding() }
+        compose.runOnUiThread { runBlocking { OnboardingState(flags).completeOnboarding() } }
         compose.waitForIdle()
         compose.onNodeWithTag("shell").assertIsDisplayed()
         assertEquals(AppTab.CHATS, coordinator.state.value.selectedTab)
@@ -115,7 +116,7 @@ class OnboardingGateTest {
             showGate(NavigationCoordinator(), onboarding(flags, state))
             compose.onNodeWithTag("system-pairing-setup").assertIsDisplayed()
             compose.onNodeWithTag("shell").assertDoesNotExist()
-            compose.runOnUiThread { OnboardingState(flags).completeOnboarding() }
+            compose.runOnUiThread { runBlocking { OnboardingState(flags).completeOnboarding() } }
             compose.waitForIdle()
             compose.onNodeWithTag("shell").assertExists()
             compose.onNodeWithTag("system-pairing-setup").assertIsDisplayed()

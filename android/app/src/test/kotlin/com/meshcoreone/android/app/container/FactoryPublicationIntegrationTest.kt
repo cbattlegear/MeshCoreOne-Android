@@ -88,7 +88,10 @@ class FactoryPublicationIntegrationTest : RoomProcessTest() {
             releaseSuccessor.complete(Unit)
             val failure = successor.await()
             if (successorFails) {
-                assertSame(unavailable, failure, "The real successor failure must reach its caller unchanged")
+                val propagated = assertIs<IllegalStateException>(failure)
+                assertEquals(unavailable.message, propagated.message)
+                // Coroutine debug stack recovery may copy the exception, retaining the original as its direct cause.
+                assertSame(unavailable, if (propagated === unavailable) propagated else propagated.cause)
                 assertEquals(DeviceConnectionState.DISCONNECTED, h.manager.connectionState)
                 assertNull(h.sessions.current, "A failed successor cannot leave the retired graph as current")
                 assertEquals(0, h.sessions.outstanding)

@@ -316,7 +316,9 @@ class OnboardingFlagsTest {
                 if (invalidation != "cancel") retry.await()
                 resetting?.await()
                 runCurrent()
-                kotlinx.coroutines.withTimeout(5_000) { state.unsettledCompletionFlow.first { !it } }
+                kotlinx.coroutines.withContext(Dispatchers.Default) {
+                    kotlinx.coroutines.withTimeout(5_000) { state.unsettledCompletionFlow.first { !it } }
+                }
                 assertEquals(1, stages)
                 assertEquals(1, ids.size)
                 assertEquals(2, reads)

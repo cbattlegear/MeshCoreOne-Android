@@ -714,3 +714,17 @@ are unchanged. Pinned Python 3.12.4, trusted path/operation admissions,
 `git diff --check` passed during authoring. Exact-successor hosted discovery
 and independent review remain required. The exact a5 failure remains recorded;
 no second CI-result bundle, local Gradle, manual dispatch or #495 changes.
+
+### Wall-clock settlement timeout correction
+
+Independent exact 431-to-cae source review closed the five reported schedules
+with their guards/controls; it did not execute them. It identified one remaining
+fixture timing concern: `runTest` virtual time can expire the five-second
+settlement wait while DataStore is still progressing on real I/O. The isolated
+successor runs that bounded wait on `Dispatchers.Default`, whose timeout uses
+real elapsed time, retaining the actual unsettled-flow synchronization point
+and every storage/count/receipt/reference-identity assertion. No sleep, weakened
+assertion or production change is introduced. This is a source-derived fixture
+correction, not an observed cae result; active exact cae run `41950450572` is
+preserved. API cancellation/reset/early-retirement reachability and all #495,
+navigation witness, hardware and local-execution holds remain unchanged.

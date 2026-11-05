@@ -149,6 +149,17 @@ not full-candidate acceptance. Final integration must bind current main and its 
 exact check/review; these results neither transfer to a combined map candidate nor
 accept physical radio, firmware, TalkBack or the rest of WP-314.
 
+Full independent review of `897e56e` found additional unfenced list/code-entry callbacks
+and live-device width reads after captured dispatch. The immutable `897e56e` diagnostics
+remain separate, not clearance for these changes. Test-only successor
+`6444103507bcd27e234f83a31c534bb8a0586c67`, run42022446364, adds eighteen separately
+discovered same/different-radio retained-action cases plus three held-lookup width methods.
+The repair successor gates all mutating list/input callbacks, retains saveable drafts,
+rechecks run admission after launch, and decodes/saves using actual dispatch/result width.
+The existing code-input path is admitted by trusted `wp-owned/modify` capability with the
+same pinned-source/declared-verification invariants. No runtime outcome is inferred from
+source review or any earlier green run.
+
 | Check | Result |
 |---|---|
 | Pinned Windows preflight: `python .\\tools\\android-port\\controller\\ci.py preflight --local --state $env:ANDROID_CI_STATE --output $output` with a fresh absolute TEMP output and pinned Python 3.12.4 | PASS (exit 0; readiness only) |

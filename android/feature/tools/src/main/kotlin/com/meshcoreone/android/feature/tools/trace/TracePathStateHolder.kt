@@ -369,17 +369,16 @@ class TracePathStateHolder(
         val device = deps.connectedDevice() ?: return false
         val radioId = device.radioId
         val snapshot = current
-        val size = TraceHashModes.hashSize(snapshot.traceHashMode ?: device.pathHashMode).toLong()
         if (!isConnectionCurrent(device)) return false
         val store = deps.savedPaths() ?: return false
         val revision = pathSelectionRevision
         if (snapshot.batchEnabled && snapshot.completedResults.isNotEmpty()) {
             val firstSuccess = snapshot.successfulResults.firstOrNull() ?: return false
-            return persistBatch(store, radioId, name, firstSuccess, snapshot.completedResults, size, revision)
+            return persistBatch(store, radioId, name, firstSuccess, snapshot.completedResults, firstSuccess.hashSize.toLong(), revision)
         }
         val result = snapshot.result?.takeIf { it.success } ?: return false
         return try {
-            val saved = store.createSavedTracePath(radioId, name, result.tracedPathBytes, size, run(result, time.now()))
+            val saved = store.createSavedTracePath(radioId, name, result.tracedPathBytes, result.hashSize.toLong(), run(result, time.now()))
             if (isConnectionCurrent() && pathSelectionRevision == revision && deps.connectedDevice()?.radioId == radioId) {
                 update { it.copy(activeSavedPath = saved) }
             }

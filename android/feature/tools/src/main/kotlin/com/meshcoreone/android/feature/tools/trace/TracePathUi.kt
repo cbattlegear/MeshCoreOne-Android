@@ -288,7 +288,10 @@ internal fun TracePathListContent(
                     Text(stringResource(C.contactsTraceListAutoReturn), style = MaterialTheme.typography.titleMedium)
                     Text(stringResource(C.contactsTraceListAutoReturnDescription), style = MaterialTheme.typography.bodySmall)
                 }
-                Switch(state.autoReturnPath, holder::setAutoReturnPath)
+                val setAutoReturn: (Boolean) -> Unit = { if (canEdit()) holder.setAutoReturnPath(it) }
+                Switch(state.autoReturnPath, setAutoReturn, modifier = Modifier.semantics {
+                    onClick { setAutoReturn(!state.autoReturnPath); true }
+                })
             }
         }
 
@@ -381,15 +384,18 @@ internal fun TracePathListContent(
                 }
             }
         }
-        item(key = "trace-code-input") { TraceCodeInput(state, holder, codeInput) }
+        item(key = "trace-code-input") { TraceCodeInput(state, holder, codeInput, canEdit) }
         if (state.availableRepeaters.isNotEmpty()) {
             item {
                 Text(stringResource(T.toolsNodeDiscoveryRepeaters), style = MaterialTheme.typography.titleMedium)
             }
             items(state.availableRepeaters, key = { it.id }) { repeater ->
+                val addRepeater = { if (canEdit()) holder.addNode(repeater) }
                 OutlinedButton(
-                    onClick = { holder.addNode(repeater) },
-                    modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp),
+                    onClick = addRepeater,
+                    modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp).semantics {
+                        onClick { addRepeater(); true }
+                    },
                 ) {
                     Text(repeater.name)
                 }
@@ -399,9 +405,11 @@ internal fun TracePathListContent(
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf(0u.toUByte(), 1u.toUByte(), 2u.toUByte()).forEach { mode ->
                     val bytes = 1 shl mode.toInt()
+                    val setMode = { if (canEdit()) holder.setTraceHashMode(mode) }
                     FilterChip(
                         selected = holder.effectiveTraceMode == mode,
-                        onClick = { holder.setTraceHashMode(mode) },
+                        onClick = setMode,
+                        modifier = Modifier.semantics { onClick { setMode(); true } },
                         label = { Text("$bytes B") },
                     )
                 }
@@ -414,7 +422,10 @@ internal fun TracePathListContent(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(stringResource(C.contactsTraceListBatchTrace), style = MaterialTheme.typography.titleMedium)
-                Switch(state.batchEnabled, holder::setBatchEnabled)
+                val setBatch: (Boolean) -> Unit = { if (canEdit()) holder.setBatchEnabled(it) }
+                Switch(state.batchEnabled, setBatch, modifier = Modifier.semantics {
+                    onClick { setBatch(!state.batchEnabled); true }
+                })
             }
         }
         state.errorMessage?.let { error ->
@@ -422,10 +433,18 @@ internal fun TracePathListContent(
         }
         item { TraceResults(state) }
         item {
+            val runOrCancel = {
+                if (canEdit()) {
+                    if (state.isRunning) holder.cancelBatchTrace()
+                    else scope.launch { if (canEdit()) holder.runBatchTrace() }
+                }
+            }
             Button(
-                onClick = { if (state.isRunning) holder.cancelBatchTrace() else scope.launch { holder.runBatchTrace() } },
+                onClick = runOrCancel,
                 enabled = state.isRunning || state.canRunTraceWhenConnected,
-                modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp),
+                modifier = Modifier.fillMaxWidth().sizeIn(minHeight = 48.dp).semantics {
+                    onClick { runOrCancel(); true }
+                },
             ) {
                 if (state.isRunning) {
                     CircularProgressIndicator(Modifier.padding(end = 8.dp))

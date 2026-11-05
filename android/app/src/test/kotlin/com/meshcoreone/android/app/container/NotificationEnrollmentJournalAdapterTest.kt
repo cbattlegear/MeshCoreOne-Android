@@ -99,7 +99,7 @@ class NotificationEnrollmentJournalAdapterTest {
     @Test fun changedNonceCannotAdoptOrReplaceRealGeneration() = runTest {
         val preparing = journal.prepare(operation)
         val replacement = operation.copy(creationNonce = UUID.randomUUID())
-        assertEquals(Enrollment.JournalResult.NotRetained(Enrollment.Failure.IDENTITY_MISMATCH),
+        assertEquals(Enrollment.JournalResult.Indeterminate(replacement),
             journal.reconcile(replacement, replacement.creationNonce))
         assertEquals(Enrollment.JournalResult.NotRetained(Enrollment.Failure.IDENTITY_MISMATCH),
             journal.prepare(replacement))

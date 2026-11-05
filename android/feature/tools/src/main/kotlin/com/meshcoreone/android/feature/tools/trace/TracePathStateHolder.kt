@@ -115,7 +115,6 @@ class TracePathStateHolder(
         val token = sessionToken
         val identity = connectionIdentity
         if (token == deps.sessionToken() &&
-            (identity == null || deps.isOriginatingSessionCurrent(identity.second, token)) &&
             (token == null || token.radioId == device?.radioId &&
                 (identity == null || identity.first == token.radioId))
         ) return true
@@ -227,7 +226,7 @@ class TracePathStateHolder(
     private fun acceptedHashSize(): Int? {
         val device = deps.connectedDevice()
         val size = TraceHashModes.hashSize(current.traceHashMode ?: device?.pathHashMode ?: 0u)
-        return size.takeIf { isConnectionCurrent(device) }
+        return size
     }
 
     private fun appendNode(node: RepeaterResolvable, size: Int) {
@@ -568,7 +567,6 @@ class TracePathStateHolder(
 
     fun recordRecent(publicKey: Bytes) {
         val radioId = currentRadioId ?: return
-        if (!isConnectionCurrent()) return
         recordRecent(publicKey, radioId)
     }
 

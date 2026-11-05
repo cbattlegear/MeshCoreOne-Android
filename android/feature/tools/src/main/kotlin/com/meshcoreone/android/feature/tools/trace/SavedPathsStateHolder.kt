@@ -75,8 +75,7 @@ class SavedPathsStateHolder(
         val token = sessionToken
         val generation = originatingGeneration
         return active && deviceRadio == radioId && (token == null || token.radioId == radioId) &&
-            deps?.sessionToken() == token &&
-            (generation == null || deps?.isOriginatingSessionCurrent(generation, token) == true)
+            deps?.sessionToken() == token
     }
 
     private fun isCurrent(operation: Long, radioId: RadioId): Boolean =

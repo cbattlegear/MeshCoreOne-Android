@@ -100,6 +100,19 @@ Test-only predecessor `d05509a9b20cf51df04ea24c7862c32a51c76896` is published
 as `diagnostic/wp305-failedclear-d05509a9`, with hosted run
 `42059575897`. This exact predecessor contains the save/cancel-clear regression
 before the production repair and before the additional controls; its result
-must not be transferred to a successor. At writing, hosted execution is pending.
+must not be transferred to a successor. Its Android job `127357290292` executed
+App 2,135 tests with two failures: the new test timed out at the helper's initial
+holder readiness (not the lifecycle assertion), and the unchanged protected map
+test failed separately. This is not a successful lifecycle reproduction.
+
+The fixture initially froze the newly created adapter's eager-but-not-yet-populated
+device value before the helper could observe readiness. The corrected fixture
+forwards actual token-bound observations during setup, then cancels and joins
+that owned collector at action entry before taking explicit delay custody.
+No off observation can pass through during the controlled ordering. Test-only
+baseline `b1db04bfe3375fc507546fa616dd269c72793f2c`, parent `d05509a9`, contains
+only that bootstrap correction with unchanged production and assertions.
+The same bootstrap correction is applied to the repaired candidate.
+
 No Kotlin execution, hardware, signing, iOS UI or whole-WP acceptance is claimed
-by the source checks or prior #585 greens.
+for the repaired candidate by the source checks or prior #585 greens.

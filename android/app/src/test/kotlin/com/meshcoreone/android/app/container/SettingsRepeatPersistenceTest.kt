@@ -38,6 +38,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
@@ -940,6 +942,7 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
             }
             val observedDevice = MutableStateFlow<DeviceDTO?>(null)
             val observation = MutableStateFlow(SettingsDeviceObservation(null))
+            var forwarding: Job? = null
             try {
                 withRepeat(held, beforeSnapshotClear = {
                     if (failClear && failurePoint == "cancel-before-clear") {
@@ -949,13 +952,19 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                         throw kotlinx.coroutines.CancellationException("Cancelled before the editor clear API")
                     }
                 }, connectionOverride = { actual ->
-                    observedDevice.value = actual.connectedDevice.value
-                    observation.value = SettingsDeviceObservation(actual.connectedDevice.value)
+                    forwarding = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                        actual.deviceObservations.collect {
+                            observedDevice.value = it.device
+                            observation.value = it
+                        }
+                    }
                     object : SettingsConnection by actual {
                         override val connectedDevice = observedDevice
                         override val deviceObservations = observation
                     }
                 }) { h, holder, _, radio ->
+                    forwarding?.cancel()
+                    forwarding?.join()
                     val token = assertNotNull(h.sessions.current).token
                     fun deliver() {
                         val device = assertNotNull(h.manager.connectedDevice)
@@ -1029,7 +1038,7 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                     assertEquals(after, h.manager.connectedDevice)
                     assertEquals(listOf(1, 0, 0, 1, 0), radio.radioWrites.map { it[11].toInt() })
                 }
-            } finally { clearRelease.complete(Unit) }
+            } finally { clearRelease.complete(Unit); forwarding?.cancel(); forwarding?.join() }
         }
     }
 

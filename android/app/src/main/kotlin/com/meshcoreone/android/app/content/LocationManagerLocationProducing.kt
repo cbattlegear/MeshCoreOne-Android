@@ -15,6 +15,7 @@ import com.meshcoreone.android.core.services.content.LocationProducing
 import com.meshcoreone.android.core.services.content.LocationServiceError
 import java.util.concurrent.Executor
 import kotlinx.coroutines.CancellableContinuation
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -64,7 +65,7 @@ class LocationManagerLocationProducing(
                 authorizationStatus.collectLatest { status ->
                     if (isAuthorized(status) && synchronized(lock) { !closed && lastCoordinate == null }) {
                         try {
-                            if (withTimeoutOrNull(10_000L) { requestLocation() } == null) {
+                            if (withTimeoutOrNull(10_000L) { acquireForegroundFix() } == null) {
                                 Log.w("NodesLocation", "Foreground location fix timed out; proximity unavailable")
                             }
                         } catch (error: LocationServiceError) {
@@ -86,7 +87,21 @@ class LocationManagerLocationProducing(
     private class Request(
         val continuation: CancellableContinuation<GeoCoordinate>,
         val signal: CancellationSignal = CancellationSignal(),
-    )
+    ) {
+        val finished = CompletableDeferred<Result<GeoCoordinate>>()
+    }
+
+    private suspend fun acquireForegroundFix(): GeoCoordinate {
+        var existing: Request? = null
+        try {
+            return acquireLocation { existing = it }
+        } catch (error: LocationServiceError) {
+            if (error != LocationServiceError.RequestInProgress) throw error
+        }
+        val result = checkNotNull(existing).finished.await()
+        // One cancellation handoff within the original timeout, not a provider-failure retry.
+        return if (result.exceptionOrNull() is CancellationException) requestLocation() else result.getOrThrow()
+    }
 
     init {
         if (isAuthorized(mutableStatus.value)) determined = true
@@ -139,8 +154,10 @@ class LocationManagerLocationProducing(
 
     // Permission is checked immediately below and a revoke-after-check SecurityException is
     // handled. Lint does not propagate the OR guard through this coroutine callback bridge.
+    override suspend fun requestLocation(): GeoCoordinate = acquireLocation()
+
     @SuppressLint("MissingPermission")
-    override suspend fun requestLocation(): GeoCoordinate {
+    private suspend fun acquireLocation(onBusy: ((Request) -> Unit)? = null): GeoCoordinate {
         refreshAuthorization()
         val manager = locationManager
             ?: throw LocationServiceError.RequestFailed("LocationManager system service unavailable")
@@ -149,7 +166,10 @@ class LocationManagerLocationProducing(
             val failure = synchronized(lock) {
                 when {
                     closed -> LocationServiceError.RequestFailed("Location producer is closed")
-                    active != null -> LocationServiceError.RequestInProgress
+                    active != null -> {
+                        onBusy?.invoke(checkNotNull(active))
+                        LocationServiceError.RequestInProgress
+                    }
                     !isAuthorized(mutableStatus.value) -> LocationServiceError.NotAuthorized(mutableStatus.value)
                     else -> {
                         active = request
@@ -218,6 +238,7 @@ class LocationManagerLocationProducing(
         }
         if (claimed) {
             request.signal.cancel()
+            request.finished.complete(result)
             request.continuation.resumeWith(result)
         }
     }
@@ -231,7 +252,9 @@ class LocationManagerLocationProducing(
         }
         if (claimed) {
             request.signal.cancel()
-            request.continuation.cancel(CancellationException("Location request cancelled"))
+            val cancelled = CancellationException("Location request cancelled")
+            request.finished.complete(Result.failure(cancelled))
+            request.continuation.cancel(cancelled)
         }
     }
 

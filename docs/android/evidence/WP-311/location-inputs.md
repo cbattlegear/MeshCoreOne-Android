@@ -17,6 +17,11 @@ The existing Android LocationManager adapter now exposes those successful
 one-shot results as an observable, permission-filtered flow. A resumed collection
 with granted permission and an empty cache acquires one bounded foreground fix
 (10 seconds). It never invokes a permission requester or adds continuous tracking.
+An overlapping list observes the exact existing request's completion without
+owning it. If that acquiring list leaves and cancels its request, the remaining
+observer may acquire one replacement within its original 10-second budget.
+Provider failures are not retried; neither repeated handoffs nor retries are
+unbounded.
 Its existing advert cache and one-shot cancellation/timeout behavior stay intact.
 Authorization is refreshed when the UI resumes collection and on the adapter's
 existing permission/fix callbacks. Denied/revoked access withdraws the phone fix
@@ -46,6 +51,9 @@ Core navigation, list loading and radio commands remain independent of location.
   and `foregroundCollectorObservesButDoesNotCancelAnotherOwnersExistingOneShot`
   prove the bounded list-owned request, late callback fencing, and preservation
   of a preexisting advert/onboarding request through list disposal.
+  `disposingAcquiringCollectorHandsOneBoundedFixToTheRemainingObserver`
+  specifically holds acquiring A and observing B, disposes A, rejects A's late
+  callback and requires B's replacement real platform callback to publish a fix.
 - `NodesLocationIntegrationTest.actualNodesAdapterPrefersAuthorizedPhoneThenLiveRadioAndWithdrawsDisconnectedFallback`
   exercises the actual AppContainer nodes dependency, live radio-coordinate
   updates, phone precedence, unavailable phone fallback and disconnect withdrawal.
@@ -76,3 +84,6 @@ The original `803f35b` hosted run `42126554703` failed App unit-test compilation
 at the newly authored untyped `listOf(null)` assertion; no App execution result
 is inferred. The successor supplies the explicit nullable element type and
 repairs the independent cold-cache, radio-observation and recency-fixture findings.
+The `6f549e0` hosted run `42128297934` subsequently failed App test compilation
+on the new test's unsupported generic Robolectric application accessor. The
+successor uses the actual nongeneric API; no App runtime result is inferred.

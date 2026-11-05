@@ -2,7 +2,6 @@
 package com.meshcoreone.android.app.container
 
 import android.Manifest
-import android.app.Application
 import android.location.Location
 import android.location.LocationManager
 import android.os.Looper
@@ -54,7 +53,7 @@ class NodesLocationIntegrationTest : RoomProcessTest() {
         verifyMountedColdCache(granted = false)
 
     private fun verifyMountedColdCache(granted: Boolean) = runTest {
-        val application = RuntimeEnvironment.getApplication<Application>()
+        val application = RuntimeEnvironment.getApplication()
         val manager = application.getSystemService(LocationManager::class.java)
         shadowOf(manager).setProviderEnabled(LocationManager.FUSED_PROVIDER, true)
         if (granted) shadowOf(application).grantPermissions(Manifest.permission.ACCESS_COARSE_LOCATION)

@@ -458,6 +458,9 @@ This rejects repository-source ambiguity; it is not an execution of Kotlin's
 classpath resolver or proof about generated/external dependency bytes. Those
 remain subject to the existing trusted build/dependency and compiler-input gates.
 Source-only parsing does not prove external classpath identity.
+Kotlin multi-dollar-prefixed strings are unsupported and fail closed, including
+inside ordinary interpolation expressions; they cannot hide declarations during
+symbol indexing. Ordinary strings/templates and comments keep their existing rules.
 Named test identities, nonzero execution, skipped-case refusal and immutable
 compiled-source equality are unchanged. A source-reader repair still requires
 independent trusted-reader review/admission before product acceptance.

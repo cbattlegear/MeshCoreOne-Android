@@ -1180,6 +1180,45 @@ class RepairExecutionTests(unittest.TestCase):
                 ), self.assertRaisesRegex(PortError, "collaborator annotations|property annotation"):
                     validate_compiled_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
 
+    def test_notification_shadow_rejects_unsupported_multi_dollar_source_collision(self):
+        source = (
+            'package org.robolectric.shadows\nval first = $$"""${"""\n'
+            'open class ShadowNotificationManager {}\nval second = """ } """\n'
+        )
+        path = "android/core/model/src/main/kotlin/ShadowNotificationManager.kt"
+        for whole in (False, True):
+            manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs({
+                TEST: self.notification_shadow_source().encode(), path: source.encode(),
+            }, whole=whole)
+            del compiled["core/maps"][path]
+            with self.subTest(whole=whole), patch(
+                "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+            ), self.assertRaisesRegex(PortError, "multi-dollar|shadows the external Robolectric identity"):
+                validate_compiled_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
+    def test_multi_dollar_prefix_guard_preserves_ordinary_literals_and_comments(self):
+        from controller.repair_acceptance import _kotlin_junit_methods
+
+        for prefix in ("$$", "$$$", "$$$$"):
+            for quote in ('"', '"""'):
+                for nested in (False, True):
+                    literal = prefix + quote + "${" + quote
+                    if nested:
+                        literal = '"${' + literal + '}"'
+                    with self.subTest(prefix=prefix, quote=quote, nested=nested), self.assertRaisesRegex(
+                        PortError, "multi-dollar",
+                    ):
+                        _kotlin_junit_methods("package sample\nval text = " + literal, source_symbols=set())
+        source = (
+            'package sample\n// $$"""${"""\n/* $$$"ignored" */\n'
+            'val plain = "\\$\\${notInterpolation}"\n'
+            'val raw = """prefix $single ignored"""\n'
+            'val templated = "${"nested ${1}"}"\nclass Visible {}'
+        )
+        symbols = set()
+        _kotlin_junit_methods(source, source_symbols=symbols)
+        self.assertEqual(symbols, {"sample.Visible"})
+
     def test_notification_shadow_external_inventory_requires_immutable_actual_blobs(self):
         base = TEST.replace("MapTest.kt", "UnrelatedShadow.kt")
         for whole in (False, True):

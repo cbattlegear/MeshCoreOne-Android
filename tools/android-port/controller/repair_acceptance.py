@@ -917,6 +917,8 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
         return index
 
     def literal(index):
+        if not java_source and text[max(0, index - 2):index] == "$$":
+            raise PortError("Unsupported Kotlin multi-dollar string prefix in hosted test source")
         quote = '"""' if text.startswith('"""', index) else text[index]
         index += len(quote)
         while index < len(text):

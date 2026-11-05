@@ -29,15 +29,22 @@ cancellation, hash-override reset, and preservation of the auto-return setting.
 |---|---|
 | Pinned Windows preflight: `python .\\tools\\android-port\\controller\\ci.py preflight --local --state $env:ANDROID_CI_STATE --output $output` with a fresh absolute TEMP output and pinned Python 3.12.4 | PASS (exit 0; readiness only) |
 | `git diff --check` | PASS |
-| Android compile / mounted Compose tests / test discovery | Pending exact-candidate hosted workflow |
+| Android compile / mounted Compose tests / test discovery | Pending successor exact-candidate hosted workflow |
 
 The trusted WP-314 manifest has `verification.configured=false` and an empty
 `commands` list. For an admitted bounded repair of a landed WP, the trusted
 `docs/android/ci/README.md` lane permits the existing WP-003 preflight, scaffold,
 and inspect commands; no manifest mutation, Gradle task, test selector, or new
-runner was added. The exact candidate is being sent through the existing
-`android-ci.yml` manual full-verification workflow on this fresh branch. Test
-discovery and execution counts remain unavailable until that hosted run completes.
+runner was added. Initial exact-candidate run
+`41982469986` compiled the Android candidate and discovered 719
+`feature:tools:testDebugUnitTest` cases, but failed one mounted regression:
+the test expected the hop name alone instead of the rendered localized hop label
+including its hash. The production control provides that full hop label. The
+test now derives each expected accessible label from the real holder's current
+`TracePathHop.displayText`; this small test-only correction is in the successor
+candidate, which must pass the same existing full `android-ci.yml` manual
+workflow before runtime verification is accepted. Original failed-run reports
+also lacked the mandatory App JUnit bundle, so that run is not passing evidence.
 
 No device, firmware, radio reception, or physical accessibility evidence is claimed. This TS-11 UI
 change does not alter radio or firmware behavior. This evidence covers only the TS-11 slice and does

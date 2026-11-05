@@ -243,21 +243,21 @@ class TraceCodeInputComposeTest {
         }
         mountPathList(harness)
 
-        assertTrue(actionButton(pathActionDescription(C.contactsDetailAvatarCropMoveUp, 1, "Alpha"))
+        assertTrue(actionButton(pathActionDescription(C.contactsDetailAvatarCropMoveUp, 1, harness.state.outboundPath[0]))
             .config.contains(SemanticsProperties.Disabled))
-        assertTrue(actionButton(pathActionDescription(C.contactsDetailAvatarCropMoveDown, 3, "Charlie"))
+        assertTrue(actionButton(pathActionDescription(C.contactsDetailAvatarCropMoveDown, 3, harness.state.outboundPath[2]))
             .config.contains(SemanticsProperties.Disabled))
-        assertTrue(actionButton(pathActionDescription(C.contactsDetailAvatarCropMoveDown, 1, "Alpha"))
+        assertTrue(actionButton(pathActionDescription(C.contactsDetailAvatarCropMoveDown, 1, harness.state.outboundPath[0]))
             .boundsInRoot.height >= 48f)
 
-        clickDescription(pathActionDescription(C.contactsDetailAvatarCropMoveDown, 1, "Alpha"))
+        clickDescription(pathActionDescription(C.contactsDetailAvatarCropMoveDown, 1, harness.state.outboundPath[0]))
         assertEquals(listOf("Bravo", "Alpha", "Charlie"), harness.state.outboundPath.map { it.resolvedName })
         assertNull(harness.state.activeSavedPath)
         assertNull(harness.state.result)
 
-        clickDescription(pathActionDescription(C.contactsDetailAvatarCropMoveUp, 3, "Charlie"))
+        clickDescription(pathActionDescription(C.contactsDetailAvatarCropMoveUp, 3, harness.state.outboundPath[2]))
         assertEquals(listOf("Bravo", "Charlie", "Alpha"), harness.state.outboundPath.map { it.resolvedName })
-        clickDescription(pathActionDescription(L.commonDelete, 2, "Charlie"))
+        clickDescription(pathActionDescription(L.commonDelete, 2, harness.state.outboundPath[1]))
         assertEquals(listOf("Bravo", "Alpha"), harness.state.outboundPath.map { it.resolvedName })
     }
 
@@ -1133,8 +1133,8 @@ class TraceCodeInputComposeTest {
         settle()
     }
 
-    private fun pathActionDescription(action: Int, index: Int, name: String) =
-        "${host.get().getString(action)}: ${C.contactsTraceListHopLabel(host.get().resources, index, name)}"
+    private fun pathActionDescription(action: Int, index: Int, hop: TracePathHop) =
+        "${host.get().getString(action)}: ${C.contactsTraceListHopLabel(host.get().resources, index, hop.displayText)}"
 
     private fun settle() {
         repeat(12) {

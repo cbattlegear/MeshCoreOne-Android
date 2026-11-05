@@ -21,6 +21,7 @@ import com.meshcoreone.android.core.connectivity.ble.BleScanCoordinator
 import com.meshcoreone.android.core.connectivity.ble.BleScanGateway
 import com.meshcoreone.android.core.connectivity.ble.DiscoveredDevice
 import com.meshcoreone.android.app.navigation.AppSettingsContent
+import com.meshcoreone.android.app.navigation.NativeNavigationShell
 import com.meshcoreone.android.app.state.PairingFailureKind
 import com.meshcoreone.android.core.ble.BleError
 import com.meshcoreone.android.core.ble.BleTransportException
@@ -103,6 +104,17 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
                         AppSettingsContent(feature, navigation.activeStack.last().destination, h.container.navigation)
                     }
                     SystemPairingSetupHost(h.appState)
+                }
+            }
+        }
+    }
+
+    private fun mountNavigationShell(h: ContainerHarness, feature: AppSettingsFeature) {
+        compose.runOnUiThread {
+            h.container.navigation.selectTab(AppTab.SETTINGS)
+            compose.activity.setContent {
+                MeshCoreTheme(motionScale = 0f) {
+                    NativeNavigationShell(h.container.navigation, settings = feature)
                 }
             }
         }
@@ -764,6 +776,101 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
     @Test @Config(sdk = [37])
     fun manualWifiDeniedLocalNetworkPermissionOffersSettingsAndResumesAfterRecovery() = runTest {
         localNetworkPermissionControl(savedDevice = false, grant = false)
+    }
+
+    private suspend fun TestScope.savedWifiPermissionResultAcrossNativeTabRemoval(grant: Boolean) {
+        val facts = FakePermissionFacts(sdk = 37, granted = ConnectivityPermission.entries.toSet() - ConnectivityPermission.ACCESS_LOCAL_NETWORK)
+        var openedSettings = 0
+        withSettings(permissionFacts = facts, openSettings = { openedSettings++ }) { h, feature ->
+            val device = saved(h)
+            store.saveDevice(device.copy(connectionMethods = (device.connectionMethods + ConnectionMethod.WiFi("tab-radio.local", 6219u)).snapshot()))
+            val before = h.links.links.size
+            val gate = CompletableDeferred<Unit>()
+            h.links.configureRadio = { it.connectGate = gate }
+            mountNavigationShell(h, feature)
+            open(h)
+            compose.onNodeWithText(device.nodeName).performClick()
+            compose.waitForIdle()
+            assertEquals(OnboardingPermissionKind.LOCAL_NETWORK, feature.selectionRequestedPermission.value)
+            compose.onNodeWithTag("tab:CHATS").performClick()
+            compose.onNodeWithTag("tab:CHATS").assertIsSelected()
+            permissionResult(facts, grant)
+            h.settle()
+            assertEquals(before, h.links.links.size)
+            compose.onNodeWithTag("tab:SETTINGS").performClick()
+            compose.onNodeWithTag("tab:SETTINGS").assertIsSelected()
+            compose.waitForIdle()
+            if (!grant) {
+                compose.onNodeWithText(compose.activity.getString(O.permissionsOpenSettings)).assertIsDisplayed().performClick()
+                assertEquals(1, openedSettings)
+                assertEquals(before, h.links.links.size)
+                facts.granted = facts.granted + ConnectivityPermission.ACCESS_LOCAL_NETWORK
+                compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+                compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+            }
+            h.eventually("native saveable host consumes original Wi-Fi permission result") { h.links.links.size == before + 1 }
+            assertNull(feature.selectionRequestedPermission.value)
+            assertNull(feature.selectionAction.value)
+            assertEquals(ConnectionTarget.WiFi("tab-radio.local", 6219u), h.links.links.last().target)
+            assertEquals(ConnectionIntent.WantsConnection(forceFullSync = true), h.manager.connectionIntent)
+            gate.complete(Unit)
+            h.eventually("native host-restored Wi-Fi connection ready") {
+                h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
+            }
+            assertEquals(before + 1, h.links.links.size)
+        }
+    }
+
+    @Test @Config(sdk = [37])
+    fun nativeSaveableSettingsHostReattachesAPendingWifiGrantReceivedWhileAnotherTabIsVisible() = runTest {
+        savedWifiPermissionResultAcrossNativeTabRemoval(grant = true)
+    }
+
+    @Test @Config(sdk = [37])
+    fun nativeSaveableSettingsHostReattachesAPendingWifiDenialAndPreservesSettingsRecovery() = runTest {
+        savedWifiPermissionResultAcrossNativeTabRemoval(grant = false)
+    }
+
+    @Test fun nativeSaveableSettingsHostConsumesCancelledScanPermissionResultWithoutRestartingTheScan() = runTest {
+        val facts = FakePermissionFacts(sdk = 31)
+        val service = BluetoothScanPairingService()
+        var starts = 0
+        val scans = BleScanCoordinator(object : BleScanGateway {
+            override fun startScan(onDevice: (DiscoveredDevice) -> Unit, onFailure: (Throwable) -> Unit) { starts++ }
+            override fun stopScan() = Unit
+        })
+        withSettings(permissionFacts = facts, pairingService = service, scans = scans) { h, feature ->
+            mountNavigationShell(h, feature)
+            open(h)
+            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            compose.waitForIdle()
+            assertEquals(OnboardingPermissionKind.BLUETOOTH, feature.selectionRequestedPermission.value)
+            compose.onNodeWithTag("tab:CHATS").performClick()
+            compose.waitForIdle()
+            assertNull(feature.selectionAction.value)
+            permissionResult(facts, true, bluetoothPermissions)
+            h.settle()
+            assertEquals(0, starts)
+            assertFalse(service.isPresenting.value)
+            compose.onNodeWithTag("tab:SETTINGS").performClick()
+            compose.waitForIdle()
+            h.eventually("native saveable host consumes cancelled scan request result") {
+                feature.selectionRequestedPermission.value == null
+            }
+            assertNull(feature.selectionAction.value)
+            assertFalse(service.isPresenting.value)
+            assertEquals(0, starts)
+            open(h)
+            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            compose.waitForIdle()
+            h.eventually("only the user's new scan action starts a picker") { service.isPresenting.value && starts == 1 }
+            compose.onNodeWithText(compose.activity.getString(L.commonCancel)).performClick()
+            compose.waitForIdle()
+            h.eventually("new explicitly requested scan completes") {
+                !service.isPresenting.value && !h.container.connectionPort.isPairingFlowActive
+            }
+            assertTrue(h.links.links.isEmpty())
+        }
     }
 
     @Test fun settingsEntrySelectsTheSavedBleIdentityWithFullSyncAndForceReconnect() = runTest {

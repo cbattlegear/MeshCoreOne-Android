@@ -53,6 +53,97 @@ class DirectAckExclusionStorageTest {
         } finally { sqlite.endTransaction() }
     }
 
+    private fun createExportedSchema(old: SupportSQLiteDatabase, schema: JSONObject) {
+        val entities = schema.getJSONArray("entities")
+        assertTrue(entities.length() > 0)
+        for (i in 0 until entities.length()) {
+            val entity = entities.getJSONObject(i)
+            val table = entity.getString("tableName")
+            old.execSQL(entity.getString("createSql").replace("\${TABLE_NAME}", table))
+            if (entity.has("indices")) {
+                val indices = entity.getJSONArray("indices")
+                for (j in 0 until indices.length()) {
+                    old.execSQL(indices.getJSONObject(j).getString("createSql")
+                        .replace("\${TABLE_NAME}", table))
+                }
+            }
+        }
+        val setup = schema.getJSONArray("setupQueries")
+        assertTrue(setup.length() > 0)
+        for (i in 0 until setup.length()) old.execSQL(setup.getString(i))
+    }
+
+    @Test fun v1RetainedSentMessageCannotBecomeAnEmptySafeRadioHistoryAfterUpgradeAndReopen() = runTest {
+        preauthorityHistoryMustRemainUnknown(deleted = false)
+    }
+
+    @Test fun v1DeletedMessageAndAbsentRadioCannotBecomeSafeWhenRadioReturnsAfterUpgradeAndReopen() = runTest {
+        preauthorityHistoryMustRemainUnknown(deleted = true)
+    }
+
+    private suspend fun preauthorityHistoryMustRemainUnknown(deleted: Boolean) {
+        val name = "ack-preauthority-${UUID.randomUUID()}.db"
+        val schema = JSONObject(File(requireNotNull(System.getProperty("roomSchemaDirectory")),
+            "com.meshcoreone.android.core.database.MeshCoreDatabase${File.separator}1.json").readText())
+            .getJSONObject("database")
+        val radio = UUID.randomUUID()
+        val oldMessage = UUID.randomUUID()
+        val current = UUID.randomUUID()
+        val wire = UUID.randomUUID()
+        val blockedAfterEachOpen = mutableListOf<Boolean>()
+        try {
+            val helper = FrameworkSQLiteOpenHelperFactory().create(
+                SupportSQLiteOpenHelper.Configuration.builder(context).name(name)
+                    .callback(object : SupportSQLiteOpenHelper.Callback(1) {
+                        override fun onCreate(old: SupportSQLiteDatabase) {
+                            createExportedSchema(old, schema)
+                            old.execSQL(
+                                "INSERT INTO messages (radioId,id,contactID,text,timestamp," +
+                                    "createdAt_seconds,createdAt_nanos,sortDate_seconds,sortDate_nanos," +
+                                    "directionRawValue,statusRawValue,textTypeRawValue,ackCode,pathLength,isRead," +
+                                    "heardRepeats,sendCount,retryAttempt,maxRetryAttempts,linkPreviewFetched," +
+                                    "containsSelfMention,mentionSeen,failureSeen,timestampCorrected," +
+                                    "routeTypeRawValue,regionScopeMatches) VALUES " +
+                                    "(?,?,?,'pre-authority sent DM',1700000000,1700000000,0,1700000000,0," +
+                                    "1,2,0,999,0,0,0,1,0,0,0,0,0,0,0,0,'[]')",
+                                arrayOf<Any?>(radio.toString().uppercase(), oldMessage.toString().uppercase(),
+                                    UUID.randomUUID().toString().uppercase()),
+                            )
+                            if (deleted) old.execSQL("DELETE FROM messages WHERE radioId=?",
+                                arrayOf<Any?>(radio.toString().uppercase()))
+                        }
+
+                        override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) =
+                            error("The pre-authority v1 fixture must be newly created")
+                    }).build(),
+            )
+            try { helper.writableDatabase } finally { helper.close() }
+            repeat(2) { opening ->
+                val db = MeshCoreDatabase.open(context, name)
+                try {
+                    assertEquals(3, db.openHelper.readableDatabase.version)
+                    val exclusions = db.directAckExclusions()
+                    assertEquals(0, exclusions.legacyCount(radio).toInt())
+                    if (opening == 0) {
+                        assertEquals(0, exclusions.count(radio).toInt())
+                        trackedWire(db, DirectAckWireEntity(radio, current, wire, 123, 999))
+                        exclusions.emission(DirectAckEmissionEntity(
+                            radio, current, wire, UUID.randomUUID(), UUID.randomUUID(),
+                            123, "ACCEPTED", 999, UUID.randomUUID(),
+                        ))
+                    }
+                    assertEquals(1, exclusions.count(radio).toInt())
+                    assertTrue(exclusions.acceptedCurrentWire(radio, current, 999))
+                    blockedAfterEachOpen += exclusions.unresolvedCompetitor(radio, current) ||
+                        exclusions.saturated(radio)
+                } finally { db.close() }
+            }
+            assertEquals(listOf(true, true), blockedAfterEachOpen,
+                "A delayed code-999 ACK from an unjournaled v1 send must not gain a safe exclusion result " +
+                    "after migration or reopen, including a deleted message/absent then re-added radio")
+        } finally { context.deleteDatabase(name) }
+    }
+
     @Test fun v2MigrationRetainsLegacyUnknownAndKnownCodesAcrossReopen() = runTest {
         val name = "ack-exclusion-migration-${UUID.randomUUID()}.db"
         val file = context.getDatabasePath(name)
@@ -73,19 +164,7 @@ class DirectAckExclusionStorageTest {
                 SupportSQLiteOpenHelper.Configuration.builder(context).name(name)
                     .callback(object : SupportSQLiteOpenHelper.Callback(2) {
                         override fun onCreate(old: SupportSQLiteDatabase) {
-                            val entities = schema.getJSONArray("entities")
-                            for (i in 0 until entities.length()) {
-                                val entity = entities.getJSONObject(i)
-                                val table = entity.getString("tableName")
-                                old.execSQL(entity.getString("createSql").replace("\${TABLE_NAME}", table))
-                                val indices = entity.getJSONArray("indices")
-                                for (j in 0 until indices.length()) {
-                                    old.execSQL(indices.getJSONObject(j).getString("createSql")
-                                        .replace("\${TABLE_NAME}", table))
-                                }
-                            }
-                            val setup = schema.getJSONArray("setupQueries")
-                            for (i in 0 until setup.length()) old.execSQL(setup.getString(i))
+                            createExportedSchema(old, schema)
                             for (wire in listOf(unknown, known)) {
                                 old.execSQL(
                                     "INSERT INTO direct_ack_wires VALUES (?,?,?,?,?)",

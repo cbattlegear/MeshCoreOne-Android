@@ -859,6 +859,47 @@ separately before implementation, not included as passing guarded-failure
 acceptance. This finding also bounds every earlier COMPLETE/NoWildcard statement
 to retained rows; those historical labels do not establish physical prehistory.
 
+## Separate pre-authority migration regression and fixture repair
+
+This diagnostic successor is layered after guarded-failure source
+`75127240ba71853726933348a849e8ea03b1cce5`. It changes only the database
+exclusion test and this evidence, before any bootstrap production/migration edit.
+Two actual-file controls create v1 from its genuine exported schema, represent a
+sent outgoing DM with actual code 999, optionally delete the message so no radio
+rows survive, migrate through the supported v1-to-v2-to-v3 chain, register a new
+tracked accepted physical code 999, close and reopen the same file, and require
+persisted exclusion uncertainty after both opens. They deliberately assert the
+required safe outcome, not the current unsafe empty-history outcome. They are
+EXPECTED TO FAIL against the current producer, but have NOT been executed.
+This models the retained/deleted pre-authority-send counterexample; it is not
+hardware evidence of a physical send or ACK.
+
+The older exact candidate `74dfb3d08b89a1ae6a8cf04203b00bf276009bba` hosted
+run `42084764103` attempt 1 failed in build job `127446949709` at
+`:core:database:testDebugUnitTest`: 56 discovered database tests, one failure,
+`DirectAckExclusionStorageTest.v2MigrationRetainsLegacyUnknownAndKnownCodesAcrossReopen`,
+reported `org.json.JSONException`. Compile succeeded; runtime/migration acceptance
+did not. The controller, scope and Swift oracle jobs passed. The execution owner
+reported 3329 available discovered tests / 3328 passing / one failing / zero errors
+or skips, with incomplete mandatory reports. No result is transferred to a later
+source, and no second CI-result bundle is generated or retained.
+
+Source inspection found a concrete fixture JSON fault consistent with that error:
+genuine v1/v2/v3 exports omit `indices` on `link_preview_data`, and v2 additionally
+omits it on the authority entities. Unconditional getJSONArray("indices") throws.
+The shared exported-schema fixture loader now tests presence, then strictly reads
+any present array. Required entities/setup queries remain strict and nonempty;
+malformed present fields still throw. Existing migration assertions are preserved.
+This is a source diagnosis/repair, not independent reproduction of the hosted error.
+The log remains authoritative:
+https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42084764103/job/127446949709
+
+No schema version, migration, exported JSON, production source, contract, service
+or observer changes occur in this diagnostic freeze. The database test file now
+has six test annotations: four existing controls and two expected-failing
+prehistory controls. All successor controls remain UNEXECUTED under the retained
+local execution hold. The original source/run and genuine v3 export stay immutable.
+
 ### Separate accepted-code mismatch repair
 
 This successor is based on the fixture-only `94af032ee0a7bbe21fee822c86f63edac8745187`

@@ -898,6 +898,34 @@ class OnboardingFlagsTest {
         } finally { scope.cancel() }
     }
 
+    @Test fun `shutdown drain completes when a cancelled writer abandons queued writes`() = runTest {
+        val firstWriteStarted = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var writes = 0
+        val scope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher(testScheduler))
+        try {
+            val flags = WriteBehindOnboardingFlags(emptyMap(), scope, { _, _ ->
+                if (++writes == 1) {
+                    firstWriteStarted.complete(Unit)
+                    release.await()
+                }
+            })
+            flags.setBoolean(OnboardingState.KEY_HAS_COMPLETED, true)
+            firstWriteStarted.await()
+            flags.setBoolean(OnboardingState.KEY_HAS_COMPLETED, false)
+
+            val shutdown = async(start = CoroutineStart.UNDISPATCHED) { flags.shutdown() }
+            scope.cancel()
+            kotlinx.coroutines.withTimeout(5_000) { shutdown.await() }
+
+            assertEquals(1, writes)
+            assertFalse(flags.hasCompleted.value)
+        } finally {
+            release.complete(Unit)
+            scope.cancel()
+        }
+    }
+
     @Test fun `production flag adapter atomically persists completion with the show-once donation`() =
         kotlinx.coroutines.runBlocking {
             val directory = temporary.newFolder()

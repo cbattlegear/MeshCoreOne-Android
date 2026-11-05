@@ -186,10 +186,17 @@ class WriteBehindOnboardingFlags(
                     writes.toList().also { writes.clear(); pendingCompletions.clear() }
                 }
                 wakeups.close(failure)
-                abandoned.forEach {
-                    it.onFinished?.invoke(Result.failure(failure))
-                    it.onReconciled?.invoke(Result.failure(failure))
-                    it.persisted?.resumeWithException(failure)
+                try {
+                    abandoned.forEach {
+                        it.onFinished?.invoke(Result.failure(failure))
+                        it.onReconciled?.invoke(Result.failure(failure))
+                        it.persisted?.resumeWithException(failure)
+                    }
+                } finally {
+                    val finished = synchronized(lock) {
+                        drained.also { drained = CompletableDeferred(Unit) }
+                    }
+                    finished.complete(Unit)
                 }
             }
         }

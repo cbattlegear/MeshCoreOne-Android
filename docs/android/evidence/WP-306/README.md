@@ -267,6 +267,11 @@ Intended controls, not execution results:
 - `unsafeSchemesNeverReachAnyExternalHandlerAndWebStillUsesItsOwnAction`
   exercises the actual router/dispatcher/native adapter with negative schemes
   and a positive HTTPS control.
+- `mountedMultipleMailLinksHaveDistinctRecipientActions` requires two distinct
+  resource-backed recipient labels and activates both through the mounted App
+  conversation. Mail actions reuse the existing localized `Open Link: %1$s`
+  label rather than exposing indistinguishable `Open Link` actions. Quoted-link,
+  internal-apostrophe and balanced-subject controls preserve the intended URI.
 
 The App test is configured for Robolectric API31/37, not real Android hardware.
 No new local execution is claimed; the retained local execution-owner hold is

@@ -43,11 +43,15 @@ class ChatMailtoConsumerTest : RoomProcessTest() {
 
     @After fun destroyHost() { host.pause().stop().destroy() }
 
-    @Test fun mountedChatMailtoTapStartsOnlyTheNativeSendToAction() = mountedMailto(false, "MAILTO:test@example.com?subject=Hello%20Mesh")
+    @Test fun mountedChatMailtoTapStartsOnlyTheNativeSendToAction() =
+        mountedMailto(false, listOf("MAILTO:test@example.com?subject=Hello%20Mesh"))
 
     @Test fun mountedChatMailtoWithoutHandlerShowsFailureInsteadOfCrashing() = mountedMailto(true)
 
-    private fun mountedMailto(unavailable: Boolean, tappedUrl: String = url) = runTest {
+    @Test fun mountedMultipleMailLinksHaveDistinctRecipientActions() =
+        mountedMailto(false, listOf("mailto:alice@example.com", "mailto:bob@example.com"))
+
+    private fun mountedMailto(unavailable: Boolean, tappedUrls: List<String> = listOf(url)) = runTest {
         val h = ContainerHarness(this, store)
         h.links.configureRadio = { radio -> radio.knownContacts += contactFrame(key(20), "Mail Peer") }
         val attempts = mutableListOf<Intent>()
@@ -66,8 +70,9 @@ class ChatMailtoConsumerTest : RoomProcessTest() {
             }
             val radio = assertNotNull(h.appState.currentRadioId)
             val peer = store.fetchContacts(radio).single { it.name == "Mail Peer" }
+            val body = tappedUrls.joinToString(" ")
             store.saveMessage(MessageDTO(
-                radioId = radio, contactID = peer.id, text = tappedUrl, timestamp = 100u,
+                radioId = radio, contactID = peer.id, text = body, timestamp = 100u,
                 createdAt = EPOCH, direction = MessageDirection.INCOMING,
             ))
             compose.runOnUiThread {
@@ -82,17 +87,26 @@ class ChatMailtoConsumerTest : RoomProcessTest() {
             }
             compose.waitUntil(10_000) {
                 h.settle()
-                compose.onAllNodesWithText(tappedUrl, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+                compose.onAllNodesWithText(body, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
             }
-            val action = compose.onNodeWithText(tappedUrl, useUnmergedTree = true).fetchSemanticsNode()
-                .config[SemanticsActions.CustomActions].single()
-            compose.runOnIdle { assertTrue(action.action()) }
-            compose.waitForIdle()
-            val intent = attempts.single()
-            assertEquals(Intent.ACTION_SENDTO, intent.action)
-            assertEquals(url, intent.dataString)
-            assertNull(intent.component)
-            assertNull(intent.selector)
+            val actions = compose.onNodeWithText(body, useUnmergedTree = true).fetchSemanticsNode()
+                .config[SemanticsActions.CustomActions]
+            assertEquals(tappedUrls.size, actions.size)
+            assertEquals(tappedUrls.size, actions.map { it.label }.distinct().size)
+            for ((index, action) in actions.withIndex()) {
+                val recipient = tappedUrls[index].substringAfter(':').substringBefore('?')
+                assertEquals(com.meshcoreone.android.core.l10n.generated.AppChatsStrings.chatsMessageActionOpenWebLink(
+                    host.get().resources, recipient,
+                ), action.label)
+                compose.runOnIdle { assertTrue(action.action()) }
+                compose.waitForIdle()
+                val intent = attempts[index]
+                assertEquals(Intent.ACTION_SENDTO, intent.action)
+                assertEquals("mailto:" + tappedUrls[index].substringAfter(':'), intent.dataString)
+                assertNull(intent.component)
+                assertNull(intent.selector)
+            }
+            assertEquals(tappedUrls.size, attempts.size)
             if (unavailable) {
                 compose.onNode(isDialog()).assertExists()
                 compose.onNodeWithText(host.get().getString(com.meshcoreone.android.R.string.platform_chat_link_unavailable))

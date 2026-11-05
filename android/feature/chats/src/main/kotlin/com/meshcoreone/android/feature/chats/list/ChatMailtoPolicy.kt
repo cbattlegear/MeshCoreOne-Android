@@ -5,17 +5,19 @@ import java.net.URI
 import java.net.URISyntaxException
 
 object ChatMailtoPolicy {
-    fun isOpenable(url: String): Boolean {
+    fun isOpenable(url: String): Boolean = recipient(url) != null
+
+    fun recipient(url: String): String? {
         val uri = try {
             URI(url)
         } catch (_: URISyntaxException) {
-            return false
+            return null
         }
-        if (!uri.scheme.equals("mailto", ignoreCase = true) || !uri.isOpaque || uri.rawFragment != null) return false
+        if (!uri.scheme.equals("mailto", ignoreCase = true) || !uri.isOpaque || uri.rawFragment != null) return null
         val rawRecipient = uri.rawSchemeSpecificPart.substringBefore('?')
-        if (rawRecipient.isEmpty()) return false
+        if (rawRecipient.isEmpty()) return null
         val recipient = URI("mailto:$rawRecipient").schemeSpecificPart
-        return recipient.isNotEmpty() && recipient.none { it.isWhitespace() || it.isISOControl() } &&
-            !recipient.startsWith("//")
+        return recipient.takeIf { it.isNotEmpty() && it.none { char -> char.isWhitespace() || char.isISOControl() } &&
+            !it.startsWith("//") }
     }
 }

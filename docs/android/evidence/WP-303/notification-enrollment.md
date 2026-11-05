@@ -100,7 +100,7 @@ Frozen #495/#518 and other producers' source remain untouched.
 
 ## Verification
 
-`NotificationEnrollmentCoordinatorTest` declares 26 tests using deterministic
+`NotificationEnrollmentCoordinatorTest` declares 27 tests using deterministic
 port doubles, not real SQLite, Keystore or Android process-death evidence. Cases
 include acknowledgment ordering, unknown/lost state, explicit failures, partial
 startup, receipt substitutions, superseding witnesses, lost returns and late
@@ -115,6 +115,15 @@ successor requires the predeclared nonce and adds lost-prepare-return/restart/
 replacement controls; the earlier passing run does not verify the successor or
 disprove that gap. The completed predecessor run was preserved before publishing
 the repair; fresh exact-head execution is required.
+
+The nonce-bound successor `bde67620d8156752769d785f214c92935bd46c8a`
+passed hosted [41970376929](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41970376929).
+Independent production-source review found no additional substantive issue in
+that nonce-adoption path, but both coordinator and automated review identified
+the test journal's already-BOUND branch overwriting another witness. The final
+test-only correction enforces exact PREPARING or exact expected BOUND CAS and
+adds a foreign-BOUND-witness restart regression asserting no mutation. The
+completed nonce-bound run likewise does not verify this final successor.
 
 - `python tools/android-port/controller/validate.py`: passed.
 - `python tools/android-port/portmap.py`: passed.

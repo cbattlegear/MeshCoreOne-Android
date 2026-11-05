@@ -367,6 +367,18 @@ class NotificationEnrollmentCoordinatorTest {
         assertTrue(f.events.isEmpty())
     }
 
+    @Test
+    fun acceptedRestartRejectsJournalAlreadyBoundToDifferentWitnessWithoutOverwritingIt() = runTest {
+        val f = Fixture()
+        f.witness.current = f.record(WitnessPhase.ACCEPTED)
+        val foreign = f.record(WitnessPhase.BOUND).receipt!!.copy(witnessId = UUID.randomUUID())
+        f.journal.receipt = foreign
+        assertEquals(Result.Blocked(Failure.IDENTITY_MISMATCH), f.coordinator().resume())
+        assertEquals(foreign, f.journal.receipt)
+        assertEquals(WitnessPhase.ACCEPTED, f.witness.current?.phase)
+        assertFalse("complete" in f.events)
+    }
+
     private class Fixture {
         val operation = Operation(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID())
         val request = EnrollmentRequest(operation, UUID.randomUUID(), null)
@@ -465,10 +477,11 @@ class NotificationEnrollmentCoordinatorTest {
             override suspend fun bind(preparing: CreationReceipt, witnessId: UUID): JournalResult {
                 events += "bind"
                 val existing = receipt ?: return JournalResult.NotRetained(Failure.NOT_RETAINED)
-                if (existing.phase == Phase.PREPARING && existing != preparing) {
+                val expectedBound = preparing.copy(revision = 2, phase = Phase.BOUND, witnessId = witnessId)
+                if (existing != preparing && existing != expectedBound) {
                     return JournalResult.NotRetained(Failure.IDENTITY_MISMATCH)
                 }
-                receipt = existing.copy(revision = 2, phase = Phase.BOUND, witnessId = witnessId)
+                receipt = expectedBound
                     .let { alterBound?.invoke(it) ?: it }
                 afterBind?.invoke()
                 return observed(Step.BIND_JOURNAL)

@@ -1,4 +1,5 @@
 // AndroidOnly: WP-407 Register implemented settings screens with real process/session/SAF adapters.
+// PortedFrom: MC1/Views/Settings/DeviceSelectionSheet.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.app.navigation
 
 import android.app.Activity
@@ -22,10 +23,11 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.R
 import com.meshcoreone.android.app.container.AppSettingsFeature
+import com.meshcoreone.android.app.container.onboarding.AppOnboardingWiFiPort
+import com.meshcoreone.android.app.container.onboarding.AppStateOnboardingHost
+import com.meshcoreone.android.app.container.onboarding.OnboardingConnectionHost
 import com.meshcoreone.android.app.platform.*
 import com.meshcoreone.android.core.contracts.AppTab
-import com.meshcoreone.android.core.contracts.FeatureId
-import com.meshcoreone.android.core.contracts.FeatureRoute
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.services.diagnostics.DebugLogBuffer
 import com.meshcoreone.android.core.services.contacts.ContactService
@@ -42,6 +44,8 @@ import com.meshcoreone.android.feature.settings.app.backup.ui.*
 import com.meshcoreone.android.feature.settings.app.diagnostics.*
 import com.meshcoreone.android.feature.settings.app.diagnostics.ui.*
 import com.meshcoreone.android.feature.settings.app.nodeconfig.*
+import com.meshcoreone.android.feature.onboarding.WiFiConnectionCoordinator
+import com.meshcoreone.android.feature.onboarding.ui.WiFiConnectionSheetContent
 import com.meshcoreone.android.feature.settings.device.*
 import com.meshcoreone.android.feature.settings.device.ui.*
 import com.meshcoreone.android.feature.settings.device.SettingsDetail as Page
@@ -70,6 +74,8 @@ internal fun AppSettingsContent(
     var licenses by remember { mutableStateOf(false) }
     var about by remember { mutableStateOf(false) }
     var rendering by remember { mutableStateOf(false) }
+    var deviceSelection by remember { mutableStateOf(false) }
+    var wifiConnection by remember { mutableStateOf(false) }
     val close = { external = null; publicKey = null; licenses = false; about = false; rendering = false; configPage = null }
     BackHandler(external != null || publicKey != null || licenses || about || rendering || configPage != null, close)
     val navigator = remember(coordinator) {
@@ -79,7 +85,7 @@ internal fun AppSettingsContent(
                     Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}")),
                 )
                 SettingsExternalDestination.MapsSettings, SettingsExternalDestination.OfflineMapSettings -> coordinator.selectTab(AppTab.MAP)
-                SettingsExternalDestination.DeviceSelection -> coordinator.navigate(FeatureRoute(FeatureId.ONBOARDING))
+                SettingsExternalDestination.DeviceSelection -> deviceSelection = true
                 else -> external = target
             }
         }
@@ -138,7 +144,7 @@ internal fun AppSettingsContent(
         page == null -> Column(Modifier.fillMaxSize()) {
             Box(Modifier.weight(1f)) {
                 SettingsListScreen(device, transport, deps.regions, deps.radioCatalog, { coordinator.navigateToSetting(SettingsDetail.valueOf(it.name)) },
-                    { coordinator.navigate(FeatureRoute(FeatureId.ONBOARDING)) }, UiText.Verbatim(appVersion(context)))
+                    { deviceSelection = true }, UiText.Verbatim(appVersion(context)))
             }
             TextButton(onClick = { about = true }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(S.aboutHeader)) }
         }
@@ -220,6 +226,63 @@ internal fun AppSettingsContent(
         page == Page.FEEDBACK -> FeedbackScreen({ DiagnosticsSection(logDependencies) })
         page == Page.MAPS -> AppMapSettings(feature, done)
         else -> error("Unregistered Settings page: $page")
+    }
+    if (deviceSelection) AppDeviceSelection(feature, onDismiss = { deviceSelection = false },
+        onWifi = { wifiConnection = true })
+    if (wifiConnection) AppSelectionWifi(feature) { wifiConnection = false }
+}
+
+@Composable
+private fun AppDeviceSelection(feature: AppSettingsFeature, onDismiss: () -> Unit, onWifi: () -> Unit) {
+    var list by remember(feature) { mutableStateOf<DeviceSelectionListBuilder.Result?>(null) }
+    var elsewhere by remember(feature) { mutableStateOf<Set<java.util.UUID>>(emptySet()) }
+    LaunchedEffect(feature) {
+        try {
+            val loaded = feature.deviceSelection()
+            elsewhere = feature.devicesConnectedElsewhere(loaded)
+            list = loaded
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (problem: Exception) {
+            feature.report("Saved devices could not load", problem)
+            onDismiss()
+        }
+    }
+    DisposableEffect(feature) {
+        onDispose { feature.container.appState.handleDeviceSelectionSheetDismissed() }
+    }
+    val loaded = list
+    if (loaded == null) {
+        AlertDialog(onDismissRequest = onDismiss, text = { CircularProgressIndicator() },
+            confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(L.commonCancel)) } })
+    } else DeviceSelectionSheet(loaded, elsewhere,
+        onSelect = { device -> onDismiss(); feature.connectSavedDevice(device) },
+        onSetUp = { accessory -> feature.queueDeviceSetup(accessory); onDismiss() },
+        onScan = { feature.queueDeviceScan(); onDismiss() },
+        onConnectViaWifi = { onDismiss(); onWifi() },
+        onDismiss = onDismiss,
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AppSelectionWifi(feature: AppSettingsFeature, onDismiss: () -> Unit) {
+    val holder = remember(feature) {
+        WiFiConnectionCoordinator(
+            feature.container.uiScope,
+            AppOnboardingWiFiPort(
+                object : OnboardingConnectionHost by AppStateOnboardingHost(feature.container) {
+                    override suspend fun connectWiFi(host: String, port: UShort) =
+                        feature.container.appState.connectViaWiFi(host, port, forceFullSync = true)
+                },
+            ), onDismiss,
+        )
+    }
+    val state by holder.state.collectAsState()
+    ModalBottomSheet(onDismissRequest = { if (!state.isConnecting) onDismiss() }) {
+        WiFiConnectionSheetContent(
+            state, holder::setAddress, holder::setPort, holder::connect, onDismiss,
+        )
     }
 }
 

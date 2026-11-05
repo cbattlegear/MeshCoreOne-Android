@@ -182,6 +182,8 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
             (dependencies.linkFactory as? AndroidRuntimeLinkFactory)?.transportFor(it)
         }
     internal val processStore get() = dependencies.store
+    internal suspend fun isDeviceConnectedToOtherApp(deviceId: java.util.UUID): Boolean =
+        dependencies.connectivity.isDeviceConnectedToOtherApp(deviceId, connectionManager.connectionState)
     internal val uiScope = CoroutineScope(dependencies.mainScope.coroutineContext + SupervisorJob(processJob))
     val foreground: ProcessForegroundState = dependencies.foreground
     val bootstrapDebugLog: DebugLogBuffer? = dependencies.newBootstrapDebugLog(processScope)

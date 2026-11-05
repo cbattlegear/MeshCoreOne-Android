@@ -1,4 +1,5 @@
 // AndroidOnly: WP-407 Settings adapters over the process preferences/store and current connection-owned services.
+// PortedFrom: MC1/Views/Settings/DeviceSelectionSheet.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.datastore.*
@@ -73,6 +74,51 @@ class AppSettingsFeature private constructor(
     }
 
     private fun write(action: suspend () -> Unit) { writes.trySend(action).getOrThrow() }
+
+    internal suspend fun deviceSelection(): DeviceSelectionListBuilder.Result {
+        val hasRegistry = container.connectionPort.hasSystemPairingRegistry
+        val pending = if (hasRegistry) container.pairing.systemAccessoriesMissingDeviceRecord() else emptyList()
+        return DeviceSelectionListBuilder.make(
+            saved = container.pairing.fetchSavedDevices(),
+            accessories = container.pairing.pairedAccessoryInfos.map { it.id to it.name },
+            needsSetup = pending.map { SystemPairedAccessory(it.id, it.name) },
+            hasSystemPairingRegistry = hasRegistry,
+        )
+    }
+
+    internal suspend fun devicesConnectedElsewhere(list: DeviceSelectionListBuilder.Result): Set<UUID> =
+        list.connectable.filter { device ->
+            (device.connectionMethods.isEmpty() || device.connectionMethods.any { !it.isWiFi }) &&
+                container.isDeviceConnectedToOtherApp(device.id)
+        }.map { it.id }.toSet()
+
+    internal fun connectSavedDevice(device: DeviceDTO): Job = scope.launch {
+        try {
+            val wifi = device.connectionMethods.filterIsInstance<ConnectionMethod.WiFi>().firstOrNull()
+            if (wifi != null) app.connectViaWiFi(wifi.host, wifi.port, forceFullSync = true)
+            else container.connectionPort.connect(device.id, forceFullSync = true, forceReconnect = true)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (problem: Exception) {
+            app.connectionUI.presentSavedDeviceConnectFailure(device.id, problem)
+        }
+    }
+
+    internal fun queueDeviceScan() {
+        app.connectionUI.queuedSystemPairingSetup = null
+        app.connectionUI.queuedDeviceScanAfterSelectionDismiss = true
+        container.connectionPort.isPairingFlowActive = true
+    }
+
+    internal fun queueDeviceSetup(accessory: SystemPairedAccessory) {
+        app.connectionUI.queuedDeviceScanAfterSelectionDismiss = false
+        app.connectionUI.queuedSystemPairingSetup =
+            com.meshcoreone.android.core.connectivity.pairing.SystemPairingSetupPrompt(
+                listOf(com.meshcoreone.android.core.connectivity.pairing.SystemPairedAccessory(accessory.id, accessory.name)),
+            )
+        container.connectionPort.isPairingFlowActive = true
+    }
+
     private fun live(): RadioSessionContainer = container.sessions.current?.takeIf {
         app.canRunSettingsStartupReads && it.token.radioId == app.currentRadioId
     } ?: throw SettingsNotConnectedException()

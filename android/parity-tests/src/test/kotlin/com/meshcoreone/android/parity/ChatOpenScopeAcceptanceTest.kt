@@ -23,7 +23,7 @@ class ChatOpenScopeAcceptanceTest : RoomProcessTest() {
             val channel = channel(radio).withFloodScope(ChannelFloodScope.AllRegions)
             store.saveChannel(channel)
             val viewModel = viewModel(h, channel)
-            firmware.respond = { if (it[0] == 0x36.toUByte()) emptyList() else null }
+            firmware.respondToFloodScopeCommands { emptyList() }
             val opened = backgroundScope.async { viewModel.open() }
             h.eventually("real unscoped command") { scopes(firmware).isNotEmpty() }
             assertEquals(listOf(UNSCOPED), scopes(firmware))
@@ -102,11 +102,11 @@ class ChatOpenScopeAcceptanceTest : RoomProcessTest() {
                 override val diagnostics = TimelineDiagnostics { operation, failure -> failures += operation to failure }
             }
             val viewModel = ChatViewModel(TimelineConversation.Channel(channel), dependencies, backgroundScope)
-            firmware.respond = { if (it[0] == 0x36.toUByte()) listOf(Bytes.of(1, 2)) else null }
+            firmware.respondToFloodScopeCommands { listOf(Bytes.of(1, 2)) }
             viewModel.open()
             assertEquals("set channel flood scope", failures.single().first)
             assertEquals(2.toUByte(), assertIs<MeshCoreException.DeviceError>(failures.single().second).code)
-            firmware.respond = { null }
+            firmware.respondToFloodScopeCommands()
             viewModel.open()
             viewModel.open()
             assertEquals(listOf(UNSCOPED, UNSCOPED), scopes(firmware))
@@ -118,7 +118,7 @@ class ChatOpenScopeAcceptanceTest : RoomProcessTest() {
             val channel = channel(radio).withFloodScope(ChannelFloodScope.AllRegions)
             store.saveChannel(channel)
             val viewModel = viewModel(h, channel)
-            firmware.respond = { if (it[0] == 0x36.toUByte()) emptyList() else null }
+            firmware.respondToFloodScopeCommands { emptyList() }
             val opened = backgroundScope.async { viewModel.open() }
             h.eventually("held scope") { scopes(firmware).size == 1 }
             opened.cancelAndJoin()
@@ -129,6 +129,7 @@ class ChatOpenScopeAcceptanceTest : RoomProcessTest() {
             h.manager.connect(h.target())
             h.eventually("replacement ready") { h.manager.connectionState == DeviceConnectionState.READY }
             val replacement = h.links.radios.last()
+            replacement.respondToFloodScopeCommands { emptyList() }
             assertNotEquals(previous, assertNotNull(h.sessions.current).token)
             h.manager.replaceConnectedDevice(assertNotNull(h.manager.connectedDevice).copy(firmwareVersion = 12u))
             store.saveChannel(channel)
@@ -159,9 +160,22 @@ class ChatOpenScopeAcceptanceTest : RoomProcessTest() {
             h.manager.connect(h.target())
             h.eventually("ready") { h.manager.connectionState == DeviceConnectionState.READY }
             assertEquals(12.toUByte(), assertNotNull(h.manager.connectedDevice).firmwareVersion)
-            body(h, h.links.radios.single(), assertNotNull(h.sessions.current).token.radioId)
+            val firmware = h.links.radios.single()
+            firmware.respondToFloodScopeCommands()
+            body(h, firmware, assertNotNull(h.sessions.current).token.radioId)
         } finally {
             withContext(NonCancellable) { h.container.close() }
+        }
+    }
+
+    private fun FirmwareRadio.respondToFloodScopeCommands(setScopeResponse: (Bytes) -> List<Bytes>? = { null }) {
+        respond = { command ->
+            when (command[0].toInt() and 0xff) {
+                // Response code 0x1c with no payload means no default flood scope is configured.
+                0x40 -> listOf(Bytes.of(0x1c))
+                0x36 -> setScopeResponse(command)
+                else -> null
+            }
         }
     }
 

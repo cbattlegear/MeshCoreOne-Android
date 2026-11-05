@@ -172,7 +172,13 @@ class ContactsStateHolder(
     }
 
     /** Sync contacts from the device; a re-trigger while one is in flight is a no-op. */
-    suspend fun syncContacts(radioId: RadioId, connection: Any? = session.connectionIdentity()) {
+    suspend fun syncContacts(radioId: RadioId) {
+        val connection = session.connectionIdentity()
+        if (session.contactService() == null) return
+        syncContacts(radioId, connection)
+    }
+
+    suspend fun syncContacts(radioId: RadioId, connection: Any?) {
         session.ensureContactConnection(connection, radioId)
         val ready = session.connectionState() == DeviceConnectionState.READY
         session.ensureContactConnection(connection, radioId)

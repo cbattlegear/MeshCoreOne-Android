@@ -149,6 +149,11 @@ Deterministic holder and mounted controls swap during the final check's last pro
 require A attribution, no B error display, retirement without active sync and fresh B success.
 A positive mounted control still requires the live not-ready owner's normal connect error.
 
+The original one-argument holder entry preserves the pinned nil-contact-service early return.
+The mounted control uses the explicit-owner entry, which owns readiness/error handling; the
+compatibility entry captures identity before its nil-service probe and forwards that same identity,
+so a probe-time replacement still cannot relabel a retired caller as the new graph.
+
 Both `ContactsImmediateAdmissionApi31ComposeTest` and
 `ContactsImmediateAdmissionApi37ComposeTest` inherit six mounted tests:
 

@@ -75,14 +75,14 @@ Source-only preparation passed:
 - `python tools/android-port/portmap.py`: exit 0.
 - `git diff --check`: exit 0.
 
-The new source contains 19 repository and four database test methods, including
+The integrated source contains 19 repository and four database test methods, including
 actual Room migration from the checked-in v1 export, same-value independent
 FAILED controls before/after own commit, cancellation before/after commit,
 explicit rollback failure, nested mutation revision fencing, typed retry codes,
 terminal resend, queue replacement, raw/DAO writes, separate contexts/handles,
 file reopen, restore and revocation. These are authored assertions, not discovered
 or passing tests. No Room/KSP/Gradle execution or generated v2 schema is claimed
-at this source-only stage.
+at the initial source-only stage.
 
 Own advisory reservation enrollment was attempted using the original assignment
 prose, session `f8058663-e138-4456-9d4d-6ad11522824c` and base `41552c85`.
@@ -107,10 +107,38 @@ is a successor assertion, not a result of the earlier exact-head run.
 
 Local Gradle remains blocked by retained execution owner
 `local-check:f516a7e271f444dd9cb2efcc8b995a16` and missing canonical cleanup proof.
-There is no bypass or ownership release. A separate admitted tooling producer
-is preparing first-export-only hosted schema recovery; only genuine KSP output
-may become the v2 schema. Hosted exact-head results/logs, not a second result
+There is no bypass or ownership release. Separate admitted tooling owners
+provided first-export-only hosted schema recovery; only genuine KSP output
+became the v2 schema. Hosted exact-head results/logs, not a second result
 bundle, will be authoritative.
+
+The first hosted diagnostic is
+[run 41958103719](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41958103719),
+attempt 1, exact candidate `fade600f73220faf2f67880b0fbc1f1751f379ec`.
+It failed `:core:contracts:compileTestKotlin` on a type-inference error at
+`DirectAckAuthorityTest.kt:133`. The collector also rejected two identical bare
+KSP headers in Gradle's parallel console stream; it produced no artifact.
+This run provides no Room migration or data-suite acceptance and no recovered
+schema. The respective contract and tooling owners are producing bounded fixes.
+
+The corrected diagnostic is
+[run 41959471917](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41959471917),
+attempt 1, exact candidate `9b9953aee68b7aef9fb1de4fb7d5cf35363ebdfa`.
+It retained genuine generated `2.json` plus original provenance in artifact
+`13384687094`. Schema SHA256 is
+`d9fb07803c1710afa82ff92cfcd0c82fc3871f511029b6862d939c1bfc69ae62`,
+Room identity `e04a68a685879f5293d881f381622531`, version 2 with 24 entities.
+Both temporary diagnostic paths were retired to exact trusted-main bytes
+before the generated schema was copied unchanged into the previously absent
+repository path. The original downloaded provenance remains in session custody;
+it records two task-heading displays, not two executions or independent compiler
+completion.
+
+That corrected run still failed `:core:data:compileDebugKotlin`: a cross-module
+nullable `pendingId` needed a stable local value for smart casting. The successor
+uses that local binding. Its Swift oracle independently failed Python setup
+with `getaddrinfo ENOTFOUND raw.githubusercontent.com`. Neither failure is Room
+test acceptance. Normal successor validation must run without either overlay.
 
 The concrete service/repeater regression and original successful ACK families
 remain the consumer owner's work against this producer. Old Boolean-wrapper

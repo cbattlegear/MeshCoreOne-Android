@@ -998,7 +998,7 @@ class NotificationReplyStagingStore internal constructor(
                             if (db.version >= 6) "INSERT INTO reply_issued_actions VALUES(?,?,?,?,?,?,?,?,?,?,?,?)"
                             else if (db.version >= 5) "INSERT INTO reply_issued_actions VALUES(?,?,?,?,?,?,?,?,?,?)"
                             else "INSERT INTO reply_issued_actions VALUES(?,?,?,?,?,?,?,?,?)",
-                            if (db.version >= 6) values + arrayOf(
+                            if (db.version >= 6) values + arrayOf<Any?>(
                                 maxReplyCodeUnits, publicationAttempt?.attemptId?.toString(),
                                 publicationAttempt?.ownerId?.toString(),
                             ) else if (db.version >= 5) values + maxReplyCodeUnits else values,

@@ -172,3 +172,15 @@ proved e1d7's 288 notification cases only. It cannot verify this schema6 success
 24 added methods, the future closed producer, receiver integration or publication behavior.
 Expected journal inventory is 165 named methods at two configured APIs plus six baseline
 cases (336); these are authored expectations, not observed execution.
+
+The initial exact storage-only composition `decff0830bf3c093e0882e576bf0a850c7e50dae`
+(parents d59773a10 and e88d8590b) ran as
+[41980907900](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41980907900)
+and completed FAILURE. Linux job127090616644 failed
+`:platform:notifications:compileDebugKotlin` at StagingStore line1001: mixed nullable
+integer/string `arrayOf` inferred an intersection type and made array concatenation
+ambiguous. The repair explicitly declares `arrayOf<Any?>`, matching existing SQL bind
+argument types; it changes no storage protocol, tests or expectations. No schema6 product
+tests executed successfully in this failed run and no 336-case acceptance is claimed.
+Classify/controller/Swift codec jobs passed; android-ci failed and the SwiftData job was
+skipped after the Android failure. A new exact successor diagnostic is required.

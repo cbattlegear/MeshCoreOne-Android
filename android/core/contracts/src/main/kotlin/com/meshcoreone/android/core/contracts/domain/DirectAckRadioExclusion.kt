@@ -373,6 +373,14 @@ interface DirectAckRadioExclusionAuthority {
         radioId: RadioId,
     ): DirectAckRadioEvidenceObservation
 
+    /**
+     * Accepted-actual-only settlement, unlike the unchanged generic settleDirectAck contract.
+     * A prediction alone is never permission: buffer a pre-return raw ACK, persist the physical
+     * emission's actual returned code, then reconcile only a matching actual code. Once accepted,
+     * that target emission's prediction is retained history, not eligibility. Earlier accepted
+     * emissions of the same current claim remain eligible across retries. Full radio-history
+     * exclusion and current-grant validation occur in the same transaction as delivery.
+     */
     suspend fun settleDirectAckExcludingRadioHistory(
         attempt: DirectAckAttempt,
         ackCode: UInt,
@@ -504,4 +512,77 @@ interface DirectAckRadioConfirmationEvidenceObserving {
     fun observeDirectAckRadioConfirmationEvidence(
         radioId: RadioId,
     ): Flow<DirectAckRadioConfirmationObservation>
+}
+
+enum class DirectAckRadioNonfailingReason {
+    TARGET_UNRESOLVED_PHYSICAL_EMISSION,
+    TARGET_CONFLICTING_PHYSICAL_EVIDENCE,
+    TARGET_UNTRACKED_LEGACY_ANCESTRY,
+    KNOWN_OTHER_CLAIM_CODE,
+    UNRESOLVED_OTHER_CLAIM_EMISSION,
+    CONFLICTING_OTHER_CLAIM_EVIDENCE,
+    UNTRACKED_OTHER_CLAIM_ANCESTRY,
+    RADIO_HISTORY_SATURATED,
+}
+
+sealed interface DirectAckRadioFailureResult {
+    data class Applied(val receipt: DirectAckReceipt) : DirectAckRadioFailureResult
+    /** Historical exact guarded-failure commit; not current proof or renewed permission. */
+    data class AlreadyApplied(val receipt: DirectAckReceipt) : DirectAckRadioFailureResult
+    /** Own delivery or protected initial DELIVERED baseline; never fabricate a delivery tuple. */
+    data class AlreadyDelivered(val receipt: DirectAckReceipt) : DirectAckRadioFailureResult
+
+    /** Failure was not written; uncertainty is not recipient delivery or an invented ACK. */
+    data class Nonfailing(
+        val reasons: SnapshotSet<DirectAckRadioNonfailingReason>,
+    ) : DirectAckRadioFailureResult {
+        init {
+            require(reasons.isNotEmpty()) { "Nonfailing evidence requires at least one reason" }
+        }
+    }
+
+    data class Rejected(val reason: DirectAckRejection) : DirectAckRadioFailureResult
+}
+
+/**
+ * Optional, additive atomic failure capability. It does not replace DirectAckAuthority's generic
+ * recordDirectFailure method or authorize failure through a public diagnostic/UI snapshot.
+ * A missing capability must be explicitly unavailable, never a generic failure-write fallback.
+ *
+ * A new failure write validates the opaque attempt's current lease/incarnation/revision and
+ * complete persisted radio history in the same serialized transaction as the mutation. Do not
+ * sample, truncate, filter retired generations, invent an ACK code or infer no-write from missing
+ * diagnostic rows. Foreign/missing/stale/ineligible authority uses existing DirectAckRejection
+ * meanings and must never mutate a replacement row.
+ *
+ * Target MAY, conflict (including malformed evidence), or untracked legacy ancestry without a
+ * definite-no-write proof is Nonfailing, not FAILED. Only complete tracked provenance proving no
+ * physical invocation, or every target emission DefinitelyUnsent, permits the known-safe no-write
+ * failure path regardless of unrelated foreign radio history. A later unsent retry cannot clear
+ * an older possible emission; a transport error alone is not definite-no-write proof.
+ *
+ * Otherwise, foreign wildcard ancestry/emissions and sticky radio saturation block failure. For
+ * accepted target emissions, ANY accepted actual code colliding with any other claim's known
+ * predicted/actual code blocks failure; one unambiguous code cannot prove another physical send
+ * failed. Report every applicable typed reason, distinguishing target uncertainty from foreign
+ * uncertainty. Malformed target/foreign evidence is conflicting evidence, never accepted/unsent.
+ * A Nonfailing result writes neither FAILED nor an invented delivery and renews no grant.
+ *
+ * Own delivery wins first as AlreadyDelivered without mutation. Preserve the existing
+ * AlreadyDelivered guard for an initially DELIVERED RESEND baseline too, without fabricating this
+ * attempt's own delivery tuple. Otherwise exact replay of a previously committed guarded failure
+ * is AlreadyApplied/read-only even after later blockers,
+ * revocation or invalidation, with the receipt's actual permission and payload-erasure semantics.
+ * Persist guarded-operation identity atomically with failure to reconcile commit-then-throw;
+ * an older generic recordDirectFailure commit without guarded proof is Rejected(CONFLICT), not a
+ * guarded replay or newly established proof.
+ * New writes preserve existing terminal/resend guards and known-safe failure positives. Historical
+ * replay never regrants authority, replaces a newer failure or rewrites product state.
+ *
+ * Storage failures and cancellation propagate unchanged.
+ */
+interface DirectAckRadioFailureAuthority {
+    suspend fun recordDirectFailureExcludingRadioHistory(
+        attempt: DirectAckAttempt,
+    ): DirectAckRadioFailureResult
 }

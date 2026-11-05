@@ -250,12 +250,12 @@ interface DirectAckAuthority {
     suspend fun recordDirectFailure(attempt: DirectAckAttempt): DirectAckMutationResult
 
     /**
-     * Atomic own SENT/FAILED delivery, with no intermediate public SENT promotion. Once a wire has
-     * acceptedAckCode, only that actual code is eligible for that wire; its retained prediction is
-     * not. The consumer must buffer a matching raw ACK received before send completion, persist the
-     * actual returned code, then reconcile/replay only if the raw code matches that actual code.
-     * Earlier accepted wires of the same still-current claim remain eligible even if a later retry
-     * has a different accepted code. A prepared prediction alone is not settlement permission.
+     * Atomic own SENT/FAILED (or pre-return registered predicted-code) delivery, with no intermediate
+     * public SENT promotion. Each registered wire matches its accepted code when present, otherwise
+     * its prediction. Thus an unaccepted wire's prediction remains eligible before return, but its
+     * own prediction is superseded after acceptance; other registered wires remain independently
+     * eligible. This generic method does not check physical emissions or full radio history; the
+     * separate radio-exclusion API has stricter accepted-actual-only eligibility.
      * Applied and AlreadyApplied carry DELIVERED history and its exact code/RTT/committed DTO. Exact
      * tuple replay can report historical delivery without granting mutation or describing the current
      * row; a different delivery tuple is CONFLICT. A RESEND of an initially DELIVERED row may commit

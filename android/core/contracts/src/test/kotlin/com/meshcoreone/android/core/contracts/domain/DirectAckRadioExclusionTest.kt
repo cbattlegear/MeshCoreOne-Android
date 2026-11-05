@@ -15,6 +15,47 @@ class DirectAckRadioExclusionTest {
     private val targetClaim = UUID(0, 2)
 
     @Test
+    fun nonfailingRequiresNonemptyReasonsIncludingOnCopy() {
+        assertFailsWith<IllegalArgumentException> {
+            DirectAckRadioFailureResult.Nonfailing(SnapshotSet.empty())
+        }
+        val result = DirectAckRadioFailureResult.Nonfailing(
+            SnapshotSet(listOf(DirectAckRadioNonfailingReason.TARGET_UNRESOLVED_PHYSICAL_EMISSION)),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            result.copy(reasons = SnapshotSet.empty())
+        }
+    }
+
+    @Test
+    fun nonfailingRetainsEveryTypedReasonWithoutMutableAliases() {
+        val reasons = DirectAckRadioNonfailingReason.entries.toMutableList()
+        val result = DirectAckRadioFailureResult.Nonfailing(SnapshotSet(reasons))
+        reasons.clear()
+
+        assertEquals(DirectAckRadioNonfailingReason.entries.toSet(), result.reasons)
+        assertEquals(8, result.reasons.size)
+    }
+
+    @Test
+    fun targetAndForeignUncertaintyAreDistinctFromRejectedAuthority() {
+        val target = DirectAckRadioFailureResult.Nonfailing(
+            SnapshotSet(listOf(DirectAckRadioNonfailingReason.TARGET_UNRESOLVED_PHYSICAL_EMISSION)),
+        )
+        val foreign = DirectAckRadioFailureResult.Nonfailing(
+            SnapshotSet(listOf(DirectAckRadioNonfailingReason.UNRESOLVED_OTHER_CLAIM_EMISSION)),
+        )
+
+        assertNotEquals(target, foreign)
+        for (reason in DirectAckRejection.entries) {
+            val rejected = DirectAckRadioFailureResult.Rejected(reason)
+            assertEquals(reason, rejected.reason)
+            assertNotEquals<DirectAckRadioFailureResult>(target, rejected)
+            assertNotEquals<DirectAckRadioFailureResult>(foreign, rejected)
+        }
+    }
+
+    @Test
     fun confirmationObservationRetainsRadioAndDistinguishesReadFromSnapshot() {
         val inspecting = DirectAckRadioConfirmationObservation.Inspecting(radio)
         val evidence = DirectAckRadioConfirmationEvidence.NoPersistedWildcard(radio)
@@ -182,11 +223,21 @@ class DirectAckRadioExclusionTest {
 
         assertEquals(
             setOf(DirectAckRadioNonsettlingReason.KNOWN_OTHER_CLAIM_CODE),
-            reasons(456u, target, firstForeignEmission, secondForeignEmission),
+            reasons(
+                456u,
+                target.copy(outcome = DirectAckRadioWireOutcome.Accepted(456u)),
+                firstForeignEmission,
+                secondForeignEmission,
+            ),
         )
         assertEquals(
             setOf(DirectAckRadioNonsettlingReason.KNOWN_OTHER_CLAIM_CODE),
-            reasons(987u, target, firstForeignEmission, secondForeignEmission),
+            reasons(
+                987u,
+                target.copy(outcome = DirectAckRadioWireOutcome.Accepted(987u)),
+                firstForeignEmission,
+                secondForeignEmission,
+            ),
         )
         assertEquals(firstForeignEmission.wireRequestId, secondForeignEmission.wireRequestId)
         assertNotEquals(firstForeignEmission.emissionRequestId, secondForeignEmission.emissionRequestId)
@@ -231,7 +282,7 @@ class DirectAckRadioExclusionTest {
                 DirectAckRadioNonsettlingReason.KNOWN_OTHER_CLAIM_CODE,
                 DirectAckRadioNonsettlingReason.UNRESOLVED_OTHER_CLAIM_EMISSION,
             ),
-            reasons(789u, target, foreign),
+            reasons(789u, target.copy(outcome = DirectAckRadioWireOutcome.Accepted(789u)), foreign),
         )
     }
 
@@ -248,7 +299,7 @@ class DirectAckRadioExclusionTest {
                 DirectAckRadioNonsettlingReason.KNOWN_OTHER_CLAIM_CODE,
                 DirectAckRadioNonsettlingReason.UNRESOLVED_OTHER_CLAIM_EMISSION,
             ),
-            reasons(789u, target, legacy),
+            reasons(789u, target.copy(outcome = DirectAckRadioWireOutcome.Accepted(789u)), legacy),
         )
         assertEquals(null, legacy.emissionRequestId)
     }
@@ -263,7 +314,7 @@ class DirectAckRadioExclusionTest {
                 DirectAckRadioNonsettlingReason.KNOWN_OTHER_CLAIM_CODE,
                 DirectAckRadioNonsettlingReason.UNRESOLVED_OTHER_CLAIM_EMISSION,
             ),
-            reasons(456u, target, legacy),
+            reasons(456u, target.copy(outcome = DirectAckRadioWireOutcome.Accepted(456u)), legacy),
         )
         assertEquals(
             setOf(DirectAckRadioNonsettlingReason.UNRESOLVED_OTHER_CLAIM_EMISSION),
@@ -290,14 +341,24 @@ class DirectAckRadioExclusionTest {
                 DirectAckRadioNonsettlingReason.KNOWN_OTHER_CLAIM_CODE,
                 DirectAckRadioNonsettlingReason.UNRESOLVED_OTHER_CLAIM_EMISSION,
             ),
-            reasons(456u, target, legacy, laterEmission),
+            reasons(
+                456u,
+                target.copy(outcome = DirectAckRadioWireOutcome.Accepted(456u)),
+                legacy,
+                laterEmission,
+            ),
         )
         assertEquals(
             setOf(
                 DirectAckRadioNonsettlingReason.KNOWN_OTHER_CLAIM_CODE,
                 DirectAckRadioNonsettlingReason.UNRESOLVED_OTHER_CLAIM_EMISSION,
             ),
-            reasons(987u, target, legacy, laterEmission),
+            reasons(
+                987u,
+                target.copy(outcome = DirectAckRadioWireOutcome.Accepted(987u)),
+                legacy,
+                laterEmission,
+            ),
         )
         assertEquals(legacy.wireRequestId, laterEmission.wireRequestId)
         assertEquals(null, legacy.emissionRequestId)

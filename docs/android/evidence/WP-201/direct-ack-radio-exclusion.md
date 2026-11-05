@@ -286,3 +286,99 @@ present in the contract test file; neither check establishes compilation or
 test execution. Hosted exact-candidate compilation/test discovery is pending.
 Physical radio testing and a real Room implementation of the optional
 capability are not claimed.
+
+## Atomic failure exclusion successor
+
+This successor starts at
+`0fb7fec315cb5d76988dfc8ff2eef9240c72092b`; previous snapshot/observer refs remain
+immutable. The coordinator explicitly selected the failure policy below and
+storage/service owners confirmed the exact additive declarations. No storage,
+DAO, schema, MessageService, queue or UI implementation is included here.
+
+`DirectAckRadioFailureAuthority.recordDirectFailureExcludingRadioHistory(attempt)`
+returns `DirectAckRadioFailureResult`: `Applied(receipt)`,
+`AlreadyApplied(receipt)`, `AlreadyDelivered(receipt)`,
+`Nonfailing(reasons: SnapshotSet<DirectAckRadioNonfailingReason>)`, or
+`Rejected(reason: DirectAckRejection)`. Nonfailing construction and copy require
+a nonempty reason set. It neither writes FAILED nor invents delivery/ACK evidence.
+Missing optional capability is explicitly unavailable, not a legacy-write fallback.
+
+The eight distinct reason literals are:
+
+- `TARGET_UNRESOLVED_PHYSICAL_EMISSION`
+- `TARGET_CONFLICTING_PHYSICAL_EVIDENCE`
+- `TARGET_UNTRACKED_LEGACY_ANCESTRY`
+- `KNOWN_OTHER_CLAIM_CODE`
+- `UNRESOLVED_OTHER_CLAIM_EMISSION`
+- `CONFLICTING_OTHER_CLAIM_EVIDENCE`
+- `UNTRACKED_OTHER_CLAIM_ANCESTRY`
+- `RADIO_HISTORY_SATURATED`
+
+New failure writes validate current grant/incarnation/revision and complete
+persisted radio history in the same serialized transaction as the failure and
+durable guarded-operation proof. Target MAY, conflict, malformed evidence or
+untracked legacy ancestry without genuine definite-no-write proof retains
+unknown/SENT/PENDING, never FAILED. Malformed target/foreign evidence maps to the
+corresponding conflicting reason; this does not change read-only warning or
+settlement error semantics. No row repair is authorized.
+
+If complete tracked evidence proves no target physical invocation or every
+target emission definitely unsent, unrelated foreign history cannot have
+delivered that target and the known-safe failure path remains. Otherwise
+foreign wildcard/saturation blocks failure. For accepted target emissions,
+ANY accepted actual code confused with another claim's known predicted/actual
+code blocks failure; an unambiguous alternative does not prove a different
+physical send failed. No invented predicted ACK, bounded/UI snapshot, missing
+diagnostic row, generic DeviceError3 inference, expiry or reset grants write
+permission. ERROR2 and the generic Boolean/channel APIs are unchanged.
+
+Own delivery wins as `AlreadyDelivered` before guarded replay; preserve the
+initially DELIVERED RESEND baseline guard too, without fabricating a new
+delivery tuple. Otherwise exact previously committed guarded failure replay is
+historical/read-only `AlreadyApplied`, even after later blockers, invalidation
+or revocation. Receipts retain actual permission and payload-erasure behavior.
+An older generic FAILED commit without guarded proof is `Rejected(CONFLICT)`,
+not guarded replay or a newly proven failure. Errors and cancellation propagate.
+
+### Generic versus radio-exclusion settlement documentation
+
+Earlier `DirectAckAuthority.kt` blob
+`aee117e9a012ed5f33d9519e04807fe7c78b06bf` incorrectly documented generic
+settlement as requiring prior acceptance. Storage confirmed the incumbent
+generic predicate is `(acceptedCode ?: predictedCode) == ackCode` for each
+registered wire: an unaccepted prediction is eligible before return, but its
+own accepted actual supersedes it once present. Other registered wires remain
+independently eligible. This successor corrects only that KDoc, preserving all
+generic declarations and production behavior. The accepted-actual-only rule
+is explicitly documented on `settleDirectAckExcludingRadioHistory`; no
+settlement signature, result, classifier or implementation changes.
+
+### Admission and source-only controls
+
+The existing WP-201 domain/evidence admission covers these exact production
+and evidence paths; the related test uses
+`reviewed-support-test/add-or-update-related-test` and preserves all existing
+cases/assertions. Rechecked manifest blob
+`e81605857f5aa7b893dcd63224fb27a45d7b0f3a` and policy blob
+`b12794157978d6d90ab7508d4e2852fdc2d5e4a4` in this isolated worktree.
+No authorization prose, policy, reservation ledger or other owner's source
+was changed. This is not a fresh-main rebase or a dependency/merge claim.
+
+Three added value controls check nonempty construction/copy, all eight
+immutable reasons, and target/foreign uncertainty versus authority rejection.
+Source review also found seven older classifier fixture calls querying
+456/789/987 while their target was accepted only for 123; those calls would
+also yield TARGET_CODE_UNREGISTERED, contradicting their foreign-only expected
+sets. The fixtures now accept the queried target code, leaving all original
+expected assertions and production classification intact.
+
+`git diff --check` passed. A source annotation count found 26 tests; none were
+executed. Source comparisons confirmed the generic authority's non-comment
+declarations are unchanged, and the snapshot/observer declarations remain
+unchanged. These are source checks, not Kotlin compilation, test discovery,
+Room transaction/replay/close/race proof or service integration evidence.
+No Gradle/Kotlin build, hosted tests, runtime activation, PR or merge was
+performed under the retained local owner hold. Storage owns real atomic
+guard/current-grant/cross-handle/race/replay controls; service owns central and
+queue failure routing controls. The contract-only handoff does not claim
+those producers are integrated or verified.

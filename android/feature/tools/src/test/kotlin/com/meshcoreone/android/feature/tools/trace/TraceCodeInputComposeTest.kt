@@ -611,8 +611,10 @@ class TraceCodeInputComposeTest {
     @Test fun productionOriginAllowsOfflineDraftEntryAndDifferentRadioReconnect() = offlineDraftAcrossReconnect(false, true)
     @Test fun productionOriginRetainsOpenDraftOnDisconnectAndSameRadioReconnect() = offlineDraftAcrossReconnect(true, false)
     @Test fun productionOriginRetainsOpenDraftOnDisconnectAndDifferentRadioReconnect() = offlineDraftAcrossReconnect(true, true)
+    @Test fun offlineRunAttemptPreservesDraftAndSameRadioReconnect() = offlineDraftAcrossReconnect(true, false, true)
+    @Test fun offlineRunAttemptPreservesDraftAndDifferentRadioReconnect() = offlineDraftAcrossReconnect(true, true, true)
 
-    private fun offlineDraftAcrossReconnect(disconnectOpenDraft: Boolean, crossRadio: Boolean) {
+    private fun offlineDraftAcrossReconnect(disconnectOpenDraft: Boolean, crossRadio: Boolean, retainedRoute: Boolean = false) {
         val epoch = com.meshcoreone.android.core.contracts.domain.ProcessEpoch(UUID.randomUUID())
         var token: com.meshcoreone.android.core.contracts.domain.SessionToken? =
             if (disconnectOpenDraft) com.meshcoreone.android.core.contracts.domain.SessionToken(
@@ -623,7 +625,7 @@ class TraceCodeInputComposeTest {
         val deps = FakeTraceDependencies().apply {
             device = if (disconnectOpenDraft) device() else null
             sender = recorded
-            directory = FakeNodeDirectory(contacts = listOf(contact(0xAA, name = "Tower")))
+            directory = FakeNodeDirectory(contacts = listOf(contact(0xAA, name = "Tower"), contact(0xBB, name = "Ridge")))
         }
         val feature = object : TracePathFeatureDependencies by deps {
             override fun sessionToken() = token
@@ -641,6 +643,13 @@ class TraceCodeInputComposeTest {
         scrollToIndex(3)
         click("Add Hop")
         setInput("AA")
+        val inputIndex = if (retainedRoute) 4 else 3
+        val freshCode = if (retainedRoute) "BB" else "AA"
+        if (retainedRoute) {
+            click("Add nodes: AA")
+            scrollToIndex(inputIndex)
+            setInput(freshCode)
+        }
         val oldText = assertNotNull(input().config[SemanticsActions.SetText].action)
         val oldDone = assertNotNull(button("Done").config[SemanticsActions.OnClick].action)
         if (disconnectOpenDraft) {
@@ -651,14 +660,22 @@ class TraceCodeInputComposeTest {
                 connection.value = connection.value.copy(radioId = null, generation = version)
             }
             settle()
-            scrollToIndex(3)
-            assertEquals("AA", input().config[SemanticsProperties.EditableText].text)
+            if (retainedRoute) {
+                scrollToIndex(8)
+                val run = button(host.get().getString(C.contactsTraceListRunTrace))
+                assertTrue(run.config.contains(SemanticsProperties.Disabled))
+                host.get().runOnUiThread { assertTrue(assertNotNull(run.config[SemanticsActions.OnClick].action)()) }
+                settle()
+                assertTrue(recorded.sent.isEmpty(), "An offline run attempt never writes to the radio")
+            }
+            scrollToIndex(inputIndex)
+            assertEquals(freshCode, input().config[SemanticsProperties.EditableText].text)
             host.get().runOnUiThread {
                 assertTrue(oldText(AnnotatedString("Retired A")))
                 assertTrue(oldDone())
             }
             settle()
-            assertEquals("AA", input().config[SemanticsProperties.EditableText].text)
+            assertEquals(freshCode, input().config[SemanticsProperties.EditableText].text)
         }
         setInput("BB")
         paste("CC")
@@ -666,7 +683,7 @@ class TraceCodeInputComposeTest {
         click("Done")
         assertFalse(nodes().any { it.config.contains(SemanticsActions.SetText) })
         click("Add Hop")
-        setInput("AA")
+        setInput(freshCode)
         val offlineText = assertNotNull(input().config[SemanticsActions.SetText].action)
         val offlineDone = assertNotNull(button("Done").config[SemanticsActions.OnClick].action)
         val nextRadio = if (crossRadio) RadioId(UUID.randomUUID()) else RADIO
@@ -679,19 +696,20 @@ class TraceCodeInputComposeTest {
             connection.value = connection.value.copy(radioId = nextRadio, generation = version)
         }
         settle()
-        scrollToIndex(3)
+        scrollToIndex(inputIndex)
         host.get().runOnUiThread {
             assertTrue(offlineText(AnnotatedString("Retired offline")))
             assertTrue(offlineDone())
         }
         settle()
-        assertEquals("AA", input().config[SemanticsProperties.EditableText].text)
+        assertEquals(freshCode, input().config[SemanticsProperties.EditableText].text)
         assertTrue(recorded.sent.isEmpty(), "Local drafts never send radio commands")
-        assertTrue(button("Add nodes: AA").boundsInRoot.height >= 48f)
-        click("Add nodes: AA")
+        assertTrue(button("Add nodes: $freshCode").boundsInRoot.height >= 48f)
+        click("Add nodes: $freshCode")
         assertEquals("", input().config[SemanticsProperties.EditableText].text)
         scrollToIndex(2)
-        assertTrue(texts().any { it.contains("Tower (AA)") }, "Fresh connected Add changes the real route")
+        assertTrue(texts().any { it.contains(if (retainedRoute) "Ridge (BB)" else "Tower (AA)") },
+            "Fresh connected Add changes the real route")
     }
 
     @Test fun sameRadioReconnectRejectsRetainedAutoReturn() = retainedListActionAcrossReconnect(false, "auto")

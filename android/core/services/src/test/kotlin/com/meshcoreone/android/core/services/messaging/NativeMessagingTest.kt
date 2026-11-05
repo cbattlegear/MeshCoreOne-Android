@@ -21,6 +21,60 @@ import org.junit.jupiter.api.TestFactory
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class NativeMessagingTest {
+    @TestFactory fun queuedChannelAtomicAdmission() = listOf(
+        native("lostAtomicChannelAdmissionReturnReplaysTheSameRequestWithoutAnotherBump") {
+            val h = Harness(this); h.start()
+            val message = h.message(MessageStatus.PENDING, 0u)
+            h.pending(message, isResend = true)
+            h.signals.set(h.token, DeviceConnectionState.CONNECTED)
+            val queue = h.queue()
+            val fault = storageFailure()
+            h.store.channelFailureAuthority.afterAdmission = { throw fault }
+            queue.hydrate(); runCurrent()
+            h.signals.set(h.token, DeviceConnectionState.READY); runCurrent()
+            assertEquals(1L, h.store.fetchPendingSends(RADIO).single().attemptCount)
+            val admitted = h.stored(message.id)
+            assertTrue(h.sends(CommandCode.SEND_CHANNEL_MESSAGE).isEmpty())
+            h.store.channelFailureAuthority.afterAdmission = null
+            h.clock.offset += 5_000
+            queue.transportDidOpen(); runCurrent(); queue.awaitDrainCompletion()
+            val sent = h.stored(message.id)
+            assertEquals(admitted.timestamp, sent.timestamp)
+            assertEquals(2L, sent.sendCount)
+            assertEquals(MessageStatus.SENT, sent.status)
+            assertEquals(1, h.sends(CommandCode.SEND_CHANNEL_MESSAGE).size)
+            assertEquals(2, h.store.calls.count { it == "admitQueuedChannelSend" })
+            assertTrue(h.store.calls.none { it == "incrementPendingSendAttemptCount" })
+            assertTrue(h.store.fetchPendingSends(RADIO).isEmpty())
+            assertTrue(queue.shutdown().isComplete)
+            h.close()
+        },
+        native("atomicChannelAdmissionUsesActualPendingModeAndMessageRatherThanEnqueuedPayload") {
+            val h = Harness(this); h.start()
+            val message = h.message(MessageStatus.PENDING, 0u, text = "old envelope")
+            h.signals.set(h.token, DeviceConnectionState.CONNECTED)
+            val indexed = mutableListOf<Triple<String, String, UInt>>()
+            val queue = h.queue(indexer = OutgoingChannelReactionIndexer { id, _, name, text, stamp ->
+                assertEquals(message.id, id)
+                indexed += Triple(name, text, stamp)
+            })
+            queue.enqueueChannel(ChannelMessageEnvelope(message.id, 0u, false, message.text, message.timestamp, "Old"))
+            runCurrent()
+            val pending = h.store.fetchPendingSends(RADIO).single()
+            h.store.upsertPendingSend(pending.copy(isResend = true, localNodeName = "Actual"))
+            h.store.saveMessage(message.copy(text = "actual stored text"))
+            h.signals.set(h.token, DeviceConnectionState.READY); runCurrent(); queue.awaitDrainCompletion()
+            val sent = h.stored(message.id)
+            assertEquals(MessageStatus.SENT, sent.status)
+            assertEquals(2L, sent.sendCount)
+            assertNotEquals(message.timestamp, sent.timestamp)
+            assertEquals(listOf(Triple("Actual", "actual stored text", sent.timestamp)), indexed)
+            assertEquals(1, h.sends(CommandCode.SEND_CHANNEL_MESSAGE).size)
+            assertTrue(h.store.fetchPendingSends(RADIO).isEmpty())
+            h.close()
+        },
+    )
+
     @TestFactory fun acceptedChannelInvocationIdentity() =
         listOf(false, true).map { isResend ->
             native("newPublicChannelInvocationCannotRebindAcceptedCaptureWithResend$isResend") {

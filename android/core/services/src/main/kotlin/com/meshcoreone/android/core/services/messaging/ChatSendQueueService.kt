@@ -52,7 +52,9 @@ class ChatSendQueueService(
     private val completedDMs = mutableSetOf<UUID>()
     private data class DirectAttempt(val pending: Attempt, val claimID: UUID = UUID.randomUUID())
     private val directAttempts = mutableMapOf<UUID, DirectAttempt>()
-    private class ChannelAttempt(val pending: Attempt, val claimID: UUID = UUID.randomUUID()) {
+    private class ChannelAttempt(val claimID: UUID = UUID.randomUUID()) {
+        var pending: Attempt? = null
+        var isResend: Boolean? = null
         var indexed = false
     }
     private val channelAttempts = mutableMapOf<UUID, ChannelAttempt>()
@@ -340,24 +342,29 @@ class ChatSendQueueService(
         awaitReady()
         checkSendAdmission()
         val retained = synchronized(lock) { channelAttempts[id] }
-            ?.takeIf { messageService.channelClaimAccepted(it.claimID) }
+            ?.takeIf { it.pending == null || messageService.channelClaimAccepted(it.claimID) }
         if (retained == null) {
             synchronized(lock) { channelClaimIDs.remove(id) }?.let(messageService::releaseChannelClaim)
             synchronized(lock) { channelAttempts.remove(id) }
         }
-        val state = retained ?: run {
-            val attempt = try {
-                preflightAndBump(dataStore, key(id)).also { ownership.check("channel.bump") }
-            } catch (failure: PersistenceStoreException) { park(id, failure) }
-            if (attempt == null) { complete(id); return }
-            ChannelAttempt(attempt).also {
-                synchronized(lock) {
-                    channelAttempts[id] = it
-                    channelClaimIDs[id] = it.claimID
-                }
+        val state = retained ?: ChannelAttempt().also {
+            synchronized(lock) {
+                channelAttempts[id] = it
+                channelClaimIDs[id] = it.claimID
             }
         }
-        val attempt = state.pending
+        val attempt = state.pending ?: try {
+            when (val admission = messageService.admitQueuedChannelClaim(state.claimID, id)) {
+                is MessageService.ChannelQueuePreparation.Ready -> {
+                    state.isResend = admission.pending.isResend
+                    Attempt(admission.postBumpCount, admission.pending.id).also { state.pending = it }
+                }
+                MessageService.ChannelQueuePreparation.Retired -> {
+                    complete(id, clearProgress = false)
+                    return
+                }
+            }
+        } catch (failure: PersistenceStoreException) { park(id, failure) }
         val claimID = state.claimID
         checkSendAdmission()
         try {
@@ -372,7 +379,7 @@ class ChatSendQueueService(
                 return
             }
             val sent = when (val outcome = messageService.sendPendingChannelClaim(
-                claimID, id, attempt.pendingID, envelope.isResend, attempt.preserveTimestamp,
+                claimID, id, attempt.pendingID, requireNotNull(state.isResend), attempt.preserveTimestamp,
             )) {
                 is MessageService.ChannelSendOutcome.Completed -> outcome
                 MessageService.ChannelSendOutcome.Retired -> {

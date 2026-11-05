@@ -187,7 +187,7 @@ class ChatSendQueueProgressTest {
             val progress = ChatSendQueueProgress()
             val first = connection()
             val m = first.message(MessageStatus.PENDING, 0u); first.pending(m, 2)
-            first.store.faults["incrementPendingSendAttemptCount"] = storageFailure()
+            first.store.faults["admitQueuedChannelSend"] = storageFailure()
             drain(first, progress)
             assertTrue(first.sends(CommandCode.SEND_CHANNEL_MESSAGE).isEmpty())
             assertTrue(first.sends(CommandCode.GET_CHANNEL).isEmpty())

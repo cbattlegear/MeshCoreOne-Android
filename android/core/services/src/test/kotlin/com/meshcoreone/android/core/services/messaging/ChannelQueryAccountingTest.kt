@@ -495,7 +495,7 @@ class ChannelQueryAccountingTest {
             val entered = CompletableDeferred<Unit>()
             val release = CompletableDeferred<Unit>()
             h.store.before = { operation ->
-                if (operation == "incrementPendingSendAttemptCount") {
+                if (operation == "admitQueuedChannelSend") {
                     entered.complete(Unit)
                     release.await()
                 }

@@ -112,10 +112,16 @@ private class RevisionedMap<K, V>(private val changed: (K, V?, V?) -> Unit) : Li
 }
 
 internal class RecordingStore : PersistenceStoreProtocol by unsupportedStore(), ChannelFailureAuthority,
-    ChannelSendCompletionAuthority {
+    ChannelSendCompletionAuthority, ChannelQueueAdmissionAuthority {
     // Conditional algorithm fixture only; this is not a production physical-history certificate.
     val directAckAuthority = RecordingDirectAckAuthority(this, preauthorityHistoryUnknown = false)
     val channelFailureAuthority = RecordingChannelFailureAuthority(this)
+    override suspend fun admitQueuedChannelSend(
+        lease: DirectAckLease, requestId: UUID, key: EntityKey, freshTimestamp: UInt,
+    ) = channelFailureAuthority.admitQueuedChannelSend(lease, requestId, key, freshTimestamp)
+    override fun noteAcceptedChannelAttempt(
+        attempt: ChannelFailureAttempt, completionRequestId: UUID, mode: ChannelSendCompletionMode, acceptedTimestamp: UInt,
+    ) = channelFailureAuthority.noteAcceptedChannelAttempt(attempt, completionRequestId, mode, acceptedTimestamp)
     override suspend fun recordChannelSendCompleted(
         attempt: ChannelFailureAttempt, completionRequestId: UUID, mode: ChannelSendCompletionMode, acceptedTimestamp: UInt,
     ) = channelFailureAuthority.recordChannelSendCompleted(attempt, completionRequestId, mode, acceptedTimestamp)
@@ -140,6 +146,10 @@ internal class RecordingStore : PersistenceStoreProtocol by unsupportedStore(), 
         channelFailureAuthority.inspectChannelFailureAttempt(lease, captureRequestId)
     private val messageRevisions = mutableMapOf<EntityKey, Long>()
     private val pendingRevisions = mutableMapOf<EntityKey, Long>()
+    private val messageLifecycles = mutableMapOf<EntityKey, Long>()
+    private val pendingLifecycles = mutableMapOf<EntityKey, Long>()
+    internal fun messageLifecycle(key: EntityKey) = messageLifecycles[key] ?: 0L
+    internal fun pendingLifecycle(key: EntityKey) = pendingLifecycles[key] ?: 0L
     internal fun messageRevision(key: EntityKey) = messageRevisions[key] ?: 0L
     internal fun pendingRevision(key: EntityKey) = pendingRevisions[key] ?: 0L
     internal fun invalidateMessage(key: EntityKey) {
@@ -149,12 +159,18 @@ internal class RecordingStore : PersistenceStoreProtocol by unsupportedStore(), 
         pendingRevisions[key] = Math.incrementExact(pendingRevision(key))
         if (invalidateMessage) pending[key]?.let { this.invalidateMessage(EntityKey(it.radioId, it.messageID)) }
     }
-    val messages: MutableMap<EntityKey, MessageDTO> = RevisionedMap { key, _, _ -> invalidateMessage(key) }
+    val messages: MutableMap<EntityKey, MessageDTO> = RevisionedMap { key, old, new ->
+        invalidateMessage(key)
+        if (old == null && new != null) messageLifecycles[key] = Math.incrementExact(messageLifecycle(key))
+    }
     val contacts = linkedMapOf<EntityKey, ContactDTO>()
     val channels = linkedMapOf<EntityKey, ChannelDTO>()
     val devices = linkedMapOf<RadioId, DeviceDTO>()
     val pending: MutableMap<EntityKey, PendingSendDTO> = RevisionedMap { key, old, new ->
         invalidatePending(key, invalidateMessage = false)
+        if (new != null && (old == null || old.messageID != new.messageID)) {
+            pendingLifecycles[key] = Math.incrementExact(pendingLifecycle(key))
+        }
         old?.let { invalidateMessage(EntityKey(it.radioId, it.messageID)) }
         new?.let { invalidateMessage(EntityKey(it.radioId, it.messageID)) }
     }

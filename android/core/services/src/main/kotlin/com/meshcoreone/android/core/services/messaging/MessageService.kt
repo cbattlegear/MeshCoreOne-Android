@@ -63,6 +63,8 @@ class MessageService(
     private val channelFailureAuthority: ChannelFailureAuthority? = dataStore as? ChannelFailureAuthority,
     private val channelSendCompletionAuthority: ChannelSendCompletionAuthority? =
         dataStore as? ChannelSendCompletionAuthority,
+    private val channelQueueAdmissionAuthority: ChannelQueueAdmissionAuthority? =
+        dataStore as? ChannelQueueAdmissionAuthority,
 ) : MessagingSendPort {
     init { require(localPublicKey.size == ProtocolLimits.PUBLIC_KEY_SIZE) }
     private val ownership = MessagingOwnership(token, scope, signals, reporter)
@@ -92,11 +94,13 @@ class MessageService(
         val completionID = UUID.randomUUID()
         val pendingCompletionID = UUID.randomUUID()
         var acceptedTimestamp: UInt? = null
+        var acceptanceNoted = false
         var completion: ChannelSendCompletion? = null
         var completionReceipt: ChannelSendCompletionReceipt? = null
         var retired = false
     }
     private val channelClaims = mutableMapOf<UUID, ChannelClaim>()
+    private val channelAdmissionTimestamps = mutableMapOf<UUID, UInt>()
     private class DirectAuthorityState(
         val requestID: UUID,
         val attempt: DirectAckAttempt,
@@ -299,7 +303,10 @@ class MessageService(
             ?: throw channelAuthorityFailure("capture unavailable")
 
     internal fun releaseChannelClaim(claimID: UUID) {
-        synchronized(lock) { channelClaims.remove(claimID) }
+        synchronized(lock) {
+            channelClaims.remove(claimID)
+            channelAdmissionTimestamps.remove(claimID)
+        }
     }
 
     internal fun channelClaimAccepted(claimID: UUID): Boolean =
@@ -308,6 +315,75 @@ class MessageService(
     internal sealed interface ChannelSendOutcome {
         data class Completed(val message: MessageDTO, val timestamp: UInt, val pending: PendingSendDTO?) : ChannelSendOutcome
         data object Retired : ChannelSendOutcome
+    }
+
+    internal sealed interface ChannelQueuePreparation {
+        data class Ready(val pending: PendingSendDTO, val postBumpCount: Long) : ChannelQueuePreparation
+        data object Retired : ChannelQueuePreparation
+    }
+
+    private fun queueAdmissionAuthority(): ChannelQueueAdmissionAuthority =
+        channelQueueAdmissionAuthority ?: throw channelAuthorityFailure("queue admission capability unavailable")
+
+    internal suspend fun admitQueuedChannelClaim(claimID: UUID, id: UUID): ChannelQueuePreparation =
+        owned("admitQueuedChannel", channelOperations) {
+            channelCompletionAuthority()
+            val freshTimestamp = synchronized(lock) { channelAdmissionTimestamps.getOrPut(claimID) { timestamp() } }
+            val result = queueAdmissionAuthority().admitQueuedChannelSend(
+                sessionLease(channel = true), claimID, key(id), freshTimestamp,
+            )
+            val (attempt, receipt, count) = when (result) {
+                is ChannelQueueAdmissionResult.Ready -> Triple(result.attempt, result.receipt, result.postBumpCount)
+                is ChannelQueueAdmissionResult.AlreadyReady -> Triple(result.attempt, result.receipt, result.postBumpCount)
+                is ChannelQueueAdmissionResult.PreviouslyCompleted -> {
+                    if (result.receipt.capture.key != key(id)) throw channelAuthorityFailure("foreign completed admission")
+                    if (ownership.isCurrent) events.yield(MessageStatusEvent.PersistenceChanged(key(id)))
+                    return@owned ChannelQueuePreparation.Retired
+                }
+                is ChannelQueueAdmissionResult.Uncertain -> {
+                    if (result.acceptance.key != key(id)) throw channelAuthorityFailure("foreign uncertain admission")
+                    ownership.failure("channelQueueUncertain.$claimID", ChannelQueueAdmissionUncertaintyException(
+                        token, result.acceptance, result.reason,
+                    ))
+                    return@owned ChannelQueuePreparation.Retired
+                }
+                is ChannelQueueAdmissionResult.Rejected -> {
+                    reportChannelUncertainty(id, result.reason)
+                    return@owned ChannelQueuePreparation.Retired
+                }
+            }
+            val pending = receipt.pending ?: throw channelAuthorityFailure("admission pending unavailable")
+            if (count < 1 || pending.attemptCount != count) throw channelAuthorityFailure("mismatched admission count")
+            val mode = if (pending.isResend) ChannelSendCompletionMode.RESEND else ChannelSendCompletionMode.SEND
+            capturedChannel(claimID, id, pending.id,
+                ChannelFailureCaptureResult.Captured(attempt, receipt), mode)
+            ChannelQueuePreparation.Ready(pending, count)
+        }
+
+    private fun noteChannelAcceptance(claim: ChannelClaim) {
+        val pendingID = claim.pendingID ?: return
+        if (claim.acceptanceNoted) return
+        val stamp = claim.acceptedTimestamp ?: throw channelAuthorityFailure("accepted timestamp unavailable")
+        val acceptance = when (val result = queueAdmissionAuthority().noteAcceptedChannelAttempt(
+            claim.attempt, claim.completionID, claim.mode, stamp,
+        )) {
+            is ChannelQueueAcceptanceResult.Registered -> result.acceptance
+            is ChannelQueueAcceptanceResult.AlreadyRegistered -> result.acceptance
+            is ChannelQueueAcceptanceResult.Rejected -> {
+                val failure = channelAuthorityFailure("accepted process fence rejected: ${result.reason}")
+                remember("channelAcceptance.${claim.id}", failure)
+                throw failure
+            }
+        }
+        if (acceptance.captureRequestId != claim.id || acceptance.key != key(claim.message.id) ||
+            acceptance.pendingSendId != pendingID || acceptance.completionRequestId != claim.completionID ||
+            acceptance.mode != claim.mode || acceptance.acceptedTimestamp != stamp) {
+            val failure = channelAuthorityFailure("mismatched accepted process fence")
+            remember("channelAcceptance.${claim.id}", failure)
+            throw failure
+        }
+        claim.acceptanceNoted = true
+        recovered("channelAcceptance.${claim.id}")
     }
 
     private fun validateChannelCompletion(claim: ChannelClaim, receipt: ChannelSendCompletionReceipt) {
@@ -328,6 +404,7 @@ class MessageService(
 
     private suspend fun completeAcceptedChannel(claim: ChannelClaim): ChannelSendOutcome {
         if (claim.retired) return ChannelSendOutcome.Retired
+        noteChannelAcceptance(claim)
         ownership.checkPersistenceCompletion("channelSendCompletion")
         val stamp = claim.acceptedTimestamp ?: throw channelAuthorityFailure("transport acceptance unavailable")
         val (completion, receipt) = try {
@@ -2187,6 +2264,7 @@ class MessageService(
     ): ChannelSendOutcome =
         owned("queuedChannel", channelOperations) {
             channelCompletionAuthority()
+            if (pendingID != null) queueAdmissionAuthority()
             val mode = if (isResend) ChannelSendCompletionMode.RESEND else ChannelSendCompletionMode.SEND
             if (synchronized(lock) {
                 claimID !in channelClaims && channelClaims.values.any {
@@ -2213,6 +2291,7 @@ class MessageService(
                             checkIdentity("queuedChannel.wire")
                             session.sendChannelMessage(index, row.text, Instant.ofEpochSecond(stamp.toLong()))
                             synchronized(lock) { claim.acceptedTimestamp = stamp }
+                            noteChannelAcceptance(claim)
                         }
                     }
                 }
@@ -2297,6 +2376,7 @@ class MessageService(
                 directClaims.clear()
                 activeDirectClaims.clear()
                 channelClaims.clear()
+                channelAdmissionTimestamps.clear()
             }
             events.finish()
             ownership.job.cancelAndJoin()

@@ -584,6 +584,7 @@ class TracePathStateHolder(
 
     internal fun setPendingTagForTesting(tag: UInt) {
         pendingTag = tag
+        batch.seedPendingModeForTesting()
     }
 
     internal fun setPendingDeviceIdForTesting(radioId: RadioId?) {

@@ -160,6 +160,21 @@ The existing code-input path is admitted by trusted `wp-owned/modify` capability
 same pinned-source/declared-verification invariants. No runtime outcome is inferred from
 source review or any earlier green run.
 
+R19 test-only42022446364 reports tools780/20 failed: eighteen retained-action cases at
+the B-running assertion642, single dispatch width at891 and batch width at882.
+Source42022705359 reports tools780/27 failed: ten fresh mounted assertions at681/688,
+plus seventeen existing response-parser/listener controls. The mounted setup had loaded
+a single-hop saved route, which the real codec correctly recognizes as auto-return;
+the fresh assertions assumed it was off. The successor explicitly sets it off before
+capturing A, preserving all fresh-route/toggle expectations.
+
+The original response controls intentionally seed correlation with the existing
+`setPendingTagForTesting` helper rather than dispatch a command. That helper now also
+seeds the captured pending mode, matching the new correlation metadata. Production
+retains only the scalar sent mode and never falls back to live width after a real
+dispatch. No original assertion was dropped. These are fixture/metadata repairs to
+be evaluated by distinct exact successor/negative runs, not retroactive passes.
+
 | Check | Result |
 |---|---|
 | Pinned Windows preflight: `python .\\tools\\android-port\\controller\\ci.py preflight --local --state $env:ANDROID_CI_STATE --output $output` with a fresh absolute TEMP output and pinned Python 3.12.4 | PASS (exit 0; readiness only) |

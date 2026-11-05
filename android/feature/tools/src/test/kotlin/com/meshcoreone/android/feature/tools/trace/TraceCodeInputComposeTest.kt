@@ -581,6 +581,12 @@ class TraceCodeInputComposeTest {
         settle()
         click(host.get().getString(C.contactsTraceSaved))
         click(saved.name)
+        host.get().runOnUiThread {
+            val autoReturn = nodes().first { it.config.getOrElseNullable(SemanticsProperties.Role) { null } == Role.Switch }
+            assertEquals(androidx.compose.ui.state.ToggleableState.On, autoReturn.config[SemanticsProperties.ToggleableState])
+            assertTrue(assertNotNull(autoReturn.config[SemanticsActions.OnClick].action)())
+        }
+        settle()
         val codeAction = action in listOf("text", "paste", "codes")
         val runLabel = host.get().getString(C.contactsTraceListRunTrace)
         if (codeAction) {

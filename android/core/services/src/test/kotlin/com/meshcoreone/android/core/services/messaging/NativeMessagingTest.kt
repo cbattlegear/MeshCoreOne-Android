@@ -22,6 +22,76 @@ import org.junit.jupiter.api.TestFactory
 @OptIn(ExperimentalCoroutinesApi::class)
 class NativeMessagingTest {
     @TestFactory fun regressions() = listOf(
+        native("conditionalGuardedDirectCommitPublishesOnlyNeutralHintAfterSameKeyReplacement") {
+            val h = Harness(this); h.start()
+            val message = h.message()
+            val unrelated = h.message(MessageStatus.FAILED, text = "unrelated unseen failure")
+            h.installAcceptedPendingAck(h.tracking(message, age = 60))
+            val events = h.service.statusEvents()
+            val committed = CompletableDeferred<DirectAckReceipt>()
+            val release = CompletableDeferred<Unit>()
+            h.store.directAckAuthority.afterFailure = { receipt ->
+                committed.complete(receipt)
+                release.await()
+            }
+            val expiry = backgroundScope.async { h.service.checkExpiredAcks() }
+            try {
+                assertEquals(MessageStatus.FAILED, committed.await().message?.status)
+                assertEquals(MessageStatus.FAILED, h.stored(message.id).status)
+                val replacement = message.copy(text = "new channel incarnation", contactID = null,
+                    channelIndex = 0u, status = MessageStatus.PENDING, failureSeen = false)
+                h.store.deleteMessage(EntityKey(RADIO, message.id))
+                h.store.saveMessage(replacement)
+                release.complete(Unit)
+                expiry.await()
+                assertEquals(replacement, h.stored(message.id))
+                assertEquals(unrelated, h.stored(unrelated.id))
+                assertEquals(listOf(MessageStatusEvent.PersistenceChanged(EntityKey(RADIO, message.id))),
+                    statuses(h.service, events))
+                assertEquals(0, h.service.pendingAckCount)
+            } finally {
+                release.complete(Unit); expiry.cancelAndJoin()
+                h.store.directAckAuthority.afterFailure = null
+                events.close(); h.close()
+            }
+        },
+        native("queueFailureReadIsOnlyNeutralHintWhenAnIndependentWriteReplacesTheObservedFailedRow") {
+            val h = Harness(this); h.start()
+            val message = h.message(MessageStatus.FAILED)
+            val unrelated = h.message(MessageStatus.FAILED, text = "unrelated")
+            val replacement = message.copy(status = MessageStatus.DELIVERED, failureSeen = false)
+            val events = h.service.statusEvents()
+            h.store.afterMessageRead = { key, row -> if (key.id == message.id) {
+                assertEquals(MessageStatus.FAILED, row?.status)
+                h.store.messages[EntityKey(RADIO, message.id)] = replacement
+            } }
+            h.service.notifyMessageFailed(message.id)
+            h.store.afterMessageRead = null
+            assertEquals(replacement, h.stored(message.id))
+            assertEquals(unrelated, h.stored(unrelated.id))
+            assertEquals(listOf(MessageStatusEvent.PersistenceChanged(EntityKey(RADIO, message.id))),
+                statuses(h.service, events))
+            h.close()
+        },
+        native("channelFailureAndDirectSendShareOneSessionLeaseWithoutFencingEachOther") {
+            val h = Harness(this, MessageServiceConfig(poolBackoff = PoolBackoffConfig(attemptCap = 0)))
+            h.start(); h.transport.channelError = 2u
+            val events = h.service.statusEvents()
+            assertFailsWith<MessageServiceException> { h.service.sendChannelMessage("channel rejection", 0u, RADIO) }
+            val channel = h.store.messages.values.single()
+            assertEquals(MessageStatus.FAILED, channel.status)
+            assertFalse(channel.failureSeen)
+            val direct = h.service.sendDirectMessage("same session direct acceptance", h.contact)
+            assertEquals(MessageStatus.SENT, direct.status)
+            assertEquals(channel, h.stored(channel.id))
+            val observed = statuses(h.service, events)
+            assertEquals(listOf(MessageStatusEvent.PersistenceChanged(EntityKey(RADIO, channel.id))),
+                observed.filterIsInstance<MessageStatusEvent.PersistenceChanged>())
+            assertTrue(observed.none { it is MessageStatusEvent.Failed })
+            assertEquals(1, h.sends(CommandCode.SEND_CHANNEL_MESSAGE).size)
+            assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+            h.close()
+        },
         native("defaultRetryBudgetIsExactlyFourBeforeResetAndOneAfter") {
             val h = Harness(this); h.start()
             h.service.sendMessageWithRetry("default budget", h.contact.copy(outPathLength = 2u, outPath = Bytes.of(1, 2)))

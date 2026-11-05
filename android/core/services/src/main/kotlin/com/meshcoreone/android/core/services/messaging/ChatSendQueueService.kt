@@ -56,6 +56,8 @@ class ChatSendQueueService(
     private val indexedChannels = mutableSetOf<UUID>()
     private val persistenceSubmissions = mutableSetOf<Deferred<Result<Unit>>>()
     private val directClaimIDs = mutableMapOf<UUID, UUID>()
+    private val channelClaimIDs = mutableMapOf<UUID, UUID>()
+    private val queuedChannels = mutableSetOf<UUID>()
     private var hydrated = false
     private var hydration: Deferred<Unit>? = null
     private var connectionTask: Deferred<Unit>? = null
@@ -129,7 +131,10 @@ class ChatSendQueueService(
     }
     override suspend fun enqueueChannel(envelope: ChannelMessageEnvelope) {
         submitPersistence(PendingSendDTO.fromEnvelope(envelope, token.radioId, newID(), clock.wallClock.instant())) {
-            if (queued.add(envelope.messageID)) channelQueue.enqueue(envelope)
+            if (queued.add(envelope.messageID)) {
+                queuedChannels += envelope.messageID
+                channelQueue.enqueue(envelope)
+            }
         }
     }
     override suspend fun signalDMEnqueued(envelope: DirectMessageEnvelope) {
@@ -186,7 +191,9 @@ class ChatSendQueueService(
                             PendingSendKind.CHANNEL -> {
                                 val envelope = row.channelMessageEnvelope()
                                     ?: throw PersistenceStoreException(PersistenceStoreError.InvalidData)
-                                if (synchronized(lock) { queued.add(envelope.messageID) }) channelQueue.enqueue(envelope)
+                                if (synchronized(lock) {
+                                    queued.add(envelope.messageID).also { if (it) queuedChannels += envelope.messageID }
+                                }) channelQueue.enqueue(envelope)
                             }
                         }
                         recovered("hydrate.${row.id}")
@@ -330,24 +337,29 @@ class ChatSendQueueService(
         val id = envelope.messageID
         awaitReady()
         checkSendAdmission()
+        if (synchronized(lock) { id !in completedChannels }) {
+            synchronized(lock) { channelClaimIDs.remove(id) }?.let(messageService::releaseChannelClaim)
+        }
         val attempt = try {
             preflightAndBump(dataStore, key(id)).also { ownership.check("channel.bump") }
-        } catch (failure: PersistenceStoreException) { parkBeforeSend(id, failure) }
+        } catch (failure: PersistenceStoreException) { park(id, failure) }
         if (attempt == null) { complete(id); return }
+        val claimID = synchronized(lock) { channelClaimIDs.getOrPut(id, UUID::randomUUID) }
         checkSendAdmission()
         try {
             val stamp = synchronized(lock) { completedChannels[id] } ?: run {
-                val sent = if (envelope.isResend) messageService.resendChannelMessage(id, attempt.preserveTimestamp)
-                    else { messageService.sendPendingChannelMessage(id); envelope.messageTimestamp }
+                val sent = messageService.sendPendingChannelClaim(
+                    claimID, id, attempt.pendingID, envelope.isResend, attempt.preserveTimestamp)
                 ownership.check("channel.completed")
                 synchronized(lock) { completedChannels[id] = sent }
                 sent
             }
+            val captured = messageService.channelClaimMessage(claimID)
             ownership.check("channel.sent")
             envelope.localNodeName?.let {
                 if (!synchronized(lock) { id in indexedChannels }) {
                     try {
-                        reactionIndexer.indexMessage(id, envelope.channelIndex, it, envelope.messageText, stamp)
+                        reactionIndexer.indexMessage(id, requireNotNull(captured.channelIndex), it, captured.text, stamp)
                         ownership.check("channel.indexed")
                         synchronized(lock) { indexedChannels += id }
                     } catch (cancelled: CancellationException) { throw cancelled }
@@ -364,7 +376,13 @@ class ChatSendQueueService(
         catch (failure: MeshCoreException) { channelFailure(envelope, attempt, failure) }
     }
 
-    private suspend fun channelFailure(envelope: ChannelMessageEnvelope, attempt: Attempt, failure: Exception): Nothing {
+    private suspend fun remapChannelPending(id: UUID): Boolean {
+        val claimID = synchronized(lock) { channelClaimIDs[id] }
+            ?: throw PersistenceStoreException(PersistenceStoreError.SaveFailed("Channel remap capture unavailable"))
+        return messageService.remapQueuedChannelClaim(claimID)
+    }
+
+    private suspend fun channelFailure(envelope: ChannelMessageEnvelope, attempt: Attempt, failure: Exception) {
         val id = envelope.messageID
         if (!isTransientChannelMessageError(failure)) throw failure
         if (isChannelMessageNotFound(failure) && attempt.postBumpCount >= config.disambiguateAfterAttempts) {
@@ -373,7 +391,10 @@ class ChatSendQueueService(
                 check(queryAccounting == null) { "Channel queries must be serialized" }
                 QueryAccounting(id, attempt, CompletableDeferred()).also { queryAccounting = it }
             }
-            val found = try { channelQuery.fetchChannel(envelope.channelIndex) }
+            val claimID = synchronized(lock) { channelClaimIDs[id] }
+                ?: throw PersistenceStoreException(PersistenceStoreError.SaveFailed("Channel query capture unavailable"))
+            val captured = messageService.channelClaimMessage(claimID)
+            val found = try { channelQuery.fetchChannel(requireNotNull(captured.channelIndex)) }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (queryFailure: Exception) {
                 // The source query contract counts every thrown error; none becomes a nil channel.
@@ -382,8 +403,12 @@ class ChatSendQueueService(
                 record("channelQuery.$id", queryFailure, retain = queryFailure is PersistenceStoreException)
                 if (count >= config.maxConsecutiveFetchChannelFailures) throw queryFailure
                 try {
-                    if (remapPending(id)) synchronized(lock) {
+                    if (remapChannelPending(id)) synchronized(lock) {
                         accounting.parkPersisted = true
+                    } else {
+                        complete(id, clearProgress = false)
+                        finishQueryAccounting(id)
+                        return
                     }
                 }
                 catch (storage: PersistenceStoreException) { record("remap.$id", storage) }
@@ -393,7 +418,9 @@ class ChatSendQueueService(
             channelProgress.clear(id)
             if (found == null) throw failure
         }
-        try { remapPending(id) }
+        try {
+            if (!remapChannelPending(id)) { complete(id, clearProgress = false); return }
+        }
         catch (storage: PersistenceStoreException) { record("remap.$id", storage) }
         park(id, failure)
     }
@@ -475,11 +502,15 @@ class ChatSendQueueService(
                 }
                 failedPersisted = dataStore.fetchMessage(key(id))?.status == MessageStatus.FAILED
             } else {
-                failedPersisted = dataStore.updateMessageStatusUnlessDelivered(key(id), MessageStatus.FAILED)
+                val claimID = synchronized(lock) { channelClaimIDs[id] }
+                if (!messageService.failQueuedChannelClaim(claimID, id)) {
+                    complete(id, clearProgress = false)
+                    return
+                }
+                failedPersisted = true
             }
             ownership.check("terminalSend.saved")
-            messageService.notifyMessageFailed(id)
-            if (!direct) dataStore.deletePendingSendsForMessage(key(id))
+            if (direct) messageService.notifyMessageFailed(id)
             ownership.check("terminalSend.deleted")
             deleted = true
         } catch (storage: PersistenceStoreException) { record("terminalPersistence.$id", storage) }
@@ -493,8 +524,10 @@ class ChatSendQueueService(
         if (clearProgress) channelProgress.clear(id)
         val claim = synchronized(lock) { directClaimIDs.remove(id) }
         claim?.let(messageService::releaseDirectClaim)
+        synchronized(lock) { channelClaimIDs.remove(id) }?.let(messageService::releaseChannelClaim)
         synchronized(lock) {
             queued.remove(id)
+            queuedChannels.remove(id)
             completedDMs.remove(id)
             directAttempts.remove(id)
             completedChannels.remove(id)
@@ -536,7 +569,10 @@ class ChatSendQueueService(
                 try {
                     ownership.checkPersistenceCompletion("shutdownPending")
                     val row = dataStore.fetchMessage(key(id))
-                    if (row?.status == MessageStatus.RETRYING || row?.status == MessageStatus.FAILED) remapPending(id)
+                    if (row?.status == MessageStatus.RETRYING || row?.status == MessageStatus.FAILED) {
+                        if (synchronized(lock) { id in queuedChannels }) remapChannelPending(id)
+                        else remapPending(id)
+                    }
                 } catch (storage: PersistenceStoreException) { record("shutdownPending.$id", storage) }
                 catch (stale: MessageServiceException) { record("shutdownPending.$id", stale) }
             }

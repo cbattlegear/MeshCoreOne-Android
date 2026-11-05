@@ -31,7 +31,7 @@ class RetirementAndConsumerCloseTest {
             advanceTimeBy(1201); runCurrent(); queue.awaitDrainCompletion()
             assertEquals(MessageStatus.FAILED, h.stored(message.id).status); assertEquals(1L, h.stored(message.id).sendCount)
             val out = statuses(h.service, events)
-            assertEquals(listOf(MessageStatusEvent.Failed(message.id)), out)
+            assertEquals(listOf(MessageStatusEvent.PersistenceChanged(EntityKey(RADIO, message.id))), out)
             assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size); queue.shutdown(); h.close()
         },
         native("actualExpiryOfUnacknowledgedResendCannotBecomeLookupAbsenceSuccess") {
@@ -43,7 +43,7 @@ class RetirementAndConsumerCloseTest {
             h.service.checkExpiredAcks(); assertEquals(0, h.service.pendingAckCount)
             advanceTimeBy(1201); runCurrent(); queue.awaitDrainCompletion()
             assertEquals(MessageStatus.FAILED, h.stored(message.id).status); assertEquals(1L, h.stored(message.id).sendCount)
-            assertEquals(listOf(MessageStatusEvent.Failed(message.id)), statuses(h.service, events))
+            assertEquals(listOf(MessageStatusEvent.PersistenceChanged(EntityKey(RADIO, message.id))), statuses(h.service, events))
             assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size); queue.shutdown(); h.close()
         },
         native("genuineEarlyAckCanRetireItsLookupBeforeAcceptanceAndStillConfirmExactlyOneResend") {

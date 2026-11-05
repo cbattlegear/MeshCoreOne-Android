@@ -423,14 +423,15 @@ class RecoveryPolicyTest {
             assertEquals(MessageStatus.FAILED, h.stored(later.id).status)
             assertSame(tracking, h.service.pendingAck(first.id))
             assertNull(h.service.pendingAck(later.id))
-            assertEquals(listOf<MessageStatusEvent>(MessageStatusEvent.Failed(later.id)), observed)
+            assertEquals(listOf<MessageStatusEvent>(MessageStatusEvent.PersistenceChanged(EntityKey(RADIO, later.id))), observed)
             assertTrue(h.diagnostics.any { it is MessagingDiagnostic.Failure &&
                 it.operation == "ackExpiry.${first.id}" && it.cause === fault })
             h.store.before = null
             h.service.checkExpiredAcks(); h.service.checkExpiredAcks(); runCurrent()
             assertEquals(MessageStatus.FAILED, h.stored(first.id).status)
             assertEquals(0, h.service.pendingAckCount)
-            assertEquals(listOf<MessageStatusEvent>(MessageStatusEvent.Failed(later.id), MessageStatusEvent.Failed(first.id)), observed)
+            assertEquals(listOf<MessageStatusEvent>(MessageStatusEvent.PersistenceChanged(EntityKey(RADIO, later.id)),
+                MessageStatusEvent.PersistenceChanged(EntityKey(RADIO, first.id))), observed)
             assertTrue(h.service.close().isComplete); h.close()
         },
         native("fail all diagnoses each failed write continues later entries and retries retained tracking") {
@@ -460,13 +461,13 @@ class RecoveryPolicyTest {
             }
             assertEquals(MessageStatus.FAILED, h.stored(messages[2].id).status)
             assertNull(h.service.pendingAck(messages[2].id))
-            assertEquals(listOf<MessageStatusEvent>(MessageStatusEvent.Failed(messages[2].id)), observed)
+            assertEquals(listOf<MessageStatusEvent>(MessageStatusEvent.PersistenceChanged(EntityKey(RADIO, messages[2].id))), observed)
             h.store.before = null
             h.service.failAllPendingMessages(); h.service.failAllPendingMessages(); runCurrent()
             assertEquals(0, h.service.pendingAckCount)
             assertTrue(messages.all { h.stored(it.id).status == MessageStatus.FAILED })
             assertEquals(listOf(messages[2].id, messages[0].id, messages[1].id),
-                observed.filterIsInstance<MessageStatusEvent.Failed>().map { it.messageID })
+                observed.filterIsInstance<MessageStatusEvent.PersistenceChanged>().map { it.key.id })
             assertTrue(h.service.close().isComplete); h.close()
         },
         native("unreconciled fail-all persistence errors survive in the teardown report") {
@@ -513,7 +514,7 @@ class RecoveryPolicyTest {
             assertEquals(2, writes)
             assertEquals(MessageStatus.FAILED, h.stored(message.id).status)
             assertEquals(0, h.service.pendingAckCount)
-            assertEquals(listOf<MessageStatusEvent>(MessageStatusEvent.Failed(message.id)), observed)
+            assertEquals(listOf<MessageStatusEvent>(MessageStatusEvent.PersistenceChanged(EntityKey(RADIO, message.id))), observed)
             assertTrue(h.service.close().isComplete); h.close()
         },
         native("overlapping ACK recovery observes fail-all ACK-write accounting before mutation unlock") {
@@ -765,7 +766,7 @@ class RecoveryPolicyTest {
             } else {
                 h.clock.offset += 60_000
                 h.service.checkExpiredAcks(); runCurrent()
-                MessageStatusEvent.Failed(message.id)
+                MessageStatusEvent.PersistenceChanged(EntityKey(RADIO, message.id))
             }
             assertEquals(if (recovery == "ACK") MessageStatus.DELIVERED else MessageStatus.FAILED,
                 h.stored(message.id).status)
@@ -815,7 +816,7 @@ class RecoveryPolicyTest {
             runCurrent()
             assertEquals(MessageStatus.FAILED, h.stored(message.id).status)
             assertEquals(0, h.service.pendingAckCount)
-            assertEquals(listOf<MessageStatusEvent>(MessageStatusEvent.Failed(message.id)), observed)
+            assertEquals(listOf<MessageStatusEvent>(MessageStatusEvent.PersistenceChanged(EntityKey(RADIO, message.id))), observed)
             assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
             assertTrue(h.service.close().isComplete); h.close()
         }

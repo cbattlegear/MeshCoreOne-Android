@@ -51,6 +51,11 @@ internal class RecordingDirectAckAuthority(
     private val saturatedRadios = mutableSetOf<RadioId>()
     private val radioMutations = Mutex()
 
+    internal fun isCurrentLease(lease: DirectAckLease, radio: RadioId): Boolean {
+        val value = lease as? Lease ?: return false
+        return currentLeases[radio] === value && value !in revoked
+    }
+
     suspend fun seedAcceptedFixture(attempt: DirectAckAttempt) {
         val value = requireNotNull(resolve(attempt))
         value.receipt.wires.forEach { wire ->

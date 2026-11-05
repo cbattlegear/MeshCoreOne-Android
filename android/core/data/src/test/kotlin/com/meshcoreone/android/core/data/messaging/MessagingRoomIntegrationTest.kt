@@ -161,7 +161,8 @@ class MessagingRoomIntegrationTest {
             directAckAuthority = persistence as? DirectAckAuthority ?: store,
             directPendingCompletionAuthority = persistence as? DirectPendingCompletionAuthority ?: store,
             directAckRadioExclusionAuthority = persistence as? DirectAckRadioExclusionAuthority ?: store,
-            directAckRadioFailureAuthority = failureAuthority)
+            directAckRadioFailureAuthority = failureAuthority,
+            channelFailureAuthority = persistence as? ChannelFailureAuthority ?: store)
         val queue = ChatSendQueueService(token, persistence, service, channelQuery,
             OutgoingChannelReactionIndexer { _, _, _, _, _ -> }, signals, scope, queueConfig, clock,
             reporter = MessagingIssueReporter { diagnostics += it })
@@ -173,7 +174,8 @@ class MessagingRoomIntegrationTest {
 
     private open inner class DirectRoles(private val actual: RoomPersistenceStore) : PersistenceStoreProtocol by actual,
         DirectAckAuthority by actual, DirectPendingCompletionAuthority by actual,
-        DirectAckRadioExclusionAuthority by actual, DirectAckRadioFailureAuthority by actual {
+        DirectAckRadioExclusionAuthority by actual, DirectAckRadioFailureAuthority by actual,
+        ChannelFailureAuthority by actual {
         private val keys = mutableMapOf<DirectAckAttempt, EntityKey>()
         private val intents = mutableMapOf<DirectAckIntent, EntityKey>()
         protected fun attemptKey(attempt: DirectAckAttempt) = requireNotNull(keys[attempt])
@@ -947,6 +949,83 @@ class MessagingRoomIntegrationTest {
         unprovedZeroAttemptFailure(reopen = true)
     }
 
+    @Test fun oldMayAcrossReopenStillBlocksFailureOfANewUnmarkedClaimForTheSameMessage() = runTest(scheduler) {
+        olderSameMessageMayBlocksNewUnmarkedClaim(inheritedFailed = false)
+    }
+
+    @Test fun inheritedFailedWithOldMayAcrossReopenCannotGrantANewUnmarkedResendFailure() = runTest(scheduler) {
+        olderSameMessageMayBlocksNewUnmarkedClaim(inheritedFailed = true)
+    }
+
+    private suspend fun TestScope.olderSameMessageMayBlocksNewUnmarkedClaim(inheritedFailed: Boolean) {
+        val name = "same-message-may-$inheritedFailed.db"
+        store.close(); db.close()
+        db = database(name); store = RoomPersistenceStore(db, process, clock.wallClock)
+        seed()
+        val old = RadioGeneration(168)
+        old.start(); old.firmware.error = 2u
+        assertFailsWith<MessageServiceException> { old.service.sendDirectMessage("same message historical MAY", contact) }
+        val original = store.fetchMessages(EntityKey(radio, contact.id)).single()
+        val oldHistory = assertIs<DirectAckRadioEvidenceObservation.Found>(
+            store.inspectDirectAckRadioEvidence(radio)).snapshot
+        assertEquals(DirectAckRadioWireOutcome.MayHaveWritten, oldHistory.wires.single().outcome)
+        assertEquals(1, old.firmware.sent().size)
+        if (inheritedFailed) store.updateMessageStatus(EntityKey(radio, original.id), MessageStatus.FAILED)
+        val baseline = assertNotNull(store.fetchMessage(EntityKey(radio, original.id)))
+        old.stop()
+        assertNotNull(process.coroutineContext[Job]).cancelAndJoin()
+        store.close(); db.close()
+        process = CoroutineScope(SupervisorJob() + StandardTestDispatcher(scheduler))
+        db = database(name); store = RoomPersistenceStore(db, process, clock.wallClock)
+        store.warmUp()
+        val actual = store
+        val captures = mutableListOf<DirectAckReceipt>()
+        val fault = MessageServiceException(MessageServiceError.ContactNotFound)
+        val boundary = object : DirectRoles(actual) {
+            override suspend fun beginDirectAckAttemptRequiringEmissionTracking(
+                intent: DirectAckIntent, firstWireRequestId: UUID, predictedAckCode: UInt,
+            ): DirectAckBeginResult =
+                super.beginDirectAckAttemptRequiringEmissionTracking(intent, firstWireRequestId, predictedAckCode).also {
+                    when (it) {
+                        is DirectAckBeginResult.Begun -> captures += it.receipt
+                        is DirectAckBeginResult.AlreadyBegun -> captures += it.receipt
+                        is DirectAckBeginResult.Rejected -> Unit
+                    }
+                }
+            override suspend fun markDirectAckWireMayHaveWritten(
+                attempt: DirectAckAttempt, wireRequestId: UUID, emissionRequestId: UUID,
+            ): DirectAckEmissionMarkResult = throw fault
+        }
+        val current = RadioGeneration(1, boundary, config = MessageServiceConfig(maxAttempts = 1),
+            processEpoch = ProcessEpoch(UUID.fromString("EEEEEEEE-1111-2222-3333-444444444444")))
+        current.start()
+        val events = current.service.statusEvents()
+        try {
+            val thrown = assertFailsWith<MessageServiceException> {
+                if (inheritedFailed) current.service.resendDirectMessage(original.id, contact, preserveTimestamp = true)
+                else current.service.sendPendingDirectMessage(original.id, contact, preserveTimestamp = true)
+            }
+            assertSame(fault, thrown)
+            val capture = captures.single()
+            assertEquals(EntityKey(radio, original.id), capture.key)
+            assertNotEquals(oldHistory.wires.single().claimRequestId, capture.requestId)
+            assertEquals(if (inheritedFailed) DirectAckMode.RESEND else DirectAckMode.SEND, capture.mode)
+            val denial = assertIs<DirectAckFailureNonsettlementException>(
+                current.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().last {
+                    it.operation == "ackFailureUncertain.${original.id}"
+                }.cause)
+            assertTrue(DirectAckRadioNonfailingReason.PREAUTHORITY_HISTORY_UNKNOWN in denial.reasons)
+            assertTrue(DirectAckRadioNonfailingReason.UNRESOLVED_OTHER_CLAIM_EMISSION in denial.reasons,
+                "The old same-message MAY must remain an independent blocker, not be masked by global UNKNOWN")
+            assertEquals(baseline, store.fetchMessage(EntityKey(radio, original.id)))
+            assertEquals(oldHistory, assertIs<DirectAckRadioEvidenceObservation.Found>(
+                store.inspectDirectAckRadioEvidence(radio)).snapshot)
+            assertTrue(current.firmware.sent().isEmpty())
+            assertEquals(1, old.firmware.sent().size)
+            assertTrue(completedStatuses(current, events).none { it is MessageStatusEvent.Failed })
+        } finally { events.close(); current.stop() }
+    }
+
     @Test fun retiredRamTrackingCannotTurnSameServiceZeroAttemptPreclaimFaultIntoDefiniteFailure() = runTest(scheduler) {
         unprovedZeroAttemptFailure(reopen = false)
     }
@@ -1401,36 +1480,138 @@ class MessagingRoomIntegrationTest {
         current.session.stop(); current.scope.cancel()
     }
 
-    @Test fun heldChannelFailureReadCannotFailADirectReplacementAtTheSameKey() = runTest(scheduler) {
-        channelFailureCannotTargetDirectReplacement(afterWrite = false)
-    }
-
-    @Test fun heldCommittedChannelFailureCannotPublishFailedForADirectReplacementAtTheSameKey() = runTest(scheduler) {
-        channelFailureCannotTargetDirectReplacement(afterWrite = true)
-    }
-
-    private suspend fun TestScope.channelFailureCannotTargetDirectReplacement(afterWrite: Boolean) {
+    @Test fun unknownDirectFailureCannotMutateOrPublishForReplacementAfterItsActualRoomDecision() = runTest(scheduler) {
         seed()
         val actual = store
+        val entered = CompletableDeferred<DirectAckRadioFailureResult.Nonfailing>()
+        val release = CompletableDeferred<Unit>()
+        val boundary = object : DirectRoles(actual) {
+            override suspend fun recordDirectFailureExcludingRadioHistory(attempt: DirectAckAttempt): DirectAckRadioFailureResult {
+                val result = assertIs<DirectAckRadioFailureResult.Nonfailing>(
+                    actual.recordDirectFailureExcludingRadioHistory(attempt))
+                entered.complete(result)
+                release.await()
+                return result
+            }
+        }
+        val current = RadioGeneration(168, boundary)
+        current.start()
+        val original = current.service.sendDirectMessage("unproved direct failure publication", contact)
+        val unrelated = original.copy(id = UUID.randomUUID(), text = "unrelated unseen failure",
+            status = MessageStatus.FAILED, failureSeen = false)
+        actual.saveMessage(unrelated)
+        val events = current.service.statusEvents()
+        val failing = backgroundScope.async { current.service.failAllPendingMessages() }
+        try {
+            assertTrue(DirectAckRadioNonfailingReason.PREAUTHORITY_HISTORY_UNKNOWN in entered.await().reasons)
+            val key = EntityKey(radio, original.id)
+            val replacement = original.copy(contactID = null, channelIndex = 0u, text = "replacement channel",
+                status = MessageStatus.PENDING, failureSeen = false)
+            actual.deleteMessage(key)
+            actual.saveMessage(replacement)
+            release.complete(Unit); failing.await()
+            assertEquals(replacement, actual.fetchMessage(key))
+            assertEquals(unrelated, actual.fetchMessage(EntityKey(radio, unrelated.id)))
+            assertTrue(completedStatuses(current, events).isEmpty())
+        } finally {
+            withContext(NonCancellable) {
+                release.complete(Unit); failing.cancelAndJoin(); events.close(); current.stop()
+            }
+        }
+    }
+
+    @Test fun queueFailureReadPublishesOnlyNeutralHintAfterActualRoomSameKeyReplacement() = runTest(scheduler) {
+        seed()
+        val actual = store
+        val message = MessageDTO(radioId = radio, contactID = contact.id, text = "pre-existing failed row",
+            timestamp = 100u, status = MessageStatus.FAILED, failureSeen = false)
+        val unrelated = message.copy(id = UUID.randomUUID(), text = "unrelated unseen failure")
+        actual.saveMessage(message); actual.saveMessage(unrelated)
         val entered = CompletableDeferred<MessageDTO>()
         val release = CompletableDeferred<Unit>()
-        var channelReads = 0
+        val key = EntityKey(radio, message.id)
         val boundary = object : DirectRoles(actual) {
             override suspend fun fetchMessage(key: EntityKey): MessageDTO? {
                 val row = actual.fetchMessage(key)
-                if (!afterWrite && row?.channelIndex != null && ++channelReads == 2) {
-                    entered.complete(row)
+                if (key.id == message.id) {
+                    entered.complete(assertNotNull(row))
                     release.await()
                 }
                 return row
             }
-            override suspend fun updateMessageStatusUnlessDelivered(key: EntityKey, status: MessageStatus): Boolean {
-                val changed = actual.updateMessageStatusUnlessDelivered(key, status)
-                if (afterWrite && status == MessageStatus.FAILED && changed) {
+        }
+        val current = RadioGeneration(169, boundary)
+        val events = current.service.statusEvents()
+        val notifying = backgroundScope.async { current.service.notifyMessageFailed(message.id) }
+        try {
+            assertEquals(message, entered.await())
+            val replacement = message.copy(contactID = null, channelIndex = 0u, text = "new channel row",
+                status = MessageStatus.PENDING)
+            actual.deleteMessage(key); actual.saveMessage(replacement)
+            release.complete(Unit); notifying.await()
+            assertEquals(replacement, actual.fetchMessage(key))
+            assertEquals(unrelated, actual.fetchMessage(EntityKey(radio, unrelated.id)))
+            assertEquals(listOf(MessageStatusEvent.PersistenceChanged(key)), completedStatuses(current, events))
+        } finally {
+            withContext(NonCancellable) {
+                release.complete(Unit); notifying.cancelAndJoin(); events.close(); current.stop()
+            }
+        }
+    }
+
+    @Test fun heldChannelFailureReadCannotFailADirectReplacementAtTheSameKey() = runTest(scheduler) {
+        channelFailureCannotTargetReplacement(afterWrite = false)
+    }
+
+    @Test fun heldCommittedChannelFailureCannotPublishFailedForADirectReplacementAtTheSameKey() = runTest(scheduler) {
+        channelFailureCannotTargetReplacement(afterWrite = true)
+    }
+
+    @Test fun heldChannelFailureReadCannotFailAnIdenticalChannelRecreationAtTheSameKey() = runTest(scheduler) {
+        channelFailureCannotTargetReplacement(afterWrite = false, sameChannel = true)
+    }
+
+    @Test fun heldCommittedChannelFailureCannotPublishFailedForAnIdenticalChannelRecreation() = runTest(scheduler) {
+        channelFailureCannotTargetReplacement(afterWrite = true, sameChannel = true)
+    }
+
+    @Test fun heldChannelFailureReadCannotFailAfterAnIndependentSameValueChannelWrite() = runTest(scheduler) {
+        channelFailureCannotTargetReplacement(afterWrite = false, sameChannel = true, deleteOriginal = false)
+    }
+
+    @Test fun heldCommittedChannelFailureCannotPublishFailedAfterAnIndependentSameValueChannelWrite() = runTest(scheduler) {
+        channelFailureCannotTargetReplacement(afterWrite = true, sameChannel = true, deleteOriginal = false)
+    }
+
+    private suspend fun TestScope.channelFailureCannotTargetReplacement(
+        afterWrite: Boolean, sameChannel: Boolean = false, deleteOriginal: Boolean = true,
+    ) {
+        seed()
+        val actual = store
+        val entered = CompletableDeferred<MessageDTO>()
+        val release = CompletableDeferred<Unit>()
+        var capturedKey: EntityKey? = null
+        val boundary = object : DirectRoles(actual) {
+            override suspend fun createChannelFailureAttempt(
+                lease: DirectAckLease, creationRequestId: UUID, message: MessageDTO,
+            ): ChannelFailureCaptureResult {
+                capturedKey = EntityKey(message.radioId, message.id)
+                return actual.createChannelFailureAttempt(lease, creationRequestId, message)
+            }
+            override suspend fun recordChannelFailure(
+                attempt: ChannelFailureAttempt, requestId: UUID, cleanup: ChannelFailureCleanup,
+            ): ChannelFailureResult {
+                val key = requireNotNull(capturedKey)
+                if (!afterWrite) {
                     entered.complete(assertNotNull(actual.fetchMessage(key)))
                     release.await()
                 }
-                return changed
+                val result = actual.recordChannelFailure(attempt, requestId, cleanup)
+                if (afterWrite && result is ChannelFailureResult.Applied) {
+                    entered.complete(assertNotNull(actual.fetchMessage(key)))
+                    release.await()
+                }
+                return result
             }
         }
         val current = RadioGeneration(167, boundary,
@@ -1445,17 +1626,19 @@ class MessagingRoomIntegrationTest {
         try {
             val original = entered.await()
             val key = EntityKey(radio, original.id)
-            actual.deleteMessage(key)
-            val replacement = original.copy(contactID = contact.id, channelIndex = null,
-                text = "independent unproved direct replacement", status = MessageStatus.PENDING,
-                ackCode = null, roundTripTime = null)
+            if (deleteOriginal) actual.deleteMessage(key)
+            val replacement = if (sameChannel) original else original.copy(
+                contactID = contact.id, channelIndex = null, text = "independent unproved direct replacement",
+                status = MessageStatus.PENDING, ackCode = null, roundTripTime = null)
             actual.saveMessage(replacement)
             release.complete(Unit)
             val failure = sending.await()
             assertEquals(2u.toUByte(),
                 assertIs<MeshCoreException.DeviceError>(assertIs<MessageServiceError.SessionError>(failure.error).underlying).code)
             assertEquals(replacement, actual.fetchMessage(key))
-            assertTrue(completedStatuses(current, events).none { it is MessageStatusEvent.Failed })
+            val observed = completedStatuses(current, events)
+            assertTrue(observed.none { it is MessageStatusEvent.Failed })
+            assertEquals(if (afterWrite) listOf(MessageStatusEvent.PersistenceChanged(key)) else emptyList(), observed)
             assertEquals(1, current.firmware.channelSent().size)
             assertTrue(current.firmware.sent().isEmpty())
         } finally {
@@ -1466,10 +1649,11 @@ class MessagingRoomIntegrationTest {
         }
     }
 
-    @Test fun channelFailureStillUsesItsOwnGenericFailedPathWithoutDirectPreclaimInference() = runTest(scheduler) {
+    @Test fun channelFailureUsesItsCapturedRowAndNeutralInvalidationWithoutDirectPreclaimInference() = runTest(scheduler) {
         seed()
         val current = RadioGeneration(163)
         current.start(); current.firmware.error = 2u
+        val events = current.service.statusEvents()
         val failure = assertFailsWith<MessageServiceException> {
             current.service.sendChannelMessage("channel rejection remains failed", 0u, radio)
         }
@@ -1480,6 +1664,8 @@ class MessagingRoomIntegrationTest {
         assertNull(message.contactID)
         assertEquals(0u.toUByte(), message.channelIndex)
         assertEquals(1, current.firmware.channelSent().size)
+        assertEquals(listOf(MessageStatusEvent.PersistenceChanged(EntityKey(radio, message.id))),
+            completedStatuses(current, events))
         assertTrue(current.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().none {
             it.cause is DirectPreclaimFailureUncertaintyException
         })

@@ -48,7 +48,8 @@ class ChatSendQueueProgressTest {
             assertEquals(MessageStatus.PENDING, second.stored(b.id).status)
             assertEquals(3L, second.store.fetchPendingSendsForMessage(EntityKey(RADIO, b.id)).single().attemptCount)
             assertEquals(1, q2.queuedEnvelopeCount)
-            assertEquals(listOf(MessageStatusEvent.Failed(a.id)), statuses(second.service, events))
+            assertEquals(List(2) { MessageStatusEvent.PersistenceChanged(EntityKey(RADIO, a.id)) },
+                statuses(second.service, events))
             q2.transportDidOpen(); runCurrent()
             assertEquals(1, second.sends(CommandCode.GET_CHANNEL).size)
             assertTrue(queryFailures(second, b.id).isEmpty())

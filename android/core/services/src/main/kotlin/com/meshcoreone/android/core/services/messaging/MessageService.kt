@@ -60,6 +60,7 @@ class MessageService(
         directAckAuthority as? DirectAckRadioExclusionAuthority ?: dataStore as? DirectAckRadioExclusionAuthority,
     private val directAckRadioFailureAuthority: DirectAckRadioFailureAuthority? =
         directAckAuthority as? DirectAckRadioFailureAuthority ?: dataStore as? DirectAckRadioFailureAuthority,
+    private val channelFailureAuthority: ChannelFailureAuthority? = dataStore as? ChannelFailureAuthority,
 ) : MessagingSendPort {
     init { require(localPublicKey.size == ProtocolLimits.PUBLIC_KEY_SIZE) }
     private val ownership = MessagingOwnership(token, scope, signals, reporter)
@@ -74,6 +75,19 @@ class MessageService(
     private val activationRequestID = UUID.randomUUID()
     private var authorityLease: DirectAckLease? = null
     private var authorityActivationStarted = false
+    private var authorityActivatedThroughChannel = false
+    private class ChannelClaim(
+        val id: UUID,
+        val message: MessageDTO,
+        val pendingID: UUID?,
+        var attempt: ChannelFailureAttempt,
+        var receipt: ChannelFailureReceipt,
+    ) {
+        var failureID = UUID.randomUUID()
+        val terminalID = UUID.randomUUID()
+        var remapID = UUID.randomUUID()
+    }
+    private val channelClaims = mutableMapOf<UUID, ChannelClaim>()
     private class DirectAuthorityState(
         val requestID: UUID,
         val attempt: DirectAckAttempt,
@@ -159,6 +173,12 @@ class MessageService(
     private fun failureAuthority(): DirectAckRadioFailureAuthority =
         directAckRadioFailureAuthority ?: throw authorityFailure("radio failure capability unavailable")
 
+    private fun channelAuthorityFailure(detail: String) =
+        PersistenceStoreException(PersistenceStoreError.SaveFailed("Channel failure authority: $detail"))
+
+    private fun channelAuthority(): ChannelFailureAuthority =
+        channelFailureAuthority ?: throw channelAuthorityFailure("capability unavailable")
+
     private fun requireDirectDispatchAuthorities() {
         radioAuthority()
         failureAuthority()
@@ -217,16 +237,146 @@ class MessageService(
         return PreparedDirect(intent, message, selected)
     }
 
-    private suspend fun directLease(): DirectAckLease = authorityActivation.withLock {
+    private suspend fun directLease(): DirectAckLease = sessionLease(channel = false)
+
+    private suspend fun sessionLease(channel: Boolean): DirectAckLease = authorityActivation.withLock {
         authorityLease ?: run {
             authorityActivationStarted = true
-            when (val result = authority().activateDirectAckSession(token, activationRequestID)) {
+            authorityActivatedThroughChannel = channel
+            val result = if (channel) channelAuthority().activateChannelFailureSession(token, activationRequestID)
+                else authority().activateDirectAckSession(token, activationRequestID)
+            when (result) {
             is DirectAckActivationResult.Activated -> result.lease
             is DirectAckActivationResult.AlreadyActivated -> result.lease
             is DirectAckActivationResult.Rejected -> throw authorityFailure(result.reason.name)
             }
         }.also { authorityLease = it }
     }
+
+    private fun capturedChannel(
+        claimID: UUID, id: UUID, pendingID: UUID?, result: ChannelFailureCaptureResult,
+    ): ChannelClaim {
+        val (attempt, receipt) = when (result) {
+            is ChannelFailureCaptureResult.Captured -> result.attempt to result.receipt
+            is ChannelFailureCaptureResult.AlreadyCaptured -> result.attempt to result.receipt
+            is ChannelFailureCaptureResult.Rejected -> throw channelAuthorityFailure(result.reason.name)
+        }
+        val message = receipt.message ?: throw channelAuthorityFailure("erased capture")
+        val pending = receipt.pending
+        if (receipt.captureRequestId != claimID || receipt.key != key(id) ||
+            receipt.permission != DirectAckPermission.CURRENT || receipt.pendingSendId != pendingID ||
+            message.radioId != token.radioId || message.id != id || message.channelIndex == null ||
+            message.contactID != null || message.direction != MessageDirection.OUTGOING ||
+            pendingID != null && (pending == null || pending.id != pendingID || pending.messageID != id ||
+                pending.radioId != token.radioId || pending.kind != PendingSendKind.CHANNEL ||
+                pending.channelIndex != message.channelIndex)) {
+            throw channelAuthorityFailure("non-current or mismatched capture")
+        }
+        return ChannelClaim(claimID, message, pendingID, attempt, receipt).also {
+            synchronized(lock) { channelClaims[claimID] = it }
+        }
+    }
+
+    internal fun channelClaimMessage(claimID: UUID): MessageDTO =
+        synchronized(lock) { channelClaims[claimID]?.message }
+            ?: throw channelAuthorityFailure("capture unavailable")
+
+    internal fun releaseChannelClaim(claimID: UUID) {
+        synchronized(lock) { channelClaims.remove(claimID) }
+    }
+
+    internal suspend fun remapQueuedChannelClaim(claimID: UUID): Boolean = withContext(NonCancellable) {
+        ownership.checkPersistenceCompletion("channelRemap")
+        val claim = synchronized(lock) { channelClaims[claimID] }
+            ?: throw channelAuthorityFailure("remap capture unavailable")
+        val (attempt, receipt) = when (val result = channelAuthority().remapChannelFailureAttempt(claim.attempt, claim.remapID)) {
+            is ChannelFailureRemapResult.Remapped -> result.attempt to result.receipt
+            is ChannelFailureRemapResult.AlreadyRemapped -> result.attempt to result.receipt
+            is ChannelFailureRemapResult.AlreadyDelivered -> return@withContext false
+            is ChannelFailureRemapResult.Rejected -> {
+                reportChannelUncertainty(claim.message.id, result.reason)
+                return@withContext false
+            }
+        }
+        if (receipt.captureRequestId != claim.id || receipt.key != key(claim.message.id) ||
+            receipt.pendingSendId != claim.pendingID || receipt.permission != DirectAckPermission.CURRENT ||
+            receipt.message?.status != MessageStatus.PENDING ||
+            receipt.operations.none { it.requestId == claim.remapID && it.operation == ChannelFailureOperation.REMAPPED_TO_PENDING }) {
+            throw channelAuthorityFailure("mismatched remap commit")
+        }
+        claim.attempt = attempt
+        claim.receipt = receipt
+        claim.remapID = UUID.randomUUID()
+        claim.failureID = UUID.randomUUID()
+        if (ownership.isCurrent) events.yield(MessageStatusEvent.PersistenceChanged(key(claim.message.id)))
+        true
+    }
+
+    private fun reportChannelUncertainty(id: UUID, rejection: DirectAckRejection? = null) {
+        ownership.failure("channelFailureUncertain.$id", ChannelFailureUncertaintyException(token, id, rejection))
+    }
+
+    private suspend fun failChannelClaim(claimID: UUID?, id: UUID, cleanup: ChannelFailureCleanup): Boolean {
+        val claim = synchronized(lock) { channelClaims[claimID] }
+        if (claim == null || claim.message.id != id) {
+            reportChannelUncertainty(id)
+            return false
+        }
+        ownership.checkPersistenceCompletion("channelFailure")
+        val requestID = if (cleanup == ChannelFailureCleanup.KEEP_PENDING) claim.failureID else claim.terminalID
+        val receipt = when (val result = channelAuthority().recordChannelFailure(claim.attempt, requestID, cleanup)) {
+            is ChannelFailureResult.Applied -> result.receipt
+            is ChannelFailureResult.AlreadyApplied -> result.receipt
+            is ChannelFailureResult.AlreadyDelivered -> return false
+            is ChannelFailureResult.Rejected -> {
+                reportChannelUncertainty(id, result.reason)
+                return false
+            }
+        }
+        val operation = if (cleanup == ChannelFailureCleanup.KEEP_PENDING) ChannelFailureOperation.FAILED
+            else ChannelFailureOperation.FAILED_AND_PENDING_DELETED
+        if (receipt.key != key(id) || receipt.captureRequestId != claim.id ||
+            receipt.pendingSendId != claim.pendingID ||
+            receipt.operations.none { it.requestId == requestID && it.operation == operation }) {
+            throw channelAuthorityFailure("mismatched failure commit")
+        }
+        claim.receipt = receipt
+        recovered("channelFailure.$id")
+        if (ownership.isCurrent) events.yield(MessageStatusEvent.PersistenceChanged(key(id)))
+        return true
+    }
+
+    internal suspend fun failQueuedChannelClaim(claimID: UUID?, messageID: UUID): Boolean =
+        mutation(messageID).withLock {
+            failChannelClaim(claimID, messageID, ChannelFailureCleanup.DELETE_CAPTURED_PENDING)
+        }
+
+    private suspend fun failChannelAndRethrow(claimID: UUID, id: UUID, failure: Exception): Nothing {
+        val receipt = currentCoroutineContext()[NotificationActionReceipt]
+        withContext(NonCancellable) {
+            if (receipt == null || receipt.state == NotificationActionReceipt.State.READY) {
+                try {
+                    mutation(id).withLock { failChannelClaim(claimID, id, ChannelFailureCleanup.KEEP_PENDING) }
+                } catch (storage: PersistenceStoreException) {
+                    remember("channelFailure.$id", storage)
+                    if (storage !== failure) failure.addSuppressed(storage)
+                } catch (stale: MessageServiceException) {
+                    remember("channelFailure.$id", stale)
+                    if (stale !== failure) failure.addSuppressed(stale)
+                }
+            }
+        }
+        if (failure is MeshCoreException) throw MessageServiceException(MessageServiceError.SessionError(failure))
+        throw failure
+    }
+
+    private suspend fun <T> channelBoundary(claimID: UUID, id: UUID, block: suspend () -> T): T =
+        try { block() }
+        catch (failure: CancellationException) { failChannelAndRethrow(claimID, id, failure) }
+        catch (failure: MeshCoreException) { failChannelAndRethrow(claimID, id, failure) }
+        catch (failure: MeshTransportError) { failChannelAndRethrow(claimID, id, failure) }
+        catch (failure: MessageServiceException) { failChannelAndRethrow(claimID, id, failure) }
+        catch (failure: PersistenceStoreException) { failChannelAndRethrow(claimID, id, failure) }
 
     private fun directAuthority(id: UUID): DirectAuthorityState =
         synchronized(lock) { directAuthorities[id] } ?: throw authorityFailure("unregistered message")
@@ -1044,7 +1194,7 @@ class MessageService(
         }
         if (!acknowledgementArrived) retireBufferedAcknowledgements(messageID, retiredAttempt)
         if (!acknowledgementArrived) {
-            if (notify && changed) broadcastFailed(messageID)
+            if (notify && changed) broadcastFailurePersistenceChanged(messageID)
             recovered("failPending.$messageID")
             recovered("ackUncertain.$messageID")
         }
@@ -1081,16 +1231,15 @@ class MessageService(
             if (attempt == null && tracking == null) {
                 val row = dataStore.fetchMessage(key(messageID))
                 ownership.checkPersistenceCompletion("failMessage.preclaim")
-                if (row == null || row.channelIndex == null || row.contactID != null ||
-                    synchronized(lock) { messageID in directIntentMessages }) {
+                if (row?.channelIndex != null && row.contactID == null &&
+                    synchronized(lock) { messageID !in directIntentMessages }) {
+                    reportChannelUncertainty(messageID)
+                } else {
                     ownership.failure("preclaimUncertain.$messageID", DirectPreclaimFailureUncertaintyException(
                         token, messageID, DirectPreclaimFailureUncertaintyReason.UNPROVED_FAILURE,
                     ))
-                    return FailureWrite.UNCERTAIN
                 }
-                return if (dataStore.updateMessageStatusUnlessDelivered(key(messageID), MessageStatus.FAILED)) {
-                    FailureWrite.CHANGED
-                } else FailureWrite.UNCHANGED
+                return FailureWrite.UNCERTAIN
             }
             if (attempt == null && wasFailed) return FailureWrite.UNCHANGED
             if (attempt == null && dataStore.fetchMessage(key(messageID))?.status == MessageStatus.DELIVERED) {
@@ -1146,14 +1295,16 @@ class MessageService(
 
     suspend fun stopAndFailAllPending() { stopAckExpiryChecking(); failAllPendingMessages() }
 
-    private fun broadcastFailed(id: UUID) {
-        if (ownership.isCurrent && synchronized(lock) { failedNotifications.add(id) }) events.yield(MessageStatusEvent.Failed(id))
+    private fun broadcastFailurePersistenceChanged(id: UUID) {
+        if (ownership.isCurrent && synchronized(lock) { failedNotifications.add(id) }) {
+            events.yield(MessageStatusEvent.PersistenceChanged(key(id)))
+        }
     }
     suspend fun notifyMessageFailed(messageID: UUID) {
         ownership.check("notifyMessageFailed")
         val row = dataStore.fetchMessage(key(messageID))
         ownership.check("notifyMessageFailed.read")
-        if (row?.status == MessageStatus.FAILED) broadcastFailed(messageID)
+        if (row?.status == MessageStatus.FAILED) broadcastFailurePersistenceChanged(messageID)
     }
 
     internal suspend fun failMessageAndRethrow(
@@ -1852,28 +2003,32 @@ class MessageService(
         withFreshNotificationAction("sendChannelMessage") {
             owned("sendChannelMessage", channelOperations) {
                 val dto = outgoingChannel(text, channelIndex, radioId, textType)
-                sendBoundary(dto.id, true, failDefinitelyUnsentInline = true) {
-                    dataStore.saveMessage(dto)
-                    ownership.check("sendChannelMessage.persisted")
-                    withPoolBackoff(2u) {
-                        channelTransmission(channelIndex) {
-                            checkIdentity("sendChannelMessage.wire")
-                            inlineWire { dispatch ->
-                                val timestamp = Instant.ofEpochSecond(dto.timestamp.toLong())
-                                if (dispatch == null) session.sendChannelMessage(channelIndex, text, timestamp)
-                                else session.sendChannelMessage(channelIndex, text, timestamp, dispatch = dispatch)
+                val claimID = UUID.randomUUID()
+                try {
+                    channelBoundary(claimID, dto.id) {
+                        val captured = capturedChannel(claimID, dto.id, null,
+                            channelAuthority().createChannelFailureAttempt(sessionLease(channel = true), claimID, dto))
+                        ownership.check("sendChannelMessage.persisted")
+                        withPoolBackoff(2u) {
+                            channelTransmission(requireNotNull(captured.message.channelIndex)) {
+                                checkIdentity("sendChannelMessage.wire")
+                                inlineWire { dispatch ->
+                                    val timestamp = Instant.ofEpochSecond(captured.message.timestamp.toLong())
+                                    if (dispatch == null) session.sendChannelMessage(channelIndex, captured.message.text, timestamp)
+                                    else session.sendChannelMessage(channelIndex, captured.message.text, timestamp, dispatch = dispatch)
+                                }
                             }
                         }
                     }
-                }
-                ownership.check("sendChannelMessage.accepted")
-                bookkeeping("inlineChannel.${dto.id}") {
-                    dataStore.updateMessageStatus(key(dto.id), MessageStatus.SENT)
-                    ownership.check("sendChannelMessage.saved")
-                    events.yield(MessageStatusEvent.StatusResolved(dto.id, MessageStatus.SENT, null))
-                    updateChannelDate(channelIndex)
-                }
-                ChannelSendReceipt(dto.id, dto.timestamp)
+                    ownership.check("sendChannelMessage.accepted")
+                    bookkeeping("inlineChannel.${dto.id}") {
+                        dataStore.updateMessageStatus(key(dto.id), MessageStatus.SENT)
+                        ownership.check("sendChannelMessage.saved")
+                        events.yield(MessageStatusEvent.StatusResolved(dto.id, MessageStatus.SENT, null))
+                        updateChannelDate(channelIndex)
+                    }
+                    ChannelSendReceipt(dto.id, dto.timestamp)
+                } finally { releaseChannelClaim(claimID) }
             }
         }
 
@@ -1881,20 +2036,28 @@ class MessageService(
     override suspend fun resendChannelMessage(messageID: UUID, preserveTimestamp: Boolean): UInt =
         queuedChannel(messageID, true, preserveTimestamp)
 
-    private suspend fun queuedChannel(id: UUID, isResend: Boolean, preserveTimestamp: Boolean): UInt =
+    private suspend fun queuedChannel(id: UUID, isResend: Boolean, preserveTimestamp: Boolean): UInt {
+        val claimID = UUID.randomUUID()
+        try { return sendPendingChannelClaim(claimID, id, null, isResend, preserveTimestamp) }
+        finally { releaseChannelClaim(claimID) }
+    }
+
+    internal suspend fun sendPendingChannelClaim(
+        claimID: UUID, id: UUID, pendingID: UUID?, isResend: Boolean, preserveTimestamp: Boolean,
+    ): UInt =
         owned("queuedChannel", channelOperations) {
             synchronized(lock) { failedNotifications.remove(id) }
-            val row = sendBoundary(id, false) {
-                val row = fetchSaved(id)
-                if (row.channelIndex == null) throw MessageServiceException(MessageServiceError.SendFailed("Not a channel message"))
-                row
+            val claim = channelBoundary(claimID, id) {
+                synchronized(lock) { channelClaims[claimID] } ?: capturedChannel(claimID, id, pendingID,
+                    channelAuthority().prepareChannelFailureAttempt(sessionLease(channel = true), claimID, key(id), pendingID,
+                        if (isResend && !preserveTimestamp) timestamp() else null))
             }
+            val row = claim.message
             val index = requireNotNull(row.channelIndex)
             val accepted = synchronized(lock) { acceptedChannels[id] }
-            val stamp = accepted ?: if (!isResend || preserveTimestamp) row.timestamp else timestamp()
+            val stamp = accepted ?: row.timestamp
             if (accepted == null) {
-                sendBoundary(id, false) {
-                    if (isResend && !preserveTimestamp) dataStore.updateMessageTimestamp(key(id), stamp)
+                channelBoundary(claimID, id) {
                     ownership.check("queuedChannel.timestamp")
                     withPoolBackoff(2u) {
                         channelTransmission(index) {
@@ -1981,7 +2144,10 @@ class MessageService(
             }
             if (authorityActivationStarted) {
                 try {
-                    when (val result = authority().revokeDirectAckSession(directLease())) {
+                    val result = if (authorityActivatedThroughChannel) {
+                        channelAuthority().revokeChannelFailureSession(sessionLease(channel = true))
+                    } else authority().revokeDirectAckSession(directLease())
+                    when (result) {
                         DirectAckRevocationResult.Revoked, DirectAckRevocationResult.AlreadyRevoked -> Unit
                         is DirectAckRevocationResult.Rejected -> throw authorityFailure(result.reason.name)
                     }
@@ -1998,6 +2164,7 @@ class MessageService(
                 uncertainFailureWrites.clear()
                 directClaims.clear()
                 activeDirectClaims.clear()
+                channelClaims.clear()
             }
             events.finish()
             ownership.job.cancelAndJoin()

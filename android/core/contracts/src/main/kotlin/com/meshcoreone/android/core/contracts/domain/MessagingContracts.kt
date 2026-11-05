@@ -16,6 +16,12 @@ import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import java.util.UUID
 
 sealed interface MessageStatusEvent {
+    /**
+     * Radio-scoped hint to refetch actual persisted state, including absence/replacement. This is
+     * not a status, FAILED/mark-seen instruction or proof of the captured message incarnation.
+     * Consumers must fence the radio and perform neutral refresh only; receipt/readback is no grant.
+     */
+    data class PersistenceChanged(val key: EntityKey) : MessageStatusEvent
     data class StatusResolved(val messageID: UUID, val status: MessageStatus, val roundTripTime: UInt?) : MessageStatusEvent
     data class Resent(val messageID: UUID) : MessageStatusEvent
     data class Retrying(val messageID: UUID, val attempt: Long, val maxAttempts: Long) : MessageStatusEvent

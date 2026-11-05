@@ -111,9 +111,25 @@ private class RevisionedMap<K, V>(private val changed: (K, V?, V?) -> Unit) : Li
     override fun clear() { keys.toList().forEach { remove(it) } }
 }
 
-internal class RecordingStore : PersistenceStoreProtocol by unsupportedStore() {
+internal class RecordingStore : PersistenceStoreProtocol by unsupportedStore(), ChannelFailureAuthority {
     // Conditional algorithm fixture only; this is not a production physical-history certificate.
     val directAckAuthority = RecordingDirectAckAuthority(this, preauthorityHistoryUnknown = false)
+    val channelFailureAuthority = RecordingChannelFailureAuthority(this)
+    override suspend fun activateChannelFailureSession(token: SessionToken, requestId: UUID) =
+        channelFailureAuthority.activateChannelFailureSession(token, requestId)
+    override suspend fun revokeChannelFailureSession(lease: DirectAckLease) =
+        channelFailureAuthority.revokeChannelFailureSession(lease)
+    override suspend fun createChannelFailureAttempt(lease: DirectAckLease, creationRequestId: UUID, message: MessageDTO) =
+        channelFailureAuthority.createChannelFailureAttempt(lease, creationRequestId, message)
+    override suspend fun prepareChannelFailureAttempt(
+        lease: DirectAckLease, prepareRequestId: UUID, key: EntityKey, pendingSendId: UUID?, resendTimestamp: UInt?,
+    ) = channelFailureAuthority.prepareChannelFailureAttempt(lease, prepareRequestId, key, pendingSendId, resendTimestamp)
+    override suspend fun remapChannelFailureAttempt(attempt: ChannelFailureAttempt, requestId: UUID) =
+        channelFailureAuthority.remapChannelFailureAttempt(attempt, requestId)
+    override suspend fun recordChannelFailure(attempt: ChannelFailureAttempt, requestId: UUID, cleanup: ChannelFailureCleanup) =
+        channelFailureAuthority.recordChannelFailure(attempt, requestId, cleanup)
+    override suspend fun inspectChannelFailureAttempt(lease: DirectAckLease, captureRequestId: UUID) =
+        channelFailureAuthority.inspectChannelFailureAttempt(lease, captureRequestId)
     private val messageRevisions = mutableMapOf<EntityKey, Long>()
     private val pendingRevisions = mutableMapOf<EntityKey, Long>()
     internal fun messageRevision(key: EntityKey) = messageRevisions[key] ?: 0L
@@ -137,6 +153,7 @@ internal class RecordingStore : PersistenceStoreProtocol by unsupportedStore() {
     val calls = mutableListOf<String>()
     val faults = mutableMapOf<String, PersistenceStoreException>()
     var before: (suspend (String) -> Unit)? = null
+    var afterMessageRead: (suspend (EntityKey, MessageDTO?) -> Unit)? = null
     private suspend fun access(name: String) {
         calls += name
         before?.invoke(name)
@@ -148,7 +165,12 @@ internal class RecordingStore : PersistenceStoreProtocol by unsupportedStore() {
         val key = EntityKey(dto.radioId, dto.id)
         invalidateMessage(key); messages[key] = dto
     }
-    override suspend fun fetchMessage(key: EntityKey): MessageDTO? { access("fetchMessage"); return messages[key] }
+    override suspend fun fetchMessage(key: EntityKey): MessageDTO? {
+        access("fetchMessage")
+        val row = messages[key]
+        afterMessageRead?.invoke(key, row)
+        return row
+    }
     override suspend fun fetchMessage(deduplicationKey: String, radioId: RadioId): MessageDTO? =
         messages.values.firstOrNull { it.radioId == radioId && it.deduplicationKey == deduplicationKey }
     override suspend fun isDuplicateMessage(deduplicationKey: String, radioId: RadioId): Boolean =

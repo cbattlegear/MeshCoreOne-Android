@@ -160,7 +160,7 @@ class SourceChatQueueTest {
             val h = failingDM(this); h.transport.directError = 5u
             val m = h.message(MessageStatus.PENDING); h.pending(m); val events = h.service.statusEvents()
             val q = h.queue(); startDrain(h, q); q.awaitDrainCompletion()
-            assertEquals(listOf(MessageStatusEvent.Failed(m.id)), statuses(h.service, events))
+            assertEquals(listOf(MessageStatusEvent.PersistenceChanged(EntityKey(RADIO, m.id))), statuses(h.service, events))
             assertFalse(h.store.hasPendingSend(EntityKey(RADIO, m.id))); q.shutdown(); h.close()
         },
         original("ChatSendQueueServiceTests", "observeConnectionState fires the trigger for an already-ready initial state") {

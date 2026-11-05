@@ -51,8 +51,8 @@ class SourceAckTest {
             h.installAcceptedPendingAck(sourcePending(h, Bytes.of(1, 2, 3, 4), m.id, age = 60)); h.service.checkExpiredAcks()
             assertEquals(MessageStatus.FAILED, h.stored(m.id).status)
             val received = statuses(h.service, events)
-            assertTrue(received.filterIsInstance<MessageStatusEvent.Failed>().any { it.messageID == m.id })
-            assertEquals(listOf(MessageStatusEvent.Failed(m.id)), received)
+            assertTrue(received.filterIsInstance<MessageStatusEvent.PersistenceChanged>().any { it.key == EntityKey(RADIO, m.id) })
+            assertEquals(listOf(MessageStatusEvent.PersistenceChanged(EntityKey(RADIO, m.id))), received)
             assertEquals(0, h.service.pendingAckCount); h.close()
         },
         original("MessageServiceACKTests", "ACK timeout keeps message .sent through the grace window so a late ACK can still reconcile") {
@@ -116,7 +116,9 @@ class SourceAckTest {
             h.installAcceptedPendingAck(sourcePending(h, Bytes.of(5, 6, 7, 8), b.id))
             h.service.failAllPendingMessages()
             assertEquals(MessageStatus.FAILED, h.stored(a.id).status); assertEquals(MessageStatus.FAILED, h.stored(b.id).status)
-            val failedIDs = statuses(h.service, events).filterIsInstance<MessageStatusEvent.Failed>().map { it.messageID }
+            val changes = statuses(h.service, events).filterIsInstance<MessageStatusEvent.PersistenceChanged>()
+            assertTrue(changes.all { it.key.radioId == RADIO })
+            val failedIDs = changes.map { it.key.id }
             assertEquals(2, failedIDs.size); assertTrue(a.id in failedIDs); assertTrue(b.id in failedIDs)
             assertEquals(setOf(a.id, b.id), failedIDs.toSet())
             assertEquals(0, h.service.pendingAckCount); h.close()

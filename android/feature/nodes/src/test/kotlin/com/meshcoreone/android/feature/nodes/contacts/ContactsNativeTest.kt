@@ -6,6 +6,7 @@ import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.model.VContactIdentity
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.feature.nodes.deps.NodesContactFailure
+import com.meshcoreone.android.feature.nodes.deps.NodesConnectionSnapshot
 import com.meshcoreone.android.feature.nodes.deps.NodesMessage
 import com.meshcoreone.android.feature.nodes.deps.SyncProgress
 import com.meshcoreone.android.feature.nodes.model.NodeSegment
@@ -27,6 +28,54 @@ import kotlinx.coroutines.launch
 import org.junit.Test
 
 class ContactsNativeTest {
+    @Test
+    fun `delete rejects a graph replaced during service acquisition then fresh B succeeds`() = verifyMutationAcquisition("delete")
+
+    @Test
+    fun `block rejects a graph replaced during service acquisition then fresh B succeeds`() = verifyMutationAcquisition("block")
+
+    @Test
+    fun `favorite rejects a graph replaced during service acquisition then fresh B succeeds`() = verifyMutationAcquisition("favorite")
+
+    private fun verifyMutationAcquisition(action: String) = scenario {
+        val harness = Harness(clock).connect()
+        val radio = checkNotNull(harness.session.radioId)
+        val row = contact(radioId = radio)
+        val owner = NodesConnectionSnapshot(radio, harness.session.connectionIdentity())
+        val holder = ContactsStateHolder(harness.dependencies, scope)
+        holder.upsert(row)
+        val replacement = Harness(clock).connect(radio)
+        replacement.store.contacts += row
+        var swaps = 0
+        harness.session.onContactServiceRead = {
+            harness.session.onContactServiceRead = {}
+            swaps++
+            harness.session.contacts = replacement.contactService
+            harness.session.adverts = replacement.adverts
+            harness.session.servicesStore = replacement.store
+            harness.session.offlineStore = replacement.store
+        }
+        suspend fun perform(binding: NodesConnectionSnapshot) = when (action) {
+            "delete" -> holder.deleteContact(row, binding)
+            "block" -> holder.toggleBlocked(row, binding)
+            else -> holder.toggleFavorite(row, binding)
+        }
+        var cancelled = false
+        try { perform(owner) } catch (_: CancellationException) { cancelled = true }
+        assertEquals(1, swaps)
+        assertTrue(cancelled)
+        assertTrue(harness.contactService.calls.isEmpty())
+        assertTrue(replacement.contactService.calls.isEmpty())
+        assertEquals(listOf(row), holder.state.value.contacts)
+        assertTrue(holder.state.value.deletingIds.isEmpty())
+        assertNull(holder.state.value.togglingFavoriteId)
+        assertNull(holder.state.value.errorMessage)
+        perform(NodesConnectionSnapshot(radio, harness.session.connectionIdentity()))
+        assertEquals(1, replacement.contactService.calls.size)
+        assertTrue(harness.contactService.calls.isEmpty())
+        assertNull(holder.state.value.errorMessage)
+    }
+
     @Test
     fun `sync flags the advert pipeline, streams progress and reloads`() = scenario {
         val harness = Harness(clock).connect()

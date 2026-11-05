@@ -232,9 +232,9 @@ internal fun NodesListScreen(
                     scope.launch {
                         dependencies.session.ensureContactConnection(connection, radioId)
                         when (action) {
-                            RowActionKind.DELETE -> holder.deleteContact(contact)
-                            RowActionKind.BLOCK, RowActionKind.UNBLOCK -> holder.toggleBlocked(contact)
-                            RowActionKind.FAVORITE, RowActionKind.UNFAVORITE -> holder.toggleFavorite(contact)
+                            RowActionKind.DELETE -> holder.deleteContact(contact, binding)
+                            RowActionKind.BLOCK, RowActionKind.UNBLOCK -> holder.toggleBlocked(contact, binding)
+                            RowActionKind.FAVORITE, RowActionKind.UNFAVORITE -> holder.toggleFavorite(contact, binding)
                             RowActionKind.SEND_MESSAGE -> navigation.openChat(contact)
                         }
                     }
@@ -265,6 +265,7 @@ internal fun NodesListScreen(
         key(dependencies, radioId, connection) {
             AddContactDialog(
                 dependencies = dependencies,
+                owner = binding,
                 navigation = navigation,
                 onDismiss = { showAdd = false },
                 onAdded = { contact ->
@@ -384,6 +385,7 @@ private fun NodesEmptyState(search: String, segment: NodeSegment, modifier: Modi
 @Composable
 private fun AddContactDialog(
     dependencies: NodesFeatureDependencies,
+    owner: NodesConnectionSnapshot,
     navigation: NodesNavigation,
     onDismiss: () -> Unit,
     onAdded: (ContactDTO) -> Unit,
@@ -397,7 +399,7 @@ private fun AddContactDialog(
         confirmButton = {
             TextButton(
                 enabled = state.canAdd,
-                onClick = { scope.launch { holder.addContact()?.let(onAdded) } },
+                onClick = { scope.launch { holder.addContact(owner.identity, owner.radioId)?.let(onAdded) } },
             ) { Text(stringResource(C.contactsAddAdd)) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(C.contactsCommonCancel)) } },

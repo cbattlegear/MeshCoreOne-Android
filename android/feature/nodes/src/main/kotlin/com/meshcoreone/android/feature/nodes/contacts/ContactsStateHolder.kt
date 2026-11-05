@@ -267,16 +267,21 @@ class ContactsStateHolder(
     }
 
     /** Toggle favorite on the device, then reload. */
-    suspend fun toggleFavorite(contact: ContactDTO) {
+    suspend fun toggleFavorite(contact: ContactDTO, owner: NodesConnectionSnapshot? = null) {
+        val connection = if (owner != null) owner.identity else session.connectionIdentity()
+        if (owner != null) session.ensureContactConnection(owner.identity, owner.radioId)
         val contactService = session.contactService() ?: return
+        session.ensureContactConnection(connection, contact.radioId)
         val current = state.value.contacts.firstOrNull { it.id == contact.id } ?: return
         mutableState.update { it.copy(togglingFavoriteId = contact.id) }
         try {
             contactService.setContactFavorite(contact.key, !current.isFavorite)
+            session.ensureContactConnection(connection, contact.radioId)
             if (state.value.contacts.any { it.id == contact.id }) loadContacts(contact.radioId)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
+            session.ensureContactConnection(connection, contact.radioId)
             mutableState.update { it.copy(errorMessage = failure(error), errorConnection = null) }
         } finally {
             mutableState.update { it.copy(togglingFavoriteId = null) }
@@ -284,11 +289,15 @@ class ContactsStateHolder(
     }
 
     /** Toggle blocked status, then reload. */
-    suspend fun toggleBlocked(contact: ContactDTO) {
+    suspend fun toggleBlocked(contact: ContactDTO, owner: NodesConnectionSnapshot? = null) {
+        val connection = if (owner != null) owner.identity else session.connectionIdentity()
+        if (owner != null) session.ensureContactConnection(owner.identity, owner.radioId)
         val contactService = session.contactService() ?: return
+        session.ensureContactConnection(connection, contact.radioId)
         val current = state.value.contacts.firstOrNull { it.id == contact.id } ?: return
-        reportingFailure {
+        reportingFailure(NodesConnectionSnapshot(contact.radioId, connection)) {
             contactService.updateContactPreferences(contact.key, isBlocked = !current.isBlocked)
+            session.ensureContactConnection(connection, contact.radioId)
             loadContacts(contact.radioId)
         }
     }
@@ -306,33 +315,42 @@ class ContactsStateHolder(
      * Delete a contact. Removing a node is a radio command, so the row keeps a spinner until the radio
      * acks and is then hidden once; failure or timeout leaves it in place with an error.
      */
-    suspend fun deleteContact(contact: ContactDTO) {
+    suspend fun deleteContact(contact: ContactDTO, owner: NodesConnectionSnapshot? = null) {
+        val connection = if (owner != null) owner.identity else session.connectionIdentity()
+        if (owner != null) session.ensureContactConnection(owner.identity, owner.radioId)
         val contactService = session.contactService() ?: run {
+            if (owner != null) session.ensureContactConnection(owner.identity, owner.radioId)
             mutableState.update {
                 it.copy(errorMessage = NodesMessage.res(R.string.l10n_app_contacts_contacts_viewmodel_connecttodelete), errorConnection = null)
             }
             return
         }
+        session.ensureContactConnection(connection, contact.radioId)
         if (isDeletePending(contact.id)) return
         mutableState.update { it.copy(deletingIds = it.deletingIds + contact.id) }
         try {
             withCommandTimeout(dependencies.clock, RadioCommandTimeout.delete, "removeContact") {
                 contactService.removeContact(contact.radioId, contact.publicKey)
             }
+            session.ensureContactConnection(connection, contact.radioId)
             hideDeletedContact(contact)
         } catch (_: NodesContactFailure.ContactNotFound) {
+            session.ensureContactConnection(connection, contact.radioId)
             // The radio no longer knows this contact: clear the orphaned local row.
-            reportingFailure {
+            reportingFailure(NodesConnectionSnapshot(contact.radioId, connection)) {
                 contactService.removeLocalContact(contact.key, contact.publicKey)
+                session.ensureContactConnection(connection, contact.radioId)
                 hideDeletedContact(contact)
             }
         } catch (_: CommandTimeoutException) {
+            session.ensureContactConnection(connection, contact.radioId)
             mutableState.update {
                 it.copy(errorMessage = NodesMessage.res(R.string.l10n_app_contacts_contacts_viewmodel_removetimedout), errorConnection = null)
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
+            session.ensureContactConnection(connection, contact.radioId)
             mutableState.update { it.copy(errorMessage = failure(error), errorConnection = null) }
         } finally {
             mutableState.update { it.copy(deletingIds = it.deletingIds - contact.id) }
@@ -362,12 +380,13 @@ class ContactsStateHolder(
         )
     }
 
-    private suspend fun reportingFailure(block: suspend () -> Unit) {
+    private suspend fun reportingFailure(owner: NodesConnectionSnapshot? = null, block: suspend () -> Unit) {
         try {
             block()
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
+            if (owner != null) session.ensureContactConnection(owner.identity, owner.radioId)
             mutableState.update { it.copy(errorMessage = failure(error), errorConnection = null) }
         }
     }

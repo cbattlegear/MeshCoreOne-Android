@@ -154,6 +154,18 @@ The mounted control uses the explicit-owner entry, which owns readiness/error ha
 compatibility entry captures identity before its nil-service probe and forwards that same identity,
 so a probe-time replacement still cannot relabel a retired caller as the new graph.
 
+Manual Add now carries its dialog's graph/radio into the operation instead of recapturing live
+providers when the still-mounted old callback fires. Mounted coverage replaces the graph and invokes
+A's actual Add semantics before advancing a composition frame, requires no A/B write, then submits
+a fresh B form. Manual and scan provider-acquisition controls replace the same-radio graph during
+service/device/store reads and require cancellation before dispatch and fresh B success. Scan
+revalidates its captured review immediately after those reads, before errors or commands.
+
+Confirmed delete/block/favorite mutations carry the confirmation's owner through holder entry and
+revalidate after contact-service acquisition, before side effects. Deterministic acquisition-swap
+controls require no A/B command, unchanged row state and a valid fresh B mutation. Existing retained
+menu/confirmation controls and held-operation expectations remain intact; WP-209 is untouched.
+
 Both `ContactsImmediateAdmissionApi31ComposeTest` and
 `ContactsImmediateAdmissionApi37ComposeTest` inherit six mounted tests:
 

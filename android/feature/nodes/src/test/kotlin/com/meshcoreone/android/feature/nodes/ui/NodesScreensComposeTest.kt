@@ -574,6 +574,41 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
         fun mountedScanAddReplacesSameKeyAndRadioBeforeListFetchIncludesContact() = verifyAdmission("same-key", scan = true)
 
         @Test
+        fun mountedManualAddRejectsReplacementBeforeTheDialogRecomposes() {
+            val harness = Harness().connect()
+            val radio = checkNotNull(harness.session.radioId)
+            mount { NodesListScreen(harness.dependencies, NodesNavigation.NONE) }
+            val context = controller.get()
+            click(awaitAction(context.getString(C.contactsListAddContact)))
+            val fields = allSemanticsNodes().filter { it.config.contains(SemanticsActions.SetText) }
+            setText(fields[0], "Old form")
+            setText(fields[1], Fixtures.repeated(0xAB).hexString)
+            val oldAdd = checkNotNull(awaitAction(context.getString(C.contactsAddAdd)).config[SemanticsActions.OnClick].action)
+            val replacement = Harness().connect(radio)
+            controller.get().runOnUiThread {
+                harness.session.contacts = replacement.contactService
+                harness.session.adverts = replacement.adverts
+                harness.session.device = replacement.session.device
+                harness.session.servicesStore = replacement.store
+                harness.session.offlineStore = replacement.store
+                assertTrue(oldAdd.invoke())
+            }
+            advanceFrames()
+            assertTrue(harness.contactService.calls.isEmpty(), "Retired form must not dispatch A")
+            assertTrue(replacement.contactService.calls.isEmpty(), "A form cannot capture B before recomposition")
+            assertTrue(harness.store.contacts.isEmpty())
+            assertTrue(replacement.store.contacts.isEmpty())
+            val freshFields = allSemanticsNodes().filter { it.config.contains(SemanticsActions.SetText) }
+            setText(freshFields[0], "Fresh")
+            setText(freshFields[1], Fixtures.repeated(0xCD).hexString)
+            click(awaitAction(context.getString(C.contactsAddAdd)))
+            awaitText("Fresh")
+            assertEquals(listOf("add:Fresh", "getContact"), replacement.contactService.calls)
+            assertEquals("Fresh", replacement.store.contacts.single().name)
+            assertTrue(harness.contactService.calls.isEmpty())
+        }
+
+        @Test
         fun mountedDeleteConfirmationRetiresOnDifferentRadio() = verifyActionOwner(sameRadio = false, delete = true)
 
         @Test

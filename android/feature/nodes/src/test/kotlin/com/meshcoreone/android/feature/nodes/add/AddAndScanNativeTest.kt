@@ -25,6 +25,79 @@ class AddAndScanNativeTest {
     private val hex64 = "ab".repeat(32)
 
     @Test
+    fun `scan rejects same-radio replacement during contact acquisition before sending`() = verifyAcquisitionSwap("contact", scan = true)
+
+    @Test
+    fun `scan rejects same-radio replacement during device acquisition before sending`() = verifyAcquisitionSwap("device", scan = true)
+
+    @Test
+    fun `scan rejects same-radio replacement during store acquisition before sending`() = verifyAcquisitionSwap("store", scan = true)
+
+    @Test
+    fun `manual add rejects same-radio replacement during contact acquisition before sending`() =
+        verifyAcquisitionSwap("contact", scan = false)
+
+    @Test
+    fun `manual add rejects same-radio replacement during device acquisition before sending`() =
+        verifyAcquisitionSwap("device", scan = false)
+
+    private fun verifyAcquisitionSwap(boundary: String, scan: Boolean) = scenario {
+        val harness = Harness(clock).connect()
+        val radio = checkNotNull(harness.session.radioId)
+        val replacement = Harness(clock).connect(radio)
+        val form = AddContactStateHolder(harness.dependencies)
+        form.setContactName("Entered")
+        form.setPublicKeyHex(hex64)
+        val scanner = ScanContactStateHolder(harness.dependencies, scope)
+        if (scan) {
+            scanner.handleScanResult(harness.codec.exportContactUri("Entered", Fixtures.repeated(0xAB), ContactType.CHAT))
+            settle()
+            assertNotNull(scanner.state.value.scannedContact)
+        }
+        var swaps = 0
+        val replace: () -> Unit = {
+            swaps++
+            harness.session.onContactServiceRead = {}
+            harness.session.onDeviceRead = {}
+            harness.session.onServicesStoreRead = {}
+            harness.session.contacts = replacement.contactService
+            harness.session.adverts = replacement.adverts
+            harness.session.device = replacement.session.device
+            harness.session.servicesStore = replacement.store
+            harness.session.offlineStore = replacement.store
+        }
+        when (boundary) {
+            "contact" -> harness.session.onContactServiceRead = replace
+            "device" -> harness.session.onDeviceRead = replace
+            "store" -> harness.session.onServicesStoreRead = replace
+        }
+        var cancelled = false
+        try {
+            if (scan) scanner.confirm() else form.addContact()
+        } catch (_: CancellationException) {
+            cancelled = true
+        }
+        assertEquals(1, swaps)
+        assertTrue(cancelled)
+        assertTrue(harness.contactService.calls.isEmpty(), "A must not send before detecting mixed acquisition")
+        assertTrue(replacement.contactService.calls.isEmpty(), "A's review must not send through B")
+        assertNull(form.state.value.errorMessage)
+        assertNull(scanner.state.value.errorMessage)
+        assertFalse(form.state.value.isSubmitting)
+        assertFalse(scanner.state.value.isImporting)
+        if (scan) {
+            scanner.resetToScanner()
+            scanner.handleScanResult(harness.codec.exportContactUri("Fresh", Fixtures.repeated(0xAB), ContactType.CHAT))
+            settle()
+            assertIs<ScanConfirmOutcome.Completed>(scanner.confirm())
+        } else {
+            assertNotNull(form.addContact())
+        }
+        assertEquals(1, replacement.store.contacts.size)
+        assertTrue(harness.store.contacts.isEmpty())
+    }
+
+    @Test
     fun `key field keeps lowercase hex and validates the 64-character length`() = scenario {
         val form = AddContactStateHolder(Harness(clock).dependencies)
         form.setPublicKeyHex("AB cd-EF")

@@ -240,6 +240,8 @@ internal class FakeSession : NodesSession {
     var onAdvertisementServiceRead: () -> Unit = {}
     var onConnectionStateRead: () -> Unit = {}
     var onRadioIdRead: () -> Unit = {}
+    var onDeviceRead: () -> Unit = {}
+    var onServicesStoreRead: () -> Unit = {}
 
     private fun publishConnection() {
         connection.value = NodesConnectionSnapshot(radioId, contacts, device, state)
@@ -247,10 +249,10 @@ internal class FakeSession : NodesSession {
 
     override fun connectionState() = state.also { onConnectionStateRead() }
     override fun connectionIdentity() = contacts
-    override fun connectedDevice() = device
+    override fun connectedDevice() = device.also { onDeviceRead() }
     override fun currentRadioId() = radioId.also { onRadioIdRead() }
     override fun offlineDataStore() = offlineStore
-    override fun servicesDataStore() = servicesStore
+    override fun servicesDataStore() = servicesStore.also { onServicesStoreRead() }
     override fun contactService() = contacts.also { onContactServiceRead() }
     override fun advertisementService() = adverts.also { onAdvertisementServiceRead() }
     override fun traceService() = trace

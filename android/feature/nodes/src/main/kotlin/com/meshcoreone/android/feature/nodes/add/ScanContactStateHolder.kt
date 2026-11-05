@@ -146,6 +146,7 @@ class ScanContactStateHolder(
         val contactService = session.contactService()
         val device = session.connectedDevice()
         val store = session.servicesDataStore()
+        ensureReview(generation, connection, scanRadioId)
         if (contactService == null || device == null) {
             presentImportFailure(NodesMessage.res(R.string.l10n_app_contacts_contacts_add_error_notconnected))
             return ScanConfirmOutcome.Stay

@@ -109,7 +109,77 @@ class NativeMessagingTest {
             assertTrue(assertIs<DirectAckRadioEvidenceObservation.Found>(
                 h.store.directAckAuthority.inspectDirectAckRadioEvidence(RADIO)).snapshot.wires
                 .none { it.outcome is DirectAckRadioWireOutcome.Accepted })
-            h.store.faults.clear(); h.close()
+            val failedBeforeTransport = h.store.messages.values.single()
+            h.store.faults.clear()
+            h.service.startEventMonitoring()
+            val actual = Bytes.of(9, 8, 7, 6)
+            h.transport.expectedAckOverride = actual
+            val later = h.service.sendDirectMessage("distinct after modern pre-marker failure", h.contact)
+            val tracker = assertNotNull(h.service.pendingAck(later.id))
+            val events = h.service.statusEvents()
+            h.transport.pushAck(actual, 321u); runCurrent()
+            assertEquals(later.copy(status = MessageStatus.DELIVERED, roundTripTime = 321u), h.stored(later.id))
+            assertEquals(MeshAcknowledgement(actual, 321u), tracker.receipt.await())
+            assertEquals(failedBeforeTransport, h.stored(failedBeforeTransport.id))
+            assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+            assertEquals(listOf(MessageStatusEvent.StatusResolved(later.id, MessageStatus.DELIVERED, 321u)),
+                statuses(h.service, events))
+            h.close()
+        },
+        native("legacyMarkerlessUnknownCannotBeUpgradedByANewerModernWire") {
+            legacyUnknownBlocksModernDelivery(acceptedCode = null)
+        },
+        native("legacyAcceptedCodeDoesNotDismissUnknownEarlierPhysicalEmissions") {
+            legacyUnknownBlocksModernDelivery(acceptedCode = 0x44332211u)
+        },
+        native("committedMarkerUnknownReturnReplaysOnlyExactMetadataAndNeverTransport") {
+            val h = Harness(this); h.start()
+            val receipt = NotificationActionReceipt()
+            var committed: DirectAckEmissionReceipt? = null
+            var attempt: DirectAckAttempt? = null
+            h.store.directAckAuthority.afterEmissionMark = {
+                committed = it
+                attempt = h.service.pendingAck(h.store.messages.values.single().id)?.authority
+                throw storageFailure()
+            }
+            val sending = backgroundScope.async(receipt) {
+                assertFailsWith<PersistenceStoreException> {
+                    h.service.sendDirectMessage("marker committed response lost", h.contact)
+                }
+            }
+            sending.await()
+            val marker = assertNotNull(committed)
+            assertEquals(NotificationActionReceipt.State.READY, receipt.state)
+            assertEquals(0, h.sends(CommandCode.SEND_MESSAGE).size)
+            h.store.directAckAuthority.afterEmissionMark = null
+            val replay = assertIs<DirectAckEmissionMarkResult.AlreadyMarked>(
+                h.store.directAckAuthority.markDirectAckWireMayHaveWritten(
+                    assertNotNull(attempt), marker.evidence.wireRequestId, marker.emissionRequestId))
+            assertEquals(marker, replay.receipt)
+            assertEquals(DirectAckRadioWireOutcome.MayHaveWritten, replay.receipt.evidence.outcome)
+            assertEquals(marker, assertIs<DirectAckEmissionObservation.Found>(
+                h.store.directAckAuthority.inspectDirectAckWireEmission(
+                    assertNotNull(attempt), marker.evidence.wireRequestId, marker.emissionRequestId)).receipt)
+            assertEquals(0, h.sends(CommandCode.SEND_MESSAGE).size)
+            assertTrue(h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+                it.operation == "ackMark.${marker.evidence.claimRequestId}.${marker.evidence.wireRequestId}.${marker.emissionRequestId}"
+            })
+            h.close()
+        },
+        native("missingRadioExclusionCapabilityNeverFallsBackToLegacyDispatch") {
+            val h = Harness(this); h.start()
+            val service = MessageService(h.token, SELF, h.session, h.store, h.signals, h.scope,
+                clock = h.clock, directAckAuthority = h.store.directAckAuthority,
+                directPendingCompletionAuthority = h.store.directAckAuthority,
+                directAckRadioExclusionAuthority = null)
+            try {
+                assertFailsWith<PersistenceStoreException> {
+                    service.sendDirectMessage("capability absent", h.contact)
+                }
+                assertEquals(0, h.sends(CommandCode.SEND_MESSAGE).size)
+                assertFalse(h.store.calls.any { it == "resolveDirectAckWireEmission" })
+                assertTrue(h.store.messages.values.none { it.status == MessageStatus.DELIVERED })
+            } finally { service.close(); h.close() }
         },
         native("notificationAcceptancePrecedesSuspendingPhysicalAcceptedResolution") {
             val h = Harness(this); h.start()
@@ -151,6 +221,84 @@ class NativeMessagingTest {
             assertFalse(tracker.receipt.isCompleted)
             assertTrue(statuses(h.service, events).isEmpty())
             assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+            h.close()
+        },
+        native("acceptedPhysicalResolutionRecoveryDoesNotRepeatWireOrQueueAttempt") {
+            val h = Harness(this, MessageServiceConfig(maxAttempts = 1))
+            h.start(); h.service.startEventMonitoring()
+            val actual = Bytes.of(9, 8, 7, 6)
+            h.transport.expectedAckOverride = actual
+            val message = h.message(MessageStatus.PENDING)
+            h.pending(message)
+            var failResolution = true
+            h.store.before = { if (it == "resolveDirectAckWireEmission" && failResolution) {
+                failResolution = false; throw storageFailure()
+            } }
+            val queue = h.queue()
+            h.signals.set(h.token, DeviceConnectionState.CONNECTED)
+            queue.hydrate(); runCurrent()
+            h.signals.set(h.token, DeviceConnectionState.READY); runCurrent()
+            val before = h.stored(message.id)
+            assertEquals(MessageStatus.PENDING, before.status)
+            assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+            assertEquals(1L, h.store.fetchPendingSends(RADIO).single().attemptCount)
+            assertEquals(DirectAckRadioWireOutcome.MayHaveWritten,
+                assertIs<DirectAckRadioEvidenceObservation.Found>(
+                    h.store.directAckAuthority.inspectDirectAckRadioEvidence(RADIO)).snapshot.wires.single().outcome)
+            val events = h.service.statusEvents()
+            h.store.before = null
+            queue.transportDidOpen(); runCurrent()
+            assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+            assertEquals(1L, h.store.fetchPendingSends(RADIO).single().attemptCount)
+            val tracker = assertNotNull(h.service.pendingAck(message.id))
+            assertTrue(actual in tracker.ackCodes)
+            h.transport.pushAck(actual, 321u); runCurrent(); queue.awaitDrainCompletion()
+            assertEquals(before.copy(status = MessageStatus.DELIVERED,
+                ackCode = actual.ackCodeUInt32, roundTripTime = 321u), h.stored(message.id))
+            assertEquals(MeshAcknowledgement(actual, 321u), tracker.receipt.await())
+            assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+            assertTrue(h.store.fetchPendingSends(RADIO).isEmpty())
+            assertEquals(0, h.service.pendingAckCount)
+            assertEquals(0, h.service.retainedDirectAuthorityCount)
+            assertEquals(listOf(MessageStatusEvent.StatusResolved(message.id, MessageStatus.DELIVERED, 321u)),
+                statuses(h.service, events))
+            queue.shutdown(); h.close()
+        },
+        native("inlineAcceptedEvidenceRecoveryReconcilesOnlyItsExistingLiveAckBuffer") {
+            val h = Harness(this); h.start(); h.service.startEventMonitoring()
+            val actual = Bytes.of(9, 8, 7, 6)
+            h.transport.expectedAckOverride = actual
+            h.transport.acknowledge = true
+            h.transport.ackBeforeAcceptance = true
+            var failResolution = true
+            h.store.before = { if (it == "resolveDirectAckWireEmission" && failResolution) {
+                failResolution = false; throw storageFailure()
+            } }
+            val receipt = NotificationActionReceipt()
+            val events = h.service.statusEvents()
+            val sending = backgroundScope.async(receipt) {
+                assertFailsWith<PersistenceStoreException> {
+                    h.service.sendDirectMessage("live buffered ack metadata recovery", h.contact)
+                }
+            }
+            sending.await(); runCurrent()
+            assertTrue(receipt.isAccepted)
+            val before = h.store.messages.values.single()
+            assertEquals(MessageStatus.PENDING, before.status)
+            assertEquals(1, h.service.bufferedAcknowledgementCount(before.id))
+            val tracker = assertNotNull(h.service.pendingAck(before.id))
+            assertFalse(tracker.receipt.isCompleted)
+            h.store.before = null
+            h.service.checkExpiredAcks(); runCurrent()
+            assertEquals(before.copy(status = MessageStatus.DELIVERED,
+                ackCode = actual.ackCodeUInt32, roundTripTime = 123u), h.stored(before.id))
+            assertEquals(MeshAcknowledgement(actual, 123u), tracker.receipt.await())
+            assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+            assertEquals(0, h.service.bufferedAcknowledgementCount(before.id))
+            assertEquals(0, h.service.pendingAckCount)
+            assertEquals(0, h.service.retainedDirectAuthorityCount)
+            assertEquals(listOf(MessageStatusEvent.StatusResolved(before.id, MessageStatus.DELIVERED, 123u)),
+                statuses(h.service, events))
             h.close()
         },
         native("oldActualCodeCannotDeliverANewerClaimWithListener") {
@@ -324,7 +472,7 @@ class NativeMessagingTest {
             assertEquals(128, h.store.messages.size)
             h.close()
         },
-        native("compactedBucketOverlapIsExplicitUncertaintyNotPermissionForDifferentHighBytes") {
+        native("persistedFullCodeHistoryDisambiguatesLocalDiagnosticBucketCollision") {
             val h = Harness(this); h.start(); h.service.startEventMonitoring()
             h.transport.acknowledge = true
             repeat(65) { index ->
@@ -341,17 +489,17 @@ class NativeMessagingTest {
             val tracker = assertNotNull(h.service.pendingAck(message.id))
             val events = h.service.statusEvents()
             h.transport.pushAck(differentActual, 999u); runCurrent()
-            assertEquals(message, h.stored(message.id))
-            assertFalse(tracker.receipt.isCompleted)
+            assertEquals(message.copy(status = MessageStatus.DELIVERED, roundTripTime = 999u), h.stored(message.id))
+            assertEquals(MeshAcknowledgement(differentActual, 999u), tracker.receipt.await())
+            assertNull(h.service.pendingAck(message.id))
             assertEquals(66, h.sends(CommandCode.SEND_MESSAGE).size)
-            assertTrue(statuses(h.service, events).isEmpty())
-            val ambiguity = h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>()
-                .single { it.operation.startsWith("ackAmbiguous.") }
-            assertEquals("Direct ACK authority: Compacted ACK code bucket overlaps; delivery remains unproven",
-                assertIs<PersistenceStoreError.SaveFailed>(assertIs<PersistenceStoreException>(ambiguity.cause).error).reason)
+            assertEquals(listOf(MessageStatusEvent.StatusResolved(message.id, MessageStatus.DELIVERED, 999u)),
+                statuses(h.service, events))
+            assertTrue(h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>()
+                .none { it.operation.startsWith("ackAmbiguous.") })
             h.close()
         },
-        native("promotionIntoCompactedHistoryPreservesEveryPreviouslyKnownCode") {
+        native("persistedHistoryPreservesEveryPreviouslyKnownCodeAcrossDiagnosticBuckets") {
             val h = Harness(this); h.start(); h.service.startEventMonitoring()
             h.transport.acknowledge = true
             repeat(65) { index ->
@@ -433,6 +581,54 @@ class NativeMessagingTest {
             assertEquals(1, successor.sends(CommandCode.SEND_MESSAGE).size)
             assertTrue(statuses(successor.service, events).isEmpty())
             successor.close()
+        },
+        native("acceptedPhysicalEvidenceFinishesAcrossTeardownWithoutRenewingOldProductAuthority") {
+            val h = Harness(this); h.start()
+            val oldCode = Bytes.of(1, 2, 3, 4)
+            h.transport.expectedAckOverride = oldCode
+            val receipt = NotificationActionReceipt()
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            h.store.before = { if (it == "resolveDirectAckWireEmission") {
+                entered.complete(Unit); release.await()
+            } }
+            val sending = backgroundScope.async(receipt) {
+                h.service.sendDirectMessage("accepted retired graph evidence", h.contact)
+            }
+            var closing: Deferred<TeardownReport>? = null
+            try {
+                entered.await()
+                assertTrue(receipt.isAccepted)
+                sending.cancelAndJoin()
+                val oldRow = h.store.messages.values.single()
+                h.signals.set(token(generation = 2), DeviceConnectionState.READY)
+                val teardown = backgroundScope.async { h.service.close() }
+                closing = teardown
+                runCurrent(); assertFalse(teardown.isCompleted)
+                h.store.before = null; release.complete(Unit); runCurrent(); teardown.await()
+                val evidence = assertIs<DirectAckRadioEvidenceObservation.Found>(
+                    h.store.directAckAuthority.inspectDirectAckRadioEvidence(RADIO)).snapshot.wires.single()
+                assertEquals(DirectAckRadioWireOutcome.Accepted(oldCode.ackCodeUInt32), evidence.outcome)
+                assertEquals(oldRow, h.stored(oldRow.id))
+                assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+                h.close()
+                val successor = Harness(this, store = h.store, generation = 2)
+                successor.start(); successor.service.startEventMonitoring()
+                successor.transport.expectedAckOverride = Bytes.of(9, 8, 7, 6)
+                successor.transport.acknowledge = true
+                val delivered = successor.service.sendMessageWithRetry("known disjoint successor", successor.contact)
+                assertEquals(MessageStatus.DELIVERED, delivered.status)
+                assertEquals(0x06070809u, delivered.ackCode)
+                assertEquals(123u, delivered.roundTripTime)
+                assertEquals(oldRow, successor.stored(oldRow.id))
+                assertEquals(1, successor.sends(CommandCode.SEND_MESSAGE).size)
+                successor.close()
+            } finally {
+                withContext(NonCancellable) {
+                    h.store.before = null; release.complete(Unit)
+                    sending.cancelAndJoin(); closing?.await(); h.close()
+                }
+            }
         },
         native("bufferedUnrelatedAckIsReportedUnmatchedOnlyAfterActualResponse") {
             val h = Harness(this); h.start(); h.service.startEventMonitoring()
@@ -861,6 +1057,39 @@ class NativeMessagingTest {
             p.close(); h.close()
         },
     )
+    private suspend fun TestScope.legacyUnknownBlocksModernDelivery(acceptedCode: UInt?) {
+        val h = Harness(this); h.start(); h.service.startEventMonitoring()
+        h.transport.expectedAckOverride = Bytes.of(5, 6, 7, 8)
+        h.service.sendDirectMessage("initialize modern grant", h.contact)
+        val historical = h.message(MessageStatus.SENT, text = "represented historical wire")
+        val old = h.store.directAckAuthority.seedLegacyFixture(EntityKey(RADIO, historical.id),
+            0x44332211u, acceptedCode)
+        val before = assertIs<DirectAckRadioEvidenceObservation.Found>(
+            h.store.directAckAuthority.inspectDirectAckRadioEvidence(RADIO)).snapshot.wires
+            .single { it.emissionRequestId == null }
+        val rejected = assertIs<DirectAckEmissionMarkResult.Rejected>(
+            h.store.directAckAuthority.markDirectAckWireMayHaveWritten(old, before.wireRequestId, UUID.randomUUID()))
+        assertEquals(DirectAckRejection.NOT_ELIGIBLE, rejected.reason)
+        val actual = Bytes.of(9, 8, 7, 6)
+        h.transport.expectedAckOverride = actual
+        val later = h.service.sendDirectMessage("modern cannot erase historical ambiguity", h.contact)
+        val tracker = assertNotNull(h.service.pendingAck(later.id))
+        val events = h.service.statusEvents()
+        h.transport.pushAck(actual, 999u); runCurrent()
+        assertEquals(later, h.stored(later.id))
+        assertEquals(historical, h.stored(historical.id))
+        assertFalse(tracker.receipt.isCompleted)
+        assertNull(assertNotNull(h.service.pendingAck(later.id)).acknowledgement)
+        assertTrue(statuses(h.service, events).isEmpty())
+        assertEquals(before, assertIs<DirectAckRadioEvidenceObservation.Found>(
+            h.store.directAckAuthority.inspectDirectAckRadioEvidence(RADIO)).snapshot.wires
+            .single { it.emissionRequestId == null })
+        if (acceptedCode == null) assertEquals(DirectAckRadioWireOutcome.LegacyUnknown, before.outcome)
+        else assertEquals(DirectAckRadioWireOutcome.LegacyAcceptedUnknown(acceptedCode), before.outcome)
+        assertEquals(2, h.sends(CommandCode.SEND_MESSAGE).size)
+        h.close()
+    }
+
     private suspend fun TestScope.deliveryReceiptWaitsForAuthority(listener: Boolean) {
         val h = Harness(this, MessageServiceConfig(maxAttempts = 1))
         h.start()

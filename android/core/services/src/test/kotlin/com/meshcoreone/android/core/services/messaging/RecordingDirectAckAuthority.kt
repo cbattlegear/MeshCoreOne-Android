@@ -43,6 +43,7 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
         val resolutions: MutableMap<UUID, DirectAckEmissionResolution> = mutableMapOf(),
     ) : DirectAckEmissionHandle
     private val emissions = mutableMapOf<UUID, Emission>()
+    private val trackedWires = mutableSetOf<Pair<UUID, UUID>>()
     private val saturatedRadios = mutableSetOf<RadioId>()
     private val radioMutations = Mutex()
 
@@ -56,6 +57,19 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
         }
     }
 
+    suspend fun seedLegacyFixture(key: EntityKey, predictedCode: UInt, acceptedCode: UInt?): DirectAckAttempt {
+        val lease = requireNotNull(currentLeases[key.radioId])
+        val intent = captureDirectAckIntent(lease, key, UUID.randomUUID(), DirectAckMode.SEND, null)
+        check(intent is DirectAckIntentResult.Captured)
+        val wireID = UUID.randomUUID()
+        val begun = beginDirectAckAttempt(intent.intent, wireID, predictedCode)
+        check(begun is DirectAckBeginResult.Begun)
+        if (acceptedCode != null) {
+            check(recordDirectSendAccepted(begun.attempt, wireID, acceptedCode) is DirectAckMutationResult.Applied)
+        }
+        return begun.attempt
+    }
+
     override suspend fun markDirectAckWireMayHaveWritten(
         attempt: DirectAckAttempt, wireRequestId: UUID, emissionRequestId: UUID,
     ): DirectAckEmissionMarkResult = radioMutations.withLock {
@@ -67,18 +81,18 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
             } else DirectAckEmissionMarkResult.Rejected(DirectAckRejection.CONFLICT)
         }
         rejection(value)?.let { return@withLock DirectAckEmissionMarkResult.Rejected(it.reason) }
+        if ((value.receipt.requestId to wireRequestId) !in trackedWires) {
+            return@withLock DirectAckEmissionMarkResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
+        }
         val wire = value.receipt.wires.firstOrNull { it.requestId == wireRequestId }
             ?: return@withLock DirectAckEmissionMarkResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
         store.authorityAccess("markDirectAckWireMayHaveWritten")
         rejection(value)?.let { return@withLock DirectAckEmissionMarkResult.Rejected(it.reason) }
         val radio = value.receipt.key.radioId
-        if (radio in saturatedRadios ||
-            emissions.values.count { it.receipt.evidence.radioId == radio } >=
-            DirectAckRadioEvidenceLimits.MAX_TRACKED_WIRES_PER_RADIO) {
-            saturatedRadios += radio
+        if (radio in saturatedRadios) {
             return@withLock DirectAckEmissionMarkResult.CoveredBySaturation(DirectAckRadioSaturationReceipt(radio))
         }
-        val receipt = DirectAckEmissionReceipt(emissionRequestId, DirectAckRadioWireEvidence(
+        val receipt = DirectAckEmissionReceipt(emissionRequestId, null, DirectAckRadioWireEvidence(
             radio, value.receipt.requestId, wireRequestId, emissionRequestId,
             wire.predictedAckCode, DirectAckRadioWireOutcome.MayHaveWritten,
         ))
@@ -108,17 +122,15 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
     ): DirectAckEmissionMutationResult = radioMutations.withLock {
         val emission = (handle as? Emission)?.takeIf { emissions[it.receipt.emissionRequestId] === it }
             ?: return@withLock DirectAckEmissionMutationResult.Rejected(DirectAckRejection.INVALID_HANDLE)
-        emission.resolutions[resolutionRequestId]?.let {
-            return@withLock if (it == resolution) DirectAckEmissionMutationResult.AlreadyApplied(emission.receipt)
-            else DirectAckEmissionMutationResult.Rejected(DirectAckRejection.CONFLICT)
-        }
+        val replay = emission.resolutions[resolutionRequestId]
+        if (replay == resolution) return@withLock DirectAckEmissionMutationResult.AlreadyApplied(emission.receipt)
         store.authorityAccess("resolveDirectAckWireEmission")
         val prior = emission.receipt.evidence.outcome
         val next = when (resolution) {
             DirectAckEmissionResolution.DefinitelyUnsent -> DirectAckRadioWireOutcome.DefinitelyUnsent
             is DirectAckEmissionResolution.Accepted -> DirectAckRadioWireOutcome.Accepted(resolution.ackCode)
         }
-        val outcome = if (prior == DirectAckRadioWireOutcome.MayHaveWritten || prior == next) next
+        val outcome = if (replay == null && (prior == DirectAckRadioWireOutcome.MayHaveWritten || prior == next)) next
         else DirectAckRadioWireOutcome.Conflict(
             (prior as? DirectAckRadioWireOutcome.Accepted)?.ackCode
                 ?: (prior as? DirectAckRadioWireOutcome.Conflict)?.firstAcceptedAckCode
@@ -126,15 +138,16 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
             prior == DirectAckRadioWireOutcome.DefinitelyUnsent || next == DirectAckRadioWireOutcome.DefinitelyUnsent ||
                 (prior as? DirectAckRadioWireOutcome.Conflict)?.definitelyUnsentObserved == true,
         )
-        emission.receipt = emission.receipt.copy(evidence = emission.receipt.evidence.copy(outcome = outcome))
-        emission.resolutions[resolutionRequestId] = resolution
+        emission.receipt = emission.receipt.copy(
+            resolutionRequestId = resolutionRequestId, evidence = emission.receipt.evidence.copy(outcome = outcome))
+        emission.resolutions.putIfAbsent(resolutionRequestId, resolution)
         if (resolution is DirectAckEmissionResolution.Accepted) {
             val value = emission.attempt
             value.receipt = value.receipt.copy(
                 phase = if (permission(value) == DirectAckPermission.CURRENT &&
                     value.receipt.phase == DirectAckPhase.REGISTERED) DirectAckPhase.ACCEPTED else value.receipt.phase,
                 wires = value.receipt.wires.map {
-                    if (it.requestId == emission.receipt.evidence.wireRequestId && it.acceptedAckCode == null) {
+                    if (it.requestId == emission.receipt.evidence.wireRequestId) {
                         it.copy(acceptedAckCode = resolution.ackCode)
                     } else it
                 }.snapshot(),
@@ -144,22 +157,23 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
         else DirectAckEmissionMutationResult.Applied(emission.receipt)
     }
 
-    private fun radioEvidence(radio: RadioId): DirectAckRadioEvidenceSnapshot {
+    private fun radioEvidence(radio: RadioId, diagnostic: Boolean = true): DirectAckRadioEvidenceSnapshot {
         val marked = emissions.values.map { it.receipt.evidence }.filter { it.radioId == radio }
         val legacy = attempts.values.filter { it.receipt.key.radioId == radio }.flatMap { attempt ->
             attempt.receipt.wires.filter { wire ->
-                marked.none { it.claimRequestId == attempt.receipt.requestId && it.wireRequestId == wire.requestId }
+                (attempt.receipt.requestId to wire.requestId) !in trackedWires
             }.map { wire ->
-                DirectAckRadioWireEvidence(radio, attempt.receipt.requestId, wire.requestId, wire.requestId,
-                    wire.predictedAckCode, wire.acceptedAckCode?.let { DirectAckRadioWireOutcome.Accepted(it) }
+                DirectAckRadioWireEvidence(radio, attempt.receipt.requestId, wire.requestId, null,
+                    wire.predictedAckCode, wire.acceptedAckCode?.let { DirectAckRadioWireOutcome.LegacyAcceptedUnknown(it) }
                         ?: DirectAckRadioWireOutcome.LegacyUnknown)
             }
         }
         val all = marked + legacy
         return DirectAckRadioEvidenceSnapshot(radio,
-            all.take(DirectAckRadioEvidenceLimits.MAX_DIAGNOSTIC_WIRES_PER_RADIO).snapshot(), when {
+            (if (diagnostic) all.take(DirectAckRadioEvidenceLimits.MAX_DIAGNOSTIC_WIRES_PER_RADIO) else all).snapshot(), when {
                 radio in saturatedRadios -> DirectAckRadioEvidenceCoverage.SATURATED
-                all.size > DirectAckRadioEvidenceLimits.MAX_DIAGNOSTIC_WIRES_PER_RADIO -> DirectAckRadioEvidenceCoverage.TRUNCATED
+                diagnostic && all.size > DirectAckRadioEvidenceLimits.MAX_DIAGNOSTIC_WIRES_PER_RADIO ->
+                    DirectAckRadioEvidenceCoverage.TRUNCATED
                 else -> DirectAckRadioEvidenceCoverage.COMPLETE
             })
     }
@@ -181,7 +195,7 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
         store.authorityAccess("updateMessageAck")
         rejection(value)?.let { return@withLock DirectAckRadioSettlementResult.Rejected(it.reason) }
         val reasons = DirectAckRadioEvidenceAssessment.nonsettlingReasons(
-            value.receipt.requestId, ackCode, radioEvidence(value.receipt.key.radioId),
+            value.receipt.requestId, ackCode, radioEvidence(value.receipt.key.radioId, diagnostic = false),
         )
         if (reasons.isNotEmpty()) return@withLock DirectAckRadioSettlementResult.Nonsettling(reasons)
         val message = requireNotNull(store.messages[value.receipt.key]).copy(
@@ -282,6 +296,18 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
 
     override suspend fun beginDirectAckAttempt(
         intent: DirectAckIntent, firstWireRequestId: UUID, predictedAckCode: UInt,
+    ): DirectAckBeginResult = radioMutations.withLock {
+        beginDirectAckAttemptWithTracking(intent, firstWireRequestId, predictedAckCode, false)
+    }
+
+    override suspend fun beginDirectAckAttemptRequiringEmissionTracking(
+        intent: DirectAckIntent, firstWireRequestId: UUID, predictedAckCode: UInt,
+    ): DirectAckBeginResult = radioMutations.withLock {
+        beginDirectAckAttemptWithTracking(intent, firstWireRequestId, predictedAckCode, true)
+    }
+
+    private fun beginDirectAckAttemptWithTracking(
+        intent: DirectAckIntent, firstWireRequestId: UUID, predictedAckCode: UInt, tracked: Boolean,
     ): DirectAckBeginResult {
         val captured = (intent as? Intent)?.takeIf { intents[it.receipt.requestId] === it }
             ?: return DirectAckBeginResult.Rejected(DirectAckRejection.INVALID_HANDLE)
@@ -293,7 +319,8 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
         attempts[requestId]?.let {
             val first = it.receipt.wires.first()
             if (it.lease !== owner || it.receipt.key != key || it.receipt.mode != mode || it.pendingID != pendingSendId ||
-                first.requestId != firstWireRequestId || first.predictedAckCode != predictedAckCode) {
+                first.requestId != firstWireRequestId || first.predictedAckCode != predictedAckCode ||
+                ((requestId to firstWireRequestId) in trackedWires) != tracked) {
                 return DirectAckBeginResult.Rejected(DirectAckRejection.CONFLICT)
             }
             if (intentPermission(captured) != DirectAckPermission.CURRENT) {
@@ -319,20 +346,38 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
             pendingSendId?.let { store.pendingRevision(EntityKey(key.radioId, it)) })
         attempts[requestId] = value
         current[key] = value
+        if (tracked) trackedWires += requestId to firstWireRequestId
         return DirectAckBeginResult.Begun(value, receipt(value))
     }
 
     override suspend fun registerDirectAckDispatch(
         attempt: DirectAckAttempt, wireRequestId: UUID, predictedAckCode: UInt,
+    ): DirectAckMutationResult = radioMutations.withLock {
+        registerDirectAckDispatchWithTracking(attempt, wireRequestId, predictedAckCode, false)
+    }
+
+    override suspend fun registerDirectAckDispatchRequiringEmissionTracking(
+        attempt: DirectAckAttempt, wireRequestId: UUID, predictedAckCode: UInt,
+    ): DirectAckMutationResult = radioMutations.withLock {
+        registerDirectAckDispatchWithTracking(attempt, wireRequestId, predictedAckCode, true)
+    }
+
+    private fun registerDirectAckDispatchWithTracking(
+        attempt: DirectAckAttempt, wireRequestId: UUID, predictedAckCode: UInt, tracked: Boolean,
     ): DirectAckMutationResult {
         val value = resolve(attempt) ?: return DirectAckMutationResult.Rejected(DirectAckRejection.INVALID_HANDLE)
         rejection(value)?.let { return it }
+        if (((value.receipt.requestId to value.receipt.wires.first().requestId) in trackedWires) != tracked) {
+            return DirectAckMutationResult.Rejected(DirectAckRejection.CONFLICT)
+        }
         value.receipt.wires.firstOrNull { it.requestId == wireRequestId }?.let {
-            return if (it.predictedAckCode == predictedAckCode) DirectAckMutationResult.AlreadyApplied(receipt(value))
+            return if (it.predictedAckCode == predictedAckCode &&
+                ((value.receipt.requestId to wireRequestId) in trackedWires) == tracked) DirectAckMutationResult.AlreadyApplied(receipt(value))
             else DirectAckMutationResult.Rejected(DirectAckRejection.CONFLICT)
         }
         value.receipt = value.receipt.copy(wires =
             (value.receipt.wires + DirectAckWireReceipt(wireRequestId, predictedAckCode, null)).snapshot())
+        if (tracked) trackedWires += value.receipt.requestId to wireRequestId
         return DirectAckMutationResult.Applied(receipt(value))
     }
 

@@ -51,11 +51,13 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.annotation.SQLiteMode
 import org.robolectric.shadows.ShadowDialog
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31, 37], qualifiers = "en-rUS-w360dp-h800dp-mdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
+@SQLiteMode(SQLiteMode.Mode.NATIVE)
 class NotificationEnrollmentEntryTest {
     @get:Rule val compose = createEmptyComposeRule()
     @get:Rule val temporary = TemporaryFolder()
@@ -245,11 +247,19 @@ class NotificationEnrollmentEntryTest {
     }
 
     @Test fun actualPauseBeforeRealStageAdmissionLeavesNoAcknowledgmentWitnessOrJournal() {
+        assertRetiredBeforeRealStage(dispose = false)
+    }
+
+    @Test fun actualDisposalBeforeRealStageAdmissionLeavesNoAcknowledgmentWitnessOrJournal() {
+        assertRetiredBeforeRealStage(dispose = true)
+    }
+
+    private fun assertRetiredBeforeRealStage(dispose: Boolean) {
         val real = mountReal("EXPLICIT_ACTION")
         shownRequest()
         compose.onNodeWithText(text(R.string.notification_enrollment_confirm)).performClick()
         assertTrue(requireNotNull(real.gate).entered.await(10, java.util.concurrent.TimeUnit.SECONDS))
-        compose.runOnUiThread { host.pause() }
+        retireHost(dispose)
         real.gate?.release?.countDown()
         awaitRealOutcome()
         assertEquals(emptyList(), real.statuses())
@@ -259,13 +269,20 @@ class NotificationEnrollmentEntryTest {
     }
 
     @Test fun actualDisposalBeforeRealConsumptionInvalidatesStagedLedgerWithoutWitnessOrJournal() {
+        assertRetiredBeforeRealConsumption(dispose = true)
+    }
+
+    @Test fun actualPauseBeforeRealConsumptionInvalidatesStagedLedgerWithoutWitnessOrJournal() {
+        assertRetiredBeforeRealConsumption(dispose = false)
+    }
+
+    private fun assertRetiredBeforeRealConsumption(dispose: Boolean) {
         val real = mountReal("WITNESS_CONSUMPTION")
         val request = shownRequest()
         compose.onNodeWithText(text(R.string.notification_enrollment_confirm)).performClick()
         assertTrue(requireNotNull(real.gate).entered.await(10, java.util.concurrent.TimeUnit.SECONDS))
         assertEquals(listOf("STAGED"), real.statuses())
-        compose.runOnUiThread { host.get().setContent {} }
-        compose.waitForIdle()
+        retireHost(dispose)
         real.gate?.release?.countDown()
         awaitRealOutcome()
         compose.waitUntil(30_000) { real.statuses().lastOrNull() == "INVALIDATED" }
@@ -276,6 +293,13 @@ class NotificationEnrollmentEntryTest {
             assertEquals(ForegroundAcknowledgmentResult.Rejected,
                 requireNotNull(real.verifier).verify(request.toWitnessRequest()))
             assertEquals(WitnessObservation.UnknownOrLost, requireNotNull(real.witness).observe())
+        }
+
+        private fun retireHost(dispose: Boolean) {
+            compose.runOnUiThread {
+                if (dispose) host.get().setContent {} else host.pause()
+            }
+            compose.waitForIdle()
         }
     }
 

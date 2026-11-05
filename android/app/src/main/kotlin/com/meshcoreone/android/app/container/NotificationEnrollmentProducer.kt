@@ -96,10 +96,11 @@ internal class NotificationEnrollmentProducer(
         val started = epoch
         scope.launch {
             try {
-                when (val observed = backend.observe(copy)) {
+                val observed = backend.observe(copy)
+                if (host !== owner || epoch != started) return@launch
+                when (observed) {
                     is Observation.Failed -> mutable.value = State.Outcome(Result.Blocked(observed.reason))
                     else -> {
-                        if (host !== owner || epoch != started) return@launch
                         val expected = (observed as? Observation.Current)?.record
                         // Only a later, explicit NEW action after durable recovery found no current
                         // authorization may abandon the old tuple. It is never an automatic retry.

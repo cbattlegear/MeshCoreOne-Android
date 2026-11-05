@@ -2,6 +2,7 @@
 package com.meshcoreone.android.app.container
 
 import android.view.ViewTreeObserver
+import android.view.View
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -101,14 +102,30 @@ internal fun NotificationEnrollmentEntry(producer: NotificationEnrollmentProduce
                 Text(shown.copy.body, Modifier.verticalScroll(rememberScrollState()))
             },
             confirmButton = {
-                TextButton(onClick = { producer.confirm(owner, shown) },
-                    enabled = state is NotificationEnrollmentProducer.State.Warning) { Text(shown.copy.confirm) }
+                EnrollmentConfirmButton(producer, owner, shown, state is NotificationEnrollmentProducer.State.Warning)
             },
             dismissButton = {
                 TextButton(onClick = { producer.dismiss(owner, shown) }) { Text(shown.copy.cancel) }
             },
         )
     }
+}
+
+@Composable
+private fun EnrollmentConfirmButton(
+    producer: NotificationEnrollmentProducer,
+    owner: Any,
+    shown: NotificationEnrollmentProducer.Presentation,
+    enabled: Boolean,
+) {
+    val view = LocalView.current
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    TextButton(onClick = {
+        if (view.isAttachedToWindow && view.hasWindowFocus() &&
+            lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)
+        ) producer.confirm(owner, shown)
+        else producer.dismiss(owner, shown)
+    }, enabled = enabled) { Text(shown.copy.confirm) }
 }
 
 /** Observe the dialog's own window; its appearance legitimately removes focus from the activity. */
@@ -121,12 +138,23 @@ private fun EnrollmentWarningLifetime(
     val view = LocalView.current
     DisposableEffect(view, producer, owner, shown) {
         val observer = view.viewTreeObserver
+        val checkInitialFocus = Runnable {
+            if (!view.isAttachedToWindow || !view.hasWindowFocus()) producer.dismiss(owner, shown)
+        }
+        val attachment = object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(view: View) { view.post(checkInitialFocus) }
+            override fun onViewDetachedFromWindow(view: View) { producer.dismiss(owner, shown) }
+        }
         val listener = ViewTreeObserver.OnWindowFocusChangeListener { focused ->
             if (!focused) producer.dismiss(owner, shown)
         }
         observer.addOnWindowFocusChangeListener(listener)
+        view.addOnAttachStateChangeListener(attachment)
+        if (view.isAttachedToWindow) view.post(checkInitialFocus)
         onDispose {
             producer.dismiss(owner, shown)
+            view.removeCallbacks(checkInitialFocus)
+            view.removeOnAttachStateChangeListener(attachment)
             if (observer.isAlive) observer.removeOnWindowFocusChangeListener(listener)
         }
     }

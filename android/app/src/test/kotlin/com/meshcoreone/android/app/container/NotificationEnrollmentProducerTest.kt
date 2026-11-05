@@ -103,6 +103,21 @@ class NotificationEnrollmentProducerTest {
         assertTrue(f.presentations.isEmpty())
     }
 
+    @Test fun delayedFailedObservationCannotReplaceNewForegroundOwnersState() = runTest {
+        val f = Fixture(this)
+        f.observation = Observation.Failed(Failure.CORRUPT_STORAGE)
+        f.readGate = CompletableDeferred()
+        f.producer.begin(f.owner, copy)
+        runCurrent()
+        f.producer.detach(f.owner)
+        val replacement = Any()
+        assertTrue(f.producer.attach(replacement))
+        f.readGate?.complete(Unit)
+        runCurrent()
+        assertEquals(NotificationEnrollmentProducer.State.Ready, f.producer.state.value)
+        assertEquals(0, f.ids)
+    }
+
     @Test fun lockedCorruptOrMismatchedObservationDoesNotAllocate() = runTest {
         for (reason in listOf(Failure.STORAGE_UNAVAILABLE, Failure.CORRUPT_STORAGE, Failure.IDENTITY_MISMATCH)) {
             val f = Fixture(this)

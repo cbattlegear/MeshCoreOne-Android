@@ -18,9 +18,11 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.SQLiteMode
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31, 37])
+@SQLiteMode(SQLiteMode.Mode.NATIVE)
 class NotificationEnrollmentJournalAdapterTest {
     private val context = ApplicationProvider.getApplicationContext<Application>()
     private val operation = Enrollment.Operation(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID())

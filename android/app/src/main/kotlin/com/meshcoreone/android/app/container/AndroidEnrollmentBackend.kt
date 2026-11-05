@@ -69,10 +69,11 @@ internal class AndroidEnrollmentBackend internal constructor(
             override suspend fun enroll() = owner.coordinator.enroll(request)
         }
 
-        companion object {
-            fun warning(copy: EnrollmentWarningCopy) = ForegroundAcknowledgmentWarning.fromRenderedCopy(
-                "notification-enrollment-new-generation", 1, copy.canonical,
-            )
-        }
+    }
+
+    companion object {
+        fun warning(copy: EnrollmentWarningCopy) = ForegroundAcknowledgmentWarning.fromRenderedCopy(
+            "notification-enrollment-new-generation", 1, copy.canonical,
+        )
     }
 }

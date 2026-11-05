@@ -45,6 +45,13 @@ data class DirectAckDelivery(
 )
 
 sealed interface DirectAckBookkeeping {
+    /**
+     * Inline completion only: promote current PENDING to SENT with this exact persisted wire's
+     * accepted code. Predicted-only, unknown or foreign wires are ineligible; preserve terminal
+     * guards and revision fencing. Acceptance alone never performs this product-status transition.
+     */
+    data class SendCompleted(val wireRequestId: UUID) : DirectAckBookkeeping
+
     /** Set RETRYING and these counters, preserving the existing nonterminal guard. */
     data class RetryStarted(val retryAttempt: Long, val maxRetryAttempts: Long) : DirectAckBookkeeping
 
@@ -220,7 +227,9 @@ interface DirectAckAuthority {
 
     /**
      * Bind the actual returned code to its registered wire request, adding rather than replacing
-     * predicted/prior codes. Late acceptance may record binding history after own FAILED/DELIVERED,
+     * predicted/prior codes and recording ACCEPTED phase without changing product message status.
+     * Retry PENDING/RETRYING remains unchanged; inline SENT promotion requires SendCompleted for
+     * this exact accepted wire. Late acceptance may record binding history after own FAILED/DELIVERED,
      * but must not regress the message or restore mutation permission after invalidation.
      * An initially FAILED/DELIVERED RESEND baseline retains its terminal status on acceptance;
      * only a genuine registered ACK can settle delivery, never a generic SENT relabel.
@@ -255,6 +264,8 @@ interface DirectAckAuthority {
      * Durable operation-ID journaling prevents double increments after commit-then-throw. Retry
      * changes on own delivery return AlreadyDelivered without regression. Post-delivery sendCount
      * requires the still-current lease/incarnation/revision and never regrants ACK authority.
+     * SendCompleted resolves the exact claim-scoped persisted accepted wire, never a caller-supplied
+     * code/status or inferred latest dispatch. Reusing an operation ID with another wire is CONFLICT.
      */
     suspend fun applyDirectAckBookkeeping(
         attempt: DirectAckAttempt,

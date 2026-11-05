@@ -78,6 +78,7 @@ fun DeviceDTO.preservingChanges(before: DeviceDTO, live: DeviceDTO): DeviceDTO {
 suspend fun DevicePersisting.editDevice(
     id: UUID,
     isCurrent: () -> Boolean = { true },
+    onSaveFailure: (PersistenceStoreException) -> Nothing = { throw it },
     transform: (DeviceDTO) -> DeviceDTO,
 ): DeviceDTO? {
     val persistence = this as? DeviceEditPersisting
@@ -93,7 +94,12 @@ suspend fun DevicePersisting.editDevice(
         val updated = transform(snapshot.device)
         require(updated.id == snapshot.device.id && updated.radioId == snapshot.device.radioId)
         require(updated.isActive == snapshot.device.isActive && updated.lastConnected == snapshot.device.lastConnected)
-        if (persistence.saveDeviceIfUnchanged(updated, snapshot)) return updated
+        val committed = try {
+            persistence.saveDeviceIfUnchanged(updated, snapshot)
+        } catch (failure: PersistenceStoreException) {
+            onSaveFailure(failure)
+        }
+        if (committed) return updated
     }
     throw DeviceWriteConflict()
 }

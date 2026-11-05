@@ -134,13 +134,16 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     private fun commitIfCurrent(
         expected: NavigationStateStore.Snapshot, next: NavigationState, isCurrent: () -> Boolean,
         onCommitted: () -> Unit = {},
+        markGuardedRadioCleanup: Boolean = false,
     ): Boolean? {
         var committed: Boolean? = null
         val publication = NavigationStateStore.Publication()
         try {
             commitBoundary {
                 if (isCurrent()) {
-                    committed = mutableState.compareAndSet(expected, next, publication)
+                    committed = mutableState.compareAndSet(
+                        expected, next, publication, markGuardedRadioCleanup = markGuardedRadioCleanup,
+                    )
                     if (committed == true) onCommitted()
                 }
             }
@@ -832,7 +835,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         while (true) {
             val snapshot = mutableState.snapshot()
             val next = clearRadioSelection(snapshot.value).copy(generation = Math.incrementExact(snapshot.value.generation))
-            when (commitIfCurrent(snapshot, next, isCurrent)) {
+            when (commitIfCurrent(snapshot, next, isCurrent, markGuardedRadioCleanup = true)) {
                 null -> return false
                 true -> return true
                 false -> Unit
@@ -1000,11 +1003,16 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         ) {
             return false
         }
-        fun sameSession(state: NavigationState): Boolean {
+        fun sameSession(snapshot: NavigationStateStore.Snapshot): Boolean {
+            val state = snapshot.value
             val unchanged = state.generation == source.generation && state.radioId == source.radioId &&
                 state.boundSessionToken == source.boundSessionToken
+            val immediateBinding = source.generation < Long.MAX_VALUE && state.generation == source.generation + 1
+            val bindingAfterCleanup = source.generation < Long.MAX_VALUE - 1 &&
+                state.generation == source.generation + 2 &&
+                snapshot.guardedRadioCleanupGeneration == source.generation
             val firstBinding = source.boundSessionToken == null &&
-                source.generation < Long.MAX_VALUE && state.generation == source.generation + 1 &&
+                (immediateBinding || bindingAfterCleanup) &&
                 state.radioId != null && state.boundSessionToken?.radioId == state.radioId
             return unchanged || firstBinding
         }
@@ -1013,7 +1021,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
             val snapshot = mutableState.snapshot()
             val current = snapshot.value
             if (snapshot.revision < presented.revision || snapshot.activeEntryEpoch != presented.activeEntryEpoch ||
-                !sameSession(current) ||
+                !sameSession(snapshot) ||
                 current.selectedTab != source.selectedTab || current.activeStack.last() != entry
             ) return false
             val next = if (mounted) {
@@ -1023,7 +1031,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
             }
             when (commitIfCurrent(
                 snapshot, next,
-                isCurrent = { sameSession(mutableState.value) && completion.isCurrent(onboardingIdentity, producer) },
+                isCurrent = { sameSession(mutableState.snapshot()) && completion.isCurrent(onboardingIdentity, producer) },
                 onCommitted = { completion.retire(onboardingIdentity) },
             )) {
                 true -> return true

@@ -486,13 +486,40 @@ class NavigationStateTest {
             n.selectTab(AppTab.SETTINGS)
             n.navigate(FeatureRoute(FeatureId.ONBOARDING))
             val presented = n.publishedNavigation.value
-            n.installOnboardingSessionCapture { { true } }
-            val completion = n.captureMountedOnboarding(presented, presented.value.activeStack.last().id)
             val successor = SessionToken(epoch, Generation(2), nextRadio)
+            n.installOnboardingSessionCapture { { it == MountedOnboardingProducer.Preset(successor) } }
+            val completion = n.captureMountedOnboarding(presented, presented.value.activeStack.last().id)
+            if (nextRadio != radio) {
+                assertTrue(n.clearPerRadioSelectionWhen { true })
+                val cleared = n.currentState
+                assertFalse(n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(successor)))
+                assertEquals(cleared, n.currentState)
+            }
             assertTrue(n.bindNotificationSession(nextRadio, null, successor))
+            val bound = n.currentState
+            val wrong = successor.copy(generation = Generation(3))
+            assertFalse(n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(wrong)))
+            assertEquals(bound, n.currentState)
             assertTrue(n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(successor)))
             assertEquals(AppTab.CHATS, n.currentState.selectedTab)
             assertEquals(successor, n.currentState.boundSessionToken)
+        }
+        for (guardedCleanup in listOf(false, true)) {
+            val n = NavigationCoordinator()
+            assertTrue(n.bindNotificationSession(radio, null, first))
+            n.clearPendingLinks()
+            n.selectTab(AppTab.SETTINGS)
+            n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+            val presented = n.publishedNavigation.value
+            val successor = SessionToken(epoch, Generation(2), otherRadio)
+            n.installOnboardingSessionCapture { { it == MountedOnboardingProducer.Preset(successor) } }
+            val completion = n.captureMountedOnboarding(presented, presented.value.activeStack.last().id)
+            if (guardedCleanup) assertTrue(n.clearPerRadioSelectionWhen { true })
+            n.clearPendingLinks()
+            assertTrue(n.bindNotificationSession(otherRadio, null, successor))
+            val current = n.currentState
+            assertFalse(n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(successor)))
+            assertEquals(current, n.currentState)
         }
     }
 

@@ -19,6 +19,7 @@ internal class NavigationStateStore(initial: NavigationState) {
         val value: NavigationState,
         internal val pending: List<Publication>,
         internal val activeEntryEpoch: Long = 0,
+        internal val guardedRadioCleanupGeneration: Long? = null,
         internal val handoffs: ChatContactHandoffs = ChatContactHandoffs(),
     )
 
@@ -77,8 +78,18 @@ internal class NavigationStateStore(initial: NavigationState) {
         deferred: Publication? = null,
         forceRevision: Boolean = false,
         handoffs: ChatContactHandoffs = expected.handoffs,
+        markGuardedRadioCleanup: Boolean = false,
     ): Boolean {
-        val updated = if (!forceRevision && expected.value == next && expected.handoffs == handoffs) expected else Snapshot(
+        // A guarded radio switch and its first binding each advance the navigation generation.
+        val cleanupGeneration = if (markGuardedRadioCleanup) expected.value.generation else {
+            expected.guardedRadioCleanupGeneration?.takeIf {
+                it < Long.MAX_VALUE && (next.generation == it + 1 ||
+                    it < Long.MAX_VALUE - 1 && next.generation == it + 2)
+            }
+        }
+        val updated = if (!forceRevision && expected.value == next && expected.handoffs == handoffs &&
+            expected.guardedRadioCleanupGeneration == cleanupGeneration
+        ) expected else Snapshot(
             revision = Math.incrementExact(expected.revision),
             value = next,
             // Later commits must not expose a guarded commit before its lifecycle boundary exits.
@@ -87,6 +98,7 @@ internal class NavigationStateStore(initial: NavigationState) {
                 expected.value.selectedTab == next.selectedTab &&
                 expected.value.activeStack.last().id == next.activeStack.last().id
             ) expected.activeEntryEpoch else Math.incrementExact(expected.activeEntryEpoch),
+            guardedRadioCleanupGeneration = cleanupGeneration,
             handoffs = handoffs,
         )
         if (!current.compareAndSet(expected, updated)) return false

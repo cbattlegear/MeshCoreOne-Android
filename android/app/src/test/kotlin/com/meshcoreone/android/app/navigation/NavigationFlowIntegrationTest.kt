@@ -629,7 +629,11 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                         }
                         reconnect.await()
                     }
-                    assertTrue(n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(successor.token)))
+                    assertTrue(
+                        n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(successor.token)),
+                        "differentRadio=$differentRadio afterBinding=$afterBinding " +
+                            "presented=${presented.value.generation} current=${n.currentState.generation}",
+                    )
                     assertEquals(AppTab.CHATS, n.currentState.selectedTab)
                     h.eventually("the successor finishes binding") {
                         uiScheduler.runCurrent()
@@ -777,7 +781,10 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                     }
                     reconnect.await()
                 }
-                assertTrue(n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(successor.token)))
+                assertTrue(
+                    n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(successor.token)),
+                    "rebuild=$rebuild presented=${presented.value.generation} current=${n.currentState.generation}",
+                )
                 assertEquals(AppTab.CHATS, n.currentState.selectedTab)
                 h.eventually("the post-loss graph finishes binding") {
                     uiScheduler.runCurrent()
@@ -834,9 +841,10 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                     n.captureMountedOnboarding(presented, presented.value.activeStack.last().id),
                 )
                 val syncRequested = CompletableDeferred<Unit>()
+                val heldSync = AtomicBoolean(false)
                 h.links.configureRadio = { radio ->
                     radio.respond = { frame ->
-                        if (frame[0].toInt() == 0x04) {
+                        if (frame[0].toInt() == 0x04 && heldSync.compareAndSet(false, true)) {
                             syncRequested.complete(Unit)
                             listOf(Bytes.of(2) + le32(0))
                         } else null
@@ -847,8 +855,11 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                     else h.manager.rebuildSession(deviceId)
                 }
                 h.eventually("the successor graph is exposed during held sync", virtualBudgetMillis = 0) {
-                    syncRequested.isCompleted && h.sessions.current?.let { it !== retired } == true &&
-                        h.manager.connectionState == DeviceConnectionState.SYNCING
+                    uiScheduler.runCurrent()
+                    val graph = h.sessions.current
+                    syncRequested.isCompleted && !attempt.isCompleted && graph != null && graph !== retired &&
+                        h.manager.snapshot.value.token == graph.token &&
+                        h.manager.connectionState in listOf(DeviceConnectionState.CONNECTED, DeviceConnectionState.SYNCING)
                 }
                 val successor = assertNotNull(h.sessions.current)
                 assertTrue(h.manager.isFirstNavigationSessionAfterOffline(
@@ -3913,13 +3924,28 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             throw CancellationException("Publication owner was cancelled")
         }
         val work = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) { f.manager.connect(f.target) }
+        val cancellationReturned = CountDownLatch(1)
+        val cancellationWorker = Thread {
+            try { work.cancel() } finally { cancellationReturned.countDown() }
+        }.apply { isDaemon = true }
         try {
             val pendingStamp = f.manager.captureNavigationLifecycle()
             f.eventually("the graph enters its factory") { entered.isCompleted }
             val graph = entered.await()
             awaitBlockedOnLock(publisherThread, holderThread, ConnectionManager::class.java, "publishNavigationService")
-            work.cancel()
+            cancellationWorker.start()
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while ((!work.isCancelled || cancellationWorker.state != Thread.State.BLOCKED) &&
+                System.nanoTime() < deadline
+            ) Thread.yield()
+            assertTrue(work.isCancelled, "Cancellation must precede publication")
+            assertEquals(Thread.State.BLOCKED, cancellationWorker.state)
+            val publisher = assertNotNull(publisherThread.get())
+            val blocked = assertNotNull(ManagementFactory.getThreadMXBean().getThreadInfo(cancellationWorker.id))
+            assertEquals(publisher.id, blocked.lockOwnerId)
+            assertEquals(1L, cancellationReturned.count)
             releaseSlot.countDown()
+            assertTrue(cancellationReturned.await(5, TimeUnit.SECONDS))
             f.eventually("the cancelled publication is rejected and retired") {
                 result.isCompleted && work.isCompleted && graph.retirement != null
             }
@@ -3930,6 +3956,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             assertFalse(f.manager.isNavigationLifecycleCurrent(pendingStamp))
         } finally {
             releaseSlot.countDown()
+            cancellationWorker.join(5_000)
             holder.cancelAndJoin()
             work.cancelAndJoin()
             f.manager.close()
@@ -5863,6 +5890,15 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             }
             assertNull(navigation.state.value.pendingContactLink)
             assertNull(store.fetchContact(radioId, publicKey))
+            val producer = assertNotNull(h.sessions.current).contactService
+            h.eventually("the canceled in-flight write requires recovery before its late ACK") {
+                producer.contactWriteRecoveryState(radioId) is ContactWriteRecoveryState.Required
+            }
+            val recovery = assertIs<ContactWriteRecoveryState.Required>(producer.contactWriteRecoveryState(radioId))
+            val syncRequests = firmware.sent.count { it[0].toInt() == 0x04 }
+            assertFailsWith<ContactServiceError.SyncInterrupted> { service.syncContactsForRefresh(radioId) }
+            assertEquals(syncRequests, firmware.sent.count { it[0].toInt() == 0x04 })
+            assertEquals(recovery, producer.contactWriteRecoveryState(radioId))
 
             assertTrue(chat.route(uri))
             h.eventually("identical chat link reaches a new confirmation", virtualBudgetMillis = 100) {
@@ -5905,15 +5941,15 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
 
             compose.onNodeWithTag("contact-link-cancel").performClick()
             assertNull(navigation.state.value.pendingContactLink)
-            val producer = assertNotNull(h.sessions.current).contactService
-            h.eventually("the canceled write retains its recovery obligation after the late ACK") {
-                producer.contactWriteRecoveryState(radioId) is ContactWriteRecoveryState.Required
+            h.eventually("the accepted and locally persisted write settles its exact recovery obligation") {
+                producer.contactWriteRecoveryState(radioId) is ContactWriteRecoveryState.Clear
             }
-            val recovery = assertIs<ContactWriteRecoveryState.Required>(producer.contactWriteRecoveryState(radioId))
-            val syncRequests = firmware.sent.count { it[0].toInt() == 0x04 }
-            assertFailsWith<ContactServiceError.SyncInterrupted> { service.syncContactsForRefresh(radioId) }
-            assertEquals(syncRequests, firmware.sent.count { it[0].toInt() == 0x04 })
-            assertEquals(recovery, producer.contactWriteRecoveryState(radioId))
+            assertFalse(producer.needsContactWriteReconciliation(radioId))
+            val beforeRefresh = firmware.sent.count { it[0].toInt() == 0x04 }
+            val refresh = backgroundScope.async { service.syncContactsForRefresh(radioId) }
+            h.eventually("refresh succeeds after exact write settlement") { refresh.isCompleted }
+            refresh.await()
+            assertEquals(beforeRefresh + 1, firmware.sent.count { it[0].toInt() == 0x04 })
             val reloaded = assertNotNull(store.fetchContact(radioId, publicKey))
             assertEquals(added.id, reloaded.id)
             assertEquals(DeepLinkRouteOutcome.Navigated, external.routeExternal(uri))

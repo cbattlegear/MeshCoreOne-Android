@@ -56,6 +56,14 @@ class TracePathStateHolder(
     private var pathSelectionRevision = 0L
     private var historyRefreshSequence = 0L
     private var publishedHistoryRefresh = 0L
+    private data class BatchSaveProgress(
+        val connectionRevision: Long,
+        val pathRevision: Long,
+        val firstResultId: UUID,
+        val path: SavedTracePathDTO,
+        val runs: MutableMap<UUID, TracePathRunDTO>,
+    )
+    private var batchSaveProgress: BatchSaveProgress? = null
     private val hashModeActionObservers = linkedSetOf<() -> Unit>()
     internal var deps: TracePathFeatureDependencies = TracePathFeatureDependencies.Disconnected
         private set
@@ -416,28 +424,47 @@ class TracePathStateHolder(
         size: Long,
         revision: Long,
     ): Boolean = try {
-        val saved = store.createSavedTracePath(radioId, name, firstSuccess.tracedPathBytes, size, run(firstSuccess, time.now()))
-        val key = EntityKey(radioId, saved.id)
-        val persisted = mutableSetOf(firstSuccess.id)
+        val requestConnection = connectionRevision
+        val previous = batchSaveProgress?.takeIf {
+            it.connectionRevision == requestConnection && it.pathRevision == revision &&
+                it.firstResultId == firstSuccess.id && it.path.radioId == radioId
+        }
+        val progress = previous ?: kotlin.run {
+            val initialRun = run(firstSuccess, time.now())
+            val saved = store.createSavedTracePath(radioId, name, firstSuccess.tracedPathBytes, size, initialRun)
+            BatchSaveProgress(requestConnection, revision, firstSuccess.id, saved, mutableMapOf(firstSuccess.id to initialRun)).also {
+                if (connectionRevision == requestConnection && pathSelectionRevision == revision) batchSaveProgress = it
+            }
+        }
+        val key = EntityKey(radioId, progress.path.id)
+        if (previous != null && previous.path.name != name) store.updateSavedTracePathName(key, name)
+        val persisted = checkNotNull(store.fetchSavedTracePath(key)) { "Created trace path is missing" }.runs.mapTo(mutableSetOf()) { it.id }
         var acceptedResults = results
         fun isSameBatch(): Boolean =
-            pathSelectionRevision == revision && current.completedResults.take(results.size) == results &&
+            connectionRevision == requestConnection && pathSelectionRevision == revision &&
+                current.completedResults.take(results.size) == results &&
                 isConnectionCurrent() && deps.connectedDevice()?.radioId == radioId
         while (true) {
             if (isSameBatch()) acceptedResults = current.completedResults
             acceptedResults.forEachIndexed { index, batchResult ->
-                if (batchResult.id !in persisted) {
-                    store.appendTracePathRun(key, run(batchResult, time.now().plusSeconds(index.toLong())))
-                    persisted += batchResult.id
+                val savedRun = progress.runs.getOrPut(batchResult.id) {
+                    run(batchResult, time.now().plusSeconds(index.toLong()))
+                }
+                if (savedRun.id !in persisted) {
+                    store.appendTracePathRun(key, savedRun)
+                    persisted += savedRun.id
                 }
             }
-            val updated = store.fetchSavedTracePath(key)
+            val updated = checkNotNull(store.fetchSavedTracePath(key)) { "Created trace path is missing" }
+            val storedRunIds = updated.runs.mapTo(mutableSetOf()) { it.id }
+            check(storedRunIds.containsAll(persisted)) { "Saved trace runs are missing" }
             if (isSameBatch()) {
-                if (current.completedResults.any { it.id !in persisted }) continue
-                if (updated != null) update { it.copy(activeSavedPath = updated) }
+                if (current.completedResults.any { it.id !in progress.runs }) continue
+                update { it.copy(activeSavedPath = updated) }
             }
             break
         }
+        if (batchSaveProgress === progress) batchSaveProgress = null
         true
     } catch (error: CancellationException) {
         throw error

@@ -219,6 +219,51 @@ class TraceCodeInputComposeTest {
     @Test fun mountedSaveRetainsVisibleFailureAndNameWhenTheNextBatchResultArrivesDuringStorage() =
         heldBatchSaveAcrossResult(fail = true)
 
+    @Test fun mountedBatchSaveRetryReusesTheCreatedPathAndCommittedRunIdentities() {
+        for (failAfterCommit in listOf(false, true)) {
+            val h = successfulSaveHarness(batch = true)
+            val store = h.deps.store as InMemoryTracePathStore
+            var creates = 0
+            var failAppend = true
+            h.deps.store = object : TracePathPersisting by store {
+                override suspend fun createSavedTracePath(
+                    radioId: RadioId, name: String, pathBytes: Bytes, hashSize: Long,
+                    initialRun: com.meshcoreone.android.core.model.TracePathRunDTO?,
+                ): SavedTracePathDTO {
+                    creates += 1
+                    return store.createSavedTracePath(radioId, name, pathBytes, hashSize, initialRun)
+                }
+                override suspend fun appendTracePathRun(
+                    path: com.meshcoreone.android.core.contracts.domain.EntityKey,
+                    run: com.meshcoreone.android.core.model.TracePathRunDTO,
+                ) {
+                    if (failAppend && !failAfterCommit) throw java.io.IOException("append before commit")
+                    store.appendTracePathRun(path, run)
+                    if (failAppend) throw java.io.IOException("append after commit")
+                }
+            }
+            mountSaveAction(h)
+            click(host.get().getString(C.contactsResultsSavePath))
+            setInput("Retry partial batch")
+            click(host.get().getString(L.commonSave))
+            val partial = store.paths.values.single()
+            assertEquals(if (failAfterCommit) 2 else 1, partial.runs.size)
+            assertNull(h.state.activeSavedPath)
+            assertTrue(texts().contains(host.get().getString(C.contactsTraceMapSaveFailedMessage)))
+            assertEquals("Retry partial batch", input().config[SemanticsProperties.EditableText].text)
+            assertEquals("savePath(batch)", h.diagnostics.failures.single().first)
+            failAppend = false
+            click(host.get().getString(L.commonSave))
+            val saved = store.paths.values.single()
+            assertEquals(1, creates, "Retry must resume the already-created path")
+            assertEquals(partial.id, saved.id)
+            assertEquals(partial.runs.map { it.id }, saved.runs.take(partial.runs.size).map { it.id })
+            assertEquals(2, saved.runs.size, "An append that committed before reporting failure must not be duplicated")
+            assertEquals(listOf(listOf(6.0), listOf(8.0)), saved.runs.map { it.hopsSNR.toList() })
+            assertEquals(saved, h.state.activeSavedPath)
+        }
+    }
+
     private fun heldBatchSaveAcrossResult(fail: Boolean) {
         val h = configured()
         val store = InMemoryTracePathStore { h.time.now() }

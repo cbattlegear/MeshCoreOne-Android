@@ -29,7 +29,7 @@ invariants are unchanged.
 
 ## Mounted regression controls
 
-Twelve new methods in `TraceCodeInputComposeTest` drive the real state holder after
+Thirteen new methods in `TraceCodeInputComposeTest` drive the real state holder after
 actual fake-radio dispatch/response correlation and persist through
 `InMemoryTracePathStore` (not Room). They cover:
 
@@ -41,6 +41,9 @@ actual fake-radio dispatch/response correlation and persist through
   another batch result arriving while the accepted write remains suspended.
   The new result must be persisted too; a failed held write must retain its
   visible name/error and retry all completed runs.
+- Failure before/after an appended run commits must retry the same saved-path
+  UUID and stable run identities, preserving accepted data without duplicate
+  paths or repeated runs.
 - Edited and failed routes with no storage write.
 - Retained confirmation after same/different-radio reconnect and fresh B Save.
 - Accepted A write completing after same/different-radio reconnect without

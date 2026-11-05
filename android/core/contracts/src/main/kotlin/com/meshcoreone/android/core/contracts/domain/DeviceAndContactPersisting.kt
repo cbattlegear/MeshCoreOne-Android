@@ -13,12 +13,15 @@ import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 
 /** A process-owned optimistic write ticket; device writers invalidate it inside their transaction. */
 data class DeviceWriteSnapshot(
     val device: DeviceDTO,
     val revision: Long,
     val authorityRevision: Long = revision,
+    val isCurrent: () -> Boolean = { true },
 )
 
 class DeviceWriteConflict : IllegalStateException("Device write authority changed")
@@ -79,6 +82,7 @@ suspend fun DevicePersisting.editDevice(
     id: UUID,
     isCurrent: () -> Boolean = { true },
     onSaveFailure: (PersistenceStoreException) -> Nothing = { throw it },
+    onCommitted: (DeviceDTO) -> Unit = {},
     transform: (DeviceDTO) -> DeviceDTO,
 ): DeviceDTO? {
     val persistence = this as? DeviceEditPersisting
@@ -94,11 +98,22 @@ suspend fun DevicePersisting.editDevice(
         val updated = transform(snapshot.device)
         require(updated.id == snapshot.device.id && updated.radioId == snapshot.device.radioId)
         require(updated.isActive == snapshot.device.isActive && updated.lastConnected == snapshot.device.lastConnected)
-        val committed = try {
-            persistence.saveDeviceIfUnchanged(updated, snapshot)
-        } catch (failure: PersistenceStoreException) {
-            onSaveFailure(failure)
+        val caller = currentCoroutineContext()
+        val committed = withContext(NonCancellable) {
+            val guarded = snapshot.copy(isCurrent = {
+                caller.ensureActive()
+                isCurrent()
+            })
+            val accepted = try {
+                persistence.saveDeviceIfUnchanged(updated, guarded)
+            } catch (failure: PersistenceStoreException) {
+                onSaveFailure(failure)
+            }
+            // A committed row must reach the token-bound live/cache consumer before cancellation escapes.
+            if (accepted) onCommitted(updated)
+            accepted
         }
+        caller.ensureActive()
         if (committed) return updated
     }
     throw DeviceWriteConflict()

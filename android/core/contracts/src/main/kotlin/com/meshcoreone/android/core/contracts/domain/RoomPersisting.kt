@@ -52,7 +52,7 @@ interface MetadataPersisting {
 }
 
 interface PersistenceStoreProtocol :
-    DevicePersisting, ContactPersisting, ChannelPersisting, MessagePersisting, HeardRepeatPersisting,
+    DevicePersisting, DeviceEditPersisting, ContactPersisting, ChannelPersisting, MessagePersisting, HeardRepeatPersisting,
     TracePathPersisting, DebugLogPersisting, LinkPreviewPersisting, RxLogPersisting, RoomPersisting,
     DiscoveredNodePersisting, ReactionPersisting, NodeSnapshotPersisting, FailedSendPersisting, MetadataPersisting {
     suspend fun warmUp()

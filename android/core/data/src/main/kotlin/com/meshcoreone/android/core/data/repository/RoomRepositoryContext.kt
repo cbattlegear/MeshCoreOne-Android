@@ -14,6 +14,7 @@ import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.database.RxLogEntryEntity
 import com.meshcoreone.android.core.model.RadioId
 import java.time.Clock
+import java.util.WeakHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -51,9 +52,12 @@ internal class RepositoryTransaction(
     var saves = false
         private set
     private val committed = mutableListOf<() -> Unit>()
+    private val committing = mutableListOf<() -> Unit>()
 
     fun save() { saves = true }
     fun afterCommit(action: () -> Unit) { committed += action }
+    fun beforeCommit(action: () -> Unit) { committing += action }
+    fun validateCommit() { committing.forEach { it() } }
     fun complete() { committed.forEach { it() } }
 
     suspend fun rxRows(radioId: RadioId): List<RxLogEntryEntity> {
@@ -74,7 +78,7 @@ internal class RoomRepositoryContext(
     parentScope: CoroutineScope,
     val reporter: RepositoryIssueReporter,
 ) {
-    private val mutex = Mutex()
+    private val mutex = synchronized(databaseMutexes) { databaseMutexes.getOrPut(database) { Mutex() } }
     private val flushOwner = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + flushOwner)
     private val pendingRx = LinkedHashMap<EntityKey, RxLogEntryEntity>()
@@ -111,8 +115,10 @@ internal class RoomRepositoryContext(
             ) {
                 val value = transaction.block()
                 if (transaction.saves) database.rxLogs().upsert(transaction.pendingRx.values.toList())
+                transaction.validateCommit()
                 value
             }
+
         }
     }
 
@@ -332,5 +338,9 @@ internal class RoomRepositoryContext(
         )
         reporter.report(operation, failure)
         throw failure
+    }
+
+    private companion object {
+        val databaseMutexes = WeakHashMap<MeshCoreDatabase, Mutex>()
     }
 }

@@ -418,15 +418,25 @@ class TracePathStateHolder(
     ): Boolean = try {
         val saved = store.createSavedTracePath(radioId, name, firstSuccess.tracedPathBytes, size, run(firstSuccess, time.now()))
         val key = EntityKey(radioId, saved.id)
-        results.forEachIndexed { index, batchResult ->
-            if (batchResult.id != firstSuccess.id) {
-                store.appendTracePathRun(key, run(batchResult, time.now().plusSeconds(index.toLong())))
+        val persisted = mutableSetOf(firstSuccess.id)
+        var acceptedResults = results
+        fun isSameBatch(): Boolean =
+            pathSelectionRevision == revision && current.completedResults.take(results.size) == results &&
+                isConnectionCurrent() && deps.connectedDevice()?.radioId == radioId
+        while (true) {
+            if (isSameBatch()) acceptedResults = current.completedResults
+            acceptedResults.forEachIndexed { index, batchResult ->
+                if (batchResult.id !in persisted) {
+                    store.appendTracePathRun(key, run(batchResult, time.now().plusSeconds(index.toLong())))
+                    persisted += batchResult.id
+                }
             }
-        }
-        store.fetchSavedTracePath(key)?.let { updated ->
-            if (pathSelectionRevision == revision && isConnectionCurrent() && deps.connectedDevice()?.radioId == radioId) {
-                update { it.copy(activeSavedPath = updated) }
+            val updated = store.fetchSavedTracePath(key)
+            if (isSameBatch()) {
+                if (current.completedResults.any { it.id !in persisted }) continue
+                if (updated != null) update { it.copy(activeSavedPath = updated) }
             }
+            break
         }
         true
     } catch (error: CancellationException) {

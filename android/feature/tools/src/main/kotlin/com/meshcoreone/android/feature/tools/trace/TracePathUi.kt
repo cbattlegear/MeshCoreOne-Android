@@ -509,8 +509,13 @@ private fun TraceSavePathAction(
 ) {
     val dialog = remember(
         connection?.radioId, connection?.generation, connection?.originatingToken,
-        state.fullPathData, state.result?.id, state.completedResults,
+        state.fullPathData,
     ) { mutableStateOf(TraceSaveDialogState()) }
+    LaunchedEffect(state.displayedResult?.success, state.isRunningSavedPath) {
+        if (!saving.value && (state.displayedResult?.success != true || state.isRunningSavedPath)) {
+            dialog.value = TraceSaveDialogState()
+        }
+    }
     val canSave = {
         val live = holder.state.value
         val currentConnection = if (connection == null) holder.isConnectionCurrent()

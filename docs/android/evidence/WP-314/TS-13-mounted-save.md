@@ -22,14 +22,14 @@ route/result/connection replacement discard the dialog. Already accepted writes
 remain governed by the holder's existing captured-radio and revision checks.
 Suggested-name formatting now uses the existing generated localization functions.
 
-All four changed paths are admitted by trusted base `wp-owned` capabilities
+All five changed paths are admitted by trusted base `wp-owned` capabilities
 (modify production/deviations, test existing mounted class, create per-WP evidence).
 The pinned-source, one-WP/branch/PR, declared-verification and provenance
 invariants are unchanged.
 
 ## Mounted regression controls
 
-Eleven new methods in `TraceCodeInputComposeTest` drive the real state holder after
+Twelve new methods in `TraceCodeInputComposeTest` drive the real state holder after
 actual fake-radio dispatch/response correlation and persist through
 `InMemoryTracePathStore` (not Room). They cover:
 
@@ -39,6 +39,8 @@ actual fake-radio dispatch/response correlation and persist through
 - Storage failure with diagnostics, retained name, visible error and real retry.
 - Held storage creation and repeated retained-confirmation rejection, including
   another batch result arriving while the accepted write remains suspended.
+  The new result must be persisted too; a failed held write must retain its
+  visible name/error and retry all completed runs.
 - Edited and failed routes with no storage write.
 - Retained confirmation after same/different-radio reconnect and fresh B Save.
 - Accepted A write completing after same/different-radio reconnect without

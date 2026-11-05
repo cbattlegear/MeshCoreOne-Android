@@ -213,11 +213,18 @@ class TraceCodeInputComposeTest {
         assertTrue(store.paths.isEmpty())
     }
 
-    @Test fun mountedSaveRemainsBusyWhenTheNextBatchResultArrivesDuringStorage() {
+    @Test fun mountedSaveRemainsBusyWhenTheNextBatchResultArrivesDuringStorage() =
+        heldBatchSaveAcrossResult(fail = false)
+
+    @Test fun mountedSaveRetainsVisibleFailureAndNameWhenTheNextBatchResultArrivesDuringStorage() =
+        heldBatchSaveAcrossResult(fail = true)
+
+    private fun heldBatchSaveAcrossResult(fail: Boolean) {
         val h = configured()
         val store = InMemoryTracePathStore { h.time.now() }
         val release = CompletableDeferred<Unit>()
         var creates = 0
+        var failCreate = fail
         h.deps.store = object : TracePathPersisting by store {
             override suspend fun createSavedTracePath(
                 radioId: RadioId, name: String, pathBytes: Bytes, hashSize: Long,
@@ -225,6 +232,7 @@ class TraceCodeInputComposeTest {
             ): SavedTracePathDTO {
                 creates += 1
                 release.await()
+                if (failCreate) throw java.io.IOException("held fixture storage failure")
                 return store.createSavedTracePath(radioId, name, pathBytes, hashSize, initialRun)
             }
         }
@@ -239,20 +247,34 @@ class TraceCodeInputComposeTest {
         assertTrue(h.state.canSavePath)
         mountSaveAction(h)
         click(host.get().getString(C.contactsResultsSavePath))
+        setInput("Pending batch route")
+        val confirm = assertNotNull(button(host.get().getString(L.commonSave)).config[SemanticsActions.OnClick].action)
         click(host.get().getString(L.commonSave))
         assertEquals(1, creates)
         h.time.advanceBy(500.milliseconds)
         h.respond(sender.sent.last().tag, listOf(TraceNode(Bytes.of(0xAA, 0x11), 8.0), node(null, 4.0)), RADIO)
         settle()
-        scrollToIndex(11)
-        val save = button(host.get().getString(C.contactsResultsSavePath))
+        val save = button(host.get().getString(L.commonSave))
         assertTrue(save.config.contains(SemanticsProperties.Disabled))
-        host.get().runOnUiThread { assertNotNull(save.config[SemanticsActions.OnClick].action)() }
+        assertEquals("Pending batch route", input().config[SemanticsProperties.EditableText].text)
+        host.get().runOnUiThread { confirm() }
         settle()
         assertEquals(1, creates, "A new batch result must not release an accepted save's submission guard")
         host.get().runOnUiThread { release.complete(Unit) }
         settle()
-        assertEquals(1, store.paths.size)
+        if (fail) {
+            assertTrue(store.paths.isEmpty())
+            assertNull(h.state.activeSavedPath)
+            assertEquals("Pending batch route", input().config[SemanticsProperties.EditableText].text)
+            assertTrue(texts().contains(host.get().getString(C.contactsTraceMapSaveFailedMessage)))
+            failCreate = false
+            click(host.get().getString(L.commonSave))
+            assertEquals(2, creates)
+        }
+        val saved = store.paths.values.single()
+        assertEquals("Pending batch route", saved.name)
+        assertEquals(listOf(listOf(6.0), listOf(8.0)), saved.runs.map { it.hopsSNR.toList() })
+        assertEquals(saved, h.state.activeSavedPath)
         assertEquals(2, h.state.completedResults.size)
     }
 

@@ -7,7 +7,10 @@
 - Candidate branch: `cbattlegear-trace-path-controls`
 - Candidate base: `f93e2012049feb4d6be728f32bd661665d71161c`
 - Source reference: `db14559b39d32322b06477c6ae676112f583db50`
-- Candidate commit: this evidence is committed with the source and mounted-test changes; use the containing Git commit for exact-candidate diagnostics.
+- Verified source/test candidate: `2cb5dbbeabd97d94a1a32d9d8ab5f46a5c5d8e3f`
+- Changed implementation paths:
+  - `android/feature/tools/src/main/kotlin/com/meshcoreone/android/feature/tools/trace/TracePathUi.kt`
+  - `android/feature/tools/src/test/kotlin/com/meshcoreone/android/feature/tools/trace/TraceCodeInputComposeTest.kt`
 
 The pinned Swift trace list uses `onMove` and `onDelete`, and the trace screen presents a destructive
 clear-path confirmation before calling `clearPath`. The Android UI now exposes accessible up/down
@@ -28,23 +31,26 @@ cancellation, hash-override reset, and preservation of the auto-return setting.
 | Check | Result |
 |---|---|
 | Pinned Windows preflight: `python .\\tools\\android-port\\controller\\ci.py preflight --local --state $env:ANDROID_CI_STATE --output $output` with a fresh absolute TEMP output and pinned Python 3.12.4 | PASS (exit 0; readiness only) |
-| `git diff --check` | PASS |
-| Android compile / mounted Compose tests / test discovery | Pending successor exact-candidate hosted workflow |
+| `git diff --check` | PASS on the source/test candidate |
+| Full existing `android-ci.yml` manual workflow, run [41984214970](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41984214970), exact head `2cb5dbbeabd97d94a1a32d9d8ab5f46a5c5d8e3f` | PASS; all six workflow jobs succeeded |
+| `:feature:tools:testDebugUnitTest` mounted/JVM tests | PASS: 719 discovered, 719 run, 719 passed, 0 failed/errors/skipped |
+| Mounted test discovery in `TraceCodeInputComposeTest` | PASS: both `mountedPathControlsReorderWithinBoundariesAndPreserveRemovalInvalidation` and `mountedClearPathRequiresConfirmationAndResetsTheTraceHashOverride` are in the 39-method runner inventory; both are included in the passing module run |
+| Swift codec oracle and SwiftData restore/export oracle | PASS |
+| APK inspection and static alignment | PASS; this is static hosted evidence, not device execution |
 
 The trusted WP-314 manifest has `verification.configured=false` and an empty
 `commands` list. For an admitted bounded repair of a landed WP, the trusted
 `docs/android/ci/README.md` lane permits the existing WP-003 preflight, scaffold,
 and inspect commands; no manifest mutation, Gradle task, test selector, or new
-runner was added. Initial exact-candidate run
-`41982469986` compiled the Android candidate and discovered 719
-`feature:tools:testDebugUnitTest` cases, but failed one mounted regression:
-the test expected the hop name alone instead of the rendered localized hop label
-including its hash. The production control provides that full hop label. The
-test now derives each expected accessible label from the real holder's current
-`TracePathHop.displayText`; this small test-only correction is in the successor
-candidate, which must pass the same existing full `android-ci.yml` manual
-workflow before runtime verification is accepted. Original failed-run reports
-also lacked the mandatory App JUnit bundle, so that run is not passing evidence.
+runner was added. The earlier exact-candidate run `41982469986` discovered 719
+tools tests but failed one mounted assertion because the expected accessible
+label omitted the hash rendered by `TracePathHop.displayText`; that run remains
+failed evidence and is not treated as a pass. The successor derives expected
+labels from the real holder's current hop and passed the full existing workflow.
+The successful run's actual method inventory contains both added mounted tests,
+and its module JUnit report records all 719 cases passing with no skips/errors.
+The mounted tests run in JVM Robolectric/Compose, not on an emulator or physical
+device.
 
 No device, firmware, radio reception, or physical accessibility evidence is claimed. This TS-11 UI
 change does not alter radio or firmware behavior. This evidence covers only the TS-11 slice and does

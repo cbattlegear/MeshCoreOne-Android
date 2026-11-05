@@ -19,10 +19,12 @@ accepted run append and storage refresh. Review found that the original
 second-most-recent persisted-success lookup could briefly select an older baseline
 while the current accepted run's append was held or failed. The response handler
 now binds the preceding success, actual result ID, saved-path/radio identity and
-accepted run before publishing a successful single result. Later history refresh
+accepted run before publishing a successful result. Later history refresh
 cannot change that result's baseline. A subsequent result can use its preceding
 accepted success even if that write is still pending. Path-selection/connection
-invalidation clears this receipt; batch-average presentation and persistence
+invalidation clears this receipt. Same-selection accepted responses take precedence
+over stored timestamps, including equal timestamps and clock rollback; successful
+batch responses update that acceptance receipt too. Batch-average presentation and persistence
 remain unchanged. Existing Save and held TS-08 work are unchanged.
 
 A wrapping Material row supports compact/large-font presentation. Date and
@@ -43,7 +45,7 @@ a normal merge with a tree identical to current main, preserving prior refs.
 
 ## Mounted controls
 
-Eleven new methods in existing `TraceCodeInputComposeTest` mount the actual trace
+Thirteen new methods in existing `TraceCodeInputComposeTest` mount the actual trace
 list, dispatch through `FakeTraceSender`, correlate actual responses on the real
 holder and append/fetch through `InMemoryTracePathStore` (not Room). They cover:
 
@@ -61,6 +63,9 @@ holder and append/fetch through `InMemoryTracePathStore` (not Room). They cover:
 - An older append completing after a newer accepted result cannot replace its
   baseline; the newer result compares with the preceding accepted success even
   while that success's append remains suspended. Clear retires the receipt.
+- Equal persisted/accepted timestamps and clock rollback preserve response
+  acceptance order. Batch-to-single compares with the latest accepted batch
+  success even if its append is held or fails, without replacing batch averages.
 
 No existing tests/assertions are removed or changed. Source declarations are
 not runtime evidence until ordinary exact-head CI discovery is audited.

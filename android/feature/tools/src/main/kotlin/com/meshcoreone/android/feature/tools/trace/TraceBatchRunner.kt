@@ -180,15 +180,15 @@ internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
         val run = saved?.let {
             TracePathRunDTO(UUID.randomUUID(), holder.time.now(), true, durationMs, holder.intermediateSnr(hops))
         }
-        val comparison = if (!holder.current.batchEnabled && saved != null && run != null) {
+        val comparison = if (saved != null && run != null) {
             val accepted = holder.current.acceptedComparison?.takeIf {
                 it.pathId == saved.id && it.radioId == saved.radioId
             }?.run
-            val previous = (saved.runs.filter { it.success } + listOfNotNull(accepted)).maxByOrNull { it.date }
+            val previous = accepted ?: saved.runs.filter { it.success }.maxByOrNull { it.date }
             AcceptedTraceComparison(result.id, saved.id, saved.radioId, run, previous)
         } else null
         if (holder.current.batchEnabled) {
-            holder.update { it.copy(result = result, completedResults = it.completedResults + result) }
+            holder.update { it.copy(result = result, completedResults = it.completedResults + result, acceptedComparison = comparison) }
         } else {
             holder.update { it.copy(result = result, resultID = UUID.randomUUID(), isRunning = false, acceptedComparison = comparison) }
         }

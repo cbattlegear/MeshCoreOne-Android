@@ -96,6 +96,87 @@ class TraceCodeInputComposeTest {
 
     @After fun dispose() = destroyHost()
 
+    @Test fun mountedTraceComparisonUsesAcceptanceOrderAtEqualTimestampsAndClockRollback() {
+        for (rollback in listOf(false, true)) {
+            val gate = CompletableDeferred<Unit>()
+            var appends = 0
+            val h = comparisonHarness(listOf(run(T0.plusMillis(150), roundTripMs = 100)), currentMs = 150) { store ->
+                object : TracePathPersisting by store {
+                    override suspend fun appendTracePathRun(key: EntityKey, run: TracePathRunDTO) {
+                        if (++appends == 1) gate.await()
+                        store.appendTracePathRun(key, run)
+                    }
+                }
+            }
+            if (rollback) h.time.advanceBy((-1).seconds)
+            h.complete { h.holder.runTrace() }
+            h.respond(
+                (h.deps.sender as FakeTraceSender).sent.last().tag,
+                listOf(node(0xAA, 6.0), node(null, 3.0)), RADIO,
+            )
+            mountTraceResults(h)
+            assertEquals(150L, h.state.previousRun?.roundTripMs)
+            assertComparison(h, "0 ms", "100%", C.contactsResultsComparisonDecreased)
+            gate.complete(Unit)
+            h.main.runCurrent()
+            settle()
+            scrollToTraceResults(h)
+            assertEquals(150L, h.state.previousRun?.roundTripMs)
+            assertComparison(h, "0 ms", "100%", C.contactsResultsComparisonDecreased)
+        }
+    }
+
+    @Test fun mountedTraceComparisonUsesAcceptedBatchSuccessAfterHeldOrFailedAppend() {
+        for (fail in listOf(false, true)) {
+            val gate = CompletableDeferred<Unit>()
+            var appends = 0
+            val h = comparisonHarness(listOf(run(T0.minusSeconds(60), roundTripMs = 100)), currentMs = 150) { store ->
+                object : TracePathPersisting by store {
+                    override suspend fun appendTracePathRun(key: EntityKey, run: TracePathRunDTO) {
+                        if (++appends == 2) {
+                            gate.await()
+                            if (fail) throw java.io.IOException("held batch comparison append failure")
+                        }
+                        store.appendTracePathRun(key, run)
+                    }
+                }
+            }
+            h.holder.setBatchEnabled(true)
+            h.holder.setBatchSize(1)
+            h.start { h.holder.runBatchTrace() }
+            h.time.advanceBy(50.milliseconds)
+            h.respond(
+                (h.deps.sender as FakeTraceSender).sent.last().tag,
+                listOf(node(0xAA, 6.0), node(null, 3.0)), RADIO,
+            )
+            assertTrue(h.state.isBatchComplete)
+            assertEquals(2, assertNotNull(h.state.activeSavedPath).runs.size)
+            if (fail) {
+                gate.complete(Unit)
+                h.main.runCurrent()
+                assertTrue(h.diagnostics.failures.any { it.second is java.io.IOException })
+            }
+            h.holder.setBatchEnabled(false)
+            h.complete { h.holder.runTrace() }
+            h.time.advanceBy(25.milliseconds)
+            h.respond(
+                (h.deps.sender as FakeTraceSender).sent.last().tag,
+                listOf(node(0xAA, 6.0), node(null, 3.0)), RADIO,
+            )
+            mountTraceResults(h)
+            assertEquals(50L, h.state.previousRun?.roundTripMs)
+            assertComparison(h, "25 ms", "50%", C.contactsResultsComparisonDecreased)
+            if (!fail) {
+                gate.complete(Unit)
+                h.main.runCurrent()
+                settle()
+                scrollToTraceResults(h)
+                assertEquals(50L, h.state.previousRun?.roundTripMs)
+                assertComparison(h, "25 ms", "50%", C.contactsResultsComparisonDecreased)
+            }
+        }
+    }
+
     @Test fun mountedTraceComparisonKeepsItsAcceptedBaselineAcrossHeldHistoryAppend() =
         heldComparisonAppend(fail = false)
 

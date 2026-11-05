@@ -75,7 +75,7 @@ Source-only preparation passed:
 - `python tools/android-port/portmap.py`: exit 0.
 - `git diff --check`: exit 0.
 
-The new source contains 18 repository and four database test methods, including
+The new source contains 19 repository and four database test methods, including
 actual Room migration from the checked-in v1 export, same-value independent
 FAILED controls before/after own commit, cancellation before/after commit,
 explicit rollback failure, nested mutation revision fencing, typed retry codes,
@@ -96,6 +96,14 @@ confirmed this is advisory historical binding mismatch, not a pre-edit lock or
 live semantic collision. Assigned, capability-admitted isolated authoring
 continues after recording the actual attempt. No receipt is claimed as acquired;
 no owner/authorization/binding/ledger mutation or held-work release occurred.
+
+Source review after the first diagnostic dispatch added a conflicting-pending
+insert guard: raw `INSERT OR REPLACE` remapping a pending key to a different
+message must fence both old and new messages, including an inline ACK claim
+with no captured pending ID. This is a conservative DML-attempt fence for that
+conflicting remap; ignored conflicting inserts may also invalidate the old
+claim, never grant permission or change message content. Its two-message control
+is a successor assertion, not a result of the earlier exact-head run.
 
 Local Gradle remains blocked by retained execution owner
 `local-check:f516a7e271f444dd9cb2efcc8b995a16` and missing canonical cleanup proof.

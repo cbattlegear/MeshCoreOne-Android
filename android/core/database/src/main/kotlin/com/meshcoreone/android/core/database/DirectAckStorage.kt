@@ -157,6 +157,13 @@ object DirectAckStorage {
         put("direct_ack_message_delete", "CREATE TRIGGER direct_ack_message_delete AFTER DELETE ON messages BEGIN " +
             invalidate("OLD.radioId", "OLD.id") +
             "DELETE FROM $IDENTITIES WHERE kind = 'message' AND radioId = OLD.radioId AND id = OLD.id; END")
+        put("direct_ack_pending_replace", "CREATE TRIGGER direct_ack_pending_replace BEFORE INSERT ON pending_sends " +
+            "WHEN EXISTS(SELECT 1 FROM pending_sends WHERE radioId = NEW.radioId AND id = NEW.id " +
+            "AND messageID != NEW.messageID) BEGIN " +
+            "UPDATE $CLAIMS SET current = 0 WHERE snapshot_radioId = NEW.radioId AND snapshot_id IN " +
+            "(SELECT messageID FROM pending_sends WHERE radioId = NEW.radioId AND id = NEW.id);" +
+            advanceMessageRevision("radioId = NEW.radioId AND id IN " +
+                "(SELECT messageID FROM pending_sends WHERE radioId = NEW.radioId AND id = NEW.id)") + " END")
         put("direct_ack_pending_insert", "CREATE TRIGGER direct_ack_pending_insert AFTER INSERT ON pending_sends BEGIN " +
             invalidate("NEW.radioId", "NEW.messageID") + identity("NEW.radioId", "NEW.id", "pending") +
             advanceMessageRevision("radioId = NEW.radioId AND id = NEW.messageID") + " END")

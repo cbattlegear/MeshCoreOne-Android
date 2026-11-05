@@ -308,6 +308,28 @@ class DirectAckAuthorityPersistenceTest {
         }
     }
 
+    @Test fun rawPendingReplacementRemappingMessageInvalidatesBothIncludingAnInlineClaim() = runTest {
+        val lease = activate()
+        val original = message()
+        val replacement = message()
+        val queued = pending(messageID = original.id)
+        store.upsertPendingSend(queued)
+        val inline = begin(original, lease = lease)
+        val other = begin(replacement, lease = lease)
+        val columns = db.openHelper.readableDatabase.query("PRAGMA table_info(pending_sends)").use { cursor ->
+            buildList { while (cursor.moveToNext()) add(cursor.getString(1)) }
+        }
+        val projection = columns.joinToString(",") { if (it == "messageID") "?" else "`$it`" }
+        db.openHelper.writableDatabase.execSQL(
+            "INSERT OR REPLACE INTO pending_sends SELECT $projection FROM pending_sends WHERE id = ?",
+            arrayOf(replacement.id.toString().uppercase(), queued.id.toString().uppercase()),
+        )
+        rejected(store.settleDirectAck(inline.attempt, 123u, 1u))
+        rejected(store.settleDirectAck(other.attempt, 123u, 1u))
+        assertEquals(original, store.fetchMessage(entity(id = original.id)))
+        assertEquals(replacement, store.fetchMessage(entity(id = replacement.id)))
+    }
+
     @Test fun nestedPendingMutationCannotBeMistakenForOwnFailureOrOwnPendingCompletion() = runTest {
         val lease = activate()
         for (completion in listOf(false, true)) {

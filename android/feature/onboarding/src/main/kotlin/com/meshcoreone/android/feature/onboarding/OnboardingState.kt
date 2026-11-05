@@ -194,14 +194,15 @@ class OnboardingState(private val store: OnboardingFlagStore) {
 
     internal fun ownsCompletion(value: OnboardingCompletionPublication): Boolean =
         synchronized(completionLock) {
-            !retired && value.revision == completionRevision && publication.value === value
+            !retired && !resetRequired && value.revision == completionRevision && publication.value === value
         }
 
     private fun invalidateCompletion(): Long = synchronized(completionLock) {
         pendingAttempt?.reject(IllegalStateException("Onboarding attempt was retired"))
         pendingAttempt = null
+        val revision = ++completionRevision
         lifecycle.value = Math.incrementExact(lifecycle.value)
-        ++completionRevision
+        revision
     }
 
     suspend fun resetOnboarding() {

@@ -10,7 +10,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.flow.collect
 import org.junit.After
 import org.junit.Test
 import kotlin.test.assertEquals
@@ -76,6 +81,26 @@ class PresetSessionFencingTest {
         assertSame(receipt, state.completionReceipt)
         state.resetOnboarding()
         assertNull(state.completionReceipt)
+    }
+
+    @Test fun resetRevokesReceiptBeforeNotifyingLifecycleObservers() = runBlocking {
+        val state = OnboardingState(InMemoryOnboardingFlagStore())
+        state.completeOnboarding()
+        val original = checkNotNull(state.completionPublication.value)
+        var ownedWhenNotified: Boolean? = null
+        val observer = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            state.lifecycleGeneration.drop(1).take(1).collect {
+                ownedWhenNotified = state.ownsCompletion(original)
+            }
+        }
+        state.resetOnboarding()
+        observer.join()
+        assertEquals(false, ownedWhenNotified)
+        assertFalse(state.hasCompletedOnboarding)
+        assertNull(state.completionReceipt)
+        state.completeOnboarding()
+        assertTrue(state.hasCompletedOnboarding)
+        assertFalse(state.ownsCompletion(original))
     }
 
     @Test fun completedFlowRejectsAReplacementReceiptBeforeStartingAnotherWrite() = runBlocking {

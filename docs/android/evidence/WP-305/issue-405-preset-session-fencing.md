@@ -248,6 +248,11 @@ identities and the cause. Cancellation remains cancellation rather than being wr
 This implementation has not yet been executed. Separate device-writer/Settings handoffs are not
 part of this source delta.
 
+A follow-up source check orders publication-revision invalidation before lifecycle notification,
+and ownership also rejects a reset awaiting acknowledgement. A synchronous lifecycle observer
+control checks that reset never exposes the old receipt during notification, then completes a
+fresh explicit attempt. This authored control is not execution evidence.
+
 ## Authored controls
 
 - `PresetSessionFencingTest`: disconnected apply and retry; replacement radio and same-radio new

@@ -20,6 +20,31 @@ The coordinator assigned an independent clean-current-main foundation. Runtime/d
 
 ## Source custody and adaptations
 
+### Follow-up: held-initialization Room command witness
+
+Exact `688b5eb19f35adf2c9557a86573e077299cbec8a` hosted run
+[41964562525](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41964562525)
+failed: 2,012 App tests executed, two failed. The new initialization lease control timed out
+after one minute; the separate CliSettingsReadbackTest typed-TX case failed at withCli line 177
+and was referred to its current producer. Neither result is attributed to another head.
+The authoritative hosted log is retained by Actions, not duplicated in this repository.
+
+The initialization control's external `async(IO) db.withTransaction` blocker proved entry into
+a separate transaction but did not prove initialization submitted a Room command. The timeout
+does not identify a production deadlock. The bounded successor uses the same dedicated
+Room transaction-executor command barrier as the existing cancellation/reconnect controls:
+beforeInsert arms the barrier under the runtime lease, then the test waits separately for
+insert entry and the actual submitted Room command. An undispatched disconnect queues at
+the real runtime gate. All original blocked-retirement, unchanged-snapshot, disconnected/no-live
+and no-late-activation assertions remain; an additional target-row assertion proves the
+queued insert really committed before retirement. The test releases the command and joins
+the executor before closing runtime/store/database. No production behavior changes.
+
+Fresh `reserve.py admit` returned reviewed-support-test. `git diff --check` and pinned
+`C:\Python312\python.exe tools\android-port\controller\validate.py` passed (1,866 reference
+files, 64 WPs, 178 edges). These are source checks only. The existing local Gradle hold and
+all prior immutable refs/runs remain unchanged; a fresh exact-head diagnostic is required.
+
 ### Follow-up: acknowledged region-removal composition
 
 The successor of `e83fb622f550ed74df0fb925a398c9c8d38764c4` composes only the

@@ -233,40 +233,56 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
     }
 
     @Test fun initializationKeepsItsRuntimeLeaseWhileTheActualRoomTransactionIsHeld() = runTest {
-        val paused = PausedStore(store)
-        val h = ContainerHarness(this, store, persistenceOverride = paused)
-        val entered = CompletableDeferred<Unit>()
-        val release = CompletableDeferred<Unit>()
-        var blocker: kotlinx.coroutines.Deferred<Unit>? = null
+        val transactionRequested = CompletableDeferred<Unit>()
+        val release = java.util.concurrent.CountDownLatch(1)
+        val pauseNext = AtomicBoolean(false)
+        val worker = java.util.concurrent.Executors.newSingleThreadExecutor()
+        val executor = java.util.concurrent.Executor { command ->
+            if (pauseNext.compareAndSet(true, false)) {
+                transactionRequested.complete(Unit)
+                worker.execute { release.await(); command.run() }
+            } else command.run()
+        }
+        val database = androidx.room.Room.inMemoryDatabaseBuilder(
+            androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>(),
+            com.meshcoreone.android.core.database.MeshCoreDatabase::class.java,
+        ).allowMainThreadQueries().setQueryExecutor { it.run() }.setTransactionExecutor(executor).build()
+        val repository = RoomPersistenceStore(database, backgroundScope)
+        val paused = PausedStore(repository)
+        val h = ContainerHarness(this, repository, persistenceOverride = paused)
+        val insertEntered = CompletableDeferred<Unit>()
+        val target = h.target()
         try {
             paused.beforeInsert = {
-                blocker = async(Dispatchers.IO) {
-                    db.withTransaction { entered.complete(Unit); release.await() }
-                }
-                entered.await()
+                insertEntered.complete(Unit)
+                pauseNext.set(true)
             }
-            val connecting = async { runCatching { h.manager.connect(h.target()) } }
-            entered.await()
-            yield()
+            val connecting = async { runCatching { h.manager.connect(target) } }
+            insertEntered.await()
+            transactionRequested.await()
             val before = h.manager.snapshot.value
-            val submitted = CompletableDeferred<Unit>()
-            val retiring = async {
-                submitted.complete(Unit)
+            val retiring = async(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
                 h.manager.disconnect()
             }
-            submitted.await()
-            yield()
             assertFalse(connecting.isCompleted)
             assertFalse(retiring.isCompleted, "Retirement cannot cross the in-flight initialization write")
             assertEquals(before, h.manager.snapshot.value)
-            release.complete(Unit)
+            assertEquals(1L, release.count, "The actual initialization Room command remains queued")
+            release.countDown()
             retiring.await()
             connecting.await()
-            blocker!!.await()
             assertNull(h.manager.connectedDevice)
             assertFalse(h.manager.connectionState.isConnected)
-            assertTrue(store.fetchDevices().none { it.isActive }, "A retired initialization never activates later")
-        } finally { release.complete(Unit); h.container.close() }
+            assertNotNull(repository.fetchDevice(target.deviceId), "The queued initialization actually committed before retirement")
+            assertTrue(repository.fetchDevices().none { it.isActive }, "A retired initialization never activates later")
+        } finally {
+            release.countDown()
+            worker.shutdown()
+            assertTrue(worker.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS))
+            h.container.close()
+            repository.close()
+            database.close()
+        }
     }
 
     @Test fun ocvCommittedWhileFreshTicketIsSuspendedIsNotDerivedFromOldLiveDto() = runTest {

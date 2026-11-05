@@ -220,6 +220,47 @@ class ForegroundWitnessAcknowledgmentVerifierTest {
     }
 
     @Test
+    fun oldCopyVerifierInvalidationDefersDuringAnotherVerifiersActualAllocation() = runBlocking {
+        val f = fixture()
+        val old = f.verifier
+        val oldPresentation = old.present(f.request)
+        old.retire(oldPresentation)
+        val changedCopy = ForegroundAcknowledgmentWarning.fromRenderedCopy(
+            f.warning.id, f.warning.version, "A newly rendered loss warning.",
+        )
+        val other = f.verifier(
+            warning = changedCopy,
+            file = File(f.root, ".${File.separator}ack.db"),
+        )
+        val request = f.request.copy(
+            operation = WitnessOperation(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID()),
+            acknowledgmentId = UUID.randomUUID(),
+        )
+        val presentation = other.present(request)
+        val gate = WriteGate(ForegroundWitnessAcknowledgmentVerifier.WritePoint.ALLOCATED)
+        f.writeGate = gate
+        val staging = async(Dispatchers.IO) { other.recordExplicitAction(presentation) }
+        try {
+            assertTrue(gate.entered.await(10, TimeUnit.SECONDS))
+            assertTrue(f.file.isFile)
+            old.invalidate(oldPresentation)
+            assertTrue(f.failures.isEmpty())
+        } finally {
+            gate.release.countDown()
+        }
+        assertEquals(ForegroundAcknowledgmentStaging.Staged, staging.await())
+        assertTrue(f.failures.isEmpty())
+        assertEquals(ForegroundAcknowledgmentResult.Required, old.verify(f.request))
+        assertEquals(
+            ForegroundAcknowledgmentResult.Rejected,
+            f.verifier(warning = changedCopy).verify(request),
+        )
+        assertEquals(ForegroundAcknowledgmentResult.NewlyVerified(request), other.verify(request))
+        assertEquals(ForegroundAcknowledgmentResult.AlreadyConsumed, other.verify(request))
+        assertEquals(1, f.authentication.creates)
+    }
+
+    @Test
     fun abandonedEmptyLedgerStillReportsCorruptionWithoutAnAllocatingWriter() = runBlocking {
         val f = fixture()
         val presentation = f.verifier.present(f.request)
@@ -624,6 +665,7 @@ class ForegroundWitnessAcknowledgmentVerifierTest {
         fun verifier(
             warning: ForegroundAcknowledgmentWarning = this.warning,
             processId: UUID = UUID.randomUUID(),
+            file: File = this.file,
         ) = ForegroundWitnessAcknowledgmentVerifier(
             file,
             warning,

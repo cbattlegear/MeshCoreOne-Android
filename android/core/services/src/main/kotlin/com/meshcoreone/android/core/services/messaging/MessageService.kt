@@ -62,7 +62,10 @@ class MessageService(
     private val mutationLocks = mutableMapOf<UUID, Mutex>()
     private val pendingAcks = linkedMapOf<UUID, PendingAck>()
     private val failedAckRestorations = mutableMapOf<UUID, PendingAck>()
-    private data class UncertainFailureWrite(val tracking: PendingAck, val cause: PersistenceStoreException)
+    private data class UncertainFailureWrite(val tracking: PendingAck, val cause: Exception) {
+        val recoveryFailure = if (cause is PersistenceStoreException) cause else
+            PersistenceStoreException(PersistenceStoreError.SaveFailed("FAILED write outcome is uncertain"), cause)
+    }
     private val uncertainFailureWrites = mutableMapOf<UUID, UncertainFailureWrite>()
     private val directClaims = mutableMapOf<UUID, DirectSendClaim>()
     private val activeDirectClaims = mutableMapOf<UUID, DirectSendClaim>()
@@ -280,7 +283,7 @@ class MessageService(
         if (row.status == MessageStatus.FAILED && uncertainWrite != null && !restoresOwnFailure) {
             // A failed return cannot identify the writer of this terminal row.
             remember("ack.$messageID", uncertainWrite.cause)
-            throw uncertainWrite.cause
+            throw uncertainWrite.recoveryFailure
         }
         if (row.status == MessageStatus.FAILED && restoresOwnFailure) {
             dataStore.updateMessageStatusUnlessDelivered(key(messageID), MessageStatus.SENT)
@@ -292,7 +295,7 @@ class MessageService(
         if (!cleanup) ownership.check("commitAcknowledgement.refetched")
         if (committed?.status != MessageStatus.DELIVERED && uncertainWrite != null) {
             remember("ack.$messageID", uncertainWrite.cause)
-            throw uncertainWrite.cause
+            throw uncertainWrite.recoveryFailure
         }
         if (committed?.status == MessageStatus.DELIVERED) {
             try {
@@ -310,6 +313,7 @@ class MessageService(
         recovered("ackDelivery")
         recovered("failPending.$messageID")
         if (committed?.status == MessageStatus.DELIVERED) {
+            recovered("ackUncertain.$messageID")
             recovered("failMessage.$messageID")
             recovered("ackExpiry.$messageID")
         }
@@ -449,6 +453,7 @@ class MessageService(
         } else {
             if (notify && changed) broadcastFailed(messageID)
             recovered("failPending.$messageID")
+            recovered("ackUncertain.$messageID")
         }
         return acknowledgementArrived
     }
@@ -457,14 +462,29 @@ class MessageService(
         val tracking = pendingAck(messageID)
         try {
             return dataStore.updateMessageStatusUnlessDelivered(key(messageID), MessageStatus.FAILED)
+        } catch (cancelled: CancellationException) {
+            retainUncertainFailureWrite(messageID, tracking, wasFailed, cancelled)
+            throw cancelled
         } catch (failure: PersistenceStoreException) {
-            if (!wasFailed && tracking != null) synchronized(lock) {
-                if (pendingAcks[messageID]?.receipt === tracking.receipt) {
-                    uncertainFailureWrites[messageID] = UncertainFailureWrite(tracking, failure)
-                }
-            }
+            retainUncertainFailureWrite(messageID, tracking, wasFailed, failure)
             throw failure
         }
+    }
+
+    private fun retainUncertainFailureWrite(
+        messageID: UUID,
+        tracking: PendingAck?,
+        wasFailed: Boolean,
+        failure: Exception,
+    ) {
+        if (wasFailed || tracking == null) return
+        val retained = synchronized(lock) {
+            if (pendingAcks[messageID]?.receipt !== tracking.receipt) false else {
+                uncertainFailureWrites[messageID] = UncertainFailureWrite(tracking, failure)
+                true
+            }
+        }
+        if (retained) remember("ackUncertain.$messageID", failure)
     }
 
     suspend fun stopAndFailAllPending() { stopAckExpiryChecking(); failAllPendingMessages() }

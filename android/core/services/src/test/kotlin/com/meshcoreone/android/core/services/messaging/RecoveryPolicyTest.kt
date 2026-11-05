@@ -19,7 +19,7 @@ import org.junit.jupiter.api.TestFactory
 class RecoveryPolicyTest {
     @TestFactory fun uncertainFailedWrites() = listOf("inline", "expiry", "fail-all").flatMap { path ->
         listOf("commit-then-throw", "throw-before-commit", "already-failed", "competing-writer",
-            "competing-after-read", "replacement", "late")
+            "competing-after-read", "replacement", "late", "commit-then-cancel", "cancel-before-commit")
             .map { schedule -> native("$path FAILED-write $schedule retains only uncertain ACK authority") {
                 val h = Harness(this); h.start(); h.service.startEventMonitoring()
                 val message = h.message(if (schedule == "already-failed") MessageStatus.FAILED else MessageStatus.SENT)
@@ -28,15 +28,18 @@ class RecoveryPolicyTest {
                 val entered = CompletableDeferred<Unit>()
                 val release = CompletableDeferred<Unit>()
                 val fault = storageFailure()
+                val cancellation = CancellationException("controlled FAILED writer cancellation")
+                val cancelling = schedule == "commit-then-cancel" || schedule == "cancel-before-commit"
+                val writerFailure = if (cancelling) cancellation else fault
                 var writing = false
                 h.store.before = {
                     if (it == "updateMessageStatusUnlessDelivered" && !writing) {
                         writing = true
                         entered.complete(Unit); release.await()
-                        if (schedule != "throw-before-commit" && schedule != "competing-after-read") {
+                        if (schedule !in listOf("throw-before-commit", "competing-after-read", "cancel-before-commit")) {
                             h.store.updateMessageStatusUnlessDelivered(EntityKey(RADIO, message.id), MessageStatus.FAILED)
                         }
-                        if (schedule != "late") throw fault
+                        if (schedule != "late") throw writerFailure
                     }
                     if (it == "updateMessageAck" && schedule == "competing-after-read") {
                         h.store.updateMessageStatus(EntityKey(RADIO, message.id), MessageStatus.FAILED)
@@ -48,19 +51,19 @@ class RecoveryPolicyTest {
                 val work = backgroundScope.async {
                     suspend fun cleanup() {
                         when (path) {
-                            "inline" -> assertSame(original, assertFailsWith<IllegalStateException> {
-                                h.service.failMessageAndRethrow(original, message.id)
-                            })
+                            "inline" -> h.service.failMessageAndRethrow(original, message.id)
                             "expiry" -> h.service.checkExpiredAcks()
                             else -> h.service.failAllPendingMessages()
                         }
                     }
-                    when {
-                        path == "inline" || schedule == "late" -> cleanup()
-                        path == "expiry" && schedule != "replacement" -> cleanup()
-                        else ->
-                            assertSame(fault, assertFailsWith<PersistenceStoreException> { cleanup() })
+                    val expected = when {
+                        cancelling -> cancellation
+                        path == "inline" -> original
+                        schedule == "replacement" || path == "fail-all" && schedule != "late" -> fault
+                        else -> null
                     }
+                    if (expected == null) cleanup()
+                    else assertSame(expected, assertFailsWith<Exception> { cleanup() })
                 }
                 entered.await()
                 if (schedule == "competing-writer") {
@@ -76,7 +79,7 @@ class RecoveryPolicyTest {
                 if (schedule == "late") h.transport.pushAck(code, 123u)
                 runCurrent()
                 when (schedule) {
-                    "throw-before-commit" -> {
+                    "throw-before-commit", "cancel-before-commit" -> {
                         assertEquals(MessageStatus.DELIVERED, h.stored(message.id).status)
                         assertNull(h.service.pendingAck(message.id))
                         assertEquals(listOf<MessageStatusEvent>(
@@ -93,14 +96,27 @@ class RecoveryPolicyTest {
                         assertEquals(MessageStatus.FAILED, h.stored(message.id).status)
                         assertEquals(code, h.service.pendingAck(message.id)?.acknowledgement?.code)
                         assertTrue(observed.isEmpty())
+                        if (schedule == "commit-then-cancel") {
+                            val other = h.message(MessageStatus.SENT)
+                            val otherCode = Bytes.of(5, 6, 7, 8)
+                            h.service.installPendingAck(h.tracking(other, otherCode))
+                            h.transport.pushAck(otherCode, 456u); runCurrent()
+                            assertEquals(MessageStatus.DELIVERED, h.stored(other.id).status)
+                            assertEquals(listOf<MessageStatusEvent>(
+                                MessageStatusEvent.StatusResolved(other.id, MessageStatus.DELIVERED, 456u),
+                            ), observed)
+                            assertEquals(code, h.service.pendingAck(message.id)?.acknowledgement?.code)
+                        }
                         val report = h.service.close()
                         assertFalse(report.isComplete)
-                        assertTrue(report.issues.any { it.cause === fault })
+                        assertTrue(report.issues.any { it.cause === writerFailure })
                         assertEquals(0, h.service.pendingAckCount)
                     }
                 }
                 assertTrue(h.sends(CommandCode.SEND_MESSAGE).isEmpty())
-                if (path == "inline" && schedule != "late") assertTrue(original.suppressed.any { it === fault })
+                if (path == "inline" && schedule != "late" && !cancelling) {
+                    assertTrue(original.suppressed.any { it === fault })
+                }
                 h.close()
             } }
     }

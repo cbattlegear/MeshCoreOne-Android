@@ -130,7 +130,10 @@ class DirectAckAuthorityTest {
         }
         val observed = DirectAckObservation.Found(receipt())
         assertSame(message, observed.receipt.message)
-        assertNotEquals(DirectAckRevocationResult.Revoked, DirectAckRevocationResult.AlreadyRevoked)
+        assertNotEquals<DirectAckRevocationResult>(
+            DirectAckRevocationResult.Revoked,
+            DirectAckRevocationResult.AlreadyRevoked,
+        )
     }
 
     private fun receipt(wires: SnapshotList<DirectAckWireReceipt> = SnapshotList.empty()) = DirectAckReceipt(

@@ -43,7 +43,7 @@ Actual trusted `tools/android-port/local/reserve.py admit --wp WP-215` checks:
 | Path suffix | Operation | Capability/result |
 | --- | --- | --- |
 | `messaging/NotificationReplyAdmission.kt` | `modify-related-consumer` | `reviewed-support-consumer`, passed |
-| `messaging/NotificationReplyAdmissionTest.kt` | `add-or-update-related-test` | `reviewed-support-test`, passed |
+| `messaging/NotificationReplyParsedAdmissionTest.kt` | `add-or-update-related-test` | `reviewed-support-test`, passed |
 | `docs/android/evidence/WP-215/inactive-issued-admission.md` | `create` | `wp-owned`, passed |
 
 An initial test admission used the nonexistent operation `add-related-test` and
@@ -52,7 +52,7 @@ then passed; no policy or authorization was changed.
 
 ## Authored checks and execution status
 
-`NotificationReplyAdmissionTest` declares eight methods, configured at API 31 and
+`NotificationReplyParsedAdmissionTest` declares eight methods, configured at API 31 and
 37 (16 expected executions, not a discovered/executed count):
 
 - Real enrollment/journal: exact text and duplicate identity; retained conflict
@@ -77,6 +77,13 @@ Actual commands/results:
 - `git rev-parse <56e4-or-HEAD>:<producer-path>` for the adapter, its two tests and
   its evidence document: all four pairs equal.
 - `git diff 4705ae8 HEAD -- <manifest> <reject-only-receiver>`: empty.
+- `python tools\android-port\controller\validate.py`: passed, 1,866 tracked
+  reference inputs, 64 work packages and 178 dependency edges.
+
+Pre-execution source-set inspection caught a test class name collision with the
+unchanged producer-owned `src/androidTest` class, which this module remaps into
+unit tests. The new class was renamed to `NotificationReplyParsedAdmissionTest`
+after a fresh exact-path admission; the original producer class is unchanged.
 
 Compilation and all 16 configured executions are **not run** on this candidate.
 The retained local Gradle execution reservation was neither cleared nor

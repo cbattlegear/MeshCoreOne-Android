@@ -30,7 +30,7 @@ import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31, 37])
-class NotificationReplyAdmissionTest {
+class NotificationReplyParsedAdmissionTest {
     private val context = ApplicationProvider.getApplicationContext<Application>()
     private val file = File(context.cacheDir, "inactive-admission-${UUID.randomUUID()}.db")
     private val limits = NotificationReplyLimits(10, 10_000, 100_000)

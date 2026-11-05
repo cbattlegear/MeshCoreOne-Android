@@ -40,6 +40,7 @@ data class NotificationReplyLimits(
 class NotificationReplyStagingStore internal constructor(
     private val databaseFile: File,
     private val limits: NotificationReplyLimits,
+    private val afterAdmissionCommit: (() -> Unit)? = null,
     private val afterLifecycleCommit: (() -> Unit)? = null,
 ) {
     constructor(context: Context, limits: NotificationReplyLimits) : this(
@@ -117,6 +118,20 @@ class NotificationReplyStagingStore internal constructor(
         data object Indeterminate : InitializeResult
     }
 
+    /**
+     * Absence, including absence of an external expectation, is never fresh-install proof.
+     * Expected store IDs must come from independently retained provisioning/issuance state,
+     * not from inspecting this file and adopting whatever identity happens to be present.
+     */
+    sealed interface InstallationResult {
+        data object UnprovisionedOrLost : InstallationResult
+        data class MissingInitializedStorage(val expectedStoreId: UUID) : InstallationResult
+        data class UnboundExisting(val observedStoreId: UUID) : InstallationResult
+        data class IdentityMismatch(val expectedStoreId: UUID, val observedStoreId: UUID) : InstallationResult
+        data class Ready(val storeId: UUID, val schemaVersion: Int, val retainedRecords: Long) : InstallationResult
+        data class Failed(val reason: Failure) : InstallationResult
+    }
+
     enum class Failure {
         INVALID_IDENTITY, INVALID_PAYLOAD, INVALID_TEXT, INVALID_LIMITS, LIMITS_MISMATCH,
         RECORD_CAPACITY, PRIVATE_DATA_CAPACITY, MISSING_STORAGE, STORAGE_UNAVAILABLE, CORRUPT_STORAGE,
@@ -184,6 +199,54 @@ class NotificationReplyStagingStore internal constructor(
         post: NotificationReplyPost,
         payload: NotificationPayload,
         exactText: String,
+    ): StageResult = stageBound(null, post, payload, exactText)
+
+    /**
+     * Atomic storage admission, NOT authenticated ingress or dispatch permission. The producer
+     * must first resolve its own issued-action registry to the exact post and immutable payload.
+     * Its externally retained store identity is checked in the same transaction as byte retention.
+     * Rejected means not retained; Indeterminate never authorizes queue retirement or retransmission.
+     */
+    suspend fun admit(
+        expectedStoreId: UUID,
+        post: NotificationReplyPost,
+        issuedPayload: NotificationPayload,
+        exactText: String,
+    ): StageResult = stageBound(expectedStoreId, post, issuedPayload, exactText)
+
+    suspend fun inspectInstallation(expectedStoreId: UUID?): InstallationResult = withContext(Dispatchers.IO) {
+        if (!limits.isValid()) return@withContext InstallationResult.Failed(Failure.INVALID_LIMITS)
+        try {
+            database { db ->
+                transaction(db) {
+                    val state = load(db)
+                    when {
+                        expectedStoreId == null -> InstallationResult.UnboundExisting(state.storeId)
+                        expectedStoreId != state.storeId ->
+                            InstallationResult.IdentityMismatch(expectedStoreId, state.storeId)
+                        else -> InstallationResult.Ready(state.storeId, db.version, state.count)
+                    }
+                }
+            }
+        } catch (error: StoreFailure) {
+            if (error.reason == Failure.MISSING_STORAGE) {
+                if (expectedStoreId == null) InstallationResult.UnprovisionedOrLost
+                else InstallationResult.MissingInitializedStorage(expectedStoreId)
+            } else InstallationResult.Failed(error.reason)
+        } catch (_: SQLiteDatabaseCorruptException) {
+            InstallationResult.Failed(Failure.CORRUPT_STORAGE)
+        } catch (_: SQLiteException) {
+            InstallationResult.Failed(Failure.STORAGE_UNAVAILABLE)
+        } catch (_: SecurityException) {
+            InstallationResult.Failed(Failure.STORAGE_UNAVAILABLE)
+        }
+    }
+
+    private suspend fun stageBound(
+        expectedStoreId: UUID?,
+        post: NotificationReplyPost,
+        payload: NotificationPayload,
+        exactText: String,
     ): StageResult = withContext(Dispatchers.IO) {
         if (!limits.isValid()) return@withContext StageResult.Rejected(Failure.INVALID_LIMITS)
         if (!post.isValid()) return@withContext StageResult.Rejected(Failure.INVALID_IDENTITY)
@@ -206,9 +269,12 @@ class NotificationReplyStagingStore internal constructor(
         val proposedId = UUID.randomUUID()
         var commitAttempted = false
         try {
-            database { db ->
+            val result = database { db ->
                 transaction(db) {
                     val state = load(db)
+                    if (expectedStoreId != null && state.storeId != expectedStoreId) {
+                        return@transaction StageResult.Rejected(Failure.IDENTITY_MISMATCH)
+                    }
                     val prior = state.rows.filter { it.post == post }
                     val identical = prior.firstOrNull {
                         it.payload.contentEquals(payloadBytes) && it.text.contentEquals(replyBytes)
@@ -253,28 +319,38 @@ class NotificationReplyStagingStore internal constructor(
                     result(state.storeId, row, replay = false)
                 }
             }
+            if (commitAttempted) afterAdmissionCommit?.invoke()
+            result
         } catch (error: StoreFailure) {
-            if (commitAttempted) reconcile(post, payloadBytes, replyBytes, proposedId)
+            if (commitAttempted) reconcile(expectedStoreId, post, payloadBytes, replyBytes, proposedId)
             else StageResult.Rejected(error.reason)
         } catch (_: SQLiteDatabaseCorruptException) {
-            if (commitAttempted) reconcile(post, payloadBytes, replyBytes, proposedId)
+            if (commitAttempted) reconcile(expectedStoreId, post, payloadBytes, replyBytes, proposedId)
             else StageResult.Rejected(Failure.CORRUPT_STORAGE)
         } catch (_: SQLiteException) {
-            if (commitAttempted) reconcile(post, payloadBytes, replyBytes, proposedId)
+            if (commitAttempted) reconcile(expectedStoreId, post, payloadBytes, replyBytes, proposedId)
             else StageResult.Rejected(Failure.STORAGE_UNAVAILABLE)
         } catch (_: SecurityException) {
-            if (commitAttempted) reconcile(post, payloadBytes, replyBytes, proposedId)
+            if (commitAttempted) reconcile(expectedStoreId, post, payloadBytes, replyBytes, proposedId)
             else StageResult.Rejected(Failure.STORAGE_UNAVAILABLE)
         }
     }
 
     /** Single read transaction: never a mixed or silently truncated inventory. */
-    suspend fun read(): ReadResult = withContext(Dispatchers.IO) {
+    suspend fun read(): ReadResult = readBound(null)
+
+    /** Read-only recovery view bound to externally retained installation identity; never adopts a replacement. */
+    suspend fun read(expectedStoreId: UUID): ReadResult = readBound(expectedStoreId)
+
+    private suspend fun readBound(expectedStoreId: UUID?): ReadResult = withContext(Dispatchers.IO) {
         if (!limits.isValid()) return@withContext ReadResult.Failed(Failure.INVALID_LIMITS)
         try {
             database { db ->
                 transaction(db) {
                     val state = load(db)
+                    if (expectedStoreId != null && expectedStoreId != state.storeId) {
+                        return@transaction ReadResult.Failed(Failure.IDENTITY_MISMATCH)
+                    }
                     val custody = if (db.version == 2) readCustody(db, state) else emptyMap()
                     ReadResult.Inventory(state.rows.map { row ->
                         val identity = RecordIdentity(state.storeId, row.recordId, row.sequence)
@@ -302,6 +378,7 @@ class NotificationReplyStagingStore internal constructor(
     }
 
     private fun reconcile(
+        expectedStoreId: UUID?,
         post: NotificationReplyPost,
         payload: ByteArray,
         text: ByteArray,
@@ -310,6 +387,9 @@ class NotificationReplyStagingStore internal constructor(
         database { db ->
             transaction(db) {
                 val state = load(db)
+                if (expectedStoreId != null && state.storeId != expectedStoreId) {
+                    return@transaction StageResult.Indeterminate(post, proposedId)
+                }
                 val exact = state.rows.firstOrNull {
                     it.post == post && it.payload.contentEquals(payload) && it.text.contentEquals(text)
                 }

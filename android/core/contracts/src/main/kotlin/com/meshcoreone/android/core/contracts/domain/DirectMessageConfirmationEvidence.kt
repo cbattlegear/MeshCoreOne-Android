@@ -76,6 +76,10 @@ sealed interface DirectMessageConfirmationEvidence {
  * wire/code contributes the corresponding target/foreign conflicting reason. It is not discarded
  * as an uninvoked wire or blessed by a different valid target wire. Preserve the actual binding
  * as diagnostic code evidence, without upgrading settlement eligibility or repairing any rows.
+ * Include every immutably retained tracked-wire generic accepted actual, not just latest wire
+ * metadata. A later physical/generic code cannot erase earlier diagnostic collision or unmatched
+ * acceptance evidence. Matching physical evidence may reconcile that exact binding without
+ * deleting it; strict assessments must still consider every other retained binding.
  * Sticky saturation can legitimately cover a physical invocation without an emission row/handle
  * followed by generic wire acceptance. Retain RADIO_HISTORY_SATURATED; the missing physical match
  * alone is not a conflict or invalid-data failure there, even alongside UNSENT/MAY/mismatched rows.

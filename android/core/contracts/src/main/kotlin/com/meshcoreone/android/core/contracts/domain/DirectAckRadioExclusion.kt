@@ -625,7 +625,15 @@ sealed interface DirectAckRadioFailureResult {
  * acceptance without a matching physical row. That gap alone, including alongside earlier
  * UNSENT/MAY/mismatched rows, is expected rather than corruption. Saturation still blocks every
  * new failure; never use this exception as no-write proof or manufacture a marker/handle.
- * Generic recordDirectSendAccepted can create such a binding; its existing behavior is unchanged.
+ * Generic recordDirectSendAccepted can create such a binding. For tracked wires, retain every
+ * successfully committed generic accepted actual immutably in the same transaction as acceptance.
+ * Strict assessments must reconcile every retained binding, not merely the mutable latest wire
+ * code. A later physical acceptance or generic acceptance cannot erase an earlier unmatched code.
+ * After generic Accepted(999) without a marker followed by physical Accepted(888), the unmatched
+ * 999 still denies the unsaturated no-write/consistency proof. A genuine matching physical 999 can
+ * establish a match for that binding without deleting its history or regranting mutation authority.
+ * Keep generic eligibility, results and public receipt shape unchanged; internal evidence is not
+ * a synthetic wire or delivery receipt. Commit-then-throw replay must not lose committed bindings.
  * Do not fabricate a marker or legacy ancestry, silently discard the accepted binding, or repair
  * rows during assessment. Distinct genuine accepted and unsent physical invocations sharing one
  * logical wire are valid: an unsent retry does not contradict or erase an earlier accepted send.

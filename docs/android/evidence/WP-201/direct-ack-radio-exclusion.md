@@ -777,3 +777,38 @@ CoveredBySaturation -> physical send -> generic acceptance -> diagnostic
 control, including earlier UNSENT/MAY/mismatched rows. This successor changes
 KDoc/evidence only; declarations, classifier, generic behavior and existing
 test assertions are unchanged. No execution of those controls is claimed.
+
+### Overwritten generic acceptance is not resolved evidence
+
+Storage found a further public-path counterexample: tracked begin, generic
+Accepted(999) without a marker, then a physical marker resolved Accepted(888).
+The physical resolver can overwrite latest wire acceptance from 999 to 888;
+comparing only that latest value against physical rows falsely appears
+consistent and loses the earlier 999 entirely. A read-side comparison cannot
+recover evidence that was never retained.
+
+The strict contract therefore requires immutable retention of every
+successfully committed generic accepted actual on a tracked wire, atomically
+with that acceptance. Every retained binding participates in strict
+consistency and diagnostic code comparison. Later generic or physical
+acceptance cannot erase an earlier unmatched actual. A genuine matching
+physical acceptance can reconcile its exact code while retaining the
+historical binding; it cannot clear other unmatched codes or renew authority.
+The sticky-saturation exception remains: a missing physical match alone can
+be legitimate there, but new settlement and failure remain blocked.
+
+Generic public eligibility, results and receipt shape must remain unchanged.
+An internal evidence record is not a fabricated wire, attempt, ACK or
+delivery tuple. The storage owner proposed an immutable internal acceptance
+journal; implementation mechanism, support admission and producer edits
+remain with storage/coordinator, not this contract worktree. No internal
+journal implementation is claimed by this KDoc-only requirement.
+
+Requested real controls include generic 999 -> physical 888 -> file reopen
+retaining unmatched 999; generic 999 -> physical 999 matching without erasing
+history; multiple retained bindings with only one matched; acceptance
+commit-then-throw and exact replay; foreign known-code comparison; and
+legitimate saturation-covered acceptance. These controls are not replaced by
+DTO/value reconstruction or the 38 existing unexecuted tests. No execution,
+compilation, migration, schema or public generic behavior change occurred
+here.

@@ -78,8 +78,8 @@ class OriginalChannelCreationAuthorityTest {
         val key = EntityKey(radio, intent.messageId)
         val unavailable = OriginalChannelCreationObservation.RecordedUnavailable(intent.requestId, key)
         assertEquals(key, unavailable.key)
-        assertNotSame(OriginalChannelCreationObservation.NotRecorded, unavailable)
-        assertNotSame(OriginalChannelCreationObservation.Conflict, unavailable)
+        assertNotSame<Any>(OriginalChannelCreationObservation.NotRecorded, unavailable)
+        assertNotSame<Any>(OriginalChannelCreationObservation.Conflict, unavailable)
         assertEquals(
             OriginalChannelCreationRejection.REQUEST_CONFLICT,
             OriginalChannelCreationResult.Rejected(

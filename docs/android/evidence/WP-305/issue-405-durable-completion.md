@@ -714,3 +714,41 @@ actual main contains the preserved 80 caller paths, not the seven trusted paths.
 do not establish semantic acceptance: the full current-main composition, including the interaction
 with main's simulator reseed work, still requires independent review. No build, Kotlin/Room run,
 activation, push, dispatch or acceptance is authorized or claimed by this correction.
+
+### Mixed onboarding/ordinary Settings ordering successor
+
+Independent source review identified that the private onboarding preset mutex did not serialize
+ordinary Settings. After preset A's verified radio operation returned, its separately awaited device
+and path-hash writes could overwrite a later successful Settings hash B using a fresh valid ticket.
+Generation leases and CAS do not order two valid same-generation operations.
+
+The bounded successor keeps the existing `SettingsService.operationLock` through an awaited metadata
+callback on `applyRadioPresetVerified`. `AppStateRadioConfigurator` performs its same token-bound
+device/hash writes inside that callback. The existing one-argument service entry point delegates with
+an empty callback, preserving its event sequence and return shape. The callback must not reenter any
+service operation that acquires the same non-reentrant lock. Ordinary `setPathHashModePersisted`
+still awaits its event consumer's persistence acknowledgement outside the radio-operation lock.
+No new private mutex is used to order competing Settings writers.
+
+Actual trusted-main admissions passed for `SettingsService.kt`, `AppOnboarding.kt` and the existing
+`SettingsPathHashPersistenceTest.kt`. Current Settings producer session `244fb3ac` confirmed no live
+overlapping operation/preset hunk. Its frozen `c477bde51895b50eb4883924f78444e19e764a6e` /
+`ca65790dd6199fbe3411a062e14e6eb54bf73773` objects remain untouched. That frozen service blob
+`4d12e9cf008df4d36e054bd165308653d05b6961` has additional acknowledged/default-scope/Repeat
+work not imported here. Future composition must transfer only this bounded callback delta and retain
+the producer's `nextRadioRevision()` and other acknowledged behavior, not replace its service with
+this branch's older service baseline.
+
+Five authored real Settings state-holder/adapter, RX consumer, protocol-radio and Room controls cover:
+preset-first with the metadata writer held before commit; admitted metadata failure; caller cancellation
+while admitted metadata is held non-cancellably; Settings-first with its durable ACK held while the
+later preset radio remains allowed; and external generation replacement draining the held writer while
+refusing the old queued Settings operation. Preset-first cases assert no B radio command while A's
+metadata is held, then B's actual committed Room/live/radio value and terminal ACK. The reverse order
+asserts later A wins without holding B's radio lane through its ACK. Replacement checks successor
+installation waits and old commands cannot route into it. These are source controls, not executed tests.
+The helper releases held work before teardown even on assertion failure.
+
+This successor does not repair or accept the independently blocked canonical gate. `632a43188e`
+remains an immutable historical candidate, and full composition source review, Kotlin/Room execution
+and publication remain held.

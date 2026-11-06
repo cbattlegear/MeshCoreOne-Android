@@ -378,7 +378,14 @@ class SettingsService(
         return actual
     }
 
-    suspend fun applyRadioPresetVerified(preset: RadioPreset): SelfInfo = operation {
+    suspend fun applyRadioPresetVerified(preset: RadioPreset): SelfInfo =
+        applyRadioPresetVerified(preset) {}
+
+    /** The metadata callback shares radio ordering and must not reenter this service's operations. */
+    suspend fun applyRadioPresetVerified(
+        preset: RadioPreset,
+        persist: suspend (SelfInfo) -> Unit,
+    ): SelfInfo = operation {
         val actual = writeRadioAndVerify(
             preset.frequencyKHz, preset.bandwidthHz, preset.spreadingFactor, preset.codingRate, null,
         )
@@ -386,6 +393,7 @@ class SettingsService(
             if (configuration { queryDevice() }.supportsPathHashMode) writePathHashAndVerify(mode)
         }
         publish(SettingsEvent.DeviceUpdated(actual, preset.id))
+        persist(actual)
         actual
     }
 

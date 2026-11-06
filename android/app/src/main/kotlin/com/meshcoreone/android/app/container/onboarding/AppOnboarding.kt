@@ -139,7 +139,6 @@ class AppStateOnboardingHost(private val container: AppContainer) : OnboardingCo
 
 /** [OnboardingRadioConfigurator] over the live session's settings service and the connected-device editor. */
 class AppStateRadioConfigurator(private val container: AppContainer) : OnboardingRadioConfigurator {
-    // SettingsService serializes radio writes separately from the token-bound Room metadata edit.
     private val presetOperation = Mutex()
 
     override fun sealCompletion(
@@ -177,14 +176,15 @@ class AppStateRadioConfigurator(private val container: AppContainer) : Onboardin
             }
             val pathHashMode =
                 preset.pathHashMode.takeIf { container.connectionManager.connectedDevice?.supportsPathHashMode == true }
-            val info = session.settingsService.applyRadioPresetVerified(preset)
-            kotlinx.coroutines.currentCoroutineContext().ensureActive()
-            if (!container.connectionPort.updateDevice(info, preset.id, token)) {
-                throw SettingsServiceException(SettingsServiceError.NotConnected)
-            }
-            pathHashMode?.let { mode ->
-                if (!container.connectionPort.updatePathHashMode(mode, token)) {
+            session.settingsService.applyRadioPresetVerified(preset) { info ->
+                kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                if (!container.connectionPort.updateDevice(info, preset.id, token)) {
                     throw SettingsServiceException(SettingsServiceError.NotConnected)
+                }
+                pathHashMode?.let { mode ->
+                    if (!container.connectionPort.updatePathHashMode(mode, token)) {
+                        throw SettingsServiceException(SettingsServiceError.NotConnected)
+                    }
                 }
             }
         }

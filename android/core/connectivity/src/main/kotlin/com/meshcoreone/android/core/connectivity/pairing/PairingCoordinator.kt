@@ -42,7 +42,7 @@ interface PairingConnectionPort {
     /** Cancels the reconnect-coordinator UI timeout and releases its device claim. */
     suspend fun clearReconnectingDevice()
     /** Defensive UI backstop after a cancelled pairing (`connectionState = .disconnected`). */
-    fun markDisconnected()
+    suspend fun markDisconnected()
     suspend fun clearPersistedConnection(deviceId: UUID)
     fun isAuthenticationFailure(failure: Throwable): Boolean
     fun isDeviceConnectedToOtherApp(failure: Throwable): Boolean

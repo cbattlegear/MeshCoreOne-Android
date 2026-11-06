@@ -1,0 +1,244 @@
+# Failed Repeat snapshot retirement
+
+## Binding and scope
+
+Repository: `cbattlegear/MeshCoreOne-Android`. WP-305 related-consumer repair for
+the snapshot-lifecycle finding on PR #585, review comment `4481469541`.
+Assignment: `call_uPSigjql7Puj1Aj8ebGTdNbv`; implementation session
+`6f720651-7ede-4f87-9b7b-113cb2957b6b`.
+Pinned Swift source remains `db14559b39d32322b06477c6ae676112f583db50`.
+
+The repair baseline is the exact tree of
+`033b3c43bc33129d273ae7772ba5e5b814d99e70`
+(`4e5420ee59691c22cac4a22f4090cafb19bd3b28`). Merge commit `711ee1b96`
+retains this session's earlier authority history while using that integration
+tree without additional product changes. Integration should transfer only the
+bounded delta against `033b3c43`, not import the historical branch ancestry.
+No OnboardingFlags, runtime, Room implementation, schema, held reference,
+protected map test or source-pin change is included.
+
+Trusted `origin/main` capability admission maps the editor, shared contract and
+Settings service to `reviewed-support-consumer` / `modify-related-consumer`;
+the two test files map to `reviewed-support-test` /
+`add-or-update-related-test`. Evidence/deviations use the manifest-owned WP-305
+paths and `record-evidence` / `modify`. Settings owner `244fb3ac` transferred
+the Repeat harness's bounded edit custody; OnboardingFlags remains with `6e767589`.
+
+## Cause and repair
+
+Verified Repeat-off is persisted before the separate snapshot clear. A clear
+failure or cancellation leaves a consumed baseline in Room. If the holder observes
+the already durable off value after its failure handler, the toggle becomes off;
+a later manual RF edit and enable preserve that obsolete baseline. The next off
+can restore RF from the previous cycle.
+
+`RepeatSnapshotRestoreAuthority.onRestoreVerified()` is an additive synchronous
+hook. The actual Settings service invokes it only after successful RF readback
+and verified Repeat-off, before either persistence publication. The editor's
+captured authority records retirement under the current token's short publication
+guard, without changing the device value or suspending. The receipt binds stable
+device identity, session token, identity epoch, all four captured snapshot fields
+and a monotonic snapshot epoch. It is not created by an arbitrary clear request,
+SET dispatch, transport ACK alone, failed verification or imported data.
+
+Shared database-owned custody survives holder/editor replacement and delegating
+store wrappers. Before a new awaited snapshot preparation or restore validation,
+the editor retries the pending clear against the authoritative row. Unrelated
+revisions/RF edits are preserved; identity changes, changed snapshots, equal-value
+snapshot ABA and still-active Repeat fail closed rather than erasing new data.
+Every preparation transform and actual restore admission also checks the fence.
+The existing committed-all-null observer alone removes retirement records.
+The originating token authorizes registration, but retirement gates every session
+for that stable identity. A new generation is not evidence that the old baseline
+became usable. A matching inactive successor may reconcile the clear; an active,
+different-identity or ABA successor retains its row and is fenced until an actual
+explicit clear. A retired token cannot mark or clear its successor.
+
+This generation rule addresses follow-up assignment
+`call_qQ5rYy9mBmkNb9KtH9uUeBFn`. The earlier token-keyed custody in `ff5ae2607`
+through `ed529370` is preserved as historical source, not accepted as complete:
+an active same-radio reconnect could preserve the consumed snapshot while a fresh
+token missed the original marker.
+
+The follow-up assignment `call_zQ8R1MzuLby9k36HgDAalPfY` examines a late
+registration race: the send admission ends before readback, so a sibling can
+commit an explicit clear before the verified hook records its captured receipt.
+The shared authority now retains versioned evidence from the actual committed
+all-null observer. Registration and observation use the same short monitor.
+A late receipt is already retired only if the current identity epoch still
+matches, the committed clear's snapshot epoch is newer than the captured epoch,
+and that clear epoch is still current. Every nonempty commit removes the proof.
+Changed/nonempty and equal-value ABA snapshots are therefore still quarantined,
+not admitted through a general version-mismatch bypass.
+
+After a matching clear commits, normal preparation snapshots the current RF.
+For intentional recovery from a changed/ABA baseline, the production editor
+exposes `discardPreRepeatSettings(currentToken)`: capture the real Room revision,
+validate current live identity, then clear only snapshot fields under the original
+token and exact receipt without rebasing. A conflicting revision (including equal
+DTO ABA) throws `DeviceEditPersistenceConflict`; a retired token returns false.
+The ordinary automatic clear/reconciliation still refuses ambiguous baselines.
+All new ambiguity controls use this production editor API, not direct Room writes,
+to prove explicit recovery. This is a callable editor recovery operation, not a
+new user-facing discard button or permission to discard uncertain data implicitly.
+Legacy asynchronous preparation refuses the pending retirement through existing
+diagnostics instead of reusing it. The original uncertain-creation custody,
+partial/imported snapshot behavior, exact abort receipt, actual send permit,
+runtime authority and bounded CAS retry remain in place.
+
+## Deterministic controls
+
+- `delayedRepeatOffObservationAfterFailedClearCannotReuseThePreviousBaseline`:
+  actual App graph, service, protocol transport, editor and Room; only the holder
+  observation is delayed. Covers failed clear, cancellation in clear, and
+  cancellation after acknowledged restore but before the editor clear API.
+  Requires durable off with the old snapshot, delayed toggle-off, actual later
+  manual RF, zero additional SET while retirement still fails, then fresh
+  enable/off restoring the manual RF with all four snapshot fields cleared and
+  exact live/Room and frame-order assertions.
+- `confirmedRestoreRetirementIsSharedAcrossEditorsAndRejectsSnapshotAba`:
+  independent editors and two stores on the same actual Room database; unrelated
+  full-row revision reconciles, snapshot ABA refuses without writes, and an
+  actual committed explicit clear allows fresh preparation.
+- `restoreRetirementRequiresVerifiedRfAndRepeatOffBeforeEitherPublication`:
+  actual Settings service/protocol for success, cancellation before ACK, RF
+  mismatch and Repeat mismatch. The hook precedes both durable publications only
+  for verified success.
+- `committedSiblingClearDuringRestoreReadbackCannotResurrectAnObsoleteRetirement`:
+  actual Repeat enable and restore SET, held actual self-info readback, a sibling
+  editor's committed clear before registration, then the real verified callback.
+  The all-null family requires usable fresh preparation and a complete later
+  manual-RF/enable/off cycle. Nonempty and equal-value ABA families require the
+  typed fence, unchanged row and no extra SET until an actual explicit clear,
+  followed by the same positive cycle.
+- `failedClearRetirementSurvivesASameRadioReconnectBeforeTheNextCycle`: actual
+  held/failed clear after durable off, same-radio active reconnect with a new
+  token (so initialization really retains the old snapshot), retired-token
+  refusal, later manual RF and a fresh enable/off cycle. The new cycle must save
+  and restore the later manual baseline, not the consumed one.
+- `explicitSnapshotDiscardRejectsConcurrentRevisionAndAbaButAllowsFreshRecovery`:
+  pause the real discard's conditional write, commit a competing snapshot change
+  or equal-DTO ABA, require exact refusal and no RF traffic, then prove a freshly
+  captured discard succeeds and a retired token cannot discard its successor.
+
+All twenty original Repeat/preset methods are retained. Nineteen original bodies
+remain exact. `retiredSnapshotOrClearCannotMutateASameRadioSuccessorOrItsDurableSnapshot`
+keeps every original retirement timing, no-SET, full-row/live and snapshot assertion,
+and strengthens the active-successor clear family: first require the typed
+consumed-baseline fence with no row changes, then commit an explicit clear and
+retain the original fresh-action positive assertion. Accepting that consumed
+baseline merely because its token changed would contradict the assigned repair.
+The test helper's
+restore-authority decorator forwards the new hook to the actual editor authority.
+The five normal-preset controls and null-token scope guard remain unchanged.
+
+## Verification
+
+Native Windows readiness passed with pinned `C:\Python312\python.exe`:
+`tools\android-port\controller\ci.py preflight --local --state $env:ANDROID_CI_STATE
+--output <fresh absolute temporary directory>`. No local Gradle invocation or
+retained execution-owner recovery was attempted.
+
+Source checks passed using that interpreter:
+
+- `tools\android-port\controller\validate.py`
+- `tools\android-port\portmap.py`
+- `android\parity-tests\audit.py --check`
+- `android\parity-tests\semantic.py --check`
+- `tools\android-port\controller\verification_config.py --check`
+- `git diff --check`
+
+Test-only predecessor `d05509a9b20cf51df04ea24c7862c32a51c76896` is published
+as `diagnostic/wp305-failedclear-d05509a9`, with hosted run
+`42059575897`. This exact predecessor contains the save/cancel-clear regression
+before the production repair and before the additional controls; its result
+must not be transferred to a successor. Its Android job `127357290292` executed
+App 2,135 tests with two failures: the new test timed out at the helper's initial
+holder readiness (not the lifecycle assertion), and the unchanged protected map
+test failed separately. This is not a successful lifecycle reproduction.
+
+The fixture initially froze the newly created adapter's eager-but-not-yet-populated
+device value before the helper could observe readiness. The corrected fixture
+forwards actual token-bound observations during setup, then cancels and joins
+that owned collector at action entry before taking explicit delay custody.
+No off observation can pass through during the controlled ordering. Test-only
+baseline `b1db04bfe3375fc507546fa616dd269c72793f2c`, parent `d05509a9`, contains
+only that bootstrap correction with unchanged production and assertions.
+The same bootstrap correction is applied to the repaired candidate.
+The new methods emit `WP305_REPEAT_CLEAR` START and per-family END/SUCCESS
+markers after explicit cleanup. These establish reached assertions/cleanup only;
+pair them with the exact hosted JUnit suite result, not standalone test acceptance.
+
+The corrected test-only baseline's exact hosted run is `42062401151`, Android
+job `127367492092`. It executed App 2,135 tests with one failure, the actual
+lifecycle discriminator: expected later manual RF `868000`, but the next off
+restored obsolete `915000`. This reproduces the original save-failure family;
+later cancellation families are not credited from this failing first iteration.
+The initial dispatch
+returned HTTP 500, and the branch run list contained no run before the successful
+retry returned this receipt. No duplicate dispatch or predecessor acceptance is
+claimed.
+
+Late-registration test-only predecessor
+`f9ee60a45375b214ebda1f554917afedff6199be` retains the earlier repair's production
+and adds only the new actual-readback control/local test hook. Its exact hosted
+run `42063234319`, Android `127370446624`, succeeded, with the named readback
+method in the real inventory and the Repeat suite END/SUCCESS. Consequently
+this control did not reproduce the source hypothesis on the predecessor and is
+not red/green evidence for the committed-clear proof. In the full successful
+publication path, a later all-null consumer commit invokes the clear observer
+again. The test is retained as a safety/progress control; the versioned clear
+proof is defensive source hardening, not a claimed reproduced permanent lockout.
+Generation-custody test-only predecessor
+`16607b4fbd13fc50d66ea9e4b1d78301d4451923` preserves `ed529370` production and
+adds the reconnect/different-identity controls and the stronger existing-control
+tail. Its execution likewise remains separate from the final identity-scoped fix.
+
+## Exact repair execution and integration handoff
+
+Product/test head: `d5ce4af4bf43c4f2d3912aaf209eea6276f22b08`.
+Published immutable feature ref: `diagnostic/wp305-retirement-d5ce4af4`.
+Command:
+`gh workflow run android-ci.yml --repo cbattlegear/MeshCoreOne-Android --ref diagnostic/wp305-retirement-d5ce4af4`.
+Exact run: [42065697165](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42065697165).
+Android job `127379247580` completed **SUCCESS**. Its completed-job log and
+structured actual JUnit inventory were independently read through the GitHub REST
+job-log endpoint; no second result bundle was created, uploaded or committed.
+
+| Executed module | Discovered/run/passed | Failed/errors/skipped |
+| --- | --- | --- |
+| App | 2,139 / 2,139 / 2,139 | 0 / 0 / 0 |
+| core/services | 3,006 / 3,006 / 3,006 | 0 / 0 / 0 |
+| feature/settings | 327 / 327 / 327 | 0 / 0 / 0 |
+| core/connectivity | 186 / 186 / 186 | 0 / 0 / 0 |
+| core/data | 616 / 616 / 616 | 0 / 0 / 0 |
+| core/runtime | 309 / 309 / 309 | 0 / 0 / 0 |
+| contracts | 14 / 14 / 14 | 0 / 0 / 0 |
+
+Actual inventory includes all five new App methods and the new service method
+listed above; the Repeat suite and both real-Room device-authority suites report
+END/SUCCESS. There are 25 Repeat/preset methods: the original 20 plus five new
+methods. The separate current-Flags composition is not this candidate: its
+`ce639690` run `42066311912` failed before App execution due to the separately
+owned OnboardingFlagsTest assertion argument order. That failure is preserved,
+not hidden by this head's success. Flags owner supplied its own correction.
+
+Independent producer `6e767589` reviewed the final authority/recovery seam at
+`d5ce4af4` with no additional consequential finding. Settings custodian `244fb3ac`
+owns composition and fresh exact-current-head checks. Transfer only the following
+seven-path delta against `033b3c43`, preserving the custodian's Flags and scope
+guard bytes; do not merge this session's historical authority ancestry:
+
+- `android/core/connectivity/src/main/kotlin/com/meshcoreone/android/core/connectivity/device/ConnectedDeviceEditor.kt`
+- `android/core/contracts/src/main/kotlin/com/meshcoreone/android/core/contracts/domain/DeviceAndContactPersisting.kt`
+- `android/core/services/src/main/kotlin/com/meshcoreone/android/core/services/device/SettingsService.kt`
+- `android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/device/SettingsRadioSerializationTest.kt`
+- `android/app/src/test/kotlin/com/meshcoreone/android/app/container/SettingsRepeatPersistenceTest.kt`
+- `docs/android/deviations/WP-305.md`
+- `docs/android/evidence/WP-305/failed-clear-lifecycle.md`
+
+At this evidence revision the independent SwiftData restore/export job remains
+pending; Android success does not claim whole-workflow success. No physical
+radio/device, signing, iOS UI, process-restart custody or whole-WP acceptance is
+claimed. The explicit discard operation is tested as an editor API, not as a
+mounted UI recovery flow.

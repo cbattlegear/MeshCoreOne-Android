@@ -166,8 +166,9 @@ class SettingsBoundaryTest {
             try {
                 val subscription = fixture.settings.events()
                 val write = request { fixture.settings.setRadioParamsVerified(869_618u, 62_500u, 8u, 8u) }
-                reply(fixture, 2, PacketBuilder.setRadio(869.618, 62.5, 8u, 8u), okPacket())
-                reply(fixture, 3, PacketBuilder.appStart("MCore"),
+                reply(fixture, 2, PacketBuilder.deviceQuery(), capabilitiesPacket())
+                reply(fixture, 3, PacketBuilder.setRadio(869.618, 62.5, 8u, 8u), okPacket())
+                reply(fixture, 4, PacketBuilder.appStart("MCore"),
                     selfPacket(frequency = 869_618u, bandwidth = 62_500u, sf = 8u, cr = 5u))
                 val fault = assertIs<SettingsServiceError.VerificationFailed>(
                     assertFailsWith<SettingsServiceException> { write.await() }.error,
@@ -182,12 +183,15 @@ class SettingsBoundaryTest {
             val fixture = settingsFixture()
             try {
                 val accepted = request { fixture.settings.setRadioParamsVerified(915_000u, 125_000u, 7u, 5u) }
-                reply(fixture, 2, PacketBuilder.setRadio(915.0, 125.0, 7u, 5u), okPacket())
-                reply(fixture, 3, PacketBuilder.appStart("MCore"), selfPacket(frequency = 915_001u))
+                reply(fixture, 2, PacketBuilder.deviceQuery(), capabilitiesPacket())
+                reply(fixture, 3, PacketBuilder.setRadio(915.0, 125.0, 7u, 5u), okPacket())
+                reply(fixture, 4, PacketBuilder.appStart("MCore"), selfPacket(frequency = 915_001u))
+                reply(fixture, 5, PacketBuilder.deviceQuery(), capabilitiesPacket())
                 assertEquals(915.001, accepted.await().radioFrequency)
                 val write = request { fixture.settings.setRadioParamsVerified(915_000u, 125_000u, 7u, 5u) }
-                reply(fixture, 4, PacketBuilder.setRadio(915.0, 125.0, 7u, 5u), okPacket())
-                reply(fixture, 5, PacketBuilder.appStart("MCore"), selfPacket(frequency = 915_002u))
+                reply(fixture, 6, PacketBuilder.deviceQuery(), capabilitiesPacket())
+                reply(fixture, 7, PacketBuilder.setRadio(915.0, 125.0, 7u, 5u), okPacket())
+                reply(fixture, 8, PacketBuilder.appStart("MCore"), selfPacket(frequency = 915_002u))
                 assertIs<SettingsServiceError.VerificationFailed>(
                     assertFailsWith<SettingsServiceException> { write.await() }.error,
                 )
@@ -260,17 +264,19 @@ class SettingsBoundaryTest {
                 val subscription = fixture.settings.events()
                 val preset = assertNotNull(RadioPresets.all.firstOrNull { it.id == "hu" })
                 val write = request { fixture.settings.applyRadioPresetVerified(preset) }
-                reply(fixture, 2, PacketBuilder.setRadio(869.618, 62.5, 7u, 5u), okPacket())
-                reply(fixture, 3, PacketBuilder.appStart("MCore"), selfPacket(frequency = 869_618u, bandwidth = 62_500u))
-                reply(fixture, 4, PacketBuilder.deviceQuery(), capabilitiesPacket(hash = 0u))
-                reply(fixture, 5, PacketBuilder.setPathHashMode(1u), okPacket())
+                reply(fixture, 2, PacketBuilder.deviceQuery(), capabilitiesPacket(hash = 0u))
+                reply(fixture, 3, PacketBuilder.setRadio(869.618, 62.5, 7u, 5u), okPacket())
+                reply(fixture, 4, PacketBuilder.appStart("MCore"), selfPacket(frequency = 869_618u, bandwidth = 62_500u))
+                reply(fixture, 5, PacketBuilder.deviceQuery(), capabilitiesPacket(hash = 0u))
                 reply(fixture, 6, PacketBuilder.deviceQuery(), capabilitiesPacket(hash = 0u))
+                reply(fixture, 7, PacketBuilder.setPathHashMode(1u), okPacket())
+                reply(fixture, 8, PacketBuilder.deviceQuery(), capabilitiesPacket(hash = 0u))
                 assertEquals(
                     SettingsServiceError.VerificationFailed("pathHashMode=1", "pathHashMode=0"),
                     assertFailsWith<SettingsServiceException> { write.await() }.error,
                 )
                 subscription.close()
-                assertTrue(subscription.events.toList().isEmpty())
+                assertEquals(listOf(SettingsEvent.ClientRepeatUpdated(false)), subscription.events.toList().map { it.event })
             } finally { fixture.close() }
         },
         nativeAsync("path hash invalid mode retains the existing protocol typed failure and sends nothing") {

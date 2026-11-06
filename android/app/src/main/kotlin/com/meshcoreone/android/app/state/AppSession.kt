@@ -42,6 +42,7 @@ class MessageEventSources(
 /** The per-connection service graph as app state sees it (Swift `ServiceContainer`). */
 interface AppSession {
     val token: SessionToken
+    val isTornDown: Boolean get() = false
     val transportType: TransportType
     val dataStore: PersistenceStoreProtocol
     val syncCoordinator: SyncCoordinator

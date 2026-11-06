@@ -16,7 +16,7 @@ class OnboardingStateTests : SourceCaseProof() {
     @Test fun completeSetsFlag() = prove {
         val onboarding = OnboardingState(store())
         onboarding.hasCompletedOnboarding = false
-        onboarding.completeOnboarding()
+        runBlocking { onboarding.completeOnboarding() }
         assertTrue(onboarding.hasCompletedOnboarding)
     }
 
@@ -25,7 +25,7 @@ class OnboardingStateTests : SourceCaseProof() {
         val flags = store()
         val onboarding = OnboardingState(flags)
         onboarding.hasCompletedOnboarding = false
-        onboarding.completeOnboarding()
+        runBlocking { onboarding.completeOnboarding() }
         assertTrue(flags.getBoolean(key))
     }
 
@@ -33,7 +33,7 @@ class OnboardingStateTests : SourceCaseProof() {
     @Test fun resetClearsFlag() = prove {
         val onboarding = OnboardingState(store())
         onboarding.hasCompletedOnboarding = true
-        onboarding.resetOnboarding()
+        runBlocking { onboarding.resetOnboarding() }
         assertFalse(onboarding.hasCompletedOnboarding)
     }
 
@@ -41,7 +41,7 @@ class OnboardingStateTests : SourceCaseProof() {
     @Test fun resetClearsPath() = prove {
         val onboarding = OnboardingState(store())
         onboarding.replacePath(listOf(OnboardingStep.WELCOME, OnboardingStep.PERMISSIONS))
-        onboarding.resetOnboarding()
+        runBlocking { onboarding.resetOnboarding() }
         assertTrue(onboarding.onboardingPath.isEmpty())
     }
 
@@ -50,7 +50,7 @@ class OnboardingStateTests : SourceCaseProof() {
         val flags = store()
         val onboarding = OnboardingState(flags)
         onboarding.hasCompletedOnboarding = true
-        onboarding.resetOnboarding()
+        runBlocking { onboarding.resetOnboarding() }
         assertFalse(flags.getBoolean(key))
     }
 

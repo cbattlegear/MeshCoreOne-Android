@@ -1,10 +1,12 @@
 // AndroidOnly: WP-207 Runtime seams consumed by WP-206 pairing and connectivity: auth latch, device edits, health and switch failures.
+// AndroidOnly: WP-305 Token-bound preset updates cannot replace a successor connection's device.
 package com.meshcoreone.android.core.runtime
 
 import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.model.*
 import java.util.UUID
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.test.*
 import org.junit.jupiter.api.TestFactory
 import kotlin.test.*
@@ -79,6 +81,170 @@ class RuntimeSeamTest {
                 connect(); manager.disconnect()
                 manager.replaceConnectedDevice(DeviceDTO(radioId = RadioId(UUID.randomUUID()), publicKey = publicKey, nodeName = "Ghost"))
                 assertNull(manager.connectedDevice)
+            }
+        },
+        nativeCase("token-bound device replacement accepts only the current session") {
+            withFixture {
+                connect()
+                val token = assertNotNull(manager.snapshot.value.token)
+                val updated = assertNotNull(manager.connectedDevice).copy(nodeName = "Current preset")
+                val edit = assertNotNull(manager.replaceConnectedDevice(updated, token))
+                assertEquals(token, edit.token)
+                assertEquals(updated, manager.connectedDevice)
+                assertNull(manager.replaceConnectedDevice(updated.copy(nodeName = "Other generation"),
+                    token.copy(generation = Generation(token.generation.value + 1))))
+                assertEquals(updated, manager.connectedDevice)
+            }
+        },
+        nativeCase("preset completion cancellation and reconnect are ordered against the actual seal") {
+            withFixture {
+                connect()
+                val token = assertNotNull(manager.snapshot.value.token)
+                val cancelled = OnboardingCompletionAttempt()
+                cancelled.reject(CancellationException("cancel won"))
+                assertFalse(manager.sealOnboardingCompletion(token, cancelled))
+                val committed = OnboardingCompletionAttempt()
+                assertTrue(manager.sealOnboardingCompletion(token, committed))
+                committed.reject(CancellationException("seal won"))
+                assertNull(committed.rejection())
+                manager.setConnectionState(DeviceConnectionState.CONNECTING)
+                assertFalse(manager.sealOnboardingCompletion(token, OnboardingCompletionAttempt()))
+                assertFalse(manager.sealOnboardingCompletion(token, committed))
+            }
+        },
+        nativeCase("explicit completion rejection races the seal CAS without changing either terminal decision") {
+            withFixture {
+                connect()
+                val token = assertNotNull(manager.snapshot.value.token)
+                repeat(64) {
+                    val attempt = OnboardingCompletionAttempt()
+                    val id = attempt.id
+                    val failure = CancellationException("explicit rejection")
+                    val start = CompletableDeferred<Unit>()
+                    val sealing = async(Dispatchers.Default) {
+                        start.await()
+                        manager.sealOnboardingCompletion(token, attempt)
+                    }
+                    val rejecting = async(Dispatchers.Default) {
+                        start.await()
+                        attempt.reject(failure)
+                    }
+                    start.complete(Unit)
+                    val sealed = sealing.await()
+                    rejecting.await()
+                    assertEquals(id, attempt.id)
+                    assertEquals(sealed, attempt.isSealed)
+                    if (sealed) assertNull(attempt.rejection()) else assertSame(failure, attempt.rejection())
+                    assertFalse(attempt.trySeal())
+                    attempt.reject(IllegalStateException("later rejection"))
+                    if (sealed) assertNull(attempt.rejection()) else assertSame(failure, attempt.rejection())
+                }
+            }
+        },
+        nativeCase("token-bound device replacement rejects connecting before old token teardown") {
+            withFixture {
+                connect()
+                val original = assertNotNull(manager.snapshot.value.token)
+                val device = assertNotNull(manager.connectedDevice)
+                manager.setConnectionState(DeviceConnectionState.CONNECTING)
+                assertEquals(original, manager.snapshot.value.token)
+                assertNull(manager.replaceConnectedDevice(device.copy(nodeName = "Late preset"), original))
+                assertEquals(device, manager.connectedDevice)
+            }
+        },
+        nativeCase("token-bound device replacement rejects disconnect and same-radio rebuilt generation") {
+            withFixture {
+                connect()
+                val original = assertNotNull(manager.snapshot.value.token)
+                val stale = assertNotNull(manager.connectedDevice).copy(nodeName = "Stale preset")
+                val callbacks = links.single().callbacks!!
+                callbacks.onAutoReconnecting("dropped"); runCurrent()
+                assertNull(manager.replaceConnectedDevice(stale, original))
+                assertFalse(manager.sealOnboardingCompletion(original, OnboardingCompletionAttempt()))
+                callbacks.onReconnected(); runCurrent()
+                val successor = assertNotNull(manager.snapshot.value.token)
+                assertEquals(original.radioId, successor.radioId)
+                assertNotEquals(original.generation, successor.generation)
+                val live = assertNotNull(manager.connectedDevice)
+                assertNull(manager.replaceConnectedDevice(stale, original))
+                assertFalse(manager.sealOnboardingCompletion(original, OnboardingCompletionAttempt()))
+                assertTrue(manager.sealOnboardingCompletion(successor, OnboardingCompletionAttempt()))
+                assertEquals(live, manager.connectedDevice)
+                assertNotNull(manager.replaceConnectedDevice(live.copy(nodeName = "Fresh preset"), successor))
+                manager.disconnect(); runCurrent()
+                assertNull(manager.replaceConnectedDevice(stale, successor))
+                assertFalse(manager.sealOnboardingCompletion(successor, OnboardingCompletionAttempt()))
+            }
+        },
+        nativeCase("a queued successor connect invalidates a failure waiting on actual device write authority") {
+            withFixture {
+                connect()
+                val oldToken = assertNotNull(manager.snapshot.value.token)
+                val oldServices = services.single()
+                val gateEntered = CompletableDeferred<Unit>()
+                val releaseGate = CompletableDeferred<Unit>()
+                val radioEntered = CompletableDeferred<Unit>()
+                val releaseRadio = CompletableDeferred<Unit>()
+                val states = mutableListOf<DeviceConnectionState>()
+                val subscription = manager.subscribeTransitions()
+                val collector = test.backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                    subscription.transitions.collect { states += it.state }
+                }
+                try {
+                    val heldWrite = async(start = CoroutineStart.UNDISPATCHED) {
+                        manager.withDeviceWriteAuthority(oldToken) {
+                            gateEntered.complete(Unit)
+                            releaseGate.await()
+                            true
+                        }
+                    }
+                    gateEntered.await()
+                    createRadio = {
+                        TestRadio().also { radio ->
+                            radio.beforeConnect = { radioEntered.complete(Unit); releaseRadio.await() }
+                        }
+                    }
+                    val successor = async(start = CoroutineStart.UNDISPATCHED) {
+                        manager.connect(ConnectionTarget.WiFi("localhost", 5000u))
+                    }
+                    val staleFailure = launch(start = CoroutineStart.UNDISPATCHED) {
+                        manager.handleReconnectionFailure()
+                    }
+                    assertFalse(successor.isCompleted)
+                    assertFalse(staleFailure.isCompleted)
+                    releaseGate.complete(Unit)
+                    assertTrue(heldWrite.await())
+                    radioEntered.await()
+                    staleFailure.join()
+                    runCurrent()
+                    assertEquals(DeviceConnectionState.CONNECTING, manager.connectionState)
+                    assertEquals(0, manager.consecutiveRebuildFailures)
+                    assertEquals(0, lossCount)
+                    assertFalse(manager.isReconnectionWatchdogRunning)
+                    assertFalse(DeviceConnectionState.DISCONNECTED in states)
+                    assertEquals(1, oldServices.teardowns)
+                    assertEquals(0, radios.last().closes)
+
+                    releaseRadio.complete(Unit)
+                    successor.await()
+                    runCurrent()
+                    val successorToken = assertNotNull(manager.snapshot.value.token)
+                    val successorDevice = assertNotNull(manager.connectedDevice)
+                    assertNotEquals(oldToken, successorToken)
+                    assertEquals(DeviceConnectionState.READY, manager.connectionState)
+                    assertEquals(successorDevice.radioId, successorToken.radioId)
+                    assertEquals(0, services.last().teardowns)
+                    assertEquals(0, radios.last().closes)
+                    assertEquals(0, lossCount)
+                    assertEquals(0, manager.consecutiveRebuildFailures)
+                    assertFalse(manager.isReconnectionWatchdogRunning)
+                    assertFalse(DeviceConnectionState.DISCONNECTED in states)
+                } finally {
+                    releaseGate.complete(Unit)
+                    releaseRadio.complete(Unit)
+                    collector.cancelAndJoin()
+                    subscription.close()
+                }
             }
         },
         // C-04: Swift attemptOpportunisticReconnect logs a failed foreground reconnect and returns.

@@ -2,8 +2,11 @@
 package com.meshcoreone.android.feature.settings.device
 
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.model.DeviceDTO
+import com.meshcoreone.android.core.model.ProtocolLimits
+import com.meshcoreone.android.core.protocol.bytes.utf8Prefix
 import com.meshcoreone.android.core.ui.UiText
 import java.math.BigInteger
 import java.text.Collator
@@ -23,10 +26,14 @@ data class DefaultFloodScopeState(
     val isDiscovering: Boolean = false,
     val discoveryMessageId: Int? = null,
     val errorMessage: UiText? = null,
+    val sessionToken: SessionToken? = null,
 ) {
     /** The scope the radio holds now; null is "Disabled" (unscoped). */
     val currentScope: String? get() = device?.defaultFloodScopeName
+        ?.takeIf { it.isNotEmpty() }?.utf8Prefix(ProtocolLimits.MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES)
     val sortedKnownRegions: List<String> get() = DefaultFloodScopeStateHolder.sortStandard(device?.knownRegions?.toList().orEmpty())
+    val regionGroups: Map<String, List<String>>
+        get() = sortedKnownRegions.groupBy { it.utf8Prefix(ProtocolLimits.MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES) }
     val enabled: Boolean get() = connectionState == DeviceConnectionState.READY && !isApplying
 }
 
@@ -51,7 +58,9 @@ class DefaultFloodScopeStateHolder(
         if (observing != null) return
         observing = env.scope.launch {
             launch { connection.connectionState.collect { s -> mutable.update { it.copy(connectionState = s) } } }
-            connection.connectedDevice.collect { d -> mutable.update { it.copy(device = d) } }
+            connection.deviceObservations.collect { observed ->
+                mutable.update { it.copy(device = observed.device, sessionToken = observed.sessionToken) }
+            }
         }
     }
 
@@ -64,18 +73,35 @@ class DefaultFloodScopeStateHolder(
 
     fun dismissError() = mutable.update { it.copy(errorMessage = null) }
 
-    fun select(name: String?) {
-        mutable.update { it.copy(isApplying = true) }
+    fun select(name: String?, expectedToken: SessionToken? = mutable.value.sessionToken) {
+        if (mutable.value.isApplying) return
+        val service = try {
+            val observed = mutable.value
+            SettingsRadioTarget.capture(
+                expectedToken, observed.device, observed.sessionToken, settingsService(),
+            ).service
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            apply(name, null, failure)
+            return
+        }
+        apply(name, service)
+    }
+
+    private fun apply(name: String?, service: SettingsRadioPort?, acquisitionFailure: Exception? = null) {
+        if (mutable.value.isApplying) return
+        mutable.update { it.copy(isApplying = true, errorMessage = null) }
         env.scope.launch {
             try {
-                val service = settingsService() ?: throw SettingsNotConnectedException()
-                service.setDefaultFloodScopeVerified(name)
+                acquisitionFailure?.let { throw it }
+                (service ?: throw SettingsNotConnectedException()).setDefaultFloodScopeVerified(name)
                 retryAlert.reset()
             } catch (cancelled: CancellationException) {
                 mutable.update { it.copy(isApplying = false) }
                 throw cancelled
             } catch (error: Exception) {
-                val message = failures.route(error) { select(name) }
+                val message = failures.route(error) { apply(name, service) }
                 mutable.update { it.copy(errorMessage = message ?: it.errorMessage) }
             }
             mutable.update { it.copy(isApplying = false) }

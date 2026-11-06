@@ -84,6 +84,8 @@ internal class FakeSettingsPort(private val connection: FakeConnection? = null) 
     var gpsState = DeviceGpsState(isSupported = false, isEnabled = false)
     var floodScope: String? = null
     var onCall: suspend (String) -> Unit = {}
+    val radioExpectations = mutableListOf<DeviceDTO?>()
+    private var radioInfo = selfInfo()
 
     fun failNext(method: String, error: Throwable) = failures.getOrPut(method) { ArrayDeque() }.addLast(error)
 
@@ -96,12 +98,27 @@ internal class FakeSettingsPort(private val connection: FakeConnection? = null) 
     override suspend fun getSelfInfo(): SelfInfo { record("getSelfInfo"); return selfInfo() }
     override suspend fun setRadioParamsVerified(
         frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte, codingRate: UByte,
-        clientRepeat: Boolean?, appliedRadioPresetID: String?,
+        clientRepeat: Boolean?, appliedRadioPresetID: String?, expectedDevice: DeviceDTO?,
+        repeatAttempt: com.meshcoreone.android.core.contracts.domain.PreRepeatSettingsAttempt?,
+        restoreAuthority: com.meshcoreone.android.core.contracts.domain.RepeatSnapshotRestoreAuthority?,
     ): SelfInfo {
-        record("setRadioParamsVerified", "$frequencyKHz,$bandwidthKHz,$spreadingFactor,$codingRate,$clientRepeat,$appliedRadioPresetID")
-        return selfInfo()
+        radioExpectations += expectedDevice
+        val mutation: suspend () -> Unit = {
+            record("setRadioParamsVerified", "$frequencyKHz,$bandwidthKHz,$spreadingFactor,$codingRate,$clientRepeat,$appliedRadioPresetID")
+        }
+        if (restoreAuthority == null) mutation() else restoreAuthority.withWrite { mutation() }
+        radioInfo = radioInfo.copy(
+            radioFrequency = frequencyKHz.toDouble() / 1000.0,
+            radioBandwidth = bandwidthKHz.toDouble() / 1000.0,
+            radioSpreadingFactor = spreadingFactor, radioCodingRate = codingRate,
+        )
+        return radioInfo
     }
-    override suspend fun setTxPowerVerified(power: Byte): SelfInfo { record("setTxPowerVerified", "$power"); return selfInfo() }
+    override suspend fun setTxPowerVerified(power: Byte): SelfInfo {
+        record("setTxPowerVerified", "$power")
+        radioInfo = radioInfo.copy(txPower = power)
+        return radioInfo
+    }
     override suspend fun applyRadioPresetVerified(presetId: String): SelfInfo {
         record("applyRadioPresetVerified", presetId); return selfInfo()
     }

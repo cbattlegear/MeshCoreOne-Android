@@ -11,6 +11,7 @@ import com.meshcoreone.android.core.protocol.config.SessionConfiguration
 import com.meshcoreone.android.core.protocol.event.ConnectionState
 import com.meshcoreone.android.core.protocol.event.MeshTransportError
 import com.meshcoreone.android.core.protocol.model.ResponseCode
+import com.meshcoreone.android.core.protocol.model.FloodScope
 import com.meshcoreone.android.core.protocol.session.MeshCoreSession
 import com.meshcoreone.android.core.protocol.session.SessionClock
 import com.meshcoreone.android.core.protocol.session.SessionCorrelationException
@@ -76,7 +77,7 @@ internal fun capabilitiesPacket(
 
 internal fun customVarsPacket(text: String = "") = packet(ResponseCode.CUSTOM_VARS, Bytes.utf8(text))
 internal fun floodScopePacket(name: String?) =
-    packet(ResponseCode.DEFAULT_FLOOD_SCOPE, name?.let { Bytes.utf8(it).paddedOrTruncated(31) + filled(0, 16) } ?: Bytes.EMPTY)
+    packet(ResponseCode.DEFAULT_FLOOD_SCOPE, name?.let { Bytes.utf8(it).paddedOrTruncated(31) + FloodScope.Region(it).scopeKey() } ?: Bytes.EMPTY)
 
 internal class TestSignals(initial: SessionToken = token()) : ConnectionSignals {
     override val snapshot = MutableStateFlow(
@@ -146,7 +147,11 @@ internal class SettingsFixture(
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)
-internal suspend fun TestScope.settingsFixture(initial: Bytes = selfPacket(), generation: Long = 1): SettingsFixture {
+internal suspend fun TestScope.settingsFixture(
+    initial: Bytes = selfPacket(),
+    generation: Long = 1,
+    onDefaultScopeAdmission: (() -> Unit)? = null,
+): SettingsFixture {
     val radio = TestRadio()
     val clock = SchedulerClock(testScheduler)
     val diagnostics = mutableListOf<SessionDiagnostic>()
@@ -165,7 +170,7 @@ internal suspend fun TestScope.settingsFixture(initial: Bytes = selfPacket(), ge
     start.await()
     val signals = TestSignals(token(generation))
     val context = DeviceSettingsContext(token(generation), signals, backgroundScope, StandardTestDispatcher(testScheduler))
-    return SettingsFixture(radio, session, signals, context, SettingsService(session, context), clock, diagnostics)
+    return SettingsFixture(radio, session, signals, context, SettingsService(session, context, onDefaultScopeAdmission), clock, diagnostics)
 }
 
 internal class CheckedRequest<T>(private val request: Deferred<Result<T>>) {
@@ -202,17 +207,39 @@ internal suspend fun TestScope.reply(fixture: SettingsFixture, count: Int, expec
 
 internal fun okPacket() = packet(ResponseCode.OK)
 
-internal class DeviceRows : DevicePersisting {
+internal class DeviceRows : DevicePersisting, DeviceEditPersisting {
     val rows = mutableMapOf<UUID, DeviceDTO>()
     var fetchFailure: PersistenceStoreException? = null
     var saveFailure: PersistenceStoreException? = null
     var beforeSave: suspend () -> Unit = {}
+    private var revision = 0L
+    override suspend fun insertDeviceIfAbsent(dto: DeviceDTO): Boolean {
+        if (dto.id in rows) return false
+        saveDevice(dto.copy(isActive = false))
+        return true
+    }
+    override suspend fun activateDeviceIfCurrent(id: UUID, isCurrent: () -> Boolean): Boolean = unsupported()
+    override suspend fun fetchDeviceWriteSnapshot(id: UUID): DeviceWriteSnapshot? =
+        fetchDevice(id)?.let { DeviceWriteSnapshot(it, revision) }
+    override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+        beforeSave()
+        saveFailure?.let { throw it }
+        return expected.withAuthority {
+            if (!expected.isCurrent() || revision != expected.revision || rows[dto.id] != expected.device) false
+            else {
+                rows[dto.id] = dto
+                revision++
+                expected.onCommitted(dto)
+                true
+            }
+        }
+    }
     override suspend fun fetchDevice(id: UUID): DeviceDTO? { fetchFailure?.let { throw it }; return rows[id] }
     override suspend fun fetchDevice(radioId: RadioId): DeviceDTO? = rows.values.firstOrNull { it.radioId == radioId }
     override suspend fun fetchDevice(publicKey: Bytes): DeviceDTO? = rows.values.firstOrNull { it.publicKey == publicKey }
     override suspend fun fetchDevices(): SnapshotList<DeviceDTO> = rows.values.snapshot()
     override suspend fun fetchActiveDevice(): DeviceDTO? = rows.values.firstOrNull { it.isActive }
-    override suspend fun saveDevice(dto: DeviceDTO) { beforeSave(); saveFailure?.let { throw it }; rows[dto.id] = dto }
+    override suspend fun saveDevice(dto: DeviceDTO) { beforeSave(); saveFailure?.let { throw it }; rows[dto.id] = dto; revision++ }
     override suspend fun setActiveDevice(id: UUID): Unit = unsupported()
     override suspend fun updateDeviceLastContactSync(radioId: RadioId, timestamp: UInt): Unit = unsupported()
     override suspend fun addDeviceKnownRegion(radioId: RadioId, region: String): Unit = unsupported()

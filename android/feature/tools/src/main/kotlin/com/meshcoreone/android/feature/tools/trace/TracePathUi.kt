@@ -2,6 +2,7 @@
 // PortedFrom: MC1/Views/Tools/TracePath/TracePathListView.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Tools/TracePath/TraceResultsSectionView.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Tools/TracePath/SavePathRowView.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Tools/TracePath/ComparisonRowView.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.feature.tools.trace
 
 import androidx.compose.foundation.layout.Arrangement
@@ -51,6 +52,7 @@ import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import com.meshcoreone.android.core.l10n.generated.AppToolsStrings as T
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.model.TracePathRunDTO
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings
 import com.meshcoreone.android.core.maps.GeoPoint
 import com.meshcoreone.android.core.maps.MapAvailability
@@ -67,6 +69,9 @@ import com.meshcoreone.android.core.maps.boundingCamera
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CoroutineScope
 import java.text.NumberFormat
+import java.text.DateFormat
+import java.util.Date
+import kotlin.math.abs
 import com.meshcoreone.android.core.l10n.R as Strings
 
 @Composable
@@ -697,6 +702,8 @@ internal fun TraceResultCard(result: TraceResult?, state: TracePathState) {
                     Text("${batchRtt.averageMs} ms", style = MaterialTheme.typography.titleMedium)
                     Text("(${batchRtt.minMs} – ${batchRtt.maxMs})", style = MaterialTheme.typography.bodySmall)
                 }
+            } else if (result?.success == true && state.previousRun != null) {
+                TraceRttComparison(result.durationMs, checkNotNull(state.previousRun))
             } else if (result != null) {
                 Text(
                     if (result.success) "${result.durationMs} ms" else result.errorMessage.orEmpty(),
@@ -746,6 +753,45 @@ internal fun TraceResultCard(result: TraceResult?, state: TracePathState) {
             state.totalPathDistance?.let { Text("${"%.0f".format(it)} m") }
             if (state.isDistanceUsingFallback) Text(state.repeatersWithoutLocation.joinToString(), style = MaterialTheme.typography.bodySmall)
         }
+    }
+}
+
+@Composable
+private fun TraceRttComparison(currentMs: Long, previous: TracePathRunDTO) {
+    val locale = LocalConfiguration.current.locales[0]
+    val comparison = RttComparison.of(currentMs, previous.roundTripMs)
+    val percent = remember(locale, comparison.percentChange) {
+        NumberFormat.getPercentInstance(locale).apply {
+            minimumFractionDigits = 0
+            maximumFractionDigits = 0
+        }.format(abs(comparison.percentChange) / 100)
+    }
+    val date = remember(locale, previous.date) {
+        DateFormat.getDateInstance(DateFormat.MEDIUM, locale).format(Date.from(previous.date))
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(stringResource(C.contactsPathDetailRoundTrip), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("$currentMs ms", style = MaterialTheme.typography.titleMedium)
+            if (comparison.changed) {
+                val direction = stringResource(
+                    if (comparison.increased) C.contactsResultsComparisonIncreased else C.contactsResultsComparisonDecreased,
+                )
+                Text(
+                    "${if (comparison.increased) "\u25B2" else "\u25BC"} $percent",
+                    color = if (comparison.increased) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.clearAndSetSemantics { contentDescription = "$direction, $percent" },
+                )
+            }
+        }
+        Text(
+            stringResource(Strings.string.l10n_app_contacts_contacts_results_comparison, previous.roundTripMs, date),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

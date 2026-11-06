@@ -59,6 +59,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.Lifecycle
 import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.model.ContactDTO
@@ -91,6 +92,9 @@ internal fun NodesListScreen(
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
+    val userLocation by dependencies.locations.collectAsStateWithLifecycle(
+        initialValue = null, minActiveState = Lifecycle.State.RESUMED,
+    )
     val binding by remember(dependencies) { dependencies.session.connectionSnapshots() }
         .collectAsStateWithLifecycle(
             initialValue = NodesConnectionSnapshot(
@@ -120,8 +124,9 @@ internal fun NodesListScreen(
     LaunchedEffect(state.hasLoadedOnce) {
         if (state.hasLoadedOnce && segment == NodeSegment.CONTACTS && state.hasFavorites) segment = NodeSegment.FAVORITES
     }
-    val contacts = remember(state.contacts, state.pendingRemovalIds, state.inboundHopByKey, search, segment, sort) {
-        holder.filteredContacts(search, segment, sort, null)
+    val contacts = remember(state.contacts, state.pendingRemovalIds, state.inboundHopByKey, search, segment, sort, userLocation) {
+        val effectiveSort = if (sort == NodeSortOrder.DISTANCE && userLocation == null) NodeSortOrder.LAST_HEARD else sort
+        holder.filteredContacts(search, segment, effectiveSort, userLocation)
     }
 
     Column(modifier.fillMaxSize()) {

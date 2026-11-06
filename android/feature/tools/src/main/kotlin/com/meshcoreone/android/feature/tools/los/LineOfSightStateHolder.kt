@@ -38,6 +38,7 @@ class LineOfSightStateHolder(
     private val analysisContext: CoroutineContext = Dispatchers.Default,
     private val failureReporter: LineOfSightFailureReporter = LineOfSightFailureReporter.NONE,
     preselectedContact: ContactDTO? = null,
+    private val onPointAEdited: () -> Unit = {},
 ) {
     private val mutableState = MutableStateFlow(LineOfSightState())
     val state: StateFlow<LineOfSightState> = mutableState.asStateFlow()
@@ -54,7 +55,7 @@ class LineOfSightStateHolder(
 
     init {
         if (preselectedContact != null && preselectedContact.hasLocation) {
-            setPointA(Coordinate(preselectedContact.latitude, preselectedContact.longitude), preselectedContact)
+            assignPointA(Coordinate(preselectedContact.latitude, preselectedContact.longitude), preselectedContact)
         }
     }
 
@@ -135,6 +136,11 @@ class LineOfSightStateHolder(
     }
 
     fun setPointA(coordinate: Coordinate, contact: ContactDTO? = null) {
+        onPointAEdited()
+        assignPointA(coordinate, contact)
+    }
+
+    private fun assignPointA(coordinate: Coordinate, contact: ContactDTO?) {
         pointAElevationJob?.cancel()
         pointAElevationJob = null
         invalidateAnalysis()
@@ -195,6 +201,7 @@ class LineOfSightStateHolder(
     // region Clearing
 
     fun clear() {
+        onPointAEdited()
         pointAElevationJob?.cancel()
         pointBElevationJob?.cancel()
         analysisJob?.cancel()
@@ -219,6 +226,7 @@ class LineOfSightStateHolder(
     }
 
     fun clearPointA() {
+        onPointAEdited()
         pointAElevationJob?.cancel()
         pointAElevationJob = null
         mutate { it.copy(pointA = null, repeaterPoint = null) }

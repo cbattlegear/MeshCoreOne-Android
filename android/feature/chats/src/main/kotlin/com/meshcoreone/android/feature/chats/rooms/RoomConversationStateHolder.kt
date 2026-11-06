@@ -1,3 +1,4 @@
+// PortedFrom: MC1/Views/RemoteNodes/Rooms/RoomConversationView.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/RemoteNodes/Rooms/RoomConversationViewModel.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1Tests/ViewModels/RoomConversationViewModelOrderingTests.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.feature.chats.rooms
@@ -12,6 +13,10 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -53,6 +58,24 @@ class RoomConversationStateHolder(
     private var eventsJob: Job? = null
     private var reloadJob: Job? = null
     private var generation = 0L
+
+    suspend fun keepAliveWhileVisible() {
+        combine(dependencies.keepAlive, state) { source, current -> source to current.session }
+            .distinctUntilChanged { old, new ->
+                old.first === new.first && old.second.id == new.second.id &&
+                    old.second.radioId == new.second.radioId && old.second.publicKey == new.second.publicKey &&
+                    old.second.isConnected == new.second.isConnected && old.second.isRoom == new.second.isRoom
+            }
+            .collectLatest { (source, session) ->
+                if (!session.isConnected || !session.isRoom) return@collectLatest
+                val lease = source?.acquire(session) ?: return@collectLatest
+                try {
+                    awaitCancellation()
+                } finally {
+                    lease.close()
+                }
+            }
+    }
 
     fun start() {
         if (eventsJob != null) return

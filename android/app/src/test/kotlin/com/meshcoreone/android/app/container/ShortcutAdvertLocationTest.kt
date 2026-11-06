@@ -43,6 +43,8 @@ import kotlin.test.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
@@ -415,6 +417,53 @@ class ShortcutAdvertLocationTest : RoomProcessTest() {
             assertEquals(device.radioId, h.appState.currentRadioId)
             assertEquals(0, producing.permissionRequests)
         } finally { h.container.close() }
+    }
+
+    @Suppress("DEPRECATION")
+    @Test fun listFirstForegroundFixCannotStarveExplicitPhoneAdvertOrCancelItsTakeover() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Application>()
+        shadowOf(context).grantPermissions(Manifest.permission.ACCESS_COARSE_LOCATION)
+        val manager = assertNotNull(context.getSystemService(LocationManager::class.java))
+        shadowOf(manager).setProviderEnabled(LocationManager.FUSED_PROVIDER, true)
+        var prompts = 0
+        val producing = LocationManagerLocationProducing(context, LocationPermissionRequesting { prompts++ })
+        val preferences = Preferences()
+        val h = connected(this, AppAdvertLocation(preferences::read, producing, producing::refreshAuthorization,
+            currentLocation = { producing.currentLocation }))
+        val foreground = launch { producing.foregroundLocations().collect() }
+        try {
+            preferences.enable(share(h), GPSSource.PHONE)
+            testScheduler.runCurrent()
+            val late = shadowOf(manager).getLocationUpdateListeners(LocationManager.FUSED_PROVIDER).single()
+            assertNull(producing.currentLocation)
+            val start = h.links.radios.single().sent.size
+            val sending = async { AppShortcutRadio(h.container).sendAdvert(false) }
+            testScheduler.runCurrent()
+            assertFalse(sending.isCompleted, "Explicit PHONE preparation must wait for its fix, not fall back to empty cache")
+            val explicit = shadowOf(manager).getLocationUpdateListeners(LocationManager.FUSED_PROVIDER).single()
+            assertFalse(late === explicit)
+            assertFailsWith<LocationServiceError.RequestInProgress> { producing.requestLocation() }
+            foreground.cancel()
+            foreground.join()
+            assertFalse(sending.isCompleted)
+            assertEquals(explicit, shadowOf(manager).getLocationUpdateListeners(LocationManager.FUSED_PROVIDER).single())
+            late.onLocationChanged(Location(LocationManager.FUSED_PROVIDER).apply { latitude = 1.0; longitude = 2.0 })
+            assertNull(producing.currentLocation)
+            assertTrue(commands(h, start).isEmpty())
+            shadowOf(manager).simulateLocation(Location(LocationManager.FUSED_PROVIDER).apply {
+                latitude = 37.0
+                longitude = -122.0
+            })
+            sending.await()
+            assertEquals(listOf(0x0e, 1, 7), commands(h, start))
+            assertEquals(GeoCoordinate(37.0, -122.0), producing.currentLocation)
+            assertEquals(0, prompts)
+        } finally {
+            foreground.cancel()
+            producing.close()
+            h.container.close()
+            shadowOf(context).denyPermissions(Manifest.permission.ACCESS_COARSE_LOCATION)
+        }
     }
 
     @Test fun existingCoarseLocationManagerProducerRefreshesBeforeActualRadioAdvertWithoutPermissionRequest() = runTest {

@@ -62,6 +62,12 @@ fun interface ChatPrimerFactory {
     fun create(dependencies: ChatTimelinePrimer.Dependencies): ChatTimelinePrimer?
 }
 
+// AndroidOnly: WP-317 Bind every PairingFlow start to its actual fallback-discovery lifetime.
+interface PairingDiscoveryLifecycle {
+    fun begin(discoveryJob: Job, onSelectionCommitted: () -> Unit): Long?
+    fun end(generation: Long)
+}
+
 /** Everything [AppState] is assembled from. Grouped so tests build it with fakes. */
 class AppStateDependencies(
     val connection: AppConnectionPort,
@@ -92,6 +98,7 @@ class AppStateDependencies(
      */
     val closeChatRoute: () -> Unit = {},
     val themeService: com.meshcoreone.android.core.designsystem.ThemeService? = null,
+    val pairingDiscoveryLifecycle: PairingDiscoveryLifecycle? = null,
 )
 
 /**
@@ -171,6 +178,7 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
         disconnect = { reason -> disconnect(reason) },
         onFreshPairingCompleted = deps.onFreshPairingCompleted,
         isAppForeground = deps.isAppForeground,
+        discoveryLifecycle = deps.pairingDiscoveryLifecycle,
     )
 
     val isConfirmingSystemPairingSetup: Boolean get() = pairing.isConfirmingSystemPairingSetup
@@ -789,7 +797,8 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
     fun cancelSystemPairingSetup() = pairing.cancelSystemPairingSetup()
     fun handleSystemPairingSetupSheetDismissed() = pairing.handleSystemPairingSetupSheetDismissed()
     fun confirmSystemPairingSetup(): Job? = pairing.confirmSystemPairingSetup()
-    suspend fun startDeviceScanAndAwait() = pairing.startDeviceScanAndAwait()
+    suspend fun startDeviceScanAndAwait(onSelectionCommitted: () -> Unit = {}) =
+        pairing.startDeviceScanAndAwait(onSelectionCommitted)
     fun removeFailedPairingAndRetry(): Job? = pairing.removeFailedPairingAndRetry()
     suspend fun retryFailedPairingConnect() = pairing.retryFailedPairingConnect()
 

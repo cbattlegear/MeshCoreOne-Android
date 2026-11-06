@@ -19,6 +19,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -41,6 +42,7 @@ class PairingFlow(
     private val onFreshPairingCompleted: () -> Unit = {},
     private val freshPairingForegroundRetryDelay: Duration = 400.milliseconds,
     private val isAppForeground: () -> Boolean = { false },
+    private val discoveryLifecycle: PairingDiscoveryLifecycle? = null,
 ) {
     @Volatile var isConfirmingSystemPairingSetup: Boolean = false
         private set
@@ -52,9 +54,9 @@ class PairingFlow(
     private var freshPairingCompletion = 0L
 
     /** Returns true only after a fresh pairing completed; an existing live radio is not consent or success. */
-    suspend fun startDeviceScanAndAwait(): Boolean {
+    suspend fun startDeviceScanAndAwait(onSelectionCommitted: () -> Unit = {}): Boolean {
         val completionBefore = freshPairingCompletion
-        val scan = startDeviceScan()
+        val scan = startDeviceScan(onSelectionCommitted)
         try {
             scan.join()
             ui.state.first {
@@ -76,14 +78,19 @@ class PairingFlow(
     }
 
     /** Start device scan/pairing. Returns the flow's job so callers and tests can await completion. */
-    fun startDeviceScan(): Job {
+    fun startDeviceScan(onSelectionCommitted: () -> Unit = {}): Job {
         if (ui.pendingSystemPairingSetup != null || isConfirmingSystemPairingSetup) return scope.launch {}
         ui.hideDisconnectedPill()
         ui.failedPairingDeviceId = null
         ui.isBusy = true
         connection.isPairingFlowActive = true
         return scope.launch {
+            var discoveryGeneration: Long? = null
             try {
+                discoveryGeneration = discoveryLifecycle?.begin(
+                    checkNotNull(currentCoroutineContext()[Job]),
+                    onSelectionCommitted,
+                )
                 withPairingFlowErrorHandling {
                     val pending = connection.systemAccessoriesMissingDeviceRecord()
                     if (pending.isNotEmpty()) {
@@ -97,6 +104,7 @@ class PairingFlow(
                     completeFreshPairing()
                 }
             } finally {
+                discoveryGeneration?.let { discoveryLifecycle?.end(it) }
                 if (ui.pendingSystemPairingSetup == null && ui.queuedSystemPairingSetup == null &&
                     !ui.shouldCompleteFreshPairingOnForeground
                 ) {

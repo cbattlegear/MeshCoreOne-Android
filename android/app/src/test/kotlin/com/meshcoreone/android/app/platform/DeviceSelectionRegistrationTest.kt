@@ -865,6 +865,9 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             compose.waitForIdle()
             h.eventually("chosen radio rendered") { compose.onAllNodesWithText("Chosen radio").fetchSemanticsNodes().size == 1 }
             compose.onNodeWithText("Chosen radio").performClick()
+            h.eventually("selection ownership is released before the pairing continuation resumes") {
+                !service.isPresenting.value && !feature.ownsSelectionScan
+            }
             h.eventually("chosen radio connection entered", virtualBudgetMillis = 3_000) { h.links.links.size == 1 }
             assertFalse(service.isPresenting.value)
             compose.runOnUiThread { h.container.navigation.selectTab(AppTab.CHATS) }
@@ -1219,6 +1222,88 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             assertEquals(replacementId, h.manager.connectedDevice?.id)
             assertNull(endpoints.endpoint(firstId))
             assertEquals(BluetoothEndpoint(replacementId, replacementAddress, null), endpoints.endpoint(replacementId))
+        }
+    }
+
+    @Test fun directAppStateDiscoveryCancellationCannotSelectOrCancelReplacementAfterHeldWrite() = runTest {
+        val service = BluetoothScanPairingService()
+        val firstAddress = "C2:00:00:00:00:06"
+        val firstId = DeviceEndpointIdentity.deviceId(firstAddress)
+        val replacementAddress = "D2:00:00:00:00:07"
+        val replacementId = DeviceEndpointIdentity.deviceId(replacementAddress)
+        val endpoints = HeldKnownEndpointStore(firstId)
+        var starts = 0
+        var stops = 0
+        val scans = BleScanCoordinator(object : BleScanGateway {
+            override fun startScan(onDevice: (DiscoveredDevice) -> Unit, onFailure: (Throwable) -> Unit) {
+                starts++
+                if (starts == 1) onDevice(DiscoveredDevice(firstId, firstAddress, "Direct first radio", -40))
+                else onDevice(DiscoveredDevice(replacementId, replacementAddress, "Direct replacement radio", -41))
+            }
+
+            override fun stopScan() { stops++ }
+        })
+        withSettings(pairingService = service, scans = scans, knownEndpoints = endpoints) { h, _ ->
+            val fallback = requireNotNull(h.container.onboarding?.scanFallbackLifecycle)
+            val firstReady = CompletableDeferred<Unit>()
+            val firstJob = h.appState.startDeviceScan()
+            h.eventually("direct AppState discovery reaches the actual pairing service") {
+                service.isPresenting.value
+            }
+            val firstCollector = backgroundScope.launch {
+                fallback.discoveries().collect { devices ->
+                    if (devices.any { it.id == firstId }) firstReady.complete(Unit)
+                }
+            }
+            withTimeout(5_000) { firstReady.await() }
+            assertEquals(1, starts)
+            fallback.select(firstId)
+            withTimeout(5_000) { endpoints.firstWrite.await() }
+
+            val concurrentJob = h.appState.startDeviceScan()
+            concurrentJob.join()
+            assertTrue(firstJob.isActive)
+            assertTrue(service.isPresenting.value)
+            assertEquals(1, starts)
+
+            firstJob.cancelAndJoin()
+            firstCollector.cancelAndJoin()
+            h.eventually("direct discovery cancellation retires its scan") {
+                !service.isPresenting.value && stops == 1 && firstJob.isCompleted
+            }
+            assertNull(endpoints.endpoint(firstId))
+
+            val replacementReady = CompletableDeferred<Unit>()
+            val replacementJob = h.appState.startDeviceScan()
+            h.eventually("replacement AppState discovery reaches the pairing service") {
+                service.isPresenting.value
+            }
+            val replacementCollector = backgroundScope.launch {
+                fallback.discoveries().collect { devices ->
+                    if (devices.any { it.id == replacementId }) replacementReady.complete(Unit)
+                }
+            }
+            withTimeout(5_000) { replacementReady.await() }
+            assertEquals(2, starts)
+            assertTrue(service.isPresenting.value)
+            assertTrue(replacementJob.isActive)
+
+            endpoints.releaseFirstWrite.complete(Unit)
+            withTimeout(5_000) { endpoints.rolledBack.await() }
+            assertNull(endpoints.endpoint(firstId))
+            assertTrue(service.isPresenting.value)
+            assertTrue(h.links.links.isEmpty())
+
+            fallback.select(replacementId)
+            h.eventually("replacement selected through direct AppState discovery connects", virtualBudgetMillis = 3_000) {
+                h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY &&
+                    replacementJob.isCompleted
+            }
+            replacementCollector.cancelAndJoin()
+            assertEquals(replacementId, h.manager.connectedDevice?.id)
+            assertNull(endpoints.endpoint(firstId))
+            assertEquals(BluetoothEndpoint(replacementId, replacementAddress, null), endpoints.endpoint(replacementId))
+            assertFalse(service.isPresenting.value)
         }
     }
 

@@ -86,7 +86,6 @@ fun appSettingsOpener(context: Context): () -> Unit = {
 /** [OnboardingConnectionHost] over the process app state, pairing coordinator and runtime manager. */
 class AppStateOnboardingHost(
     private val container: AppContainer,
-    private val scanFallback: ScanFallbackPort? = null,
 ) : OnboardingConnectionHost {
     private val appState get() = container.appState
     override val currentState: DeviceConnectionState get() = container.connectionManager.connectionState
@@ -99,13 +98,8 @@ class AppStateOnboardingHost(
     override val isDemoDevice: Boolean get() = container.connectionManager.isSimulatorConnection
 
     override suspend fun startPairing(): com.meshcoreone.android.feature.onboarding.OnboardingConnectOutcome {
-        val generation = scanFallback?.beginDiscovery()
-        try {
-            val completed = appState.startDeviceScanAndAwait()
-            return OnboardingConnectMapping.afterPairing(currentState, ui.value, completed)
-        } finally {
-            if (generation != null) scanFallback?.endDiscovery(generation)
-        }
+        val completed = appState.startDeviceScanAndAwait()
+        return OnboardingConnectMapping.afterPairing(currentState, ui.value, completed)
     }
 
     override suspend fun retryConnect(deviceId: UUID) {
@@ -248,7 +242,7 @@ object AppOnboardingFactory {
                 )
             }
         }
-        val host = AppStateOnboardingHost(container, scanFallback)
+        val host = AppStateOnboardingHost(container)
         val permissions = AndroidOnboardingPermissionPort(
             platform.permissionFacts, platform.requests, scanFallback = service != null,
         )

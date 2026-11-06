@@ -52,10 +52,14 @@ class ScanFallbackPort(
     private var nextAttemptId = 0L
     private val endpointWriteLock = Mutex()
 
-    internal fun beginDiscovery(onSelectionCommitted: () -> Unit = {}): Long {
+    internal fun beginDiscovery(
+        discoveryJob: Job? = null,
+        onSelectionCommitted: () -> Unit = {},
+    ): Long? {
         val (generation, previousJobs) = synchronized(selectionLock) {
+            if (activeAttempt?.let { it.active && it.discoveryJob?.isActive == true } == true) return null
             val previousJobs = activeAttempt?.let(::retireAttempt)
-            val attempt = DiscoveryAttempt(++nextAttemptId, onSelectionCommitted = onSelectionCommitted)
+            val attempt = DiscoveryAttempt(++nextAttemptId, discoveryJob, onSelectionCommitted)
             activeAttempt = attempt
             attempt.generation to previousJobs
         }
@@ -72,11 +76,18 @@ class ScanFallbackPort(
     }
 
     override fun discoveries(): Flow<List<OnboardingScanDiscovery>> = channelFlow {
-        val attempt = synchronized(selectionLock) {
-            activeAttempt?.takeIf { it.active } ?: DiscoveryAttempt(++nextAttemptId).also { activeAttempt = it }
+        val (attempt, staleJobs) = synchronized(selectionLock) {
+            val current = activeAttempt
+            if (current != null && current.active && current.discoveryJob?.isActive != false) {
+                current to null
+            } else {
+                val staleJobs = current?.let(::retireAttempt)
+                DiscoveryAttempt(++nextAttemptId, null).also { activeAttempt = it } to staleJobs
+            }
         }
+        cancel(staleJobs)
         val scanJob = synchronized(selectionLock) {
-            if (activeAttempt !== attempt || !attempt.active) null
+            if (activeAttempt !== attempt || !attempt.active || attempt.discoveryJob?.isActive == false) null
             else {
                 attempt.scanCollectors++
                 attempt.scanJob ?: scope.launch(start = CoroutineStart.LAZY) {
@@ -148,7 +159,7 @@ class ScanFallbackPort(
 
     override fun select(id: UUID) {
         synchronized(selectionLock) {
-            val attempt = activeAttempt?.takeIf { it.active } ?: return
+            val attempt = activeAttempt?.takeIf { it.active && it.discoveryJob?.isActive != false } ?: return
             if (attempt.selectionJob?.isActive == true) return
             val endpoint = attempt.endpoints[id]
             if (endpoint == null) {
@@ -199,13 +210,12 @@ class ScanFallbackPort(
                             attempt.scanJob?.cancel()
                             activeAttempt = null
                             attempt.endpoints.remove(id)
+                            attempt.onSelectionCommitted()
                             service.select(id)
                             true
                         }
                     }
-                    if (selected) {
-                        attempt.onSelectionCommitted()
-                    } else {
+                    if (!selected) {
                         rollbackEndpoint(id, endpoint, previous, previousStability)
                         return
                     }
@@ -240,7 +250,9 @@ class ScanFallbackPort(
     }
 
     private fun isActive(attempt: DiscoveryAttempt): Boolean =
-        synchronized(selectionLock) { activeAttempt === attempt && attempt.active }
+        synchronized(selectionLock) {
+            activeAttempt === attempt && attempt.active && attempt.discoveryJob?.isActive != false
+        }
 
     private fun retireAttempt(attempt: DiscoveryAttempt): AttemptJobs {
         attempt.active = false
@@ -261,7 +273,7 @@ class ScanFallbackPort(
     }
 
     private fun resolveFailure(attempt: DiscoveryAttempt, failure: Throwable) {
-        if (activeAttempt !== attempt || !attempt.active) return
+        if (activeAttempt !== attempt || !attempt.active || attempt.discoveryJob?.isActive == false) return
         attempt.active = false
         activeAttempt = null
         service.fail(failure)
@@ -296,6 +308,7 @@ class ScanFallbackPort(
 
     private class DiscoveryAttempt(
         val generation: Long,
+        val discoveryJob: Job?,
         val onSelectionCommitted: () -> Unit = {},
         var active: Boolean = true,
         var selectionJob: Job? = null,

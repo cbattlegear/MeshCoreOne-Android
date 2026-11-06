@@ -130,6 +130,7 @@ class AppSettingsFeature private constructor(
     private var selectionRequestedForScan = false
     private var selectionScanQueued = false
     private var selectionScanOwned = false
+    internal val ownsSelectionScan: Boolean get() = selectionScanOwned
     internal var selectionScanJob: Job? = null
         private set
     private val selectionScanGate by lazy {
@@ -202,9 +203,7 @@ class AppSettingsFeature private constructor(
                         selectionScanOwned = platform.pairing.scanFallback != null
                         app.connectionUI.queuedSystemPairingSetup = null
                         val previous = selectionScanJob
-                        val scanLifecycle = platform.scanFallbackLifecycle
                         selectionScanJob = scope.launch {
-                            var discoveryGeneration: Long? = null
                             try {
                                 previous?.join()
                                 ensureActive()
@@ -215,12 +214,10 @@ class AppSettingsFeature private constructor(
                                     return@launch
                                 }
                                 container.connectionPort.stopBleScanning()
-                                discoveryGeneration = scanLifecycle?.beginDiscovery {
+                                app.startDeviceScanAndAwait {
                                     selectionScanOwned = false
                                 }
-                                app.startDeviceScanAndAwait()
                             } finally {
-                                discoveryGeneration?.let { scanLifecycle?.endDiscovery(it) }
                                 if (currentCoroutineContext()[Job] === selectionScanJob) selectionScanOwned = false
                             }
                         }

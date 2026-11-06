@@ -79,6 +79,17 @@ interrupted at that boundary can have an unknown outcome. Scheduling an
 eight-second callback is not a hard real-time guarantee or proof against ANRs.
 Native receiver timing and process-kill evidence remain separate gates.
 
+The foreground host also reads a status-only snapshot without the custody/storage
+lock while a complete read is pending. `recordsAvailable = false` is explicitly
+not an empty-record result: no copy/discard controls are exposed, and the localized
+storage notice describes unavailable/busy records and an unconfirmed pending
+save. A generation change cannot hide newly published loss/manual-open warnings
+behind a blocked database read. Closing this incomplete surface hides only that
+observed unavailable generation locally; it acknowledges no flags or unseen
+records, and a later complete snapshot can display the actual originals.
+Per-host reads are serialized with a cancellable mutex to avoid accumulating
+blocked IO readers on each status update.
+
 Recovery does not start an activity from the reply/mark-read broadcast: Android 12
 prohibits notification trampolines, and background-launch denial need not throw.
 Instead the content-free status tells the user to open MeshCore One themselves.
@@ -188,12 +199,16 @@ byte/oversize rejection, and deadline completion without cancellation, premature
 budget release or double finish. These are authored controls, not evidence that
 the Android receiver deadline has been exercised on a device.
 
-`NotificationRecoveryClipboardTest.kt` contains 13 authored App methods covering
+`NotificationRecoveryClipboardTest.kt` contains 14 authored App methods covering
 the actual clipboard and mounted dialog: exact sensitive copy, inaccessible
 clipboard, cancel/host destruction, single-record copy/discard, failed
 copy/discard, the process-only warning, deferral behind another dialog and the
 old-displayed-cancel/new-unseen-rejection interleaving, wrapped clipboard service
 death and propagation of unrelated programming failures.
+A mounted blocked-storage control gates an actual custody call, observes the
+independently published manual-open/loss status, invokes a stale unavailable
+dialog callback, requires no disposition/acknowledgment, and then releases storage
+to require both actual originals.
 
 **Zero methods have been executed for this draft.** These counts come from static
 source inspection, not runner discovery. A fresh store instance is not an
@@ -207,6 +222,8 @@ which methods actually execute.
 That 25-method count describes the discovery-fix commit; the off-main follow-up
 adds four receiver declarations, for 29 receiver and 13 App controls, still zero
 executed.
+The independent-status follow-up adds one mounted App declaration, for 29 receiver
+and 14 App controls; none have executed.
 
 Actual allowed static checks:
 

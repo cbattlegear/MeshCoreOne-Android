@@ -65,6 +65,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import com.meshcoreone.android.platform.notifications.messaging.NotificationActionRecovery
 import com.meshcoreone.android.platform.notifications.messaging.NotificationRecoverySnapshot
 import com.meshcoreone.android.platform.notifications.R as NotificationStrings
@@ -290,20 +292,32 @@ internal fun NotificationActionRecoveryDialog(blockedByOtherDialog: Boolean = fa
     val context = LocalContext.current
     val sequence by NotificationActionRecovery.changes.collectAsState()
     var dismissedSequence by remember { mutableStateOf<Long?>(null) }
+    var dismissedUnavailableSequence by remember { mutableStateOf<Long?>(null) }
+    val reader = remember { Mutex() }
     val snapshot by produceState<NotificationRecoverySnapshot?>(null, sequence) {
-        value = withContext(Dispatchers.IO) { NotificationActionRecovery.load(context.applicationContext) }
+        value = reader.withLock {
+            withContext(Dispatchers.IO) { NotificationActionRecovery.load(context.applicationContext) }
+        }
     }
-    val recovery = snapshot?.takeIf { it.version == sequence } ?: return
+    val recovery = snapshot?.takeIf { it.version == sequence } ?: NotificationActionRecovery.statusSnapshot()
     val item = recovery.items.firstOrNull()
-    if (item == null && recovery.storageFailure == null && !recovery.notRetained && !recovery.manualOpenRequired) return
+    if (recovery.recordsAvailable && item == null && recovery.storageFailure == null &&
+        !recovery.notRetained && !recovery.manualOpenRequired
+    ) return
     if (dismissedSequence == sequence) return
+    if (!recovery.recordsAvailable && dismissedUnavailableSequence == recovery.version) return
     var busy by remember(item?.entry?.id) { mutableStateOf(false) }
     var error by remember(item?.entry?.id) { mutableStateOf<Int?>(null) }
     val scope = rememberCoroutineScope()
     val close = {
         if (!busy) {
-            NotificationActionRecovery.acknowledgeFailure(recovery.version)?.let { acknowledgedVersion ->
-                dismissedSequence = acknowledgedVersion
+            if (!recovery.recordsAvailable) {
+                // Closing an incomplete read must not acknowledge unseen records or status.
+                dismissedUnavailableSequence = recovery.version
+            } else {
+                NotificationActionRecovery.acknowledgeFailure(recovery.version)?.let { acknowledgedVersion ->
+                    dismissedSequence = acknowledgedVersion
+                }
             }
         }
     }
@@ -314,7 +328,7 @@ internal fun NotificationActionRecoveryDialog(blockedByOtherDialog: Boolean = fa
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 if (recovery.notRetained) Text(stringResource(NotificationStrings.string.notification_action_recovery_not_retained))
-                if (recovery.storageFailure != null) {
+                if (!recovery.recordsAvailable || recovery.storageFailure != null) {
                     Text(stringResource(NotificationStrings.string.notification_action_recovery_storage_unavailable))
                 }
                 if (recovery.manualOpenRequired) {

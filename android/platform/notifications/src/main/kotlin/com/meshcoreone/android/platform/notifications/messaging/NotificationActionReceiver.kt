@@ -427,6 +427,7 @@ class NotificationRecoverySnapshot(
     val storageFailure: NotificationRecoveryFailure?,
     val notRetained: Boolean,
     val manualOpenRequired: Boolean,
+    val recordsAvailable: Boolean = true,
 )
 
 enum class NotificationRecoveryRetention { DURABLE, PROCESS_ONLY, NOT_RETAINED }
@@ -443,6 +444,13 @@ object NotificationActionRecovery {
     private val updates = MutableStateFlow(0L)
     val changes: StateFlow<Long> = updates.asStateFlow()
     private val logger = Logger.getLogger("com.mc1.NotificationRecovery")
+
+    /** Status only: an empty item list here never asserts that storage contains no drafts. */
+    fun statusSnapshot(): NotificationRecoverySnapshot = synchronized(statusLock) {
+        NotificationRecoverySnapshot(
+            updates.value, emptyList(), null, lost, manualOpenRequired, recordsAvailable = false,
+        )
+    }
 
     fun retain(context: Context, response: NotificationResponse): NotificationRecoveryRetention = synchronized(lock) {
         val retained = when (val result = NotificationActionRecoveryStore(context).retain(response)) {
@@ -516,7 +524,7 @@ object NotificationActionRecovery {
         updates.value
     }
 
-    internal fun handoffNotRetained() = synchronized(statusLock) {
+    fun handoffNotRetained() = synchronized(statusLock) {
         lost = true
         logger.severe("Rejected notification action exceeded bounded recovery handoff; input not retained")
         refresh()

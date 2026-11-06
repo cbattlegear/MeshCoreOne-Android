@@ -29,6 +29,9 @@ import com.meshcoreone.android.platform.notifications.messaging.NotificationReco
 import com.meshcoreone.android.platform.notifications.messaging.RejectedNotificationAction
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -266,6 +269,53 @@ class NotificationRecoveryClipboardTest {
         compose.onNodeWithText(text(NotificationStrings.string.notification_action_recovery_saved)).assertDoesNotExist()
         compose.onNodeWithText(text(AppLocalizableStrings.commonCancel)).performClick()
         assertEquals("process only", NotificationActionRecovery.load(context).items.single().entry.response.userText)
+    }
+
+    @Test
+    fun blockedCustodyStillShowsNewFailureWithoutAcknowledgingUnseenRecords() {
+        val original = save(40, "older saved original")
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        context = object : ContextWrapper(context) {
+            override fun getApplicationContext(): Context = this
+            override fun getNoBackupFilesDir(): File {
+                entered.countDown()
+                check(release.await(10, TimeUnit.SECONDS)) { "Storage gate was not released" }
+                return super.getNoBackupFilesDir()
+            }
+        }
+        val custody = CompletableFuture.supplyAsync {
+            NotificationActionRecovery.retain(context, response(41, "new pending original"))
+        }
+        try {
+            assertTrue(entered.await(5, TimeUnit.SECONDS))
+            NotificationActionRecovery.requireManualOpen()
+            mount()
+            awaitText(text(NotificationStrings.string.notification_action_recovery_storage_unavailable))
+            awaitText(text(NotificationStrings.string.notification_action_recovery_launch_failed))
+            compose.onNodeWithText("older saved original").assertDoesNotExist()
+            val oldCancel = requireNotNull(
+                compose.onNodeWithText(text(AppLocalizableStrings.commonCancel))
+                    .fetchSemanticsNode().config[SemanticsActions.OnClick].action,
+            )
+            compose.runOnUiThread {
+                // Queue overflow/status publication must not acquire the blocked custody lock.
+                NotificationActionRecovery.handoffNotRetained()
+                assertTrue(oldCancel())
+            }
+            awaitText(text(NotificationStrings.string.notification_action_recovery_not_retained))
+            assertFalse(NotificationActionRecovery.statusSnapshot().recordsAvailable)
+            assertTrue(NotificationActionRecovery.statusSnapshot().notRetained)
+            compose.onNodeWithText(text(AppChatsStrings.chatsMessageActionDelete)).assertDoesNotExist()
+            compose.onNodeWithText(text(AppLocalizableStrings.commonCancel)).performClick()
+            assertTrue(NotificationActionRecovery.statusSnapshot().notRetained)
+        } finally {
+            release.countDown()
+            assertEquals(NotificationRecoveryRetention.DURABLE, custody.get(5, TimeUnit.SECONDS))
+        }
+        awaitText("older saved original")
+        assertEquals(listOf(original.id), entries().take(1).map { it.id })
+        assertEquals(2, entries().size)
     }
 
     private fun mount() {

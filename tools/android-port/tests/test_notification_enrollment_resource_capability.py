@@ -95,6 +95,8 @@ class NotificationEnrollmentResourceCapabilityTests(unittest.TestCase):
             ["git", "-C", str(REPO), "show", f"{BASE}:docs/android/automation-policy.json"],
         ))
         current = json.loads((REPO / "docs/android/automation-policy.json").read_text(encoding="utf-8"))
+        action = current["reservation_policy"]["capabilities"].pop()
+        self.assertEqual(action["id"], "reviewed-support-notification-action-recovery-copy")
         extension = current["reservation_policy"]["capabilities"].pop()
         self.assertEqual(extension["id"], "reviewed-support-simulator-preference-recovery-copy")
         added = current["reservation_policy"]["capabilities"].pop()

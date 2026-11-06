@@ -281,6 +281,17 @@ class NotificationActionReceiverCapacityTest {
     }
 
     @Test
+    fun rejectedMarkReadAlsoRequiresManualOpeningWithoutAnActivityTrampoline() {
+        fillQueue()
+        NotificationActionReceiver().onReceive(context, intent(94, NotificationAction.MARK_READ))
+        val snapshot = NotificationActionRecovery.load(context)
+        assertTrue(snapshot.manualOpenRequired)
+        assertEquals(response(94, NotificationAction.MARK_READ), snapshot.items.single().entry.response)
+        assertTrue(snapshot.items.single().persistent)
+        assertTrue(startedActivities.isEmpty())
+    }
+
+    @Test
     fun corruptExistingVersionIsNotRecreatedOrReportedAsEmpty() {
         val file = File(context.noBackupFilesDir, "notification-action-recovery.sqlite")
         SQLiteDatabase.openOrCreateDatabase(file, null).use {
@@ -300,6 +311,25 @@ class NotificationActionReceiverCapacityTest {
                 assertTrue(row.moveToFirst())
                 assertEquals(17, row.getInt(0))
             }
+        }
+
+        @Test
+        fun corruptDatabaseBytesAreNotDeletedOrRecreatedByTheDefaultSqliteErrorHandler() {
+            val file = File(context.noBackupFilesDir, "notification-action-recovery.sqlite")
+            val original = ByteArray(4096) { index -> (index % 127 + 1).toByte() }
+            file.writeBytes(original)
+            val store = NotificationActionRecoveryStore(context)
+            assertTrue(store.read() is NotificationRecoveryRead.Failed)
+            assertTrue(file.exists())
+            org.junit.Assert.assertArrayEquals(original, file.readBytes())
+            assertEquals(
+                NotificationRecoveryRetention.PROCESS_ONLY,
+                NotificationActionRecovery.retain(context, response(93, NotificationAction.REPLY, "keep outside corrupt store")),
+            )
+            org.junit.Assert.assertArrayEquals(original, file.readBytes())
+            val snapshot = NotificationActionRecovery.load(context)
+            assertEquals("keep outside corrupt store", snapshot.items.single().entry.response.userText)
+            assertFalse(snapshot.items.single().persistent)
         }
     }
 

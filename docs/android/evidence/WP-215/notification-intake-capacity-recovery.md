@@ -44,6 +44,9 @@ payload/text per record and 1 MiB total. Original text is stored as UTF-16 code-
 bytes rather than normalized by a text encoder. SQLite page growth is capped at
 1,024 pages; page size and journal overhead are not conflated with the logical
 1 MiB content budget. No private text or exception message is logged.
+Both SQLite opening paths install a non-destructive corruption handler rather
+than Android's default handler, which can delete the corrupt database. A corrupt
+file is a typed unavailable-storage result, not an empty replacement store.
 
 If durable storage is full or unavailable, a separate process-memory fallback
 holds at most 32 records and 1 MiB, with the same per-record limit and no eviction.
@@ -139,7 +142,7 @@ translations or complete-locale UI acceptance.
 
 ## Authored controls, not execution evidence
 
-`NotificationActionReceiverCapacityTest.kt` contains 23 authored methods using the
+`NotificationActionReceiverCapacityTest.kt` contains 25 authored methods using the
 real receiver, RemoteInput, dispatcher and private SQLite adapter. They cover
 queue-full reply and mark-read, unchanged accepted normalization/FIFO, blank
 input, exact code-unit reopening, count/byte/multibyte limits, bounded fallback
@@ -149,6 +152,9 @@ direct/room target round trips, private-directory denial, duplicate-ID rollback,
 and stale-snapshot acknowledgment of newer retained responses or failures. The
 real receiver control captures all attempted activity starts and requires none
 for rejected-action recovery while original private custody remains available.
+Separate reply and mark-read controls assert this boundary. A corrupt-byte
+fixture asserts the database file is preserved and new text uses process-only
+fallback rather than silent recreation.
 
 `NotificationRecoveryClipboardTest.kt` contains 13 authored App methods covering
 the actual clipboard and mounted dialog: exact sensitive copy, inaccessible

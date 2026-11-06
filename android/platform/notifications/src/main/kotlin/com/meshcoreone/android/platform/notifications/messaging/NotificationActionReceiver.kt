@@ -8,6 +8,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.database.sqlite.SQLiteDatabase
+import android.database.sqlite.SQLiteDatabaseCorruptException
 import android.database.sqlite.SQLiteException
 import android.widget.Toast
 import com.meshcoreone.android.core.contracts.notifications.NotificationAction
@@ -237,9 +238,9 @@ class NotificationActionRecoveryStore(private val context: Context) {
         val existed = file.exists()
         if (!existed && !create) return null
         val database = if (existed) {
-            SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READWRITE)
+            SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READWRITE, preserveCorruption)
         } else {
-            SQLiteDatabase.openOrCreateDatabase(file, null)
+            SQLiteDatabase.openOrCreateDatabase(file.path, null, preserveCorruption)
         }
         try {
             if (!existed) {
@@ -275,6 +276,9 @@ class NotificationActionRecoveryStore(private val context: Context) {
         internal const val MAX_ENTRY_BYTES = 128 * 1024L
         internal const val MAX_TOTAL_BYTES = 1024 * 1024L
         private val lock = Any()
+        private val preserveCorruption = android.database.DatabaseErrorHandler {
+            throw SQLiteDatabaseCorruptException("Notification recovery storage is corrupt; original bytes preserved")
+        }
 
         internal fun isRecoverable(response: NotificationResponse): Boolean = when (response.action) {
             NotificationAction.REPLY -> !response.userText.isNullOrBlank()

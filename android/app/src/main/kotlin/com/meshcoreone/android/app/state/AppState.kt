@@ -115,6 +115,15 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
 
     private val lock = Any()
 
+    init {
+        batteryMonitor.withCurrentServices = { source, publish ->
+            synchronized(lock) {
+                if (services?.batteryServices !== source) throw CancellationException("Battery source has retired")
+                publish()
+            }
+        }
+    }
+
     // region Observable counters and references
 
     private val servicesVersionFlow = MutableStateFlow(0)

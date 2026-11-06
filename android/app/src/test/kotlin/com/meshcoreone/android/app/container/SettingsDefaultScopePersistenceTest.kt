@@ -961,42 +961,34 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
         }
     }
 
-    @Test fun disconnectDuringBadgeAwaitCannotReinstallNotificationsOrBatteryMonitoring() = runTest {
+    @Test fun disconnectAfterBadgeAwaitCannotReinstallNotificationsOrBatteryMonitoring() = runTest {
         val configured = mutableListOf<com.meshcoreone.android.core.contracts.domain.SessionToken>()
-        val entered = CompletableDeferred<Unit>()
-        val release = CompletableDeferred<Unit>()
-        var armed = false
-        val recorded = RecordingDelivery()
-        val delivery = object : com.meshcoreone.android.core.contracts.notifications.NotificationDeliveryPort by recorded {
-            override suspend fun setBadgeCount(count: Long) {
-                if (armed) {
-                    armed = false
-                    entered.complete(Unit)
-                    release.await()
-                }
-                recorded.setBadgeCount(count)
-            }
-        }
         val platform = object : com.meshcoreone.android.app.state.AppStatePlatform {
             override fun configureNotificationNavigation(
                 session: com.meshcoreone.android.app.state.AppSession, connectedDevice: () -> DeviceDTO?,
             ) { configured += session.token }
         }
-        try {
-            withSettings(platform = platform, notificationDelivery = delivery) { h, _, _, _ ->
-                val notifications = configured.size
-                armed = true
-                val wiring = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) {
+        withSettings(platform = platform) { h, _, _, _ ->
+            val notifications = configured.size
+            val reached = java.util.concurrent.CountDownLatch(1)
+            val resume = java.util.concurrent.CountDownLatch(1)
+            h.appState.beforeWiringInstallationForTesting = { installation ->
+                if (installation == com.meshcoreone.android.app.state.AppState.WiringInstallation.NOTIFICATIONS) {
+                    reached.countDown()
+                    assertTrue(resume.await(10, java.util.concurrent.TimeUnit.SECONDS))
+                }
+            }
+            try {
+                val wiring = backgroundScope.async(kotlinx.coroutines.Dispatchers.Default) {
                     h.appState.wireServicesIfConnected()
                 }
-                h.eventually("the real badge delivery is held before the wire can continue") { entered.isCompleted }
+                h.eventually("the real badge has completed but notification installation is held") { reached.count == 0L }
                 assertFalse(wiring.isCompleted)
-                val disconnect = backgroundScope.async { h.manager.disconnect() }
-                h.eventually("the held badge belongs to an actually retired graph") { h.sessions.current == null }
-                release.complete(Unit)
-                h.eventually("retired badge waiter and actual disconnect settle") { wiring.isCompleted && disconnect.isCompleted }
+                h.manager.disconnect()
+                assertNull(h.sessions.current)
+                resume.countDown()
+                h.eventually("retired post-badge continuation settles") { wiring.isCompleted }
                 wiring.await()
-                disconnect.await()
                 h.settle()
                 assertEquals(notifications, configured.size)
                 assertEquals(0, h.appState.activeSessionJobCount)
@@ -1004,8 +996,11 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
                 assertFalse(h.appState.batteryMonitor.isBootstrapActive)
                 assertFalse(h.appState.batteryMonitor.isRefreshLoopActive)
                 assertFalse(h.appState.hasSettingsEventsJob)
+            } finally {
+                h.appState.beforeWiringInstallationForTesting = null
+                resume.countDown()
             }
-        } finally { release.complete(Unit) }
+        }
     }
 
     @Test fun checkedOldWiringCannotReplaceAnAlreadyWiredSuccessorsConsumersOrBattery() = runTest {
@@ -1039,8 +1034,9 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
                     }
                     h.eventually("A passes the check before its $stage installation") { reached.count == 0L }
                     h.manager.disconnect()
+                    val configure = h.links.configureRadio
                     h.links.configureRadio = { firmware ->
-                        radio.configure(firmware)
+                        configure(firmware)
                         val respond = firmware.respond
                         firmware.respond = { command ->
                             if (command[0] == 0x14.toUByte()) {
@@ -1098,6 +1094,164 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
                 } finally {
                     h.appState.beforeWiringInstallationForTesting = null
                     resume.countDown()
+                }
+            }
+        }
+        assertEquals(2, completed)
+    }
+
+    @Test fun anOldReturnedBatteryReadCannotPublishThroughTheSuccessorsCallbackOrClearItsValue() = runTest {
+        var completed = 0
+        for (operation in listOf("bootstrap", "fetch", "missed", "bootstrap-failure", "fetch-failure")) {
+            val updates = java.util.concurrent.CopyOnWriteArrayList<Long>()
+            val platform = object : com.meshcoreone.android.app.state.AppStatePlatform {
+                override suspend fun onBatteryChanged(battery: com.meshcoreone.android.core.protocol.model.BatteryInfo) {
+                    updates += battery.level
+                }
+            }
+            val main = CoroutineScope(backgroundScope.coroutineContext + kotlinx.coroutines.Dispatchers.Default)
+            withSettings(platform = platform, mainScope = main) { h, _, _, _ ->
+                val old = assertNotNull(h.sessions.current)
+                val device = assertNotNull(h.manager.connectedDevice)
+                val reached = java.util.concurrent.CountDownLatch(1)
+                val resume = java.util.concurrent.CountDownLatch(1)
+                val calls = java.util.concurrent.atomic.AtomicInteger()
+                val monitor = h.appState.batteryMonitor
+                h.eventually("the original battery bootstrap is complete before arming the $operation read") {
+                    monitor.isRefreshLoopActive && monitor.deviceBattery?.level == 3_700L
+                }
+                if (operation.endsWith("-failure")) {
+                    val firmware = h.links.radios.last()
+                    val respond = firmware.respond
+                    firmware.respond = { command ->
+                        if (command[0] == 0x14.toUByte()) listOf(Bytes.of(1, 2)) else respond(command)
+                    }
+                }
+                monitor.afterBatteryReadForTesting = { source ->
+                    if (source === old.batteryServices && calls.incrementAndGet() == 1) {
+                        reached.countDown()
+                        assertTrue(resume.await(10, java.util.concurrent.TimeUnit.SECONDS))
+                    }
+                }
+                try {
+                    val read: Job = when (operation) {
+                        "bootstrap", "bootstrap-failure" -> monitor.start(old.batteryServices, device)
+                        "fetch", "fetch-failure" -> backgroundScope.async(kotlinx.coroutines.Dispatchers.Default) {
+                            monitor.fetchDeviceBattery(old.batteryServices, device)
+                        }
+                        else -> backgroundScope.async(kotlinx.coroutines.Dispatchers.Default) {
+                            monitor.checkMissedBatteryThreshold(device, old.batteryServices)
+                        }
+                    }
+                    val outcome = CompletableDeferred<Throwable?>()
+                    read.invokeOnCompletion { outcome.complete(it) }
+                    h.eventually("A's $operation read returned before publication") { reached.count == 0L }
+                    h.manager.disconnect()
+                    val configure = h.links.configureRadio
+                    h.links.configureRadio = { firmware ->
+                        configure(firmware)
+                        val respond = firmware.respond
+                        firmware.respond = { command ->
+                            if (command[0] == 0x14.toUByte()) listOf(Bytes.of(0x0c, 0xa0, 0x0f))
+                            else respond(command)
+                        }
+                    }
+                    h.manager.connect(h.target())
+                    h.eventually("B owns the distinct battery and its actual platform callback") {
+                        h.appState.canRunSettingsStartupReads && h.sessions.current?.let { it !== old } == true &&
+                            monitor.deviceBattery?.level == 4_000L && updates.contains(4_000L)
+                    }
+                    val current = assertNotNull(h.sessions.current)
+                    val updateStart = updates.size
+                    resume.countDown()
+                    h.eventually("the returned retired read is rejected at publication") { outcome.isCompleted }
+                    assertTrue(outcome.await() is kotlinx.coroutines.CancellationException)
+                    h.settle()
+                    assertEquals(current.token, h.sessions.current?.token)
+                    assertEquals(4_000L, monitor.deviceBattery?.level)
+                    assertTrue(updates.drop(updateStart).all { it == 4_000L }, "A must not appear through B's callback")
+                    assertFailsWith<kotlinx.coroutines.CancellationException> {
+                        monitor.startRefreshLoop(old.batteryServices, device)
+                    }
+                    assertTrue(monitor.isRefreshLoopActive)
+                    completed++
+                } finally {
+                    monitor.afterBatteryReadForTesting = null
+                    resume.countDown()
+                }
+            }
+        }
+        assertEquals(5, completed)
+    }
+
+    @Test fun foregroundBatteryReadCannotPublishOrRestartAnOldSourceAfterReplacement() = runTest {
+        var completed = 0
+        for (failRead in listOf(false, true)) {
+            val updates = java.util.concurrent.CopyOnWriteArrayList<Long>()
+            val platform = object : com.meshcoreone.android.app.state.AppStatePlatform {
+                override suspend fun onBatteryChanged(battery: com.meshcoreone.android.core.protocol.model.BatteryInfo) {
+                    updates += battery.level
+                }
+            }
+            withSettings(platform = platform) { h, _, _, _ ->
+                val old = assertNotNull(h.sessions.current)
+                val monitor = h.appState.batteryMonitor
+                h.eventually("initial battery work completes before the actual foreground read") {
+                    monitor.isRefreshLoopActive && monitor.deviceBattery?.level == 3_700L
+                }
+                if (failRead) {
+                    val firmware = h.links.radios.last()
+                    val respond = firmware.respond
+                    firmware.respond = { command ->
+                        if (command[0] == 0x14.toUByte()) listOf(Bytes.of(1, 2)) else respond(command)
+                    }
+                }
+                val reached = CompletableDeferred<Unit>()
+                val resume = CompletableDeferred<Unit>()
+                monitor.afterBatteryReadForTesting = { source ->
+                    if (source === old.batteryServices && !reached.isCompleted) {
+                        reached.complete(Unit)
+                        resume.await()
+                    }
+                }
+                try {
+                    val foreground = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) {
+                        h.appState.handleReturnToForeground()
+                    }
+                    h.eventually("the foreground continuation awaits A's completed read or ordinary failure") {
+                        reached.isCompleted
+                    }
+                    h.manager.disconnect()
+                    assertFalse(foreground.isCompleted, "Stopping the battery monitor does not own the foreground job")
+                    val configure = h.links.configureRadio
+                    h.links.configureRadio = { firmware ->
+                        configure(firmware)
+                        val respond = firmware.respond
+                        firmware.respond = { command ->
+                            if (command[0] == 0x14.toUByte()) listOf(Bytes.of(0x0c, 0xa0, 0x0f))
+                            else respond(command)
+                        }
+                    }
+                    h.manager.connect(h.target())
+                    h.eventually("B owns a ready graph, actual battery callback and refresh loop") {
+                        h.appState.canRunSettingsStartupReads && h.sessions.current?.let { it !== old } == true &&
+                            monitor.deviceBattery?.level == 4_000L && updates.contains(4_000L) && monitor.isRefreshLoopActive
+                    }
+                    val current = assertNotNull(h.sessions.current)
+                    val updateStart = updates.size
+                    resume.complete(Unit)
+                    h.eventually("retired foreground publication or restart is refused") { foreground.isCompleted }
+                    assertFailsWith<kotlinx.coroutines.CancellationException> { foreground.await() }
+                    h.settle()
+                    assertEquals(current.token, h.sessions.current?.token)
+                    assertEquals(4_000L, monitor.deviceBattery?.level)
+                    assertTrue(updates.drop(updateStart).all { it == 4_000L })
+                    assertTrue(monitor.isRefreshLoopActive)
+                    assertEquals(4, h.appState.activeSessionJobCount)
+                    completed++
+                } finally {
+                    monitor.afterBatteryReadForTesting = null
+                    resume.complete(Unit)
                 }
             }
         }
@@ -1955,12 +2109,12 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
         exposeDependencies: (SettingsFeatureDependencies) -> Unit = {},
         firmwareVersion: UByte = 11u,
         platform: com.meshcoreone.android.app.state.AppStatePlatform = com.meshcoreone.android.app.state.AppStatePlatform.NONE,
-        notificationDelivery: com.meshcoreone.android.core.contracts.notifications.NotificationDeliveryPort? = null,
+        mainScope: CoroutineScope? = null,
         action: suspend (ContainerHarness, DefaultFloodScopeStateHolder, MutableList<Throwable>, ScopeRadio) -> Unit,
     ) {
         val h = ContainerHarness(
             this, store, persistenceOverride = persistence, platform = platform,
-            notificationDeliveryOverride = notificationDelivery,
+            mainScope = mainScope ?: backgroundScope,
         )
         val radio = ScopeRadio().also { it.firmwareVersion = firmwareVersion }
         var holder: DefaultFloodScopeStateHolder? = null

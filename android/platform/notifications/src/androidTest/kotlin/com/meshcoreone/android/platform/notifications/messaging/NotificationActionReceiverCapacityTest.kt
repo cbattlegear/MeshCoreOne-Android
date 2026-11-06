@@ -352,7 +352,7 @@ class NotificationActionReceiverCapacityTest {
                 it.endTransaction()
             }
             assertEquals(0, it.version)
-            it.rawQuery("SELECT COUNT(*) FROM sqlite_master", null).use { row ->
+            it.rawQuery("SELECT COUNT(*) FROM sqlite_master WHERE name != 'android_metadata'", null).use { row ->
                 assertTrue(row.moveToFirst())
                 assertEquals(0, row.getInt(0))
             }
@@ -375,6 +375,34 @@ class NotificationActionReceiverCapacityTest {
         assertTrue(entries().isEmpty())
         SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY).use {
             assertEquals(1, it.version)
+        }
+    }
+
+    @Test
+    fun emptyUnknownVersionZeroTableIsNotBootstrapState() {
+        val file = File(context.noBackupFilesDir, "notification-action-recovery.sqlite")
+        SQLiteDatabase.openOrCreateDatabase(file, null).use {
+            it.execSQL("CREATE TABLE unknown_empty (value TEXT)")
+        }
+        val store = NotificationActionRecoveryStore(context)
+        assertEquals(
+            NotificationRecoveryFailure.INVALID_RECORD,
+            (store.read() as NotificationRecoveryRead.Failed).reason,
+        )
+        assertEquals(
+            NotificationRecoveryFailure.INVALID_RECORD,
+            (store.retain(response(97, NotificationAction.MARK_READ)) as NotificationRecoveryWrite.Failed).reason,
+        )
+        SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY).use {
+            assertEquals(0, it.version)
+            it.rawQuery("SELECT COUNT(*) FROM sqlite_master WHERE name = 'unknown_empty'", null).use { row ->
+                assertTrue(row.moveToFirst())
+                assertEquals(1, row.getInt(0))
+            }
+            it.rawQuery("SELECT COUNT(*) FROM sqlite_master WHERE name = 'drafts'", null).use { row ->
+                assertTrue(row.moveToFirst())
+                assertEquals(0, row.getInt(0))
+            }
         }
     }
 

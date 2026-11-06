@@ -361,7 +361,14 @@ class NotificationActionRecoveryStore(private val context: Context) {
             if (database.version == 0) {
                 database.beginTransaction()
                 try {
-                    database.rawQuery("SELECT COUNT(*) FROM sqlite_master", null).use {
+                    if (database.version != 0) throw InvalidRecoveryRecord()
+                    // Android creates its locale metadata even before our first schema transaction.
+                    database.rawQuery(
+                        "SELECT COUNT(*) FROM sqlite_master WHERE NOT " +
+                            "(type = 'table' AND name = 'android_metadata' AND " +
+                            "tbl_name = 'android_metadata' AND sql = 'CREATE TABLE android_metadata (locale TEXT)')",
+                        null,
+                    ).use {
                         if (!it.moveToFirst() || it.getLong(0) != 0L) throw InvalidRecoveryRecord()
                     }
                     database.execSQL(

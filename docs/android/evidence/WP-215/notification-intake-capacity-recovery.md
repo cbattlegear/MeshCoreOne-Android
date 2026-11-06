@@ -51,7 +51,9 @@ than Android's default handler, which can delete the corrupt database. A corrupt
 file is a typed unavailable-storage result, not an empty replacement store.
 An interrupted first schema transaction can leave an empty version-zero file.
 Both preliminary read and write openings retry initialization only when a
-transaction observes version zero with no `sqlite_master` objects at all.
+transaction observes version zero with no schema objects other than Android's
+exact platform-defined `android_metadata` locale table (automatically created
+before the app schema transaction).
 Unknown/populated schemas and nonzero unsupported versions remain failures and
 are preserved, never reset or migrated implicitly.
 
@@ -217,9 +219,9 @@ not count as reviewed translations or complete-locale UI acceptance.
 ## Authored controls, not execution evidence
 
 The inventory history below predates hosted execution. The later interrupted
-bootstrap repair adds three receiver controls (32 receiver and 28 App
+bootstrap repair adds four receiver controls (33 receiver and 28 App
 declarations): actual schema rollback then reopen/retain, empty version-zero
-read/reopen, and populated unknown version-zero preservation. Use the original
+read/reopen, and both empty and populated unknown version-zero preservation. Use the original
 exact-head hosted log linked above for actual discovery and execution, not these
 source counts.
 

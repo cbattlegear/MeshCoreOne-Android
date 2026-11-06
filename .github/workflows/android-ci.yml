@@ -173,6 +173,14 @@ jobs:
           path: android/core/data/build/reports/wp203/interop/
           if-no-files-found: error
           retention-days: 1
+      - name: Collect generated Room v2 schema for WP-202 diagnostic
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/diagnostic/wp202-room-export-9750580f1ebf-diag1' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: room-schema-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: android/core/database/schemas/com.meshcoreone.android.core.database.MeshCoreDatabase/2.json
+          if-no-files-found: error
+          retention-days: 1
 
   external-oracle:
     name: Swift codec oracle

@@ -144,6 +144,35 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(steps[0]["with"]["persist-credentials"], "false")
         self.assertNotIn("secrets.", text)
 
+    def test_room_schema_diagnostic_collects_only_actual_bytes_from_one_manual_ref(self):
+        workflow, text = self.read("android-ci.yml")
+        steps = workflow["jobs"]["build"]["steps"]
+        uploads = [
+            (index, step) for index, step in enumerate(steps)
+            if step.get("name") == "Collect generated Room v2 schema for WP-202 diagnostic"
+        ]
+        self.assertEqual(len(uploads), 1)
+        index, upload = uploads[0]
+        self.assertGreater(index, next(i for i, step in enumerate(steps) if step.get("id") == "gradle"))
+        self.assertEqual(upload, {
+            "name": "Collect generated Room v2 schema for WP-202 diagnostic",
+            "if": (
+                "${{ always() && github.event_name == 'workflow_dispatch' && "
+                "github.ref == 'refs/heads/diagnostic/wp202-room-export-9750580f1ebf-diag1' }}"
+            ),
+            "uses": "actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f",
+            "with": {
+                "name": "room-schema-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}",
+                "path": "android/core/database/schemas/com.meshcoreone.android.core.database.MeshCoreDatabase/2.json",
+                "if-no-files-found": "error",
+                "retention-days": "1",
+            },
+        })
+        self.assertEqual(workflow["permissions"], {"contents": "read"})
+        self.assertEqual(steps[0]["with"]["persist-credentials"], "false")
+        self.assertNotIn("secrets.", text)
+        validate_candidate(workflow, text)
+
     def test_controller_runs_installed_runtime_regressions_with_positive_discovery(self):
         workflow, _ = self.read("android-ci.yml")
         runner = next(step for step in workflow["jobs"]["controller"]["steps"]

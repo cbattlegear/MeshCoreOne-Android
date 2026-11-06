@@ -1,11 +1,66 @@
-# WP-201 independent main-based reaction contract
+# WP-201 incoming provenance correction to the independent reaction contract
 
 Repository: `cbattlegear/MeshCoreOne-Android`.
 Pinned Swift specification: `db14559b39d32322b06477c6ae676112f583db50`.
 Exact current-main base: `35abcc1276082995eed216bf28bff04d77e176c8`,
 tree `91150b99594daa3a8cb965d84e0370005a14c124`.
-Assignment:
-`assignment:fc9361f4-ec03-4739-994b-ddb9b4e4cec9:call_BNQOfp8vNVw5Tlm2Lh3G0vSV`.
+Correction assignment:
+`assignment:fc9361f4-ec03-4739-994b-ddb9b4e4cec9:call_t58hnavgWyjbOEZe0xgzmwGB`.
+Immutable correction parent: `67a22f7f9e75db2b8188ed890e04cc3b25d62a02`,
+tree `76c29b754b56ea9b3767eaad9c80f4d28e1c234f`, sole parent exact main above.
+
+## Concrete provenance defect and corrected boundary
+
+The original67a API could not honestly mint incoming/history targets from a
+MessageDTO containing only radio/slot. A later current-slot read could bind a
+delayed A event or same-UUID replacement to B. The correction removes that grant:
+save requires the retained original ChannelReactionOccurrence, candidate queries
+and apply require the REACTION's own retained occurrence, and history preserves
+every selected row while exposing missing provenance without a target.
+
+ChannelReactionOccurrence.Unproven(envelope,reason) explicitly carries no grant.
+Proven is an interface with NO public constructor/factory or live issuer; only
+a future private storage-authenticated implementation may be accepted, never a
+caller implementation. Its own exact event/session/radio/index/wire and original
+occupant incarnation must be authenticated at a genuinely ordered receive
+boundary. Equal/copied envelopes, object identity, occurrence UUID, native hash,
+current slot and existing ChannelReceiveOrigin markers cannot mint that proof.
+
+13a and 12e confirm NO such current producer exists. f805 agrees this contract
+shape and the historical positive control; its dirty WP-202 draft is untouched.
+All current ordinary incoming messages are Unproven and may persist/display
+without indexing. Incoming reaction wire is also Unproven: retain explicit
+bounded non-redrivable custody, not normal chat, native matching or reselection.
+This contract does not implement that consumer custody or activate receive hooks.
+
+InsertedUnproven(message,reason) means a COMMITTED original insert, not a save
+failure, missing message or reaction grant. Existing(key) retains its original
+committed-upsert meaning. Continue normal harvest/unread/notification/message
+events for saved ordinary messages without reaction indexing. Unknown save
+return preserves original envelope/DTO/cause custody; it does not recover proof.
+
+History returns ChannelReactionHistoryEntry: CapturedChannelReactionTarget only
+with authentic already-persisted original origin, otherwise
+UnprovenChannelReactionMessage(message,reason). Do not filter legacy/migrated/
+restored rows, change offset/order/hasMore or late-rebind displayed DTOs.
+No live issuer means there is no newly proved incoming history from this delta.
+
+Queries return ChannelReactionSelectionResult<T> with Selected, NoMatch,
+Unproven, Stale or Rejected. NoMatch is an actual authenticated eligible query
+without a match; the other outcomes do not authorize a fresh lookup. Apply adds
+Unproven and consumes the SAME retained original reaction occurrence, including
+per-item native batch/pending replay and MCO v1/v3. Both query and atomic apply
+require exact reaction/message ORIGINAL occupant provenance equality, not equal
+occurrence UUIDs: message and reaction are different events. A caller-supplied
+ParsedReaction or ReactionDTO must be verified against that occurrence's wire.
+
+Preserved positive: historical A target plus authenticated A reaction may apply
+after live slot retirement to B. Do not compare against today's active slot or
+erase A's stored origin solely due retirement. B reaction cannot match A; slot
+changes fence future proof issuance. Same-ID ABA, secret/enable/lifecycle change
+cannot remap either original event to a replacement. Restore/replacement or
+missing/unresolved/inauthentic row origin yields no newly selected target.
+Stale/rejected/unproven and UNKNOWN are not retry/reselection permission.
 
 ## Provenance correction and independent scope
 
@@ -15,14 +70,14 @@ the coordinator reports held c77 strict-prehistory/schema/store semantics in
 that tree even without held commit ancestry. That earlier characterization and
 any main-ready interpretation are explicitly superseded.
 
-This independently admitted delta is based ONLY on exact main above. It imports
+This independently admitted lineage is based ONLY on exact main above. It imports
 no implementation, migration, trigger, schema, completion handle or rejection
-type from that history. It adds one standalone role, ten value controls and this
-evidence. All existing main files are unchanged. Retained work is not deleted,
+type from that history. It preserves one standalone role, all ten original value
+controls, and adds six provenance-shape controls. All existing main files are unchanged. Retained work is not deleted,
 rebased or activated. No other worktree or held candidate is inspected.
 
-The standalone role uses only existing main DTOs/EntityKey/ParsedReaction/
-SnapshotList and a new domain-local ChannelReactionRejection. It has no send,
+The standalone role uses existing main DTOs/EntityKey/ParsedReaction/
+SnapshotList/ChannelReceiveEnvelope and domain-local result/provenance types. It has no send,
 ACK, completion, lease, pending-cleanup or original outgoing-indexer dependency.
 Outgoing completion capture/indexing and completion-successor support are
 UNAVAILABLE until separately admitted/re-authored compatible contracts and
@@ -39,16 +94,21 @@ Serial authenticated REST reads verified current main and trusted inputs:
 | `docs/android/automation-policy.json` | `e56438d64d2309c964353066f26e1427f17f55d8` |
 | `tools/android-port/controller/capabilities.py` | `1001f43112d9bff9c9985929a203b5166c41559e` |
 
-| New path | Capability / operation |
+| Path relative to immutable67a | Capability / operation |
 | --- | --- |
-| `android/core/contracts/src/main/kotlin/com/meshcoreone/android/core/contracts/domain/ReactionTargetAuthority.kt` | `wp-owned / create` |
+| `android/core/contracts/src/main/kotlin/com/meshcoreone/android/core/contracts/domain/ReactionTargetAuthority.kt` | `wp-owned / modify` |
 | `android/core/contracts/src/test/kotlin/com/meshcoreone/android/core/contracts/domain/ReactionTargetAuthorityTest.kt` | `reviewed-support-test / add-or-update-related-test` |
-| `docs/android/evidence/WP-201/reaction-target-authority.md` | `wp-owned / create` |
+| `docs/android/evidence/WP-201/reaction-target-authority.md` | `wp-owned / modify` |
 
 Manifest domain/evidence descendants and policy support glob plus Kotlin-test
 regex admit these exact operations. No controller/reservation transaction,
 generated receipt or passing ownership validator is claimed. Authorization,
 policy, ledgers and locks remain unchanged.
+
+The original main-relative creation remains admitted by wp-owned/create; this
+correction modifies only those three immutable67a paths. f805 agreed revised
+occurrence/history/selection/apply shapes; 12e and 13a confirmed the actual
+producer limitation and per-reaction retention/custody requirements.
 
 f805 agreed the standalone reaction-only shapes and independently authorized
 provisional reaction v1-to-v2 producer route; no producer implementation is
@@ -71,23 +131,39 @@ Actual main source:
 | `DiagnosticDTOs.kt` | `439a39d0a49c3be28e26e4b829a419e82502d332` |
 | `MessageRepository.kt` | `937380545fe91d5b77e4a1552be0180f34b8612f` |
 | `AppChatsFeature.kt` | `509c5c835645064cc3f0dfbc69abfb4474fc35fc` |
+| `ServiceContracts.kt` | `80fbc13d37e89f28e3ddf68c542f17dcf0f337f2` |
+| `MessagePollingService.kt` | `8437b8a7d3c79bf793aa14fa6b69cc8b96515c30` |
+| `SessionCore.kt` | `609a18d5c98aeaffee05265159e30a6a7b5e55a9` |
+| `EventDispatcher.kt` | `82b4dbc2f60e854f45debb5b602d4318ec9896ef` |
+
+Actual ServiceContracts ChannelReceiveOrigin.Proved has private constructor and
+NO factory. Poller newDelivery emits only Unproved after stream dequeue or poll
+result handling. Its occurrence UUID and actual ChannelMessage object distinguish
+host fanout, not firmware identity, storage authentication or original epoch.
+Exact-main SessionCore parses then dispatches under core lock, with no ordered
+storage callback. EventDispatcher has no occupant epoch/transaction capability.
+13a reports later a277 critical-owner/backlog code likewise has no proof issuer;
+that local-only ref returned HTTP404 remotely and was NOT inspected/imported.
+No claim of verifying that candidate or activating its consumer adapters is made.
 
 Original ingress save preserves atomic upsert. Inserted(captured) certifies an
-actually absent-before-insert row only; Existing(key) means real existing-row
+actually absent-before-insert row WITH authenticated occurrence origin only;
+otherwise InsertedUnproven commits the ordinary row without target. Existing(key) means real existing-row
 save committed with NO reaction authority. Existing continues ordinary saved
 message harvest/delivery/notification, not false save failure or reaction
 indexing. Rejected writes nothing. Unknown postcommit return cannot be
 reconciled by later Existing/UUID equality; no retry ledger is invented.
 
-Both original history reads capture actual row+target in the same read
-transaction. Offset preserves filter/order/limit/offset. Anchored refresh
+Both original history reads capture actual row plus its stored provenance state
+in the same read transaction, preserving target-free legacy rows. Offset preserves filter/order/limit/offset. Anchored refresh
 preserves count-at/after anchor, max(floor,count), checked extra-row/hasMore and
 display ordering, including more than 200 loaded rows. Both remain read-only,
 including neutral invalidation fetch without prepare. Original binding/object
 reference handoff is not equality-based regrant.
 
 Native/MCO candidate selection remains a genuinely new never-targeted wire
-lookup with original query bounds/order/format rules. It is not a cache/pending
+lookup requiring the reaction's own authenticated original occurrence and matching
+message origin, with original query bounds/order/format rules. It is not a cache/pending
 replay substitute. A indexed, then deleted and recreated identically as B,
 cannot be recovered as A by UUID/hash/text/timestamp/ranking hints.
 
@@ -99,14 +175,30 @@ more than 200 loaded rows must not disappear behind a current-time fallback.
 No original assertion/fault matrix is weakened or declared equivalent.
 
 Atomic apply validates original persisted message/occupant incarnation and
-reaction-identity revision/envelope, then dedups/inserts, reads newest 100,
+reaction-identity revision/envelope AND original reaction occurrence/origin, then dedups/inserts, reads newest 100,
 computes existing canonical/count/earliest summary and updates that row in ONE
 write transaction. Applied(successor,summary,inserted) returns actual binding
-and snapshot; inserted=false is not a new event/log. Stale/Rejected write nothing.
+and snapshot; inserted=false is not a new event/log. Stale/Unproven/Rejected write nothing.
 Errors/cancellation propagate. No request journal, exactly-once or lost-successor
 recovery is claimed.
 
 ## Genuine implementation prerequisites
+
+No authenticated receive-origin producer exists. Before issuing any Proven
+occurrence, an independently admitted ingress design must actually order event
+capture against ALL relevant slot mutation paths/handles, bind its exact session/
+event/wire and persist authentic original occupant incarnation. Do not block
+protocol response dispatch behind a repository callback or activate a guard as
+a contract shortcut. Raw supported DML, secret/enable/lifecycle change, same-value
+upsert and same-ID delete/recreate must be reconciled in that real producer.
+No schema, export or proof fixture is manufactured here; f805's draft is untouched.
+
+Hosted producer controls remain required for A-event-before-B delayed work and
+same-ID ABA, authentic A/A historical positive after retirement, B/A rejection,
+forged/foreign/copied proof, same-secret repeat versus secret/enable changes,
+legacy/restore/reopen/raw supported writes, per-item mixed occurrence replay,
+ordinary unproven save/delivery and unproven reaction bounded custody, and
+cancellation/commit-before-throw UNKNOWN without proof recovery.
 
 The independent provisional v1-to-v2 migration must provide durable reaction
 identity rotating on delete/reinsert/restore/replacement and advancing on
@@ -124,16 +216,20 @@ Outgoing completion integration remains a distinct unavailable prerequisite.
 
 ## Validation and limits
 
-Ten new value controls cover actual snapshot/corrected timestamp, opaque target
+Ten preserved value controls cover actual snapshot/corrected timestamp, opaque target
 distinction despite equal DTOs, explicit successor/duplicate/stale/rejected
 outcomes, radio/channel data, retained reaction metadata, empty summary, ingress
 results and a 201-row anchored-window shape. They are UNCOMPILED/UNEXECUTED,
-not transaction, ABA, schema, cache or native proof.
+not transaction, ABA, schema, cache or native proof. Six additional shape controls
+cover committed unproven save, mixed history visibility/order, distinct equal-wire
+occurrences, non-upgrading context copies, distinct candidate outcomes and
+unproven apply. All SIXTEEN are UNCOMPILED/UNEXECUTED.
 
-Source-only validation checks ASCII/newlines/trailing whitespace, ten test
+Source-only validation checks ASCII/newlines/trailing whitespace, sixteen test
 declarations, six suspend methods, and absence of external authority symbols
-in the new production/test source. Publication verifies a sole exact-main
-parent and exactly three additions, with no other tree differences.
+in the production/test source and preservation of the original ten method bodies.
+Publication verifies sole immutable67a parent, three modified paths only, and
+exactly three additions relative to main with no other tree differences.
 
 The local checkout intentionally remains divergent under the retained execution
 hold. No local Git/fetch/Gradle/compiler/controller/validator, readiness recovery,

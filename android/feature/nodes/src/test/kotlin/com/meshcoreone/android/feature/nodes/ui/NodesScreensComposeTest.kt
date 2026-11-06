@@ -40,6 +40,7 @@ import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.Coordinate
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
+import com.meshcoreone.android.core.l10n.generated.AppToolsStrings
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.feature.nodes.NodesNavigation
@@ -473,6 +474,44 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
     }
 
     abstract class ContactPathActionsComposeTestBase : NodesScreensComposeTestBase() {
+        @Test
+        @Config(shadows = [UnsupportedNodesMapProcess::class])
+        fun locatedContactOpensOfflineLineOfSightWithTheExactContact() {
+            val harness = Harness().connect()
+            val contact = Fixtures.contact(
+                radioId = checkNotNull(harness.session.radioId),
+                name = "LOS target",
+                latitude = 37.8,
+                longitude = -122.4,
+            )
+            harness.store.contacts += contact
+            harness.session.state = DeviceConnectionState.DISCONNECTED
+            harness.session.contacts = null
+            val opened = mutableListOf<ContactDTO>()
+            val navigation = object : NodesNavigation by NodesNavigation.NONE {
+                override val openLineOfSight: (ContactDTO) -> Unit = { opened += it }
+            }
+            mount { ContactDetailScreen(contact, harness.dependencies, navigation) }
+            val action = scrollToAction(controller.get().getString(AppToolsStrings.toolsLineOfSight))
+            assertTrue(action.boundsInRoot.height / currentDensity() >= 48f)
+            assertFalse(action.config.contains(SemanticsProperties.Disabled))
+            click(action)
+            assertEquals(listOf(contact), opened)
+            assertTrue(harness.contactService.calls.isEmpty(), "Offline LOS must not issue radio commands")
+        }
+
+        @Test
+        fun unlocatedContactDoesNotOfferLineOfSight() {
+            val harness = Harness().connect()
+            val contact = Fixtures.contact(radioId = checkNotNull(harness.session.radioId))
+            harness.store.contacts += contact
+            val navigation = object : NodesNavigation by NodesNavigation.NONE {
+                override val openLineOfSight: (ContactDTO) -> Unit = { error("Unlocated contact must not navigate") }
+            }
+            mount { ContactDetailScreen(contact, harness.dependencies, navigation) }
+            assertTrue(actionNode(controller.get().getString(AppToolsStrings.toolsLineOfSight)) == null)
+        }
+
         @Test
         fun pathActionsRemainVisibleAndAtLeast48DpAtLargeTextInRtl() {
             val harness = Harness().connect()

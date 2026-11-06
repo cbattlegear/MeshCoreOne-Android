@@ -33,10 +33,15 @@ data class TelemetryHistoryOverviewState(
     val hasSnapshots: Boolean get() = snapshots.isNotEmpty()
 }
 
+data class HistoryPresentation(
+    val locale: Locale,
+    val system: MeasurementSystem,
+    val titleText: TitleTextResolver,
+)
+
 /**
- * Offline history overview for one repeater (Swift `TelemetryHistoryOverviewViewModel`). The computed
- * Swift properties read `.now` on every access; here they read [clock] the same way. [system], [locale]
- * and [titleText] stand in for `Locale.current` and `L10n` when grouping and sorting sensor charts.
+ * Offline history for one node. Presentation is read at use time so locale/unit changes do not
+ * replace snapshots, errors or the selected range, or initiate another store load.
  */
 class TelemetryHistoryOverviewStateHolder(
     private val clock: RemoteNodesClock,
@@ -44,6 +49,7 @@ class TelemetryHistoryOverviewStateHolder(
     private val locale: Locale,
     private val system: MeasurementSystem,
     private val titleText: TitleTextResolver,
+    private val presentation: () -> HistoryPresentation = { HistoryPresentation(locale, system, titleText) },
 ) {
     private val _state = MutableStateFlow(TelemetryHistoryOverviewState())
     val state: StateFlow<TelemetryHistoryOverviewState> = _state.asStateFlow()
@@ -64,7 +70,7 @@ class TelemetryHistoryOverviewStateHolder(
     val channelGroups: List<ChannelGroup> get() = channelGroups(filteredSnapshots)
 
     fun channelGroups(snapshots: List<NodeStatusSnapshotDTO>): List<ChannelGroup> =
-        ChannelGroups.groups(snapshots, system, locale, titleText)
+        presentation().let { ChannelGroups.groups(snapshots, it.system, it.locale, it.titleText) }
 
     fun hasNeighborData(snapshots: List<NodeStatusSnapshotDTO>): Boolean =
         snapshots.any { it.neighborSnapshots?.isEmpty() == false }
@@ -98,7 +104,7 @@ class TelemetryHistoryOverviewStateHolder(
 
     /** Swift `resolveNeighborName(prefix:)`: the resolver policy without a user location. */
     fun resolveNeighborName(prefix: Bytes): String? = _state.value.let {
-        NeighborNameResolver.resolveName(prefix, it.contacts, it.discoveredNodes, userLocation = null, locale = locale)
+        NeighborNameResolver.resolveName(prefix, it.contacts, it.discoveredNodes, userLocation = null, locale = presentation().locale)
     }
 
     private suspend fun <T> attempt(block: suspend () -> T): T? = try {

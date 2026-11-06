@@ -1251,6 +1251,8 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
                     val read = backgroundScope.async(kotlinx.coroutines.Dispatchers.Default) {
                         monitor.fetchDeviceBattery(old.batteryServices, device)
                     }
+                    val outcome = CompletableDeferred<Throwable?>()
+                    read.invokeOnCompletion { outcome.complete(it) }
                     h.eventually("A holds the actual post-validation pre-publication phase") { reached.count == 0L }
                     val teardown = if (disposition == "withdraw" || disposition == "retired") {
                         old.beforeRetirementForTesting = { withdrawingThread.set(Thread.currentThread()) }
@@ -1282,7 +1284,13 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
                         assertEquals(3_700L, monitor.deviceBattery?.level)
                         assertFalse(updates.contains(3_900L))
                     } else {
-                        read.await()
+                        if (disposition == "withdraw") {
+                            val failure = outcome.await()
+                            assertTrue(failure == null || failure is com.meshcoreone.android.app.state.RetiredBatterySource)
+                            if (failure == null) read.await()
+                        } else {
+                            read.await()
+                        }
                         assertEquals(3_900L, monitor.deviceBattery?.level)
                         if (disposition == "live") {
                             h.eventually("the admitted live value reaches its reentrant callback") { updates.contains(3_900L) }

@@ -1537,6 +1537,7 @@ class OnboardingGateTest {
         var showSecond by mutableStateOf(false)
         val publicationFlowsA = mutableListOf<com.meshcoreone.android.feature.onboarding.OnboardingFlowCoordinator>()
         val publicationFlowsB = mutableListOf<com.meshcoreone.android.feature.onboarding.OnboardingFlowCoordinator>()
+        val publicationDeliveredA = CompletableDeferred<Unit>()
         try {
             host.setup().visible()
             val baseFlags = flags(completed = true)
@@ -1563,6 +1564,7 @@ class OnboardingGateTest {
                                     modifier = Modifier.testTag("settings-entry-a"),
                                     onCompletionPublication = { callbackFlow, _, commit ->
                                         publicationFlowsA += callbackFlow
+                                        publicationDeliveredA.complete(Unit)
                                         commit { false }
                                     },
                                     flowCoordinator = flowA,
@@ -1605,7 +1607,7 @@ class OnboardingGateTest {
             assertSame(flowB, ownerB.retainedFlowCoordinator())
 
             releaseSeal.countDown()
-            withTimeout(5_000) { flowA.onboarding.completionPublication.first { it != null } }
+            compose.waitUntil(5_000) { publicationDeliveredA.isCompleted }
             compose.waitForIdle()
             applying.await()
 

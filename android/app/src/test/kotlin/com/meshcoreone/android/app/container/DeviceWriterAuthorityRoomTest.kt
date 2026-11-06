@@ -7,7 +7,6 @@ import com.meshcoreone.android.app.navigation.addSettingsKnownRegion
 import com.meshcoreone.android.app.navigation.removeSettingsKnownRegion
 import com.meshcoreone.android.core.contracts.domain.DeviceEditPersisting
 import com.meshcoreone.android.core.contracts.domain.DeviceWriteSnapshot
-import com.meshcoreone.android.core.contracts.domain.OnboardingPresetTarget
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.model.ChannelDTO
@@ -18,6 +17,7 @@ import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.SelfInfo
 import com.meshcoreone.android.core.services.device.RadioPresets
+import com.meshcoreone.android.feature.onboarding.OnboardingPresetTarget
 import com.meshcoreone.android.feature.settings.device.SettingsNotConnectedException
 import java.util.Collections
 import java.util.UUID

@@ -478,12 +478,25 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         fallbackScanFailureControl(startup = true, direct = true)
     }
 
+    private suspend fun TestScope.onboardingScanFailureControl(startup: Boolean) {
+        val resolver = compose.activity.contentResolver
+        val previousScale = android.provider.Settings.Global.getFloat(
+            resolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f,
+        )
+        try {
+            android.provider.Settings.Global.putFloat(resolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
+            fallbackScanFailureControl(startup = startup, onboarding = true)
+        } finally {
+            android.provider.Settings.Global.putFloat(resolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, previousScale)
+        }
+    }
+
     @Test fun onboardingScannerStartupFailureResolvesPairingAndShowsOneVisibleError() = runTest {
-        fallbackScanFailureControl(startup = true, onboarding = true)
+        onboardingScanFailureControl(startup = true)
     }
 
     @Test fun onboardingScannerCallbackFailureResolvesPairingAndShowsOneVisibleError() = runTest {
-        fallbackScanFailureControl(startup = false, onboarding = true)
+        onboardingScanFailureControl(startup = false)
     }
 
     private suspend fun TestScope.savedBlePermissionControl(grant: Boolean, cancel: Boolean = false, scanAfter: Boolean = false) {

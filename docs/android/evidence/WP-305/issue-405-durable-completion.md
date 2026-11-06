@@ -315,3 +315,14 @@ directory; `controller/validate.py` passed (64 WPs / 1,866 tracked reference fil
 passed. The new Kotlin test and other Android tests were not run because the shared Gradle execution
 reservation remains held. The local commit is not pushed; PR #532 still points to `fb940ee`, and
 its active run is not evidence for this candidate.
+
+The shared radio-to-metadata serialization boundary and Room interposition regression are in
+`aa880b22e524907586d876c80459197099893c85`, parent
+`bfc9e4a9f052cf5b83d0d774d21dfd769553b99a`; the merge base remains
+`35abcc1276082995eed216bf28bff04d77e176c8`. Trusted default-base admission passed for
+`AppOnboarding.kt` (`reviewed-support-consumer/modify-related-consumer`) and
+`DeviceWriterAuthorityRoomTest.kt` (`reviewed-support-test/add-or-update-related-test`), and
+`git diff --check` passed before commit. The new interposition test and all other Android tests
+remain unexecuted because the shared Gradle reservation is held. Run `42141885753` is still
+in progress on older head `fb940ee72ab565555db46e54988789fd1756f54c`; it is not evidence for
+this candidate. The `aa880b2` commit is local and unpushed, and PR #532 still points to `fb940ee`.

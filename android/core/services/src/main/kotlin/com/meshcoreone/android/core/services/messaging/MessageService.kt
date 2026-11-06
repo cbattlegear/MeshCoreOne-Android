@@ -51,6 +51,10 @@ class MessageService(
     },
     reporter: MessagingIssueReporter = LoggingMessagingIssueReporter,
     private val newID: () -> UUID = UUID::randomUUID,
+    private val directAckAuthority: DirectAckAuthority? = dataStore as? DirectAckAuthority,
+    private val directPendingCompletionAuthority: DirectPendingCompletionAuthority? =
+        dataStore as? DirectPendingCompletionAuthority,
+    private val channelTransmission: suspend (UByte, suspend () -> Unit) -> Unit = { _, transmit -> transmit() },
 ) : MessagingSendPort {
     init { require(localPublicKey.size == ProtocolLimits.PUBLIC_KEY_SIZE) }
     private val ownership = MessagingOwnership(token, scope, signals, reporter)
@@ -61,7 +65,34 @@ class MessageService(
     private val monitoring = Mutex()
     private val mutationLocks = mutableMapOf<UUID, Mutex>()
     private val pendingAcks = linkedMapOf<UUID, PendingAck>()
-    private val failedAckRestorations = mutableMapOf<UUID, PendingAck>()
+    private val authorityActivation = Mutex()
+    private val activationRequestID = UUID.randomUUID()
+    private var authorityLease: DirectAckLease? = null
+    private var authorityActivationStarted = false
+    private class DirectAuthorityState(
+        val requestID: UUID,
+        val attempt: DirectAckAttempt,
+        firstWireID: UUID,
+    ) {
+        val wires = mutableMapOf(0 to firstWireID)
+        val operations = mutableMapOf<String, UUID>()
+    }
+    private val directAuthorities = mutableMapOf<UUID, DirectAuthorityState>()
+    private val directRegistrationIDs = mutableMapOf<UUID, UUID>()
+    private class NoDispatchCompletion(
+        val messageID: UUID,
+        val pendingID: UUID,
+        val reason: DirectPendingCompletionReason,
+        val captureID: UUID = UUID.randomUUID(),
+        val completionID: UUID = UUID.randomUUID(),
+        var handle: DirectPendingCompletion? = null,
+    )
+    private val noDispatchCompletions = mutableMapOf<UUID, NoDispatchCompletion>()
+    private data class UncertainFailureWrite(val tracking: PendingAck, val cause: Exception) {
+        val recoveryFailure = if (cause is PersistenceStoreException) cause else
+            PersistenceStoreException(PersistenceStoreError.SaveFailed("FAILED write outcome is uncertain"), cause)
+    }
+    private val uncertainFailureWrites = mutableMapOf<UUID, UncertainFailureWrite>()
     private val directClaims = mutableMapOf<UUID, DirectSendClaim>()
     private val activeDirectClaims = mutableMapOf<UUID, DirectSendClaim>()
     private val inFlightRetries = mutableSetOf<UUID>()
@@ -87,6 +118,190 @@ class MessageService(
         ownership.failure(operation, failure)
     }
     private fun recovered(operation: String) { synchronized(lock) { retainedFailures.remove(operation) } }
+
+    private fun authorityFailure(detail: String): PersistenceStoreException =
+        PersistenceStoreException(PersistenceStoreError.SaveFailed("Direct ACK authority: $detail"))
+
+    private fun authority(): DirectAckAuthority =
+        directAckAuthority ?: throw authorityFailure("capability unavailable")
+
+    private fun mutationReceipt(result: DirectAckMutationResult): DirectAckReceipt =
+        when (result) {
+            is DirectAckMutationResult.Applied -> result.receipt
+            is DirectAckMutationResult.AlreadyApplied -> result.receipt
+            is DirectAckMutationResult.AlreadyDelivered -> result.receipt
+            is DirectAckMutationResult.Rejected -> throw authorityFailure(result.reason.name)
+        }
+
+    private fun requireReceipt(result: DirectAckMutationResult): DirectAckReceipt {
+        val receipt = mutationReceipt(result)
+        if (receipt.permission != DirectAckPermission.CURRENT || receipt.message == null) {
+            throw authorityFailure("non-current or erased ${receipt.permission}")
+        }
+        return receipt
+    }
+
+    private data class PreparedDirect(
+        val intent: DirectAckIntent, val message: MessageDTO, val contact: ContactDTO,
+    )
+
+    private suspend fun prepareDirect(
+        id: UUID, requestID: UUID, contact: ContactDTO, mode: DirectAckMode, pendingSendID: UUID?,
+        isResend: Boolean = false,
+    ): PreparedDirect {
+        val result = authority().captureDirectAckIntent(directLease(), key(id), requestID, mode, pendingSendID)
+        val (intent, receipt) = when (result) {
+            is DirectAckIntentResult.Captured -> result.intent to result.receipt
+            is DirectAckIntentResult.AlreadyCaptured -> result.intent to result.receipt
+            is DirectAckIntentResult.Rejected -> throw authorityFailure(result.reason.name)
+        }
+        ownership.check("directIntent.captured")
+        val message = receipt.message ?: throw authorityFailure("erased dispatch intent")
+        val pending = receipt.pending
+        if (receipt.permission != DirectAckPermission.CURRENT || receipt.key != key(id) ||
+            receipt.requestId != requestID || receipt.mode != mode || receipt.pendingSendId != pendingSendID ||
+            pendingSendID != null && (pending == null || pending.id != pendingSendID || pending.messageID != id)) {
+            throw authorityFailure("non-current or mismatched dispatch intent")
+        }
+        if (pending != null && (pending.contactID != message.contactID || pending.isResend != isResend)) {
+            throw authorityFailure("pending dispatch intent changed")
+        }
+        if (message.radioId != token.radioId || message.contactID != contact.id || contact.radioId != token.radioId) {
+            throw MessageServiceException(MessageServiceError.ContactNotFound)
+        }
+        val selected = dataStore.fetchContact(key(requireNotNull(message.contactID)))
+            ?: throw MessageServiceException(MessageServiceError.ContactNotFound)
+        ownership.check("directIntent.contact")
+        if (selected.publicKey != contact.publicKey) throw MessageServiceException(MessageServiceError.ContactNotFound)
+        validate(message.text, selected)
+        return PreparedDirect(intent, message, selected)
+    }
+
+    private suspend fun directLease(): DirectAckLease = authorityActivation.withLock {
+        authorityLease ?: run {
+            authorityActivationStarted = true
+            when (val result = authority().activateDirectAckSession(token, activationRequestID)) {
+            is DirectAckActivationResult.Activated -> result.lease
+            is DirectAckActivationResult.AlreadyActivated -> result.lease
+            is DirectAckActivationResult.Rejected -> throw authorityFailure(result.reason.name)
+            }
+        }.also { authorityLease = it }
+    }
+
+    private fun directAuthority(id: UUID): DirectAuthorityState =
+        synchronized(lock) { directAuthorities[id] } ?: throw authorityFailure("unregistered message")
+
+    private suspend fun registerDirectDispatch(
+        id: UUID, requestID: UUID, predicted: Bytes, wireIndex: Int,
+        intent: DirectAckIntent,
+    ): Pair<DirectAuthorityState, UUID> {
+        val prior = synchronized(lock) { directAuthorities[id] }
+        if (prior?.requestID == requestID) {
+            val wireID = synchronized(lock) { prior.wires.getOrPut(wireIndex, UUID::randomUUID) }
+            requireReceipt(authority().registerDirectAckDispatch(prior.attempt, wireID, predicted.ackCodeUInt32))
+            return prior to wireID
+        }
+        val wireID = synchronized(lock) { directRegistrationIDs.getOrPut(requestID, UUID::randomUUID) }
+        val result = authority().beginDirectAckAttempt(intent, wireID, predicted.ackCodeUInt32)
+        val (attempt, receipt) = when (result) {
+            is DirectAckBeginResult.Begun -> result.attempt to result.receipt
+            is DirectAckBeginResult.AlreadyBegun -> result.attempt to result.receipt
+            is DirectAckBeginResult.Rejected -> throw authorityFailure(result.reason.name)
+        }
+        if (receipt.permission != DirectAckPermission.CURRENT) throw authorityFailure(receipt.permission.name)
+        val state = DirectAuthorityState(requestID, attempt, wireID)
+        synchronized(lock) {
+            directAuthorities[id] = state
+            pendingAcks.remove(id)?.receipt?.cancel()
+        }
+        return state to wireID
+    }
+
+    private suspend fun recordDirectAcceptance(state: DirectAuthorityState, wireID: UUID, info: MessageSentInfo) {
+        val receipt = mutationReceipt(authority().recordDirectSendAccepted(state.attempt, wireID, info.expectedAck.ackCodeUInt32))
+        if (receipt.wires.none { it.requestId == wireID && it.acceptedAckCode == info.expectedAck.ackCodeUInt32 }) {
+            throw authorityFailure("accepted wire binding missing")
+        }
+    }
+
+    private suspend fun directBookkeeping(id: UUID, operation: String, change: DirectAckBookkeeping): DirectAckReceipt {
+        val state = directAuthority(id)
+        val requestID = synchronized(lock) { state.operations.getOrPut(operation, UUID::randomUUID) }
+        val result = authority().applyDirectAckBookkeeping(state.attempt, requestID, change)
+        if (result is DirectAckMutationResult.Rejected && result.reason == DirectAckRejection.NOT_ELIGIBLE &&
+            change != DirectAckBookkeeping.ResendCountIncrement) {
+            val observation = authority().inspectDirectAckAttempt(directLease(), state.requestID)
+            if (observation is DirectAckObservation.Found &&
+                observation.receipt.permission == DirectAckPermission.CURRENT &&
+                observation.receipt.message?.status == MessageStatus.FAILED) {
+                return observation.receipt
+            }
+        }
+        return requireReceipt(result)
+    }
+
+    internal suspend fun completeDirectPending(claimID: UUID, messageID: UUID, pendingSendID: UUID) {
+        ownership.check("completeDirectPending")
+        val state = synchronized(lock) { directAuthorities[messageID]?.takeIf { it.requestID == claimID } }
+        if (state == null) {
+            completeWithoutDispatch(claimID, messageID, pendingSendID)
+            return
+        }
+        val requestID = synchronized(lock) { state.operations.getOrPut("pendingCompletion", UUID::randomUUID) }
+        val receipt = mutationReceipt(authority().completeDirectPending(state.attempt, pendingSendID, requestID))
+        if (receipt.pendingCompletions.none { it.requestId == requestID && it.pendingSendId == pendingSendID }) {
+            throw authorityFailure("pending completion receipt missing")
+        }
+        ownership.check("completeDirectPending.saved")
+    }
+
+    private suspend fun completeWithoutDispatch(claimID: UUID, messageID: UUID, pendingSendID: UUID) {
+        val state = synchronized(lock) { noDispatchCompletions[claimID] }
+            ?: throw authorityFailure("pending completion has no send or no-dispatch decision")
+        if (state.messageID != messageID || state.pendingID != pendingSendID) {
+            throw authorityFailure("no-dispatch completion identity mismatch")
+        }
+        val producer = directPendingCompletionAuthority
+            ?: throw authorityFailure("no-dispatch completion capability unavailable")
+        val handle = state.handle ?: run {
+            val result = producer.captureDirectPendingCompletion(
+                directLease(), key(messageID), pendingSendID, state.captureID, state.reason,
+            )
+            val (captured, receipt) = when (result) {
+                is DirectPendingCaptureResult.Captured -> result.completion to result.receipt
+                is DirectPendingCaptureResult.AlreadyCaptured -> result.completion to result.receipt
+                is DirectPendingCaptureResult.Rejected -> throw authorityFailure(result.reason.name)
+            }
+            if (receipt.permission != DirectPendingCompletionPermission.CURRENT ||
+                receipt.key != key(messageID) || receipt.message == null ||
+                receipt.pendingSendId != pendingSendID || receipt.pending?.id != pendingSendID || receipt.reason != state.reason) {
+                throw authorityFailure("no-dispatch capture is not current or matching")
+            }
+            captured
+        }.also { state.handle = it }
+        ownership.check("completeDirectPending.captured")
+        val receipt = when (val result = producer.completeDirectPendingWithoutDispatch(handle, state.completionID)) {
+            is DirectPendingCompletionResult.Applied -> result.receipt
+            is DirectPendingCompletionResult.AlreadyApplied -> result.receipt
+            is DirectPendingCompletionResult.Rejected -> throw authorityFailure(result.reason.name)
+        }
+        if (receipt.captureRequestId != state.captureID || receipt.completedRequestId != state.completionID) {
+            throw authorityFailure("no-dispatch completion receipt missing")
+        }
+        ownership.check("completeDirectPending.saved")
+    }
+
+    private fun rememberNoDispatch(
+        claimID: UUID, messageID: UUID, pendingID: UUID?, reason: DirectPendingCompletionReason,
+    ) {
+        if (pendingID == null) return
+        synchronized(lock) {
+            val state = noDispatchCompletions.getOrPut(claimID) { NoDispatchCompletion(messageID, pendingID, reason) }
+            if (state.messageID != messageID || state.pendingID != pendingID || state.reason != reason) {
+                throw authorityFailure("no-dispatch decision changed")
+            }
+        }
+    }
 
     private suspend fun checkIdentity(operation: String) {
         ownership.check(operation)
@@ -123,6 +338,10 @@ class MessageService(
     suspend fun startEventMonitoring(): Unit = monitoring.withLock {
         ownership.check("startAckMonitoring")
         if (isEventMonitoringActive) return@withLock
+        if (directAckAuthority != null) {
+            directLease()
+            ownership.check("startAckMonitoring.activated")
+        }
         val stream = session.events(EventFilter.anyAcknowledgement)
         val task = ownership.scope.async(start = CoroutineStart.UNDISPATCHED) {
             stream.collect { event ->
@@ -155,6 +374,10 @@ class MessageService(
     suspend fun startAckExpiryChecking(interval: Double = 5.0): Unit = monitoring.withLock {
         require(interval.isFinite() && interval > 0)
         ownership.check("startAckExpiry")
+        if (directAckAuthority != null) {
+            directLease()
+            ownership.check("startAckExpiry.activated")
+        }
         val prior = synchronized(lock) { expiry.also { expiry = null; checkInterval = interval } }
         prior?.cancelAndJoin()
         val task = ownership.scope.async {
@@ -182,7 +405,24 @@ class MessageService(
     }
 
     internal fun pendingAck(messageID: UUID): PendingAck? = synchronized(lock) { pendingAcks[messageID] }
-    internal fun installPendingAck(tracking: PendingAck) { synchronized(lock) { pendingAcks[tracking.messageID] = tracking } }
+    internal suspend fun installPendingAck(tracking: PendingAck) {
+        val row = dataStore.fetchMessage(key(tracking.messageID))
+        if (row != null && row.status !in listOf(MessageStatus.FAILED, MessageStatus.DELIVERED)) {
+            val requestID = UUID.randomUUID()
+            val result = authority().captureDirectAckIntent(directLease(), key(row.id), requestID, DirectAckMode.SEND, null)
+            val intent = when (result) {
+                is DirectAckIntentResult.Captured -> result.intent
+                is DirectAckIntentResult.AlreadyCaptured -> result.intent
+                is DirectAckIntentResult.Rejected -> throw authorityFailure(result.reason.name)
+            }
+            tracking.ackCodes.forEachIndexed { index, code ->
+                registerDirectDispatch(tracking.messageID, requestID, code, index, intent)
+            }
+        }
+        synchronized(lock) {
+            pendingAcks[tracking.messageID] = tracking.copy(authority = directAuthorities[tracking.messageID]?.attempt)
+        }
+    }
     internal fun claimRetryForTest(messageID: UUID) { synchronized(lock) { inFlightRetries += messageID } }
 
     internal fun trackPendingAck(
@@ -197,7 +437,7 @@ class MessageService(
         val value = prior?.copy(
             ackCodes = (prior.ackCodes + listOf(ackCode)).snapshotSet(), sentAt = clock.wallClock.instant(), timeout = timeout,
         ) ?: PendingAck(messageID, contactID, SnapshotSet(listOf(ackCode)), clock.wallClock.instant(), timeout,
-            publicKey = publicKey)
+            publicKey = publicKey, authority = directAuthorities[messageID]?.attempt)
         pendingAcks[messageID] = value
         value
     }
@@ -241,12 +481,19 @@ class MessageService(
         }
     }
 
-    private suspend fun reconcileAcknowledgementLocked(messageID: UUID, cleanup: Boolean) {
+    private suspend fun reconcileAcknowledgementLocked(
+        messageID: UUID, cleanup: Boolean, verifyRadioIdentity: Boolean = true,
+    ) {
         val tracking = pendingAck(messageID) ?: return
         val ack = tracking.acknowledgement ?: return
-        if (!cleanup) checkIdentity("commitAcknowledgement")
+        suspend fun checkOwnership(operation: String) {
+            if (cleanup) ownership.checkPersistenceCompletion(operation) else ownership.check(operation)
+        }
+        if (cleanup) checkOwnership("commitAcknowledgement.cleanup")
+        else if (verifyRadioIdentity) checkIdentity("commitAcknowledgement")
+        else ownership.check("commitAcknowledgement")
         val row = dataStore.fetchMessage(key(messageID))
-        if (!cleanup) ownership.check("commitAcknowledgement.read")
+        checkOwnership("commitAcknowledgement.read")
         if (row == null) {
             val failure = PersistenceStoreException(PersistenceStoreError.MessageNotFound)
             remember("ack.$messageID", failure)
@@ -261,7 +508,7 @@ class MessageService(
         }
         if (tracking.publicKey != null) {
             val contact = dataStore.fetchContact(key(tracking.contactID))
-            if (!cleanup) ownership.check("commitAcknowledgement.contact")
+            checkOwnership("commitAcknowledgement.contact")
             if (contact != null && contact.publicKey != tracking.publicKey) {
                 val failure = MessageServiceException(MessageServiceError.ContactNotFound)
                 remember("ack.$messageID.identity", failure)
@@ -269,32 +516,79 @@ class MessageService(
                 throw failure
             }
         }
-        val restoresOwnFailure = synchronized(lock) {
-            failedAckRestorations[messageID]?.receipt === tracking.receipt
+        val uncertainWrite = synchronized(lock) {
+            uncertainFailureWrites[messageID]?.takeIf { it.tracking.receipt === tracking.receipt }
         }
-        if (row.status == MessageStatus.FAILED && restoresOwnFailure) {
-            dataStore.updateMessageStatusUnlessDelivered(key(messageID), MessageStatus.SENT)
-            if (!cleanup) ownership.check("commitAcknowledgement.restoreForAck")
+        val attempt = tracking.authority
+        if (attempt == null && row.status in listOf(MessageStatus.FAILED, MessageStatus.DELIVERED)) {
+            retireTerminalAck(tracking)
+            return
         }
-        dataStore.updateMessageAck(key(messageID), ack.code.ackCodeUInt32, MessageStatus.DELIVERED, ack.tripTime)
-        if (!cleanup) ownership.check("commitAcknowledgement.saved")
+        val result = try {
+            authority().settleDirectAck(
+                attempt ?: throw authorityFailure("unregistered acknowledgement"),
+                ack.code.ackCodeUInt32, ack.tripTime,
+            )
+        } catch (failure: PersistenceStoreException) {
+            if (uncertainWrite != null) {
+                remember("ackUncertain.$messageID", uncertainWrite.cause)
+                remember("ack.$messageID", uncertainWrite.cause)
+                throw uncertainWrite.recoveryFailure
+            }
+            throw failure
+        }
+        if (result is DirectAckMutationResult.Rejected && result.reason in retiredAuthorityReasons) {
+            if (uncertainWrite != null && row.status != MessageStatus.DELIVERED) {
+                remember("ackUncertain.$messageID", uncertainWrite.cause)
+                throw uncertainWrite.recoveryFailure
+            }
+            ownership.reporter.report(MessagingDiagnostic.StaleResult(token, "ackAuthority.${result.reason}"))
+            retireTerminalAck(tracking)
+            recovered("ack.$messageID")
+            recovered("ackUncertain.$messageID")
+            recovered("failPending.$messageID")
+            recovered("failMessage.$messageID")
+            return
+        }
+        val receipt = mutationReceipt(result)
+        checkOwnership("commitAcknowledgement.saved")
+        val delivery = receipt.delivery ?: throw authorityFailure("missing committed delivery")
+        if (delivery.ackCode != ack.code.ackCodeUInt32 || delivery.roundTripTime != ack.tripTime) {
+            throw authorityFailure("delivery tuple mismatch")
+        }
+        if (receipt.permission != DirectAckPermission.CURRENT) {
+            retireTerminalAck(tracking)
+            recovered("ack.$messageID")
+            recovered("ackUncertain.$messageID")
+            return
+        }
+        if (receipt.message == null || delivery.message == null) {
+            throw authorityFailure("current delivery payload erased")
+        }
         val committed = dataStore.fetchMessage(key(messageID))
-        if (!cleanup) ownership.check("commitAcknowledgement.refetched")
+        checkOwnership("commitAcknowledgement.refetched")
+        if (committed?.status != MessageStatus.DELIVERED || committed.ackCode != delivery.ackCode ||
+            committed.roundTripTime != delivery.roundTripTime) throw authorityFailure("delivery readback changed")
         if (committed?.status == MessageStatus.DELIVERED) {
             try {
                 dataStore.updateContactLastMessage(key(tracking.contactID), clock.wallClock.instant())
+                checkOwnership("commitAcknowledgement.contactSaved")
                 recovered("ackContact.$messageID")
             } catch (failure: PersistenceStoreException) { remember("ackContact.$messageID", failure) }
             if (!cleanup && ownership.isCurrent) events.yield(MessageStatusEvent.StatusResolved(messageID, MessageStatus.DELIVERED, ack.tripTime))
         }
         synchronized(lock) {
             if (pendingAcks[messageID]?.receipt === tracking.receipt) pendingAcks.remove(messageID)
-            if (failedAckRestorations[messageID]?.receipt === tracking.receipt) failedAckRestorations.remove(messageID)
+            if (uncertainFailureWrites[messageID]?.tracking?.receipt === tracking.receipt) uncertainFailureWrites.remove(messageID)
         }
         recovered("ack.$messageID")
         recovered("ackDelivery")
         recovered("failPending.$messageID")
-        if (committed?.status == MessageStatus.DELIVERED) recovered("failMessage.$messageID")
+        if (committed?.status == MessageStatus.DELIVERED) {
+            recovered("ackUncertain.$messageID")
+            recovered("failMessage.$messageID")
+            recovered("ackExpiry.$messageID")
+        }
     }
 
     suspend fun checkExpiredAcks() {
@@ -309,7 +603,7 @@ class MessageService(
                 throw cancelled
             } catch (failure: Exception) {
                 if (!ownership.isCurrent) throw failure
-                remember("ackExpiry.${snapshot.messageID}", failure)
+                if (failure !is PersistenceStoreException) remember("ackExpiry.${snapshot.messageID}", failure)
             }
         }
         recovered("ackExpiry")
@@ -318,30 +612,38 @@ class MessageService(
     private fun retireTerminalAck(tracking: PendingAck) {
         synchronized(lock) {
             if (pendingAcks[tracking.messageID]?.receipt === tracking.receipt) pendingAcks.remove(tracking.messageID)
-            if (failedAckRestorations[tracking.messageID]?.receipt === tracking.receipt) {
-                failedAckRestorations.remove(tracking.messageID)
+            if (uncertainFailureWrites[tracking.messageID]?.tracking?.receipt === tracking.receipt) {
+                uncertainFailureWrites.remove(tracking.messageID)
             }
         }
     }
 
     private suspend fun expireOrReconcile(snapshot: PendingAck, now: Instant) {
-        if (snapshot.acknowledgement != null) { reconcileAcknowledgement(snapshot.messageID); return }
+        val failureOperation = "ackExpiry.${snapshot.messageID}"
+        if (snapshot.acknowledgement != null) {
+            reconcileAcknowledgement(snapshot.messageID, failureOperation = failureOperation)
+            return
+        }
         var acknowledgementArrived = false
         mutation(snapshot.messageID).withLock {
-            val current = pendingAck(snapshot.messageID) ?: return@withLock
-            if (current.isDelivered || Duration.between(current.sentAt, now).toNanos().toDouble() / 1e9 <=
-                maxOf(config.ackGiveUpWindow, current.timeout)) return@withLock
-            val wasFailed = dataStore.fetchMessage(key(current.messageID))?.status == MessageStatus.FAILED
-            ownership.check("expireAcknowledgement")
-            val changed = dataStore.updateMessageStatusUnlessDelivered(key(current.messageID), MessageStatus.FAILED)
-            ownership.check("expireAcknowledgement.saved")
-            acknowledgementArrived = settleFailedPendingAck(
-                current.messageID, changed, "expireAcknowledgement", notify = true,
-                retireDirectClaim = true, restoreOnAck = !wasFailed,
-                checkOwnership = { operation -> ownership.check(operation) },
-            )
+            try {
+                val current = pendingAck(snapshot.messageID) ?: return@withLock
+                if (current.isDelivered || Duration.between(current.sentAt, now).toNanos().toDouble() / 1e9 <=
+                    maxOf(config.ackGiveUpWindow, current.timeout)) return@withLock
+                val wasFailed = dataStore.fetchMessage(key(current.messageID))?.status == MessageStatus.FAILED
+                ownership.check("expireAcknowledgement")
+                val changed = writeFailedStatus(current.messageID, wasFailed)
+                ownership.check("expireAcknowledgement.saved")
+                acknowledgementArrived = settleFailedPendingAck(
+                    current.messageID, changed, notify = true, retireDirectClaim = true,
+                )
+            } catch (failure: PersistenceStoreException) {
+                if (!ownership.isCurrent) throw failure
+                remember(failureOperation, failure)
+                throw failure
+            }
         }
-        if (acknowledgementArrived) reconcileAcknowledgement(snapshot.messageID)
+        if (acknowledgementArrived) reconcileAcknowledgement(snapshot.messageID, failureOperation = failureOperation)
     }
 
     suspend fun failAllPendingMessages() {
@@ -356,12 +658,10 @@ class MessageService(
                     if (pendingAck(id)?.isDelivered != false) return@withLock
                     val wasFailed = dataStore.fetchMessage(key(id))?.status == MessageStatus.FAILED
                     ownership.check("failAllPendingMessages.read")
-                    val changed = dataStore.updateMessageStatusUnlessDelivered(key(id), MessageStatus.FAILED)
+                    val changed = writeFailedStatus(id, wasFailed)
                     ownership.check("failAllPendingMessages.saved")
                     acknowledgementArrived = settleFailedPendingAck(
-                        id, changed, "failAllPendingMessages", notify = true,
-                        retireDirectClaim = true, restoreOnAck = !wasFailed,
-                        checkOwnership = { operation -> ownership.check(operation) },
+                        id, changed, notify = true, retireDirectClaim = true,
                     )
                 } catch (failure: PersistenceStoreException) {
                     if (!ownership.isCurrent) throw failure
@@ -387,20 +687,17 @@ class MessageService(
     private suspend fun settleFailedPendingAck(
         messageID: UUID,
         changed: Boolean,
-        operation: String,
         notify: Boolean,
         retireDirectClaim: Boolean,
-        restoreOnAck: Boolean,
-        checkOwnership: suspend (String) -> Unit,
     ): Boolean {
         val acknowledgementArrived = synchronized(lock) {
             val tracking = pendingAcks[messageID]
             if (tracking?.acknowledgement != null) {
-                if (changed && restoreOnAck) failedAckRestorations[messageID] = tracking
                 true
             }
             else {
                 pendingAcks.remove(messageID)
+                uncertainFailureWrites.remove(messageID)
                 if (retireDirectClaim) {
                     activeDirectClaims[messageID]?.let {
                         if (it.acknowledgement == null) it.retiredWithoutAcknowledgement = true
@@ -409,16 +706,59 @@ class MessageService(
                 false
             }
         }
-        if (acknowledgementArrived) {
-            if (changed && restoreOnAck) {
-                dataStore.updateMessageStatusUnlessDelivered(key(messageID), MessageStatus.SENT)
-                checkOwnership("$operation.restoreForAck")
-            }
-        } else {
+        if (!acknowledgementArrived) {
             if (notify && changed) broadcastFailed(messageID)
             recovered("failPending.$messageID")
+            recovered("ackUncertain.$messageID")
         }
         return acknowledgementArrived
+    }
+
+    private suspend fun writeFailedStatus(messageID: UUID, wasFailed: Boolean): Boolean {
+        val tracking = pendingAck(messageID)
+        try {
+            val attempt = tracking?.authority ?: synchronized(lock) {
+                if (tracking == null) directAuthorities[messageID]?.attempt else null
+            }
+            if (attempt == null && tracking == null) {
+                return dataStore.updateMessageStatusUnlessDelivered(key(messageID), MessageStatus.FAILED)
+            }
+            if (attempt == null && wasFailed) return false
+            if (attempt == null && dataStore.fetchMessage(key(messageID))?.status == MessageStatus.DELIVERED) return false
+            val result = authority().recordDirectFailure(
+                attempt ?: throw authorityFailure("unregistered failure"),
+            )
+            if (result is DirectAckMutationResult.Rejected && result.reason in retiredAuthorityReasons) {
+                ownership.reporter.report(MessagingDiagnostic.StaleResult(token, "failureAuthority.${result.reason}"))
+                tracking?.let(::retireTerminalAck)
+                return false
+            }
+            val receipt = requireReceipt(result)
+            return receipt.message?.status == MessageStatus.FAILED && !wasFailed
+        } catch (cancelled: CancellationException) {
+            retainUncertainFailureWrite(messageID, tracking, wasFailed, cancelled)
+            throw cancelled
+        } catch (failure: PersistenceStoreException) {
+            retainUncertainFailureWrite(messageID, tracking, wasFailed, failure)
+            throw failure
+        }
+    }
+
+    private fun retainUncertainFailureWrite(
+        messageID: UUID,
+        tracking: PendingAck?,
+        wasFailed: Boolean,
+        failure: Exception,
+    ) {
+        if (wasFailed || tracking == null) return
+        val report = synchronized(lock) {
+            val current = pendingAcks[messageID]
+            if (current?.receipt !== tracking.receipt) false else {
+                uncertainFailureWrites[messageID] = UncertainFailureWrite(tracking, failure)
+                failure !is CancellationException || current.acknowledgement != null
+            }
+        }
+        if (report) remember("ackUncertain.$messageID", failure)
     }
 
     suspend fun stopAndFailAllPending() { stopAckExpiryChecking(); failAllPendingMessages() }
@@ -450,12 +790,10 @@ class MessageService(
                             if (pendingAck(messageID)?.acknowledgement == null) {
                                 val wasFailed = dataStore.fetchMessage(key(messageID))?.status == MessageStatus.FAILED
                                 ownership.checkPersistenceCompletion("failMessage")
-                                val changed = dataStore.updateMessageStatusUnlessDelivered(key(messageID), MessageStatus.FAILED)
+                                val changed = writeFailedStatus(messageID, wasFailed)
                                 ownership.checkPersistenceCompletion("failMessage.saved")
                                 settleFailedPendingAck(
-                                    messageID, changed, "failMessage", notify, retireDirectClaim = false,
-                                    restoreOnAck = !wasFailed,
-                                    checkOwnership = { operation -> ownership.checkPersistenceCompletion(operation) },
+                                    messageID, changed, notify, retireDirectClaim = false,
                                 )
                             }
                         } else {
@@ -607,25 +945,31 @@ class MessageService(
                     dataStore.saveMessage(message)
                     ownership.check("sendDirectMessage.saved")
                     checkIdentity("sendDirectMessage")
-                    val predicted = AckCodeBuilder.expectedAck(message.timestamp, 0u, text, localPublicKey)
-                    val tracking = trackPendingAck(message.id, contact.id, predicted, checkInterval, contact.publicKey)
+                    val requestID = UUID.randomUUID()
+                    val prepared = prepareDirect(message.id, requestID, contact, DirectAckMode.SEND, null)
+                    val captured = prepared.message
+                    val selected = prepared.contact
+                    val predicted = AckCodeBuilder.expectedAck(captured.timestamp, 0u, captured.text, localPublicKey)
+                    registerDirectDispatch(message.id, requestID, predicted, 0, prepared.intent)
+                    val tracking = trackPendingAck(message.id, selected.id, predicted, checkInterval, selected.publicKey)
                     val info = withPoolBackoff(3u) {
                         dmOperations.withLock {
                             checkIdentity("sendDirectMessage.wire")
                             inlineWire { dispatch ->
-                                val timestamp = Instant.ofEpochSecond(message.timestamp.toLong())
-                                if (dispatch == null) session.sendMessage(contact.publicKey, text, timestamp)
-                                else session.sendMessage(contact.publicKey, text, timestamp, dispatch = dispatch)
+                                val timestamp = Instant.ofEpochSecond(captured.timestamp.toLong())
+                                if (dispatch == null) session.sendMessage(selected.publicKey, captured.text, timestamp)
+                                else session.sendMessage(selected.publicKey, captured.text, timestamp, dispatch = dispatch)
                             }
                         }
                     }
+                    mergeSentInfo(message.id, predicted, info, 0u, null)
                     Triple(info, tracking, predicted)
                 }
+                postDMSent(message.id, contact.id, info)
                 ownership.check("sendDirectMessage.accepted")
                 if (pendingAck(message.id)?.receipt === tracking.receipt) {
-                    mergeSentInfo(message.id, contact.id, predicted, info, 0u, null)
+                    mergeSentInfo(message.id, predicted, info, 0u, null)
                 }
-                postDMSent(message.id, contact.id, info)
                 fetchSaved(message.id)
             }
         }
@@ -646,10 +990,19 @@ class MessageService(
         onMessageCreated?.invoke(message)
         ownership.check("sendMessageWithRetry.created")
         return owned("sendMessageWithRetry") {
-            val claim = newDirectClaim(UUID.randomUUID(), message, contact, false).also { it.timestamp = message.timestamp }
+            val current = fetchSaved(message.id)
+            if (current.contactID != contact.id) throw MessageServiceException(MessageServiceError.ContactNotFound)
+            if (config.maxAttempts == 0L) {
+                return@owned sendBoundary(message.id, true) {
+                    finalizeSend(message.id, contact.id, contact.publicKey, null, contact.outPathLength, noDispatch = true)
+                }
+            }
+            val claim = newDirectClaim(
+                UUID.randomUUID(), message, contact, false, initialStatus = current.status,
+            )
             try {
                 sendBoundary(message.id, true) {
-                    val info = retryLoop(claim, contact, message.timestamp, timeout.takeIf { it > 0 })
+                    val info = retryLoop(claim, claim.contact, requireNotNull(claim.timestamp), timeout.takeIf { it > 0 })
                     finalizeSend(message.id, contact.id, contact.publicKey, info, contact.outPathLength)
                 }
             } finally { releaseDirectClaim(claim.id) }
@@ -669,29 +1022,52 @@ class MessageService(
 
     internal suspend fun sendPendingClaim(
         claimID: UUID, messageID: UUID, contact: ContactDTO, preserveTimestamp: Boolean, isResend: Boolean,
-    ): MessageDTO = queuedDM(messageID, contact, preserveTimestamp, isResend, claimID)
+        pendingSendID: UUID = claimID,
+    ): MessageDTO = queuedDM(messageID, contact, preserveTimestamp, isResend, claimID, pendingSendID)
 
     internal fun releaseDirectClaim(claimID: UUID) {
         synchronized(lock) {
+            noDispatchCompletions.remove(claimID)
             directClaims.remove(claimID)?.let { claim ->
                 if (activeDirectClaims[claim.messageID] === claim) activeDirectClaims.remove(claim.messageID)
             }
         }
     }
 
-    private fun newDirectClaim(claimID: UUID, row: MessageDTO, contact: ContactDTO, resend: Boolean): DirectSendClaim =
+    private suspend fun newDirectClaim(
+        claimID: UUID, row: MessageDTO, contact: ContactDTO, resend: Boolean, pendingSendID: UUID? = null,
+        initialStatus: MessageStatus = row.status,
+    ): DirectSendClaim {
         synchronized(lock) {
-            directClaims[claimID]?.also {
-                if (it.messageID != row.id || it.contactID != contact.id || it.publicKey != contact.publicKey || it.isResend != resend) {
+            directClaims[claimID]?.let {
+                if (it.messageID != row.id || it.contactID != contact.id || it.publicKey != contact.publicKey ||
+                    it.isResend != resend || it.pendingSendID != pendingSendID) {
                     throw MessageServiceException(MessageServiceError.SendFailed("Pending-send claim identity changed"))
                 }
-            } ?: DirectSendClaim(claimID, row.id, contact.id, contact.publicKey, row.text, resend).also {
+                return it
+            }
+        }
+        val mode = if (resend || initialStatus in listOf(MessageStatus.FAILED, MessageStatus.DELIVERED)) {
+            DirectAckMode.RESEND
+        } else DirectAckMode.SEND
+        if (config.maxAttempts > 0) checkIdentity("retryDirectMessage")
+        val prepared = prepareDirect(row.id, claimID, contact, mode, pendingSendID, resend)
+        return DirectSendClaim(
+            claimID, row.id, prepared.contact.id, prepared.contact.publicKey, prepared.message.text,
+            resend, pendingSendID, mode, prepared.intent, prepared.contact,
+        ).also {
+            it.timestamp = prepared.message.timestamp
+            synchronized(lock) {
                 directClaims[claimID] = it
                 activeDirectClaims[row.id] = it
             }
         }
+    }
 
-    private suspend fun queuedDM(id: UUID, contact: ContactDTO, preserveTimestamp: Boolean, isResend: Boolean, claimID: UUID): MessageDTO {
+    private suspend fun queuedDM(
+        id: UUID, contact: ContactDTO, preserveTimestamp: Boolean, isResend: Boolean, claimID: UUID,
+        pendingSendID: UUID? = null,
+    ): MessageDTO {
         synchronized(lock) {
             if (!inFlightRetries.add(id)) throw MessageServiceException(MessageServiceError.SendFailed("Retry already in progress"))
             failedNotifications.remove(id)
@@ -705,24 +1081,38 @@ class MessageService(
                     }
                     validate(row.text, contact)
                     if (!isResend && row.status == MessageStatus.DELIVERED) {
+                        rememberNoDispatch(claimID, id, pendingSendID, DirectPendingCompletionReason.AlreadyDeliveredSend)
                         return@owned row
                     }
-                    val claim = newDirectClaim(claimID, row, contact, isResend)
-                    val wireTimestamp = synchronized(lock) { claim.timestamp } ?: (
-                        if (preserveTimestamp) row.timestamp else timestamp().also {
+                    if (config.maxAttempts == 0L) {
+                        return@owned sendBoundary(id, false) {
+                            if (!preserveTimestamp) {
+                                dataStore.updateMessageTimestamp(key(id), timestamp())
+                                ownership.check("queuedDirectMessage.timestamp")
+                            }
+                            val result = finalizeSend(id, contact.id, contact.publicKey, null, contact.outPathLength, noDispatch = true)
+                            rememberNoDispatch(claimID, id, pendingSendID, DirectPendingCompletionReason.ZeroAttempts(0L))
+                            result
+                        }
+                    }
+                    val retained = synchronized(lock) { directClaims[claimID] }
+                    if (retained == null && !preserveTimestamp) {
+                        timestamp().also {
                             dataStore.updateMessageTimestamp(key(id), it)
                             ownership.check("queuedDirectMessage.timestamp")
                         }
-                    ).also { synchronized(lock) { claim.timestamp = it } }
+                    }
+                    val claim = newDirectClaim(claimID, row, contact, isResend, pendingSendID)
+                    val wireTimestamp = requireNotNull(claim.timestamp)
                     sendBoundary(id, false) {
                         val info = if (synchronized(lock) { claim.wireFinished }) {
                             synchronized(lock) { claim.lastSentInfo }
-                        } else retryLoop(claim, contact, wireTimestamp, null).also {
+                        } else retryLoop(claim, claim.contact, wireTimestamp, null).also {
                             synchronized(lock) { claim.lastSentInfo = it; claim.wireFinished = true }
                         }
                         if (isResend && info != null && !synchronized(lock) { claim.sendCountCommitted }) {
                             try {
-                                dataStore.incrementMessageSendCount(key(id))
+                                directBookkeeping(id, "resendCount", DirectAckBookkeeping.ResendCountIncrement)
                                 synchronized(lock) { claim.sendCountCommitted = true }
                                 ownership.check("queuedDirectMessage.sendCount")
                                 recovered("dmSendCount.$id")
@@ -753,15 +1143,18 @@ class MessageService(
     private suspend fun retryLoop(claim: DirectSendClaim, contact: ContactDTO, stamp: UInt, timeout: Double?): MessageSentInfo? {
         val id = claim.messageID
         val text = claim.text
-        var attempts = 0L
-        var floods = 0L
-        var flood = false
+        var attempts = synchronized(lock) { claim.nextWireIndex }
+        var floods = synchronized(lock) { claim.floodAttempts }
+        var flood = synchronized(lock) { claim.usingFlood }
         while (attempts < config.maxAttempts && (!flood || floods < config.maxFloodAttempts)) {
             checkIdentity("retryDirectMessage")
+            synchronized(lock) { claim.acceptedWire }?.let {
+                recordDirectAcceptance(directAuthority(id), it.requestID, it.info)
+            }
             completedDirect(claim)?.let { return it }
             if (unacknowledgedRetirement(claim)) return null
             if (attempts > 0) {
-                dataStore.updateMessageRetryStatus(key(id), MessageStatus.RETRYING, attempts - 1, config.maxAttempts - 1)
+                directBookkeeping(id, "retry.$attempts", DirectAckBookkeeping.RetryStarted(attempts - 1, config.maxAttempts - 1))
                 ownership.check("retryDirectMessage.status")
                 completedDirect(claim)?.let { return it }
                 if (unacknowledgedRetirement(claim)) return null
@@ -787,11 +1180,16 @@ class MessageService(
                 catch (failure: MeshTransportError) { remember("resetPath.$id", failure) }
                 catch (failure: PersistenceStoreException) { remember("resetPath.$id", failure) }
                 flood = true
+                synchronized(lock) { claim.usingFlood = true }
             }
             completedDirect(claim)?.let { return it }
             if (unacknowledgedRetirement(claim)) return null
             val attempt = attempts.toUByte()
             val predicted = AckCodeBuilder.expectedAck(stamp, attempt, text, localPublicKey)
+            val (authorityState, wireID) = registerDirectDispatch(
+                id, claim.id, predicted, attempts.toInt(),
+                claim.intent,
+            )
             val tracking = trackPendingAck(id, contact.id, predicted, maxOf(timeout ?: config.minTimeout, checkInterval), contact.publicKey)
             val mailbox = Channel<MeshEvent.Acknowledgement>(Channel.UNLIMITED)
             val stream = session.events(EventFilter.anyAcknowledgement)
@@ -799,7 +1197,7 @@ class MessageService(
                 stream.collect { if (it is MeshEvent.Acknowledgement) mailbox.send(it) }
             }
             try {
-                val info = withPoolBackoff(3u) {
+                val info = synchronized(lock) { claim.acceptedWire }?.info ?: withPoolBackoff(3u) {
                     dmOperations.withLock {
                         checkIdentity("retryDirectMessage.wire")
                         if (unacknowledgedRetirement(claim)) null
@@ -813,12 +1211,16 @@ class MessageService(
                         }
                     }
                 } ?: return null
-                synchronized(lock) { claim.lastSentInfo = info }
+                synchronized(lock) {
+                    claim.lastSentInfo = info
+                    claim.acceptedWire = AcceptedDirectWire(wireID, info)
+                }
+                mergeSentInfo(id, predicted, info, attempt, timeout)
+                recordDirectAcceptance(authorityState, wireID, info)
                 ownership.check("retryDirectMessage.accepted")
                 completedDirect(claim)?.let { return it }
                 if (unacknowledgedRetirement(claim)) return null
                 val ackTimeout = timeout ?: maxOf(config.minTimeout, info.suggestedTimeoutMs.toDouble() / 1000.0 * 1.2)
-                mergeSentInfo(id, contact.id, predicted, info, attempt, timeout)
                 val outcome = clock.messagingDeadline(ackTimeout) {
                     while (true) {
                         val ack = select<MeshAcknowledgement> {
@@ -843,24 +1245,41 @@ class MessageService(
             }
             attempts++
             if (flood) floods++
+            synchronized(lock) {
+                claim.nextWireIndex = attempts
+                claim.floodAttempts = floods
+                claim.acceptedWire = null
+            }
         }
         return null
     }
 
     private fun mergeSentInfo(
-        id: UUID, contactID: UUID, predicted: Bytes, info: MessageSentInfo, attempt: UByte, timeout: Double?,
+        id: UUID, predicted: Bytes, info: MessageSentInfo, attempt: UByte, timeout: Double?,
     ) {
         val seconds = timeout ?: maxOf(config.minTimeout, info.suggestedTimeoutMs.toDouble() / 1000.0 * 1.2)
         if (info.expectedAck != predicted) {
             ownership.reporter.report(MessagingDiagnostic.AckCodeMismatch(token, id, attempt))
-            trackPendingAck(id, contactID, info.expectedAck, seconds)
-        } else synchronized(lock) {
-            pendingAcks[id]?.let { pendingAcks[id] = it.copy(sentAt = clock.wallClock.instant(), timeout = seconds) }
+        }
+        synchronized(lock) {
+            val current = pendingAcks[id] ?: return
+            if (current.authority !== directAuthorities[id]?.attempt) return
+            if (info.expectedAck != predicted) {
+                pendingAcks.values.firstOrNull { it.messageID != id && info.expectedAck in it.ackCodes }?.let {
+                    ownership.reporter.report(MessagingDiagnostic.AckCodeCollision(token, id, it.messageID))
+                    throw MessageServiceException(MessageServiceError.SendFailed("Ambiguous acknowledgement identity"))
+                }
+            }
+            pendingAcks[id] = current.copy(
+                ackCodes = (current.ackCodes + listOf(info.expectedAck)).snapshotSet(),
+                sentAt = clock.wallClock.instant(), timeout = seconds,
+            )
         }
     }
 
     internal suspend fun finalizeSend(
         messageID: UUID, contactID: UUID, publicKey: Bytes, sentInfo: MessageSentInfo?, initialPathLength: UByte,
+        noDispatch: Boolean = false,
     ): MessageDTO {
         ownership.check("finalizeSend")
         val tracking = pendingAck(messageID)
@@ -868,21 +1287,32 @@ class MessageService(
         else mutation(messageID).withLock {
             ownership.check("finalizeSend.transition")
             val current = pendingAck(messageID)
-            if (current == null || current.isDelivered) synchronized(lock) { pendingAcks.remove(messageID) }
+            if (current?.acknowledgement != null) reconcileAcknowledgementLocked(messageID, cleanup = false)
+            else if (current == null || current.isDelivered) synchronized(lock) { pendingAcks.remove(messageID) }
             else if (sentInfo != null) {
-                dataStore.updateMessageAck(key(messageID), sentInfo.expectedAck.ackCodeUInt32, MessageStatus.DELIVERED)
-                ownership.check("finalizeSend.delivered")
-                dataStore.updateContactLastMessage(key(contactID), clock.wallClock.instant())
-                ownership.check("finalizeSend.contact")
-                synchronized(lock) { pendingAcks.remove(messageID) }
-                if (dataStore.fetchMessage(key(messageID))?.status == MessageStatus.DELIVERED) {
-                    ownership.check("finalizeSend.refetched")
-                    events.yield(MessageStatusEvent.StatusResolved(messageID, MessageStatus.DELIVERED, null))
+                val acknowledgement = MeshAcknowledgement(sentInfo.expectedAck, null)
+                synchronized(lock) {
+                    pendingAcks[messageID] = current.copy(isDelivered = true, acknowledgement = acknowledgement)
+                    current.receipt.complete(acknowledgement)
+                    activeDirectClaims[messageID]?.acknowledgement = acknowledgement
                 }
+                reconcileAcknowledgementLocked(messageID, cleanup = false, verifyRadioIdentity = false)
             } else {
-                val changed = dataStore.clearRetryingToSent(key(messageID))
+                if (noDispatch) {
+                    val changed = dataStore.clearRetryingToSent(key(messageID))
+                    ownership.check("finalizeSend.noDispatch")
+                    if (changed) events.yield(MessageStatusEvent.StatusResolved(messageID, MessageStatus.SENT, null))
+                    return@withLock
+                }
+                if (synchronized(lock) { directAuthorities[messageID] } == null &&
+                    dataStore.fetchMessage(key(messageID))?.status in listOf(MessageStatus.FAILED, MessageStatus.DELIVERED)) {
+                    return@withLock
+                }
+                val receipt = directBookkeeping(messageID, "retryExhausted", DirectAckBookkeeping.RetryExhausted)
                 ownership.check("finalizeSend.sent")
-                if (changed) events.yield(MessageStatusEvent.StatusResolved(messageID, MessageStatus.SENT, null))
+                if (receipt.message?.status == MessageStatus.SENT) {
+                    events.yield(MessageStatusEvent.StatusResolved(messageID, MessageStatus.SENT, null))
+                }
             }
         }
         checkRouting(messageID, contactID, publicKey, initialPathLength)
@@ -917,7 +1347,9 @@ class MessageService(
         bookkeeping("dmSent.$id") {
             mutation(id).withLock {
                 ownership.checkPersistenceCompletion("dmSent")
-                dataStore.updateMessageAck(key(id), info.expectedAck.ackCodeUInt32, MessageStatus.SENT)
+                val state = directAuthority(id)
+                val wireID = synchronized(lock) { requireNotNull(state.wires[0]) }
+                recordDirectAcceptance(state, wireID, info)
                 ownership.checkPersistenceCompletion("dmSent.saved")
                 dataStore.updateContactLastMessage(key(contactID), clock.wallClock.instant())
                 ownership.checkPersistenceCompletion("dmSent.contact")
@@ -926,6 +1358,9 @@ class MessageService(
                 if (ownership.isCurrent && row?.status == MessageStatus.SENT) {
                     events.yield(MessageStatusEvent.StatusResolved(id, MessageStatus.SENT, null))
                 }
+            }
+            if (ownership.isCurrent && pendingAck(id)?.acknowledgement != null) {
+                bookkeeping("ack.$id") { reconcileAcknowledgement(id) }
             }
         }
     }
@@ -963,11 +1398,13 @@ class MessageService(
                     dataStore.saveMessage(dto)
                     ownership.check("sendChannelMessage.persisted")
                     withPoolBackoff(2u) {
-                        checkIdentity("sendChannelMessage.wire")
-                        inlineWire { dispatch ->
-                            val timestamp = Instant.ofEpochSecond(dto.timestamp.toLong())
-                            if (dispatch == null) session.sendChannelMessage(channelIndex, text, timestamp)
-                            else session.sendChannelMessage(channelIndex, text, timestamp, dispatch = dispatch)
+                        channelTransmission(channelIndex) {
+                            checkIdentity("sendChannelMessage.wire")
+                            inlineWire { dispatch ->
+                                val timestamp = Instant.ofEpochSecond(dto.timestamp.toLong())
+                                if (dispatch == null) session.sendChannelMessage(channelIndex, text, timestamp)
+                                else session.sendChannelMessage(channelIndex, text, timestamp, dispatch = dispatch)
+                            }
                         }
                     }
                 }
@@ -1002,8 +1439,10 @@ class MessageService(
                     if (isResend && !preserveTimestamp) dataStore.updateMessageTimestamp(key(id), stamp)
                     ownership.check("queuedChannel.timestamp")
                     withPoolBackoff(2u) {
-                        checkIdentity("queuedChannel.wire")
-                        session.sendChannelMessage(index, row.text, Instant.ofEpochSecond(stamp.toLong()))
+                        channelTransmission(index) {
+                            checkIdentity("queuedChannel.wire")
+                            session.sendChannelMessage(index, row.text, Instant.ofEpochSecond(stamp.toLong()))
+                        }
                     }
                 }
                 ownership.check("queuedChannel.accepted")
@@ -1082,10 +1521,21 @@ class MessageService(
                 catch (failure: PersistenceStoreException) { remember("ack.$id", failure) }
                 catch (failure: MessageServiceException) { remember("ack.$id.identity", failure) }
             }
+            if (authorityActivationStarted) {
+                try {
+                    when (val result = authority().revokeDirectAckSession(directLease())) {
+                        DirectAckRevocationResult.Revoked, DirectAckRevocationResult.AlreadyRevoked -> Unit
+                        is DirectAckRevocationResult.Rejected -> throw authorityFailure(result.reason.name)
+                    }
+                } catch (failure: PersistenceStoreException) { remember("directAckRevoke", failure) }
+            }
             synchronized(lock) {
                 pendingAcks.values.forEach { it.receipt.cancel() }
                 pendingAcks.clear()
-                failedAckRestorations.clear()
+                directAuthorities.clear()
+                directRegistrationIDs.clear()
+                noDispatchCompletions.clear()
+                uncertainFailureWrites.clear()
                 directClaims.clear()
                 activeDirectClaims.clear()
             }
@@ -1100,6 +1550,9 @@ class MessageService(
     }
 
     private companion object {
+        private val retiredAuthorityReasons = setOf(
+            DirectAckRejection.INVALIDATED, DirectAckRejection.STALE_LEASE, DirectAckRejection.MISSING,
+        )
         // A caller receipt must have one active top-level owner across service instances.
         private val notificationActionLock = Any()
         private val notificationActionClaims = mutableSetOf<NotificationActionReceipt>()

@@ -102,7 +102,8 @@ class RoutingTransportFailureTest {
         }
         val service = MessageService(fixture.token, SELF, role, fixture.store, fixture.signals,
             fixture.scope, config, fixture.clock, jitter = { 1.0 },
-            reporter = MessagingIssueReporter { fixture.diagnostics += it })
+            reporter = MessagingIssueReporter { fixture.diagnostics += it },
+            directAckAuthority = fixture.store.directAckAuthority)
         try {
             fixture.start()
             val result = service.sendMessageWithRetry("optional path reset", fixture.contact)
@@ -157,7 +158,7 @@ class RoutingTransportFailureTest {
         val transport = FailingTransport(cause)
         val session = MeshCoreSession(transport, SessionConfiguration(defaultTimeout = 5.0), clock, scope.coroutineContext)
         val service = MessageService(token(), SELF, session, store, signals, scope, clock = clock,
-            reporter = MessagingIssueReporter { diagnostics += it })
+            reporter = MessagingIssueReporter { diagnostics += it }, directAckAuthority = store.directAckAuthority)
 
         suspend fun seed(status: MessageStatus): MessageDTO {
             val ack = Bytes.of(0xFE, 0xED, 0xFA, 0xCE)

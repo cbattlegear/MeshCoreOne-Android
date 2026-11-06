@@ -668,7 +668,7 @@ class CommitRecoveryTest {
         block: suspend (MessageService) -> Unit,
     ) {
         val service = MessageService(h.token, SELF, session, store, h.signals, h.scope, clock = h.clock,
-            reporter = MessagingIssueReporter { h.diagnostics += it })
+            reporter = MessagingIssueReporter { h.diagnostics += it }, directAckAuthority = h.store.directAckAuthority)
         try { block(service) } finally { service.close() }
     }
 }

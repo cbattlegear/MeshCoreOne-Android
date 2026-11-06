@@ -295,10 +295,22 @@ internal class PendingQueue<K, V> private constructor(
     }
 
     /** Removes every value queued under [key]; returns the remaining queue and the values (null when none). */
-    fun take(key: K, withOrder: (V, Long, Long) -> V): Pair<PendingQueue<K, V>, List<V>?> {
-        val matched = entries[key] ?: return this to null
+    fun take(key: K, withOrder: (V, Long, Long) -> V): Pair<PendingQueue<K, V>, List<V>?> =
+        takeMatching(key, { true }, withOrder)
+
+    /** Leaves nonmatching entries and their original eviction priority untouched. */
+    fun takeMatching(
+        key: K,
+        matches: (V) -> Boolean,
+        withOrder: (V, Long, Long) -> V,
+    ): Pair<PendingQueue<K, V>, List<V>?> {
+        val values = entries[key] ?: return this to null
+        val (matched, remaining) = values.partition { matches(it.value) }
+        if (matched.isEmpty()) return this to null
         val keyOrder = keyOrders.getValue(key)
-        return PendingQueue(entries - key, keyOrders - key, nextOrder) to
+        val next = if (remaining.isEmpty()) PendingQueue(entries - key, keyOrders - key, nextOrder)
+            else PendingQueue(entries + (key to remaining), keyOrders, nextOrder)
+        return next to
             matched.map { withOrder(it.value, keyOrder, it.order) }
     }
 

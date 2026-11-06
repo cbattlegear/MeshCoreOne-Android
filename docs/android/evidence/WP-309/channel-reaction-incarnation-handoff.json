@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "wp": "WP-309",
+  "base": "35abcc1276082995eed216bf28bff04d77e176c8",
+  "reference_pin": "db14559b39d32322b06477c6ae676112f583db50",
+  "status": "PARTIAL_SOURCE_ONLY_UNCOMPILED_UNEXECUTED",
+  "implemented": [
+    "Predicate-selective pending queue take preserves nonmatching entries, original key and entry ordinals, and oldest-key eviction priority.",
+    "Existing take delegates to the same operation with an always-true predicate, preserving original all-entry drain behavior.",
+    "Six focused queue controls cover foreign-radio retention, no-match stability, original-priority restoration around new arrivals, unchanged eviction age, actual PendingReaction wire/radio/receivedAt retention and unchanged legacy full-drain behavior."
+  ],
+  "not_implemented_or_accepted": [
+    "No frozen canonical reaction mutation contract is imported by this partial source.",
+    "Cache target binding, conditional successor advancement, real App completion indexer and Sync adapter remain dependent on the actual frozen producer API.",
+    "This queue prerequisite does not fix or accept the same-ID replacement mutation race by itself."
+  ],
+  "actual_trace": {
+    "indexer": "RadioSessionContainer.kt:216-217 passes ID/channel/sender/text/timestamp to ReactionService.indexMessage and discards returned pending matches.",
+    "cache": "MessageLRUCache.kt stores MessageCandidate ID/text/timestamp/indexedAt without persisted incarnation or revision.",
+    "consumer": "SyncCoordinatorReactionHandlers.kt native cache lookup resolves UUID and persists separately; native DB fallback and MCO v3/v1 candidates are DTO-only.",
+    "persistence": "ReactionPersisting separates reactionExists, saveReaction, fetchReactions and updateMessageReactionSummary; no atomic original-target mutation guard exists at the trusted base.",
+    "history": "AppChatsFeature.prepareTimelineMessages drains pending reactions and restores unfinished original queue metadata on errors or cancellation; this behavior must be retained."
+  },
+  "necessary_prerequisites": [
+    "a59 canonical opaque target and typed atomic apply contract, with actual persisted incarnation plus revision and explicit successor after own summary writes.",
+    "f805 atomic Room implementation and actual path admission, serialized with 3008 durable-occupant/schema work; held storage source is not trusted-main acceptance.",
+    "Original save, history-window or channel completion transaction issues the binding for cache/index-triggered replay; actual candidate-selection transaction may issue a binding for a genuinely fresh never-targeted wire lookup. No ID-only or DTO-equality recapture.",
+    "Rejected ranked-unbound-hint shortcut: if cached A is deleted and identical same-key B is inserted, a later actual query ranked by old cached ID can authorize B. Full wire matching does not prove the old indexed incarnation. It is not an ABA-safe cache repair.",
+    "Already-bound stale pending work retains its binding and cannot become never-bound work or fall back onto a replacement.",
+    "Old pending timestamps, corrected receive timestamps, more than 200 rows and cache indexedAt collision ordering need discriminating coverage; generic now-window/createdAt candidate selection is not an equivalent substitute.",
+    "12e7 owns real Sync native/v3/v1/pending consumer and ports/helpers/tests; 13a owns queue adoption and original completion cleanup lineage.",
+    "This session owns cache/service/App indexing and SyncReactionAdapter wiring; b0c5 neutral event/list hunks remain disjoint and retained warning/enqueue freezes remain unchanged."
+  ],
+  "verification": {
+    "product_tests_executed": 0,
+    "compiled": false,
+    "device_or_radio_execution": false,
+    "local_gradle_or_ci_dispatch": false,
+    "source_admission": "Exact trusted CapabilityEngine.admit accepted the existing service consumer and focused test path; capability-admissions.json is session-local bookkeeping, not a ledger receipt or product evidence."
+  }
+}

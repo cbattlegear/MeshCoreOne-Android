@@ -1422,73 +1422,6 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
                 else onDevice(DiscoveredDevice(replacementId, replacementAddress, "Direct replacement radio", -41))
             }
 
-            private suspend fun TestScope.mountedImmediateDiscoveryReplacement(onboarding: Boolean) {
-                val service = BluetoothScanPairingService()
-                val address = "D2:00:00:00:00:19"
-                val id = DeviceEndpointIdentity.deviceId(address)
-                var starts = 0
-                var stops = 0
-                val scans = BleScanCoordinator(object : BleScanGateway {
-                    override fun startScan(onDevice: (DiscoveredDevice) -> Unit, onFailure: (Throwable) -> Unit) {
-                        starts++
-                        onDevice(DiscoveredDevice(id, address, "Immediate replacement radio", -40))
-                    }
-                    override fun stopScan() { stops++ }
-                })
-                val resolver = compose.activity.contentResolver
-                val previousScale = android.provider.Settings.Global.getFloat(
-                    resolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f,
-                )
-                try {
-                    android.provider.Settings.Global.putFloat(resolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
-                    withSettings(pairingService = service, scans = scans, knownEndpoints = InMemoryKnownEndpointStore()) { h, feature ->
-                        if (onboarding) {
-                            val dependencies = requireNotNull(h.container.onboarding).forRerun()
-                            compose.runOnUiThread {
-                                compose.activity.setContent { MeshCoreTheme(motionScale = 0f) { OnboardingFlow(dependencies, {}) } }
-                            }
-                        } else mount(h, feature)
-                        val first = h.appState.startDeviceScan()
-                        h.eventuallyMounted("first discovery has a mounted scanner") { service.isPresenting.value && starts == 1 }
-                        lateinit var replacement: kotlinx.coroutines.Job
-                        compose.runOnUiThread {
-                            first.cancel()
-                            h.settle()
-                            assertTrue(first.isCompleted)
-                            assertFalse(service.isPresenting.value)
-                            replacement = h.appState.startDeviceScan()
-                            h.settle()
-                            assertTrue(service.isPresenting.value)
-                        }
-                        h.eventuallyMounted("same composed picker switches to replacement discovery") {
-                            starts == 2 && compose.onAllNodesWithText("Immediate replacement radio").fetchSemanticsNodes().size == 1
-                        }
-                        assertEquals(1, stops)
-                        assertTrue(replacement.isActive)
-                        assertTrue(h.appState.connectionUI.isBusy)
-                        compose.onNodeWithText("Immediate replacement radio").performClick()
-                        h.eventually("replacement can connect through the unchanged picker", virtualBudgetMillis = 3_000) {
-                            compose.waitForIdle()
-                            h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY &&
-                                replacement.isCompleted
-                        }
-                        assertEquals(id, h.manager.connectedDevice?.id)
-                        assertEquals(2, starts)
-                        assertEquals(2, stops)
-                    }
-                } finally {
-                    android.provider.Settings.Global.putFloat(resolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, previousScale)
-                }
-            }
-
-            @Test fun settingsPickerReattachesWhenImmediateReplacementConflatesRequestedState() = runTest {
-                mountedImmediateDiscoveryReplacement(onboarding = false)
-            }
-
-            @Test fun onboardingPickerReattachesWhenImmediateReplacementConflatesRequestedState() = runTest {
-                mountedImmediateDiscoveryReplacement(onboarding = true)
-            }
-
             override fun stopScan() { stops++ }
         })
         withSettings(pairingService = service, scans = scans, knownEndpoints = endpoints) { h, _ ->
@@ -1555,6 +1488,73 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             assertEquals(BluetoothEndpoint(replacementId, replacementAddress, null), endpoints.endpoint(replacementId))
             assertFalse(service.isPresenting.value)
         }
+    }
+
+    private suspend fun TestScope.mountedImmediateDiscoveryReplacement(onboarding: Boolean) {
+        val service = BluetoothScanPairingService()
+        val address = "D2:00:00:00:00:19"
+        val id = DeviceEndpointIdentity.deviceId(address)
+        var starts = 0
+        var stops = 0
+        val scans = BleScanCoordinator(object : BleScanGateway {
+            override fun startScan(onDevice: (DiscoveredDevice) -> Unit, onFailure: (Throwable) -> Unit) {
+                starts++
+                onDevice(DiscoveredDevice(id, address, "Immediate replacement radio", -40))
+            }
+            override fun stopScan() { stops++ }
+        })
+        val resolver = compose.activity.contentResolver
+        val previousScale = android.provider.Settings.Global.getFloat(
+            resolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f,
+        )
+        try {
+            android.provider.Settings.Global.putFloat(resolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
+            withSettings(pairingService = service, scans = scans, knownEndpoints = InMemoryKnownEndpointStore()) { h, feature ->
+                if (onboarding) {
+                    val dependencies = requireNotNull(h.container.onboarding).forRerun()
+                    compose.runOnUiThread {
+                        compose.activity.setContent { MeshCoreTheme(motionScale = 0f) { OnboardingFlow(dependencies, {}) } }
+                    }
+                } else mount(h, feature)
+                val first = h.appState.startDeviceScan()
+                h.eventuallyMounted("first discovery has a mounted scanner") { service.isPresenting.value && starts == 1 }
+                lateinit var replacement: kotlinx.coroutines.Job
+                compose.runOnUiThread {
+                    first.cancel()
+                    h.settle()
+                    assertTrue(first.isCompleted)
+                    assertFalse(service.isPresenting.value)
+                    replacement = h.appState.startDeviceScan()
+                    h.settle()
+                    assertTrue(service.isPresenting.value)
+                }
+                h.eventuallyMounted("same composed picker switches to replacement discovery") {
+                    starts == 2 && compose.onAllNodesWithText("Immediate replacement radio").fetchSemanticsNodes().size == 1
+                }
+                assertEquals(1, stops)
+                assertTrue(replacement.isActive)
+                assertTrue(h.appState.connectionUI.isBusy)
+                compose.onNodeWithText("Immediate replacement radio").performClick()
+                h.eventually("replacement can connect through the unchanged picker", virtualBudgetMillis = 3_000) {
+                    compose.waitForIdle()
+                    h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY &&
+                        replacement.isCompleted
+                }
+                assertEquals(id, h.manager.connectedDevice?.id)
+                assertEquals(2, starts)
+                assertEquals(2, stops)
+            }
+        } finally {
+            android.provider.Settings.Global.putFloat(resolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, previousScale)
+        }
+    }
+
+    @Test fun settingsPickerReattachesWhenImmediateReplacementConflatesRequestedState() = runTest {
+        mountedImmediateDiscoveryReplacement(onboarding = false)
+    }
+
+    @Test fun onboardingPickerReattachesWhenImmediateReplacementConflatesRequestedState() = runTest {
+        mountedImmediateDiscoveryReplacement(onboarding = true)
     }
 
     @Test fun concurrentNonFallbackPairingDoesNotClearOwningActivityState() = runTest {

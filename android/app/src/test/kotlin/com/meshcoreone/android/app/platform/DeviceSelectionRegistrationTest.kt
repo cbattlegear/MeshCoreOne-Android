@@ -1019,6 +1019,55 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         }
     }
 
+    @Test fun leavingSettingsAfterFallbackSelectionDoesNotCancelTheSelectedConnection() = runTest {
+        val service = BluetoothScanPairingService()
+        val address = "4A:00:00:00:00:02"
+        val id = DeviceEndpointIdentity.deviceId(address)
+        val endpoints = SharedPreferencesKnownEndpoints(compose.activity)
+        val connectionStarted = CompletableDeferred<UUID>()
+        val releaseConnection = CompletableDeferred<Unit>()
+        val systemLinks = object : SystemLinkProbe {
+            override suspend fun isDeviceConnectedToSystem(deviceId: UUID): Boolean {
+                connectionStarted.complete(deviceId)
+                releaseConnection.await()
+                return false
+            }
+
+            override suspend fun systemConnectedDeviceIds(): Set<UUID> = emptySet()
+        }
+        val scans = BleScanCoordinator(object : BleScanGateway {
+            override fun startScan(onDevice: (DiscoveredDevice) -> Unit, onFailure: (Throwable) -> Unit) {
+                onDevice(DiscoveredDevice(id, address, "Selected radio", -40))
+            }
+            override fun stopScan() = Unit
+        })
+        withSettings(pairingService = service, scans = scans, knownEndpoints = endpoints, systemLinks = systemLinks) { h, feature ->
+            mount(h, feature)
+            open(h)
+            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            compose.waitForIdle()
+            h.eventually("selected radio discovery rendered") {
+                compose.onAllNodesWithText("Selected radio").fetchSemanticsNodes().size == 1
+            }
+            compose.onNodeWithText("Selected radio").performClick()
+            h.eventually("selection commits and connection waits", virtualBudgetMillis = 1_000) {
+                !service.isPresenting.value && connectionStarted.isCompleted
+            }
+            assertEquals(id, connectionStarted.await())
+            assertTrue(feature.selectionScanJob?.isActive == true)
+
+            compose.runOnUiThread { compose.activity.setContent {} }
+            compose.waitForIdle()
+            assertTrue("selected connection must outlive the Settings host", feature.selectionScanJob?.isActive == true)
+            releaseConnection.complete(Unit)
+            h.eventually("selected radio connects after Settings disposal", virtualBudgetMillis = 3_000) {
+                h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
+            }
+            assertEquals(id, h.manager.connectedDevice?.id)
+            assertEquals(BluetoothEndpoint(id, address, null), endpoints.endpoint(id))
+        }
+    }
+
     @Test fun fallbackDiscoverySharesOneScanAcrossConcurrentSettingsCollectors() = runTest {
         val service = BluetoothScanPairingService()
         var starts = 0
@@ -1102,7 +1151,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             assertNull(endpoints.endpoint(firstId))
             assertTrue(h.links.links.isEmpty())
             compose.onNodeWithText("Replacement radio").performClick()
-            h.eventually("replacement radio connects") {
+            h.eventually("replacement radio connects", virtualBudgetMillis = 3_000) {
                 h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
             }
             assertEquals(replacementId, h.manager.connectedDevice?.id)

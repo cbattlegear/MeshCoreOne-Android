@@ -215,7 +215,9 @@ class AppSettingsFeature private constructor(
                                     return@launch
                                 }
                                 container.connectionPort.stopBleScanning()
-                                discoveryGeneration = scanLifecycle?.beginDiscovery()
+                                discoveryGeneration = scanLifecycle?.beginDiscovery {
+                                    selectionScanOwned = false
+                                }
                                 app.startDeviceScanAndAwait()
                             } finally {
                                 discoveryGeneration?.let { scanLifecycle?.endDiscovery(it) }

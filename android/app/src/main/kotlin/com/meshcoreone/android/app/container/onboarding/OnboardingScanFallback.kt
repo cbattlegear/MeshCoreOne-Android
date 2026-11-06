@@ -52,10 +52,10 @@ class ScanFallbackPort(
     private var nextAttemptId = 0L
     private val endpointWriteLock = Mutex()
 
-    internal fun beginDiscovery(): Long {
+    internal fun beginDiscovery(onSelectionCommitted: () -> Unit = {}): Long {
         val (generation, previousJobs) = synchronized(selectionLock) {
             val previousJobs = activeAttempt?.let(::retireAttempt)
-            val attempt = DiscoveryAttempt(++nextAttemptId)
+            val attempt = DiscoveryAttempt(++nextAttemptId, onSelectionCommitted = onSelectionCommitted)
             activeAttempt = attempt
             attempt.generation to previousJobs
         }
@@ -191,7 +191,7 @@ class ScanFallbackPort(
                         return
                     }
                     val selected = synchronized(selectionLock) {
-                        if (activeAttempt !== attempt || !attempt.active || !job.isActive) {
+                        if (activeAttempt !== attempt || !attempt.active || !job.isActive || !service.isPresenting.value) {
                             false
                         } else {
                             attempt.active = false
@@ -203,7 +203,9 @@ class ScanFallbackPort(
                             true
                         }
                     }
-                    if (!selected) {
+                    if (selected) {
+                        attempt.onSelectionCommitted()
+                    } else {
                         rollbackEndpoint(id, endpoint, previous, previousStability)
                         return
                     }
@@ -294,6 +296,7 @@ class ScanFallbackPort(
 
     private class DiscoveryAttempt(
         val generation: Long,
+        val onSelectionCommitted: () -> Unit = {},
         var active: Boolean = true,
         var selectionJob: Job? = null,
         var scanJob: Job? = null,

@@ -52,7 +52,7 @@ data class ActiveConversation(
     val roomSessionID: UUID? = null,
 )
 
-// AndroidOnly: WP-215 Captured reaction posting reports actual policy and platform boundaries.
+// Native adaptation (WP-215): captured reaction posting reports actual policy and platform boundaries.
 sealed interface ReactionNotificationOutcome {
     /** NotificationManager.notify returned; this is not durable delivery or proof of display. */
     data class Posted(val id: NotificationId) : ReactionNotificationOutcome

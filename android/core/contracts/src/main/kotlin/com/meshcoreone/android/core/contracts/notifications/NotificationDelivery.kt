@@ -80,7 +80,7 @@ data class NotificationRequest(
     val payload: NotificationPayload,
 )
 
-// AndroidOnly: WP-215 Synchronous notification effect admission and retirement fencing.
+// Native adaptation (WP-215): synchronous notification effect admission and retirement fencing.
 /**
  * Synchronous final-side-effect admission for one notification wiring generation.
  *

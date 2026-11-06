@@ -1,4 +1,5 @@
 // AndroidOnly: WP-303 App-state connection port and runtime sync state over the process ConnectionManager.
+// AndroidOnly: WP-305 Manager-owned device write lease bridge.
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.app.state.AppConnectionPort
@@ -141,8 +142,15 @@ class ConnectionManagerAppPort(
 class ManagerDeviceAccess(private val manager: ConnectionManager) : ConnectedDeviceAccess {
     private val mutableChanges = kotlinx.coroutines.flow.MutableStateFlow(0L)
     internal val changes: kotlinx.coroutines.flow.StateFlow<Long> = mutableChanges
+    override val requiresGenerationDeviceWriteLease: Boolean get() = true
     override val connectedDevice: DeviceDTO? get() = manager.connectedDevice
     override val connectedDeviceToken: SessionToken? get() = manager.snapshot.value.token
+    override fun captureDeviceWrite(): Pair<SessionToken, DeviceDTO>? = manager.captureDeviceWrite()
+    override suspend fun <T : Any> withDeviceWrite(
+        token: SessionToken,
+        deviceId: UUID,
+        block: suspend () -> T,
+    ): T? = manager.withDeviceWrite(token, deviceId, block)
     override fun currentDevice(expectedToken: SessionToken): DeviceDTO? = manager.currentDevice(expectedToken)
     override fun transformConnectedDevice(
         expectedToken: SessionToken?,

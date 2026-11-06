@@ -37,6 +37,14 @@ import kotlinx.coroutines.sync.withLock
 interface ConnectedDeviceAccess {
     val connectedDevice: DeviceDTO?
     val connectedDeviceToken: SessionToken? get() = null
+    /** Manager-backed access must fail closed if its atomic generation capture is unavailable. */
+    val requiresGenerationDeviceWriteLease: Boolean get() = false
+    fun captureDeviceWrite(): Pair<SessionToken, DeviceDTO>? = null
+    suspend fun <T : Any> withDeviceWrite(
+        token: SessionToken,
+        deviceId: UUID,
+        block: suspend () -> T,
+    ): T? = null
     fun currentDevice(expectedToken: SessionToken): DeviceDTO? =
         throw UnsupportedOperationException("Session-bound connected-device reads are not supported")
     fun transformConnectedDevice(
@@ -114,14 +122,26 @@ class ConnectedDeviceEditor(
         operation: String,
         expectedToken: SessionToken,
         transform: (DeviceDTO) -> DeviceDTO,
-    ): Boolean = sessionEdits.withLock { persistEdit(operation, expectedToken, transform) }
+    ): Boolean {
+        if (!access.requiresGenerationDeviceWriteLease) {
+            return sessionEdits.withLock { persistEdit(operation, expectedToken, transform) }
+        }
+        val (token, device) = access.captureDeviceWrite() ?: return false
+        if (token != expectedToken) return false
+        return sessionEdits.withLock {
+            access.withDeviceWrite(token, device.id) {
+                persistEdit(operation, token, transform, device)
+            } ?: false
+        }
+    }
 
     private suspend fun persistEdit(
         operation: String,
         expectedToken: SessionToken?,
         transform: (DeviceDTO) -> DeviceDTO,
+        capturedDevice: DeviceDTO? = null,
     ): Boolean {
-        val original = if (expectedToken == null) access.connectedDevice else access.currentDevice(expectedToken)
+        val original = capturedDevice ?: if (expectedToken == null) access.connectedDevice else access.currentDevice(expectedToken)
         original ?: return false
         fun current(): Boolean {
             val live = if (expectedToken == null) access.connectedDevice else access.currentDevice(expectedToken)
@@ -186,6 +206,15 @@ class ConnectedDeviceEditor(
     fun clearPreRepeatSettings(): Job? = edit("clearPreRepeat") { it.clearingPreRepeatSettings() }
 
     fun addKnownRegion(region: String): Job? {
+        if (access.requiresGenerationDeviceWriteLease) {
+            val (token, device) = access.captureDeviceWrite() ?: return null
+            if (region in device.knownRegions) return null
+            return scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                report("addKnownRegion") {
+                    changeKnownRegion(region, false, token, capturedDevice = device)
+                }
+            }
+        }
         val device = access.connectedDevice ?: return null
         if (region in device.knownRegions) return null
         val token = access.connectedDeviceToken
@@ -195,6 +224,14 @@ class ConnectedDeviceEditor(
     }
 
     fun removeKnownRegion(region: String): Job? {
+        if (access.requiresGenerationDeviceWriteLease) {
+            val (token, device) = access.captureDeviceWrite() ?: return null
+            return scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                report("removeKnownRegion") {
+                    changeKnownRegion(region, true, token, clearRadio = true, capturedDevice = device)
+                }
+            }
+        }
         access.connectedDevice ?: return null
         val token = access.connectedDeviceToken
         return scope.launch(start = CoroutineStart.UNDISPATCHED) {
@@ -205,20 +242,57 @@ class ConnectedDeviceEditor(
     }
 
     suspend fun addKnownRegion(region: String, expectedToken: SessionToken): Boolean =
-        changeKnownRegion(region, false, expectedToken)
+        changeKnownRegionWithExpectedToken(region, false, expectedToken)
 
     /** The Settings consumer has already verified the default-scope radio write, if required. */
     suspend fun persistKnownRegionRemoval(region: String, expectedToken: SessionToken): Boolean =
-        changeKnownRegion(region, true, expectedToken)
+        changeKnownRegionWithExpectedToken(region, true, expectedToken)
+
+    private suspend fun changeKnownRegionWithExpectedToken(
+        region: String,
+        remove: Boolean,
+        expectedToken: SessionToken,
+    ): Boolean {
+        if (!access.requiresGenerationDeviceWriteLease) {
+            return sessionEdits.withLock {
+                changeKnownRegionLocked(region, remove, expectedToken, null, false)
+            }
+        }
+        val (token, device) = access.captureDeviceWrite() ?: return false
+        if (token != expectedToken) return false
+        return sessionEdits.withLock {
+            access.withDeviceWrite(token, device.id) {
+                changeKnownRegionLocked(region, remove, token, device, false)
+            } ?: false
+        }
+    }
 
     private suspend fun changeKnownRegion(
         region: String,
         remove: Boolean,
         expectedToken: SessionToken?,
         clearRadio: Boolean = false,
+        capturedDevice: DeviceDTO? = null,
     ): Boolean = sessionEdits.withLock {
-        val original = if (expectedToken == null) access.connectedDevice else access.currentDevice(expectedToken)
-        original ?: return@withLock false
+        if (access.requiresGenerationDeviceWriteLease) {
+            val token = expectedToken ?: return@withLock false
+            val device = capturedDevice ?: return@withLock false
+            return@withLock access.withDeviceWrite(token, device.id) {
+                changeKnownRegionLocked(region, remove, token, device, clearRadio)
+            } ?: false
+        }
+        changeKnownRegionLocked(region, remove, expectedToken, capturedDevice, clearRadio)
+    }
+
+    private suspend fun changeKnownRegionLocked(
+        region: String,
+        remove: Boolean,
+        expectedToken: SessionToken?,
+        capturedDevice: DeviceDTO?,
+        clearRadio: Boolean,
+    ): Boolean {
+        val original = capturedDevice ?: if (expectedToken == null) access.connectedDevice else access.currentDevice(expectedToken)
+        original ?: return false
         if (remove) devices.removeDeviceKnownRegion(original.radioId, region)
         else devices.addDeviceKnownRegion(original.radioId, region)
         if (clearRadio && original.defaultFloodScopeName == region) clearDefaultFloodScope()
@@ -230,8 +304,8 @@ class ConnectedDeviceEditor(
                 else (live.knownRegions + region).distinct().snapshot(),
                 defaultFloodScopeName = if (remove && live.defaultFloodScopeName == region) null else live.defaultFloodScopeName,
             ).also { published = it }
-        } ?: return@withLock false
-        val updated = published ?: return@withLock false
+        } ?: return false
+        val updated = published ?: return false
         if (edit.previousKnownRegions != updated.knownRegions) onKnownRegionsChanged(edit, updated.knownRegions.toList())
         true
     }
@@ -287,6 +361,18 @@ class ConnectedDeviceEditor(
     }
 
     private fun edit(operation: String, transform: (DeviceDTO) -> DeviceDTO): Job? {
+        if (access.requiresGenerationDeviceWriteLease) {
+            val (token, device) = access.captureDeviceWrite() ?: return null
+            return scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                report(operation) {
+                    sessionEdits.withLock {
+                        access.withDeviceWrite(token, device.id) {
+                            persistEdit(operation, token, transform, device)
+                        }
+                    }
+                }
+            }
+        }
         val device = access.connectedDevice ?: return null
         val token = access.connectedDeviceToken
         // UNDISPATCHED enqueues this call before a later awaited preset can acquire the edit mutex.

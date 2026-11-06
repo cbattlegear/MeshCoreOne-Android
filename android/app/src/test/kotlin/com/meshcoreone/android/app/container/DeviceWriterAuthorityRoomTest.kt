@@ -5,9 +5,13 @@ import androidx.room.withTransaction
 import com.meshcoreone.android.app.container.onboarding.AppStateRadioConfigurator
 import com.meshcoreone.android.app.navigation.addSettingsKnownRegion
 import com.meshcoreone.android.app.navigation.removeSettingsKnownRegion
+import com.meshcoreone.android.core.connectivity.device.ConnectedDeviceAccess
+import com.meshcoreone.android.core.connectivity.device.ConnectedDeviceEditor
+import com.meshcoreone.android.core.connectivity.device.RadioPresetMatcher
 import com.meshcoreone.android.core.contracts.domain.DeviceEditPersisting
 import com.meshcoreone.android.core.contracts.domain.DeviceWriteSnapshot
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.ChannelFloodScope
@@ -19,11 +23,13 @@ import com.meshcoreone.android.core.protocol.model.SelfInfo
 import com.meshcoreone.android.core.services.device.RadioPresets
 import com.meshcoreone.android.feature.onboarding.OnboardingPresetTarget
 import com.meshcoreone.android.feature.settings.device.SettingsNotConnectedException
+import java.time.Instant
 import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
@@ -39,6 +45,7 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
         var beforeSnapshot: suspend () -> Unit = {}
         var beforeSave: suspend () -> Unit = {}
         var afterSave: suspend () -> Unit = {}
+        var beforeAdd: suspend () -> Unit = {}
         var beforeRemove: suspend () -> Unit = {}
         var rejected = 0
         override suspend fun insertDeviceIfAbsent(dto: DeviceDTO): Boolean = room.insertDeviceIfAbsent(dto)
@@ -64,6 +71,13 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
             return accepted
         }
 
+        override suspend fun addDeviceKnownRegion(radioId: RadioId, region: String) {
+            val hook = beforeAdd
+            beforeAdd = {}
+            hook()
+            room.addDeviceKnownRegion(radioId, region)
+        }
+
         override suspend fun removeDeviceKnownRegion(radioId: RadioId, region: String) {
             val hook = beforeRemove
             beforeRemove = {}
@@ -71,6 +85,16 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
             room.removeDeviceKnownRegion(radioId, region)
         }
     }
+
+    private fun editorFor(
+        access: ConnectedDeviceAccess,
+        persistence: PausedStore,
+        scope: CoroutineScope,
+    ) = ConnectedDeviceEditor(
+        access, persistence, persistence, { null },
+        RadioPresetMatcher { _, _, _, _ -> emptySet() },
+        scope, { Instant.EPOCH },
+    )
 
     @Test fun initializationAndRepeatedSimulatorSeedCannotReplaceSettingsOrActivateAnOlderRadio() = runTest {
         val successor = DeviceDTO(radioId = RadioId(UUID(0, 301)), publicKey = key(3), nodeName = "Successor")
@@ -220,6 +244,301 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
             assertEquals("new-preset", actual.appliedRadioPresetID)
             assertEquals(actual, h.manager.connectedDevice)
         } finally { release.complete(Unit); h.container.close() }
+    }
+
+    @Test fun capturedOldGenerationCannotWriteAfterSameIdSuccessorInstallsBeforeAdmission() = runTest {
+        val paused = PausedStore(store)
+        val h = ContainerHarness(this, store, persistenceOverride = paused)
+        val admissionEntered = CompletableDeferred<Unit>()
+        val releaseAdmission = CompletableDeferred<Unit>()
+        var capturedToken: SessionToken? = null
+        var capturedDeviceId: UUID? = null
+        try {
+            val pairingId = UUID.randomUUID()
+            h.manager.connect(h.target(pairingId))
+            h.settle()
+            val before = assertNotNull(h.manager.connectedDevice)
+            val oldToken = assertNotNull(h.manager.snapshot.value.token)
+            val managerAccess = h.container.deviceAccess
+            val delayedAdmission = object : ConnectedDeviceAccess by managerAccess {
+                override suspend fun <T : Any> withDeviceWrite(
+                    token: SessionToken,
+                    deviceId: UUID,
+                    block: suspend () -> T,
+                ): T? {
+                    capturedToken = token
+                    capturedDeviceId = deviceId
+                    admissionEntered.complete(Unit)
+                    releaseAdmission.await()
+                    return managerAccess.withDeviceWrite(token, deviceId, block)
+                }
+            }
+            val editor = editorFor(delayedAdmission, paused, this)
+            val write = assertNotNull(editor.updateDevice(before.info(), "stale-generation-preset"))
+            admissionEntered.await()
+            assertEquals(oldToken, capturedToken)
+            assertEquals(before.id, capturedDeviceId)
+
+            h.manager.disconnect()
+            h.manager.connect(h.target(pairingId))
+            h.settle()
+            val successor = assertNotNull(h.manager.connectedDevice)
+            val successorToken = assertNotNull(h.manager.snapshot.value.token)
+            assertEquals(before.id, successor.id)
+            assertEquals(before.radioId, successor.radioId)
+            assertTrue(oldToken != successorToken)
+            val persistedSuccessor = assertNotNull(store.fetchDevice(successor.id))
+
+            releaseAdmission.complete(Unit)
+            write.join()
+
+            assertEquals(persistedSuccessor, store.fetchDevice(successor.id), "Stale admission performs no Room write")
+            assertEquals(successor, h.manager.connectedDevice, "A same-ID successor is not republished from G1")
+        } finally {
+            releaseAdmission.complete(Unit)
+            h.container.close()
+        }
+    }
+
+    @Test fun retirementWaitsForAdmittedDeviceWriteThroughRoomCommitWithoutSuccessor() = runTest {
+        val paused = PausedStore(store)
+        val h = ContainerHarness(this, store, persistenceOverride = paused)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            val before = assertNotNull(h.manager.connectedDevice)
+            val token = assertNotNull(h.manager.snapshot.value.token)
+            paused.beforeSave = { entered.complete(Unit); release.await() }
+            val write = async {
+                h.container.deviceEditor.updateDevice(before.info(), "committed-before-retirement", token)
+            }
+            entered.await()
+
+            val retirement = async { h.manager.disconnect() }
+            testScheduler.runCurrent()
+            assertFalse(retirement.isCompleted, "Retirement cannot finish while the admitted Room write is held")
+
+            release.complete(Unit)
+            assertFalse(write.await(), "A commit after logical detach is not reported as live publication")
+            retirement.await()
+
+            assertEquals(
+                "committed-before-retirement",
+                store.fetchDevice(before.id)!!.appliedRadioPresetID,
+                "Room commit completes before teardown releases the generation",
+            )
+            assertNull(h.manager.connectedDevice)
+        } finally {
+            release.complete(Unit)
+            h.container.close()
+        }
+    }
+
+    @Test fun admittedDeviceWriteHoldsSuccessorUntilRoomCommitAndCannotPublishIntoIt() = runTest {
+        val paused = PausedStore(store)
+        val firstId = UUID(0, 501)
+        val successorId = UUID(0, 502)
+        val h = ContainerHarness(
+            this, store, persistenceOverride = paused,
+            identity = { target ->
+                key(if ((target as com.meshcoreone.android.core.contracts.domain.ConnectionTarget.Bluetooth).deviceId == firstId) 7 else 8)
+            },
+        )
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        try {
+            h.manager.connect(h.target(firstId))
+            h.settle()
+            val before = assertNotNull(h.manager.connectedDevice)
+            val token = assertNotNull(h.manager.snapshot.value.token)
+            paused.beforeSave = { entered.complete(Unit); release.await() }
+            val write = async {
+                h.container.deviceEditor.updateDevice(before.info(), "before-successor", token)
+            }
+            entered.await()
+
+            val successorInstall = async { h.manager.switchDevice(h.target(successorId)) }
+            testScheduler.runCurrent()
+            assertFalse(successorInstall.isCompleted, "Successor installation waits for the admitted Room result")
+
+            release.complete(Unit)
+            assertFalse(write.await(), "A retired generation is not reported as live publication")
+            successorInstall.await()
+            h.settle()
+
+            val successor = assertNotNull(h.manager.connectedDevice)
+            assertTrue(successor.id != before.id)
+            assertNull(store.fetchDevice(successor.id)!!.appliedRadioPresetID)
+            assertEquals("before-successor", store.fetchDevice(before.id)!!.appliedRadioPresetID)
+            assertEquals(successor, h.manager.connectedDevice)
+        } finally {
+            release.complete(Unit)
+            h.container.close()
+        }
+    }
+
+    @Test fun retirementDrainsAnAdmittedDeviceWriteThroughRoomRollback() = runTest {
+        val paused = PausedStore(store)
+        val h = ContainerHarness(this, store, persistenceOverride = paused)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val trigger = "reject_retiring_device_write"
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            val before = assertNotNull(h.manager.connectedDevice)
+            val token = assertNotNull(h.manager.snapshot.value.token)
+            paused.beforeSave = { entered.complete(Unit); release.await() }
+            val write = async {
+                runCatching { h.container.deviceEditor.updateDevice(before.info(), "must-roll-back", token) }
+            }
+            entered.await()
+
+            val retirement = async { h.manager.disconnect() }
+            testScheduler.runCurrent()
+            assertFalse(retirement.isCompleted, "Retirement remains drained through the pending transaction")
+            db.openHelper.writableDatabase.execSQL(
+                "CREATE TRIGGER $trigger BEFORE UPDATE ON devices " +
+                    "BEGIN SELECT RAISE(FAIL, 'retiring device write rejected'); END",
+            )
+
+            release.complete(Unit)
+            assertTrue(write.await().isFailure)
+            retirement.await()
+
+            assertNull(store.fetchDevice(before.id)!!.appliedRadioPresetID)
+            assertNull(h.manager.connectedDevice)
+        } finally {
+            release.complete(Unit)
+            db.openHelper.writableDatabase.execSQL("DROP TRIGGER IF EXISTS $trigger")
+            h.container.close()
+        }
+    }
+
+    @Test fun directKnownRegionAdditionDrainsBeforeNoSuccessorTeardown() = runTest {
+        val paused = PausedStore(store)
+        val h = ContainerHarness(this, store, persistenceOverride = paused)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            val before = assertNotNull(h.manager.connectedDevice)
+            paused.beforeAdd = { entered.complete(Unit); release.await() }
+            val edit = assertNotNull(h.container.deviceEditor.addKnownRegion("US915"))
+            entered.await()
+
+            val retirement = async { h.manager.disconnect() }
+            testScheduler.runCurrent()
+            assertFalse(retirement.isCompleted, "The direct region DAO write is part of the generation lease")
+            release.complete(Unit)
+            edit.join()
+            retirement.await()
+
+            assertEquals(listOf("US915"), store.fetchDevice(before.id)!!.knownRegions)
+            assertNull(h.manager.connectedDevice)
+        } finally {
+            release.complete(Unit)
+            h.container.close()
+        }
+    }
+
+    @Test fun directKnownRegionRemovalDrainsBeforeSuccessorInstallation() = runTest {
+        val paused = PausedStore(store)
+        val firstId = UUID(0, 601)
+        val successorId = UUID(0, 602)
+        val h = ContainerHarness(
+            this, store, persistenceOverride = paused,
+            identity = { target ->
+                key(if ((target as com.meshcoreone.android.core.contracts.domain.ConnectionTarget.Bluetooth).deviceId == firstId) 7 else 8)
+            },
+        )
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        try {
+            h.manager.connect(h.target(firstId))
+            h.settle()
+            val before = assertNotNull(h.manager.connectedDevice)
+            store.addDeviceKnownRegion(before.radioId, "US915")
+            h.container.deviceEditor.updateDevice(before.copy(knownRegions = listOf("US915").snapshot()))
+            paused.beforeRemove = { entered.complete(Unit); release.await() }
+            val edit = assertNotNull(h.container.deviceEditor.removeKnownRegion("US915"))
+            entered.await()
+
+            val successorInstall = async { h.manager.switchDevice(h.target(successorId)) }
+            testScheduler.runCurrent()
+            assertFalse(successorInstall.isCompleted, "The direct region DAO write is part of the generation lease")
+            release.complete(Unit)
+            edit.join()
+            successorInstall.await()
+            h.settle()
+
+            assertEquals(emptyList<String>(), store.fetchDevice(before.id)!!.knownRegions)
+            assertTrue(h.manager.connectedDevice!!.id != before.id)
+        } finally {
+            release.complete(Unit)
+            h.container.close()
+        }
+    }
+
+    @Test fun explicitlyGuardOffEditorKeepsLegacyUnboundPersistence() = runTest {
+        val paused = PausedStore(store)
+        val h = ContainerHarness(this, store, persistenceOverride = paused)
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            val before = assertNotNull(h.manager.connectedDevice)
+            val managerAccess = h.container.deviceAccess
+            val guardOffAccess = object : ConnectedDeviceAccess by managerAccess {
+                override val requiresGenerationDeviceWriteLease: Boolean get() = false
+                override val connectedDeviceToken: SessionToken? get() = null
+                override suspend fun <T : Any> withDeviceWrite(
+                    token: SessionToken,
+                    deviceId: UUID,
+                    block: suspend () -> T,
+                ): T? = error("The explicit legacy path must not request a generation lease")
+            }
+            val editor = editorFor(guardOffAccess, paused, this)
+            assertNotNull(editor.updateDevice(before.info(), "legacy-guard-off")).join()
+            assertEquals("legacy-guard-off", store.fetchDevice(before.id)!!.appliedRadioPresetID)
+            assertEquals("legacy-guard-off", h.manager.connectedDevice!!.appliedRadioPresetID)
+        } finally {
+            h.container.close()
+        }
+    }
+
+    @Test fun guardedCaptureFailureRefusesEveryEditorWriteWithoutLegacyFallback() = runTest {
+        val paused = PausedStore(store)
+        val h = ContainerHarness(this, store, persistenceOverride = paused)
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            val before = assertNotNull(h.manager.connectedDevice)
+            val token = assertNotNull(h.manager.snapshot.value.token)
+            val managerAccess = h.container.deviceAccess
+            val unavailableCapture = object : ConnectedDeviceAccess by managerAccess {
+                override val requiresGenerationDeviceWriteLease: Boolean get() = true
+                override fun captureDeviceWrite(): Pair<SessionToken, DeviceDTO>? = null
+                override suspend fun <T : Any> withDeviceWrite(
+                    token: SessionToken,
+                    deviceId: UUID,
+                    block: suspend () -> T,
+                ): T? = error("A missing guarded capture must be refused before lease admission")
+            }
+            val editor = editorFor(unavailableCapture, paused, this)
+
+            assertNull(editor.updateDevice(before.info(), "must-not-write"))
+            assertFalse(editor.updateDevice(before.info(), "must-not-write", token))
+            assertNull(editor.addKnownRegion("US915"))
+            assertNull(editor.removeKnownRegion("US915"))
+
+            assertEquals(before, store.fetchDevice(before.id))
+            assertEquals(before, h.manager.connectedDevice)
+        } finally {
+            h.container.close()
+        }
     }
 
     @Test fun concurrentOnboardingPresetsSerializeRadioAndDeviceMetadata() = runTest {
@@ -409,6 +728,8 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
                 knownRegions = listOf("US915", "EU868").snapshot(), defaultFloodScopeName = "US915",
             )
             store.saveDevice(before)
+            store.addDeviceKnownRegion(before.radioId, "US915")
+            store.addDeviceKnownRegion(before.radioId, "EU868")
             h.container.deviceEditor.updateDevice(before)
             store.saveChannel(ChannelDTO(radioId = before.radioId, index = 1u, name = "Region")
                 .withFloodScope(ChannelFloodScope.Region("US915")))
@@ -433,6 +754,8 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
                 knownRegions = listOf("US915", "EU868").snapshot(), defaultFloodScopeName = "US915",
             )
             store.saveDevice(before)
+            store.addDeviceKnownRegion(before.radioId, "US915")
+            store.addDeviceKnownRegion(before.radioId, "EU868")
             h.container.deviceEditor.updateDevice(before)
             paused.beforeRemove = {
                 h.sessions.current!!.deviceService.updateOCVSettings(before.id, "liFePO4", "latest")

@@ -1507,6 +1507,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
     @Test fun mountedRoomListAuthenticatesBeforeOpeningAndSurfacesLoginFailure() = runTest {
         val h = ContainerHarness(this, store)
         val roomKey = key(40)
+        val expectedKeepAlive = Bytes.of(0x32) + roomKey + Bytes.of(0x02) + le32(0)
         val allowLogin = java.util.concurrent.atomic.AtomicBoolean(false)
         h.links.configureRadio = { radio ->
             radio.knownContacts += contactFrame(key(20), "Prior peer")
@@ -1517,6 +1518,10 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                         Bytes.of(if (allowLogin.get()) 0x85 else 0x86, 1) + roomKey.prefix(6),
                     )
                     0x1b -> listOf(Bytes.of(1, 2))
+                    0x32 -> {
+                        assertEquals(expectedKeepAlive, command)
+                        listOf(Bytes.of(0x06, 0, 1, 2, 3, 4) + le32(5_000))
+                    }
                     else -> null
                 }
             }
@@ -1557,6 +1562,9 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             val roomEntry = n.state.value.activeStack.last()
             await(h) { compose.onAllNodesWithTag("entry:${roomEntry.id}").fetchSemanticsNodes().isNotEmpty() }
             compose.onNodeWithTag("entry:${roomEntry.id}").assertIsDisplayed()
+            h.eventually("mounted authenticated room sends its keepalive") {
+                h.links.radios.last().sent.any { it == expectedKeepAlive }
+            }
             h.eventually("mounted room detail marks messages read after authentication") {
                 kotlinx.coroutines.runBlocking { store.fetchRemoteNodeSession(EntityKey(radio, room.id))?.unreadCount == 0L }
             }

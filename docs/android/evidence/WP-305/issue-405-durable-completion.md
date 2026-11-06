@@ -274,18 +274,19 @@ After merging current `main` `35abcc1276082995eed216bf28bff04d77e176c8` as
 `fun createRerunOwner(): OnboardingFeatureDependencies`. Each call creates an independent rerun
 owner, retained coordinator, in-memory flag store, revision and retirement set. The existing
 `forRerun()` remains a legacy single-entry singleton; it is not safe for concurrent navigation
-entries. WP-302 must create one owner for each new Settings entry and retain that exact owner by
-stable entry identity across Activity recreation. It must retire that owner only after permanent
-entry removal, not on composition disposal or temporary tab hiding.
+entries. WP-302 must create one owner for each live in-memory rerun stack entry, regardless of tab
+or entry point, and retain that exact owner by stable entry identity across Activity recreation.
+The first-run gate remains on its durable process-owned flow. The host must retire a rerun owner
+only after permanent entry removal, not on composition disposal or temporary tab hiding.
 
 The new mounted `OnboardingGateTest` case creates two rerun owners, starts and holds A's sealed
 completion, mounts B, recreates the Activity while retaining both owners, then releases A and
 checks the delayed publication is delivered with A's coordinator only. It removes A's entry and
 asserts B remains owned and incomplete. The test is authored but has not run. The existing
 `MainActivity` still calls the legacy `forRerun()`; the active WP-302 host must switch to an
-entry-keyed retained owner before multi-entry navigation is considered integrated. The broader
-candidate remains unpublished while exact-head run `42141885753` runs against the older `fb940ee`
-head; that run cannot verify this follow-up.
+entry-keyed retained owner for every rerun entry before multi-entry navigation is considered
+integrated. The broader candidate remains unpublished while exact-head run `42141885753` runs
+against the older `fb940ee` head; that run cannot verify this follow-up.
 
 The factory and regression were added in source commit
 `0e6854ecb5aca216ae503008e4a469e533ea19a2`, parent

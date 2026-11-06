@@ -208,8 +208,8 @@ class ReactionTargetAuthorityTest {
             assertIs<ChannelReactionSelectionResult.Unproven>(unproven).reason,
         )
         assertSame(ChannelReactionSelectionResult.Stale, stale)
-        assertNotSame(ChannelReactionSelectionResult.NoMatch, unproven)
-        assertNotSame(ChannelReactionSelectionResult.NoMatch, rejected)
+        assertNotSame<Any>(ChannelReactionSelectionResult.NoMatch, unproven)
+        assertNotSame<Any>(ChannelReactionSelectionResult.NoMatch, rejected)
         assertEquals(ChannelReactionRejection.INVALID_HANDLE, rejected.reason)
     }
 
@@ -222,6 +222,6 @@ class ReactionTargetAuthorityTest {
             ChannelReactionUnprovenReason.INVALID_PROOF,
             assertIs<ChannelReactionApplyResult.Unproven>(result).reason,
         )
-        assertNotSame(ChannelReactionApplyResult.Stale, result)
+        assertNotSame<Any>(ChannelReactionApplyResult.Stale, result)
     }
 }

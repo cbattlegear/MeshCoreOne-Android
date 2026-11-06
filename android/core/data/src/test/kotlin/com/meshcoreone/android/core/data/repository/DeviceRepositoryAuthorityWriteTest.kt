@@ -1,6 +1,9 @@
 // AndroidOnly: WP-305 Test device-writer authority for simulator identity reconciliation.
 package com.meshcoreone.android.core.data.repository
 
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
+import com.meshcoreone.android.core.database.toEntity
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -104,7 +107,7 @@ class DeviceRepositoryAuthorityWriteTest : RepositoryTest() {
         assertEquals(canonical.copy(nodeName = "Fresh edit"), repository.fetchDevice(canonical.id))
     }
 
-    @Test fun ignoredAndRolledBackGhostRetirementsPreserveRowsAndTicketAuthority() = runTest(scheduler) {
+    @Test fun ignoredGhostDeleteFailsAndPreservesRowsAndTicketAuthority() = runTest(scheduler) {
         val canonical = device(
             radio = RADIO_A,
             id = UUID.fromString("00000000-0000-0000-0000-000000000301"),
@@ -116,19 +119,48 @@ class DeviceRepositoryAuthorityWriteTest : RepositoryTest() {
         repository.saveDevice(canonical)
         repository.saveDevice(ghost)
 
-        val ignoredTicket = assertNotNull(repository.fetchDeviceWriteSnapshot(canonical.id))
-        val ignored = repository.writeWithDeviceAuthority("resolveSimulatorIdentityKeepCanonical") {
-            assertNotNull(database.devices().byId(ghost.id))
-            false
+        db.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER ignore_ghost_retirement BEFORE DELETE ON devices " +
+                "WHEN OLD.id = '${ghost.id}' BEGIN SELECT RAISE(IGNORE); END",
+        )
+        val beforeResolution = assertNotNull(repository.fetchDeviceWriteSnapshot(canonical.id))
+        val failure = assertFailsWith<PersistenceStoreException> {
+            repository.writeWithDeviceAuthority("resolveSimulatorIdentityKeepCanonical") {
+                database.devices().upsert(canonical.copy(nodeName = "Uncommitted change").toEntity())
+                save()
+                val deleted = database.devices().delete(ghost.id)
+                if (deleted != 1) {
+                    throw PersistenceStoreException(
+                        PersistenceStoreError.SaveFailed("ghost retirement deleted $deleted rows"),
+                    )
+                }
+            }
         }
-        assertFalse(ignored)
+        assertEquals(PersistenceStoreError.SaveFailed("ghost retirement deleted 0 rows"), failure.error)
+        assertEquals(canonical, repository.fetchDevice(canonical.id))
         assertEquals(ghost, repository.fetchDevice(ghost.id))
+        val afterResolution = assertNotNull(repository.fetchDeviceWriteSnapshot(canonical.id))
+        assertEquals(beforeResolution.revision, afterResolution.revision)
+        assertEquals(beforeResolution.authorityRevision, afterResolution.authorityRevision)
         assertTrue(
             repository.saveDeviceIfUnchanged(
-                ignoredTicket.device.copy(nodeName = "After ignored resolution"),
-                ignoredTicket,
+                beforeResolution.device.copy(nodeName = "After ignored resolution"),
+                beforeResolution,
             ),
         )
+    }
+
+    @Test fun rolledBackGhostRetirementPreservesRowsAndTicketAuthority() = runTest(scheduler) {
+        val canonical = device(
+            radio = RADIO_A,
+            id = UUID.fromString("00000000-0000-0000-0000-000000000401"),
+        ).copy(publicKey = key(0x61), nodeName = "Canonical")
+        val ghost = device(
+            radio = RADIO_B,
+            id = UUID.fromString("00000000-0000-0000-0000-000000000402"),
+        ).copy(publicKey = key(0x62), nodeName = "Restored")
+        repository.saveDevice(canonical)
+        repository.saveDevice(ghost)
 
         val rollbackTicket = assertNotNull(repository.fetchDeviceWriteSnapshot(canonical.id))
         val failure = assertFailsWith<IllegalStateException> {

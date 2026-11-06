@@ -376,6 +376,64 @@ class OnboardingRegionPresetComposeTest {
         assertTrue(fixture.resolutions.isEmpty())
     }
 
+    @Test fun tappingAnotherPresetDuringAHeldApplyCannotChangeTheSelectionThatCompletesOnboarding() {
+        val fixture = Fixture(location = PermissionStatus.GRANTED)
+        holdUSAAndAttemptAnotherPreset(fixture)
+        release(fixture, OnboardingPresetOutcome.Applied)
+        assertCompletedOnce(fixture, 1)
+        assertEquals(listOf("us-ca"), fixture.applies.map { it.id })
+        row("USA").assertIsSelected()
+        row("WCMesh (SoCal)").assertIsNotSelected()
+    }
+
+    @Test fun anotherPresetBecomesSelectableAfterAHeldApplyFailsAndNeedsItsOwnSuccessfulApply() {
+        val fixture = Fixture(location = PermissionStatus.GRANTED)
+        holdUSAAndAttemptAnotherPreset(fixture)
+        val failure = "USA apply failed"
+        release(fixture, OnboardingPresetOutcome.Failed(UiText.Verbatim(failure)))
+        compose.onNodeWithText(failure).assertIsDisplayed()
+        assertNotCompleted(fixture)
+        button(L.commonOk).performClick()
+        row("USA").assertIsSelected()
+        row("WCMesh (SoCal)").assertIsEnabled().performClick().assertIsSelected()
+        row("USA").assertIsNotSelected()
+        assertNotCompleted(fixture)
+        assertEquals(listOf("us-ca"), fixture.applies.map { it.id })
+        applyButton("WCMesh (SoCal)").assertIsEnabled().performClick()
+        assertHeld(fixture, 2, "WCMesh (SoCal)")
+        assertEquals(listOf("us-ca", "wcmesh"), fixture.applies.map { it.id })
+        release(fixture, OnboardingPresetOutcome.Applied)
+        assertCompletedOnce(fixture, 2)
+    }
+
+    private fun holdUSAAndAttemptAnotherPreset(fixture: Fixture) {
+        mount(fixture)
+        val detected = RegionSelection("US", RegionSelection.Source.LOCATION, "US-CA", "los angeles")
+        compose.onNodeWithText(text(O.regionResolving)).assertIsDisplayed()
+        compose.runOnIdle { assertTrue(fixture.resolutions.single().complete(detected)) }
+        button(O.regionUseThisRegion).assertIsEnabled().performClick()
+        assertEquals(listOf(detected), fixture.commits)
+        assertHeading(O.presetTitle)
+        row("USA").assertIsNotSelected().performClick().assertIsSelected()
+        row("WCMesh (SoCal)").assertIsNotSelected()
+        applyButton().assertIsEnabled().performClick()
+        assertHeld(fixture, 1)
+        assertEquals(listOf("us-ca"), fixture.applies.map { it.id })
+        val attempt = fixture.applies.single()
+        assertTrue(attempt.owner.isActive)
+        assertFalse(attempt.result.isCompleted)
+        repeat(2) {
+            row("WCMesh (SoCal)").performScrollTo().assertIsNotEnabled().performTouchInput { click() }
+            row("WCMesh (SoCal)").assertIsNotSelected()
+            row("USA").assertIsNotEnabled().assertIsSelected()
+            applyButton().assertIsNotEnabled().performClick()
+            assertNotCompleted(fixture)
+            assertEquals(listOf("us-ca"), fixture.applies.map { it.id })
+            assertTrue(attempt.owner.isActive)
+            assertFalse(attempt.result.isCompleted)
+        }
+    }
+
     @Test fun frenchRegionalLabelsReachTheMountedPickerWithStableSelectionCodes() =
         localizedPicker(Locale.FRENCH, "Californie", "Pennsylvanie", "Territoire du Nord")
 

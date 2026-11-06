@@ -1,0 +1,318 @@
+{
+  "schema_version": 1,
+  "wp": "WP-309",
+  "concern": "NM-HISTORY-REACTION-REPLAY",
+  "issue": 406,
+  "status": "COMPLETE_ORIGINAL_METHOD_INVENTORY_NOT_APPROVED_EQUIVALENCE",
+  "trusted_base": "35abcc1276082995eed216bf28bff04d77e176c8",
+  "swift_reference": "db14559b39d32322b06477c6ae676112f583db50",
+  "consumer_source": "a75e8c88641951c8da4ddeb067316168e8ce1ce6",
+  "contract_under_review": "67a22f7f9e75db2b8188ed890e04cc3b25d62a02",
+  "original": {
+    "path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/HistoryReactionReplayFailureTest.kt",
+    "blob": "ee8791035b7bb9a6dd86ea29219105f579147958",
+    "method_count": 64,
+    "direct_methods": 32,
+    "channel_methods": 32,
+    "inventory_scope": "All 64 @Test methods in this exact file, not all prior WP-309 tests or the historical 73-test executed suite."
+  },
+  "candidate_tests": {
+    "app_path": "android/app/src/test/kotlin/com/meshcoreone/android/app/container/ChannelReactionTargetConsumerTest.kt",
+    "app_blob": "f9081279ad9fd5ed73db23d5e59d4faa383271e2",
+    "service_path": "android/core/services/src/test/kotlin/com/meshcoreone/android/core/services/reactions/ChannelReactionTargetServiceTest.kt",
+    "service_blob": "afb1f0ec4e9a14eefd0505481276ee93b08c0e9e",
+    "product_tests_executed": 0,
+    "compiled": false,
+    "provenance_gate": "Existing candidate fixtures save a bare channel/message then request a captured window. These are not accepted positive authority fixtures until the revised producer proves original occupant provenance AND each original reaction receive occurrence. Neither a DTO, current channel slot, window read nor matching UUID may fabricate either proof. All current ChannelReceiveEnvelope origins are reported Unproved by the live producer owners; no reaction admission is inferred from that report."
+  },
+  "rules": [
+    "Each original method occurs exactly once in the groups below. Grouping does not waive its parameter family, assertions, mounted consumer behavior or required execution.",
+    "All original tests and assertions remain unchanged. A missing interception is not a pass and must never be fixed with a timeout, skip, weakened expectation or a fake authority.",
+    "Direct paths retain their existing split persistence boundary and legacy queue semantics. Re-run them on the composed head; previous execution is not execution of this candidate.",
+    "Atomic rollback controls can replace impossible split-transaction partial states only after independent equivalence review and execution against the actual Room authority and mounted consumer.",
+    "A public authority exception does not certify rollback even when a test deliberately forces an SQLite rollback. UNKNOWN remains bound and non-redrivable without an admitted recovery journal.",
+    "No method count or source header is passing evidence. Exact candidate tests must be discovered and execute on the allowed hosted route.",
+    "Guard activation stays OFF. The unproven incoming/legacy-history provenance contract is being revised by its owners; 67a and a75 are diagnostic source, not a coherent executable composition."
+  ],
+  "groups": [
+    {
+      "id": "direct-recovery",
+      "original_methods": [
+        "directExistsFailureRetainsTheUnfinishedBatch",
+        "directSaveFailureRetainsTheUnfinishedBatch",
+        "directCommittedSaveFailureReconcilesWithoutAnotherRow",
+        "directFetchFailureReconcilesWithoutAnotherRow",
+        "directCompletedFetchFailureReconcilesWithoutAnotherRow",
+        "directSummaryFailureReconcilesWithoutAnotherRow",
+        "directCommittedSummaryFailureReconcilesWithoutAnotherRow",
+        "directExistsCancellationRetainsTheUnfinishedBatch",
+        "directSaveCancellationRetainsTheUnfinishedBatch",
+        "directCommittedSaveCancellationReconcilesWithoutAnotherRow",
+        "directFetchCancellationReconcilesWithoutAnotherRow",
+        "directCompletedFetchCancellationReconcilesWithoutAnotherRow",
+        "directSummaryCancellationReconcilesWithoutAnotherRow",
+        "directCommittedSummaryCancellationReconcilesWithoutAnotherRow",
+        "directLockedExistenceFailureRetainsTheUnfinishedBatch",
+        "directLockedExistenceCancellationRetainsTheUnfinishedBatch"
+      ],
+      "classification": "UNCHANGED_LEGACY_PATH_REEXECUTION_REQUIRED",
+      "required_assertions": [
+        "Every original EXISTS, EXISTS_LOCKED, SAVE_BEFORE, SAVE_AFTER, FETCH_BEFORE, FETCH_AFTER, SUMMARY_BEFORE and SUMMARY_AFTER fault/cancellation occurrence remains intercepted.",
+        "Only completed Bob is acknowledged; Carol/Dave and original wire/contact/radio/receivedAt/arrival metadata survive.",
+        "Original partial-row/summary expectations, duplicate repair, UUID preservation, three-row final convergence, rendered summary and cancellation-not-error behavior stay unchanged."
+      ],
+      "required_action": "Execute all 16 original direct methods unchanged with actual Room, including their mounted open/refresh and render projection. Do not route them through channel authority or replace them with service-only controls."
+    },
+    {
+      "id": "direct-interleaving",
+      "original_methods": [
+        "directDuplicateReplaySerializesALiveReaction",
+        "directLiveReactionSerializesDuplicateReplay",
+        "directCancelledDuplicateWaiterRetainsItsPendingReaction",
+        "directOldReplaySerializesReplacementSessionReaction",
+        "directReplacementSessionReactionSerializesOldReplay",
+        "directCancelledOldReplayWaiterRetainsItsPendingReaction"
+      ],
+      "classification": "UNCHANGED_LEGACY_PATH_REEXECUTION_REQUIRED",
+      "required_assertions": [
+        "Live/history order is serialized by the same process mutex, including a replacement connection generation.",
+        "A cancelled waiter retains Bob and original metadata; Carol's actual insertion and summary cannot race or replace Bob.",
+        "Actual reconnect preserves stored message/contact/reactions, replaces the session-owned service and retains complete summary/render behavior."
+      ],
+      "required_action": "Run all six original direct order/reconnect/cancellation methods unchanged. A mock mutex or same-service substitute is not equivalent."
+    },
+    {
+      "id": "direct-reaction-identity",
+      "original_methods": [
+        "directHistoryWinsTheSameReactionWithoutReplacingItsIdentity",
+        "directLiveWinsAnOutdatedReplayExistenceCheck",
+        "directOldHistoryWinsTheSameReactionAcrossReconnect",
+        "directReplacementSessionWinsAnOutdatedReplayExistenceCheck",
+        "directSameSenderCanStillAddADifferentEmoji"
+      ],
+      "classification": "UNCHANGED_LEGACY_PATH_REEXECUTION_REQUIRED",
+      "required_assertions": [
+        "Both stale outside existence checks and the inside serialized recheck are actually exercised.",
+        "The first committed ReactionDTO is unchanged, with the same UUID, radio, message, sender and receive time.",
+        "Same-sender different-emoji produces two rows, not false deduplication; summary, refresh and render remain consistent."
+      ],
+      "required_action": "Run all five original direct identity/order/reconnect/emoji methods unchanged."
+    },
+    {
+      "id": "direct-queue-order-and-bound",
+      "original_methods": [
+        "directFailedOldestReplayDoesNotEvictANewerKey",
+        "directCancelledOldestReplayDoesNotEvictANewerKey",
+        "directFailedReplayPrecedesANewArrivalUnderItsDrainedKey",
+        "directCancelledReplayPrecedesANewArrivalUnderItsDrainedKey",
+        "restoredDirectMatchesKeepTheirMetadataAndTheExistingQueueBound"
+      ],
+      "classification": "UNCHANGED_LEGACY_PATH_REEXECUTION_REQUIRED",
+      "required_assertions": [
+        "Failed/cancelled restoration retains original oldest-key and entry order rather than renewing priority.",
+        "Original eviction of First versus Second/Late and retention of 98 newer foreign keys remains exactly as asserted.",
+        "Direct 101-entry restored overflow keeps the original last 100 with exact original metadata and contact scope."
+      ],
+      "required_action": "Run all five original direct methods unchanged; strict protected-native admission must not be applied to DM."
+    },
+    {
+      "id": "channel-exists",
+      "original_methods": [
+        "channelExistsFailureRetainsTheUnfinishedBatch",
+        "channelLockedExistenceFailureRetainsTheUnfinishedBatch"
+      ],
+      "classification": "MISSING_ATOMIC_READ_FAILURE_EQUIVALENT",
+      "candidate_app_methods": [],
+      "candidate_service_methods": [],
+      "preserved_obligation": "A real failure reading existing reactions inside the original-target atomic operation must not acknowledge Carol/Dave, emit new-reaction success or expose half a page.",
+      "difference": "EXISTS and EXISTS_LOCKED are no longer public separate calls. The old wrappers will not intercept atomic authority reads. An exception thrown by a wrapper before delegation is not proof of an internal Room read failure.",
+      "required_action": "Add reviewed actual producer fault injection for the atomic dedup-read boundary, retain exact original targets/metadata/cause and discriminate rollback knowledge from public UNKNOWN. Keep the two original split controls for a deliberately tested legacy seam; do not relabel them as guarded coverage.",
+      "acceptance": "BLOCKED"
+    },
+    {
+      "id": "channel-before-insert",
+      "original_methods": [
+        "channelSaveFailureRetainsTheUnfinishedBatch"
+      ],
+      "classification": "PARTIAL_SAFETY_EQUIVALENT_NOT_LIVENESS_EQUIVALENT",
+      "candidate_app_methods": [
+        "actualReactionInsertAbortRollsBackWithoutUnsafeRetry"
+      ],
+      "candidate_service_methods": [],
+      "preserved_obligation": "Bob remains durably committed, Carol/Dave retain original binding and metadata, Carol does not partially insert, and Bob's callback precedes the failed operation.",
+      "difference": "The actual BEFORE INSERT SQLite ABORT proves rollback to the test, not to the public caller. The guarded caller parks UNKNOWN instead of automatically retrying to three rows.",
+      "required_action": "Execute actual Room trigger control and mounted failure visibility after valid occupant provenance is available. Preserve final convergence as a separate unresolved obligation; only a reviewed recovery receipt/journal could justify safe retry.",
+      "acceptance": "BLOCKED"
+    },
+    {
+      "id": "channel-after-insert",
+      "original_methods": [
+        "channelCommittedSaveFailureReconcilesWithoutAnotherRow"
+      ],
+      "classification": "PARTIAL_SAFETY_EQUIVALENT_NOT_LIVENESS_EQUIVALENT",
+      "candidate_app_methods": [
+        "actualPostInsertAbortRollsBackTheRowAndSummaryTogether",
+        "commitThenThrowRemainsUnknownAndNeverReplaysAgainstANewWindowBinding"
+      ],
+      "candidate_service_methods": [],
+      "preserved_obligation": "Never replace an existing reaction UUID or mutate a replacement message. Every unfinished original operation retains its metadata and exact target.",
+      "difference": "AFTER INSERT ABORT inside the transaction rolls back both Carol and summary. A genuinely committed atomic return followed by a throw persists both together but is UNKNOWN. Neither is the old state of Carol committed with stale summary; that split state is intentionally impossible in the guarded operation.",
+      "required_action": "Review both actual transaction rollback and post-commit lost-return controls. No automatic three-row convergence or lost-return event reconciliation is available in 67a; do not claim those original liveness assertions as equivalent.",
+      "acceptance": "BLOCKED"
+    },
+    {
+      "id": "channel-fetch-and-summary-read",
+      "original_methods": [
+        "channelFetchFailureReconcilesWithoutAnotherRow",
+        "channelCompletedFetchFailureReconcilesWithoutAnotherRow"
+      ],
+      "classification": "MISSING_ATOMIC_READ_FAILURE_EQUIVALENT",
+      "candidate_app_methods": [],
+      "candidate_service_methods": [],
+      "preserved_obligation": "Actual newest-100 reaction read or summary-computation failure leaves no atomic partial insertion/summary, preserves prior reaction identities and retains unfinished original work.",
+      "difference": "The old FETCH_BEFORE/FETCH_AFTER wrapper targets public fetchReactions after a separately committed save. Guarded reads occur within one producer transaction; existing App wrappers are bypassed.",
+      "required_action": "Add producer-owned actual transaction read/summary fault injection and include newest-100 ordering/canonical summary parameters. SQL summary-update ABORT is not a proxy for a failed fetch. Automatic repair of an unknowable outcome remains separately blocked.",
+      "acceptance": "BLOCKED"
+    },
+    {
+      "id": "channel-before-and-after-summary-write",
+      "original_methods": [
+        "channelSummaryFailureReconcilesWithoutAnotherRow",
+        "channelCommittedSummaryFailureReconcilesWithoutAnotherRow"
+      ],
+      "classification": "PARTIAL_SAFETY_EQUIVALENT_NOT_LIVENESS_EQUIVALENT",
+      "candidate_app_methods": [
+        "actualSummaryWriteAbortRollsBackTheInsertedReaction",
+        "actualPostSummaryWriteAbortRollsBackTheEntireReactionTransaction",
+        "commitThenThrowRemainsUnknownAndNeverReplaysAgainstANewWindowBinding"
+      ],
+      "candidate_service_methods": [],
+      "preserved_obligation": "A failed atomic write cannot publish half a page, replace prior reaction UUIDs or leave Carol inserted without its summary. Known Bob commit/callback remains intact.",
+      "difference": "BEFORE/AFTER UPDATE ABORT both roll back the transaction. Throw after actual commit is UNKNOWN with both row and summary committed. The old SUMMARY_AFTER path's safe duplicate reconciliation does not establish a new original-target grant.",
+      "required_action": "Execute both actual Room trigger controls plus lost-return control, then independently review their safety correspondence. Preserve unknown-outcome recovery and mounted complete projection as explicit outstanding obligations.",
+      "acceptance": "BLOCKED"
+    },
+    {
+      "id": "channel-cancellation-boundaries",
+      "original_methods": [
+        "channelExistsCancellationRetainsTheUnfinishedBatch",
+        "channelLockedExistenceCancellationRetainsTheUnfinishedBatch",
+        "channelSaveCancellationRetainsTheUnfinishedBatch",
+        "channelCommittedSaveCancellationReconcilesWithoutAnotherRow",
+        "channelFetchCancellationReconcilesWithoutAnotherRow",
+        "channelCompletedFetchCancellationReconcilesWithoutAnotherRow",
+        "channelSummaryCancellationReconcilesWithoutAnotherRow",
+        "channelCommittedSummaryCancellationReconcilesWithoutAnotherRow"
+      ],
+      "classification": "PARTIAL_CANCELLATION_SAFETY_NOT_BOUNDARY_OR_RECOVERY_EQUIVALENT",
+      "candidate_app_methods": [
+        "committedCallbackPrecedesLaterCancellationAndTheUncertainTailRemainsBound",
+        "callbackFailureRequeuesOnlyTheTailWithTheKnownOwnWriteSuccessor"
+      ],
+      "candidate_service_methods": [
+        "retentionEnvelopesKeepExactWorkAndCancellationCauseWithoutReturningRawRedriveInput"
+      ],
+      "preserved_obligation": "Cancellation propagates, known earlier commits are not repeated, unfinished metadata/targets remain retained and cancellation is not displayed as an ordinary store failure.",
+      "difference": "One before-apply cancellation control does not cover all eight actual producer boundaries. Public cancellation during an atomic call is conservatively UNKNOWN even if the caller believes the call had not committed; there is no automatic fresh-window rebind.",
+      "required_action": "Add actual transaction cancellation controls at dedup read, insert, newest-100 read and summary update, including commit-before-cancellation. Add cancellation while waiting for the process mutex and verify it never drains a batch. Verify actual mounted cancellation projection and exact cause. Do not duplicate one wrapper gate under eight labels.",
+      "acceptance": "BLOCKED"
+    },
+    {
+      "id": "channel-live-history-serialization",
+      "original_methods": [
+        "channelDuplicateReplaySerializesALiveReaction",
+        "channelLiveReactionSerializesDuplicateReplay",
+        "channelCancelledDuplicateWaiterRetainsItsPendingReaction",
+        "channelOldReplaySerializesReplacementSessionReaction",
+        "channelReplacementSessionReactionSerializesOldReplay",
+        "channelCancelledOldReplayWaiterRetainsItsPendingReaction"
+      ],
+      "classification": "MISSING_COMPOSED_SYNC_AND_RECONNECT_EQUIVALENTS",
+      "candidate_app_methods": [
+        "callbackFailureRequeuesOnlyTheTailWithTheKnownOwnWriteSuccessor"
+      ],
+      "candidate_service_methods": [],
+      "preserved_obligation": "Actual App history and actual live Sync share the same process mutation boundary across connection generations. A cancelled waiter leaves original custody intact and cannot start another write.",
+      "difference": "Old controls intercept split fetchReactions/reactionExists and call the generic adapter persistence helper. That is not the guarded Sync apply path. The candidate observer-tail test does not exercise live Sync or reconnect serialization.",
+      "required_action": "Compose real revised authority, protected Sync adapter and actual polling frames. Cover history-first/live-first, old-session/new-session and waiter cancellation with original capture handoff, no token recapture and complete notifications. Preserve every first committed row identity and verify complete mounted summary.",
+      "acceptance": "BLOCKED"
+    },
+    {
+      "id": "channel-same-reaction-identity",
+      "original_methods": [
+        "channelHistoryWinsTheSameReactionWithoutReplacingItsIdentity",
+        "channelLiveWinsAnOutdatedReplayExistenceCheck",
+        "channelOldHistoryWinsTheSameReactionAcrossReconnect",
+        "channelReplacementSessionWinsAnOutdatedReplayExistenceCheck",
+        "channelSameSenderCanStillAddADifferentEmoji"
+      ],
+      "classification": "PARTIAL_DEDUP_CONTROL_NOT_REAL_CONCURRENCY_EQUIVALENT",
+      "candidate_app_methods": [
+        "duplicatePendingReactionAdvancesKnownSuccessorWithoutAnotherInsertion"
+      ],
+      "candidate_service_methods": [],
+      "preserved_obligation": "Same sender/emoji deduplicates without replacing the first ReactionDTO or emitting a duplicate insertion event. Same sender with a different emoji still inserts, with correct full summary.",
+      "difference": "Sequential duplicate pending controls are not both actual consumers racing, not reconnect cases and not the different-emoji parameter. Both wrappers captured before a write may become stale after the first write unless the revised producer supports the necessary safe lineage; a stale target must not be refreshed by ID.",
+      "required_action": "Port both actual arrival orders and reconnect orders through real Sync/App composition. Verify exact first-row UUID/receivedAt/rawText preservation, one inserted=true event, different-emoji two-row behavior and admitted same-incarnation successor lineage without recapture.",
+      "acceptance": "BLOCKED"
+    },
+    {
+      "id": "channel-restoration-failure-order",
+      "original_methods": [
+        "channelFailedOldestReplayDoesNotEvictANewerKey",
+        "channelCancelledOldestReplayDoesNotEvictANewerKey",
+        "channelFailedReplayPrecedesANewArrivalUnderItsDrainedKey",
+        "channelCancelledReplayPrecedesANewArrivalUnderItsDrainedKey"
+      ],
+      "classification": "INTENTIONAL_CUSTODY_POLICY_CHANGE_NOT_EQUIVALENT",
+      "candidate_app_methods": [
+        "inFlightNativeReservationsSurviveConcurrentArrivalsAndNeverSilentlyDisplaceOriginals",
+        "wholeNativeBatchOverflowReturnsOriginalBoundWorkBeforeAnyWriteOrCallback",
+        "callbackFailureRequeuesOnlyTheTailWithTheKnownOwnWriteSuccessor",
+        "appProcessRetainsTheExactOverflowOutsideReplaceableErrorsAndBlocksFurtherHistoryAdmission"
+      ],
+      "candidate_service_methods": [
+        "selectiveDrainDoesNotRenewTheOldestKeysEvictionPriority",
+        "unfinishedSelectiveBatchRestoresItsOriginalOrderAroundNewArrivals",
+        "protectedNativeCapacityCannotBeDisplacedByOrdinaryArrivalsAndReturnsExactOverflow",
+        "terminalNativeCustodyKeepsTheExactPendingTargetOrdinalsAndFailureOutsideLegacyMatching"
+      ],
+      "preserved_obligation": "Preserve exact original arrival metadata and existing newer ordinary keys. Do not lose selected unresolved originals during suspension or silently renew their priority.",
+      "difference": "Original tests intentionally evict First/Second while preserving Late after saturation. Protected selected work now reserves distinct finite custody and cannot silently evict that original work. Terminal UNKNOWN work is not drained by legacy indexMessage. Those original count/eviction assertions are not unchanged guarded behavior.",
+      "required_action": "Keep original legacy queue eviction controls, add explicitly reviewed protected-admission variants proving reservations, exact overflow transfer, first-before-second-before-Late ready order and terminal no-rematch under both failure/cancellation. Actual operation ordering and upstream full-capacity stop must be exercised; preserving stored ordinal fields alone is insufficient.",
+      "acceptance": "BLOCKED"
+    },
+    {
+      "id": "channel-restored-101st-arrival",
+      "original_methods": [
+        "restoredChannelMatchesKeepTheirMetadataAndTheExistingQueueBound"
+      ],
+      "classification": "EXPLICIT_NON_EQUIVALENT_ADMISSION_ADAPTATION_REVIEW_REQUIRED",
+      "candidate_app_methods": [
+        "appProcessRetainsTheExactOverflowOutsideReplaceableErrorsAndBlocksFurtherHistoryAdmission"
+      ],
+      "candidate_service_methods": [
+        "neverTargetedAdmissionPreservesExistingHundredAndReturnsExactUnretainedArrivalOrdinals",
+        "protectedNativeCapacityCannotBeDisplacedByOrdinaryArrivalsAndReturnsExactOverflow"
+      ],
+      "preserved_obligation": "A finite 100-item queue, original radio/channel/canonical sender/wire/receivedAt/ordinals and explicit unchanged scope matching remain required.",
+      "difference": "The original method requeues 101 exact items and expects pending.drop(1): silent eviction of the oldest. Strict requeue admission now keeps the first 100 and returns the exact 101st incoming item in Native CapacityExceeded. This is intentionally not an equivalent result. The original source is unchanged and will fail at the 101st admission against a75.",
+      "required_action": "Retain the original original-policy case on the deliberately legacy queue admission and add the strict-admission 100/101 case as a reviewed safety adaptation, preserving its wire/canonical sender/radio assertions. Verify actual Sync/polling transfer and cancellation of the exact 101st item, not raw redrive or a dropped exception. Never delete or weaken the original just to make the suite green.",
+      "acceptance": "BLOCKED"
+    }
+  ],
+  "additional_controls_not_substitutes_for_originals": [
+    "Each pending native operation, protected batch item, selected MCO parked item and overflow envelope must carry its own original reaction occurrence independently of the target proof. One history replay batch may contain multiple occurrences; a batch-wide proof, later slot/queue observation or current target window cannot replace them. Unproved reactions remain bounded non-redrivable custody, never ordinary native matching or ordinary chat.",
+    "Bound/Unbound/Miss, wrong-radio, identical replacement, stale no-fallback and unproven original provenance need independent positive and negative original-input evidence.",
+    "Original corrected senderTimestamp, old pending timestamps, indexedAt collision order, history over 200 rows and default five/500 cache boundaries remain separate obligations.",
+    "Real orphan/slot replacement/restore/migration evidence belongs to the actual storage issuer; a test CacheMarker is not that issuer.",
+    "Typed overflow and process-owned App custody do not prove upstream event dispatcher, ACK, RX or polling losslessness or durable restart recovery."
+  ],
+  "next_acceptance_gates": [
+    "Obtain the revised provenance-safe contract and actual producer-issued original-occupant evidence; do not compose 67a as if the missing original identity were already solved.",
+    "Review non-equivalent liveness and finite-capacity policy changes explicitly. Keep unresolved behavior visible instead of declaring the map approved.",
+    "Implement the missing actual read/cancellation/live-Sync/reconnect/identity/order controls with exact producer source and original proof; no fake capture or late selection.",
+    "Run exact change-scoped hosted verification on the coherent composed head and inspect nonzero test discovery, assertions and complete reports. Retained local execution owner remains untouched.",
+    "Keep guard inactive until upstream custody/flow control, protected gates and the consumer behavior obligations are satisfied."
+  ]
+}

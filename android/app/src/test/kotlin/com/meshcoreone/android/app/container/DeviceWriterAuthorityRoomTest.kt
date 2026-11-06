@@ -720,17 +720,20 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
             paused.beforeSave = { entered.complete(Unit); release.await() }
             val ordinary = assertNotNull(h.container.deviceEditor.updateClientRepeat(true))
             entered.await()
-            h.manager.switchDevice(h.target(UUID(0, 101)))
+            val successorInstall = async { h.manager.switchDevice(h.target(UUID(0, 101))) }
+            testScheduler.runCurrent()
+            assertFalse(successorInstall.isCompleted, "Successor installation drains the admitted ordinary save")
+            release.complete(Unit)
+            ordinary.join()
+            successorInstall.await()
             h.settle()
             val successor = assertNotNull(h.manager.connectedDevice)
             assertTrue(successor.id != before.id)
-            release.complete(Unit)
-            ordinary.join()
-            h.settle()
             assertEquals(successor, h.manager.connectedDevice)
             assertEquals(successor.id, store.fetchActiveDevice()!!.id)
             assertFalse(store.fetchDevice(before.id)!!.isActive)
-            assertFalse(store.fetchDevice(before.id)!!.clientRepeat)
+            assertTrue(store.fetchDevice(before.id)!!.clientRepeat, "The admitted write commits before successor activation")
+            assertFalse(successor.clientRepeat, "The old generation's edit cannot be published into its successor")
         } finally { release.complete(Unit); h.container.close() }
     }
 
@@ -832,14 +835,18 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
             paused.beforeRemove = { entered.complete(Unit); release.await() }
             val removal = async { runCatching { removeSettingsKnownRegion(h.container, session, "EU868") } }
             entered.await()
-            h.manager.switchDevice(h.target(UUID(0, 101)))
-            h.settle()
-            val successor = assertNotNull(h.manager.connectedDevice)
+            val successorInstall = async { h.manager.switchDevice(h.target(UUID(0, 101))) }
+            testScheduler.runCurrent()
+            assertFalse(successorInstall.isCompleted, "Successor installation drains the admitted region removal")
             release.complete(Unit)
             assertTrue(removal.await().exceptionOrNull() is SettingsNotConnectedException)
+            successorInstall.await()
+            h.settle()
+            val successor = assertNotNull(h.manager.connectedDevice)
             assertEquals(successor, h.manager.connectedDevice)
             assertEquals(successor.id, store.fetchActiveDevice()!!.id)
             assertFalse(store.fetchDevice(before.id)!!.isActive)
+            assertFalse("EU868" in store.fetchDevice(before.id)!!.knownRegions)
         } finally { release.complete(Unit); h.container.close() }
     }
 

@@ -493,7 +493,14 @@ inline before `initialSync` children of the initiating Job finish, so cancelling
 real child is held in cleanup still admits writes. The existing child control only exercises connect.
 WP-302 sent a rebuild variant and operation-owned-scope distinction to WP-209. This is source-only:
 `c0dcd30…` remains unaccepted, and `66eab2a` is not accepted or composed. No Kotlin/Room execution,
-publication or dispatch occurred. The reported minimal production
+publication or dispatch occurred. The reported corrected successor is
+`bc701e194b715ad21409772810fcdda5640516d3` (tree
+`f5819465e798b69b36d2a05941c4a3a0dfb6a356`, manager blob
+`5a8c160187a02ae92dadb6cd5d34b607859ea128`); the canonical contract and signatures are unchanged.
+The producer reports establishment now owns a structured coroutine scope and binds its exact Job,
+settling only after children are terminal; the held-child cancellation control also exercises real
+rebuild. Independent review is pending, and this successor remains uncomposed and unexecuted.
+The reported minimal production
 composition is `ConnectionManager.kt` plus canonical `ChannelIdentityMutation.kt`
 (`a4cf97a36327721e9df7eb9afffbf12b37511d3c`); the cumulative WP-209 ancestry and 411d data/runtime
 test graph change are not required for the runtime API.
@@ -518,8 +525,7 @@ pending manager API, so they are not yet a compilable composed candidate. The ea
 fixture, onboarding-state and authority-control repairs were subsequently frozen in local commit
 `eff1f33e911`.
 
-The exact producer composition still requires a corrected successor addressing the direct-rebuild
-child-lifetime finding, favorable independent review, and the minimal
+The exact producer composition still requires favorable independent review of `bc701e1…` and the minimal
 canonical `ChannelIdentityMutation.kt` dependency as well as `ConnectionManager.kt`; no cumulative
 WP-209 ancestry is imported. Trusted current-main admissions for the caller files were previously
 verified. On caller head `dcb37285c8d`, `python tools\android-port\controller\validate.py` passed
@@ -539,3 +545,17 @@ inventory and traceability checks only. No Kotlin compilation, Room/Android test
 execution or new hosted run was performed; the shared Gradle execution reservation remains held
 without cleanup proof. PR #532 remains draft at pushed head
 `121bea50975de31f7f10ca4b85185ca13ca7d4e3`; no push or PR update was made for this worktree.
+
+### Caller-only source corrections while manager review is held
+
+A direct caller review found `changeKnownRegionLocked` had a block body ending in `true` without an
+explicit return. It now uses `return true`; this is a source-level Kotlin correction, not an observed
+compiler result. Two older Room controls also awaited successor installation before releasing the
+already-admitted write, which conflicts with the newly required retirement drain. They now launch the
+switch concurrently, assert it is held, release the write, and then await installation. The ordinary
+control explicitly checks that the admitted edit committed to the old row without reactivation or
+successor publication. The region consumer control retains its `SettingsNotConnectedException`
+assertion and verifies the old region removal committed. These controls remain unexecuted.
+On this caller-only delta, pinned Python 3.12.4 runs of `controller/validate.py`,
+`test_inventory.py --check` and `portmap.py --repo .`, plus `git diff --check`, all exited 0.
+No Kotlin, Room, Gradle or hosted execution occurred.

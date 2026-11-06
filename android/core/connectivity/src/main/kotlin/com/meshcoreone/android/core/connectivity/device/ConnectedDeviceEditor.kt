@@ -319,7 +319,7 @@ class ConnectedDeviceEditor(
         } ?: return false
         val updated = published ?: return false
         if (edit.previousKnownRegions != updated.knownRegions) onKnownRegionsChanged(edit, updated.knownRegions.toList())
-        true
+        return true
     }
 
     suspend fun unfavoritedNodeCount(): Int {

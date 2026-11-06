@@ -353,7 +353,7 @@ class OnboardingGateTest {
         }
     }
 
-    @Test fun `mounted preset action refreshes when cancelled completion is known uncommitted`() = runBlocking {
+    @Test fun `mounted preset action refreshes when cancelled completion is known uncommitted`() = runBlocking<Unit> {
         val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
         val finalizerEntered = CompletableDeferred<String>()
         val releaseFinalizer = CompletableDeferred<Unit>()

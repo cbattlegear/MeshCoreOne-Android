@@ -85,6 +85,7 @@ internal class FakeSettingsPort(private val connection: FakeConnection? = null) 
     var floodScope: String? = null
     var onCall: suspend (String) -> Unit = {}
     val radioExpectations = mutableListOf<DeviceDTO?>()
+    private var radioInfo = selfInfo()
 
     fun failNext(method: String, error: Throwable) = failures.getOrPut(method) { ArrayDeque() }.addLast(error)
 
@@ -106,9 +107,18 @@ internal class FakeSettingsPort(private val connection: FakeConnection? = null) 
             record("setRadioParamsVerified", "$frequencyKHz,$bandwidthKHz,$spreadingFactor,$codingRate,$clientRepeat,$appliedRadioPresetID")
         }
         if (restoreAuthority == null) mutation() else restoreAuthority.withWrite { mutation() }
-        return selfInfo()
+        radioInfo = radioInfo.copy(
+            radioFrequency = frequencyKHz.toDouble() / 1000.0,
+            radioBandwidth = bandwidthKHz.toDouble() / 1000.0,
+            radioSpreadingFactor = spreadingFactor, radioCodingRate = codingRate,
+        )
+        return radioInfo
     }
-    override suspend fun setTxPowerVerified(power: Byte): SelfInfo { record("setTxPowerVerified", "$power"); return selfInfo() }
+    override suspend fun setTxPowerVerified(power: Byte): SelfInfo {
+        record("setTxPowerVerified", "$power")
+        radioInfo = radioInfo.copy(txPower = power)
+        return radioInfo
+    }
     override suspend fun applyRadioPresetVerified(presetId: String): SelfInfo {
         record("applyRadioPresetVerified", presetId); return selfInfo()
     }

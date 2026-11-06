@@ -46,6 +46,64 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
+    @Test fun acceptedRfReadbackRatherThanTheRequestBecomesTheDraftForAFreshUnrelatedEdit() = runTest {
+        var dependencies: SettingsFeatureDependencies? = null
+        withSettings(exposeDependencies = { dependencies = it }) { h, _, _, radio ->
+            val d = assertNotNull(dependencies)
+            val failures = mutableListOf<Throwable>()
+            val advanced = AdvancedRadioStateHolder(
+                SettingsEnvironment(backgroundScope, describe = { failures += it; UiText.Verbatim("Radio failed") }),
+                d.connection, d.settingsService, RadioWriteGate(),
+            )
+            advanced.start()
+            try {
+                h.eventually("Advanced observes the initial radio") { advanced.state.value.hasLoaded }
+                val before = assertNotNull(h.manager.connectedDevice)
+                val token = assertNotNull(h.sessions.current).token
+                radio.radioWriteTransform = { command ->
+                    if (radio.radioWrites.size == 1) PacketBuilder.setRadio(867.999, 125.0, 9u, 7u, false) else command
+                }
+                advanced.onFrequencyTextChanged("868.000")
+                advanced.onBandwidthSelected(125_000u)
+                advanced.onSpreadingFactorSelected(9)
+                advanced.onCodingRateSelected(7)
+                advanced.onTxPowerTextChanged("10")
+                advanced.apply(token)
+                h.eventually("accepted one-kHz readback is acknowledged through Room") {
+                    advanced.state.value.showSuccess && !advanced.state.value.isApplying
+                }
+                assertTrue(failures.isEmpty())
+                assertEquals(867_999u, store.fetchDevice(before.id)?.frequency)
+                assertEquals(867_999u, h.manager.connectedDevice?.frequency)
+                assertEquals("867.999", advanced.state.value.frequencyText)
+                assertEquals(867.999, advanced.state.value.frequency)
+                assertEquals(125_000u, advanced.state.value.bandwidth)
+                assertEquals(9, advanced.state.value.spreadingFactor)
+                assertEquals(7, advanced.state.value.codingRate)
+                assertEquals(10, advanced.state.value.txPower)
+                assertFalse(advanced.state.value.settingsModified)
+                advanced.onSpreadingFactorSelected(8)
+                advanced.apply(token)
+                h.eventually("fresh SF-only Apply sends the acknowledged frequency unchanged") {
+                    radio.powerWrites.size == 2 && advanced.state.value.showSuccess && !advanced.state.value.isApplying
+                }
+                assertEquals(
+                    listOf(PacketBuilder.setRadio(868.0, 125.0, 9u, 7u, false), PacketBuilder.setRadio(867.999, 125.0, 8u, 7u, false)),
+                    radio.radioWrites,
+                )
+                assertEquals(listOf(PacketBuilder.setTxPower(10), PacketBuilder.setTxPower(10)), radio.powerWrites)
+                val saved = assertNotNull(store.fetchDevice(before.id))
+                assertEquals(867_999u, saved.frequency)
+                assertEquals(8.toUByte(), saved.spreadingFactor)
+                assertEquals(saved, h.manager.connectedDevice)
+                assertEquals("867.999", advanced.state.value.frequencyText)
+                assertFalse(advanced.state.value.settingsModified)
+                assertTrue(failures.isEmpty())
+                assertNull(advanced.state.value.errorMessage)
+            } finally { advanced.stop() }
+        }
+    }
+
     @Test fun reopeningAdvancedAfterFailedTxPersistenceReconcilesPowerBeforeAnUnrelatedRfEdit() = runTest {
         for (followup in listOf("success", "failed-untouched", "failed-explicit")) {
         val laterFailure = followup != "success"
@@ -1450,6 +1508,7 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
     private class ScopeRadio {
         var firmwareVersion: UByte = 11u
         val radioWrites = mutableListOf<Bytes>()
+        var radioWriteTransform: (Bytes) -> Bytes = { it }
         val powerWrites = mutableListOf<Bytes>()
         var powerFailure: UByte? = null
         private var radioParams: Bytes? = null
@@ -1473,7 +1532,7 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
                     0x0b -> {
                         check(command.size == 11 || command.size == 12) { "Invalid SET_RADIO frame length ${command.size}" }
                         radioWrites += command
-                        radioParams = command.slice(1, 11)
+                        radioParams = radioWriteTransform(command).slice(1, 11)
                         repeatEnabled = command.size == 12 && command[11] != 0u.toUByte()
                         listOf(Bytes.of(0))
                     }

@@ -211,7 +211,7 @@ class AdvancedRadioStateHolder(
             val sfToSend = if (request.spreadingFactor == captured.spreadingFactor) device.spreadingFactor else request.spreadingFactor
             val crToSend = if (request.codingRate == captured.codingRate) device.codingRate else request.codingRate
             val powerToSend = if (request.power == captured.txPower) device.txPower else request.power
-            service.setRadioParamsVerified(
+            val actualRadio = service.setRadioParamsVerified(
                 frequencyToSend, bandwidthToSend, sfToSend, crToSend,
                 clientRepeat = device.clientRepeat,
                 expectedDevice = device,
@@ -219,20 +219,10 @@ class AdvancedRadioStateHolder(
             target.requireCurrent(mutable.value.device, mutable.value.sessionToken)
             // RF is committed; retain reconciled power intent if its subsequent write fails.
             appliedTarget = target
-            mutable.update {
-                it.copy(
-                    frequency = frequencyToSend.toDouble() / 1000.0,
-                    frequencyText = formatFrequencyMHz(frequencyToSend),
-                    bandwidth = RadioOptions.nearestBandwidth(bandwidthToSend),
-                    spreadingFactor = sfToSend.toInt(),
-                    codingRate = crToSend.toInt(),
-                    txPower = powerToSend.toInt(),
-                    txPowerText = powerToSend.toString(),
-                )
-            }
-            service.setTxPowerVerified(powerToSend)
+            reflectAppliedRadio(device.updating(actualRadio), powerToSend)
+            val actualPower = service.setTxPowerVerified(powerToSend)
             target.requireCurrent(mutable.value.device, mutable.value.sessionToken)
-            mutable.update { it.copy(txPower = powerToSend.toInt(), txPowerText = powerToSend.toString()) }
+            reflectAppliedRadio(device.updating(actualPower), powerToSend)
         } catch (cancelled: CancellationException) {
             release()
             throw cancelled
@@ -249,6 +239,20 @@ class AdvancedRadioStateHolder(
             env.clock.sleep(SUCCESS_DISPLAY)
         } finally {
             mutable.update { it.copy(showSuccess = false) }
+        }
+    }
+
+    private fun reflectAppliedRadio(device: DeviceDTO, power: Byte) {
+        mutable.update {
+            it.copy(
+                frequency = device.frequency.toDouble() / 1000.0,
+                frequencyText = formatFrequencyMHz(device.frequency),
+                bandwidth = RadioOptions.nearestBandwidth(device.bandwidth),
+                spreadingFactor = device.spreadingFactor.toInt(),
+                codingRate = device.codingRate.toInt(),
+                txPower = power.toInt(),
+                txPowerText = power.toString(),
+            )
         }
     }
 

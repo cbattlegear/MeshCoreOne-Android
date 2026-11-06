@@ -122,6 +122,12 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
     }
 
     @Test fun activationRechecksRetiredOwnerAfterWaitingForTheActualRoomTransaction() = runTest {
+        // The shared harness uses immediate Room executors, which cannot hold one real transaction while another waits.
+        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+        val db = androidx.room.Room.inMemoryDatabaseBuilder(context, com.meshcoreone.android.core.database.MeshCoreDatabase::class.java)
+            .allowMainThreadQueries().build()
+        val owner = CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+        val store = RoomPersistenceStore(db, owner)
         val original = DeviceDTO(radioId = RadioId(UUID(0, 401)), publicKey = key(3), nodeName = "Original")
         val successor = DeviceDTO(radioId = RadioId(UUID(0, 402)), publicKey = key(4), nodeName = "Successor")
         store.saveDevice(original)
@@ -150,7 +156,13 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
             assertEquals(1, guardCalls)
             assertEquals(successor.id, store.fetchActiveDevice()!!.id)
             assertFalse(store.fetchDevice(original.id)!!.isActive)
-        } finally { release.complete(Unit) }
+        } finally {
+            release.complete(Unit)
+            transaction.await()
+            store.close()
+            owner.cancel()
+            db.close()
+        }
     }
 
     @Test fun ocvCommittedWhileFreshTicketIsSuspendedIsNotDerivedFromOldLiveDto() = runTest {

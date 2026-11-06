@@ -25,6 +25,9 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
+import androidx.compose.ui.test.assertExists
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.printToString
 import org.junit.Rule
 import org.junit.Test
 import org.robolectric.annotation.Config
@@ -98,6 +101,10 @@ class SettingsPathHashRecreationTest : RoomProcessTest() {
                 }
             }
             fun choose(text: Int) {
+                try { compose.onNodeWithText(context.getString(S.pathHashModeLabel)).assertExists() }
+                catch (missing: AssertionError) {
+                    throw AssertionError("Mounted tree: ${compose.onRoot(useUnmergedTree = true).printToString(40)}", missing)
+                }
                 compose.onNodeWithText(context.getString(S.pathHashModeLabel)).performScrollTo().performClick()
                 compose.onNodeWithText(context.getString(text)).performClick()
             }

@@ -33,6 +33,7 @@ import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.printToString
 import androidx.core.app.ActivityOptionsCompat
 import com.meshcoreone.android.app.content.LocationPermissionResultReporting
 import com.meshcoreone.android.app.navigation.NavigationCoordinator
@@ -162,10 +163,14 @@ class OnboardingGateTest {
         compose.waitForIdle()
     }
 
-    private fun awaitEnabled(node: SemanticsNodeInteraction) {
-        compose.waitUntil(5_000) {
-            shadowOf(Looper.getMainLooper()).idle()
-            !node.fetchSemanticsNode().config.contains(SemanticsProperties.Disabled)
+    private fun awaitEnabled(node: SemanticsNodeInteraction, state: () -> String = { "" }) {
+        try {
+            compose.waitUntil(5_000) {
+                shadowOf(Looper.getMainLooper()).idle()
+                !node.fetchSemanticsNode().config.contains(SemanticsProperties.Disabled)
+            }
+        } catch (timeout: androidx.compose.ui.test.ComposeTimeoutException) {
+            throw AssertionError("Node stayed disabled: ${state()}\n${node.printToString()}", timeout)
         }
         node.assertIsEnabled()
     }
@@ -463,7 +468,7 @@ class OnboardingGateTest {
             compose.waitForIdle()
             assertTrue(flow.onboarding.canReconcileCompletion())
             assertTrue(flow.canCompleteWithoutDevice())
-            awaitEnabled(confirm)
+            awaitEnabled(confirm) { "unsettled=${flow.onboarding.unsettledCompletionFlow.value} ready=${flow.onboarding.reconciliationReadyFlow.value} canWithout=${flow.canCompleteWithoutDevice()}" }
 
             compose.runOnIdle { readbackAvailable = true }
             confirm.performClick()
@@ -523,7 +528,7 @@ class OnboardingGateTest {
             assertFalse(flags.hasCompleted.value)
             assertTrue(flow.onboarding.canStartCompletion())
             assertTrue(flow.preset.canApply(dependencies.presets.canApply.value, flow.preset.state.value))
-            awaitEnabled(apply)
+            awaitEnabled(apply) { "unsettled=${flow.onboarding.unsettledCompletionFlow.value} ready=${flow.onboarding.reconciliationReadyFlow.value} canApply=${flow.preset.canApply(dependencies.presets.canApply.value, flow.preset.state.value)}" }
         } finally {
             releaseFinalizer.complete(Unit)
             processScope.cancel()

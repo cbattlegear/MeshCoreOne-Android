@@ -455,8 +455,17 @@ class SettingsPathHashPersistenceTest : RoomProcessTest() {
             val before = assertNotNull(store.fetchDevice(assertNotNull(h.manager.connectedDevice).id))
             armed = true
             holder.onModeSelected(2u)
-            h.eventually("watermark conflict is resolved and acknowledged") {
-                !holder.state.value.isApplying && holder.state.value.device?.pathHashMode == 2u.toUByte()
+            try {
+                h.eventually("watermark conflict is resolved and acknowledged") {
+                    !holder.state.value.isApplying && holder.state.value.device?.pathHashMode == 2u.toUByte()
+                }
+            } catch (timeout: AssertionError) {
+                throw AssertionError(
+                    "applying=${holder.state.value.isApplying} mode=${holder.state.value.device?.pathHashMode} " +
+                        "error=${holder.state.value.errorMessage} conflicts=$conflicts failures=${failures.size} " +
+                        "stored=${store.fetchDevice(before.id)?.pathHashMode} sent=${h.links.radios.single().sent.count { it[0] == 0x3d.toUByte() }}",
+                    timeout,
+                )
             }
             assertEquals(1, conflicts)
             assertTrue(failures.isEmpty())

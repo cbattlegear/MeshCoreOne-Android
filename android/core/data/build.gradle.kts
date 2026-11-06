@@ -1,5 +1,7 @@
 // AndroidOnly: WP-202 Admitted Room repository dependencies and complete native assertion hook.
 import org.gradle.api.artifacts.result.UnresolvedDependencyResult
+import org.gradle.api.tasks.testing.logging.TestExceptionFormat
+import org.gradle.api.tasks.testing.logging.TestLogEvent
 
 plugins {
     id("mesh.android.library")
@@ -25,6 +27,13 @@ dependencyLocking {
 tasks.withType<Test>().configureEach {
     systemProperty("wp203.interop.output", layout.buildDirectory.dir("reports/wp203/interop").get().asFile.absolutePath)
     providers.gradleProperty("wp203InteropInputDir").orNull?.let { systemProperty("wp203.interop.input", it) }
+    testLogging.quiet {
+        events(TestLogEvent.FAILED)
+        exceptionFormat = TestExceptionFormat.FULL
+        showExceptions = true
+        showCauses = true
+        showStackTraces = true
+    }
 }
 
 val repository = rootProject.projectDir.parentFile

@@ -2,15 +2,119 @@
 package com.meshcoreone.android.core.services.reactions
 
 import com.meshcoreone.android.core.contracts.domain.ParsedReaction
+import com.meshcoreone.android.core.contracts.domain.CapturedChannelReactionTarget
+import com.meshcoreone.android.core.contracts.domain.ChannelReactionTarget
+import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.services.rendering.MessageLRUCache
+import java.time.Clock
 import java.time.Instant
+import java.time.ZoneId
+import java.time.ZoneOffset
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertSame
+import kotlin.test.assertTrue
+import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import org.junit.jupiter.api.Test
 
 class ChannelReactionTargetServiceTest {
+    // Opaque test markers exercise cache ownership only, never storage issuance or validation.
+    private class CacheMarker : ChannelReactionTarget
+    private class CacheClock(var now: Instant = Instant.EPOCH) : Clock() {
+        override fun instant() = now
+        override fun getZone(): ZoneId = ZoneOffset.UTC
+        override fun withZone(zone: ZoneId): Clock = this
+    }
+
+    private fun capture(radio: RadioId, text: String = "Hello", id: UUID = UUID.randomUUID()) =
+        CapturedChannelReactionTarget(CacheMarker(), MessageDTO(
+            id = id, radioId = radio, channelIndex = 3u, text = text, timestamp = 100u,
+        ))
+
+    @Test fun boundCacheIsRadioScopedAndLegacyEntryNeverProvidesAuthority() {
+        val radio = RadioId(UUID.randomUUID())
+        val foreign = RadioId(UUID.randomUUID())
+        val target = capture(radio)
+        val service = ReactionService()
+        val parsed = ParsedReaction("X", "Alice", ReactionParser.generateMessageHash("Hello", 100u))
+        service.indexMessage(target.message.id, 3u, "Alice", "Hello", 100u)
+        assertIs<ChannelReactionCacheLookup.Unbound>(service.findChannelTarget(parsed, 3u, radio))
+        val cache = MessageLRUCache()
+        cache.indexChannelTarget(target, "Alice")
+        assertSame(target, cache.lookupChannelTargets(radio, 3u, "Alice", parsed.messageHash).single().channelTarget)
+        assertTrue(cache.lookupChannelTargets(foreign, 3u, "Alice", parsed.messageHash).isEmpty())
+    }
+
+    @Test fun identicalSameIdReplacementCannotBeAdvancedOrEvictedByItsPredecessor() {
+        val radio = RadioId(UUID.randomUUID())
+        val first = capture(radio)
+        val replacement = CapturedChannelReactionTarget(CacheMarker(), first.message.copy())
+        val successor = CapturedChannelReactionTarget(CacheMarker(), first.message.copy(reactionSummary = "X:1"))
+        val cache = MessageLRUCache()
+        cache.indexChannelTarget(first, "Alice")
+        cache.indexChannelTarget(replacement, "Alice")
+        assertFalse(cache.advanceChannelTarget(first, successor))
+        cache.evictChannelTarget(first)
+        assertSame(replacement, cache.lookupChannelTargets(
+            radio, 3u, "Alice", ReactionParser.generateMessageHash("Hello", 100u),
+        ).single().channelTarget)
+    }
+
+    @Test fun successorAdvancesOnlyItsExactPredecessorWithoutRefreshingArrivalOrEvictionAge() {
+        val radio = RadioId(UUID.randomUUID())
+        val clock = CacheClock()
+        val cache = MessageLRUCache(capacity = 2, clock = clock)
+        val first = capture(radio)
+        val second = capture(radio, "second")
+        cache.indexChannelTarget(first, "Alice")
+        clock.now = Instant.EPOCH.plusSeconds(1)
+        cache.indexChannelTarget(second, "Alice")
+        val successor = CapturedChannelReactionTarget(CacheMarker(), first.message.copy(reactionSummary = "X:1"))
+        clock.now = Instant.EPOCH.plusSeconds(2)
+        assertTrue(cache.advanceChannelTarget(first, successor))
+        val hash = ReactionParser.generateMessageHash("Hello", 100u)
+        assertEquals(Instant.EPOCH, cache.lookupChannelTargets(radio, 3u, "Alice", hash).single().indexedAt)
+        cache.indexChannelTarget(capture(radio, "third"), "Alice")
+        assertTrue(cache.lookupChannelTargets(radio, 3u, "Alice", hash).isEmpty())
+        assertSame(second, cache.lookupChannelTargets(
+            radio, 3u, "Alice", ReactionParser.generateMessageHash("second", 100u),
+        ).single().channelTarget)
+    }
+
+    @Test fun boundCollisionSelectionPreservesMostRecentIndexAndFirstEqualClockTie() {
+        val radio = RadioId(UUID.randomUUID())
+        val clock = CacheClock()
+        val cache = MessageLRUCache(clock = clock)
+        val service = ReactionService(cache, clock)
+        val first = capture(radio)
+        val second = capture(radio)
+        cache.indexChannelTarget(first, "Alice")
+        cache.indexChannelTarget(second, "Alice")
+        val parsed = ParsedReaction("X", "Alice", ReactionParser.generateMessageHash("Hello", 100u))
+        assertSame(first, assertIs<ChannelReactionCacheLookup.Bound>(
+            service.findChannelTarget(parsed, 3u, radio),
+        ).captured)
+        clock.now = Instant.EPOCH.plusSeconds(1)
+        cache.indexChannelTarget(second, "Alice")
+        assertSame(second, assertIs<ChannelReactionCacheLookup.Bound>(
+            service.findChannelTarget(parsed, 3u, radio),
+        ).captured)
+    }
+
+    @Test fun parkedUnboundOriginalNeverBecomesLegacyEligibleAfterAnotherArrival() {
+        val radio = RadioId(UUID.randomUUID())
+        val service = ReactionService()
+        val parsed = ParsedReaction("X", "Alice", ReactionParser.generateMessageHash("Hello", 100u))
+        service.requeuePendingReaction(PendingReaction(
+            parsed, 3u, "Bob", "original", radio, Instant.EPOCH, originalAuthorityUnavailable = true,
+        ))
+        assertTrue(service.indexMessage(UUID.randomUUID(), 3u, "Alice", "Hello", 100u).isEmpty())
+        assertEquals(1 to 0, service.pendingCounts)
+    }
+
     private data class Entry(
         val radio: Int,
         val sender: String,

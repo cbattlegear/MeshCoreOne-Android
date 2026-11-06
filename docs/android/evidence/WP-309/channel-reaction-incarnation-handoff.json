@@ -10,12 +10,19 @@
     "Six focused queue controls cover foreign-radio retention, no-match stability, original-priority restoration around new arrivals, unchanged eviction age, actual PendingReaction wire/radio/receivedAt retention and unchanged legacy full-drain behavior.",
     "Overlapping older-page rows adopt the complete actual prepared snapshot instead of copying its summary onto an old same-ID rendered DTO; the UUID is used only for display reconciliation, not mutation authority.",
     "Six focused paging controls preserve the actual replacement snapshot, the prepared successor snapshot, scroll/offset/unread behavior, removal of a replacement that becomes a hidden outgoing reaction, concurrent newer rendered state, concurrent deletion and legitimate unchanged-row replay.",
-    "Paging reconciles against the current window using exact original rendered-object identity only as a presentation compare-and-set. This prevents a suspended preparation from overwriting a newer rendered object or resurrecting a removed overlapping row; it never grants storage mutation authority."
+    "Paging reconciles against the current window using exact original rendered-object identity only as a presentation compare-and-set. This prevents a suspended preparation from overwriting a newer rendered object or resurrecting a removed overlapping row; it never grants storage mutation authority.",
+    "Protected radio-scoped cache entries retain original captured targets. Exact predecessor-only successor advancement and eviction preserve indexedAt, key eviction age and collision ordering. Legacy entries expose Unbound(messageID), not mutation authority.",
+    "Protected replay serializes the whole batch with the existing process persistence mutex. Original bound work is never rebound; unfinished entries retain wire metadata, original target and queue ordinals. Known own-write successors advance only exact predecessor references, including queued work.",
+    "Each returned Applied is reported by a non-suspending callback after predecessor cache advancement and before another storage suspension, even if the cache predecessor was already evicted. Consumed bookkeeping precedes callback invocation; callback failure cannot replay the committed item.",
+    "Ordinary failures return Failed(cause,mutationUncertain) and log the explicit error; cancellation propagates. A thrown atomic write parks its original target group as UNKNOWN. Unbound-original/no-authority entries are parked and excluded from both legacy and protected matching.",
+    "Five cache and parking controls supplement the six original queue controls; these cache markers are test-only and do not certify storage issuance or validation."
   ],
   "not_implemented_or_accepted": [
-    "No frozen canonical reaction mutation contract is imported by this partial source.",
-    "Cache target binding, conditional successor advancement, real App completion indexer and Sync adapter remain dependent on the actual frozen producer API.",
-    "This queue prerequisite does not fix or accept the same-ID replacement mutation race by itself."
+    "Requires separately composed exact standalone contract 67a22f7f9e75db2b8188ed890e04cc3b25d62a02, API blob 1deccf7ebd9521cdba9c1e2251995acc17ea4e91. No withdrawn a303 or held ancestry is imported.",
+    "The real App original-window integration is staged separately and not included in this service/cache slice; real Sync adapter and consumer wiring remain unfinished.",
+    "Outgoing completion capture/indexing/cleanup lineage is unavailable in the standalone role and remains a separate admitted prerequisite, not fabricated by ID.",
+    "Generic Existing upserts, including equal-value upserts, invalidate old binding authority. Bound pending work may become Stale and remains retained, never rebound. Benign targeted-write lineage requires actual independent storage support; full replay parity is not claimed.",
+    "These consumers and cache controls do not establish atomic Room safety without the actual storage producer and real guarded App/Sync tests. Existing split-operation failure controls remain legacy coverage, not guarded-path acceptance."
   ],
   "actual_trace": {
     "indexer": "RadioSessionContainer.kt:216-217 passes ID/channel/sender/text/timestamp to ReactionService.indexMessage and discards returned pending matches.",
@@ -25,7 +32,7 @@
     "history": "AppChatsFeature.prepareTimelineMessages drains pending reactions and restores unfinished original queue metadata on errors or cancellation; this behavior must be retained."
   },
   "necessary_prerequisites": [
-    "a59 canonical opaque target and typed atomic apply contract, with actual persisted incarnation plus revision and explicit successor after own summary writes.",
+    "Separately compose the frozen a59 standalone 67a22 role; its sole parent is trusted 35ab and it has no held completion or DirectAck dependency.",
     "f805 atomic Room implementation and actual path admission, serialized with 3008 durable-occupant/schema work; held storage source is not trusted-main acceptance.",
     "Original save, history-window or channel completion transaction issues the binding for cache/index-triggered replay; actual candidate-selection transaction may issue a binding for a genuinely fresh never-targeted wire lookup. No ID-only or DTO-equality recapture.",
     "Rejected ranked-unbound-hint shortcut: if cached A is deleted and identical same-key B is inserted, a later actual query ranked by old cached ID can authorize B. Full wire matching does not prove the old indexed incarnation. It is not an ABA-safe cache repair.",
@@ -37,6 +44,7 @@
   "verification": {
     "product_tests_executed": 0,
     "queue_methods_authored": 6,
+    "cache_methods_authored": 5,
     "paging_methods_authored": 6,
     "compiled": false,
     "device_or_radio_execution": false,

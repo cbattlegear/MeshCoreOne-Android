@@ -1,12 +1,19 @@
 // PortedFrom: MC1Services/Sources/MC1Services/Services/MessageLRUCache.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.core.services.rendering
 
+import com.meshcoreone.android.core.contracts.domain.CapturedChannelReactionTarget
+import com.meshcoreone.android.core.model.RadioId
 import java.time.Clock
 import java.time.Instant
 import java.util.UUID
 
 /** Key for channel message lookup. [senderName] is canonical (NFC), matching Swift `String` hashing. */
-internal data class MessageCacheKey(val channelIndex: UByte, val senderName: String, val messageHash: String)
+internal data class MessageCacheKey(
+    val channelIndex: UByte,
+    val senderName: String,
+    val messageHash: String,
+    val radioId: RadioId? = null,
+)
 
 /** Key for DM message lookup. */
 internal data class DirectMessageCacheKey(val contactID: UUID, val messageHash: String)
@@ -17,6 +24,7 @@ internal data class MessageCandidate(
     val text: String,
     val timestamp: UInt,
     val indexedAt: Instant,
+    val channelTarget: CapturedChannelReactionTarget? = null,
 )
 
 /**
@@ -50,6 +58,66 @@ internal class MessageLRUCache(
     /** Candidates for a channel key, oldest first; empty when unknown. */
     fun lookup(channelIndex: UByte, senderName: String, messageHash: String): List<MessageCandidate> =
         synchronized(lock) { cache[MessageCacheKey(channelIndex, SwiftText.canonical(senderName), messageHash)].orEmpty() }
+
+    /** Only an original storage-issued capture enters the protected, radio-scoped cache. */
+    fun indexChannelTarget(captured: CapturedChannelReactionTarget, senderName: String) {
+        val message = captured.message
+        val channelIndex = requireNotNull(message.channelIndex)
+        require(message.contactID == null)
+        val key = MessageCacheKey(
+            channelIndex, SwiftText.canonical(senderName),
+            ReactionWireFormat.generateMessageHash(message.text, message.reactionTimestamp), message.radioId,
+        )
+        val candidate = MessageCandidate(
+            message.id, message.text, message.reactionTimestamp, clock.instant(), captured,
+        )
+        synchronized(lock) {
+            val (newOrder, evicted) = touched(order, key)
+            order = newOrder
+            cache = withCandidate(evicted?.let { cache - it } ?: cache, key, candidate)
+        }
+    }
+
+    fun lookupChannelTargets(
+        radioId: RadioId,
+        channelIndex: UByte,
+        senderName: String,
+        messageHash: String,
+    ): List<MessageCandidate> = synchronized(lock) {
+        cache[MessageCacheKey(channelIndex, SwiftText.canonical(senderName), messageHash, radioId)].orEmpty()
+    }
+
+    /** A summary write advances only its exact predecessor, without creating an indexing arrival. */
+    fun advanceChannelTarget(
+        predecessor: CapturedChannelReactionTarget,
+        successor: CapturedChannelReactionTarget,
+    ): Boolean {
+        require(predecessor.message.radioId == successor.message.radioId)
+        require(predecessor.message.id == successor.message.id)
+        require(predecessor.message.channelIndex == successor.message.channelIndex)
+        synchronized(lock) {
+            var advanced = false
+            cache = cache.mapValues { (_, candidates) ->
+                candidates.map { candidate ->
+                    if (candidate.channelTarget?.target === predecessor.target) {
+                        advanced = true
+                        candidate.copy(channelTarget = successor)
+                    } else candidate
+                }
+            }
+            return advanced
+        }
+    }
+
+    /** Never evict a newer same-key binding while retiring a stale predecessor. */
+    fun evictChannelTarget(predecessor: CapturedChannelReactionTarget) {
+        synchronized(lock) {
+            cache = cache.mapValues { (_, candidates) ->
+                candidates.filterNot { it.channelTarget?.target === predecessor.target }
+            }.filterValues { it.isNotEmpty() }
+            order = order.filter { it in cache }
+        }
+    }
 
     /** Indexes a DM message for later lookup. */
     fun indexDM(messageID: UUID, contactID: UUID, text: String, timestamp: UInt) {

@@ -32,6 +32,12 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
             result
         }
 
+    /** Shares this repository's post-commit revisions with related Room mutations. */
+    internal suspend fun <T> writeWithDeviceAuthority(
+        operation: String,
+        action: suspend RepositoryTransaction.() -> T,
+    ): T = write(operation, action = action)
+
     override suspend fun fetchDeviceWriteSnapshot(id: UUID): DeviceWriteSnapshot? = context.read("fetchDeviceWriteSnapshot") {
         database.devices().byId(id)?.let { DeviceWriteSnapshot(it.toDTO(), revision, authorityRevision) }
     }

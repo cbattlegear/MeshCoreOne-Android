@@ -359,3 +359,13 @@ made. These tests exercise the shared writer primitive only, not the actual
 `saveSimulatorDevice` / `resolveSimulatorDevicePreferenceConflict` call sites; those must be
 composed and tested against the exact APIs before claiming stale-ticket coverage. The primitive
 depends on the unmerged WP-305 writer foundation, which current main does not contain.
+
+A read-only source review of the initial test commit found that its ignored-retirement case was
+only a no-write branch and that the test lacked the `DeviceDTO.toEntity` import. Corrected in local
+commit `a0a6a8e4f2f9cd20e44c6783b5014630eab8118c` (tree
+`e2a2f70fcd48f54981876a9ac2007d21d636320f`, parent
+`ce1b4a6fbb30dbf5bf6d55f2b00412808fdbed1e`): the Room test now installs a `RAISE(IGNORE)` delete
+trigger, asserts the DAO reports zero deleted rows, throws a typed `PersistenceStoreException`
+after a staged canonical-row write, and verifies rollback restores both rows and leaves the old
+ticket usable. This is still a primitive-level control, not a call through the two #602 APIs, and
+has not been compiled or executed.

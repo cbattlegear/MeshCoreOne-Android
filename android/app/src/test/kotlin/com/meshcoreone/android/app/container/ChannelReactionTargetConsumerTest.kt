@@ -117,7 +117,10 @@ class ChannelReactionTargetConsumerTest : RoomProcessTest() {
     )
 
     private fun Fixture.queue(message: MessageDTO, sender: String = "Bob", radio: RadioId = channel.radioId) {
-        val wire = service.buildReactionText("Alice", emoji, message.text, message.reactionTimestamp)
+        val wire = service.buildReactionText(
+            emoji = emoji, targetSender = "Alice", targetText = message.text,
+            targetTimestamp = message.reactionTimestamp,
+        )
         service.requeuePendingReaction(PendingReaction(
             assertNotNull(ReactionParser.parse(wire)), channel.index, sender, wire, radio, receivedAt,
         ))
@@ -139,6 +142,10 @@ class ChannelReactionTargetConsumerTest : RoomProcessTest() {
             assertEquals(receivedAt, reaction.receivedAt)
             assertEquals(ReactionParser.generateMessageHash(original.text, original.reactionTimestamp), reaction.messageHash)
             assertEquals("Bob", reaction.senderName)
+            assertEquals(
+                service.buildReactionText(emoji, "Alice", original.text, original.reactionTimestamp),
+                reaction.rawText,
+            )
         }
     }
 
@@ -273,6 +280,73 @@ class ChannelReactionTargetConsumerTest : RoomProcessTest() {
                 runCatching { dependencies.prepareMessages(window()) }.exceptionOrNull(),
             )
             assertTrue(store.fetchReactions(EntityKey(channel.radioId, original.id)).isEmpty())
+        }
+    }
+
+    @Test fun deletionDuringOriginalWindowReplayCannotPublishOrResurrectTheRemovedRow() = runTest {
+        var remove: EntityKey? = null
+        fixture(this, beforeApply = {
+            remove?.let { remove = null; store.deleteMessage(it) }
+        }) {
+            val original = message()
+            val key = EntityKey(channel.radioId, original.id)
+            store.saveMessage(original)
+            queue(original)
+            remove = key
+            val viewModel = ChatViewModel(conversation, dependencies, CoroutineScope(currentCoroutineContext()))
+            try {
+                viewModel.open()
+                assertIs<PersistenceStoreException>(viewModel.state.value.loadError)
+                assertTrue(viewModel.state.value.messages.isEmpty())
+                assertNull(store.fetchMessage(key))
+                assertTrue(store.fetchReactions(key).isEmpty())
+                viewModel.open()
+                assertNull(viewModel.state.value.loadError)
+                assertTrue(viewModel.state.value.messages.isEmpty())
+                assertNull(store.fetchMessage(key))
+            } finally {
+                viewModel.close()
+            }
+        }
+    }
+
+    @Test fun committedCallbackStillRunsIfItsCachePredecessorWasEvictedDuringTheWrite() = runTest {
+        fixture(this) {
+            val original = message()
+            store.saveMessage(original)
+            queue(original)
+            val first = authority.fetchChannelReactionWindow(channel.radioId, channel.index, 10, 0).single()
+            var intervened = false
+            val interleaved = object : ChannelReactionTargetAuthority by authority {
+                override suspend fun applyChannelReaction(
+                    target: ChannelReactionTarget,
+                    reaction: ReactionDTO,
+                ): ChannelReactionApplyResult {
+                    if (!intervened) {
+                        intervened = true
+                        repeat(501) { ordinal ->
+                            service.indexMessage(
+                                UUID.randomUUID(), channel.index, "Other $ordinal", "unrelated",
+                                original.reactionTimestamp,
+                            )
+                        }
+                    }
+                    return authority.applyChannelReaction(target, reaction)
+                }
+            }
+            val observed = mutableListOf<Boolean>()
+            assertIs<ChannelReactionReplayResult.Completed>(
+                service.indexChannelMessageAndReplay(first, "Alice", interleaved) { observed += it.inserted },
+            )
+            assertEquals(listOf(true), observed)
+            assertIs<com.meshcoreone.android.core.services.reactions.ChannelReactionCacheLookup.Miss>(
+                service.findChannelTarget(
+                    assertNotNull(ReactionParser.parse(
+                        service.buildReactionText(emoji, "Alice", original.text, original.reactionTimestamp),
+                    )), channel.index, channel.radioId,
+                ),
+            )
+            assertEquals(1, store.fetchReactions(EntityKey(channel.radioId, original.id)).size)
         }
     }
 

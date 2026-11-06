@@ -9,7 +9,7 @@
     "Existing take delegates to the same operation with an always-true predicate, preserving original all-entry drain behavior.",
     "Six focused queue controls cover foreign-radio retention, no-match stability, original-priority restoration around new arrivals, unchanged eviction age, actual PendingReaction wire/radio/receivedAt retention and unchanged legacy full-drain behavior.",
     "Overlapping older-page rows adopt the complete actual prepared snapshot instead of copying its summary onto an old same-ID rendered DTO; the UUID is used only for display reconciliation, not mutation authority.",
-    "Six focused paging controls preserve the actual replacement snapshot, the prepared successor snapshot, scroll/offset/unread behavior, removal of a replacement that becomes a hidden outgoing reaction, concurrent newer rendered state, concurrent deletion and legitimate unchanged-row replay.",
+    "Eight focused paging controls preserve the actual replacement snapshot, the prepared successor snapshot, scroll/offset/unread behavior, removal of a replacement that becomes a hidden outgoing reaction, concurrent newer rendered state, concurrent deletion and legitimate unchanged-row replay. Two controls exercise real retry admission and retry-cancellation deletion while older-page preparation is suspended.",
     "Paging reconciles against the current window using exact original rendered-object identity only as a presentation compare-and-set. This prevents a suspended preparation from overwriting a newer rendered object or resurrecting a removed overlapping row; it never grants storage mutation authority.",
     "Protected radio-scoped cache entries retain original captured targets. Exact predecessor-only successor advancement and eviction preserve indexedAt, key eviction age and collision ordering. Legacy entries expose Unbound(messageID), not mutation authority.",
     "Protected replay serializes the whole batch with the existing process persistence mutex. Original bound work is never rebound; unfinished entries retain wire metadata, original target and queue ordinals. Known own-write successors advance only exact predecessor references, including queued work.",
@@ -21,7 +21,8 @@
     "Actual App offset and anchored reads use original atomic captured windows and pass exact DTO-reference receipts into preparation. Missing receipts fail explicitly without key/equality recapture; neutral reads have no replay side effects. PRIME delegates the same receipt-aware hook.",
     "Protected App preparation adopts the complete actual committed snapshot, not a UUID-only summary copy. Unknown sender skips only that message, foreign-radio pending entries stay queued, and actual pending receivedAt/hash/rawText survive persistence.",
     "The optional channelReactionTargets role is explicitly passed from the real Room facade through production factory, AppContainer, SessionEnvironment including lifecycle copy, RadioSessionContainer and SyncDependencies. The adapter forwards actual protected result/pending objects without stripping queue metadata; null is explicit unavailability, never a generic mutation fallback.",
-    "Thirteen actual-Room App controls are authored for original windows, missing receipt/role, read-only neutral reads, mounted open/loadOlder/anchored refresh over 235 old/corrected rows, selective sender/radio replay, identical replacement, generic-upsert invalidation, benign targeted writes, deduplication, commit-then-throw, cancellation event ordering and observer failure. Two additional parked-format controls cover original-object retention and typed overflow."
+    "Fifteen actual-Room App controls are authored for original windows, missing receipt/role, read-only neutral reads, mounted open/loadOlder/anchored refresh over 235 old/corrected rows, selective sender/radio replay, identical replacement, generic-upsert invalidation, benign targeted writes, deduplication, commit-then-throw, cancellation event ordering, observer failure, deletion during original replay and committed callbacks after actual cache eviction. Two additional parked-format controls cover original-object retention and typed overflow.",
+    "The Room fixture uses named native wire-builder arguments in this successor; 8c76abe98 had sender and emoji reversed in the newly authored queue fixture. No earlier execution or passing result is claimed."
   ],
   "not_implemented_or_accepted": [
     "Requires separately composed exact standalone contract 67a22f7f9e75db2b8188ed890e04cc3b25d62a02, API blob 1deccf7ebd9521cdba9c1e2251995acc17ea4e91. No withdrawn a303 or held ancestry is imported.",
@@ -55,8 +56,8 @@
     "queue_methods_authored": 6,
     "cache_and_native_parking_methods_authored": 10,
     "parked_mco_methods_authored": 2,
-    "app_methods_authored": 13,
-    "paging_methods_authored": 6,
+    "app_methods_authored": 15,
+    "paging_methods_authored": 8,
     "compiled": false,
     "device_or_radio_execution": false,
     "local_gradle_or_ci_dispatch": false,

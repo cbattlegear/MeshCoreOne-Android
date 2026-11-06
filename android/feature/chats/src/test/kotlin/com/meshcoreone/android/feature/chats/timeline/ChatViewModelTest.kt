@@ -32,6 +32,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -681,6 +682,115 @@ class ChatViewModelTest {
         assertEquals(listOf(older.id) + latest.map { it.id }, viewModel.state.value.messages.map { it.id })
         assertEquals(ChatViewModel.PAGE_SIZE + 2, viewModel.state.value.totalFetchedCount)
         assertFalse(viewModel.state.value.hasMoreMessages)
+    }
+
+    @Test
+    fun `suspended older preparation cannot overwrite real retry admission`() = runBlocking {
+        val contact = contact()
+        val all = List(ChatViewModel.PAGE_SIZE + 1) { index ->
+            if (index == 20) message(contact, index, MessageDirection.OUTGOING, MessageStatus.FAILED)
+            else message(contact, index)
+        }
+        val failed = all[20]
+        val preparing = CompletableDeferred<Unit>()
+        val releasePreparation = CompletableDeferred<Unit>()
+        val retrying = CompletableDeferred<Unit>()
+        val releaseRetry = CompletableDeferred<Unit>()
+        var suspendPreparation = false
+        val data = FakeData(all)
+        val viewModel = viewModel(
+            contact, data = data,
+            prepare = { messages ->
+                if (suspendPreparation) {
+                    preparing.complete(Unit)
+                    releasePreparation.await()
+                    messages.map { if (it.id == failed.id) failed.copy(reactionSummary = "X:1") else it }
+                } else messages
+            },
+            retry = TimelineRetryService { _, _ ->
+                retrying.complete(Unit)
+                releaseRetry.await()
+            },
+        )
+        viewModel.open()
+        val anchor = TimelineScrollAnchor(failed.id, 12)
+        viewModel.updateScrollPosition(anchor, false)
+        data.scriptedPages.addLast(listOf(all.first(), failed))
+        suspendPreparation = true
+        val paging = launch { viewModel.loadOlder() }
+        preparing.await()
+        val retry = launch { viewModel.retry(failed.id) }
+        try {
+            retrying.await()
+            assertEquals(MessageStatus.RETRYING, viewModel.state.value.messages.single { it.id == failed.id }.status)
+            releasePreparation.complete(Unit)
+            paging.join()
+            val retained = viewModel.state.value.messages.single { it.id == failed.id }
+            assertEquals(MessageStatus.RETRYING, retained.status)
+            assertNull(retained.reactionSummary)
+            assertTrue(failed.id in viewModel.state.value.retryingMessageIds)
+            assertEquals(anchor, viewModel.state.value.scrollAnchor)
+            assertEquals(listOf(0, ChatViewModel.PAGE_SIZE), data.offsets)
+        } finally {
+            releasePreparation.complete(Unit)
+            releaseRetry.complete(Unit)
+            paging.join()
+            retry.join()
+        }
+    }
+
+    @Test
+    fun `suspended older preparation cannot resurrect a deletion reconciled by real retry cancellation`() = runBlocking {
+        val contact = contact()
+        val all = List(ChatViewModel.PAGE_SIZE + 1) { index ->
+            if (index == 20) message(contact, index, MessageDirection.OUTGOING, MessageStatus.FAILED)
+            else message(contact, index)
+        }
+        val failed = all[20]
+        val preparing = CompletableDeferred<Unit>()
+        val releasePreparation = CompletableDeferred<Unit>()
+        val retrying = CompletableDeferred<Unit>()
+        val releaseRetry = CompletableDeferred<Unit>()
+        var suspendPreparation = false
+        val data = FakeData(all)
+        val viewModel = viewModel(
+            contact, data = data,
+            prepare = { messages ->
+                if (suspendPreparation) {
+                    preparing.complete(Unit)
+                    releasePreparation.await()
+                }
+                messages
+            },
+            retry = TimelineRetryService { _, _ ->
+                retrying.complete(Unit)
+                releaseRetry.await()
+            },
+        )
+        viewModel.open()
+        data.scriptedPages.addLast(listOf(all.first(), failed.copy(reactionSummary = "X:1")))
+        suspendPreparation = true
+        val paging = launch { viewModel.loadOlder() }
+        preparing.await()
+        val retry = launch { viewModel.retry(failed.id) }
+        try {
+            retrying.await()
+            data.messages.removeAll { it.id == failed.id }
+            retry.cancelAndJoin()
+            assertTrue(viewModel.state.value.messages.none { it.id == failed.id })
+            releasePreparation.complete(Unit)
+            paging.join()
+            assertTrue(viewModel.state.value.messages.none { it.id == failed.id })
+            assertTrue(viewModel.state.value.messages.any { it.id == all.first().id })
+            assertTrue(viewModel.state.value.retryingMessageIds.isEmpty())
+            assertNull(viewModel.state.value.passiveError)
+            assertFalse(viewModel.state.value.isLoadingOlder)
+        } finally {
+            releasePreparation.complete(Unit)
+            releaseRetry.complete(Unit)
+            paging.join()
+            retry.cancelAndJoin()
+        }
     }
 
     private fun viewModel(

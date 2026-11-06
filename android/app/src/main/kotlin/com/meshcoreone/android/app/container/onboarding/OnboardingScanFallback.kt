@@ -47,14 +47,33 @@ class ScanFallbackPort(
     private val clock: Clock = Clock.systemUTC(),
 ) : OnboardingScanFallbackPort {
     override val isRequested: StateFlow<Boolean> get() = service.isPresenting
-    private val discoveredEndpoints = ConcurrentHashMap<UUID, BluetoothEndpoint>()
     private val selectionLock = Any()
     private var activeAttempt: DiscoveryAttempt? = null
+    private var nextAttemptId = 0L
     private val endpointWriteLock = Mutex()
+
+    internal fun beginDiscovery(): Long {
+        val (generation, previousJobs) = synchronized(selectionLock) {
+            val previousJobs = activeAttempt?.let(::retireAttempt)
+            val attempt = DiscoveryAttempt(++nextAttemptId)
+            activeAttempt = attempt
+            attempt.generation to previousJobs
+        }
+        cancel(previousJobs)
+        return generation
+    }
+
+    internal fun endDiscovery(generation: Long) {
+        val jobs = synchronized(selectionLock) {
+            val attempt = activeAttempt?.takeIf { it.generation == generation } ?: return
+            retireAttempt(attempt)
+        }
+        cancel(jobs)
+    }
 
     override fun discoveries(): Flow<List<OnboardingScanDiscovery>> = channelFlow {
         val attempt = synchronized(selectionLock) {
-            activeAttempt?.takeIf { it.active } ?: DiscoveryAttempt().also { activeAttempt = it }
+            activeAttempt?.takeIf { it.active } ?: DiscoveryAttempt(++nextAttemptId).also { activeAttempt = it }
         }
         val scanJob = synchronized(selectionLock) {
             if (activeAttempt !== attempt || !attempt.active) null
@@ -111,11 +130,10 @@ class ScanFallbackPort(
                     devices.values.map { OnboardingScanDiscovery(it.discovery.id, it.discovery.name, it.tier) }
             }
         }
-        discoveredEndpoints.clear()
         try {
             tracker.consume(scans.startBleScanning().map { device ->
                 val endpoint = BluetoothEndpoint(device.id, DeviceEndpointIdentity.canonicalAddress(device.address), null)
-                discoveredEndpoints[device.id] = endpoint
+                if (isActive(attempt)) attempt.endpoints[device.id] = endpoint
                 ScanDiscovery(device.id, device.name, device.rssi.toLong())
             })
             result.complete(null)
@@ -129,10 +147,10 @@ class ScanFallbackPort(
     }
 
     override fun select(id: UUID) {
-        val endpoint = discoveredEndpoints[id]
         synchronized(selectionLock) {
             val attempt = activeAttempt?.takeIf { it.active } ?: return
             if (attempt.selectionJob?.isActive == true) return
+            val endpoint = attempt.endpoints[id]
             if (endpoint == null) {
                 resolveFailure(attempt, IllegalStateException("Selected BLE discovery no longer has an endpoint"))
                 return
@@ -144,15 +162,9 @@ class ScanFallbackPort(
     }
 
     override fun cancel() {
-        synchronized(selectionLock) {
-            activeAttempt?.let { attempt ->
-                attempt.active = false
-                attempt.selectionJob?.cancel()
-                attempt.scanJob?.cancel()
-                activeAttempt = null
-            }
-            service.cancel()
-        }
+        val jobs = synchronized(selectionLock) { activeAttempt?.let(::retireAttempt) }
+        cancel(jobs)
+        service.cancel()
     }
 
     private suspend fun retainAndSelect(attempt: DiscoveryAttempt, id: UUID, endpoint: BluetoothEndpoint) {
@@ -186,7 +198,7 @@ class ScanFallbackPort(
                             attempt.selectionJob = null
                             attempt.scanJob?.cancel()
                             activeAttempt = null
-                            discoveredEndpoints.remove(id)
+                            attempt.endpoints.remove(id)
                             service.select(id)
                             true
                         }
@@ -228,6 +240,24 @@ class ScanFallbackPort(
     private fun isActive(attempt: DiscoveryAttempt): Boolean =
         synchronized(selectionLock) { activeAttempt === attempt && attempt.active }
 
+    private fun retireAttempt(attempt: DiscoveryAttempt): AttemptJobs {
+        attempt.active = false
+        attempt.failureReported = true
+        attempt.discoveries.value = emptyList()
+        attempt.endpoints.clear()
+        val jobs = AttemptJobs(attempt.selectionJob, attempt.scanJob)
+        attempt.selectionJob = null
+        attempt.scanJob = null
+        if (activeAttempt === attempt) activeAttempt = null
+        attempt.scanResult.complete(null)
+        return jobs
+    }
+
+    private fun cancel(jobs: AttemptJobs?) {
+        jobs?.selection?.cancel()
+        jobs?.scan?.cancel()
+    }
+
     private fun resolveFailure(attempt: DiscoveryAttempt, failure: Throwable) {
         if (activeAttempt !== attempt || !attempt.active) return
         attempt.active = false
@@ -260,7 +290,10 @@ class ScanFallbackPort(
         }
     }
 
+    private data class AttemptJobs(val selection: Job?, val scan: Job?)
+
     private class DiscoveryAttempt(
+        val generation: Long,
         var active: Boolean = true,
         var selectionJob: Job? = null,
         var scanJob: Job? = null,
@@ -268,6 +301,7 @@ class ScanFallbackPort(
         var scanResult: CompletableDeferred<Exception?> = CompletableDeferred(),
         var failureReported: Boolean = false,
         val discoveries: MutableStateFlow<List<OnboardingScanDiscovery>> = MutableStateFlow(emptyList()),
+        val endpoints: ConcurrentHashMap<UUID, BluetoothEndpoint> = ConcurrentHashMap(),
     )
 
     private companion object {

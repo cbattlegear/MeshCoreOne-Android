@@ -605,3 +605,9 @@ empty cache. The callback case retains empty successor Room/live/cache assertion
 replays the actual captured G1 edit into `knownRegionsChanged` after G2 installs, verifying stale-token
 notification rejection. Pinned Python 3.12.4 `controller/validate.py`, `test_inventory.py --check`,
 and `git diff --check` passed; these Kotlin/Room controls remain unexecuted.
+The coordinator's bounded follow-up additionally puts the complete disconnect/reconnect sequence
+in the asynchronous replacement operation and asserts the old service remains installed while the
+admitted write/callback is held. Inspection of the rest of `RxRegionConsumerTest` found no other
+disconnect/replacement waiting synchronously on a held leased editor operation: its mounted
+replacement follows completed joins, and its overlapping notification control uses the separate
+non-persisting direct DTO replacement API. No production semantics were changed for these tests.

@@ -210,15 +210,18 @@ class RxRegionConsumerTest : RoomProcessTest() {
             val id = assertNotNull(f.harness.manager.connectedDevice).id
             val edit = assertNotNull(f.harness.container.deviceEditor.addKnownRegion("Germany"))
             f.harness.eventually("old region persistence suspended") { entered.isCompleted }
-            val retirement = async { f.harness.manager.disconnect() }
+            val replacementInstall = async {
+                f.harness.manager.disconnect()
+                f.harness.manager.connect(f.harness.target(id))
+            }
             f.harness.eventually("old generation logically detached") {
                 f.harness.manager.connectedDevice == null
             }
-            assertFalse(retirement.isCompleted, "Disconnect drains the admitted region write")
+            assertFalse(replacementInstall.isCompleted, "Replacement waits for the admitted region write")
+            assertTrue(f.harness.sessions.current === old, "G2 cannot install while G1's write is held")
             release.complete(Unit)
             edit.join()
-            retirement.await()
-            f.harness.manager.connect(f.harness.target(id))
+            replacementInstall.await()
             f.harness.eventually("replacement handlers ready") {
                 f.harness.sessions.current?.let { it !== old && it.messagePollingService.hasMessageHandlersWired } == true
             }
@@ -267,16 +270,19 @@ class RxRegionConsumerTest : RoomProcessTest() {
             f.harness.eventually("DTO accepted before callback lookup") { accepted.isCompleted }
             assertEquals(old.token, accepted.await())
             assertEquals(listOf("Germany"), assertNotNull(store.fetchDevice(f.radio)).knownRegions)
-            val retirement = async { f.harness.manager.disconnect() }
+            val replacementInstall = async {
+                f.harness.manager.disconnect()
+                store.removeDeviceKnownRegion(f.radio, "Germany")
+                f.harness.manager.connect(f.harness.target(id))
+            }
             f.harness.eventually("accepted edit generation logically detached") {
                 f.harness.manager.connectedDevice == null
             }
-            assertFalse(retirement.isCompleted, "Disconnect drains the accepted edit's callback")
+            assertFalse(replacementInstall.isCompleted, "Replacement waits for the accepted edit's callback")
+            assertTrue(f.harness.sessions.current === old, "G2 cannot install while G1's callback is held")
             resumeCallback.countDown()
             assertNotNull(edit.await()).join()
-            retirement.await()
-            store.removeDeviceKnownRegion(f.radio, "Germany")
-            f.harness.manager.connect(f.harness.target(id))
+            replacementInstall.await()
             f.harness.eventually("same-radio replacement handlers ready") {
                 f.harness.sessions.current?.let {
                     it !== old && it.messagePollingService.hasMessageHandlersWired

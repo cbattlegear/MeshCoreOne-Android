@@ -478,7 +478,7 @@ class ChannelReactionTargetServiceTest {
         val radio = RadioId(UUID.randomUUID())
         val service = ReactionService()
         val target = capture(radio)
-        val raw = service.buildReactionText("X", "Alice", "Hello", 100u)
+        val raw = service.buildReactionText("\uD83D\uDC4D", "Alice", "Hello", 100u)
         val parsed = requireNotNull(ReactionParser.parse(raw))
         val cancellation = kotlinx.coroutines.CancellationException("Original apply cancelled")
         val failures = listOf(
@@ -516,7 +516,7 @@ class ChannelReactionTargetServiceTest {
         val radio = RadioId(UUID.randomUUID())
         val service = ReactionService()
         val target = capture(radio)
-        val raw = service.buildReactionText("X", "Alice", "Hello", 100u)
+        val raw = service.buildReactionText("\uD83D\uDC4D", "Alice", "Hello", 100u)
         val parsed = requireNotNull(ReactionParser.parse(raw))
         val all = List(101) { index ->
             ParkedNativeChannelReaction(PendingReaction(
@@ -549,7 +549,7 @@ class ChannelReactionTargetServiceTest {
         val radio = RadioId(UUID.randomUUID())
         val target = capture(radio)
         val service = ReactionService()
-        val raw = service.buildReactionText("X", "Alice", "Hello", 100u)
+        val raw = service.buildReactionText("\uD83D\uDC4D", "Alice", "Hello", 100u)
         val cause = kotlinx.coroutines.CancellationException("Original cancellation")
         val native = ParkedNativeChannelReaction(PendingReaction(
             requireNotNull(ReactionParser.parse(raw)), 3u, "Bob", raw, radio, Instant.EPOCH, boundTarget = target,
@@ -583,7 +583,7 @@ class ChannelReactionTargetServiceTest {
     @Test fun queueCapacityOnlyPreservesExistingHundredAndReturnsExactUnretainedArrivalOrdinals() {
         val radio = RadioId(UUID.randomUUID())
         val service = ReactionService()
-        val raw = service.buildReactionText("X", "Alice", "Hello", 100u)
+        val raw = service.buildReactionText("\uD83D\uDC4D", "Alice", "Hello", 100u)
         val parsed = requireNotNull(ReactionParser.parse(raw))
         val arrivals = List(101) { index ->
             PendingReaction(
@@ -621,7 +621,7 @@ class ChannelReactionTargetServiceTest {
     @Test fun missingLegacyOccurrenceIsTerminalWithoutTargetSelectionOrMetadataReconstruction() {
         val radio = RadioId(UUID.randomUUID())
         val service = ReactionService()
-        val raw = service.buildReactionText("X", "Alice", "Hello", 100u)
+        val raw = service.buildReactionText("\uD83D\uDC4D", "Alice", "Hello", 100u)
         val pending = PendingReaction(
             requireNotNull(ReactionParser.parse(raw)), 3u, "Bob", raw, radio, Instant.EPOCH,
             queueKeyOrder = 7, queueEntryOrder = 11,
@@ -639,7 +639,7 @@ class ChannelReactionTargetServiceTest {
     @Test fun eachUnprovenNativeOperationRetainsItsOwnExactReceiveOccurrenceBeforeMatching() {
         val radio = RadioId(UUID.randomUUID())
         val service = ReactionService()
-        val raw = service.buildReactionText("X", "Alice", "Hello", 100u)
+        val raw = service.buildReactionText("\uD83D\uDC4D", "Alice", "Hello", 100u)
         val first = unproven(radio, raw)
         val second = unproven(radio, raw)
         assertFalse(first.envelope.occurrenceID == second.envelope.occurrenceID)
@@ -663,7 +663,7 @@ class ChannelReactionTargetServiceTest {
     @Test fun unprovenNativeCapacityReturnsTheExact101stOccurrenceAndPreservesTheFirstHundred() {
         val radio = RadioId(UUID.randomUUID())
         val service = ReactionService()
-        val raw = service.buildReactionText("X", "Alice", "Hello", 100u)
+        val raw = service.buildReactionText("\uD83D\uDC4D", "Alice", "Hello", 100u)
         val pending = List(101) { index ->
             PendingReaction(
                 requireNotNull(ReactionParser.parse(raw)), 3u, "Sender $index", raw, radio, Instant.EPOCH,
@@ -687,7 +687,7 @@ class ChannelReactionTargetServiceTest {
     @Test fun legacyGuardOffRestorationPreservesTheOriginalArrivalOrderAnd101stEviction() {
         val radio = RadioId(UUID.randomUUID())
         val service = ReactionService()
-        val raw = service.buildReactionText("X", "Alice", "Hello", 100u)
+        val raw = service.buildReactionText("\uD83D\uDC4D", "Alice", "Hello", 100u)
         val parsed = requireNotNull(ReactionParser.parse(raw))
         repeat(100) { service.queuePendingReaction(parsed, 3u, "Sender $it", raw, radio) }
         val original = service.indexMessage(UUID.randomUUID(), 3u, "Alice", "Hello", 100u)
@@ -704,7 +704,7 @@ class ChannelReactionTargetServiceTest {
     @Test fun legacyRestorationRejectsEveryOccurrenceAwareSelectedOrUncertainWorkWithoutEnqueueing() {
         val radio = RadioId(UUID.randomUUID())
         val service = ReactionService()
-        val raw = service.buildReactionText("X", "Alice", "Hello", 100u)
+        val raw = service.buildReactionText("\uD83D\uDC4D", "Alice", "Hello", 100u)
         val original = PendingReaction(
             requireNotNull(ReactionParser.parse(raw)), 3u, "Bob", raw, radio, Instant.EPOCH,
             queueKeyOrder = 7, queueEntryOrder = 11,

@@ -52,13 +52,18 @@ class PairingFlow(
     private var foregroundRetryJob: Job? = null
     private var foregroundPairingJob: Job? = null
     private var freshPairingCompletion = 0L
+    private val pairingStateLock = Any()
+    private var nextPairingStateGeneration = 0L
+    private var activePairingStateGeneration: Long? = null
+
+    private data class DeviceScanStart(val job: Job, val stateGeneration: Long?)
 
     /** Returns true only after a fresh pairing completed; an existing live radio is not consent or success. */
     suspend fun startDeviceScanAndAwait(onSelectionCommitted: () -> Unit = {}): Boolean {
         val completionBefore = freshPairingCompletion
-        val scan = startDeviceScan(onSelectionCommitted)
+        val started = startDeviceScanInternal(onSelectionCommitted)
         try {
-            scan.join()
+            started.job.join()
             ui.state.first {
                 !it.isBusy && it.pendingSystemPairingSetup == null && it.queuedSystemPairingSetup == null &&
                     !it.shouldCompleteFreshPairingOnForeground
@@ -66,25 +71,44 @@ class PairingFlow(
             return freshPairingCompletion != completionBefore
         } catch (cancelled: CancellationException) {
             withContext(NonCancellable) {
-                scan.cancelAndJoin()
-                setupConfirmationJob?.cancelAndJoin()
-                foregroundRetryJob?.cancelAndJoin()
-                foregroundPairingJob?.cancelAndJoin()
-                cancelSystemPairingSetup()
-                ui.isBusy = false
+                started.job.cancelAndJoin()
+                if (started.stateGeneration != null && hasNoNewerStateOwner(started.stateGeneration)) {
+                    setupConfirmationJob?.cancelAndJoin()
+                    foregroundRetryJob?.cancelAndJoin()
+                    foregroundPairingJob?.cancelAndJoin()
+                    cancelSystemPairingSetup()
+                }
             }
             throw cancelled
         }
     }
 
     /** Start device scan/pairing. Returns the flow's job so callers and tests can await completion. */
-    fun startDeviceScan(onSelectionCommitted: () -> Unit = {}): Job {
-        if (ui.pendingSystemPairingSetup != null || isConfirmingSystemPairingSetup) return scope.launch {}
-        ui.hideDisconnectedPill()
-        ui.failedPairingDeviceId = null
-        ui.isBusy = true
-        connection.isPairingFlowActive = true
-        return scope.launch {
+    fun startDeviceScan(onSelectionCommitted: () -> Unit = {}): Job =
+        startDeviceScanInternal(onSelectionCommitted).job
+
+    private fun startDeviceScanInternal(
+        onSelectionCommitted: () -> Unit,
+        allowExistingActivity: Boolean = false,
+    ): DeviceScanStart {
+        if (ui.pendingSystemPairingSetup != null || isConfirmingSystemPairingSetup) {
+            return DeviceScanStart(scope.launch {}, null)
+        }
+        val stateGeneration = synchronized(pairingStateLock) {
+            if (activePairingStateGeneration != null || ui.isBusy ||
+                (!allowExistingActivity && connection.isPairingFlowActive)
+            ) {
+                return@synchronized null
+            }
+            val generation = ++nextPairingStateGeneration
+            activePairingStateGeneration = generation
+            ui.hideDisconnectedPill()
+            ui.failedPairingDeviceId = null
+            ui.isBusy = true
+            connection.isPairingFlowActive = true
+            generation
+        } ?: return DeviceScanStart(scope.launch {}, null)
+        val job = scope.launch {
             var discoveryGeneration: Long? = null
             try {
                 discoveryGeneration = discoveryLifecycle?.begin(
@@ -105,15 +129,26 @@ class PairingFlow(
                 }
             } finally {
                 discoveryGeneration?.let { discoveryLifecycle?.end(it) }
-                if (ui.pendingSystemPairingSetup == null && ui.queuedSystemPairingSetup == null &&
-                    !ui.shouldCompleteFreshPairingOnForeground
-                ) {
-                    connection.isPairingFlowActive = false
+                synchronized(pairingStateLock) {
+                    if (activePairingStateGeneration == stateGeneration) {
+                        if (ui.pendingSystemPairingSetup == null && ui.queuedSystemPairingSetup == null &&
+                            !ui.shouldCompleteFreshPairingOnForeground
+                        ) {
+                            connection.isPairingFlowActive = false
+                        }
+                        ui.isBusy = false
+                        activePairingStateGeneration = null
+                    }
                 }
-                ui.isBusy = false
             }
         }
+        return DeviceScanStart(job, stateGeneration)
     }
+
+    private fun hasNoNewerStateOwner(generation: Long): Boolean =
+        synchronized(pairingStateLock) {
+            activePairingStateGeneration == null || activePairingStateGeneration == generation
+        }
 
     /** Device-selection sheet left the hierarchy: start a queued scan or present the queued setup prompt. */
     fun handleDeviceSelectionSheetDismissed() {
@@ -123,7 +158,7 @@ class PairingFlow(
             connection.isPairingFlowActive = true
             scope.launch {
                 connection.stopBleScanning()
-                startDeviceScan()
+                startDeviceScanInternal(onSelectionCommitted = {}, allowExistingActivity = true)
             }
             return
         }

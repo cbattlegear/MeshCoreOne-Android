@@ -63,6 +63,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.onStart
@@ -1264,6 +1265,8 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             concurrentJob.join()
             assertTrue(firstJob.isActive)
             assertTrue(service.isPresenting.value)
+            assertTrue(h.appState.connectionUI.isBusy)
+            assertTrue(h.container.connectionPort.isPairingFlowActive)
             assertEquals(1, starts)
 
             firstJob.cancelAndJoin()
@@ -1305,6 +1308,47 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             assertEquals(BluetoothEndpoint(replacementId, replacementAddress, null), endpoints.endpoint(replacementId))
             assertFalse(service.isPresenting.value)
         }
+    }
+
+    @Test fun concurrentNonFallbackPairingDoesNotClearOwningActivityState() = runTest {
+        val port = FakeConnectionPort()
+        val firstPickerStarted = CompletableDeferred<Unit>()
+        val releaseFirstPicker = CompletableDeferred<Unit>()
+        port.beforePicker = {
+            if (port.pickerCalls == 1) {
+                firstPickerStarted.complete(Unit)
+                releaseFirstPicker.await()
+            } else {
+                throw DevicePairingError.AlreadyInProgress()
+            }
+        }
+        val state = appStateOf(backgroundScope, port)
+        val firstJob = state.startDeviceScan()
+        runCurrent()
+        firstPickerStarted.await()
+        assertTrue(port.hasSystemPairingRegistry)
+        assertTrue(state.connectionUI.isBusy)
+        assertTrue(port.isPairingFlowActive)
+
+        val duplicateJob = state.startDeviceScan()
+        duplicateJob.join()
+        assertTrue(firstJob.isActive)
+        assertTrue(state.connectionUI.isBusy)
+        assertTrue(port.isPairingFlowActive)
+        assertEquals(1, port.pickerCalls)
+
+        val awaitPairing = async { state.startDeviceScanAndAwait() }
+        runCurrent()
+        assertFalse(awaitPairing.isCompleted)
+        assertTrue(state.connectionUI.isBusy)
+        assertTrue(port.isPairingFlowActive)
+
+        releaseFirstPicker.complete(Unit)
+        firstJob.join()
+        assertTrue(awaitPairing.await())
+        assertFalse(state.connectionUI.isBusy)
+        assertFalse(port.isPairingFlowActive)
+        assertEquals(1, port.pickerCalls)
     }
 
     @Test fun disposingSettingsHostCancelsHeldFallbackSelectionAndRollsBackItsEndpoint() = runTest {

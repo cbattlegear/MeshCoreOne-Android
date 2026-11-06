@@ -62,12 +62,6 @@ fun interface ChatPrimerFactory {
     fun create(dependencies: ChatTimelinePrimer.Dependencies): ChatTimelinePrimer?
 }
 
-// AndroidOnly: WP-317 Bind every PairingFlow start to its actual fallback-discovery lifetime.
-interface PairingDiscoveryLifecycle {
-    fun begin(discoveryJob: Job, onSelectionCommitted: () -> Unit): Long?
-    fun end(generation: Long)
-}
-
 /** Everything [AppState] is assembled from. Grouped so tests build it with fakes. */
 class AppStateDependencies(
     val connection: AppConnectionPort,

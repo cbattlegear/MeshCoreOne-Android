@@ -1,18 +1,31 @@
 // AndroidOnly: WP-401 Cold-start-safe notification action receiver and bounded process dispatcher.
+// AndroidOnly: WP-215 Separate, bounded custody of actions rejected before dispatcher admission.
 package com.meshcoreone.android.platform.notifications.messaging
 
 import android.app.RemoteInput
+import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.database.sqlite.SQLiteDatabase
+import android.database.sqlite.SQLiteException
+import android.widget.Toast
 import com.meshcoreone.android.core.contracts.notifications.NotificationAction
 import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
+import com.meshcoreone.android.platform.notifications.R
+import java.io.File
+import java.net.URISyntaxException
 import java.util.ArrayDeque
+import java.util.UUID
 import java.util.logging.Logger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 class NotificationActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -20,13 +33,36 @@ class NotificationActionReceiver : BroadcastReceiver() {
         val action = intent.getStringExtra(EXTRA_ACTION)?.let { raw ->
             NotificationAction.entries.firstOrNull { it.rawValue == raw } ?: return
         }
-        val text = if (action == NotificationAction.REPLY) {
+        val originalText = if (action == NotificationAction.REPLY) {
             RemoteInput.getResultsFromIntent(intent)?.getCharSequence(REMOTE_INPUT_KEY)?.toString()
-                ?.trim()?.takeIf(String::isNotEmpty) ?: return
+                ?.takeIf { it.isNotBlank() } ?: return
         } else {
             null
         }
-        NotificationActionDispatcher.enqueue(NotificationResponse(payload, action, text))
+        val result = NotificationActionDispatcher.enqueue(NotificationResponse(payload, action, originalText?.trim()))
+        if (result == EnqueueResult.REJECTED_CAPACITY &&
+            (action == NotificationAction.REPLY || action == NotificationAction.MARK_READ)
+        ) {
+            val retained = NotificationActionRecovery.retain(context, NotificationResponse(payload, action, originalText))
+            val status = when (retained) {
+                NotificationRecoveryRetention.DURABLE -> R.string.notification_action_recovery_saved
+                NotificationRecoveryRetention.PROCESS_ONLY -> R.string.notification_action_recovery_memory_only
+                NotificationRecoveryRetention.NOT_RETAINED -> R.string.notification_action_recovery_not_retained
+            }
+            Toast.makeText(context, status, Toast.LENGTH_LONG).show()
+            val launch = context.packageManager.getLaunchIntentForPackage(context.packageName)
+            if (launch == null) {
+                NotificationActionRecovery.foregroundUnavailable()
+            } else {
+                try {
+                    context.startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP))
+                } catch (_: ActivityNotFoundException) {
+                    NotificationActionRecovery.foregroundUnavailable()
+                } catch (_: SecurityException) {
+                    NotificationActionRecovery.foregroundUnavailable()
+                }
+            }
+        }
         if (action == null) {
             context.packageManager.getLaunchIntentForPackage(context.packageName)?.apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
@@ -42,6 +78,317 @@ class NotificationActionReceiver : BroadcastReceiver() {
 
 internal enum class EnqueueResult { DELIVERED_OR_QUEUED, REJECTED_CAPACITY }
 
+enum class NotificationRecoveryFailure { CAPACITY, TOO_LARGE, STORAGE_UNAVAILABLE, INVALID_RECORD }
+
+class RejectedNotificationAction(val id: UUID, val response: NotificationResponse)
+
+sealed interface NotificationRecoveryRead {
+    class Ready(val entries: List<RejectedNotificationAction>) : NotificationRecoveryRead
+    class Failed(val reason: NotificationRecoveryFailure) : NotificationRecoveryRead
+}
+
+sealed interface NotificationRecoveryWrite {
+    class Stored(val entry: RejectedNotificationAction) : NotificationRecoveryWrite
+    class Failed(val reason: NotificationRecoveryFailure) : NotificationRecoveryWrite
+}
+
+/**
+ * Pre-admission drafts, never accepted-action receipts or permission to replay a channel index.
+ * The original target and untrimmed text are kept until an explicit, confirmed disposition.
+ */
+class NotificationActionRecoveryStore(context: Context) {
+    private val file = File(context.noBackupFilesDir, "notification-action-recovery.sqlite")
+
+    fun retain(response: NotificationResponse): NotificationRecoveryWrite = synchronized(lock) {
+        val action = response.action
+            ?: return@synchronized NotificationRecoveryWrite.Failed(NotificationRecoveryFailure.INVALID_RECORD)
+        if (!isRecoverable(response)) {
+            return@synchronized NotificationRecoveryWrite.Failed(NotificationRecoveryFailure.INVALID_RECORD)
+        }
+        val payload = NotificationPayloadCodec.write(Intent(), response.payload).toUri(0)
+        val bytes = payload.toByteArray(Charsets.UTF_8).size.toLong() +
+            (response.userText?.toByteArray(Charsets.UTF_8)?.size ?: 0)
+        if (bytes > MAX_ENTRY_BYTES) {
+            return@synchronized NotificationRecoveryWrite.Failed(NotificationRecoveryFailure.TOO_LARGE)
+        }
+        when (val existing = read()) {
+            is NotificationRecoveryRead.Failed -> return@synchronized NotificationRecoveryWrite.Failed(existing.reason)
+            is NotificationRecoveryRead.Ready -> Unit
+        }
+        val entry = RejectedNotificationAction(UUID.randomUUID(), response)
+        try {
+            (open(create = true) ?: throw InvalidRecoveryRecord()).use { database ->
+                database.beginTransaction()
+                try {
+                    database.rawQuery("SELECT COUNT(*), COALESCE(SUM(byte_count), 0) FROM drafts", null).use {
+                        if (!it.moveToFirst()) throw InvalidRecoveryRecord()
+                        if (it.getLong(0) >= MAX_ENTRIES || it.getLong(1) + bytes > MAX_TOTAL_BYTES) {
+                            return@synchronized NotificationRecoveryWrite.Failed(NotificationRecoveryFailure.CAPACITY)
+                        }
+                    }
+                    database.insertOrThrow(
+                        "drafts", null,
+                        ContentValues().apply {
+                            put("id", entry.id.toString())
+                            put("payload", payload)
+                            put("action", action.rawValue)
+                            put("original_text", response.userText?.let(::encodeText))
+                            put("byte_count", bytes)
+                        },
+                    )
+                    database.setTransactionSuccessful()
+                } finally {
+                    database.endTransaction()
+                }
+            }
+            NotificationRecoveryWrite.Stored(entry)
+        } catch (_: InvalidRecoveryRecord) {
+            NotificationRecoveryWrite.Failed(NotificationRecoveryFailure.INVALID_RECORD)
+        } catch (_: SQLiteException) {
+            NotificationRecoveryWrite.Failed(NotificationRecoveryFailure.STORAGE_UNAVAILABLE)
+        } catch (_: SecurityException) {
+            NotificationRecoveryWrite.Failed(NotificationRecoveryFailure.STORAGE_UNAVAILABLE)
+        }
+    }
+
+    fun read(): NotificationRecoveryRead = synchronized(lock) {
+        try {
+            val database = open(create = false) ?: return@synchronized NotificationRecoveryRead.Ready(emptyList())
+            database.use {
+                val entries = mutableListOf<RejectedNotificationAction>()
+                var bytes = 0L
+                it.rawQuery(
+                    "SELECT id, payload, action, original_text, byte_count FROM drafts ORDER BY sequence", null,
+                ).use { cursor ->
+                    while (cursor.moveToNext()) {
+                        if (entries.size >= MAX_ENTRIES || (0..2).any(cursor::isNull) || cursor.isNull(4)) {
+                            throw InvalidRecoveryRecord()
+                        }
+                        val payloadText = cursor.getString(1)
+                        val text = if (cursor.isNull(3)) null else decodeText(cursor.getBlob(3))
+                        val size = payloadText.toByteArray(Charsets.UTF_8).size.toLong() +
+                            (text?.toByteArray(Charsets.UTF_8)?.size ?: 0)
+                        bytes += size
+                        if (size != cursor.getLong(4) || size > MAX_ENTRY_BYTES || bytes > MAX_TOTAL_BYTES) {
+                            throw InvalidRecoveryRecord()
+                        }
+                        val id = try {
+                            UUID.fromString(cursor.getString(0))
+                        } catch (_: IllegalArgumentException) {
+                            throw InvalidRecoveryRecord()
+                        }
+                        val action = NotificationAction.entries.firstOrNull { action ->
+                            action.rawValue == cursor.getString(2)
+                        }
+                        if (action != NotificationAction.REPLY && action != NotificationAction.MARK_READ) {
+                            throw InvalidRecoveryRecord()
+                        }
+                        if ((action == NotificationAction.REPLY && text.isNullOrBlank()) ||
+                            (action == NotificationAction.MARK_READ && text != null)
+                        ) {
+                            throw InvalidRecoveryRecord()
+                        }
+                        val payload = try {
+                            NotificationPayloadCodec.read(Intent.parseUri(payloadText, 0))
+                        } catch (_: URISyntaxException) {
+                            throw InvalidRecoveryRecord()
+                        } ?: throw InvalidRecoveryRecord()
+                        entries += RejectedNotificationAction(id, NotificationResponse(payload, action, text))
+                    }
+                }
+                NotificationRecoveryRead.Ready(entries)
+            }
+        } catch (_: InvalidRecoveryRecord) {
+            NotificationRecoveryRead.Failed(NotificationRecoveryFailure.INVALID_RECORD)
+        } catch (_: SQLiteException) {
+            NotificationRecoveryRead.Failed(NotificationRecoveryFailure.STORAGE_UNAVAILABLE)
+        } catch (_: SecurityException) {
+            NotificationRecoveryRead.Failed(NotificationRecoveryFailure.STORAGE_UNAVAILABLE)
+        }
+    }
+
+    /** Call only after explicit discard or successful clipboard transfer, never on dialog dismissal. */
+    fun dispose(id: UUID): NotificationRecoveryFailure? = synchronized(lock) {
+        try {
+            val database = open(create = false) ?: return@synchronized NotificationRecoveryFailure.INVALID_RECORD
+            database.use {
+                if (it.delete("drafts", "id = ?", arrayOf(id.toString())) != 1) {
+                    NotificationRecoveryFailure.INVALID_RECORD
+                } else {
+                    null
+                }
+            }
+        } catch (_: InvalidRecoveryRecord) {
+            NotificationRecoveryFailure.INVALID_RECORD
+        } catch (_: SQLiteException) {
+            NotificationRecoveryFailure.STORAGE_UNAVAILABLE
+        } catch (_: SecurityException) {
+            NotificationRecoveryFailure.STORAGE_UNAVAILABLE
+        }
+    }
+
+    private fun open(create: Boolean): SQLiteDatabase? {
+        if (file.parentFile?.isDirectory != true) throw SQLiteException("Recovery storage directory unavailable")
+        val existed = file.exists()
+        if (!existed && !create) return null
+        val database = if (existed) {
+            SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READWRITE)
+        } else {
+            SQLiteDatabase.openOrCreateDatabase(file, null)
+        }
+        try {
+            if (!existed) {
+                database.beginTransaction()
+                try {
+                    database.execSQL(
+                        "CREATE TABLE drafts (sequence INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                            "id TEXT NOT NULL UNIQUE, payload TEXT NOT NULL, action TEXT NOT NULL, " +
+                            "original_text BLOB, byte_count INTEGER NOT NULL CHECK(byte_count >= 0))",
+                    )
+                    database.version = 1
+                    database.setTransactionSuccessful()
+                } finally {
+                    database.endTransaction()
+                }
+            }
+            if (database.version != 1) throw InvalidRecoveryRecord()
+            database.execSQL("PRAGMA synchronous = FULL")
+            database.rawQuery("PRAGMA max_page_count = 1024", null).use {
+                if (!it.moveToFirst() || it.getLong(0) != 1024L) throw InvalidRecoveryRecord()
+            }
+            return database
+        } catch (failure: SQLiteException) {
+            database.close()
+            throw failure
+        }
+    }
+
+    private class InvalidRecoveryRecord : SQLiteException("Invalid notification recovery record")
+
+    companion object {
+        internal const val MAX_ENTRIES = 32
+        internal const val MAX_ENTRY_BYTES = 128 * 1024L
+        internal const val MAX_TOTAL_BYTES = 1024 * 1024L
+        private val lock = Any()
+
+        internal fun isRecoverable(response: NotificationResponse): Boolean = when (response.action) {
+            NotificationAction.REPLY -> !response.userText.isNullOrBlank()
+            NotificationAction.MARK_READ -> response.userText == null
+            else -> false
+        }
+
+        // Preserve RemoteInput's exact UTF-16 code units, including unpaired surrogates.
+        private fun encodeText(text: String): ByteArray = ByteArray(text.length * 2).also { bytes ->
+            text.forEachIndexed { index, char ->
+                bytes[index * 2] = (char.code shr 8).toByte()
+                bytes[index * 2 + 1] = char.code.toByte()
+            }
+        }
+
+        private fun decodeText(bytes: ByteArray): String {
+            if (bytes.size % 2 != 0) throw InvalidRecoveryRecord()
+            return CharArray(bytes.size / 2) { index ->
+                (((bytes[index * 2].toInt() and 255) shl 8) or
+                    (bytes[index * 2 + 1].toInt() and 255)).toChar()
+            }.concatToString()
+        }
+    }
+}
+
+class NotificationRecoveryItem(val entry: RejectedNotificationAction, val persistent: Boolean)
+
+class NotificationRecoverySnapshot(
+    val items: List<NotificationRecoveryItem>,
+    val storageFailure: NotificationRecoveryFailure?,
+    val notRetained: Boolean,
+    val foregroundUnavailable: Boolean,
+)
+
+enum class NotificationRecoveryRetention { DURABLE, PROCESS_ONLY, NOT_RETAINED }
+
+/** Separate, bounded process-only fallback when durable custody is unavailable. Never evicts a draft. */
+object NotificationActionRecovery {
+    private val lock = Any()
+    private val memory = linkedMapOf<UUID, RejectedNotificationAction>()
+    private var memoryBytes = 0L
+    private var lost = false
+    private var launchUnavailable = false
+    private val updates = MutableStateFlow(0L)
+    val changes: StateFlow<Long> = updates.asStateFlow()
+    private val logger = Logger.getLogger("com.mc1.NotificationRecovery")
+
+    fun retain(context: Context, response: NotificationResponse): NotificationRecoveryRetention = synchronized(lock) {
+        val retained = when (val result = NotificationActionRecoveryStore(context).retain(response)) {
+            is NotificationRecoveryWrite.Stored -> NotificationRecoveryRetention.DURABLE
+            is NotificationRecoveryWrite.Failed -> {
+                val bytes = recoveryBytes(response)
+                if (!NotificationActionRecoveryStore.isRecoverable(response) ||
+                    bytes > NotificationActionRecoveryStore.MAX_ENTRY_BYTES ||
+                    memory.size >= NotificationActionRecoveryStore.MAX_ENTRIES ||
+                    memoryBytes + bytes > NotificationActionRecoveryStore.MAX_TOTAL_BYTES
+                ) {
+                    lost = true
+                    logger.severe("Rejected notification action could not be retained; reason=${result.reason}")
+                    NotificationRecoveryRetention.NOT_RETAINED
+                } else {
+                    val entry = RejectedNotificationAction(UUID.randomUUID(), response)
+                    memory[entry.id] = entry
+                    memoryBytes += bytes
+                    logger.warning("Rejected notification action retained only in process memory; reason=${result.reason}")
+                    NotificationRecoveryRetention.PROCESS_ONLY
+                }
+            }
+        }
+        refresh()
+        retained
+    }
+
+    fun load(context: Context): NotificationRecoverySnapshot = synchronized(lock) {
+        val stored = NotificationActionRecoveryStore(context).read()
+        val persistent = (stored as? NotificationRecoveryRead.Ready)?.entries.orEmpty()
+        NotificationRecoverySnapshot(
+            persistent.map { NotificationRecoveryItem(it, persistent = true) } +
+                memory.values.map { NotificationRecoveryItem(it, persistent = false) },
+            (stored as? NotificationRecoveryRead.Failed)?.reason,
+            lost,
+            launchUnavailable,
+        )
+    }
+
+    fun dispose(context: Context, item: NotificationRecoveryItem): NotificationRecoveryFailure? = synchronized(lock) {
+        val failure = if (item.persistent) {
+            NotificationActionRecoveryStore(context).dispose(item.entry.id)
+        } else {
+            val removed = memory.remove(item.entry.id)
+            if (removed == null) NotificationRecoveryFailure.INVALID_RECORD else {
+                memoryBytes -= recoveryBytes(removed.response)
+                null
+            }
+        }
+        if (failure == null) refresh()
+        failure
+    }
+
+    fun foregroundUnavailable() = synchronized(lock) {
+        launchUnavailable = true
+        logger.warning("Foreground notification recovery launch unavailable; no launch success claimed")
+        refresh()
+    }
+
+    fun acknowledgeFailure() = synchronized(lock) {
+        lost = false
+        launchUnavailable = false
+        refresh()
+    }
+
+    fun refresh() = synchronized(lock) {
+        updates.value += 1
+    }
+
+    private fun recoveryBytes(response: NotificationResponse): Long =
+        NotificationPayloadCodec.write(Intent(), response.payload).toUri(0).toByteArray(Charsets.UTF_8).size.toLong() +
+            (response.userText?.toByteArray(Charsets.UTF_8)?.size ?: 0)
+}
 internal object NotificationActionDispatcher {
     private const val MAX_PENDING = 32
     private const val RETRY_COUNT = 60

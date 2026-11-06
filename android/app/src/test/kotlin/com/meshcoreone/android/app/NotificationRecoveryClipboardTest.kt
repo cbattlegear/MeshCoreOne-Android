@@ -1,0 +1,230 @@
+// AndroidOnly: WP-215 Mounted explicit recovery, clipboard custody and cancellation controls.
+package com.meshcoreone.android.app
+
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.ContextWrapper
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
+import com.meshcoreone.android.core.contracts.notifications.NotificationAction
+import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
+import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
+import com.meshcoreone.android.core.designsystem.MeshCoreTheme
+import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
+import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
+import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.platform.notifications.messaging.NotificationActionRecovery
+import com.meshcoreone.android.platform.notifications.messaging.NotificationActionRecoveryStore
+import com.meshcoreone.android.platform.notifications.messaging.NotificationRecoveryRead
+import com.meshcoreone.android.platform.notifications.messaging.NotificationRecoveryRetention
+import com.meshcoreone.android.platform.notifications.messaging.NotificationRecoveryWrite
+import com.meshcoreone.android.platform.notifications.messaging.RejectedNotificationAction
+import java.io.File
+import java.util.UUID
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Rule
+import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import org.junit.runner.RunWith
+import org.robolectric.Robolectric
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+import com.meshcoreone.android.platform.notifications.R as NotificationStrings
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [31], qualifiers = "w400dp-h800dp")
+class NotificationRecoveryClipboardTest {
+    @get:Rule val compose = createEmptyComposeRule()
+    @get:Rule val folder = TemporaryFolder()
+    private val activity = Robolectric.buildActivity(ComponentActivity::class.java)
+    private lateinit var context: Context
+    private var clipboardUnavailable = false
+    private var mounted = false
+    private var closed = false
+
+    @Before
+    fun prepare() {
+        activity.setup().visible()
+        context = object : ContextWrapper(activity.get()) {
+            override fun getApplicationContext(): Context = this
+            override fun getNoBackupFilesDir(): File = folder.root
+            override fun getSystemService(name: String): Any? =
+                if (name == CLIPBOARD_SERVICE && clipboardUnavailable) null else super.getSystemService(name)
+        }
+        NotificationActionRecovery.acknowledgeFailure()
+    }
+
+    @After
+    fun close() {
+        if (!closed) activity.pause().stop().destroy()
+        NotificationActionRecovery.load(context).items.filter { !it.persistent }.forEach {
+            assertNull(NotificationActionRecovery.dispose(context, it))
+        }
+        NotificationActionRecovery.acknowledgeFailure()
+    }
+
+    @Test
+    fun clipboardTransferPreservesExactTextAndSensitiveFlagButDoesNotItselfDelete() {
+        val original = " \tprivate\uD83D\uDE80 text\n "
+        val entry = save(1, original)
+        assertTrue(copyRejectedNotificationText(context, original))
+        val clip = requireNotNull(context.getSystemService(ClipboardManager::class.java)).primaryClip!!
+        assertEquals(original, clip.getItemAt(0).text.toString())
+        assertTrue(clip.description.extras!!.getBoolean("android.content.extra.IS_SENSITIVE"))
+        assertEquals(entry.id, entries().single().id)
+    }
+
+    @Test
+    fun unavailableClipboardIsNotReportedAsASuccessfulDisposition() {
+        val entry = save(2, "keep")
+        clipboardUnavailable = true
+        assertFalse(copyRejectedNotificationText(context, "keep"))
+        assertEquals(entry.id, entries().single().id)
+    }
+
+    @Test
+    fun cancelClosesTheActualDialogWithoutDeletingOrReplaying() {
+        val entry = save(3, "cancel keeps this")
+        mount()
+        awaitText("cancel keeps this")
+        compose.onNodeWithText(text(AppLocalizableStrings.commonCancel)).performClick()
+        compose.waitForIdle()
+        assertEquals(entry.id, entries().single().id)
+        compose.onNodeWithText(text(NotificationStrings.string.notification_action_recovery_title)).assertDoesNotExist()
+    }
+
+    @Test
+    fun destroyingTheHostDoesNotDisposeTheDurableRecoveryRecord() {
+        val entry = save(4, "keep on host cancellation")
+        mount()
+        awaitText("keep on host cancellation")
+        activity.pause().stop().destroy()
+        closed = true
+        assertEquals(entry.id, entries().single().id)
+    }
+
+    @Test
+    fun explicitCopyFromTheActualDialogRemovesOnlyTheCopiedDraft() {
+        val first = save(5, " \tfirst unchanged\n ")
+        val second = save(6, "second remains")
+        mount()
+        awaitText(" \tfirst unchanged\n ")
+        compose.onNodeWithText(text(AppChatsStrings.chatsMessageActionCopy)).performClick()
+        compose.waitUntil(5_000) { entries().map { it.id } == listOf(second.id) }
+        val clip = requireNotNull(context.getSystemService(ClipboardManager::class.java)).primaryClip!!
+        assertEquals(" \tfirst unchanged\n ", clip.getItemAt(0).text.toString())
+        assertFalse(entries().any { it.id == first.id })
+        awaitText("second remains")
+    }
+
+    @Test
+    fun copyFailureRemainsVisibleAndLeavesTheRecordForExplicitRecovery() {
+        val entry = save(7, "failed copy keeps this")
+        mount()
+        awaitText("failed copy keeps this")
+        clipboardUnavailable = true
+        compose.onNodeWithText(text(AppChatsStrings.chatsMessageActionCopy)).performClick()
+        awaitText(text(NotificationStrings.string.notification_action_recovery_copy_failed))
+        assertEquals(entry.id, entries().single().id)
+    }
+
+    @Test
+    fun explicitDiscardOfRejectedMarkReadNeverInvokesAnAutomaticRetry() {
+        val response = response(8, null, NotificationAction.MARK_READ)
+        val entry = (NotificationActionRecoveryStore(context).retain(response) as NotificationRecoveryWrite.Stored).entry
+        mount()
+        awaitText(text(NotificationStrings.string.notification_action_recovery_rejected_mark_read))
+        compose.onNodeWithText(text(AppChatsStrings.chatsMessageActionCopy)).assertDoesNotExist()
+        compose.onNodeWithText(text(AppLocalizableStrings.commonTryAgain)).assertDoesNotExist()
+        compose.onNodeWithText(text(AppChatsStrings.chatsMessageActionDelete)).performClick()
+        compose.waitUntil(5_000) { entries().isEmpty() }
+        assertFalse(entries().any { it.id == entry.id })
+    }
+
+    @Test
+    fun failedDiscardSurfacesAnErrorWithoutErasingTheOriginal() {
+        val entry = save(9, "disk error keeps this")
+        mount()
+        awaitText("disk error keeps this")
+        val file = File(context.noBackupFilesDir, "notification-action-recovery.sqlite")
+        android.database.sqlite.SQLiteDatabase.openDatabase(
+            file.path, null, android.database.sqlite.SQLiteDatabase.OPEN_READWRITE,
+        ).use { it.version = 99 }
+        compose.onNodeWithText(text(AppChatsStrings.chatsMessageActionDelete)).performClick()
+        awaitText(text(NotificationStrings.string.notification_action_recovery_discard_failed))
+        android.database.sqlite.SQLiteDatabase.openDatabase(
+            file.path, null, android.database.sqlite.SQLiteDatabase.OPEN_READONLY,
+        ).use {
+            it.rawQuery("SELECT id FROM drafts", null).use { row ->
+                assertTrue(row.moveToFirst())
+                assertEquals(entry.id.toString(), row.getString(0))
+            }
+        }
+    }
+
+    @Test
+    fun processOnlyRecoveryIsDistinguishedFromAPrivateSavedRecord() {
+        val blocked = File(folder.root, "not-a-directory").apply { writeText("occupied") }
+        context = object : ContextWrapper(context) {
+            override fun getApplicationContext(): Context = this
+            override fun getNoBackupFilesDir(): File = blocked
+        }
+        assertEquals(
+            NotificationRecoveryRetention.PROCESS_ONLY,
+            NotificationActionRecovery.retain(context, response(10, "process only")),
+        )
+        mount()
+        awaitText("process only")
+        compose.onNodeWithText(text(NotificationStrings.string.notification_action_recovery_memory_only)).assertIsDisplayed()
+        compose.onNodeWithText(text(NotificationStrings.string.notification_action_recovery_saved)).assertDoesNotExist()
+        compose.onNodeWithText(text(AppLocalizableStrings.commonCancel)).performClick()
+        assertEquals("process only", NotificationActionRecovery.load(context).items.single().entry.response.userText)
+    }
+
+    private fun mount() {
+        check(!mounted)
+        mounted = true
+        activity.get().setContent {
+            CompositionLocalProvider(LocalContext provides context) {
+                MeshCoreTheme(motionScale = 0f) { NotificationActionRecoveryDialog() }
+            }
+        }
+    }
+
+    private fun awaitText(value: String) {
+        compose.waitUntil(5_000) {
+            compose.onAllNodes(androidx.compose.ui.test.hasText(value)).fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText(value).assertIsDisplayed()
+    }
+
+    private fun text(resource: Int) = activity.get().getString(resource)
+
+    private fun save(id: Int, text: String): RejectedNotificationAction =
+        (NotificationActionRecoveryStore(context).retain(response(id, text)) as NotificationRecoveryWrite.Stored).entry
+
+    private fun entries(): List<RejectedNotificationAction> =
+        (NotificationActionRecoveryStore(context).read() as NotificationRecoveryRead.Ready).entries
+
+    private fun response(id: Int, text: String?, action: NotificationAction = NotificationAction.REPLY) =
+        NotificationResponse(
+            NotificationPayload.ChannelMessage(
+                RadioId(UUID.fromString("10000000-0000-0000-0000-000000000001")),
+                7u,
+                UUID(0, id.toLong()),
+            ),
+            action,
+            text,
+        )
+}

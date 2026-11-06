@@ -1,5 +1,6 @@
 // PortedFrom: MC1/ContentView.swift@db14559b39d32322b06477c6ae676112f583db50
 // Native adaptation: Edge-to-edge Activity and retained screen navigation; no process/radio graph assembly.
+// AndroidOnly: WP-215 Explicit copy/discard of rejected notification actions; never automatic replay.
 package com.meshcoreone.android.app
 
 import android.content.Intent
@@ -14,6 +15,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -37,18 +41,33 @@ import com.meshcoreone.android.core.connectivity.pairing.CompanionChooserHost
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.designsystem.ThemeServiceHost
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.SecureFlagPolicy
+import com.meshcoreone.android.core.contracts.notifications.NotificationAction
+import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import com.meshcoreone.android.feature.tools.trace.AndroidRecentHopsStorage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import com.meshcoreone.android.platform.notifications.messaging.NotificationActionRecovery
+import com.meshcoreone.android.platform.notifications.messaging.NotificationRecoverySnapshot
+import com.meshcoreone.android.platform.notifications.R as NotificationStrings
 
 class NavigationHostViewModel : ViewModel() {
     var navigation = NavigationCoordinator()
@@ -166,6 +185,7 @@ open class MainActivity : ComponentActivity() {
                     }
                     answer.container?.let { AppConnectionRecoveryDialogs(it.appState) }
                 }
+                NotificationActionRecoveryDialog()
             }
             val themeService = resolved?.container?.themeService
             if (themeService != null) ThemeServiceHost(themeService) { screen() }
@@ -200,6 +220,7 @@ open class MainActivity : ComponentActivity() {
     /** While resumed, this activity is the host that can launch the system companion-device chooser. */
     override fun onResume() {
         super.onResume()
+        NotificationActionRecovery.refresh()
         val application = application as? MeshCoreApplication ?: return
         chooserJob?.cancel()
         chooserJob = uiScope.launch {
@@ -256,5 +277,139 @@ open class MainActivity : ComponentActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putStringArrayList(NavigationSavedState.KEY, NavigationSavedState.encode(host.navigation.state.value))
         super.onSaveInstanceState(outState)
+    }
+}
+
+@Composable
+internal fun NotificationActionRecoveryDialog() {
+    val context = LocalContext.current
+    val sequence by NotificationActionRecovery.changes.collectAsState()
+    var dismissedSequence by remember { mutableStateOf<Long?>(null) }
+    val snapshot by produceState<Pair<Long, NotificationRecoverySnapshot>?>(null, sequence) {
+        value = sequence to withContext(Dispatchers.IO) { NotificationActionRecovery.load(context.applicationContext) }
+    }
+    val recovery = snapshot?.takeIf { it.first == sequence }?.second ?: return
+    val item = recovery.items.firstOrNull()
+    if (item == null && recovery.storageFailure == null && !recovery.notRetained && !recovery.foregroundUnavailable) return
+    if (dismissedSequence == sequence) return
+    var busy by remember(item?.entry?.id) { mutableStateOf(false) }
+    var error by remember(item?.entry?.id) { mutableStateOf<Int?>(null) }
+    val scope = rememberCoroutineScope()
+    val close = {
+        if (!busy) {
+            NotificationActionRecovery.acknowledgeFailure()
+            dismissedSequence = NotificationActionRecovery.changes.value
+        }
+    }
+    AlertDialog(
+        properties = DialogProperties(securePolicy = SecureFlagPolicy.SecureOn),
+        onDismissRequest = close,
+        title = { Text(stringResource(NotificationStrings.string.notification_action_recovery_title)) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                if (recovery.notRetained) Text(stringResource(NotificationStrings.string.notification_action_recovery_not_retained))
+                if (recovery.storageFailure != null) {
+                    Text(stringResource(NotificationStrings.string.notification_action_recovery_storage_unavailable))
+                }
+                if (recovery.foregroundUnavailable) {
+                    Text(stringResource(NotificationStrings.string.notification_action_recovery_launch_failed))
+                }
+                item?.let {
+                    Text(
+                        stringResource(
+                            if (it.entry.response.action == NotificationAction.REPLY) {
+                                NotificationStrings.string.notification_action_recovery_rejected_reply
+                            } else {
+                                NotificationStrings.string.notification_action_recovery_rejected_mark_read
+                            },
+                        ),
+                    )
+                    Text(
+                        stringResource(
+                            if (it.persistent) NotificationStrings.string.notification_action_recovery_saved
+                            else NotificationStrings.string.notification_action_recovery_memory_only,
+                        ),
+                    )
+                    Text(
+                        stringResource(
+                            NotificationStrings.string.notification_action_recovery_original_target,
+                            it.entry.response.payload.toString(),
+                        ),
+                    )
+                    it.entry.response.userText?.let { text -> Text(text) }
+                }
+                error?.let { Text(stringResource(it)) }
+            }
+        },
+        confirmButton = {
+            Column {
+                val text = item?.entry?.response?.userText
+                if (item != null && text != null) {
+                    TextButton(
+                        enabled = !busy,
+                        onClick = {
+                            scope.launch {
+                                busy = true
+                                try {
+                                    if (!copyRejectedNotificationText(context, text)) {
+                                        error = NotificationStrings.string.notification_action_recovery_copy_failed
+                                    } else {
+                                        val failure = withContext(Dispatchers.IO) {
+                                            NotificationActionRecovery.dispose(context.applicationContext, item)
+                                        }
+                                        if (failure == null) dismissedSequence = sequence
+                                        else error = NotificationStrings.string.notification_action_recovery_discard_failed
+                                    }
+                                } finally {
+                                    busy = false
+                                }
+                            }
+                        },
+                    ) { Text(stringResource(AppChatsStrings.chatsMessageActionCopy)) }
+                }
+                if (item != null) {
+                    TextButton(
+                        enabled = !busy,
+                        onClick = {
+                            scope.launch {
+                                busy = true
+                                try {
+                                    val failure = withContext(Dispatchers.IO) {
+                                        NotificationActionRecovery.dispose(context.applicationContext, item)
+                                    }
+                                    if (failure == null) dismissedSequence = sequence
+                                    else error = NotificationStrings.string.notification_action_recovery_discard_failed
+                                } finally {
+                                    busy = false
+                                }
+                            }
+                        },
+                    ) { Text(stringResource(AppChatsStrings.chatsMessageActionDelete)) }
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(enabled = !busy, onClick = close) {
+                Text(stringResource(AppLocalizableStrings.commonCancel))
+            }
+        },
+    )
+}
+
+internal fun copyRejectedNotificationText(context: android.content.Context, text: String): Boolean {
+    return try {
+        val clipboard = context.getSystemService(android.content.ClipboardManager::class.java) ?: return false
+        val clip = android.content.ClipData.newPlainText("", text).apply {
+            description.extras = android.os.PersistableBundle().apply {
+                putBoolean("android.content.extra.IS_SENSITIVE", true)
+            }
+        }
+        clipboard.setPrimaryClip(clip)
+        val copied = clipboard.primaryClip
+        copied != null && copied.itemCount == 1 && copied.getItemAt(0).text?.toString() == text
+    } catch (_: SecurityException) {
+        false
+    } catch (_: IllegalStateException) {
+        false
     }
 }

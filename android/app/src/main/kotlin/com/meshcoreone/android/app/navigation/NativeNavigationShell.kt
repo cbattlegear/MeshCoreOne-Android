@@ -480,6 +480,9 @@ private fun ExistingFeatureContent(
                 else -> NodesDestination.List
             },
             navigation = object : NodesNavigation {
+                override val openLineOfSight =
+                    if (lineOfSight != null) coordinator::navigateToLineOfSight else null
+
                 override fun openContact(contact: com.meshcoreone.android.core.model.ContactDTO) =
                     coordinator.navigateToContactDetail(contact)
 
@@ -513,7 +516,10 @@ private fun ExistingFeatureContent(
             if (selected == com.meshcoreone.android.feature.tools.navigation.ToolSelection.LINE_OF_SIGHT &&
                 lineOfSight != null
             ) {
-                LineOfSightEntry(lineOfSight)
+                LineOfSightEntry(
+                    lineOfSight,
+                    preselectedContact = (destination as? NavigationDestination.Tool)?.preselectedContact,
+                )
             } else {
                 ToolsEntry(
                     route,

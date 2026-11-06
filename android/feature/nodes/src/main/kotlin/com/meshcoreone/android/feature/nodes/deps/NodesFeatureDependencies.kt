@@ -4,6 +4,7 @@ package com.meshcoreone.android.feature.nodes.deps
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.model.ContactDTO
+import com.meshcoreone.android.core.model.Coordinate
 import com.meshcoreone.android.core.model.ContactFrame
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.DiscoveredNodeDTO
@@ -203,4 +204,6 @@ class NodesFeatureDependencies(
     val preferences: StringListPreferences,
     val clock: NodesClock,
     val locale: () -> Locale = Locale::getDefault,
+    /** Authorized phone fix, otherwise live connected-radio location; null uses the source sort fallback. */
+    val locations: Flow<Coordinate?> = flowOf(null),
 )

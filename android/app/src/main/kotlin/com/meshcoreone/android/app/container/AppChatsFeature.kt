@@ -1,3 +1,4 @@
+// PortedFrom: MC1/Views/RemoteNodes/Rooms/RoomConversationView.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Chats/ViewModel/ChatViewModel+SendQueues.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Chats/ViewModel/ChatViewModel+EventStream.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Chats/ViewModel/ChatViewModel+Messages.swift@db14559b39d32322b06477c6ae676112f583db50
@@ -35,6 +36,8 @@ import com.meshcoreone.android.feature.chats.channels.*
 import com.meshcoreone.android.core.services.contacts.ChannelService
 import com.meshcoreone.android.core.services.messaging.ChatSendQueueService
 import com.meshcoreone.android.core.services.notifications.NotificationService
+import com.meshcoreone.android.core.services.remote.startSessionKeepAlive
+import com.meshcoreone.android.core.services.remote.stopSessionKeepAlive
 import java.time.Clock
 import java.time.Instant
 import java.util.UUID
@@ -103,6 +106,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
     )
     private val floodScopeMutex = Mutex()
     private var lastPushedScope: PushedFloodScope? = null
+    private val visibleRoomKeepAlives = mutableMapOf<Pair<RadioSessionContainer, EntityKey>, Any>()
     private val store get() = container.processStore
     private val scope get() = container.uiScope
     private val app get() = container.appState
@@ -763,6 +767,29 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         )
     }
 
+    private fun acquireRoomKeepAlive(graph: RadioSessionContainer, room: RemoteNodeSessionDTO): AutoCloseable? =
+        synchronized(visibleRoomKeepAlives) {
+            val connection = container.connectionManager.snapshot.value
+            if (!room.isRoom || !room.isConnected || room.radioId != graph.token.radioId ||
+                container.sessions.current !== graph || connection.token != graph.token ||
+                connection.state != com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
+            ) return@synchronized null
+            val session = EntityKey(room.radioId, room.id)
+            val key = graph to session
+            val owner = Any()
+            graph.remoteNodeService.startSessionKeepAlive(session, room.publicKey)
+            visibleRoomKeepAlives[key] = owner
+            AutoCloseable {
+                synchronized(visibleRoomKeepAlives) {
+                    // Replacement mounts own the same service slot; an old disposal cannot stop them.
+                    if (visibleRoomKeepAlives[key] === owner) {
+                        visibleRoomKeepAlives.remove(key)
+                        graph.remoteNodeService.stopSessionKeepAlive(session)
+                    }
+                }
+            }
+        }
+
     internal fun captureNavigationSession(token: com.meshcoreone.android.core.contracts.domain.SessionToken?): () -> Boolean {
         val initiatingSession = token?.let { expected -> container.sessions.current?.takeIf { it.token == expected } }
         return { initiatingSession != null && container.isCurrentSession(initiatingSession) }
@@ -791,6 +818,16 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         joinSession: () -> RadioSessionContainer,
     ): RoomConversationDependencies = object : RoomConversationDependencies {
         private fun roomKey() = EntityKey(room.radioId, room.id)
+        override val keepAlive: Flow<RoomSessionKeepAlive?> = changes.onStart { emit(Unit) }
+            .map {
+                val connection = container.connectionManager.snapshot.value
+                container.sessions.current?.takeIf {
+                    it.token.radioId == room.radioId && connection.token == it.token &&
+                        connection.state == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
+                }
+            }
+            .distinctUntilChanged()
+            .map { graph -> graph?.let { RoomSessionKeepAlive { session -> acquireRoomKeepAlive(it, session) } } }
         override val data = object : RoomConversationDataSource {
             override suspend fun fetchMessages(session: RemoteNodeSessionDTO) =
                 store.fetchRoomMessages(EntityKey(session.radioId, session.id))

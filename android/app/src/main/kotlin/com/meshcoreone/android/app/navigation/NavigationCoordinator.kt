@@ -366,6 +366,13 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         it.push(AppTab.TOOLS, NavigationDestination.Tool(tool)).copy(selectedTool = tool)
     }
 
+    fun navigateToLineOfSight(contact: ContactDTO) = mutableState.update {
+        it.removeDestinations { destination ->
+            destination is NavigationDestination.Tool && destination.selection == ToolSelection.LINE_OF_SIGHT
+        }.push(AppTab.TOOLS, NavigationDestination.Tool(ToolSelection.LINE_OF_SIGHT, contact))
+            .copy(selectedTool = ToolSelection.LINE_OF_SIGHT)
+    }
+
     fun stageContactLink(
         link: ContactLinkRequest?, targetRadioId: RadioId? = mutableState.value.radioId, selectChats: Boolean = false,
     ) = mutableState.update {

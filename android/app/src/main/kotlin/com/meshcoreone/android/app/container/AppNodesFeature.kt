@@ -45,9 +45,10 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import org.json.JSONArray
 
-internal fun AppContainer.createNodesFeatureDependencies(): NodesFeatureDependencies =
-    NodesFeatureDependencies(
-        session = AppNodesSession(this),
+internal fun AppContainer.createNodesFeatureDependencies(): NodesFeatureDependencies {
+    val session = AppNodesSession(this)
+    return NodesFeatureDependencies(
+        session = session,
         uriCodec = object : ContactUriCodec {
             override fun exportContactUri(name: String, publicKey: Bytes, type: com.meshcoreone.android.core.protocol.model.ContactType) =
                 ContactService.exportContactURI(name, publicKey, type)
@@ -73,12 +74,18 @@ internal fun AppContainer.createNodesFeatureDependencies(): NodesFeatureDependen
         messages = nodesMessages,
         announcer = nodesAnnouncer,
         preferences = nodesPreferences,
+        locations = combine(nodesLocations, session.connectionSnapshots()) { phone, connection ->
+            phone ?: connection.device?.takeIf { it.hasLocation }?.let {
+                com.meshcoreone.android.core.model.Coordinate(it.latitude, it.longitude)
+            }
+        }.distinctUntilChanged(),
         clock = object : NodesClock {
             override val wallNow: Instant get() = Instant.now()
             override val elapsed: Duration get() = System.nanoTime().nanoseconds
             override suspend fun sleep(duration: Duration) = delay(duration)
         },
     )
+}
 
 private class AppNodesSession(private val container: AppContainer) : NodesSession {
     override fun captureSessionValidity(): () -> Boolean {
@@ -93,7 +100,8 @@ private class AppNodesSession(private val container: AppContainer) : NodesSessio
         container.connectionManager.snapshot,
         container.appState.servicesVersion,
         container.appState.sessionStateChangeCount,
-    ) { graph, _, _, _ ->
+        container.deviceAccess.changes,
+    ) { graph, _, _, _, _ ->
         NodesConnectionSnapshot(currentRadioId(), graph, connectedDevice(), connectionState())
     }.distinctUntilChanged()
 

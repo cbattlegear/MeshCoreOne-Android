@@ -95,7 +95,7 @@ internal class FakeConnectionPort : AppConnectionPort {
         return RemoveUnfavoritedResult(0, 0)
     }
     override fun updateDevice(info: SelfInfo, appliedRadioPresetId: String?) { calls += "updateDeviceInfo" }
-    override suspend fun updateDevice(info: SelfInfo, appliedRadioPresetId: String, expectedToken: SessionToken): Boolean {
+    override suspend fun updateDevice(info: SelfInfo, appliedRadioPresetId: String?, expectedToken: SessionToken): Boolean {
         presetTokens += expectedToken
         beforePresetUpdate()
         if (presetToken != expectedToken) return false

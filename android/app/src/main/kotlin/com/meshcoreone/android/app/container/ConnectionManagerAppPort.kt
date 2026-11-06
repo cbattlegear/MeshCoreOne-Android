@@ -123,19 +123,32 @@ class ConnectionManagerAppPort(
     override suspend fun removeStaleNodes(olderThanDays: Int): RemoveUnfavoritedResult = editor.removeStaleNodes(olderThanDays)
 
     override fun updateDevice(info: SelfInfo, appliedRadioPresetId: String?) { editor.updateDevice(info, appliedRadioPresetId) }
-    override suspend fun updateDevice(info: SelfInfo, appliedRadioPresetId: String, expectedToken: SessionToken): Boolean =
+    override suspend fun updateDevice(info: SelfInfo, appliedRadioPresetId: String?, expectedToken: SessionToken): Boolean =
         editor.updateDevice(info, appliedRadioPresetId, expectedToken)
     override fun updateDevice(device: DeviceDTO) = editor.updateDevice(device)
     override fun updateOCVSettings(device: DeviceDTO, expectedToken: SessionToken) = editor.updateOCVSettings(device, expectedToken)
     override fun updateAutoAddConfig(config: AutoAddConfig) { editor.updateAutoAddConfig(config) }
+    override suspend fun updateAutoAddConfig(config: AutoAddConfig, expectedToken: SessionToken): Boolean =
+        editor.updateAutoAddConfig(config, expectedToken)
     override fun updateClientRepeat(enabled: Boolean) { editor.updateClientRepeat(enabled) }
+    override suspend fun updateClientRepeat(enabled: Boolean, expectedToken: SessionToken): Boolean =
+        editor.updateClientRepeat(enabled, expectedToken)
     override fun updatePathHashMode(mode: UByte) { editor.updatePathHashMode(mode) }
     override suspend fun updatePathHashMode(mode: UByte, expectedToken: SessionToken): Boolean =
         editor.updatePathHashMode(mode, expectedToken)
     override fun updateDefaultFloodScopeName(name: String?) { editor.updateDefaultFloodScopeName(name) }
+    override suspend fun updateDefaultFloodScopeName(name: String?, expectedToken: SessionToken): Boolean =
+        editor.updateDefaultFloodScopeName(name, expectedToken)
 
     /** The runtime exposes the ranges read-only; the settings stream's latest value is kept here (see WP-303.md). */
     override fun setAllowedRepeatFreqRanges(ranges: SnapshotList<FrequencyRange>) { repeatRangesOverride = ranges }
+    override fun setAllowedRepeatFreqRanges(ranges: SnapshotList<FrequencyRange>, expectedToken: SessionToken): Boolean {
+        if (!manager.updateAllowedRepeatFrequencyRanges(ranges, expectedToken)) return false
+        repeatRangesOverride = null
+        return true
+    }
+    override fun withCurrentSession(expectedToken: SessionToken, action: () -> Unit): Boolean =
+        manager.withCurrentSession(expectedToken, action)
 }
 
 /** [ConnectedDeviceAccess] over the runtime manager's guarded connected-device value. */

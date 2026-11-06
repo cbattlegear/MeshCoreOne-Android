@@ -99,21 +99,32 @@ class ConnectedDeviceEditor(
     val connectedDevice: DeviceDTO? get() = access.connectedDevice
 
     fun updateDevice(info: SelfInfo, appliedRadioPresetID: String?): Job? {
-        return edit("updateDevice") { device ->
-            var updated = device.updating(info)
-            if (appliedRadioPresetID != null) {
-                updated = updated.copy(appliedRadioPresetID = appliedRadioPresetID)
-            } else if (!device.clientRepeat) {
-                val matches = presets.matchingPresetIds(updated.frequency, updated.bandwidth, updated.spreadingFactor, updated.codingRate)
-                val current = updated.appliedRadioPresetID
-                if (current != null && current !in matches) updated = updated.copy(appliedRadioPresetID = null)
-            }
-            updated
-        }
+        return edit("updateDevice") { it.updatingSettings(info, appliedRadioPresetID) }
     }
 
-    suspend fun updateDevice(info: SelfInfo, appliedRadioPresetID: String, expectedToken: SessionToken): Boolean =
-        sessionEdit("updateDevice", expectedToken) { it.updating(info).copy(appliedRadioPresetID = appliedRadioPresetID) }
+    suspend fun updateDevice(info: SelfInfo, appliedRadioPresetID: String?, expectedToken: SessionToken): Boolean =
+        sessionEdit("updateDevice", expectedToken) { it.updatingSettings(info, appliedRadioPresetID) }
+
+    private fun DeviceDTO.updatingSettings(info: SelfInfo, presetId: String?): DeviceDTO {
+        var updated = updating(info)
+        if (presetId != null) {
+            updated = updated.copy(appliedRadioPresetID = presetId)
+        } else if (!clientRepeat) {
+            val matches = presets.matchingPresetIds(updated.frequency, updated.bandwidth, updated.spreadingFactor, updated.codingRate)
+            val current = updated.appliedRadioPresetID
+            if (current != null && current !in matches) updated = updated.copy(appliedRadioPresetID = null)
+        }
+        return updated
+    }
+
+    suspend fun updateAutoAddConfig(config: AutoAddConfig, expectedToken: SessionToken): Boolean =
+        sessionEdit("autoAddConfig", expectedToken) { it.copy(autoAddConfig = config.bitmask, autoAddMaxHops = config.maxHops) }
+
+    suspend fun updateClientRepeat(enabled: Boolean, expectedToken: SessionToken): Boolean =
+        sessionEdit("clientRepeat", expectedToken) { it.copy(clientRepeat = enabled) }
+
+    suspend fun updateDefaultFloodScopeName(name: String?, expectedToken: SessionToken): Boolean =
+        sessionEdit("defaultFloodScope", expectedToken) { it.copy(defaultFloodScopeName = name) }
 
     suspend fun updatePathHashMode(mode: UByte, expectedToken: SessionToken): Boolean =
         sessionEdit("pathHashMode", expectedToken) { it.copy(pathHashMode = mode) }

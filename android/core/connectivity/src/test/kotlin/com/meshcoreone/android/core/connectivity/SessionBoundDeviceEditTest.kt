@@ -15,10 +15,12 @@ import com.meshcoreone.android.core.contracts.domain.ProcessEpoch
 import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.protocol.model.AutoAddConfig
 import java.util.UUID
 import java.io.IOException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import org.junit.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -27,6 +29,17 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class SessionBoundDeviceEditTest {
+    private enum class EventEdit { DEVICE, AUTO_ADD, REPEAT, SCOPE, HASH }
+
+    private suspend fun apply(editor: ConnectedDeviceEditor, event: EventEdit, token: SessionToken): Boolean =
+        when (event) {
+            EventEdit.DEVICE -> editor.updateDevice(selfInfo(PRESET_ROWS.first()), null, token)
+            EventEdit.AUTO_ADD -> editor.updateAutoAddConfig(AutoAddConfig(7u, 3u), token)
+            EventEdit.REPEAT -> editor.updateClientRepeat(true, token)
+            EventEdit.SCOPE -> editor.updateDefaultFloodScopeName("US915", token)
+            EventEdit.HASH -> editor.updatePathHashMode(2u, token)
+        }
+
     private class Access : ConnectedDeviceAccess {
         var device: DeviceDTO? = testDevice()
         var token: SessionToken? = SessionToken(ProcessEpoch(UUID.randomUUID()), Generation(1), device!!.radioId)
@@ -56,6 +69,68 @@ class SessionBoundDeviceEditTest {
         assertTrue(editor.updateDevice(selfInfo(preset), preset.id, access.token!!))
         assertEquals(preset.id, access.device!!.appliedRadioPresetID)
         assertEquals(access.device, devices.rows[access.device!!.id])
+    }
+
+    @Test fun everySessionEventApiRejectsItsOldTokenAndAcceptsCurrentOrigin() = runtimeScenario {
+        for (event in EventEdit.entries) {
+            val access = Access()
+            val before = access.device!!
+            devices.saveDevice(before)
+            val old = access.token!!
+            access.token = old.copy(generation = Generation(2))
+            val editor = ConnectedDeviceEditor(access, devices, contacts, { null }, PRESET_MATCHER, scenario.scope, { clock.instant })
+            devices.beforeConditionalSave = { error("A retired event must not reach a conditional save") }
+            assertFalse(apply(editor, event, old), event.name)
+            assertEquals(before, access.device)
+            assertEquals(before, devices.rows[before.id])
+            devices.beforeConditionalSave = {}
+            assertTrue(apply(editor, event, access.token!!), event.name)
+            assertEquals(access.device, devices.rows[before.id])
+            assertTrue(access.device != before, "${event.name} must actually apply its current-origin fields")
+        }
+    }
+
+    @Test fun everySessionEventApiPropagatesSaveFailureWithoutLivePublication() = runtimeScenario {
+        for (event in EventEdit.entries) {
+            val access = Access()
+            val before = access.device!!
+            devices.saveDevice(before)
+            val failure = IOException("${event.name} disk full")
+            devices.conditionalSaveFailure = failure
+            val editor = ConnectedDeviceEditor(access, devices, contacts, { null }, PRESET_MATCHER, scenario.scope, { clock.instant })
+            val caught = assertFailsWith<IOException> { apply(editor, event, access.token!!) }
+            assertEquals(failure, caught)
+            assertEquals(before, access.device)
+            assertEquals(before, devices.rows[before.id])
+            devices.conditionalSaveFailure = null
+        }
+    }
+
+    @Test fun everySessionEventApiCancellationReleasesItsQueuedWriteWithoutPublishing() = runtimeScenario {
+        for (event in EventEdit.entries) {
+            val access = Access()
+            val before = access.device!!
+            devices.saveDevice(before)
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            devices.beforeConditionalSave = { entered.complete(Unit); release.await() }
+            val editor = ConnectedDeviceEditor(access, devices, contacts, { null }, PRESET_MATCHER, scenario.scope, { clock.instant })
+            val write = scenario.scope.async { apply(editor, event, access.token!!) }
+            try {
+                entered.await()
+                assertFalse(write.isCompleted)
+                write.cancelAndJoin()
+                assertTrue(write.isCancelled)
+                assertEquals(before, access.device)
+                assertEquals(before, devices.rows[before.id])
+                devices.beforeConditionalSave = {}
+                assertTrue(apply(editor, event, access.token!!), "Cancelled ${event.name} must release the editor")
+            } finally {
+                release.complete(Unit)
+                write.cancelAndJoin()
+                devices.beforeConditionalSave = {}
+            }
+        }
     }
 
     @Test fun disconnectBetweenReadAndReplacementDoesNotPersist() = runtimeScenario {

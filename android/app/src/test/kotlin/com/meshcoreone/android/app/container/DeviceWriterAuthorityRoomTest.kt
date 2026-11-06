@@ -19,6 +19,7 @@ import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.model.AutoAddConfig
 import com.meshcoreone.android.core.protocol.model.SelfInfo
 import com.meshcoreone.android.core.services.device.RadioPresets
 import com.meshcoreone.android.feature.onboarding.OnboardingPresetTarget
@@ -641,6 +642,10 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
 
             assertNull(editor.updateDevice(before.info(), "must-not-write"))
             assertFalse(editor.updateDevice(before.info(), "must-not-write", token))
+            assertFalse(editor.updateDevice(before.info(), null, token))
+            assertFalse(editor.updateAutoAddConfig(AutoAddConfig(7u, 3u), token))
+            assertFalse(editor.updateClientRepeat(true, token))
+            assertFalse(editor.updateDefaultFloodScopeName("US915", token))
             assertFalse(editor.updatePathHashMode(2u, token))
             assertNull(editor.addKnownRegion("US915"))
             assertNull(editor.removeKnownRegion("US915"))
@@ -684,13 +689,17 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
 
             assertNotNull(editor.updateDevice(before.info(), "must-not-write")).join()
             assertFalse(editor.updateDevice(before.info(), "must-not-write", token))
+            assertFalse(editor.updateDevice(before.info(), null, token))
+            assertFalse(editor.updateAutoAddConfig(AutoAddConfig(7u, 3u), token))
+            assertFalse(editor.updateClientRepeat(true, token))
+            assertFalse(editor.updateDefaultFloodScopeName("US915", token))
             assertFalse(editor.updatePathHashMode(2u, token))
             assertNotNull(editor.addKnownRegion("US915")).join()
             assertNotNull(editor.removeKnownRegion("US915")).join()
             assertFalse(editor.addKnownRegion("US915", token))
             assertFalse(editor.persistKnownRegionRemoval("US915", token))
 
-            assertEquals(7, admissions)
+            assertEquals(11, admissions)
             assertEquals(before, store.fetchDevice(before.id))
             assertEquals(before, h.manager.connectedDevice)
         } finally {

@@ -752,3 +752,43 @@ The helper releases held work before teardown even on assertion failure.
 This successor does not repair or accept the independently blocked canonical gate. `632a43188e`
 remains an immutable historical candidate, and full composition source review, Kotlin/Room execution
 and publication remain held.
+
+### Original Settings event token API successor
+
+The separately assigned API repair adds suspend Boolean token-bound auto-add, client-repeat and
+default-flood-scope edits and makes the existing token-bound device-info entry accept a nullable preset.
+It reuses the editor's existing `sessionEdit` boundary: the passed original token is compared to the
+atomic captured manager token before mutex/lease admission, the DTO is reread under that same token
+inside the lease, and Room retries/terminal outcome and live publication remain inside the original
+generation lease. A late A envelope cannot become a newly captured B operation. Missing capture,
+rejected admission and unsupported port implementations fail closed without untokened fallback.
+
+Device-info edits with a null preset use the same preset-matching logic as ordinary device-info edits;
+they do not blindly erase an otherwise matching preset. Existing non-event APIs are retained.
+The nonsuspend token-bound repeat-range setter delegates to a manager mutation under the same
+monitor as its final `currentDevice(expectedToken)` check, then clears the old adapter overlay.
+The manager lifecycle, canonical authority gate and operation ownership are not changed.
+
+Trusted current-main admissions passed for the editor, AppState ports, manager adapter, narrow
+runtime setter and directly related test surfaces. WP-209 confirmed no live repeat-range hunk
+overlap; Settings producer `244fb3ac` owns the AppState handler and actual stale-envelope/Room tests
+under a separate assignment. No AppState handler edits or held Settings/contract source are imported
+by this API successor. The existing callback
+`updateOCVSettings(event.event, event.token)` must survive that later handler composition; it publishes
+only the OCV fields under the original token, never a wholesale callback DTO replacement.
+
+The editor controls cover all five session-event persistence API families with old-token refusal,
+current-origin actual field changes, save failure without live publication, and cancellation releasing
+the serialized editor for a subsequent write. Real-Room guarded-capture and null-admission controls
+now include the four additional nullable-info/auto-add/repeat/default-scope calls (11 admission
+requests rather than seven), retaining the no-ticket/no-save/no-region-operation assertions.
+These controls are authored, not executed. The actual A-passed-initial-check/B-ready envelope matrix
+and current-subscription control remain with the AppState producer; API support alone is not a
+completed handler repair or composition acceptance.
+
+The handler producer also requested a synchronous `withCurrentSession(expectedToken, action)` port
+for AutoAdd's post-save storage-full UI effect. It checks the final token and performs only local
+publication under the runtime monitor, avoiding a token check/use race with external replacement.
+The action cannot suspend and its contract forbids I/O or lifecycle/device operations. JVM monitor
+reentrancy and synchronous observers remain an explicit independent-review concern; the actual
+handler must keep this action bounded to the local flag mutation. No coroutine authority is minted.

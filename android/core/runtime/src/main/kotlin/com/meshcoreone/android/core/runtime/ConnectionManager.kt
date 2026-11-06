@@ -387,6 +387,12 @@ class ConnectionManager(
         pendingTarget == ConnectionTarget.Simulator || (active ?: retained)?.target == ConnectionTarget.Simulator
     }
     val allowedRepeatFrequencyRanges: SnapshotList<FrequencyRange> get() = synchronized(lock) { repeatRanges }
+    fun updateAllowedRepeatFrequencyRanges(ranges: SnapshotList<FrequencyRange>, expectedToken: SessionToken): Boolean =
+        synchronized(lock) {
+            if (currentDevice(expectedToken) == null) return@synchronized false
+            repeatRanges = ranges
+            true
+        }
     val detectedPlatform: DevicePlatform get() = synchronized(lock) { platformValue }
     val lastCleanChannelSync: Pair<RadioId, Instant>? get() = synchronized(lock) { cleanSync }
     val lastAttemptedChannelSync: Pair<RadioId, Instant>? get() = synchronized(lock) { attemptedSync }
@@ -2126,6 +2132,13 @@ class ConnectionManager(
         val owner = active ?: return@synchronized null
         if (owner.token != expectedToken || !values.value.state.isConnected || !isCurrent(owner)) return@synchronized null
         deviceValue
+    }
+
+    /** Only synchronous local publication; action must not perform I/O or start runtime operations. */
+    fun withCurrentSession(expectedToken: SessionToken, action: () -> Unit): Boolean = synchronized(lock) {
+        if (currentDevice(expectedToken) == null) return@synchronized false
+        action()
+        true
     }
 
     fun transformConnectedDevice(

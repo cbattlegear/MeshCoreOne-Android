@@ -19,6 +19,20 @@ The base `ChannelRepository.saveChannel(dto)` queries only the incoming UUID:
 its subsequent upsert inserts another row at the imported radio/index.
 This is a source finding until the exact candidate's controls actually execute.
 
+The immutable Swift inputs exhibit the same source interaction:
+`MC1Services/Sources/MC1Services/Services/PersistenceStore+BackupBatchInsert.swift`
+constructs the placed channel with `UUID()`;
+`MC1Services/Sources/MC1Services/Services/PersistenceStore+Channels.swift`
+matches DTO save only by `dto.id`; and
+`MC1Services/Sources/MC1Services/Simulator/SimulatorConnectionMode.swift`
+replays `MockDataProvider.channels` through that save API. Immutable `git show`
+reads and a diff against the pin confirmed these facts with no drift in those
+three files. The initial guessed simulator `Services/` path was nonexistent;
+the verified `Simulator/` path above is the actual source.
+This repair is an explicit Android safety adaptation, not a claim that unique
+slots already have equivalent Swift behavior. No iOS runtime test, reproduction
+or source change occurred.
+
 The repair first respects the exact radio/UUID match and its existing index.
 When the UUID is absent, only a unique same-radio/index row with the same secret
 and enable state may be reconciled. The current row is retained completely:

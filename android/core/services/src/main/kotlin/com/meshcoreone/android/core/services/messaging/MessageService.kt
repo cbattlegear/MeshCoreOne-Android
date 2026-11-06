@@ -51,6 +51,7 @@ class MessageService(
     },
     reporter: MessagingIssueReporter = LoggingMessagingIssueReporter,
     private val newID: () -> UUID = UUID::randomUUID,
+    private val channelFailureAuthority: ChannelFailureAuthority? = dataStore as? ChannelFailureAuthority,
 ) : MessagingSendPort {
     init { require(localPublicKey.size == ProtocolLimits.PUBLIC_KEY_SIZE) }
     private val ownership = MessagingOwnership(token, scope, signals, reporter)
@@ -69,6 +70,10 @@ class MessageService(
     private val retainedFailures = linkedMapOf<String, Throwable>()
     private val failedNotifications = mutableSetOf<UUID>()
     private val acceptedChannels = mutableMapOf<UUID, UInt>()
+    private val channelActivation = Mutex()
+    private val channelActivationID = UUID.randomUUID()
+    private var channelActivationStarted = false
+    private var channelLease: DirectAckLease? = null
     private val events = MessagingEvents<MessageStatusEvent>(token)
     private var listener: Deferred<Unit>? = null
     private var expiry: Deferred<Unit>? = null
@@ -100,7 +105,8 @@ class MessageService(
     private suspend fun <T> owned(operation: String, mutex: Mutex? = null, block: suspend () -> T): T {
         val caller = currentCoroutineContext()
         val receipts = (caller[NotificationActionReceipt] ?: EmptyCoroutineContext) +
-            (caller[PendingMessageCreation] ?: EmptyCoroutineContext)
+            (caller[PendingMessageCreation] ?: EmptyCoroutineContext) +
+            (caller[PendingChannelMessageIntent] ?: EmptyCoroutineContext)
         ownership.check(operation)
         val task = synchronized(lock) {
             if (ownership.closing) throw MessageServiceException(MessageServiceError.NotConnected)
@@ -947,8 +953,99 @@ class MessageService(
             createdAt = clock.wallClock.instant(), textType = textType)
     }
 
+    fun preparePendingChannelMessage(
+        text: String,
+        origin: ChannelHistoryScope,
+        textType: TextType = TextType.PLAIN,
+    ): PendingChannelMessageIntent {
+        if (origin.radioId != token.radioId) throw MessageServiceException(MessageServiceError.ChannelNotFound)
+        return PendingChannelMessageIntent(
+            ChannelMessageCreation(newID(), origin, text, textType), timestamp(), clock.wallClock.instant(),
+        )
+    }
+
+    private fun channelCreationFailure(detail: String) =
+        PersistenceStoreException(PersistenceStoreError.SaveFailed("Channel creation: $detail"))
+
+    private suspend fun pendingChannelLease(): DirectAckLease = channelActivation.withLock {
+        channelLease ?: run {
+            val authority = channelFailureAuthority ?: throw channelCreationFailure("capability unavailable")
+            channelActivationStarted = true
+            when (val result = authority.activateChannelFailureSession(token, channelActivationID)) {
+                is DirectAckActivationResult.Activated -> result.lease
+                is DirectAckActivationResult.AlreadyActivated -> result.lease
+                is DirectAckActivationResult.Rejected -> throw channelCreationFailure(result.reason.name)
+            }.also { channelLease = it }
+        }
+    }
+
+    private fun requireChannelCreationMessage(intent: PendingChannelMessageIntent, message: MessageDTO) {
+        val creation = intent.creation
+        if (message.id != creation.messageID || message.radioId != creation.origin.radioId ||
+            message.channelIndex != creation.origin.channelIndex || message.contactID != null ||
+            message.direction != MessageDirection.OUTGOING || message.text != creation.text ||
+            message.textType != creation.textType
+        ) throw channelCreationFailure("canonical message does not match the original intent")
+    }
+
+    private suspend fun savePendingChannelCreation(intent: PendingChannelMessageIntent): MessageDTO {
+        val authority = channelFailureAuthority ?: throw channelCreationFailure("capability unavailable")
+        val lease = pendingChannelLease()
+        ownership.check("createPendingChannel.activated")
+        val creation = intent.creation
+        val proposed = MessageDTO(
+            creation.messageID, creation.origin.radioId, channelIndex = creation.origin.channelIndex,
+            text = creation.text, timestamp = intent.timestamp, createdAt = intent.createdAt, textType = creation.textType,
+        )
+        val receipt = currentCoroutineContext()[PendingMessageCreation]
+        receipt?.writing(proposed)
+        val stored = try {
+            val result = authority.createOrReconcileChannelMessage(lease, creation, intent.timestamp, intent.createdAt)
+            val committed = when (result) {
+                is ChannelMessageCreationResult.Created -> result.receipt
+                is ChannelMessageCreationResult.Reconciled -> result.receipt
+                is ChannelMessageCreationResult.Rejected -> {
+                    receipt?.settled(PendingMessageCreation.State.UNKNOWN)
+                    throw channelCreationFailure(result.reason.name)
+                }
+            }
+            if (committed.origin != creation.origin) throw channelCreationFailure("canonical origin changed")
+            requireChannelCreationMessage(intent, committed.envelope)
+            committed.envelope
+        } catch (failure: Exception) {
+            if (receipt?.snapshot?.state == PendingMessageCreation.State.WRITING) {
+                // Generic capture inspection does not bind the creation's origin and argument digest.
+                // Replaying the insert here could create a row after the caller cancelled.
+                receipt.settled(PendingMessageCreation.State.UNKNOWN)
+            }
+            if (failure !is CancellationException) remember("pendingChannelCreation.${creation.messageID}", failure)
+            throw failure
+        }
+        if (receipt?.committed(stored) == false) throw channelCreationFailure("canonical identity changed")
+        recovered("pendingChannelCreation.${creation.messageID}")
+        return stored
+    }
+
     override suspend fun createPendingChannelMessage(text: String, channelIndex: UByte, radioId: RadioId, textType: TextType): MessageDTO =
         owned("createPendingChannel", pendingOperations) {
+            val callerIntent = currentCoroutineContext()[PendingChannelMessageIntent]
+            if (callerIntent != null || channelFailureAuthority != null) {
+                val intent = callerIntent ?: run {
+                    if (radioId != token.radioId) throw MessageServiceException(MessageServiceError.ChannelNotFound)
+                    val channel = dataStore.fetchChannel(radioId, channelIndex)
+                        ?: throw MessageServiceException(MessageServiceError.ChannelNotFound)
+                    ownership.check("createPendingChannel.origin")
+                    preparePendingChannelMessage(text, ChannelHistoryScope(radioId, channelIndex, channel.id), textType)
+                }
+                val creation = intent.creation
+                if (creation.origin.radioId != radioId || creation.origin.channelIndex != channelIndex ||
+                    creation.text != text || creation.textType != textType
+                ) throw channelCreationFailure("caller arguments differ from the original intent")
+                rejectChannelText(text, radioId)
+                val canonical = savePendingChannelCreation(intent)
+                ownership.check("createPendingChannel.saved")
+                return@owned canonical
+            }
             val dto = outgoingChannel(text, channelIndex, radioId, textType)
             savePendingCreation(dto)
             ownership.check("createPendingChannel.saved")
@@ -1074,6 +1171,17 @@ class MessageService(
             val work = synchronized(lock) { activeOperations.toList() }
             work.forEach { it.cancel() }
             work.forEach { it.join() }
+            if (channelActivationStarted) {
+                try {
+                    val authority = checkNotNull(channelFailureAuthority)
+                    when (val result = authority.revokeChannelFailureSession(pendingChannelLease())) {
+                        DirectAckRevocationResult.Revoked, DirectAckRevocationResult.AlreadyRevoked -> Unit
+                        is DirectAckRevocationResult.Rejected -> throw channelCreationFailure(result.reason.name)
+                    }
+                } catch (failure: Exception) {
+                    remember("pendingChannelCreation.revoke", failure)
+                }
+            }
             stopEventMonitoring()
             stopAckExpiryChecking()
             val deliveries = synchronized(lock) { pendingAcks.values.filter { it.acknowledgement != null }.map { it.messageID } }

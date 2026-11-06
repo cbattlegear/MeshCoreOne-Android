@@ -136,6 +136,18 @@ metadata retained. Only this test-file delta is composed, not its parent history
 There are now seven new Room methods and four new App methods relative to main;
 all remain uncompiled/unexecuted on this local successor.
 
+Copilot review thread `PRRT_kwDOU5YTUM60WPVl` identified that the newly mounted
+failure/retry controls used `harness.settle()` without advancing a pending
+background-only simulator delay. Source inspection confirms the harness defaults
+to `test.backgroundScope`, `settle()` calls `advanceUntilIdle()`, and simulator
+connect suspends for 200 ms. Each of the four attempt/retry wait sites now first
+uses the existing bounded `harness.eventually` pattern with a 2,000 ms virtual
+budget and 5 ms steps. Failure waits require the actual typed
+`connect.attempt.1` diagnostic, not merely the initially disconnected state;
+retry waits require READY. All existing UI, error, retained-data and offline
+assertions remain unchanged. Exact-successor hosted execution and review-thread
+resolution remain pending; earlier head results do not verify this correction.
+
 The baseline main run
 [42139516955](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42139516955)
 had a separate observed `ChatMapPreviewTest` failure. It is neither evidence for

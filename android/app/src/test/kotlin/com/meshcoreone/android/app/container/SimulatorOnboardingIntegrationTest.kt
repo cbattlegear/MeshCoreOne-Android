@@ -584,6 +584,14 @@ class SimulatorOnboardingIntegrationTest : RoomProcessTest() {
             val invalidData = com.meshcoreone.android.core.ui.UiErrorMapper().persistenceError(
                 com.meshcoreone.android.core.contracts.domain.PersistenceStoreError.InvalidData,
             ).resolve(host.get().resources)
+            harness.eventually("ambiguous simulator seed failure", virtualBudgetMillis = 2_000, virtualStepMillis = 5) {
+                harness.diagnostics.any {
+                    it is com.meshcoreone.android.core.runtime.RuntimeDiagnostic.Failure &&
+                        it.operation == "connect.attempt.1" &&
+                        (it.cause as? com.meshcoreone.android.core.contracts.domain.PersistenceStoreException)?.error ==
+                        com.meshcoreone.android.core.contracts.domain.PersistenceStoreError.InvalidData
+                }
+            }
             compose.waitUntil(30_000) {
                 harness.settle()
                 compose.onAllNodesWithText(invalidData).fetchSemanticsNodes().isNotEmpty()
@@ -605,6 +613,9 @@ class SimulatorOnboardingIntegrationTest : RoomProcessTest() {
             // Fixture-only repair; the production path must not delete either ambiguous row.
             assertEquals(1, db.channels().delete(radio.value, duplicate.id))
             button(O.deviceScanContinueDemo).performScrollTo().performClick()
+            harness.eventually("repaired ambiguous simulator seed", virtualBudgetMillis = 2_000, virtualStepMillis = 5) {
+                harness.manager.connectionState == DeviceConnectionState.READY
+            }
             compose.waitUntil(30_000) {
                 harness.settle()
                 compose.onAllNodesWithText(text(O.regionTitle)).fetchSemanticsNodes().isNotEmpty()
@@ -704,6 +715,14 @@ class SimulatorOnboardingIntegrationTest : RoomProcessTest() {
             val invalidData = com.meshcoreone.android.core.ui.UiErrorMapper().persistenceError(
                 com.meshcoreone.android.core.contracts.domain.PersistenceStoreError.InvalidData,
             ).resolve(host.get().resources)
+            harness.eventually("restored simulator conflict failure", virtualBudgetMillis = 2_000, virtualStepMillis = 5) {
+                harness.diagnostics.any {
+                    it is com.meshcoreone.android.core.runtime.RuntimeDiagnostic.Failure &&
+                        it.operation == "connect.attempt.1" &&
+                        (it.cause as? com.meshcoreone.android.core.contracts.domain.PersistenceStoreException)?.error ==
+                        com.meshcoreone.android.core.contracts.domain.PersistenceStoreError.InvalidData
+                }
+            }
             compose.waitUntil(30_000) {
                 harness.settle()
                 compose.onAllNodesWithText(invalidData).fetchSemanticsNodes().isNotEmpty()
@@ -731,6 +750,9 @@ class SimulatorOnboardingIntegrationTest : RoomProcessTest() {
             val repaired = restored.copy(secret = seed.secret, isEnabled = seed.isEnabled)
             assertEquals(repaired, store.fetchChannel(EntityKey(radio, restored.id)))
             button(O.deviceScanContinueDemo).performScrollTo().performClick()
+            harness.eventually("repaired restored simulator conflict", virtualBudgetMillis = 2_000, virtualStepMillis = 5) {
+                harness.manager.connectionState == DeviceConnectionState.READY
+            }
             compose.waitUntil(30_000) {
                 harness.settle()
                 compose.onAllNodesWithText(text(O.regionTitle)).fetchSemanticsNodes().isNotEmpty()

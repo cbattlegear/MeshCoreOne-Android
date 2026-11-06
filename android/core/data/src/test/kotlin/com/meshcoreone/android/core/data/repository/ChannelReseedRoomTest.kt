@@ -126,6 +126,25 @@ class ChannelReseedRoomTest : BackupRoomTest() {
     }
 
     @Test
+    fun matchingUnknownUUIDReplayIsATrueNoOpEvenWhenSQLiteRejectsChannelWrites() = runTest {
+        val current = seedChannel().copy(isFavorite = true, unreadCount = 5)
+        store.saveChannel(current)
+        for (operation in listOf("INSERT", "UPDATE", "DELETE")) {
+            db.openHelper.writableDatabase.execSQL(
+                "CREATE TRIGGER reject_channel_$operation BEFORE $operation ON channels " +
+                    "BEGIN SELECT RAISE(ABORT, 'unexpected channel mutation'); END",
+            )
+        }
+        repeat(3) { store.saveChannel(seedChannel()) }
+        assertEquals(current, store.fetchChannels(RADIO_A).single())
+        val failure = assertFailsWith<PersistenceStoreException> {
+            store.saveChannel(current.copy(name = "explicit known-ID update"))
+        }
+        assertIs<PersistenceStoreError.SaveFailed>(failure.error)
+        assertEquals(current, store.fetchChannels(RADIO_A).single())
+    }
+
+    @Test
     fun missingUUIDEnableMismatchFailsButKnownUUIDRetainsItsExplicitUpdateSemantics() = runTest {
         val current = seedChannel()
         val otherSlot = current.copy(id = UUID.randomUUID(), index = 3u, name = "other slot")

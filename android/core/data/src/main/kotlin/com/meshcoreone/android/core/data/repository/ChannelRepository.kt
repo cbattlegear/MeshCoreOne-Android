@@ -44,7 +44,8 @@ internal class ChannelRepository(
             (existing.secret != dto.secret || existing.isEnabled != dto.isEnabled)) {
             throw PersistenceStoreException(PersistenceStoreError.InvalidData)
         }
-        database.channels().upsert(identified?.applying(dto) ?: existing ?: dto.toEntity())
+        if (identified == null && existing != null) return@write
+        database.channels().upsert(identified?.applying(dto) ?: dto.toEntity())
         save()
     }
 

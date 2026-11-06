@@ -22,7 +22,7 @@ This is a source finding until the exact candidate's controls actually execute.
 The repair first respects the exact radio/UUID match and its existing index.
 When the UUID is absent, only a unique same-radio/index row with the same secret
 and enable state may be reconciled. The current row is retained completely:
-the replay must not overwrite restored name, unread/date, favorite, notification
+the replay is a true no-op, issuing no channel DML or save. It must not overwrite restored name, unread/date, favorite, notification
 or flood-scope metadata with seed defaults. A missing-ID secret or enable-state
 mismatch fails with typed InvalidData before any mutation; main has no safe
 persisted occupant rotation/invalidation primitive to substitute here.
@@ -41,7 +41,7 @@ incarnation or original-message/pending revision proof is supplied by this fix.
 
 ## Authored controls and actual evidence
 
-`ChannelReseedRoomTest` adds six real-Room test methods using the existing native
+`ChannelReseedRoomTest` adds seven real-Room test methods using the existing native
 SQLite fixture, not a persistence fake:
 
 - Actual `AppBackupService` customized-metadata empty-store import followed by
@@ -56,6 +56,9 @@ SQLite fixture, not a persistence fake:
 - New unoccupied slot still uses the supplied UUID.
 - Missing-ID enable-state mismatch fails with current state/text/pending retained;
   explicit known-ID updates preserve their original behavior.
+- SQLite INSERT/UPDATE/DELETE rejection triggers permit matching unknown-ID
+  replays but reject an explicit known-ID update, proving the fallback issues no
+  channel DML rather than redundantly upserting the same row.
 
 Source checks performed:
 
@@ -63,7 +66,7 @@ Source checks performed:
 - `python tools\android-port\portmap.py`: passed.
 - `python tools\android-port\controller\validate.py`: passed.
 
-Six methods are source-authored, not six executed tests. Kotlin compilation and
+Seven methods are source-authored, not seven executed tests. Kotlin compilation and
 JUnit execution have not occurred. The retained local execution owner
 `local-check:f516a7e271f444dd9cb2efcc8b995a16` is unchanged and was not executed
 through or bypassed. Exact-head hosted execution and independent review remain
@@ -77,7 +80,7 @@ uses actual `AppBackupService` empty-Room import, four real fixed seed DTOs,
 retained user text and three actual onboarding/simulator reconnects. It checks
 unique slots, retained imported UUIDs/history, foreign-radio isolation, the
 existing seed-family assertions and no physical-radio/HTTP calls. All previous
-App assertions remain unchanged. This seventh added method is likewise
+App assertions remain unchanged. This added method is likewise
 unexecuted; clean patch application is not compilation or product evidence.
 
 The local successor also composes only the independent App test delta
@@ -86,7 +89,7 @@ The local successor also composes only the independent App test delta
 onboarding with a duplicate slot whose existing row has the fixed fixture UUID.
 It requires localized InvalidData, disconnected state, retained channels and
 user messages, then fixture-only duplicate removal and a successful retry to
-READY with retained identity/history and offline boundaries. This eighth added
+READY with retained identity/history and offline boundaries. This additional
 method remains uncompiled/unexecuted.
 
 The reviewed prior candidate
@@ -105,6 +108,9 @@ also incorrectly blessed that behavior. This local correction strengthens those
 new controls to require visible mismatch refusal and adds a customized imported
 metadata witness. No pre-existing test or known-ID API behavior is weakened or
 changed. `7ce` is a superseded diagnostic, not the safe successor or merge target.
+The matching fallback's early transaction return also avoids triggering future
+identity/epoch invalidation on a redundant identical write. Existing context
+transaction ownership is retained, and no staged RX save is requested.
 
 The baseline main run
 [42139516955](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42139516955)

@@ -481,8 +481,16 @@ anchors and a real-monitor regression request to WP-209. A later source-only can
 cleanup still closes a successfully completed restoration-only adoption, which intentionally has no
 settlement flag. WP-302 also noted the authored real-monitor test may not start lazy work inside an
 already-active Unconfined event loop and sent both findings to WP-209. The exact full commit/tree/blob,
-corrected successor and independent disposition remain pending. No reported manager candidate in
-this review chain is accepted, executed or published, and none is composed. The reported minimal production
+corrected successor and independent disposition remained pending until WP-209 supplied
+`66eab2a53fc91fafc481a18d920146639280b886` (tree
+`d6760234be8834914062919402250c06080d69fd`, manager blob
+`e06acf47a75ada777ba6fca4712e726076cf2c0a`, canonical contract blob unchanged at
+`a4cf97a36327721e9df7eb9afffbf12b37511d3c`). The producer reports it addresses successful/live
+establishment settlement on failure paths, preserves successful restoration-only adoption, adds a
+duplicate-adoption→late-diagnostic→registered-reconnect control, and changes the real-monitor test
+caller to UNDISPATCHED. WP-302 exact-source review has been requested and is pending; no Kotlin/Room
+execution, publication or dispatch occurred. `c0dcd30…` remains unaccepted; `66eab2a` is not accepted
+or composed. The reported minimal production
 composition is `ConnectionManager.kt` plus canonical `ChannelIdentityMutation.kt`
 (`a4cf97a36327721e9df7eb9afffbf12b37511d3c`); the cumulative WP-209 ancestry and 411d data/runtime
 test graph change are not required for the runtime API.
@@ -507,8 +515,7 @@ pending manager API, so they are not yet a compilable composed candidate. The ea
 fixture, onboarding-state and authority-control repairs were subsequently frozen in local commit
 `eff1f33e911`.
 
-The exact producer composition still requires a corrected manager successor addressing both
-`c0dcd30…` findings, favorable independent review, and the minimal
+The exact producer composition still requires favorable independent review of `66eab2a…` and the minimal
 canonical `ChannelIdentityMutation.kt` dependency as well as `ConnectionManager.kt`; no cumulative
 WP-209 ancestry is imported. Trusted current-main admissions for the caller files were previously
 verified. On caller head `dcb37285c8d`, `python tools\android-port\controller\validate.py` passed

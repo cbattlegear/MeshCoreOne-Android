@@ -360,7 +360,7 @@ class ChannelReactionTargetAuthorityTest {
         db.withTransaction {
             db.openHelper.writableDatabase.execSQL(
                 "UPDATE channel_reaction_identity SET revision = ? WHERE radioId = ? AND messageID = ?",
-                arrayOf(Long.MAX_VALUE, RADIO_A.canonicalString, original.id.toString()),
+                arrayOf<Any>(Long.MAX_VALUE, RADIO_A.canonicalString, original.id.toString()),
             )
             assertEquals(
                 Long.MAX_VALUE,

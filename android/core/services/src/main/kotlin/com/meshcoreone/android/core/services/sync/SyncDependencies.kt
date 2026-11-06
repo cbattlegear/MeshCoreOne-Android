@@ -2,6 +2,7 @@
 package com.meshcoreone.android.core.services.sync
 
 import com.meshcoreone.android.core.contracts.domain.AppStateProvider
+import com.meshcoreone.android.core.contracts.domain.ChannelReactionTargetAuthority
 import com.meshcoreone.android.core.contracts.domain.ChannelServiceProtocol
 import com.meshcoreone.android.core.contracts.domain.ContactServiceProtocol
 import com.meshcoreone.android.core.contracts.domain.MessagePollingServiceProtocol
@@ -51,6 +52,10 @@ class SyncDependencies(
     val startEventMonitoring: suspend (radioId: RadioId, enableAutoFetch: Boolean) -> Unit,
     /** Exports the device private key for direct message decryption. */
     val exportPrivateKey: suspend () -> Bytes,
+    /** Optional original-target authority, used only by the separately guarded channel path. */
+    val channelReactionTargets: ChannelReactionTargetAuthority? = null,
+    /** The guarded path is nonactivated until polling reserves exact terminal custody. */
+    val guardedChannelReactionsEnabled: Boolean = false,
 ) {
     /** Copy with replaced members (Swift test helper `with(dataStore:messagePollingService:...)`). */
     fun copy(
@@ -70,9 +75,12 @@ class SyncDependencies(
         appStateProvider: AppStateProvider? = this.appStateProvider,
         startEventMonitoring: suspend (RadioId, Boolean) -> Unit = this.startEventMonitoring,
         exportPrivateKey: suspend () -> Bytes = this.exportPrivateKey,
+        channelReactionTargets: ChannelReactionTargetAuthority? = this.channelReactionTargets,
+        guardedChannelReactionsEnabled: Boolean = this.guardedChannelReactionsEnabled,
     ): SyncDependencies = SyncDependencies(
         dataStore, contactService, channelService, messagePollingService, notificationService, reactionService,
         advertisementService, rxLogService, heardRepeatsService, roomServerService, roomAdminService,
-        repeaterAdminService, codecs, appStateProvider, startEventMonitoring, exportPrivateKey,
+        repeaterAdminService, codecs, appStateProvider, startEventMonitoring, exportPrivateKey, channelReactionTargets,
+        guardedChannelReactionsEnabled,
     )
 }

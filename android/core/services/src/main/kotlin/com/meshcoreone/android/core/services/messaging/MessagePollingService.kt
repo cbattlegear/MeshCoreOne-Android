@@ -7,9 +7,21 @@ import com.meshcoreone.android.core.contracts.domain.errors.*
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.event.*
 import com.meshcoreone.android.core.protocol.session.MeshCoreSessionProtocol
+import com.meshcoreone.android.core.protocol.session.CriticalSessionEventStreaming
 import com.meshcoreone.android.core.protocol.session.SessionClock
 import com.meshcoreone.android.core.protocol.session.SystemSessionClock
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
+import com.meshcoreone.android.core.services.reactions.ChannelReactionRetentionCancellation
+import com.meshcoreone.android.core.services.reactions.ChannelReactionRetentionException
+import com.meshcoreone.android.core.services.reactions.ChannelReactionUnretainedWork
+import com.meshcoreone.android.core.services.sync.ChannelMessageDeliveryIncomplete
+import com.meshcoreone.android.core.services.sync.ChannelMessageDeliveryIncompleteCancellation
+import com.meshcoreone.android.core.services.sync.ChannelMessageDeliveryIncompleteException
+import com.meshcoreone.android.core.services.sync.ChannelMessageIngressUnusableReceipt
+import com.meshcoreone.android.core.services.sync.ChannelMessageIngressUnusableReceiptException
+import com.meshcoreone.android.core.services.sync.ChannelMessageDuplicateUnresolved
+import com.meshcoreone.android.core.services.sync.ChannelMessageDuplicateUnresolvedCancellation
+import com.meshcoreone.android.core.services.sync.ChannelMessageDuplicateUnresolvedException
 import java.time.Duration
 import java.util.UUID
 import kotlin.coroutines.AbstractCoroutineContextElement
@@ -31,13 +43,71 @@ class MessagePollingService(
     scope: CoroutineScope,
     private val clock: SessionClock = SystemSessionClock(),
     reporter: MessagingIssueReporter = LoggingMessagingIssueReporter,
+    private val useCriticalIngress: Boolean = false,
 ) : MessagePollingServiceProtocol, ChannelReceiveEnvelopePolling {
+    sealed interface ChannelIngressCustody {
+        val selectedEvent: MeshEvent
+        val selectedEnvelope: ChannelReceiveEnvelope?
+        val failure: Exception
+        val cancellation: CancellationException?
+    }
+
+    class ChannelIngressUnknownCustody internal constructor(
+        override val selectedEvent: MeshEvent,
+        override val selectedEnvelope: ChannelReceiveEnvelope?,
+        val work: ChannelMessageIngressUnknown,
+        override val failure: Exception,
+        override val cancellation: CancellationException? = null,
+    ) : ChannelIngressCustody
+
+    class ChannelDeliveryIncompleteCustody internal constructor(
+        override val selectedEvent: MeshEvent,
+        override val selectedEnvelope: ChannelReceiveEnvelope?,
+        val work: ChannelMessageDeliveryIncomplete,
+        override val failure: Exception,
+        override val cancellation: CancellationException? = null,
+    ) : ChannelIngressCustody
+
+    class ChannelReactionCustody internal constructor(
+        override val selectedEvent: MeshEvent,
+        override val selectedEnvelope: ChannelReceiveEnvelope?,
+        val work: ChannelReactionUnretainedWork,
+        override val failure: Exception,
+        override val cancellation: CancellationException? = null,
+    ) : ChannelIngressCustody
+
+    class ChannelIngressUnusableReceiptCustody internal constructor(
+        override val selectedEvent: MeshEvent,
+        override val selectedEnvelope: ChannelReceiveEnvelope?,
+        val work: ChannelMessageIngressUnusableReceipt,
+        override val failure: Exception,
+        override val cancellation: CancellationException? = null,
+    ) : ChannelIngressCustody
+
+    class ChannelDuplicateUnresolvedCustody internal constructor(
+        override val selectedEvent: MeshEvent,
+        override val selectedEnvelope: ChannelReceiveEnvelope?,
+        val work: ChannelMessageDuplicateUnresolved,
+        override val failure: Exception,
+        override val cancellation: CancellationException?,
+    ) : ChannelIngressCustody
+
+    /** Retains the selected input without asserting whether any collaborator wrote or committed. */
+    class ChannelIngressUnclassifiedCustody internal constructor(
+        override val selectedEvent: MeshEvent,
+        override val selectedEnvelope: ChannelReceiveEnvelope,
+        override val failure: Exception,
+        override val cancellation: CancellationException?,
+    ) : ChannelIngressCustody
+
     private data class Delivery(
         val event: MeshEvent,
         val context: DeliveryContext,
         val channelEnvelope: ChannelReceiveEnvelope?,
         val matchesChannelOccurrence: Boolean,
+        val guardedHandler: (suspend (ChannelReceiveEnvelope, ChannelDTO?) -> Unit)? = null,
         var failure: Exception? = null,
+        var cancellation: CancellationException? = null,
     ) {
         fun inContext(context: DeliveryContext): Delivery =
             copy(context = context, channelEnvelope = channelEnvelope?.copy(context = context))
@@ -54,9 +124,14 @@ class MessagePollingService(
     private var contactHandler: (suspend (ContactMessage, ContactDTO?, DeliveryContext) -> Unit)? = null
     private var channelHandler: (suspend (ChannelMessage, ChannelDTO?, DeliveryContext) -> Unit)? = null
     private var channelEnvelopeHandler: (suspend (ChannelReceiveEnvelope, ChannelDTO?) -> Unit)? = null
+    private var guardedChannelEnvelopeHandler: (suspend (ChannelReceiveEnvelope, ChannelDTO?) -> Unit)? = null
     private var signedHandler: (suspend (ContactMessage, ContactDTO?) -> Unit)? = null
     private var cliHandler: (suspend (ContactMessage, ContactDTO?) -> Unit)? = null
     private var listener: Deferred<Unit>? = null
+    private var criticalMessages: CriticalEventSubscription? = null
+    private var criticalMessageObserver: Job? = null
+    private var terminalChannelIngress: ChannelIngressCustody? = null
+    private var reservedChannelIngress: Delivery? = null
     private var polling: Deferred<Long>? = null
     private var catchUp: Deferred<Unit>? = null
     private var catchUpRequested = false
@@ -73,10 +148,18 @@ class MessagePollingService(
     private var teardown: CompletableDeferred<TeardownReport>? = null
     val isAutoFetching: Boolean get() = synchronized(lock) { autoFetch }
     val pendingHandlerCount: Long get() = synchronized(lock) { handlerCount }
-    val undeliveredCount: Int get() = synchronized(lock) { pending.size + parked.size }
+    val criticalIngressTerminal: CriticalEventTerminal?
+        get() = synchronized(lock) { criticalMessages }?.terminal
+    val retainedChannelIngressUnknown: ChannelIngressUnknownCustody?
+        get() = synchronized(lock) { terminalChannelIngress as? ChannelIngressUnknownCustody }
+    val retainedChannelIngressFailure: ChannelIngressCustody?
+        get() = synchronized(lock) { terminalChannelIngress }
+    val undeliveredCount: Int get() = synchronized(lock) {
+        pending.size + parked.size + if (terminalChannelIngress == null) 0 else 1
+    }
     val hasMessageHandlersWired: Boolean get() = synchronized(lock) {
         contactHandler != null || channelHandler != null || channelEnvelopeHandler != null ||
-            signedHandler != null || cliHandler != null
+            guardedChannelEnvelopeHandler != null || signedHandler != null || cliHandler != null
     }
 
     private fun remember(operation: String, cause: Throwable) {
@@ -84,6 +167,19 @@ class MessagePollingService(
         ownership.failure(operation, cause)
     }
     private suspend fun checkPolling(operation: String) {
+        retainedChannelIngressFailure?.let {
+            throw when (it) {
+                is ChannelIngressUnknownCustody -> ChannelMessageIngressUnknownException(it.work)
+                is ChannelDeliveryIncompleteCustody -> ChannelMessageDeliveryIncompleteException(it.work)
+                is ChannelIngressUnusableReceiptCustody -> ChannelMessageIngressUnusableReceiptException(it.work)
+                is ChannelDuplicateUnresolvedCustody -> it.failure
+                is ChannelIngressUnclassifiedCustody -> it.failure
+                is ChannelReactionCustody -> ChannelReactionRetentionException(
+                    it.work, checkNotNull(it.failure.cause as? Exception),
+                )
+            }
+        }
+        criticalIngressTerminal?.let { throw it }
         try { ownership.check(operation) }
         catch (failure: MessageServiceException) {
             if (failure.error == MessageServiceError.NotConnected) throw MessagePollingException(MessagePollingError.NotConnected, failure)
@@ -97,13 +193,27 @@ class MessagePollingService(
     }
     override suspend fun setChannelMessageHandler(handler: suspend (ChannelMessage, ChannelDTO?, DeliveryContext) -> Unit) {
         ownership.checkLifetime("setChannelMessageHandler")
-        synchronized(lock) { channelHandler = handler; channelEnvelopeHandler = null }
+        synchronized(lock) {
+            channelHandler = handler; channelEnvelopeHandler = null; guardedChannelEnvelopeHandler = null
+        }
     }
     override suspend fun setChannelReceiveEnvelopeHandler(
         handler: suspend (ChannelReceiveEnvelope, ChannelDTO?) -> Unit,
     ) {
         ownership.checkLifetime("setChannelReceiveEnvelopeHandler")
-        synchronized(lock) { channelEnvelopeHandler = handler; channelHandler = null }
+        synchronized(lock) {
+            channelEnvelopeHandler = handler; channelHandler = null; guardedChannelEnvelopeHandler = null
+        }
+    }
+
+    /** Inactive adapter seam: production Sync wiring still refuses guarded registration. */
+    internal suspend fun setGuardedChannelReceiveEnvelopeHandler(
+        handler: suspend (ChannelReceiveEnvelope, ChannelDTO?) -> Unit,
+    ) {
+        ownership.checkLifetime("setGuardedChannelReceiveEnvelopeHandler")
+        synchronized(lock) {
+            guardedChannelEnvelopeHandler = handler; channelEnvelopeHandler = null; channelHandler = null
+        }
     }
     override suspend fun setSignedMessageHandler(handler: suspend (ContactMessage, ContactDTO?) -> Unit) {
         ownership.checkLifetime("setSignedMessageHandler")
@@ -116,6 +226,7 @@ class MessagePollingService(
     override suspend fun clearMessageHandlers() {
         synchronized(lock) {
             contactHandler = null; channelHandler = null; channelEnvelopeHandler = null
+            guardedChannelEnvelopeHandler = null
             signedHandler = null; cliHandler = null
         }
     }
@@ -124,7 +235,20 @@ class MessagePollingService(
         require(radioId == token.radioId) { "Polling cannot switch its radio partition" }
         checkPolling("startMessageEventMonitoring")
         if (synchronized(lock) { monitorActive }) return@withLock
-        val stream = session.events(EventFilter.anyContactMessage or EventFilter.anyChannelMessage)
+        val stream = if (useCriticalIngress) {
+            val role = session as? CriticalSessionEventStreaming
+                ?: throw IllegalStateException("Critical message ingress requires the actual session role")
+            val subscription = role.criticalEvents(CriticalEventKind.MESSAGES)
+            synchronized(lock) { criticalMessages = subscription }
+            if (criticalMessageObserver == null) {
+                criticalMessageObserver = ownership.scope.launch {
+                    remember("criticalMessageIngress", subscription.awaitTermination())
+                    stopAutoAfterIngressFailure()
+                }
+            }
+            subscription.terminal?.let { throw it }
+            subscription.stream
+        } else session.events(EventFilter.anyContactMessage or EventFilter.anyChannelMessage)
         synchronized(lock) { monitorActive = true }
         val task = ownership.scope.async(start = CoroutineStart.UNDISPATCHED) {
             stream.collect { event ->
@@ -159,7 +283,23 @@ class MessagePollingService(
         stopAutoLocked()
         val task = synchronized(lock) { monitorActive = false; listener.also { listener = null } }
         task?.cancelAndJoin()
+        closeCriticalIngress()
         synchronized(lock) { expectedEchoes.clear(); expectedChannelEchoes.clear() }
+    }
+
+    private suspend fun closeCriticalIngress() {
+        synchronized(lock) { criticalMessages }?.let {
+            it.close()
+            it.terminal?.let { failure -> remember("criticalMessageIngress", failure) }
+        }
+        criticalMessageObserver?.cancelAndJoin()
+        criticalMessageObserver = null
+    }
+
+    private suspend fun stopAutoAfterIngressFailure() {
+        try { lifecycle.withLock { stopAutoLocked() } }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: MeshCoreException) { remember("terminalIngress.stopAuto", failure) }
     }
 
     override suspend fun startAutoFetch(radioId: RadioId) {
@@ -192,13 +332,15 @@ class MessagePollingService(
     private suspend fun reconcileAutoLocked() {
         while (true) {
             val (revision, wanted, running) = synchronized(lock) {
-                Triple(autoRevision, ownership.isCurrent && autoFetch && !desiredAutoPaused && !pollingActive, autoRunning)
+                Triple(autoRevision, ownership.isCurrent && terminalChannelIngress == null && criticalMessages?.terminal == null &&
+                    autoFetch && !desiredAutoPaused && !pollingActive, autoRunning)
             }
             if (wanted == running) return
             if (wanted) session.startAutoMessageFetching() else session.stopAutoMessageFetching()
             synchronized(lock) { autoRunning = wanted }
             if (synchronized(lock) {
-                revision == autoRevision && wanted == (ownership.isCurrent && autoFetch && !desiredAutoPaused && !pollingActive)
+                revision == autoRevision && wanted == (ownership.isCurrent && terminalChannelIngress == null && criticalMessages?.terminal == null &&
+                    autoFetch && !desiredAutoPaused && !pollingActive)
             }) return
         }
     }
@@ -237,7 +379,8 @@ class MessagePollingService(
 
     private fun launchCatchUp() {
         synchronized(lock) {
-            if (!ownership.isCurrent || !autoFetch || desiredAutoPaused) return
+            if (!ownership.isCurrent || terminalChannelIngress != null ||
+                criticalMessages?.terminal != null || !autoFetch || desiredAutoPaused) return
             catchUpRequested = true
             if (catchUp != null) return
             val task = ownership.scope.async(start = CoroutineStart.LAZY) {
@@ -339,9 +482,12 @@ class MessagePollingService(
 
     private suspend fun attemptPendingDelivery(): Exception? =
         try { deliverPending(); null }
-        catch (failure: PersistenceStoreException) { failure }
+        catch (failure: PersistenceStoreException) {
+            if (retainedChannelIngressFailure != null) throw failure
+            failure
+        }
         catch (failure: MessagePollingException) {
-            if (failure.error == MessagePollingError.NotConnected) throw failure
+            if (retainedChannelIngressFailure != null || failure.error == MessagePollingError.NotConnected) throw failure
             failure
         }
 
@@ -350,7 +496,8 @@ class MessagePollingService(
         (event as? MeshEvent.ChannelMessageReceived)?.let {
             ChannelReceiveEnvelope(UUID.randomUUID(), token, it.message, context, ChannelReceiveOrigin.Unproved)
         },
-        channelEnvelopeHandler != null,
+        channelEnvelopeHandler != null || guardedChannelEnvelopeHandler != null,
+        if (event is MeshEvent.ChannelMessageReceived) guardedChannelEnvelopeHandler else null,
     )
 
     private fun matchesEcho(first: Delivery, second: Delivery): Boolean {
@@ -418,6 +565,10 @@ class MessagePollingService(
             }
             synchronized(lock) { handlerCount++ }
             try {
+                if (delivery.guardedHandler != null) synchronized(lock) {
+                    check(terminalChannelIngress == null && reservedChannelIngress == null)
+                    reservedChannelIngress = delivery
+                }
                 when (val event = delivery.event) {
                     is MeshEvent.ContactMessageReceived -> {
                         val contact = dataStore.fetchContactByPrefix(token.radioId, event.message.senderPublicKeyPrefix)
@@ -435,7 +586,10 @@ class MessagePollingService(
                     is MeshEvent.ChannelMessageReceived -> {
                         val channel = dataStore.fetchChannel(token.radioId, event.message.channelIndex)
                         checkPolling("dispatchChannel.lookup")
-                        val handler = synchronized(lock) {
+                        val handler = delivery.guardedHandler?.let { callback ->
+                            val envelope = checkNotNull(delivery.channelEnvelope)
+                            suspend { callback(envelope, channel) }
+                        } ?: synchronized(lock) {
                             channelEnvelopeHandler?.let { callback ->
                                 val envelope = checkNotNull(delivery.channelEnvelope)
                                 suspend { callback(envelope, channel) }
@@ -445,7 +599,7 @@ class MessagePollingService(
                         }
                             ?: throw MessagePollingException(MessagePollingError.PollingFailed,
                                 IllegalStateException("Channel handler is not installed"))
-                        invokeConsumer(handler)
+                        invokeConsumer(handler, delivery)
                     }
                     else -> throw MessagePollingException(MessagePollingError.PollingFailed)
                 }
@@ -453,13 +607,75 @@ class MessagePollingService(
                 synchronized(lock) {
                     check(pending.firstOrNull() === delivery)
                     pending.removeFirst()
+                    if (reservedChannelIngress === delivery) reservedChannelIngress = null
                     handlerFailure = null
                     failures.remove("messageHandler")
                     failures.remove("messageLookup")
                     if (parked.isEmpty()) failures.remove("messageDelivery")
                 }
-            } catch (cancelled: CancellationException) { throw cancelled }
+            } catch (failure: ChannelMessageDuplicateUnresolvedCancellation) {
+                retainChannelIngress(delivery, ChannelDuplicateUnresolvedCustody(
+                    delivery.event, delivery.channelEnvelope, failure.work, failure, delivery.cancellation ?: failure,
+                ))
+                throw delivery.cancellation ?: failure
+            } catch (failure: ChannelMessageDuplicateUnresolvedException) {
+                val cancellation = delivery.cancellation ?: try {
+                    currentCoroutineContext().ensureActive()
+                    null
+                } catch (cancelled: CancellationException) {
+                    cancelled
+                }
+                retainChannelIngress(delivery, ChannelDuplicateUnresolvedCustody(
+                    delivery.event, delivery.channelEnvelope, failure.work, failure, cancellation,
+                ))
+                throw cancellation ?: failure
+            } catch (failure: ChannelMessageIngressUnknownCancellation) {
+                retainChannelIngress(delivery, ChannelIngressUnknownCustody(
+                    delivery.event, delivery.channelEnvelope, failure.work, failure, delivery.cancellation,
+                ))
+                throw delivery.cancellation ?: failure
+            } catch (failure: ChannelMessageIngressUnknownException) {
+                retainChannelIngress(delivery, ChannelIngressUnknownCustody(
+                    delivery.event, delivery.channelEnvelope, failure.work, failure, delivery.cancellation,
+                ))
+                throw delivery.cancellation ?: failure
+            } catch (failure: ChannelMessageDeliveryIncompleteCancellation) {
+                retainChannelIngress(delivery, ChannelDeliveryIncompleteCustody(
+                    delivery.event, delivery.channelEnvelope, failure.work, failure, delivery.cancellation,
+                ))
+                throw delivery.cancellation ?: failure
+            } catch (failure: ChannelMessageDeliveryIncompleteException) {
+                retainChannelIngress(delivery, ChannelDeliveryIncompleteCustody(
+                    delivery.event, delivery.channelEnvelope, failure.work, failure, delivery.cancellation,
+                ))
+                throw delivery.cancellation ?: failure
+            } catch (failure: ChannelMessageIngressUnusableReceiptException) {
+                retainChannelIngress(delivery, ChannelIngressUnusableReceiptCustody(
+                    delivery.event, delivery.channelEnvelope, failure.work, failure, delivery.cancellation,
+                ))
+                throw delivery.cancellation ?: failure
+            } catch (failure: ChannelReactionRetentionCancellation) {
+                retainChannelIngress(delivery, ChannelReactionCustody(
+                    delivery.event, delivery.channelEnvelope, failure.work, failure, delivery.cancellation,
+                ))
+                throw delivery.cancellation ?: failure
+            } catch (failure: ChannelReactionRetentionException) {
+                retainChannelIngress(delivery, ChannelReactionCustody(
+                    delivery.event, delivery.channelEnvelope, failure.work, failure, delivery.cancellation,
+                ))
+                throw delivery.cancellation ?: failure
+            } catch (cancelled: CancellationException) {
+                retainUnclassifiedGuardedIngress(delivery, cancelled)
+                throw cancelled
+            } catch (terminal: CriticalEventTerminal) {
+                retainUnclassifiedGuardedIngress(delivery, terminal)
+                throw delivery.cancellation ?: terminal
+            }
             catch (failure: Exception) {
+                if (delivery.guardedHandler != null) {
+                    retainUnclassifiedGuardedIngress(delivery, failure)
+                    throw delivery.cancellation ?: failure
+                }
                 val typed = if (failure is PersistenceStoreException || failure is MessagePollingException) failure
                     else MessagePollingException(MessagePollingError.PollingFailed, failure)
                 if (typed is MessagePollingException && typed.error == MessagePollingError.NotConnected) throw typed
@@ -476,12 +692,60 @@ class MessagePollingService(
         }
     }
 
+    private fun retainUnclassifiedGuardedIngress(delivery: Delivery, failure: Exception) {
+        if (delivery.guardedHandler == null) return
+        retainChannelIngress(delivery, ChannelIngressUnclassifiedCustody(
+            delivery.event, checkNotNull(delivery.channelEnvelope), failure, delivery.cancellation,
+        ))
+    }
+
+    private fun retainChannelIngress(
+        delivery: Delivery,
+        custody: ChannelIngressCustody,
+    ) {
+        // dispatch holds the single reusable outcome slot before invoking any consumer.
+        // A terminal outcome occupies it permanently; later work cannot start or replace it.
+        synchronized(lock) {
+            check(terminalChannelIngress == null)
+            check(if (delivery.guardedHandler != null) reservedChannelIngress === delivery else reservedChannelIngress == null)
+            terminalChannelIngress = custody
+            reservedChannelIngress = null
+            check(pending.firstOrNull() === delivery)
+            pending.removeFirst()
+            handlerFailure = custody.failure
+        }
+        val failure = custody.failure
+        try {
+            remember("channelIngressTerminal", failure)
+            val reportedEnvelope = when (custody) {
+                is ChannelIngressUnknownCustody -> custody.work.envelope
+                is ChannelDeliveryIncompleteCustody -> custody.work.envelope
+                is ChannelIngressUnusableReceiptCustody -> custody.work.envelope
+                is ChannelDuplicateUnresolvedCustody -> custody.work.envelope
+                is ChannelIngressUnclassifiedCustody -> custody.selectedEnvelope
+                // A history replay overflow may retain reactions from several earlier occurrences.
+                is ChannelReactionCustody -> delivery.channelEnvelope
+            }
+            if (delivery.channelEnvelope !== reportedEnvelope) {
+                remember("channelIngressTerminal.identity", IllegalStateException(
+                    "Channel ingress did not return the selected occurrence; both are retained", failure,
+                ))
+            }
+        } catch (reportFailure: Exception) {
+            if (reportFailure !== failure) failure.addSuppressed(reportFailure)
+        } finally {
+            ownership.scope.launch { stopAutoAfterIngressFailure() }
+        }
+    }
+
     override suspend fun waitForPendingHandlers(timeout: Duration): Boolean {
         require(!timeout.isNegative)
         val interval = timeout.seconds.seconds + timeout.nano.nanoseconds
         require(interval.isFinite())
         val end = clock.now + interval
-        while (synchronized(lock) { handlerCount > 0 || pending.isNotEmpty() || parked.isNotEmpty() }) {
+        while (synchronized(lock) {
+            handlerCount > 0 || pending.isNotEmpty() || parked.isNotEmpty() || terminalChannelIngress != null
+        }) {
             currentCoroutineContext().ensureActive()
             if (clock.now >= end) return false
             clock.sleepFor(10.milliseconds)
@@ -489,11 +753,34 @@ class MessagePollingService(
         return true
     }
 
-    private suspend fun invokeConsumer(handler: suspend () -> Unit) {
+    private suspend fun invokeConsumer(handler: suspend () -> Unit, delivery: Delivery? = null) {
         val owner = checkNotNull(currentCoroutineContext()[Job]) { "A polling consumer requires an owned operation" }
         val invocation = MessageHandlerInvocation(this, owner)
+        val context: CoroutineContext = if (delivery?.guardedHandler != null) {
+            synchronized(lock) { check(reservedChannelIngress === delivery) }
+            invocation + GuardedChannelIngressInvocation(this, checkNotNull(delivery.channelEnvelope))
+        } else invocation
         synchronized(lock) { consumerInvocations[owner] = invocation }
-        try { withContext(invocation) { handler() } }
+        try {
+            withContext(context) {
+                try { handler() }
+                catch (failure: Exception) {
+                    if (delivery?.guardedHandler != null) synchronized(lock) { delivery.failure = failure }
+                    throw failure
+                }
+                finally {
+                    if (delivery?.guardedHandler != null) {
+                        try { currentCoroutineContext().ensureActive() }
+                        catch (cancelled: CancellationException) {
+                            synchronized(lock) { delivery.cancellation = cancelled }
+                        }
+                    }
+                }
+            }
+        }
+        catch (failure: Exception) {
+            throw if (delivery?.guardedHandler != null) delivery.failure ?: failure else failure
+        }
         finally { synchronized(lock) { if (consumerInvocations[owner] === invocation) consumerInvocations.remove(owner) } }
     }
 
@@ -513,6 +800,11 @@ class MessagePollingService(
 
     private fun closeReport(): TeardownReport = synchronized(lock) {
         val result = failures.values.map { TeardownIssue(LifecycleStage.STOP_SERVICES, it) }.toMutableList()
+        terminalChannelIngress?.let { custody ->
+            custody.cancellation?.takeIf { it !== custody.failure && it !== custody.failure.cause }?.let {
+                result += TeardownIssue(LifecycleStage.STOP_SERVICES, it)
+            }
+        }
         for (delivery in pending + parked) result += TeardownIssue(LifecycleStage.STOP_SERVICES,
             MessagePollingException(MessagePollingError.PollingFailed, delivery.failure
                 ?: handlerFailure ?: CancellationException("Generation ended with an unfinished message handler")))
@@ -539,6 +831,7 @@ class MessagePollingService(
             work.forEach { it.first.cancel() }
             lifecycle.withLock { stopAutoLocked() }
             for ((task, invocation) in work) joinUnlessConsumerClosing(task, invocation)
+            closeCriticalIngress()
             synchronized(lock) {
                 polling = null; listener = null; monitorActive = false
                 expectedEchoes.clear(); expectedChannelEchoes.clear()
@@ -549,6 +842,14 @@ class MessagePollingService(
             closeReport().also { receipt.complete(it) }
         }
     }
+}
+
+/** Identifies the reserved callback context only; it is not receive-origin or storage authority. */
+internal class GuardedChannelIngressInvocation(
+    val service: MessagePollingService,
+    val envelope: ChannelReceiveEnvelope,
+) : AbstractCoroutineContextElement(Key) {
+    companion object Key : CoroutineContext.Key<GuardedChannelIngressInvocation>
 }
 
 private class MessageHandlerInvocation(val service: MessagePollingService, val owner: Job) :

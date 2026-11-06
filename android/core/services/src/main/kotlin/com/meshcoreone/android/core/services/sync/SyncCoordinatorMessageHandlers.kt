@@ -35,6 +35,9 @@ internal sealed interface IncomingMessageKind {
 
 /** Wires the contact, channel, signed and CLI handlers on the message polling service. */
 suspend fun SyncCoordinator.wireMessageHandlers(dependencies: SyncDependencies, radioId: RadioId) {
+    check(!dependencies.guardedChannelReactionsEnabled) {
+        "Guarded channel ingress requires a reserved poller custody adapter before registration"
+    }
     log(DebugLogLevel.INFO, "Wiring message handlers for device ${radioId.canonicalString}")
     refreshBlockedContactsCache(radioId, dependencies.dataStore)
 

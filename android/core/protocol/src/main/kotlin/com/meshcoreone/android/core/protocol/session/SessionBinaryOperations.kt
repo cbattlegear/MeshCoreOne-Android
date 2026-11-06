@@ -53,7 +53,7 @@ internal suspend fun <T> ExchangeOwner.binary(
                 val retransmit = if (core.configuration.binaryRequestRetransmitInterval == null) null else launch {
                     firstMessageSent.await()
                     while (isActive) {
-                        val interval = synchronized(core.lock) { cadence }
+                        val interval = core.withLock { cadence }
                         core.clock.sleepFor(timeoutDuration(interval))
                         ensureActive()
                         // A failed resend does not erase an earlier answerable attempt.
@@ -83,7 +83,7 @@ internal suspend fun <T> ExchangeOwner.binary(
                                 requestContext.messageSentReplies += 1
                                 requestContext.latestTag = tag
                                 requestContext.tags += tag
-                                synchronized(core.lock) {
+                                core.withLock {
                                     cadence = maxOf(cadence, event.info.suggestedTimeoutMs.toDouble() /
                                         SessionConfiguration.MILLISECONDS_PER_SECOND * SessionConfiguration.BINARY_RETRANSMIT_RTT_HEADROOM)
                                 }
@@ -115,7 +115,7 @@ internal suspend fun <T> ExchangeOwner.binary(
         if (routedFamily != null) core.unresolved(generation, routedFamily, acceptsErrors = false)
         throw failure
     } finally {
-        synchronized(core.lock) { generation.retiredBinaryTags += requestContext.tags }
+        core.withLock { generation.retiredBinaryTags += requestContext.tags }
         if (!rejectedBeforeMessageSent && requestContext.messageSentReplies < requestContext.sends && core.isCurrent(generation)) {
             core.unresolved(generation, "messageSent", acceptsErrors = true)
         }

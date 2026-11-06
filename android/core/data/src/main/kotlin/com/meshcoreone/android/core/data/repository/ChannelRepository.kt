@@ -21,7 +21,7 @@ internal class ChannelRepository(
         token: SessionToken,
         session: MeshCoreSession,
         channelIndex: UByte,
-    ): String = withChannelOperation { _, scope ->
+    ): String = manager.withChannelOperationScope { scope ->
         manager.withChannelOperationLease(token, session, token.radioId, scope) { lease ->
             val captured = context.read("captureChannelOccupant") {
                 verifyChannelOccupantStorage()

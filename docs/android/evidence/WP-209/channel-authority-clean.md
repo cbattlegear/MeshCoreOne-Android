@@ -180,6 +180,27 @@ all these entrypoints refuse immediately while state/teardown stay unchanged,
 then verifies the genuine lease is still usable. No reviewer approval or runtime
 execution is inferred from this correction.
 
+A subsequent coordinator review identified inherited-child / `NonCancellable`
+self-retirement bypassing a guard based only on equal Jobs. The corrected
+entry is `manager.withChannelOperationScope { scope -> ... }`: it installs a
+private inherited callback marker **before** the canonical process scope and
+lease are minted. The marker is only a self-drain deadlock guard, never authority.
+Lease admission still requires the real process scope, exact active callback
+Job, current manager/session binding and private issued registry. Normal child
+coroutines and nested `NonCancellable` contexts inherit the guard, so cannot
+await retirement of their parent's live lease. They cannot borrow the exact-Job
+identity capability either. Consumers must not pre-acquire the process lane
+outside this manager-owned entry.
+
+The callback control checks nested `NonCancellable` close/transport/shutdown
+wait and awaited-child reconnect teardown/rebuild/failure refusal, preservation
+of READY/no teardown, a legitimate identity operation afterward, and successful
+external retirement after the callback expires. The normal real-manager wire /
+Room success controls use the new outer entry, guarding against an
+all-legitimate-operations-fail-closed regression. Arbitrary detached scopes or
+deliberately removed private execution context are not claimed to be generally
+detectable coroutine ancestry.
+
 ## Source validation status
 
 Trusted named `modify-related-consumer` and `add-or-update-related-test`

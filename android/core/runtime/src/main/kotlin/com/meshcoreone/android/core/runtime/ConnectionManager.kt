@@ -51,6 +51,11 @@ class ConnectionManager(
     private class RuntimeOperation(val owner: Any) : AbstractCoroutineContextElement(Key) {
         companion object Key : CoroutineContext.Key<RuntimeOperation>
     }
+    private class ChannelOperationContext(val manager: ConnectionManager) : AbstractCoroutineContextElement(Key) {
+        companion object Key : CoroutineContext.Key<ChannelOperationContext>
+        @Volatile var active = true
+        @Volatile var leased = false
+    }
     private data class Submission(
         val work: Deferred<Unit>,
         val previous: Deferred<Unit>?,
@@ -147,6 +152,23 @@ class ConnectionManager(
     private var retained: RadioGeneration? = null
     private val channelOperationLeases = mutableSetOf<ChannelOperationLease>()
 
+    suspend fun <T> withChannelOperationScope(
+        block: suspend (ChannelIdentityWriteScope) -> T,
+    ): T {
+        check(currentCoroutineContext()[ChannelOperationContext]?.active != true) {
+            "A channel operation cannot reacquire its process lane"
+        }
+        val marker = ChannelOperationContext(this)
+        // Install the inherited deadlock guard before minting the exact-Job process capability.
+        return withContext(marker) {
+            try {
+                ChannelIdentityMutex.PROCESS.withChannelOperationScope(block)
+            } finally {
+                marker.active = false
+            }
+        }
+    }
+
     suspend fun <T> withChannelOperationLease(
         token: SessionToken,
         session: MeshCoreSession,
@@ -155,6 +177,10 @@ class ConnectionManager(
         block: suspend (ChannelOperationLease) -> T,
     ): T {
         ChannelIdentityMutex.PROCESS.requireChannelOperationScope(identityScope)
+        val marker = currentCoroutineContext()[ChannelOperationContext]
+        check(marker != null && marker.active && marker.manager === this && !marker.leased) {
+            "Channel leases require this manager's owned operation callback"
+        }
         val job = checkNotNull(currentCoroutineContext()[Job])
         val lease = synchronized(lock) {
             val owner = active
@@ -170,6 +196,7 @@ class ConnectionManager(
             checkNotNull(owner.ownership).verifyReturned(checkNotNull(owner.services).services)
             ChannelOperationLease(this, owner, token, session, identityScope, job).also {
                 channelOperationLeases += it
+                marker.leased = true
             }
         }
         try {
@@ -177,6 +204,7 @@ class ConnectionManager(
         } finally {
             synchronized(lock) {
                 channelOperationLeases.remove(lease)
+                marker.leased = false
                 val owner = lease.generation
                 if (owner.channelOperationsRetired && channelOperationLeases.none { it.generation === owner }) {
                     owner.channelOperationsDrained?.complete(Unit)
@@ -220,7 +248,12 @@ class ConnectionManager(
     }
 
     private suspend fun requireNoChannelOperationLease() {
-        val job = currentCoroutineContext()[Job]
+        val caller = currentCoroutineContext()
+        val marker = caller[ChannelOperationContext]
+        check(marker == null || marker.manager !== this || !marker.active || !marker.leased) {
+            "A channel callback or its child cannot await retirement of its inherited lease"
+        }
+        val job = caller[Job]
         synchronized(lock) {
             check(channelOperationLeases.none { it.ownerJob === job }) {
                 "A channel operation cannot await retirement of its own lease"

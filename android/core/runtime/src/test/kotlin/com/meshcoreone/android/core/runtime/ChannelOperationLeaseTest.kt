@@ -10,10 +10,13 @@ import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.runCurrent
 import org.junit.jupiter.api.TestFactory
 import kotlin.test.*
@@ -28,7 +31,7 @@ class ChannelOperationLeaseTest {
                 val inputs = services.single().inputs.connection
                 val otherSession = MeshCoreSession(TestRadio(), coroutineContext = test.backgroundScope.coroutineContext)
                 try {
-                    ChannelIdentityMutex.PROCESS.withChannelOperationScope { scope ->
+                    manager.withChannelOperationScope { scope ->
                         manager.withChannelOperationLease(inputs.token, inputs.session, inputs.token.radioId, scope) { lease ->
                             var executed = false
                             lease.withChannelIdentityMutation(inputs.token.radioId) { executed = true }
@@ -61,7 +64,7 @@ class ChannelOperationLeaseTest {
                 connect()
                 val inputs = services.single().inputs.connection
                 lateinit var escaped: ConnectionManager.ChannelOperationLease
-                ChannelIdentityMutex.PROCESS.withChannelOperationScope { scope ->
+                manager.withChannelOperationScope { scope ->
                     manager.withChannelOperationLease(inputs.token, inputs.session, inputs.token.radioId, scope) { lease ->
                         escaped = lease
                         test.backgroundScope.async {
@@ -79,6 +82,23 @@ class ChannelOperationLeaseTest {
                         assertFailsWith<IllegalStateException> { manager.awaitShutdown() }
                         assertEquals(DeviceConnectionState.READY, manager.connectionState)
                         assertEquals(0, services.single().teardowns)
+                        assertFailsWith<IllegalStateException> {
+                            manager.withChannelOperationScope { fail("Operation lane reacquired") }
+                        }
+                        withContext(NonCancellable) {
+                            assertFailsWith<IllegalStateException> { manager.close() }
+                            assertFailsWith<IllegalStateException> { manager.disconnectTransport() }
+                            assertFailsWith<IllegalStateException> { manager.awaitShutdown() }
+                        }
+                        coroutineScope {
+                            async {
+                                assertFailsWith<IllegalStateException> { manager.teardownSessionForReconnect() }
+                                assertFailsWith<IllegalStateException> { manager.rebuildSession(platform.target.deviceId) }
+                                assertFailsWith<IllegalStateException> { manager.handleReconnectionFailure() }
+                            }.await()
+                        }
+                        assertEquals(DeviceConnectionState.READY, manager.connectionState)
+                        assertEquals(0, services.single().teardowns)
                         lease.withChannelIdentityMutation(inputs.token.radioId) { Unit }
                         assertFailsWith<IllegalStateException> {
                             manager.withChannelOperationLease(inputs.token, inputs.session, inputs.token.radioId, scope) {
@@ -91,13 +111,15 @@ class ChannelOperationLeaseTest {
                     }
                 }
                 assertEquals(DeviceConnectionState.READY, manager.connectionState)
+                assertTrue(manager.disconnect().isComplete)
+                assertEquals(1, services.single().teardowns)
             }
         },
         nativeCase("an internal constructor is not authority without the managers private issued registry") {
             withFixture {
                 connect()
                 val inputs = services.single().inputs.connection
-                ChannelIdentityMutex.PROCESS.withChannelOperationScope { scope ->
+                manager.withChannelOperationScope { scope ->
                     val forgedGeneration = ConnectionManager.RadioGeneration(
                         inputs.token.generation.value, platform.target, 0,
                         test.backgroundScope.coroutineContext, checkNotNull(currentCoroutineContext()[Job]),
@@ -127,7 +149,7 @@ class ChannelOperationLeaseTest {
                 val release = CompletableDeferred<Unit>()
                 val effects = mutableListOf<String>()
                 val operation = test.backgroundScope.launch {
-                    ChannelIdentityMutex.PROCESS.withChannelOperationScope { scope ->
+                    manager.withChannelOperationScope { scope ->
                         manager.withChannelOperationLease(inputs.token, inputs.session, inputs.token.radioId, scope) { lease ->
                             lease.withChannelIdentityMutation(inputs.token.radioId) {
                                 entered.complete(Unit)
@@ -150,7 +172,7 @@ class ChannelOperationLeaseTest {
                 disconnect.await()
                 assertEquals(listOf("admitted operation terminal", "disconnect terminal"), effects)
                 assertEquals(1, handle.teardowns)
-                ChannelIdentityMutex.PROCESS.withChannelOperationScope { scope ->
+                manager.withChannelOperationScope { scope ->
                     assertFailsWith<IllegalStateException> {
                         manager.withChannelOperationLease(inputs.token, inputs.session, inputs.token.radioId, scope) {
                             fail("Retired session admitted")
@@ -166,7 +188,7 @@ class ChannelOperationLeaseTest {
                 val entered = CompletableDeferred<Unit>()
                 val release = CompletableDeferred<Unit>()
                 val held = test.backgroundScope.launch {
-                    ChannelIdentityMutex.PROCESS.withChannelOperationScope { scope ->
+                    manager.withChannelOperationScope { scope ->
                         manager.withChannelOperationLease(old.token, old.session, old.token.radioId, scope) { lease ->
                             lease.withChannelIdentityMutation(old.token.radioId) {
                                 entered.complete(Unit)
@@ -188,7 +210,7 @@ class ChannelOperationLeaseTest {
                 val fresh = services.last().inputs.connection
                 assertNotEquals(old.token, fresh.token)
                 assertNotSame(old.session, fresh.session)
-                ChannelIdentityMutex.PROCESS.withChannelOperationScope { scope ->
+                manager.withChannelOperationScope { scope ->
                     assertFailsWith<IllegalStateException> {
                         manager.withChannelOperationLease(old.token, old.session, old.token.radioId, scope) {
                             fail("Replaced session admitted")
@@ -204,7 +226,7 @@ class ChannelOperationLeaseTest {
             withFixture {
                 connect()
                 val inputs = services.single().inputs.connection
-                ChannelIdentityMutex.PROCESS.withChannelOperationScope { scope ->
+                manager.withChannelOperationScope { scope ->
                     assertFailsWith<IllegalArgumentException> {
                         manager.withChannelOperationLease(inputs.token, inputs.session, inputs.token.radioId, scope) {
                             throw IllegalArgumentException("operation failure")
@@ -213,7 +235,7 @@ class ChannelOperationLeaseTest {
                 }
                 val entered = CompletableDeferred<Unit>()
                 val cancelled = test.backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
-                    ChannelIdentityMutex.PROCESS.withChannelOperationScope { scope ->
+                    manager.withChannelOperationScope { scope ->
                         manager.withChannelOperationLease(inputs.token, inputs.session, inputs.token.radioId, scope) {
                             entered.complete(Unit)
                             CompletableDeferred<Unit>().await()

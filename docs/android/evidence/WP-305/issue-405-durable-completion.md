@@ -382,12 +382,13 @@ has not been compiled or executed.
 
 ### Follow-up after exact-head run 42153267661
 
-The current worktree is still based on local `HEAD` `113b46a39fef60cf389174c3d632ff95675207f1`
+At the time this follow-up was first recorded, the worktree was based on local `HEAD`
+`113b46a39fef60cf389174c3d632ff95675207f1`
 (tree `4c845cf815efcbedb827442bf9d368dbf21874cf`, parent
 `a0a6a8e4f2f9cd20e44c6783b5014630eab8118c`), merge base
 `35abcc1276082995eed216bf28bff04d77e176c8`, against `origin/main`
-`0d10b838a181cd3bd34af1a0200435149dbc6bb0`. The changes below are uncommitted and are not part
-of run `42153267661` or a new immutable candidate.
+`0d10b838a181cd3bd34af1a0200435149dbc6bb0`. The changes below were uncommitted at that point and
+are not part of run `42153267661`.
 
 The exact run emitted 54 unique App test failure markers: 32 `HistoryReactionReplayFailureTest`, 3
 `CliSettingsReadbackTest`, 4 `TraceToolsEntryLifetimeTest`, 1 `RxRegionConsumerTest`, 1
@@ -444,8 +445,11 @@ process-owned generation. WP-209 supplied another corrected source candidate
 `168e0ab9d77d6cb71e62480e25e4179964fe8f41`), exact manager blob
 `91ba84242605000d27f284cfbbde831f2125edd5`. It moves establishment settlement to terminal
 successful work completion, keeps reconnect-cycle equality after settlement, and adds post-return
-caller-cancellation controls. WP-302's independent re-review is pending; 78c is not accepted,
-executed or published and remains uncomposed. The reported minimal production
+caller-cancellation controls. WP-302's review found another owner/duplicate completion window:
+successful shared work can remain READY but refuse edits when the original caller is cancelled
+before resuming after `work.await`. WP-209 is addressing that schedule and has been asked for a
+controlled-dispatcher regression. 78c is not accepted, executed or published and remains
+uncomposed. The reported minimal production
 composition is `ConnectionManager.kt` plus canonical `ChannelIdentityMutation.kt`
 (`a4cf97a36327721e9df7eb9afffbf12b37511d3c`); the cumulative WP-209 ancestry and 411d data/runtime
 test graph change are not required for the runtime API.
@@ -463,12 +467,15 @@ reads the latest DTO through the original token only after the mutex and lease a
 validates its device identity; the direct region path uses the same fresh, token-bound baseline for
 the default-scope decision. The existing real-Room 868→915 queued-edit assertion remains, and a new
 queued default-scope/region assertion verifies it does not clear a scope changed by the earlier edit.
-These controls are authored, not executed. The caller freeze is local commit `fca33e0adbf`; the freshness
-correction and added Room control are local commit `dcb37285c8d` directly after it. Both follow
-WP-305 writer commit `113b46a39fef60cf389174c3d632ff95675207f1` and intentionally reference the
-pending manager API, so they are not yet a compilable composed candidate.
+These controls are authored, not executed. The caller freeze is local commit `fca33e0adbf`; the
+freshness correction and added Room control are local commit `dcb37285c8d` directly after it. Both
+follow WP-305 writer commit `113b46a39fef60cf389174c3d632ff95675207f1` and intentionally reference the
+pending manager API, so they are not yet a compilable composed candidate. The earlier uncommitted
+fixture, onboarding-state and authority-control repairs were subsequently frozen in local commit
+`eff1f33e911`.
 
-The exact producer composition still requires favorable review of `78c...` and the minimal
+The exact producer composition still requires favorable review of a later corrected successor to
+`78c...` and the minimal
 canonical `ChannelIdentityMutation.kt` dependency as well as `ConnectionManager.kt`; no cumulative
 WP-209 ancestry is imported. Trusted current-main admissions for the caller files were previously
 verified. On caller head `dcb37285c8d`, `python tools\android-port\controller\validate.py` passed
@@ -477,7 +484,7 @@ passed (468 paths / 5,133 declarations; inventory only), `python tools\android-p
 exited 0 (traceability only), and `git diff --check` passed. No Kotlin compilation,
 Room/Android test or new hosted run occurred because the shared Gradle reservation remains held.
 PR #532 remains draft at pushed head
-`121bea50975de31f7f10ca4b85185ca13ca7d4e3`; this local follow-up is uncommitted and unpublished.
+`121bea50975de31f7f10ca4b85185ca13ca7d4e3`; the local commits remain unpushed and unpublished.
 
 Documented native-Windows readiness preflight passed with pinned Python 3.12.4 and existing
 same-host state. `controller/validate.py` passed (64 WPs / 1,866 tracked reference files),

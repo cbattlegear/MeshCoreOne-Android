@@ -147,6 +147,7 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
     // region Per-session jobs (cancelled on disconnect and re-wire)
 
     private var settingsEventsJob: Job? = null
+    private var settingsEventsSession: AppSession? = null
     private var syncDataEventsJob: Job? = null
     private var advertisementEventsJob: Job? = null
     private var rxLogEventsJob: Job? = null
@@ -467,6 +468,7 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
         val cancelled = synchronized(lock) {
             listOfNotNull(settingsEventsJob, syncDataEventsJob, advertisementEventsJob, rxLogEventsJob).also {
                 settingsEventsJob = null; syncDataEventsJob = null; advertisementEventsJob = null; rxLogEventsJob = null
+                settingsEventsSession = null
             }
         }
         cancelled.forEach(Job::cancel)
@@ -553,8 +555,9 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
     }
 
     private fun wireSettingsEventStream(session: AppSession) {
+        if (synchronized(lock) { settingsEventsSession === session && settingsEventsJob?.isActive == true }) return
         val subscription = session.settingsService.events()
-        replaceJob({ settingsEventsJob }, { settingsEventsJob = it }, sessionScope.launch(start = CoroutineStart.UNDISPATCHED) {
+        replaceJob({ settingsEventsJob }, { settingsEventsJob = it; settingsEventsSession = session }, sessionScope.launch(start = CoroutineStart.UNDISPATCHED) {
             try {
                 subscription.events.collect { wrapped ->
                     when (val event = wrapped.event) {

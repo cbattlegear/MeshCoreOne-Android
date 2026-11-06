@@ -111,6 +111,10 @@ class SettingsPathHashPersistenceTest : RoomProcessTest() {
                 h.eventually("actual conditional write is suspended") { entered.isCompleted }
                 assertTrue(holder.state.value.isApplying)
                 assertEquals(before.pathHashMode, store.fetchDevice(before.id)!!.pathHashMode)
+                h.appState.wireServicesIfConnected()
+                h.settle()
+                assertTrue(holder.state.value.isApplying, "A same-session rewire cannot retire the pending acknowledgement")
+                assertTrue(failures.isEmpty())
                 release.complete(Unit)
                 h.eventually("actual conditional write is acknowledged") { !holder.state.value.isApplying }
                 assertTrue(failures.isEmpty())
@@ -226,6 +230,7 @@ class SettingsPathHashPersistenceTest : RoomProcessTest() {
                 holder.onModeSelected(2u)
                 h.eventually("old Room write entered") { entered.isCompleted }
                 assertEquals(2u.toUByte(), store.fetchDevice(before.id)!!.pathHashMode)
+                h.appState.tearDownAppStateSessionState()
                 h.appState.wireServicesIfConnected()
                 h.eventually("retired original waiter fails") {
                     !holder.state.value.isApplying && failures.isNotEmpty()

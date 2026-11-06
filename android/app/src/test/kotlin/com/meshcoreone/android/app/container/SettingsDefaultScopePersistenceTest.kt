@@ -879,14 +879,79 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
         }
     }
 
+    @Test fun sameSessionRewireKeepsQueuedScopeAcknowledgementUntilRoomCommits() = runTest {
+        assertSameSessionRewireKeepsChannelAcknowledgement(queued = true)
+    }
+
+    @Test fun sameSessionRewireKeepsNotificationScopeAcknowledgementUntilRoomCommits() = runTest {
+        assertSameSessionRewireKeepsChannelAcknowledgement(queued = false)
+    }
+
+    private suspend fun TestScope.assertSameSessionRewireKeepsChannelAcknowledgement(queued: Boolean) {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var armed = false
+        val held = object : PersistenceStoreProtocol by store {
+            override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+                if (armed && dto.defaultFloodScopeName == "EU868") {
+                    armed = false
+                    entered.complete(Unit)
+                    release.await()
+                }
+                return store.saveDeviceIfUnchanged(dto, expected)
+            }
+        }
+        try {
+            withSettings(held) { h, _, failures, radio ->
+                val device = assertNotNull(h.manager.connectedDevice)
+                val session = assertNotNull(h.sessions.current)
+                val channel = ChannelDTO(radioId = device.radioId, index = 1u, name = "Rewired scope")
+                store.saveChannel(channel)
+                radio.channel = channel
+                radio.mode = "EU868"
+                armed = true
+                val message = if (queued) enqueueActualChannel(h, device, "Queued rewire") else null
+                val reply = if (queued) null else backgroundScope.launch {
+                    session.notificationActionHandler.handleChannelQuickReply(device.radioId, 1u, "Notification rewire")
+                }
+                h.eventually("scope acknowledgement is waiting on the actual Room write") { entered.isCompleted }
+                assertTrue(radio.channelTransmissions.isEmpty())
+                assertNull(store.fetchDevice(device.id)!!.defaultFloodScopeName)
+                val rewire = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                    h.appState.wireServicesIfConnected()
+                }
+                h.settle()
+                assertTrue(radio.channelTransmissions.isEmpty())
+                if (reply != null) assertFalse(reply.isCompleted)
+                assertEquals(session.token, h.sessions.current?.token)
+                release.complete(Unit)
+                h.eventually("the same acknowledgement permits exactly one send without another ready transition") {
+                    radio.channelTransmissions.size == 1 && (reply == null || reply.isCompleted) &&
+                        (message == null || !store.hasPendingSend(EntityKey(device.radioId, message.id)))
+                }
+                rewire.join()
+                reply?.join()
+                assertEquals("EU868", h.manager.connectedDevice!!.defaultFloodScopeName)
+                assertEquals("EU868", store.fetchDevice(device.id)!!.defaultFloodScopeName)
+                if (message != null) assertEquals(
+                    MessageStatus.SENT, store.fetchMessage(EntityKey(device.radioId, message.id))!!.status,
+                )
+                assertEquals(listOf(PacketBuilder.setFloodScope(FloodScope.Region("EU868").scopeKey())), radio.activeScopes)
+                assertTrue(radio.writes.isEmpty(), "Reading the baseline must not invent a default-scope write")
+                assertTrue(failures.isEmpty())
+            }
+        } finally { release.complete(Unit) }
+    }
+
     @Test fun actualInFlightScopeSubscriberReplacementReconcilesWithoutReportingTheOldActionSuccessful() = runTest {
         withSettings { h, holder, failures, radio ->
             val before = assertNotNull(h.manager.connectedDevice)
             var rewire: Job? = null
             radio.onWrite = {
                 radio.onWrite = null
-                // Wiring replaces the Settings subscriber before its first suspension (badge refresh).
+                // Explicit teardown replaces the subscriber; an ordinary same-session rewire keeps it.
                 rewire = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                    h.appState.tearDownAppStateSessionState()
                     h.appState.wireServicesIfConnected()
                 }
             }

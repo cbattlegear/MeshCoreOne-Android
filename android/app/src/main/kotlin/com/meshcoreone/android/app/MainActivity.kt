@@ -417,5 +417,7 @@ internal fun copyRejectedNotificationText(context: android.content.Context, text
         false
     } catch (_: IllegalStateException) {
         false
+    } catch (failure: RuntimeException) {
+        if (failure.cause is android.os.RemoteException) false else throw failure
     }
 }

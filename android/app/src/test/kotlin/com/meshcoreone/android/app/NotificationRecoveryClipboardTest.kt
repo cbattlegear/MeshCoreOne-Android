@@ -52,6 +52,7 @@ class NotificationRecoveryClipboardTest {
     private val activity = Robolectric.buildActivity(ComponentActivity::class.java)
     private lateinit var context: Context
     private var clipboardUnavailable = false
+    private var clipboardFailure: RuntimeException? = null
     private var mounted = false
     private var closed = false
     private val otherDialog = mutableStateOf(false)
@@ -62,8 +63,13 @@ class NotificationRecoveryClipboardTest {
         context = object : ContextWrapper(activity.get()) {
             override fun getApplicationContext(): Context = this
             override fun getNoBackupFilesDir(): File = folder.root
-            override fun getSystemService(name: String): Any? =
-                if (name == CLIPBOARD_SERVICE && clipboardUnavailable) null else super.getSystemService(name)
+            override fun getSystemService(name: String): Any? {
+                if (name == CLIPBOARD_SERVICE) {
+                    clipboardFailure?.let { throw it }
+                    if (clipboardUnavailable) return null
+                }
+                return super.getSystemService(name)
+            }
         }
         NotificationActionRecovery.acknowledgeFailure(NotificationActionRecovery.load(context).version)
     }
@@ -186,6 +192,27 @@ class NotificationRecoveryClipboardTest {
         compose.onNodeWithText(text(AppChatsStrings.chatsMessageActionCopy)).performClick()
         awaitText(text(NotificationStrings.string.notification_action_recovery_copy_failed))
         assertEquals(entry.id, entries().single().id)
+    }
+
+    @Test
+    fun wrappedClipboardServiceDeathIsVisibleAndDoesNotDisposeTheOriginal() {
+        val entry = save(33, "clipboard service failed")
+        mount()
+        awaitText("clipboard service failed")
+        clipboardFailure = RuntimeException(android.os.DeadObjectException())
+        compose.onNodeWithText(text(AppChatsStrings.chatsMessageActionCopy)).performClick()
+        awaitText(text(NotificationStrings.string.notification_action_recovery_copy_failed))
+        assertEquals(entry.id, entries().single().id)
+    }
+
+    @Test
+    fun unrelatedProgrammingFailureIsNotHiddenAsAnUnavailableClipboard() {
+        val expected = UnsupportedOperationException("synthetic unexpected service programming failure")
+        clipboardFailure = expected
+        val actual = org.junit.Assert.assertThrows(UnsupportedOperationException::class.java) {
+            copyRejectedNotificationText(context, "original")
+        }
+        org.junit.Assert.assertSame(expected, actual)
     }
 
     @Test

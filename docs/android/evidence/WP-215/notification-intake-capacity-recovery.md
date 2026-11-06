@@ -63,7 +63,9 @@ The foreground surface offers only explicit copy, delete and cancel. Cancel,
 Back/dismissal, host destruction and cancelled reading do not dispose records.
 Copy uses a sensitive clipboard item and checks the exact copied text before
 requesting deletion of that one record. If clipboard access or deletion fails,
-the original record remains available and an error is surfaced. There is no
+clipboard failure requests no deletion; an unconfirmed disposal is surfaced as
+uncertain, not proof the record still exists. Failures before the deletion
+transaction commits preserve the original. There is no
 automatic aging, replacement of old drafts, channel resampling or accepted-action
 replay.
 
@@ -137,11 +139,12 @@ explicit/stale/failed disposition, drain cancellation and reader cancellation,
 direct/room target round trips, private-directory denial, duplicate-ID rollback,
 and stale-snapshot acknowledgment of newer retained responses or failures.
 
-`NotificationRecoveryClipboardTest.kt` contains 11 authored App methods covering
+`NotificationRecoveryClipboardTest.kt` contains 13 authored App methods covering
 the actual clipboard and mounted dialog: exact sensitive copy, inaccessible
 clipboard, cancel/host destruction, single-record copy/discard, failed
 copy/discard, the process-only warning, deferral behind another dialog and the
-old-displayed-cancel/new-unseen-rejection interleaving.
+old-displayed-cancel/new-unseen-rejection interleaving, wrapped clipboard service
+death and propagation of unrelated programming failures.
 
 **Zero methods have been executed for this draft.** These counts come from static
 source inspection, not runner discovery. A fresh store instance is not an

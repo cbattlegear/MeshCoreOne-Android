@@ -8,6 +8,36 @@
   "swift_reference": "db14559b39d32322b06477c6ae676112f583db50",
   "consumer_source": "a75e8c88641951c8da4ddeb067316168e8ce1ce6",
   "contract_under_review": "67a22f7f9e75db2b8188ed890e04cc3b25d62a02",
+  "service_room_only_diagnostic_scope_override": {
+    "candidate": "a1864f8ad49d9f6433c76db0bac042651a2bc6b3",
+    "tree": "f806c2ab7521b896371b21a66f6a4989e57e2fd8",
+    "sole_parent": "0d10b838a181cd3bd34af1a0200435149dbc6bb0",
+    "retained_full_sources": [
+      "ae8d62d9302e2b293da97cbbf66ff7a2305168a0",
+      "33b13c9291887124b3952b31b33d9bbb35165b25"
+    ],
+    "precedence": "This scope overrides older App/Sync composition descriptions for this diagnostic only. All earlier source/test inventories and obligations remain historical and are not acceptance claims for this narrower source.",
+    "excluded_coupled_bundles": [
+      "All changed android/app production, timeline/history adapters, graph/factory/Sync adapter, consumer tests and harness.",
+      "All changed android/feature production and tests.",
+      "All changed core/services sync production and test sources, including ports and diagnostic fakes, whose adoption requires the excluded App adapter."
+    ],
+    "main_compatibility": "Entire App, feature and Sync production/test trees match current main. Original legacy reaction service queue/index/persistence signatures remain available; no guarded ingress handler, history preparation hook or optional authority is newly wired. Nonactivation is by absence of the opt-in consumer, not a bypass or test-only flag.",
+    "retained_exact_dependencies": [
+      "Frozen 67ec reaction authority contract and compatible owner-corrected contract controls.",
+      "All-Unproven storage/data/database source and controls, genuine c429 Room v2 export with matched inputs, exact 2010358 SQL-bind type correction.",
+      "ReactionService c6bef and compatible MessageLRUCache plus the unchanged 37 authored service controls.",
+      "All current-main WP-209 reseeding changes and original history controls."
+    ],
+    "test_scope": "Excluded App/Sync tests remain intact under ae8/33b refs, not selectively disabled or weakened. The old service control requiring genuine positive matching remains unaccepted; no test exclusion is authorized. This negative diagnostic does not establish App/history, anchored refresh, outgoing-reaction, registered ingress or positive-origin acceptance.",
+    "source_checks": "Exact retained blob equality, excluded bundle equality to current main, actual trusted per-path admissions and full current-main whitespace check. No Kotlin compilation or runner discovery.",
+    "review_hold": true,
+    "compiled": false,
+    "product_tests_executed": 0,
+    "published": false,
+    "dispatched": false,
+    "guard_active": false
+  },
   "narrow_diagnostic_scope_override": {
     "candidate": "505fd883b1ea30caef8659ec8ab4c2010eea4f4a",
     "tree": "70cf09bfdac40572d34555e82992ad07d2741345",

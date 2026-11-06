@@ -246,22 +246,24 @@ class LocationManagerLocationProducing(
     private fun owns(request: Request): Boolean = synchronized(lock) { active === request }
 
     private fun complete(request: Request, result: Result<GeoCoordinate>) {
-        val claimed = synchronized(lock) {
-            if (active !== request) false else {
+        val outcome = synchronized(lock) {
+            if (active !== request) null else {
                 active = null
                 if (!closed && request.continuation.isActive) {
                     result.getOrNull()?.let {
                         lastCoordinate = it
                         coordinates.value = it
                     }
+                    result
+                } else {
+                    Result.failure(CancellationException("Location callback's owner is no longer active"))
                 }
-                true
             }
         }
-        if (claimed) {
+        if (outcome != null) {
             request.signal.cancel()
-            request.finished.complete(result)
-            request.continuation.resumeWith(result)
+            request.finished.complete(outcome)
+            request.continuation.resumeWith(outcome)
         }
     }
 

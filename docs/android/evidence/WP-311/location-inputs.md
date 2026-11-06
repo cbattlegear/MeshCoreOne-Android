@@ -28,6 +28,10 @@ canceling that retired platform fix and fencing its late callback. Lists then
 observe the explicit request, without owning or canceling it. Competing explicit
 requests retain the existing RequestInProgress behavior. If an explicit owner
 cancels, surviving lists may recover within their unchanged deadline.
+Callback completion derives cache publication and the observer result together
+under the adapter monitor. A callback rejected because its owner is already
+inactive reports cancellation, never an uncached success that could strand
+remaining observers.
 Its existing advert cache and one-shot cancellation/timeout behavior stay intact.
 Authorization is refreshed when the UI resumes collection and on the adapter's
 existing permission/fix callbacks. Denied/revoked access withdraws the phone fix
@@ -67,6 +71,11 @@ Core navigation, list loading and radio commands remain independent of location.
   advances 2.001 seconds and requires cancellation at the original deadline.
   Explicit-takeover cancellation recovery is also covered with both retired
   platform callbacks retained and rejected.
+  `cancelledOwnerOverlappingCallbackCannotReportAnUncachedSuccessToRemainingList`
+  holds only the adapter monitor, cancels the real owning continuation on a
+  bounded test thread, delivers its callback before cleanup can claim the
+  monitor, and requires the remaining list's replacement callback. This is a
+  deliberate race control, not a sleep-based ordering assumption.
 - `NodesLocationIntegrationTest.actualNodesAdapterPrefersAuthorizedPhoneThenLiveRadioAndWithdrawsDisconnectedFallback`
   exercises the actual AppContainer nodes dependency, live radio-coordinate
   updates, phone precedence, unavailable phone fallback and disconnect withdrawal.
@@ -110,3 +119,7 @@ failures locating Distance after an injected Sort touch. The successor drives
 the actual mounted OnClick semantics and waits for popup composition; row-order
 expectations and the real callback transition remain unchanged. Other suites'
 results are not transferred to the successor.
+The `4415934` run `42131884693` passed, including the actual mounted cold/denied
+controls, list-first advert, bounded handoffs, real cache and explicit-owner
+controls. It remains predecessor evidence only: the callback/cancellation-race
+successor requires its own exact-head hosted results and independent review.

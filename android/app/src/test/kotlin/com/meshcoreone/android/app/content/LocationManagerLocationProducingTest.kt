@@ -46,6 +46,49 @@ class LocationManagerLocationProducingTest {
 
     @Suppress("DEPRECATION")
     @Test
+    fun cancelledOwnerOverlappingCallbackCannotReportAnUncachedSuccessToRemainingList() = runTest {
+        shadowOf(locationManager).setProviderEnabled(LocationManager.FUSED_PROVIDER, true)
+        shadowOf(context as android.app.Application).grantPermissions(android.Manifest.permission.ACCESS_COARSE_LOCATION)
+        LocationManagerLocationProducing(context).use { adapter ->
+            val owner = async { adapter.requestLocation() }
+            testScheduler.runCurrent()
+            val late = shadowOf(locationManager).getLocationUpdateListeners(LocationManager.FUSED_PROVIDER).single()
+            val observed = mutableListOf<GeoCoordinate?>()
+            val remaining = launch { adapter.foregroundLocations().collect { observed += it } }
+            testScheduler.runCurrent()
+            val monitor = adapter.javaClass.getDeclaredField("lock").apply { isAccessible = true }.get(adapter)
+            val active = adapter.javaClass.getDeclaredField("active").apply { isAccessible = true }.get(adapter)
+            val continuation = active.javaClass.getDeclaredField("continuation").apply { isAccessible = true }.get(active)
+                as kotlinx.coroutines.CancellableContinuation<*>
+            val cancellation = Thread { owner.cancel() }.apply { isDaemon = true }
+            try {
+                // Stage continuation cancellation before its cleanup can acquire the adapter monitor.
+                synchronized(monitor) {
+                    cancellation.start()
+                    val deadline = System.nanoTime() + 5_000_000_000L
+                    while (continuation.isActive && System.nanoTime() < deadline) Thread.yield()
+                    assertFalse(continuation.isActive)
+                    late.onLocationChanged(fix(1.0, 2.0))
+                    assertNull(adapter.currentLocation)
+                }
+            } finally {
+                cancellation.join(5_000)
+                assertFalse(cancellation.isAlive, "Release only this test's cancellation thread")
+            }
+            assertFailsWith<CancellationException> { owner.await() }
+            testScheduler.runCurrent()
+            val replacement = shadowOf(locationManager).getLocationUpdateListeners(LocationManager.FUSED_PROVIDER).single()
+            assertFalse(late === replacement, "An uncached callback must not stop the remaining observer")
+            shadowOf(locationManager).simulateLocation(fix(10.0, 10.0))
+            testScheduler.runCurrent()
+            assertEquals(GeoCoordinate(10.0, 10.0), observed.last())
+            remaining.cancel()
+            remaining.join()
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    @Test
     fun explicitTakeoverCancellationLetsTheStillMountedListRecoverWithoutPublishingRetiredFixes() = runTest {
         shadowOf(locationManager).setProviderEnabled(LocationManager.FUSED_PROVIDER, true)
         shadowOf(context as android.app.Application).grantPermissions(android.Manifest.permission.ACCESS_COARSE_LOCATION)

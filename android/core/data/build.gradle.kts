@@ -34,6 +34,14 @@ tasks.withType<Test>().configureEach {
         showCauses = true
         showStackTraces = true
     }
+    testLogging.lifecycle {
+        events(TestLogEvent.FAILED)
+        exceptionFormat = TestExceptionFormat.FULL
+        showExceptions = true
+        showCauses = true
+        showStackTraces = true
+        stackTraceFilters = emptySet()
+    }
 }
 
 val repository = rootProject.projectDir.parentFile

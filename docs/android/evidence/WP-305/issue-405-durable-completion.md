@@ -596,3 +596,12 @@ entry points after G1 capture but before admission, installs same-ID G2, then re
 It asserts both suspend results are false, neither region DAO is invoked, and G2's Room/live state
 is unchanged. Separate editor producers avoid serializing the four captures on one editor mutex;
 each still passes its original G1 token and device ID. This is not executed coverage.
+
+Two existing `RxRegionConsumerTest` schedules are now drain-aware rather than awaiting disconnect
+before releasing their admitted DAO/callback. Each asserts logical detach and incomplete retirement,
+releases the operation, and awaits retirement before reconnecting. The committed-region case now
+requires the successor to load the committed Room region instead of expecting an intentionally stale
+empty cache. The callback case retains empty successor Room/live/cache assertions and explicitly
+replays the actual captured G1 edit into `knownRegionsChanged` after G2 installs, verifying stale-token
+notification rejection. Pinned Python 3.12.4 `controller/validate.py`, `test_inventory.py --check`,
+and `git diff --check` passed; these Kotlin/Room controls remain unexecuted.

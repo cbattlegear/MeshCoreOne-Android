@@ -9,6 +9,7 @@ import com.meshcoreone.android.core.connectivity.pairing.CompanionPairingService
 import com.meshcoreone.android.core.connectivity.pairing.CompanionSetupService
 import com.meshcoreone.android.core.connectivity.pairing.DevicePairingService
 import com.meshcoreone.android.core.connectivity.pairing.KnownEndpointStore
+import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import java.util.UUID
 
 /**
@@ -45,6 +46,9 @@ class ConnectivityPlatform(
     }
 
     suspend fun linkState(deviceId: UUID): LinkStateSnapshot = inspector.linkState(deviceId)
+
+    suspend fun isDeviceConnectedToOtherApp(deviceId: UUID, connectionState: DeviceConnectionState): Boolean =
+        inspector.isDeviceConnectedToOtherApp(deviceId, connectionState)
 
     fun isRegistered(deviceId: UUID): Boolean = pairing.isDeviceConnectable(deviceId)
 

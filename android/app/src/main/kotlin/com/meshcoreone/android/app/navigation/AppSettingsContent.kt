@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
@@ -17,6 +18,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
@@ -24,8 +26,6 @@ import com.meshcoreone.android.R
 import com.meshcoreone.android.app.container.AppSettingsFeature
 import com.meshcoreone.android.app.platform.*
 import com.meshcoreone.android.core.contracts.AppTab
-import com.meshcoreone.android.core.contracts.FeatureId
-import com.meshcoreone.android.core.contracts.FeatureRoute
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.services.diagnostics.DebugLogBuffer
 import com.meshcoreone.android.core.services.contacts.ContactService
@@ -42,6 +42,12 @@ import com.meshcoreone.android.feature.settings.app.backup.ui.*
 import com.meshcoreone.android.feature.settings.app.diagnostics.*
 import com.meshcoreone.android.feature.settings.app.diagnostics.ui.*
 import com.meshcoreone.android.feature.settings.app.nodeconfig.*
+import com.meshcoreone.android.feature.onboarding.PairingBlocker
+import com.meshcoreone.android.feature.onboarding.PermissionStatus
+import com.meshcoreone.android.feature.onboarding.ui.DeviceScannerSheetContent
+import com.meshcoreone.android.feature.onboarding.ui.WiFiConnectionSheetContent
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import com.meshcoreone.android.feature.settings.device.*
 import com.meshcoreone.android.feature.settings.device.ui.*
 import com.meshcoreone.android.feature.settings.device.SettingsDetail as Page
@@ -56,6 +62,7 @@ import kotlinx.coroutines.flow.*
 internal fun AppSettingsContent(
     feature: AppSettingsFeature, destination: NavigationDestination, coordinator: NavigationCoordinator,
     nodeDocuments: NodeConfigDocuments? = null,
+    selectionHost: Boolean = true,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -79,7 +86,7 @@ internal fun AppSettingsContent(
                     Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}")),
                 )
                 SettingsExternalDestination.MapsSettings, SettingsExternalDestination.OfflineMapSettings -> coordinator.selectTab(AppTab.MAP)
-                SettingsExternalDestination.DeviceSelection -> coordinator.navigate(FeatureRoute(FeatureId.ONBOARDING))
+                SettingsExternalDestination.DeviceSelection -> feature.selectionVisible.value = true
                 else -> external = target
             }
         }
@@ -114,10 +121,6 @@ internal fun AppSettingsContent(
         else container.currentTransport
     val page = (destination as? NavigationDestination.Setting)?.selection?.let { Page.valueOf(it.name) }
     val done = { coordinator.back(); Unit }
-    val error by feature.failure.collectAsState()
-    if (error != null) AlertDialog(onDismissRequest = { feature.failure.value = null },
-        text = { Text(uiString(UiErrorMapper().message(requireNotNull(error)))) },
-        confirmButton = { TextButton(onClick = { feature.failure.value = null }) { Text(stringResource(L.commonOk)) } })
     when {
         configPage == SettingsSubpage.ConfigExport -> NodeConfigExportScreen(configHolder, configDocuments, close)
         configPage == SettingsSubpage.ConfigImport -> NodeConfigImportScreen(configHolder, configDocuments, close)
@@ -138,7 +141,7 @@ internal fun AppSettingsContent(
         page == null -> Column(Modifier.fillMaxSize()) {
             Box(Modifier.weight(1f)) {
                 SettingsListScreen(device, transport, deps.regions, deps.radioCatalog, { coordinator.navigateToSetting(SettingsDetail.valueOf(it.name)) },
-                    { coordinator.navigate(FeatureRoute(FeatureId.ONBOARDING)) }, UiText.Verbatim(appVersion(context)))
+                    { feature.selectionVisible.value = true }, UiText.Verbatim(appVersion(context)))
             }
             TextButton(onClick = { about = true }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(S.aboutHeader)) }
         }
@@ -220,6 +223,148 @@ internal fun AppSettingsContent(
         page == Page.FEEDBACK -> FeedbackScreen({ DiagnosticsSection(logDependencies) })
         page == Page.MAPS -> AppMapSettings(feature, done)
         else -> error("Unregistered Settings page: $page")
+    }
+    if (selectionHost) AppSettingsSelectionHost(feature)
+}
+
+@Composable
+internal fun AppSettingsSelectionHost(feature: AppSettingsFeature) {
+    val deviceSelection by feature.selectionVisible.collectAsState()
+    val wifiConnection by feature.selectionWifiVisible.collectAsState()
+    val error by feature.failure.collectAsState()
+    DisposableEffect(feature, deviceSelection) {
+        val wasPresentingSelection = deviceSelection
+        onDispose {
+            if (wasPresentingSelection) feature.selectionSheetDismissed()
+        }
+    }
+    if (error != null) AlertDialog(onDismissRequest = { feature.failure.value = null },
+        text = { Text(uiString(UiErrorMapper().message(requireNotNull(error)))) },
+        confirmButton = { TextButton(onClick = { feature.failure.value = null }) { Text(stringResource(L.commonOk)) } })
+    if (deviceSelection) AppDeviceSelection(feature, onDismiss = { feature.selectionVisible.value = false },
+        onWifi = feature::showSelectionWifi)
+    if (wifiConnection) AppSelectionWifi(feature)
+    AppSelectionPlatform(feature)
+}
+
+@Composable
+private fun AppDeviceSelection(feature: AppSettingsFeature, onDismiss: () -> Unit, onWifi: () -> Unit) {
+    var list by remember(feature) { mutableStateOf<DeviceSelectionListBuilder.Result?>(null) }
+    var elsewhere by remember(feature) { mutableStateOf<Set<java.util.UUID>>(emptySet()) }
+    LaunchedEffect(feature) {
+        try {
+            val loaded = feature.deviceSelection()
+            elsewhere = feature.devicesConnectedElsewhere(loaded)
+            list = loaded
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (problem: Exception) {
+            feature.report("Saved devices could not load", problem)
+            onDismiss()
+        }
+    }
+    val loaded = list
+    if (loaded == null) {
+        AlertDialog(onDismissRequest = onDismiss, text = { CircularProgressIndicator() },
+            confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(L.commonCancel)) } })
+    } else DeviceSelectionSheet(loaded, elsewhere,
+        onSelect = { device -> onDismiss(); feature.selectSavedDevice(device) },
+        onSetUp = { accessory -> onDismiss(); feature.queueDeviceSetup(accessory) },
+        onScan = { feature.queueDeviceScan(); onDismiss() },
+        onConnectViaWifi = { onDismiss(); onWifi() },
+        onDismiss = onDismiss,
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AppSelectionWifi(feature: AppSettingsFeature) {
+    val holder = feature.selectionWifi
+    val state by holder.state.collectAsState()
+    val sheet = rememberModalBottomSheetState(
+        confirmValueChange = { it != SheetValue.Hidden || !holder.state.value.isConnecting },
+    )
+    ModalBottomSheet(onDismissRequest = feature::dismissSelectionWifi, sheetState = sheet) {
+        WiFiConnectionSheetContent(
+            state, holder::setAddress, holder::setPort, feature::submitSelectionWifi, feature::dismissSelectionWifi,
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AppSelectionPlatform(feature: AppSettingsFeature) {
+    val platform = feature.container.onboarding ?: return
+    val action by feature.selectionAction.collectAsState()
+    val denied by feature.selectionPermissionDenied.collectAsState()
+    val requestedPermission by feature.selectionRequestedPermission.collectAsState()
+    val scanBlocker by feature.selectionScanBlocker.collectAsState()
+    val fallback = platform.pairing.scanFallback
+    val requested by (fallback?.isRequested ?: remember { MutableStateFlow(false) }).collectAsState()
+    val activity = LocalActivity.current
+    DisposableEffect(feature, activity) {
+        onDispose {
+            if (activity?.isChangingConfigurations != true) {
+                feature.selectionVisible.value = false
+                feature.cancelSelectionScan()
+            }
+        }
+    }
+    val connectionRequester = platform.rememberConnectionPermissionRequester(feature::selectionPermissionResult)
+    val scanRequester = platform.rememberPermissionRequester(feature::selectionPermissionResult)
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { feature.refreshSelectionPermission() }
+    LaunchedEffect(requested) {
+        if (requested) feature.refreshSelectionPermission()
+    }
+    LaunchedEffect(action, denied, requestedPermission) {
+        feature.beginSelectionPermissionRequest()?.let { kind ->
+            if (action == AppSettingsFeature.SelectionAction.Scan) scanRequester(kind) else connectionRequester(kind)
+        }
+    }
+    if (action != null && denied) AlertDialog(
+        onDismissRequest = feature::cancelSelectionPermission,
+        text = {
+            if (feature.selectionUsesBluetooth) {
+                val off = scanBlocker == PairingBlocker.BLUETOOTH_OFF
+                Column {
+                    Text(stringResource(if (off)
+                        com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings.deviceScannerBluetoothOffTitle
+                    else com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings.deviceScannerBluetoothUnauthorizedTitle))
+                    Text(stringResource(if (off)
+                        com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings.deviceScannerBluetoothOffMessage
+                    else com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings.deviceScannerBluetoothUnauthorizedMessage))
+                }
+            } else Text(uiString(UiErrorMapper().connectionIssue(
+                com.meshcoreone.android.core.contracts.domain.ConnectionIssue.PermissionDenied(
+                    com.meshcoreone.android.core.contracts.domain.Capability.LOCAL_NETWORK,
+                ),
+            )))
+        },
+        confirmButton = {
+            TextButton(onClick = platform::openAppSettings) {
+                Text(stringResource(com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings.permissionsOpenSettings))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = feature::cancelSelectionPermission) { Text(stringResource(L.commonCancel)) }
+        },
+    )
+    val permissions by platform.permissions.snapshot.collectAsState()
+    if (fallback != null && requested) {
+        ModalBottomSheet(
+            feature::cancelSelectionDiscovery,
+            modifier = Modifier.testTag("settings-scan-picker"),
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        ) {
+            val ready = permissions.bluetooth == PermissionStatus.GRANTED && permissions.bluetoothAdapterEnabled
+            val discoveries by remember(fallback, ready) {
+                if (ready) fallback.discoveries().catch { failure ->
+                    if (failure is CancellationException) throw failure
+                    feature.report("Could not scan for a radio", failure)
+                } else flowOf(emptyList())
+            }.collectAsState(emptyList())
+            DeviceScannerSheetContent(discoveries, permissions, feature::selectSelectionScanDevice, feature::cancelSelectionDiscovery)
+        }
     }
 }
 

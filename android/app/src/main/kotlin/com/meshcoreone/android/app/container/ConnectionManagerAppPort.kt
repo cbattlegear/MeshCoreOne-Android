@@ -105,10 +105,13 @@ class ConnectionManagerAppPort(
     override suspend fun connectViaWiFi(host: String, port: UShort, forceFullSync: Boolean) =
         manager.connect(ConnectionTarget.WiFi(host, port), forceFullSync, forceReconnect = false)
 
-    override suspend fun connect(deviceId: UUID, forceReconnect: Boolean) {
+    override suspend fun connect(deviceId: UUID, forceReconnect: Boolean) =
+        connect(deviceId, forceFullSync = false, forceReconnect = forceReconnect)
+
+    suspend fun connect(deviceId: UUID, forceFullSync: Boolean, forceReconnect: Boolean) {
         val target = if (deviceId == MockDataProvider.simulatorDeviceID) ConnectionTarget.Simulator
             else platform.targetForDevice(deviceId) ?: throw ConnectionError.DeviceNotFound()
-        manager.connect(target, forceFullSync = false, forceReconnect = forceReconnect)
+        manager.connect(target, forceFullSync = forceFullSync, forceReconnect = forceReconnect)
     }
 
     override suspend fun pairNewDevice() = pairing.pairNewDevice()

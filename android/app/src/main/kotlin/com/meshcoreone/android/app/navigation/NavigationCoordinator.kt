@@ -66,6 +66,15 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     }
 
     fun selectTab(tab: AppTab) = mutableState.update { it.select(tab) }
+    fun showSettingsPairingRecovery() = mutableState.update {
+        val selected = it.select(AppTab.SETTINGS)
+        val stack = selected.stacks.getValue(AppTab.SETTINGS)
+            .dropLastWhile { entry -> entry.destination is NavigationDestination.Auxiliary }.snapshot()
+        selected.copy(
+            stacks = (selected.stacks + (AppTab.SETTINGS to stack)).snapshotMap(),
+            tabBarVisible = stack.size == 1,
+        )
+    }
     fun measureWindow(widthDp: Float) {
         require(widthDp.isFinite() && widthDp >= 0f) { "Window width must be finite and nonnegative" }
         mutableState.update { it.copy(widthDp = widthDp) }

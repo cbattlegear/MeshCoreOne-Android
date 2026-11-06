@@ -22,7 +22,17 @@ import com.meshcoreone.android.core.ui.uiString
 import kotlinx.coroutines.launch
 
 @Composable
-fun AppConnectionRecoveryDialogs(app: AppState) {
+fun AppConnectionRecoveryDialogs(container: AppContainer) {
+    AppConnectionRecoveryDialogs(container.appState) {
+        val onboarding = container.onboarding
+        if (onboarding?.pairing?.scanFallback != null && onboarding.hasCompleted.value) {
+            container.navigation.showSettingsPairingRecovery()
+        }
+    }
+}
+
+@Composable
+fun AppConnectionRecoveryDialogs(app: AppState, beforeRemoveAndRetry: () -> Unit = {}) {
     val state by app.connectionUI.state.collectAsState()
     val scope = rememberCoroutineScope()
     ConnectionRecoveryDialogs(
@@ -36,6 +46,7 @@ fun AppConnectionRecoveryDialogs(app: AppState) {
             scope.launch { app.retryFailedPairingConnect() }
         },
         onRemoveAndRetry = {
+            beforeRemoveAndRetry()
             app.removeFailedPairingAndRetry()
         },
     )

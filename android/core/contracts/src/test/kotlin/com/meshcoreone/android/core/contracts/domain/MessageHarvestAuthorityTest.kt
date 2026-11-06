@@ -124,6 +124,37 @@ class MessageHarvestAuthorityTest {
     }
 
     @Test
+    fun rowLevelStaleRetainsExactBatchWithoutSubstitutingAnObservedRow() {
+        val candidate = candidate(10, 0)
+        val request = IncomingPathHarvestRequest(row, listOf(candidate).snapshot())
+        val stale = IncomingPathHarvestIssue(null, IncomingPathHarvestIssueReason.Stale)
+        val result = IncomingPathHarvestResult.Blocked(request, listOf(stale).snapshot())
+        assertSame(request, result.request)
+        assertSame(row, result.request.savedRow)
+        assertSame(row.receipt, result.request.savedRow.receipt)
+        assertSame(candidate, result.request.candidates.single())
+        assertSame(stale, result.issues.single())
+        assertNull(result.issues.single().ordinal)
+    }
+
+    @Test
+    fun initialCountInputsRetainBothSignsForAuthorityRejectionWithoutConstructorSanitization() {
+        for (count in listOf(-1L, 0L, 1L)) {
+            val input = message.copy(heardRepeats = count)
+            val request = ChannelMessageRowSaveRequest(input, occurrence)
+            assertSame(input, request.message)
+            assertEquals(count, request.message.heardRepeats)
+            if (count != 0L) {
+                val rejected = RowBoundChannelIngress(
+                    ChannelReactionIngressResult.Rejected(ChannelReactionRejection.CONFLICT), null,
+                )
+                assertNull(rejected.savedRow)
+                assertFailsWith<IllegalArgumentException> { rejected.copy(savedRow = row) }
+            }
+        }
+    }
+
+    @Test
     fun stableEarlierRxCandidatesRetainTheirOwnExactEntriesWithoutProof() {
         val first = candidate(10, -5)
         val second = candidate(11, -5)

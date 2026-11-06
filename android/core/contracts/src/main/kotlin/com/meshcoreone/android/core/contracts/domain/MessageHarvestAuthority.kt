@@ -166,8 +166,11 @@ sealed interface IncomingPathHarvestResult {
  * propagate without a guessed success, retry, or reconstructed outcome.
  * Authenticate DTO derivation under original decoding/time-correction rules. RX-derived enrichment
  * is deferred: reject already enriched input before DML, never certify fields copied by a current-key
- * lookup. Save actual row and privately bind exact stored incarnation/reaction-identity revision/
- * original save in SAME TX; return actual DTO/receipt for a newly inserted row, including committed
+ * lookup. Require heardRepeats == 0 for this new-row/no-issuer role. Any nonzero
+ * count, including negative input, requires Rejected(CONFLICT) BEFORE DML with no receipt; never
+ * sanitize or certify a caller-preseeded repeat count. The public request constructor is unchanged.
+ * Save actual row and privately bind exact stored incarnation/reaction-identity revision/original
+ * save in SAME TX; return actual DTO/receipt for a newly inserted row, including committed
  * Unproven. A later loss of that return does not permit receipt recapture by ID or a second save.
  * Any future separately admitted Existing successor would certify storage lineage only, NOT original
  * insert, same-origin duplicate proof, original occurrence recovery or reaction target.
@@ -175,7 +178,18 @@ sealed interface IncomingPathHarvestResult {
  * Row receipt alone does NOT authenticate receive origin or grant reaction/index authority.
  *
  * Harvest: in ONE WRITE TX first authenticate receipt/actual original row incarnation and revision,
- * then EVERY exact RX candidate's independent original proof, message/occupant/session association,
+ * then, for this inactive role without an authenticated RX issuer, compare actual pathNodes,
+ * pathLength, routeType, regionScope, regionScopeMatches, heardRepeats and SNR against the private
+ * original-save snapshot. Do this BEFORE candidate-level issues or empty completion. Any mismatch
+ * requires row-level Blocked(Stale), retaining the EXACT request with ZERO DML and no successor.
+ * Preserve benign read flags and unrelated local metadata; do not compare the whole DTO.
+ * This is only current-state comparison: NOT ABA/same-value write-history detection, protection
+ * from subsequent generic writes, receive-origin proof, or a fence for repeat-table-only writes.
+ * No future positive RX write may silently waive this baseline; it needs separately authenticated
+ * mutation and explicit same-TX successor semantics.
+ *
+ * A future authenticated positive implementation must also validate EVERY exact RX candidate's
+ * independent original proof, message/occupant/session association,
  * GROUP_TEXT/SUCCESS decoded sender/body/slot/original reactionTimestamp (senderTimestamp when
  * corrected, NOT corrected stored timestamp) and canonical-equivalent dedup key.
  * Current storage has no positive RX issuer: Unproven and every unrecognized public Proven marker

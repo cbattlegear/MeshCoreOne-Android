@@ -3,8 +3,8 @@
 Assignment:
 `assignment:fc9361f4-ec03-4739-994b-ddb9b4e4cec9:call_0jpIzLm0tBYXoigYAOa1QKuO`.
 This bounded inactive semantic successor has the sole parent
-`8fd424010eb4fbcc4ea1d9f14504ceffef248006`,
-tree `dd93172f3bbd381d154ab44d6ec1bec3aac15b4b`. The original c8f and 8fd commits
+`d2ee04ea47607cfe7acb2f79f9684a463aacc220`,
+tree `dd13a722d1f13ecc9178ec2c063a86102bdc4a18`. The original c8f, 8fd and d2ee commits
 remain immutable. Their approved reaction dependency remains
 `67ec8bffe3d1eb66e1c896b9fbdebf7fc790b136`. Only the existing contract, its
 shape controls and this evidence change; no cache-selection4c405, shared derivation
@@ -64,6 +64,14 @@ requirement for this role. Generic/OFF behavior remains unchanged.
 Commit-before-throw may lose a new-insert return; no journal, safe redrive or
 recovered receipt is promised.
 
+For this new-row/no-issuer role, initial heardRepeats MUST equal zero. Positive
+and negative nonzero values require Rejected(CONFLICT) before DML and no receipt;
+otherwise a private baseline would preserve a caller-preseeded unproven count.
+The coordinator approved this coupled requirement. The public request constructor
+remains unchanged and retains exact input; storage performs explicit rejection,
+not silent sanitization. Zero is permitted by this requirement, not proof of
+origin or a promise to accept other invalid input.
+
 A second independent gap was reported by 12e/f805: a consumer content-key lookup
 outside the save transaction cannot exclude another distinct-UUID/same-key insert
 before save. No cross-context single-ingress invariant was established. Under the
@@ -101,6 +109,12 @@ receivedAt order. Earlier legitimate RX entries are not excluded because they
 precede save; equal timestamps retain input order. In one write TX:
 
 1. Authenticate own original row receipt/incarnation/revision and actual row.
+   In this inactive no-issuer role, compare actual pathNodes, pathLength, routeType,
+   regionScope, regionScopeMatches, heardRepeats and SNR to the private original-save
+   snapshot in that SAME transaction, before candidate-level issues or empty completion.
+   Any mismatch requires row-level Blocked(Stale), exact original request, ZERO DML
+   and no successor. Benign read flags and unrelated local metadata remain permitted;
+   this is not whole-DTO equality.
 2. Authenticate EACH original candidate and its same-origin association; verify
    GROUP_TEXT/SUCCESS decoded sender/body/slot/original reactionTimestamp
    (senderTimestamp when corrected, not corrected stored timestamp) and canonical
@@ -122,6 +136,17 @@ Empty candidates may complete after actual row validation in the same TX,
 claiming no RX origin/enrichment. Current all-Unproven storage can implement only
 such validated empty no-op or explicit blocked nonempty work; fake Proven markers
 are rejected, not a positive test seam.
+
+The 9b97 source review identified that reaction-identity triggers do not watch
+path/route/region/count fields. Legacy path/count writes can therefore leave that
+revision unchanged, and the previous empty-harvest snapshot could return those
+unproven current values. The coordinator approved the explicit snapshot check
+above. It is current-state drift detection only: not ABA or same-value write-history
+detection, not a fence against later generic writes, not receive-origin proof, and
+not by itself protection from repeat-table-only writes. No trigger/schema mutation
+or generic/OFF change is introduced. Future positive enrichment needs separately
+authenticated writes and explicit same-transaction successor semantics; it cannot
+silently disable or reset this baseline.
 
 Own benign path/repeat/count writes must preserve original authentic reaction
 lineage or return explicit SAME-TX successor capture on actual returned message.
@@ -147,10 +172,11 @@ admit `wp-owned/modify`; directly related contracts test admits
 `reviewed-support-test/add-or-update-related-test`. No policy/authorization/
 reservation edit or executed validator receipt is claimed.
 
-Eight authored shape controls cover exact original wire/save fields, rejecting
+Ten authored shape controls cover exact original wire/save fields, rejecting
 pre-enrichment, committed Unproven/unsupported Existing value shape, existing-key
 CONFLICT with no receipt, distinct-ID/content-key collision refusal shape without
-row adoption, each original earlier/equal-time RX snapshot, blocked
+row adoption, row-level Stale retaining the exact batch without observed-row
+substitution, each original earlier/equal-time RX snapshot, blocked
 exact custody and issue bounds. Existing value assertions are retained solely for
 compatibility shape, not producer acceptance. The new conflict shape test is not
 a fake authority, an existing-row lookup or proof of zero database writes.
@@ -163,12 +189,18 @@ with row/identity preservation, plus same-transaction distinct-ID/content-key
 collision controls, radio isolation, and deterministic competing-context insertion
 where the actual harness permits. Source shape controls do not establish SQLite
 writer/snapshot behavior, global uniqueness, or exclusion of later generic DML.
+Storage also owns actual snapshot-drift controls for every listed field, precedence
+over candidate issues, zero DML/no successor, and benign-read preservation. Shape
+controls cannot establish actual SQL behavior or state-transition coverage.
+Initial-count shape coverage retains negative, zero and positive input without
+constructor sanitization; actual before-DML rejection and valid zero insertion
+remain storage-owned controls, not simulated authority assertions.
 Service consumers must retain Existing/Rejected as
 non-redrivable unresolved custody, not notify/index an observed row as the incoming
 occurrence. No runtime composition, full contract implementation, positive issuer
 or active feature/device acceptance is supplied by this correction.
 
-Publication checks cover exact sole 8fd parent, only these three changed paths,
+Publication checks cover exact sole d2ee parent, only these three changed paths,
 ASCII/LF and no changes to other originals. Local execution hold
 `local-check:f516a7e271f444dd9cb2efcc8b995a16` remains; no local Gradle/controller/
 readiness recovery or new session/worktree. No schema allocation, producer/

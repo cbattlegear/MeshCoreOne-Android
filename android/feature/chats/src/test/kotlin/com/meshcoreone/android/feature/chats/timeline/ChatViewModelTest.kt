@@ -132,6 +132,76 @@ class ChatViewModelTest {
     }
 
     @Test
+    fun `overlapping older page adopts whole actual replacement without grafting its summary onto old text`() = runBlocking {
+        val contact = contact()
+        val all = List(ChatViewModel.PAGE_SIZE + 1) { message(contact, it) }
+        val data = FakeData(all)
+        val viewModel = viewModel(contact, data = data)
+        viewModel.open()
+        val old = all[20]
+        val replacement = old.copy(
+            text = "replacement occupant", status = MessageStatus.SENT, reactionSummary = "X:1",
+        )
+        val anchor = TimelineScrollAnchor(old.id, 17)
+        viewModel.updateScrollPosition(anchor, isAtLatest = false)
+        data.scriptedPages.addLast(listOf(all.first(), replacement))
+
+        viewModel.loadOlder()
+
+        assertSame(replacement, viewModel.state.value.messages.single { it.id == old.id })
+        assertEquals(1, viewModel.state.value.messages.count { it.id == old.id })
+        assertEquals(anchor, viewModel.state.value.scrollAnchor)
+        assertEquals(ChatViewModel.PAGE_SIZE + 2, viewModel.state.value.totalFetchedCount)
+        assertEquals(listOf(0, ChatViewModel.PAGE_SIZE), data.offsets)
+        assertEquals(1, data.clearUnreadCalls)
+        assertEquals(1, data.markFailedSeenCalls)
+    }
+
+    @Test
+    fun `overlapping older page keeps the complete prepared snapshot rather than the fetched predecessor`() = runBlocking {
+        val contact = contact()
+        val all = List(ChatViewModel.PAGE_SIZE + 1) { message(contact, it) }
+        val old = all[20]
+        val fetched = old.copy(text = "fetched occupant")
+        val prepared = fetched.copy(text = "actual prepared snapshot", reactionSummary = "X:2")
+        var replaceDuringPreparation = false
+        val data = FakeData(all)
+        val viewModel = viewModel(contact, data = data, prepare = { messages ->
+            if (replaceDuringPreparation) messages.map { if (it === fetched) prepared else it } else messages
+        })
+        viewModel.open()
+        data.scriptedPages.addLast(listOf(all.first(), fetched))
+        replaceDuringPreparation = true
+
+        viewModel.loadOlder()
+
+        assertSame(prepared, viewModel.state.value.messages.single { it.id == old.id })
+        assertEquals("actual prepared snapshot", viewModel.state.value.messages.single { it.id == old.id }.text)
+        assertEquals(1, viewModel.state.value.messages.count { it.id == old.id })
+        assertFalse(viewModel.state.value.hasMoreMessages)
+    }
+
+    @Test
+    fun `overlapping replacement that becomes a hidden outgoing reaction leaves the visible timeline`() = runBlocking {
+        val contact = contact()
+        val all = List(ChatViewModel.PAGE_SIZE + 1) { message(contact, it) }
+        val old = all[20]
+        val replacement = old.copy(
+            direction = MessageDirection.OUTGOING, status = MessageStatus.SENT, text = "hidden reaction",
+        )
+        val data = FakeData(all)
+        val viewModel = viewModel(contact, data = data, hidden = { it.text == "hidden reaction" })
+        viewModel.open()
+        data.scriptedPages.addLast(listOf(all.first(), replacement))
+
+        viewModel.loadOlder()
+
+        assertTrue(viewModel.state.value.messages.none { it.id == old.id })
+        assertEquals(ChatViewModel.PAGE_SIZE + 2, viewModel.state.value.totalFetchedCount)
+        assertFalse(viewModel.state.value.hasMoreMessages)
+    }
+
+    @Test
     fun `queued older request retires spinner when refresh closes paging`() = runBlocking {
         val contact = contact()
         val data = FakeData(List(ChatViewModel.PAGE_SIZE + 1) { message(contact, it) })
@@ -550,9 +620,10 @@ class ChatViewModelTest {
         retry: TimelineRetryService = TimelineRetryService { _, _ -> },
         drafts: MemoryDrafts = MemoryDrafts(),
         hidden: (MessageDTO) -> Boolean = { false },
+        prepare: suspend (List<MessageDTO>) -> List<MessageDTO> = { it },
     ) = ChatViewModel(
         TimelineConversation.Direct(contact),
-        Dependencies(data, retry, drafts, events, hidden),
+        Dependencies(data, retry, drafts, events, hidden, prepare),
         scope,
         ZoneOffset.UTC,
     )
@@ -563,8 +634,10 @@ class ChatViewModelTest {
         override val draftStore: TimelineDraftStore,
         override val events: MutableSharedFlow<TimelineEvent>,
         private val hidden: (MessageDTO) -> Boolean = { false },
+        private val prepare: suspend (List<MessageDTO>) -> List<MessageDTO> = { it },
     ) : ChatTimelineDependencies {
         override fun isHiddenOutgoingReaction(message: MessageDTO) = hidden(message)
+        override suspend fun prepareMessages(messages: List<MessageDTO>) = prepare(messages)
     }
 
     private class MemoryDrafts : TimelineDraftStore {

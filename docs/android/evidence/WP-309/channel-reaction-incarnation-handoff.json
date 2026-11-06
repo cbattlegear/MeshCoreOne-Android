@@ -7,7 +7,9 @@
   "implemented": [
     "Predicate-selective pending queue take preserves nonmatching entries, original key and entry ordinals, and oldest-key eviction priority.",
     "Existing take delegates to the same operation with an always-true predicate, preserving original all-entry drain behavior.",
-    "Six focused queue controls cover foreign-radio retention, no-match stability, original-priority restoration around new arrivals, unchanged eviction age, actual PendingReaction wire/radio/receivedAt retention and unchanged legacy full-drain behavior."
+    "Six focused queue controls cover foreign-radio retention, no-match stability, original-priority restoration around new arrivals, unchanged eviction age, actual PendingReaction wire/radio/receivedAt retention and unchanged legacy full-drain behavior.",
+    "Overlapping older-page rows adopt the complete actual prepared snapshot instead of copying its summary onto an old same-ID rendered DTO; the UUID is used only for display reconciliation, not mutation authority.",
+    "Three focused paging controls preserve the actual replacement snapshot, the prepared successor snapshot, scroll/offset/unread behavior and removal of a replacement that becomes a hidden outgoing reaction."
   ],
   "not_implemented_or_accepted": [
     "No frozen canonical reaction mutation contract is imported by this partial source.",
@@ -33,6 +35,8 @@
   ],
   "verification": {
     "product_tests_executed": 0,
+    "queue_methods_authored": 6,
+    "paging_methods_authored": 3,
     "compiled": false,
     "device_or_radio_execution": false,
     "local_gradle_or_ci_dispatch": false,

@@ -197,12 +197,12 @@ class ChatViewModel(
                 val existingIds = before.messages.asSequence().map(MessageDTO::id).toHashSet()
                 val prepared = dependencies.prepareMessages(page)
                 val older = prepared.filterNot { it.id in existingIds }
-                // Offset shifts can replay a reaction for a row already in the loaded window.
-                val summaries = prepared.associate { it.id to it.reactionSummary }
+                // Offset shifts can return a replacement row; retain its complete actual snapshot.
+                val actualById = prepared.associateBy { it.id }
                 val retained = before.messages.map { message ->
-                    if (message.id in summaries) message.copy(reactionSummary = summaries[message.id]) else message
+                    actualById[message.id] ?: message
                 }
-                val merged = normalize(visible(older) + retained)
+                val merged = normalize(visible(older + retained))
                 mutableState.update {
                     it.copy(
                         messages = merged,

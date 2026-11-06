@@ -39,7 +39,7 @@ class RoomBoundaryTest {
         val export = JSONObject(File(requireNotNull(System.getProperty("roomSchemaDirectory")),
             "com.meshcoreone.android.core.database.MeshCoreDatabase\\${MeshCoreDatabase.SCHEMA_VERSION}.json".replace('\\', File.separatorChar)).readText()).getJSONObject("database")
         assertEquals(MeshCoreDatabase.SCHEMA_VERSION, export.getInt("version"))
-        assertEquals(18, export.getJSONArray("entities").length())
+        assertEquals(19, export.getJSONArray("entities").length())
         val sqlite = db.openHelper.readableDatabase
         sqlite.query("PRAGMA user_version").use {
             assertTrue(it.moveToFirst()); assertEquals(MeshCoreDatabase.SCHEMA_VERSION, it.getInt(0))
@@ -64,7 +64,10 @@ class RoomBoundaryTest {
                 assertEquals(field.getString("affinity") to notNull, actual[field.getString("columnName")], "$name.${field.getString("columnName")}")
             }
             val pk = entity.getJSONObject("primaryKey").getJSONArray("columnNames")
-            if (name == "channel_reaction_identity") {
+            if (name == "channel_occupant_authority") {
+                assertEquals(listOf("radioId", "index"), (0 until pk.length()).map { pk.getString(it) })
+                assertEquals(0, entity.optJSONArray("foreignKeys")?.length() ?: 0)
+            } else if (name == "channel_reaction_identity") {
                 assertEquals(listOf("radioId", "messageID"), (0 until pk.length()).map { pk.getString(it) })
             } else if (name !in setOf("devices", "debug_log_entries", "link_preview_data", "node_status_snapshots")) {
                 assertEquals(listOf("radioId", "id"), (0 until pk.length()).map { pk.getString(it) })

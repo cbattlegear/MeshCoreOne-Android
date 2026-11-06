@@ -187,26 +187,63 @@ class CapabilityEngine:
                         raise PortError("Notification enrollment copy cannot delete an existing string key")
                     if original_structure != candidate_structure:
                         raise PortError("Notification enrollment copy cannot change unrelated resource content")
+        simulator_resources = {
+            path for path, operation in path_operations.items()
+            if operation == "add-or-update-simulator-preference-recovery-copy"
+        }
+        if simulator_resources:
+            from .scope_amendment import SIMULATOR_PREFERENCE_RECOVERY_COPY_CAPABILITY
+
+            rule = SIMULATOR_PREFERENCE_RECOVERY_COPY_CAPABILITY
+            paths, keys = rule["path_rules"], rule["keys"]
+            if simulator_resources - set(paths) or read_blob is None:
+                raise PortError("Simulator preference recovery requires exact paths and an immutable blob reader")
+            for path in paths:
+                if path not in candidate_tree:
+                    raise PortError("Simulator preference recovery cannot delete or omit a supported locale")
+                if base_tree.get(path) != candidate_tree[path] and path not in simulator_resources:
+                    raise PortError("Simulator preference recovery requires an operation for each changed locale")
+                structure, values = CapabilityEngine._bounded_copy_resource(
+                    read_blob(candidate_tree[path]), keys, "Simulator preference recovery"
+                )
+                if set(values) != set(keys):
+                    raise PortError("Simulator preference recovery requires all twenty keys in every locale")
+                for value in values.values():
+                    CapabilityEngine._android_copy_comparison(value)
+                if path in base_tree:
+                    original_structure, original = CapabilityEngine._bounded_copy_resource(
+                        read_blob(base_tree[path]), keys, "Simulator preference recovery"
+                    )
+                    if set(original) != set(keys):
+                        raise PortError("Simulator preference recovery base must contain all twenty keys")
+                    if structure != original_structure:
+                        raise PortError("Simulator preference recovery cannot change unrelated resource content")
 
     @staticmethod
     def _notification_enrollment_resource(data: bytes):
         from .scope_amendment import NOTIFICATION_ENROLLMENT_COPY_CAPABILITY
 
+        return CapabilityEngine._bounded_copy_resource(
+            data, NOTIFICATION_ENROLLMENT_COPY_CAPABILITY["keys"], "Notification enrollment"
+        )
+
+    @staticmethod
+    def _bounded_copy_resource(data: bytes, keys, label: str):
         try:
             text = data.decode("utf-8")
             if "<!DOCTYPE" in text.upper() or "<!ENTITY" in text.upper():
-                raise PortError("Notification enrollment resource cannot contain DTD or entity declarations")
+                raise PortError(f"{label} resource cannot contain DTD or entity declarations")
             document = minidom.parseString(text)
         except (UnicodeError, ExpatError) as error:
-            raise PortError("Notification enrollment resource requires valid UTF-8 XML") from error
+            raise PortError(f"{label} resource requires valid UTF-8 XML") from error
 
         root = document.documentElement
         if (
             root.tagName != "resources" or root.attributes.length
             or any(child.nodeType == Node.TEXT_NODE and child.data.strip() for child in root.childNodes)
         ):
-            raise PortError("Notification enrollment resource requires a plain resources root")
-        allowed = set(NOTIFICATION_ENROLLMENT_COPY_CAPABILITY["keys"])
+            raise PortError(f"{label} resource requires a plain resources root")
+        allowed = set(keys)
         values = {}
         selected = []
         for child in root.childNodes:
@@ -215,15 +252,15 @@ class CapabilityEngine:
             if child.nodeType in (Node.COMMENT_NODE, Node.PROCESSING_INSTRUCTION_NODE):
                 continue
             if child.nodeType != Node.ELEMENT_NODE or child.tagName != "string":
-                raise PortError("Notification enrollment resource may contain only approved string entries")
+                raise PortError(f"{label} resource may contain only approved string entries")
             key = child.getAttribute("name")
             if key not in allowed or key in values or dict(child.attributes.items()) != {"name": key}:
-                raise PortError("Notification enrollment resource contains an unknown or duplicate string key")
+                raise PortError(f"{label} resource contains an unknown or duplicate string key")
             if any(value.nodeType != Node.TEXT_NODE for value in child.childNodes):
-                raise PortError("Notification enrollment strings must be plain text")
+                raise PortError(f"{label} strings must be plain text")
             value = "".join(node.data for node in child.childNodes)
             if not value.strip():
-                raise PortError("Notification enrollment strings must be nonempty")
+                raise PortError(f"{label} strings must be nonempty")
             values[key] = value
             selected.append(child)
 

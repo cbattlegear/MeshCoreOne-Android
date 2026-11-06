@@ -230,6 +230,22 @@ owner need not re-attest or rebind: this requires no new lease, authorization ce
 ledger rewrite or fabricated terminal identity. Real execution, runtime and protected gates remain in force.
 Admission does not establish displayed consent, verifier/runtime provenance or feature/device acceptance.
 
+WP-217's `reviewed-support-simulator-preference-recovery-copy` capability admits only
+`add-or-update-simulator-preference-recovery-copy` on the twelve explicit app
+`simulator_preference_recovery.xml` source inputs (default, de, es, fr, it, ko, nl,
+pl, pt, ru, uk and b+zh+Hans). Every locale must contain exactly the twenty approved
+`simulator_preference_recovery_` keys. These are authored Android-only inputs, not
+generated catalogs or Swift source-map entries; existing catalogs remain unchanged.
+Immutable base/candidate validation rejects locale/file/key deletion, extra or duplicate
+keys, malformed or empty strings and changes to unrelated notices. Each changed locale
+requires the named operation. Consumer and test admissions remain separate.
+Genuine translations, including pt-PT for `values-pt`, and actual resource/Compose assertions
+for all twelve locales remain necessary; structural checks or string inequality cannot
+establish translation quality. Trusted landing, legitimate assignment, ordinary admission
+and resolved semantic overlap precede resource edits, without a new lease or historical-owner
+re-attestation. This grants no runtime installation, native execution, hold relaxation,
+simulator recovery acceptance or backup interoperability claim.
+
 WP-503's accessibility source-binding exception is limited to two exact paths and operations:
 `add-or-update-validator-rule` on `android/accessibility-tests/language_binding.py`, and
 `add-regression-fixture-or-test` on `android/accessibility-tests/test_language_binding.py`. These are

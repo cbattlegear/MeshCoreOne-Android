@@ -44,7 +44,8 @@ class NotificationEnrollmentResourceCapabilityTests(unittest.TestCase):
         self.assertEqual(self.rule["work_packages"], ["WP-303"])
         self.assertEqual(self.rule["operations"], [OPERATION])
         self.assertEqual(self.rule["keys"], list(KEYS))
-        self.assertEqual(self.policy["reservation_policy"]["capabilities"][-1], self.rule)
+        self.assertEqual(next(rule for rule in self.policy["reservation_policy"]["capabilities"]
+                              if rule["id"] == self.rule["id"]), self.rule)
         admission = self.engine.admit("WP-303", [], PATH, OPERATION)
         self.assertEqual(admission.capability_id, self.rule["id"])
         self.assertEqual(admission.invariants, tuple(self.rule["invariants"]))
@@ -94,6 +95,8 @@ class NotificationEnrollmentResourceCapabilityTests(unittest.TestCase):
             ["git", "-C", str(REPO), "show", f"{BASE}:docs/android/automation-policy.json"],
         ))
         current = json.loads((REPO / "docs/android/automation-policy.json").read_text(encoding="utf-8"))
+        extension = current["reservation_policy"]["capabilities"].pop()
+        self.assertEqual(extension["id"], "reviewed-support-simulator-preference-recovery-copy")
         added = current["reservation_policy"]["capabilities"].pop()
         self.assertEqual(added, self.rule)
         self.assertEqual(current, base_policy)
@@ -120,7 +123,8 @@ class NotificationEnrollmentResourceCapabilityTests(unittest.TestCase):
             ("validation", self.rule["validation"][:-1]),
         ):
             changed = copy.deepcopy(self.policy)
-            changed["reservation_policy"]["capabilities"][-1][field] = value
+            next(rule for rule in changed["reservation_policy"]["capabilities"]
+                 if rule["id"] == self.rule["id"])[field] = value
             with self.subTest(field=field), self.assertRaises(PortError):
                 routine_support_predecessor(changed)
         for mode in ("duplicate", "reordered"):

@@ -18,6 +18,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
@@ -232,8 +233,9 @@ internal fun AppSettingsSelectionHost(feature: AppSettingsFeature) {
     val wifiConnection by feature.selectionWifiVisible.collectAsState()
     val error by feature.failure.collectAsState()
     DisposableEffect(feature, deviceSelection) {
+        val wasPresentingSelection = deviceSelection
         onDispose {
-            if (deviceSelection) feature.selectionSheetDismissed()
+            if (wasPresentingSelection) feature.selectionSheetDismissed()
         }
     }
     if (error != null) AlertDialog(onDismissRequest = { feature.failure.value = null },
@@ -349,7 +351,11 @@ private fun AppSelectionPlatform(feature: AppSettingsFeature) {
     )
     val permissions by platform.permissions.snapshot.collectAsState()
     if (fallback != null && requested) {
-        ModalBottomSheet(fallback::cancel, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+        ModalBottomSheet(
+            feature::cancelSelectionDiscovery,
+            modifier = Modifier.testTag("settings-scan-picker"),
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        ) {
             val ready = permissions.bluetooth == PermissionStatus.GRANTED && permissions.bluetoothAdapterEnabled
             val discoveries by remember(fallback, ready) {
                 if (ready) fallback.discoveries().catch { failure ->
@@ -357,7 +363,7 @@ private fun AppSelectionPlatform(feature: AppSettingsFeature) {
                     feature.report("Could not scan for a radio", failure)
                 } else flowOf(emptyList())
             }.collectAsState(emptyList())
-            DeviceScannerSheetContent(discoveries, permissions, feature::selectSelectionScanDevice, fallback::cancel)
+            DeviceScannerSheetContent(discoveries, permissions, feature::selectSelectionScanDevice, feature::cancelSelectionDiscovery)
         }
     }
 }

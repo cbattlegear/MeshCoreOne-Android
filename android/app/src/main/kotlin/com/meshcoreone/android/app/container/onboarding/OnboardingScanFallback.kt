@@ -113,7 +113,7 @@ class ScanFallbackPort(
                 }
                 if (shouldReport) {
                     resolveFailure(attempt, failure)
-                    throw failure
+                    return@channelFlow
                 }
             }
             scanJob.join()

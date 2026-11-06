@@ -283,10 +283,7 @@ class AppSettingsFeature private constructor(
     internal fun cancelSelectionPermission() {
         val scan = selectionAction.value == SelectionAction.Scan
         clearSelectionPermission()
-        if (scan) {
-            cancelSelectionScan()
-            container.onboarding?.pairing?.scanFallback?.cancel()
-        }
+        if (scan) cancelSelectionDiscovery()
     }
 
     private fun clearSelectionPermission() {
@@ -327,6 +324,11 @@ class AppSettingsFeature private constructor(
             container.onboarding?.pairing?.scanFallback?.cancel()
         }
         selectionScanOwned = false
+    }
+
+    internal fun cancelSelectionDiscovery() {
+        cancelSelectionScan()
+        container.onboarding?.pairing?.scanFallback?.cancel()
     }
 
     internal fun selectSelectionScanDevice(id: UUID) {

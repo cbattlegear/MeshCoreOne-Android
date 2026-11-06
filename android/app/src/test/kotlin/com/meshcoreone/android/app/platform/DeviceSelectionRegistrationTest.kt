@@ -395,7 +395,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             override fun stopScan() { stops++ }
         })
         withSettings(pairingService = service, scans = scans) { h, feature ->
-            mount(h, feature)
+            mount(h, feature, includeConnectionRecovery = true)
             val directJob = if (direct) h.appState.startDeviceScan() else {
                 open(h)
                 clickSelectionRow(compose.activity.getString(S.deviceSelectionScanBluetooth))
@@ -406,7 +406,9 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
                 requireNotNull(failScan)(failure)
             }
             h.eventuallyMounted("scanner error resolves waiting pairing and reaches Settings") {
-                feature.failure.value === failure
+                h.appState.connectionUI.showingConnectionFailedAlert &&
+                    h.appState.connectionUI.connectionFailedMessage ==
+                    com.meshcoreone.android.core.ui.UiText.Verbatim(requireNotNull(failure.message))
             }
             h.eventuallyMounted("scanner error cancels pairing and scan") {
                 !service.isPresenting.value && !h.container.connectionPort.isPairingFlowActive &&
@@ -418,6 +420,8 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             assertTrue(h.links.links.isEmpty())
             compose.onNodeWithText(compose.activity.getString(L.commonOk)).assertIsDisplayed().performClick()
             assertNull(feature.failure.value)
+            assertFalse(h.appState.connectionUI.showingConnectionFailedAlert)
+            compose.onAllNodes(isDialog()).assertCountEquals(0)
             assertEquals(1, starts)
         }
     }
@@ -555,7 +559,11 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             assertNull(h.appState.connectionUI.queuedSystemPairingSetup)
             assertEquals(0, h.pairing.removeCalls)
             assertEquals(setOf(selected, other), h.pairing.registered.keys)
-            h.eventuallyMounted("setup requests CONNECT before showing confirmation") {
+            h.eventuallyMounted(
+                "setup requests CONNECT before showing confirmation " +
+                    "(action=${feature.selectionAction.value}, requested=${feature.selectionRequestedPermission.value}, " +
+                    "denied=${feature.selectionPermissionDenied.value}, visible=${feature.selectionVisible.value})",
+            ) {
                 feature.selectionRequestedPermission.value == OnboardingPermissionKind.BLUETOOTH
             }
             permissionResult(facts, grant, setOf(ConnectivityPermission.BLUETOOTH_CONNECT))
@@ -733,6 +741,45 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             compose.onNodeWithText(compose.activity.getString(O.deviceScannerTitle)).assertDoesNotExist()
             h.eventually("navigation cancels invisible pairing") {
                 !service.isPresenting.value && !h.container.connectionPort.isPairingFlowActive && stops == 1
+            }
+
+            @Test fun cancellingPermissionBlockedPickerDoesNotRestartAfterGrantOrResume() = runTest {
+                val facts = FakePermissionFacts(sdk = 31, granted = bluetoothPermissions)
+                val service = BluetoothScanPairingService()
+                var starts = 0
+                val scans = BleScanCoordinator(object : BleScanGateway {
+                    override fun startScan(onDevice: (DiscoveredDevice) -> Unit, onFailure: (Throwable) -> Unit) { starts++ }
+                    override fun stopScan() = Unit
+                })
+                withSettings(permissionFacts = facts, pairingService = service, scans = scans) { h, feature ->
+                    mount(h, feature)
+                    open(h)
+                    clickSelectionRow(compose.activity.getString(S.deviceSelectionScanBluetooth))
+                    h.eventuallyMounted("picker scans before permission is revoked") { starts == 1 && service.isPresenting.value }
+                    facts.granted = setOf(ConnectivityPermission.BLUETOOTH_CONNECT)
+                    shadowOf(compose.activity.application).denyPermissions(ConnectivityPermission.BLUETOOTH_SCAN.manifestName)
+                    compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+                    compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+                    h.eventuallyMounted("live discovery retains its missing permission action") {
+                        feature.selectionRequestedPermission.value == OnboardingPermissionKind.BLUETOOTH
+                    }
+                    compose.onNode(
+                        hasText(compose.activity.getString(L.commonCancel)) and
+                            hasAnyAncestor(hasTestTag("settings-scan-picker")),
+                    ).performClick()
+                    h.eventuallyMounted("picker cancellation clears retained scan intent") {
+                        !service.isPresenting.value && feature.selectionAction.value == null &&
+                            !h.container.connectionPort.isPairingFlowActive
+                    }
+                    permissionResult(facts, granted = true, permissions = bluetoothPermissions)
+                    compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+                    compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+                    compose.waitForIdle()
+                    h.settle()
+                    assertNull(feature.selectionAction.value)
+                    assertFalse(service.isPresenting.value)
+                    assertEquals(1, starts)
+                }
             }
             compose.runOnUiThread { h.container.navigation.selectTab(AppTab.SETTINGS) }
             compose.waitForIdle()
@@ -2042,13 +2089,19 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             h.eventuallyMounted("permission-gated retry starts its scanner") { starts == 1 && failScan != null }
             requireNotNull(failScan)(failure)
             h.eventuallyMounted("retry scanner failure resolves the direct pairing and reaches Settings") {
-                feature.failure.value === failure && !service.isPresenting.value &&
+                h.appState.connectionUI.showingConnectionFailedAlert && !service.isPresenting.value &&
                     !h.container.connectionPort.isPairingFlowActive
             }
+            assertEquals(com.meshcoreone.android.core.ui.UiText.Verbatim(requireNotNull(failure.message)),
+                h.appState.connectionUI.connectionFailedMessage)
             assertEquals(1, starts)
             assertEquals(1, stops)
             assertFalse(scans.isScanning)
             assertNull(store.fetchDevice(device.id))
+            compose.onNodeWithText(compose.activity.getString(L.commonOk)).performClick()
+            assertFalse(h.appState.connectionUI.showingConnectionFailedAlert)
+            assertNull(feature.failure.value)
+            compose.onAllNodes(isDialog()).assertCountEquals(0)
         }
     }
 

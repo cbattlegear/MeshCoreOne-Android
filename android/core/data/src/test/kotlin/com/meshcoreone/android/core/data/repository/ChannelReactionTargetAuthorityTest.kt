@@ -39,6 +39,9 @@ import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
+import org.junit.Rule
+import org.junit.rules.TestWatcher
+import org.junit.runner.Description
 import org.junit.runner.RunWith
 import org.json.JSONObject
 import org.robolectric.RobolectricTestRunner
@@ -49,6 +52,12 @@ import org.robolectric.annotation.SQLiteMode
 @Config(sdk = [31])
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 class ChannelReactionTargetAuthorityTest {
+    @get:Rule val failureDetails = object : TestWatcher() {
+        override fun failed(error: Throwable, description: Description) {
+            System.err.println("Room authority failure: ${description.methodName}")
+            error.printStackTrace(System.err)
+        }
+    }
     private val context: Context = ApplicationProvider.getApplicationContext()
     private val name = "channel-reaction-authority.db"
     private val owner = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
@@ -105,7 +114,7 @@ class ChannelReactionTargetAuthorityTest {
             assertEquals(identity.revision + 1, updated.revision)
             raw.openHelper.writableDatabase.execSQL(
                 "UPDATE messages SET text = text WHERE radioId = ? AND id = ?",
-                arrayOf(RADIO_A.canonicalString, original.id.toString()),
+                arrayOf(RADIO_A.canonicalString, original.id.canonicalString()),
             )
             assertEquals(
                 updated.revision + 1,
@@ -223,7 +232,7 @@ class ChannelReactionTargetAuthorityTest {
                     callerOpens++
                     database.execSQL(
                         "UPDATE messages SET text = 'must not commit' WHERE radioId = ? AND id = ?",
-                        arrayOf(RADIO_A.canonicalString, original.id.toString()),
+                        arrayOf(RADIO_A.canonicalString, original.id.canonicalString()),
                     )
                 }
             })
@@ -250,7 +259,7 @@ class ChannelReactionTargetAuthorityTest {
                     JOIN channel_reaction_identity i ON i.radioId = m.radioId AND i.messageID = m.id
                     WHERE m.radioId = ? AND m.id = ?
                     """.trimIndent(),
-                    arrayOf(RADIO_A.canonicalString, original.id.toString()),
+                    arrayOf(RADIO_A.canonicalString, original.id.canonicalString()),
                 ).use {
                     assertTrue(it.moveToFirst())
                     assertEquals(original.text, it.getString(0))
@@ -311,7 +320,7 @@ class ChannelReactionTargetAuthorityTest {
         val original = incoming().toEntity()
         db.messages().insert(original)
         val identity = assertNotNull(db.channelReactionIdentities().forMessage(original.radioId, original.id))
-        val failure = IOException("controlled identity rollback")
+        val failure = IdentityRollbackFailure(identity.incarnation)
 
         val actual = assertFailsWith<IOException> {
             db.withTransaction {
@@ -324,6 +333,7 @@ class ChannelReactionTargetAuthorityTest {
         }
 
         assertSame(failure, actual)
+        assertEquals(identity.incarnation, assertIs<IdentityRollbackFailure>(actual).originalIncarnation)
         assertEquals(original, db.messages().byId(original.radioId, original.id))
         assertEquals(identity, db.channelReactionIdentities().forMessage(original.radioId, original.id))
     }
@@ -332,7 +342,7 @@ class ChannelReactionTargetAuthorityTest {
         val original = incoming().toEntity()
         db.messages().insert(original)
         val identity = assertNotNull(db.channelReactionIdentities().forMessage(original.radioId, original.id))
-        val cancellation = CancellationException("controlled identity cancellation")
+        val cancellation = IdentityRollbackCancellation(identity.incarnation)
 
         val actual = assertFailsWith<CancellationException> {
             db.withTransaction {
@@ -349,6 +359,7 @@ class ChannelReactionTargetAuthorityTest {
         }
 
         assertSame(cancellation, actual)
+        assertEquals(identity.incarnation, assertIs<IdentityRollbackCancellation>(actual).originalIncarnation)
         assertEquals(original, db.messages().byId(original.radioId, original.id))
         assertEquals(identity, db.channelReactionIdentities().forMessage(original.radioId, original.id))
     }
@@ -360,7 +371,7 @@ class ChannelReactionTargetAuthorityTest {
         db.withTransaction {
             db.openHelper.writableDatabase.execSQL(
                 "UPDATE channel_reaction_identity SET revision = ? WHERE radioId = ? AND messageID = ?",
-                arrayOf<Any>(Long.MAX_VALUE, RADIO_A.canonicalString, original.id.toString()),
+                arrayOf<Any>(Long.MAX_VALUE, RADIO_A.canonicalString, original.id.canonicalString()),
             )
             assertEquals(
                 Long.MAX_VALUE,
@@ -368,7 +379,7 @@ class ChannelReactionTargetAuthorityTest {
             )
             db.openHelper.writableDatabase.execSQL(
                 "UPDATE messages SET text = text WHERE radioId = ? AND id = ?",
-                arrayOf(RADIO_A.canonicalString, original.id.toString()),
+                arrayOf(RADIO_A.canonicalString, original.id.canonicalString()),
             )
         }
 
@@ -503,7 +514,7 @@ class ChannelReactionTargetAuthorityTest {
         assertEquals(1_700_000_123u, corrected.senderTimestamp)
         db.openHelper.writableDatabase.execSQL(
             "UPDATE messages SET text = text WHERE radioId = ? AND id = ?",
-            arrayOf(RADIO_A.canonicalString, original.id.toString()),
+            arrayOf(RADIO_A.canonicalString, original.id.canonicalString()),
         )
         val rawWriteIdentity = assertNotNull(
             db.channelReactionIdentities().forMessage(RADIO_A.value, original.id),
@@ -800,7 +811,7 @@ class ChannelReactionTargetAuthorityTest {
         check(schemaFile.isFile) { "Trusted Room v1 schema fixture is missing: ${schemaFile.path}" }
         val schema = JSONObject(schemaFile.readText()).getJSONObject("database")
         val legacyRadioId = RADIO_A.canonicalString
-        val legacyMessageId = UUID.randomUUID().toString()
+        val legacyMessageId = UUID.randomUUID().canonicalString()
         val legacy = object : SQLiteOpenHelper(context, migrationName, null, 1) {
             override fun onCreate(database: SQLiteDatabase) {
                 val entities = schema.getJSONArray("entities")
@@ -808,7 +819,7 @@ class ChannelReactionTargetAuthorityTest {
                     val entity = entities.getJSONObject(index)
                     val table = entity.getString("tableName")
                     database.execSQL(entity.getString("createSql").replace("\${TABLE_NAME}", table))
-                    val indices = entity.getJSONArray("indices")
+                    val indices = entity.optJSONArray("indices") ?: continue
                     for (indexInEntity in 0 until indices.length()) {
                         val sql = indices.getJSONObject(indexInEntity).getString("createSql")
                         database.execSQL(sql.replace("\${TABLE_NAME}", table))
@@ -906,6 +917,13 @@ class ChannelReactionTargetAuthorityTest {
             context.deleteDatabase(migrationName)
         }
     }
+
+    // Coroutine debug recovery must not clone away the controlled transaction's identity.
+    private class IdentityRollbackFailure(val originalIncarnation: String) :
+        IOException("controlled identity rollback")
+
+    private class IdentityRollbackCancellation(val originalIncarnation: String) :
+        CancellationException("controlled identity cancellation")
 
     private fun rawFileDatabase(fileName: String): MeshCoreDatabase =
         Room.databaseBuilder(context, MeshCoreDatabase::class.java, fileName)

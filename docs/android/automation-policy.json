@@ -986,6 +986,101 @@
           "complete preceding trusted policy remains byte-semantically unchanged",
           "policy admission does not claim translated-copy quality UI behavior or WP-303 acceptance"
         ]
+      },
+      {
+        "id": "reviewed-support-simulator-preference-recovery-copy",
+        "work_packages": ["WP-217"],
+        "path_rules": [
+          "android/app/src/main/res/values/simulator_preference_recovery.xml",
+          "android/app/src/main/res/values-de/simulator_preference_recovery.xml",
+          "android/app/src/main/res/values-es/simulator_preference_recovery.xml",
+          "android/app/src/main/res/values-fr/simulator_preference_recovery.xml",
+          "android/app/src/main/res/values-it/simulator_preference_recovery.xml",
+          "android/app/src/main/res/values-ko/simulator_preference_recovery.xml",
+          "android/app/src/main/res/values-nl/simulator_preference_recovery.xml",
+          "android/app/src/main/res/values-pl/simulator_preference_recovery.xml",
+          "android/app/src/main/res/values-pt/simulator_preference_recovery.xml",
+          "android/app/src/main/res/values-ru/simulator_preference_recovery.xml",
+          "android/app/src/main/res/values-uk/simulator_preference_recovery.xml",
+          "android/app/src/main/res/values-b+zh+Hans/simulator_preference_recovery.xml"
+        ],
+        "operations": ["add-or-update-simulator-preference-recovery-copy"],
+        "keys": [
+          "simulator_preference_recovery_title",
+          "simulator_preference_recovery_explanation",
+          "simulator_preference_recovery_current",
+          "simulator_preference_recovery_recovered",
+          "simulator_preference_recovery_apply",
+          "simulator_preference_recovery_applying",
+          "simulator_preference_recovery_retry",
+          "simulator_preference_recovery_not_set",
+          "simulator_preference_recovery_empty_text",
+          "simulator_preference_recovery_no_regions",
+          "simulator_preference_recovery_flood_scope",
+          "simulator_preference_recovery_repeat_frequency",
+          "simulator_preference_recovery_repeat_bandwidth",
+          "simulator_preference_recovery_repeat_spreading_factor",
+          "simulator_preference_recovery_repeat_coding_rate",
+          "simulator_preference_recovery_last_contact_sync",
+          "simulator_preference_recovery_ocv_preset",
+          "simulator_preference_recovery_radio_preset",
+          "simulator_preference_recovery_custom_ocv",
+          "simulator_preference_recovery_known_regions"
+        ],
+        "invariants": [
+          "only-WP217-twelve-explicit-source-XML-paths-and-twenty-approved-keys-no-file-key-or-locale-deletion",
+          "Android-only-authored-copy-not-generator-output-or-Swift-source-map-preserve-pinned-db14559b39d32322b06477c6ae676112f583db50-and-existing-catalog-bytes",
+          "genuine-translations-in-all-twelve-supported-locales-values-pt-is-pt-PT-no-English-fallback-disguised-as-localization",
+          "explain-explicit-current-or-recovered-preference-choice-cancel-keeps-both-no-message-channel-contact-or-radio-data-deletion-promises-beyond-reviewed-behavior",
+          "immutable-base-candidate-resource-blobs-preserve-unrelated-notices-and-content-consumer-and-test-admission-remains-separate",
+          "trusted-main-landing-legitimate-assignment-path-operation-admission-and-resolved-overlap-before-product-edit-no-new-lease-or-historical-owner-reattestation",
+          "policy-admission-only-no-runtime-installation-native-execution-hold-relaxation-feature-or-backup-compatibility-acceptance"
+        ],
+        "validation": [
+          "exact-WP217-operation-twelve-path-twenty-key positives-and-wrong-WP-operation-path-traversal-denials",
+          "immutable-XML-missing-deleted-locale-key-extra-duplicate-malformed-empty-content-unrelated-change-and-normalized-English-fallback-regressions",
+          "simulator-only-actual-UTF8-declaration-Android-reference-apostrophe-and-case-only-fallback-denials-with-escaped-literal-positives",
+          "complete-predecessor-policy-object-and-raw-Git-blob-unchanged-including-existing-admission-and-protected-gates",
+          "actual-controller-staging-supplies-immutable-blob-reader-and-trusted-base-policy-not-candidate-self-admission",
+          "future-exact-candidate-resource-and-mounted-Compose-assertions-for-all-twelve-locales-with-positive-hosted-discovery",
+          "structural-validation-or-string-inequality-is-not-translation-quality-product-behavior-or-native-acceptance"
+        ]
+      },
+      {
+        "id": "reviewed-support-notification-action-recovery-copy",
+        "work_packages": ["WP-215"],
+        "path_rules": ["android/platform/notifications/src/main/res/values/notification_action_recovery.xml"],
+        "operations": ["add-or-update-notification-action-recovery-copy"],
+        "keys": [
+          "notification_action_recovery_title",
+          "notification_action_recovery_rejected_reply",
+          "notification_action_recovery_rejected_mark_read",
+          "notification_action_recovery_saved",
+          "notification_action_recovery_memory_only",
+          "notification_action_recovery_not_retained",
+          "notification_action_recovery_storage_unavailable",
+          "notification_action_recovery_copy_failed",
+          "notification_action_recovery_discard_failed",
+          "notification_action_recovery_launch_failed",
+          "notification_action_recovery_original_target"
+        ],
+        "invariants": [
+          "only-WP215-one-explicit-platform-notifications-resource-eleven-approved-keys-no-unrelated-resource-or-generated-catalog-edits",
+          "immutable-UTF8-XML-all-keys-nonempty-no-deletion-extra-keys-or-unrelated-notice-changes",
+          "AndroidOnly-WP215-source-marker-is-traceability-not-product-or-translation-acceptance",
+          "original-target-exactly-one-percent-1-dollar-s-placeholder-other-ten-no-placeholders",
+          "rejected-intake-not-accepted-or-delivery-uncertain-durable-process-only-and-not-retained-remain-distinct",
+          "original-target-copy-never-authorizes-replay-or-current-slot-sampling-consumer-and-test-rights-separate",
+          "trusted-main-landing-legitimate-assignment-path-operation-admission-resolved-overlap-no-new-lease-or-historical-owner-reattestation",
+          "preserve-pinned-db14559b39d32322b06477c6ae676112f583db50-publication-Gradle-dispatch-activation-and-held-source-gates"
+        ],
+        "validation": [
+          "exact-WP215-path-operation-key-positive-and-other-WP-sibling-locale-traversal-operation-denials",
+          "immutable-reader-malformed-duplicate-empty-extra-missing-key-deletion-notice-and-placeholder-regressions",
+          "actual-UTF8-bytes-and-declaration-validation-no-candidate-policy-self-admission",
+          "complete-predecessor-policy-object-raw-bytes-projection-and-existing-admissions-unchanged",
+          "English-source-only-not-translation-quality-Android-resource-compilation-recovery-flow-or-WP215-acceptance"
+        ]
       }
     ]
   },

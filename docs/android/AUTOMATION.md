@@ -230,6 +230,50 @@ owner need not re-attest or rebind: this requires no new lease, authorization ce
 ledger rewrite or fabricated terminal identity. Real execution, runtime and protected gates remain in force.
 Admission does not establish displayed consent, verifier/runtime provenance or feature/device acceptance.
 
+WP-217's `reviewed-support-simulator-preference-recovery-copy` capability admits only
+`add-or-update-simulator-preference-recovery-copy` on the twelve explicit app
+`simulator_preference_recovery.xml` source inputs (default, de, es, fr, it, ko, nl,
+pl, pt, ru, uk and b+zh+Hans). Every locale must contain exactly the twenty approved
+`simulator_preference_recovery_` keys. These are authored Android-only inputs, not
+generated catalogs or Swift source-map entries; existing catalogs remain unchanged.
+Immutable base/candidate validation rejects locale/file/key deletion, extra or duplicate
+keys, malformed or empty strings and changes to unrelated notices. Each changed locale
+requires the named operation. Each non-English key is compared to its English counterpart
+after Android escape, quote, whitespace and case normalization; identical fallback is rejected,
+with no blanket identical-text exception. Consumer and test admissions remain separate.
+Simulator inputs are parsed from their actual UTF-8 bytes and must have an absent or UTF-8
+encoding declaration. Unescaped Android resource/theme/null references and unescaped apostrophes
+outside Android double quotes are rejected; escaped literal prefixes and quoted/escaped
+apostrophes remain valid. These extra syntax guards do not change the earlier copy rules.
+Genuine translations, including pt-PT for `values-pt`, and actual resource/Compose assertions
+for all twelve locales remain necessary; structural checks or string inequality cannot
+establish translation quality. Trusted landing, legitimate assignment, ordinary admission
+and resolved semantic overlap precede resource edits, without a new lease or historical-owner
+re-attestation. This grants no runtime installation, native execution, hold relaxation,
+simulator recovery acceptance or backup interoperability claim.
+
+WP-215's `reviewed-support-notification-action-recovery-copy` capability admits only
+`add-or-update-notification-action-recovery-copy` on
+`android/platform/notifications/src/main/res/values/notification_action_recovery.xml`.
+The platform receiver uses its module resources; the app already depends on that module.
+The app's own resource path is not admitted. Its eleven explicit
+`notification_action_recovery_` keys cover title, rejected reply/mark-read, saved,
+memory-only, not-retained, storage-unavailable, copy/discard/launch failure and original
+target. The original-target value requires exactly one `%1$s`; the other ten permit no
+format placeholders. Immutable UTF-8 XML validation preserves unrelated notices and
+rejects missing/extra/duplicate/empty keys, deletion and inconsistent encoding declarations.
+Authored strings reject Android resource/theme/null aliases and unescaped apostrophes
+outside double quotes; escaped literal prefixes and escaped/quoted apostrophes remain valid.
+The WP-215 AndroidOnly comment is traceability, not acceptance. This is authored English
+recovery copy, not translation or complete-locale evidence. Rejected intake, durable
+draft custody, bounded process-only custody and actual non-retention must remain distinct;
+an original-target reference never authorizes replay or current-slot sampling.
+Trusted landing, legitimate assignment, ordinary path/operation admission and resolved
+overlap must precede product edits, without a new lease or historical-owner ceremony.
+Consumer/test rights are separate. Pinned/generated catalogs, held source, local Android/
+Gradle, publication, dispatch, merge and activation gates remain unchanged; this grants
+no product recovery-flow or WP-215 acceptance.
+
 WP-503's accessibility source-binding exception is limited to two exact paths and operations:
 `add-or-update-validator-rule` on `android/accessibility-tests/language_binding.py`, and
 `add-regression-fixture-or-test` on `android/accessibility-tests/test_language_binding.py`. These are

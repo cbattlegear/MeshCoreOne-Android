@@ -54,6 +54,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStoreOwner
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.l10n.R
+import com.meshcoreone.android.core.l10n.generated.AppToolsStrings
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.maps.GeoPoint
 import com.meshcoreone.android.core.maps.MapAvailability
@@ -268,6 +269,12 @@ internal fun ContactDetailScreen(
                             onClick = { navigation.openMap(contact.latitude, contact.longitude) },
                             modifier = Modifier.padding(horizontal = 8.dp),
                         ) { Text(stringResource(C.contactsDetailOpenInMaps)) }
+                        navigation.openLineOfSight?.let { openLineOfSight ->
+                            TextButton(
+                                onClick = { openLineOfSight(contact) },
+                                modifier = Modifier.padding(horizontal = 8.dp).heightIn(min = 48.dp),
+                            ) { Text(stringResource(AppToolsStrings.toolsLineOfSight)) }
+                        }
                     }
                 }
             }

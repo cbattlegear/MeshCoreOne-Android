@@ -38,7 +38,9 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.model.ContactDTO
+import com.meshcoreone.android.core.model.Coordinate
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
+import com.meshcoreone.android.core.l10n.generated.AppToolsStrings
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.feature.nodes.NodesNavigation
@@ -117,6 +119,16 @@ class ContactsImmediateAdmissionApi31ComposeTest :
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ContactsImmediateAdmissionApi37ComposeTest :
     NodesScreensComposeTestBase.ContactsImmediateAdmissionComposeTestBase()
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [31], qualifiers = "w360dp-h900dp-mdpi")
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+class NodesLocationApi31ComposeTest : NodesScreensComposeTestBase.NodesLocationComposeTestBase()
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [37], qualifiers = "w360dp-h900dp-mdpi")
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+class NodesLocationApi37ComposeTest : NodesScreensComposeTestBase.NodesLocationComposeTestBase()
 
 abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false) {
     protected lateinit var controller: ActivityController<ComponentActivity>
@@ -298,6 +310,68 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
         }
     }
 
+    abstract class NodesLocationComposeTestBase : NodesScreensComposeTestBase(deterministicFrames = true) {
+        private var menuOpen = false
+        override fun rootView(): View = if (menuOpen) {
+            checkNotNull(WindowInspector.getGlobalWindowViews().lastOrNull { it.isShown })
+        } else super.rootView()
+
+        @Test
+        fun contactsDistanceReordersOnLocationChangesAndFallsBackWhenUnavailable() = verifyLocation(discovery = false)
+
+        @Test
+        fun discoveryDistanceReordersOnLocationChangesAndFallsBackWhenUnavailable() = verifyLocation(discovery = true)
+
+        private fun verifyLocation(discovery: Boolean) {
+            val harness = Harness().connect()
+            val radio = checkNotNull(harness.session.radioId)
+            harness.store.contacts += listOf(
+                Fixtures.contact(radioId = radio, name = "Alpha", latitude = 10.0, longitude = 10.0, lastModified = 1u),
+                Fixtures.contact(radioId = radio, name = "Zulu", latitude = 20.0, longitude = 20.0, lastModified = 2u),
+            )
+            harness.store.discovered += listOf(
+                Fixtures.node(radioId = radio, publicKey = Fixtures.repeated(0x11), name = "Alpha", latitude = 10.0, longitude = 10.0, lastHeard = java.time.Instant.ofEpochSecond(1)),
+                Fixtures.node(radioId = radio, publicKey = Fixtures.repeated(0x22), name = "Zulu", latitude = 20.0, longitude = 20.0, lastHeard = java.time.Instant.ofEpochSecond(2)),
+            )
+            mount {
+                if (discovery) DiscoveryScreen(harness.dependencies)
+                else NodesListScreen(harness.dependencies, NodesNavigation.NONE)
+            }
+            awaitText("Alpha")
+            awaitText("Zulu")
+            val context = controller.get()
+            click(awaitAction(context.getString(C.contactsListSort)))
+            menuOpen = true
+            val distance = awaitAction(context.getString(NodeSortOrder.DISTANCE.titleRes))
+            menuOpen = false
+            click(distance)
+            assertOrder("Zulu", "Alpha")
+            controller.get().runOnUiThread { harness.locations.value = Coordinate(10.0, 10.0) }
+            assertOrder("Alpha", "Zulu")
+            controller.get().runOnUiThread { harness.locations.value = Coordinate(20.0, 20.0) }
+            assertOrder("Zulu", "Alpha")
+            controller.get().runOnUiThread { harness.locations.value = Coordinate(10.0, 10.0) }
+            assertOrder("Alpha", "Zulu")
+            controller.get().runOnUiThread { harness.locations.value = null }
+            assertOrder("Zulu", "Alpha")
+            assertTrue(harness.contactService.calls.isEmpty(), "Location changes must not issue radio commands")
+        }
+
+        private fun assertOrder(first: String, second: String) {
+            repeat(100) {
+                advanceFrames()
+                fun bounds(text: String) = allSemanticsNodes().firstOrNull {
+                    isDisplayed(it) && it.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { value -> value.text == text }
+                }?.boundsInRoot
+                val a = bounds(first)
+                val b = bounds(second)
+                if (a != null && b != null && a.top < b.top) return
+                Thread.sleep(10)
+            }
+            error("Expected mounted order $first before $second")
+        }
+    }
+
     abstract class ContactHopSortComposeTestBase : NodesScreensComposeTestBase(deterministicFrames = true) {
         private var sortMenuOpen = false
 
@@ -400,6 +474,44 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
     }
 
     abstract class ContactPathActionsComposeTestBase : NodesScreensComposeTestBase() {
+        @Test
+        @Config(shadows = [UnsupportedNodesMapProcess::class])
+        fun locatedContactOpensOfflineLineOfSightWithTheExactContact() {
+            val harness = Harness().connect()
+            val contact = Fixtures.contact(
+                radioId = checkNotNull(harness.session.radioId),
+                name = "LOS target",
+                latitude = 37.8,
+                longitude = -122.4,
+            )
+            harness.store.contacts += contact
+            harness.session.state = DeviceConnectionState.DISCONNECTED
+            harness.session.contacts = null
+            val opened = mutableListOf<ContactDTO>()
+            val navigation = object : NodesNavigation by NodesNavigation.NONE {
+                override val openLineOfSight: (ContactDTO) -> Unit = { opened += it }
+            }
+            mount { ContactDetailScreen(contact, harness.dependencies, navigation) }
+            val action = scrollToAction(controller.get().getString(AppToolsStrings.toolsLineOfSight))
+            assertTrue(action.boundsInRoot.height / currentDensity() >= 48f)
+            assertFalse(action.config.contains(SemanticsProperties.Disabled))
+            click(action)
+            assertEquals(listOf(contact), opened)
+            assertTrue(harness.contactService.calls.isEmpty(), "Offline LOS must not issue radio commands")
+        }
+
+        @Test
+        fun unlocatedContactDoesNotOfferLineOfSight() {
+            val harness = Harness().connect()
+            val contact = Fixtures.contact(radioId = checkNotNull(harness.session.radioId))
+            harness.store.contacts += contact
+            val navigation = object : NodesNavigation by NodesNavigation.NONE {
+                override val openLineOfSight: (ContactDTO) -> Unit = { error("Unlocated contact must not navigate") }
+            }
+            mount { ContactDetailScreen(contact, harness.dependencies, navigation) }
+            assertTrue(actionNode(controller.get().getString(AppToolsStrings.toolsLineOfSight)) == null)
+        }
+
         @Test
         fun pathActionsRemainVisibleAndAtLeast48DpAtLargeTextInRtl() {
             val harness = Harness().connect()

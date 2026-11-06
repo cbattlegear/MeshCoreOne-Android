@@ -11,11 +11,17 @@ enum class MeasurementSystem {
     METRIC, US, UK;
 
     companion object {
-        /** The locale's (or the user's regional override's) measurement system via ICU. */
-        fun of(locale: Locale): MeasurementSystem = when (LocaleData.getMeasurementSystem(ULocale.forLocale(locale))) {
-            LocaleData.MeasurementSystem.US -> US
-            LocaleData.MeasurementSystem.UK -> UK
-            else -> METRIC
+        /** Explicit Unicode measurement preference, otherwise ICU's regional measurement system. */
+        fun of(locale: Locale): MeasurementSystem = when (locale.getUnicodeLocaleType("ms")) {
+            "metric" -> METRIC
+            "ussystem" -> US
+            "uksystem" -> UK
+            // LocaleData uses the supplemental region (including "rg"), not the "ms" preference.
+            else -> when (LocaleData.getMeasurementSystem(ULocale.forLocale(locale))) {
+                LocaleData.MeasurementSystem.US -> US
+                LocaleData.MeasurementSystem.UK -> UK
+                else -> METRIC
+            }
         }
     }
 }

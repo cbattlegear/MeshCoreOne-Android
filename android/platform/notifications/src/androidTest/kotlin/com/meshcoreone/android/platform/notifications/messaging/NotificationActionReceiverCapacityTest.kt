@@ -41,6 +41,7 @@ import org.junit.runner.RunWith
 class NotificationActionReceiverCapacityTest {
     @get:Rule val folder = TemporaryFolder()
     private lateinit var context: Context
+    private val startedActivities = mutableListOf<Intent>()
     private val radio = RadioId(UUID.fromString("10000000-0000-0000-0000-000000000001"))
 
     @Before
@@ -185,20 +186,20 @@ class NotificationActionReceiverCapacityTest {
             NotificationRecoveryRetention.NOT_RETAINED,
             NotificationActionRecovery.retain(context, response(91, NotificationAction.REPLY, "x".repeat(128 * 1024))),
         )
-        NotificationActionRecovery.foregroundUnavailable()
+        NotificationActionRecovery.requireManualOpen()
         val unseen = NotificationActionRecovery.load(context)
         assertTrue(unseen.version > displayed.version)
         assertNull(NotificationActionRecovery.acknowledgeFailure(displayed.version))
         val unchanged = NotificationActionRecovery.load(context)
         assertEquals(unseen.version, unchanged.version)
         assertTrue(unchanged.notRetained)
-        assertTrue(unchanged.foregroundUnavailable)
+        assertTrue(unchanged.manualOpenRequired)
 
         val acknowledged = NotificationActionRecovery.acknowledgeFailure(unchanged.version)
         val afterAcknowledgment = NotificationActionRecovery.load(context)
         assertEquals(acknowledged, afterAcknowledgment.version)
         assertFalse(afterAcknowledgment.notRetained)
-        assertFalse(afterAcknowledgment.foregroundUnavailable)
+        assertFalse(afterAcknowledgment.manualOpenRequired)
     }
 
     @Test
@@ -269,13 +270,14 @@ class NotificationActionReceiverCapacityTest {
     }
 
     @Test
-    fun unlaunchableForegroundDoesNotEraseOrClaimAnOpenedRecovery() {
+    fun actionBroadcastRequiresUserOpeningWithoutAttemptingARecoveryTrampoline() {
         fillQueue()
         NotificationActionReceiver().onReceive(context, intent(90, NotificationAction.REPLY, "original"))
         val snapshot = NotificationActionRecovery.load(context)
-        assertTrue(snapshot.foregroundUnavailable)
+        assertTrue(snapshot.manualOpenRequired)
         assertTrue(snapshot.items.single().persistent)
         assertEquals("original", snapshot.items.single().entry.response.userText)
+        assertTrue(startedActivities.isEmpty())
     }
 
     @Test
@@ -433,7 +435,8 @@ class NotificationActionReceiverCapacityTest {
     private fun recoveryContext(directory: File): Context =
         object : ContextWrapper(ApplicationProvider.getApplicationContext<Context>()) {
             override fun getNoBackupFilesDir(): File = directory
-            // No launchable package is deliberately configured: no foreground success is inferred.
-            override fun getPackageName(): String = "com.meshcoreone.capacity.test.unlaunchable"
+            override fun startActivity(intent: Intent) {
+                startedActivities += intent
+            }
         }
 }

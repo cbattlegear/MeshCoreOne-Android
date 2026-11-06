@@ -295,7 +295,7 @@ internal fun NotificationActionRecoveryDialog(blockedByOtherDialog: Boolean = fa
     }
     val recovery = snapshot?.takeIf { it.version == sequence } ?: return
     val item = recovery.items.firstOrNull()
-    if (item == null && recovery.storageFailure == null && !recovery.notRetained && !recovery.foregroundUnavailable) return
+    if (item == null && recovery.storageFailure == null && !recovery.notRetained && !recovery.manualOpenRequired) return
     if (dismissedSequence == sequence) return
     var busy by remember(item?.entry?.id) { mutableStateOf(false) }
     var error by remember(item?.entry?.id) { mutableStateOf<Int?>(null) }
@@ -317,7 +317,7 @@ internal fun NotificationActionRecoveryDialog(blockedByOtherDialog: Boolean = fa
                 if (recovery.storageFailure != null) {
                     Text(stringResource(NotificationStrings.string.notification_action_recovery_storage_unavailable))
                 }
-                if (recovery.foregroundUnavailable) {
+                if (recovery.manualOpenRequired) {
                     Text(stringResource(NotificationStrings.string.notification_action_recovery_launch_failed))
                 }
                 item?.let {

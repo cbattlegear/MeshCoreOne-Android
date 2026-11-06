@@ -53,11 +53,20 @@ and a user-visible failure rather than claiming that a notification retap can
 recover RemoteInput. Process-only drafts can be lost when the process dies;
 there is no claim to the contrary.
 
-Foreground presentation is attempted after retention, not used as proof of
-custody. A missing launch intent, activity or permission is recorded separately.
-An ordinary `startActivity` return is not proof Android displayed the activity.
+Recovery does not start an activity from the reply/mark-read broadcast: Android 12
+prohibits notification trampolines, and background-launch denial need not throw.
+Instead the content-free status tells the user to open MeshCore One themselves.
+The existing foreground host loads recovery when opened or resumed. Neither
+manually opening the app nor a status toast is proof of durable custody.
 Private text is not included in launch extras, logs, status toasts or lock-screen
 notifications. The foreground dialog requests `SecureOn`.
+The original null-action content-tap path is unchanged here, not claimed repaired
+or reconciled with held #495.
+
+Platform references:
+
+- <https://developer.android.com/about/versions/12/behavior-changes-12#notification-trampolines>
+- <https://developer.android.com/guide/components/activities/secure-bal>
 
 The foreground surface offers only explicit copy, delete and cancel. Cancel,
 Back/dismissal, host destruction and cancelled reading do not dispose records.
@@ -71,7 +80,7 @@ replay.
 
 Snapshots carry the actual version observed under the custody lock. A dialog can
 acknowledge failure flags only if that exact version is still current. Closing an
-old dialog cannot acknowledge a newer response, loss warning or launch failure.
+old dialog cannot acknowledge a newer response, loss warning or manual-open requirement.
 Recovery waits behind existing connection-recovery dialogs without changing
 custody or acknowledging its unseen state.
 
@@ -137,7 +146,9 @@ input, exact code-unit reopening, count/byte/multibyte limits, bounded fallback
 and exhaustion, unavailable storage/foreground, malformed existing state,
 explicit/stale/failed disposition, drain cancellation and reader cancellation,
 direct/room target round trips, private-directory denial, duplicate-ID rollback,
-and stale-snapshot acknowledgment of newer retained responses or failures.
+and stale-snapshot acknowledgment of newer retained responses or failures. The
+real receiver control captures all attempted activity starts and requires none
+for rejected-action recovery while original private custody remains available.
 
 `NotificationRecoveryClipboardTest.kt` contains 13 authored App methods covering
 the actual clipboard and mounted dialog: exact sensitive copy, inaccessible

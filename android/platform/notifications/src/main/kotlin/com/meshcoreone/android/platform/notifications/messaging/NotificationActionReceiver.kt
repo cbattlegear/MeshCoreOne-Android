@@ -3,7 +3,6 @@
 package com.meshcoreone.android.platform.notifications.messaging
 
 import android.app.RemoteInput
-import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
 import android.content.ContentValues
 import android.content.Context
@@ -50,18 +49,8 @@ class NotificationActionReceiver : BroadcastReceiver() {
                 NotificationRecoveryRetention.NOT_RETAINED -> R.string.notification_action_recovery_not_retained
             }
             Toast.makeText(context, status, Toast.LENGTH_LONG).show()
-            val launch = context.packageManager.getLaunchIntentForPackage(context.packageName)
-            if (launch == null) {
-                NotificationActionRecovery.foregroundUnavailable()
-            } else {
-                try {
-                    context.startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP))
-                } catch (_: ActivityNotFoundException) {
-                    NotificationActionRecovery.foregroundUnavailable()
-                } catch (_: SecurityException) {
-                    NotificationActionRecovery.foregroundUnavailable()
-                }
-            }
+            // Android 12 forbids an action broadcast from starting a recovery activity.
+            NotificationActionRecovery.requireManualOpen()
         }
         if (action == null) {
             context.packageManager.getLaunchIntentForPackage(context.packageName)?.apply {
@@ -318,7 +307,7 @@ class NotificationRecoverySnapshot(
     val items: List<NotificationRecoveryItem>,
     val storageFailure: NotificationRecoveryFailure?,
     val notRetained: Boolean,
-    val foregroundUnavailable: Boolean,
+    val manualOpenRequired: Boolean,
 )
 
 enum class NotificationRecoveryRetention { DURABLE, PROCESS_ONLY, NOT_RETAINED }
@@ -329,7 +318,7 @@ object NotificationActionRecovery {
     private val memory = linkedMapOf<UUID, RejectedNotificationAction>()
     private var memoryBytes = 0L
     private var lost = false
-    private var launchUnavailable = false
+    private var manualOpenRequired = false
     private val updates = MutableStateFlow(0L)
     val changes: StateFlow<Long> = updates.asStateFlow()
     private val logger = Logger.getLogger("com.mc1.NotificationRecovery")
@@ -369,7 +358,7 @@ object NotificationActionRecovery {
                 memory.values.map { NotificationRecoveryItem(it, persistent = false) },
             (stored as? NotificationRecoveryRead.Failed)?.reason,
             lost,
-            launchUnavailable,
+            manualOpenRequired,
         )
     }
 
@@ -387,9 +376,9 @@ object NotificationActionRecovery {
         failure
     }
 
-    fun foregroundUnavailable() = synchronized(lock) {
-        launchUnavailable = true
-        logger.warning("Foreground notification recovery launch unavailable; no launch success claimed")
+    fun requireManualOpen() = synchronized(lock) {
+        manualOpenRequired = true
+        logger.info("Rejected notification action recovery requires user-directed app opening")
         refresh()
     }
 
@@ -397,7 +386,7 @@ object NotificationActionRecovery {
     fun acknowledgeFailure(observedVersion: Long): Long? = synchronized(lock) {
         if (updates.value != observedVersion) return@synchronized null
         lost = false
-        launchUnavailable = false
+        manualOpenRequired = false
         refresh()
         updates.value
     }

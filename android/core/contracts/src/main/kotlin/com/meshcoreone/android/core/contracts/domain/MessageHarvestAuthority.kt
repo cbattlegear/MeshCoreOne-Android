@@ -39,7 +39,10 @@ data class ChannelMessageRowSaveRequest(
     }
 }
 
-/** Original 67ec outcome plus storage-only row lineage, captured in the SAME original save TX. */
+/**
+ * Original 67ec outcome plus storage-only row lineage, captured in the SAME original save TX.
+ * Existing remains a compatibility value shape, NOT a permitted save outcome under the current API.
+ */
 data class RowBoundChannelIngress(
     val original: ChannelReactionIngressResult,
     val savedRow: SavedMessageRow?,
@@ -145,13 +148,23 @@ sealed interface IncomingPathHarvestResult {
  * Optional CHANNEL-INCOMING role, separate from generic Boolean/DM/sent-echo persistence.
  * No defaults, receipt recapture by ID or caller-provided issuer implementations.
  *
- * Original save preserves all 67ec Inserted/InsertedUnproven/Existing/Rejected distinctions.
+ * Original save preserves the 67ec result vocabulary, but this API has no recognized
+ * expected-incarnation authority permitting an existing-key mutation. In the SAME save transaction,
+ * reject EVERY already-present (radioId, message.id) with Rejected(CONFLICT), BEFORE ANY DML,
+ * without a row receipt. This includes identical DTOs, matching wire/body/key, retries and public
+ * Proven markers. Do not overwrite, silently fall back to generic upsert, or return the untouched
+ * predecessor as Existing. UUID/content equality is not original-occurrence or overwrite authority.
+ * Existing remains an unsupported result shape until separately reviewed genuine expected-
+ * incarnation authority is admitted; neither its public value constructor nor this marker API
+ * supplies such authority. Generic/OFF persistence behavior remains unchanged.
  * Authenticate DTO derivation under original decoding/time-correction rules. RX-derived enrichment
  * is deferred: reject already enriched input before DML, never certify fields copied by a current-key
  * lookup. Save actual row and privately bind exact stored incarnation/reaction-identity revision/
- * original save in SAME TX; return actual DTO/receipt, including committed Unproven and Existing.
- * Existing gets only the new upsert successor's storage lineage: NOT original insert, same-origin
- * duplicate proof, original occurrence recovery or reaction target. Never save then read to mint.
+ * original save in SAME TX; return actual DTO/receipt for a newly inserted row, including committed
+ * Unproven. A later loss of that return does not permit receipt recapture by ID or a second save.
+ * Any future separately admitted Existing successor would certify storage lineage only, NOT original
+ * insert, same-origin duplicate proof, original occurrence recovery or reaction target.
+ * Never save then read to mint.
  * Row receipt alone does NOT authenticate receive origin or grant reaction/index authority.
  *
  * Harvest: in ONE WRITE TX first authenticate receipt/actual original row incarnation and revision,

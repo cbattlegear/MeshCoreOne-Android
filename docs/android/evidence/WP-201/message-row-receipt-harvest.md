@@ -2,11 +2,13 @@
 
 Assignment:
 `assignment:fc9361f4-ec03-4739-994b-ddb9b4e4cec9:call_0jpIzLm0tBYXoigYAOa1QKuO`.
-Parent dependency: approved reaction contract
-`67ec8bffe3d1eb66e1c896b9fbdebf7fc790b136`,
-tree `9c6a3684a0bf5290c73d419ddb17c1503d563c23`.
-This is a SEPARATE three-path additive delta, not cache-selection4c405 or held
-consumer ancestry. Actual currentmain checked0d10 lacks67ec declarations.
+This bounded inactive semantic successor has the sole parent
+`c8f50a99d711a0c091a65ad0b46088b9789733ae`,
+tree `54cafbe51e836d0cc5252e43c1601907d80dcd6b`. The original c8f commit remains
+immutable. Its approved reaction dependency remains
+`67ec8bffe3d1eb66e1c896b9fbdebf7fc790b136`. Only the existing contract, its
+shape controls and this evidence change; no cache-selection4c405, shared derivation
+e6f, held consumer ancestry or production storage implementation is imported.
 Swift specification stays `db14559b39d32322b06477c6ae676112f583db50`.
 
 ## Custody and scope
@@ -27,23 +29,40 @@ request: IncomingPathHarvestRequest): IncomingPathHarvestResult`
 
 No generic save, DM/sent echo policy or defaults are added. Existing67ec variants
 and generic interfaces remain unchanged. f805 explicitly confirmed MessageDTO
-unset-field representation and Existing's storage-only receipt semantics.
+unset-field representation. The earlier Existing upsert expectation is corrected
+below; wire/DTO consistency and storage-only receipts cannot authorize overwriting
+an unrelated existing incarnation.
 
 ## Separate row and receive provenance
 
 SavedMessageRow retains actual committed DTO, private storage-issued
 SavedMessageRowReceipt and optional exact reaction capture. Receipt binds original
-save, incarnation and reaction-identity revision IN THE SAME SAVE TX, including
-InsertedUnproven and actual Existing upsert successor. Public receipt markers are
+save, incarnation and reaction-identity revision IN THE SAME SAVE TX for new
+inserts, including InsertedUnproven. Public receipt markers are
 not accepted by storage. It is not a receive, duplicate, original-insert or
 reaction proof; no save-then-read, current-ID or DTO-equality receipt recovery.
 
-RowBoundChannelIngress preserves the exact original67ec outcome. Inserted
+RowBoundChannelIngress preserves the original67ec result vocabulary. Inserted
 requires the exact captured message/capture; InsertedUnproven and Existing cannot
-gain reaction capture; Rejected carries no row. Existing's committed same-ID
-upsert can issue its own new storage-only receipt, not certify a prior insertion/
-occurrence or safe retry. Commit-before-throw may lose the return; no journal
-or recovered receipt is promised.
+gain reaction capture; Rejected carries no row. Existing remains a compatibility
+value shape, not a permitted outcome from the current save role.
+
+The concrete 9ef storage review exposed a distinct safety gap: by-ID lookup then
+unconditional upsert could overwrite an unrelated same-radio/same-UUID row before
+RX authentication. Canonical wire derivation does not establish overwrite authority.
+Under the current API, storage MUST reject every existing key with
+Rejected(CONFLICT), before ANY DML, without a receipt. Identical DTO, matching wire,
+content key, retry and public Proven marker are not exceptions. Leave the existing
+row and durable identity unchanged; never return its untouched predecessor as
+Existing or fall back to generic upsert.
+
+The coordinator explicitly approved this restriction under the same assignment.
+A future positive Existing outcome requires separately reviewed genuine expected-
+incarnation authority. No such input, token, issuer or positive implementation is
+introduced here. The old upsert expectation is not retained as an acceptance
+requirement for this role. Generic/OFF behavior remains unchanged.
+Commit-before-throw may lose a new-insert return; no journal, safe redrive or
+recovered receipt is promised.
 
 Pre-save content correlation/current-key decoding is not proof: the prior
 consumer copied RX path/route/region before save. The new save request explicitly
@@ -111,19 +130,28 @@ Trusted manifest `e81605857f5aa7b893dcd63224fb27a45d7b0f3a`,
 policy `e56438d64d2309c964353066f26e1427f17f55d8`,
 engine `1001f43112d9bff9c9985929a203b5166c41559e` were checked against actualmain0d10
 and match the approved dependency's admission policy. Domain/evidence descendants
-admit `wp-owned/create`; directly related contracts test admits
+admit `wp-owned/modify`; directly related contracts test admits
 `reviewed-support-test/add-or-update-related-test`. No policy/authorization/
 reservation edit or executed validator receipt is claimed.
 
-Six authored shape controls cover exact original wire/save fields, rejecting
-pre-enrichment, committed Unproven/Existing storage-only shape, each original
-earlier/equal-time RX snapshot, blocked exact custody and issue bounds.
+Seven authored shape controls cover exact original wire/save fields, rejecting
+pre-enrichment, committed Unproven/unsupported Existing value shape, existing-key
+CONFLICT with no receipt, each original earlier/equal-time RX snapshot, blocked
+exact custody and issue bounds. Existing value assertions are retained solely for
+compatibility shape, not producer acceptance. The new conflict shape test is not
+a fake authority, an existing-row lookup or proof of zero database writes.
 Test receipt marker is value-shape only, never submitted to storage; no fake
 Proven issuer or positive RX/Room evidence. No compiler/test run occurred.
 All existing67ec tests/assertions and operation058 source remain untouched.
 
-Publication checks cover exact sole dependency parent, three additive paths,
-ASCII/LF and no changes to originals. Local execution hold
+Storage owns actual different-wire and identical-DTO existing-key zero-DML controls
+with row/identity preservation. Service consumers must retain Existing/Rejected as
+non-redrivable unresolved custody, not notify/index an observed row as the incoming
+occurrence. No runtime composition, full contract implementation, positive issuer
+or active feature/device acceptance is supplied by this correction.
+
+Publication checks cover exact sole c8f parent, only these three changed paths,
+ASCII/LF and no changes to other originals. Local execution hold
 `local-check:f516a7e271f444dd9cb2efcc8b995a16` remains; no local Gradle/controller/
 readiness recovery or new session/worktree. No schema allocation, producer/
 factory activation, PR, merge, deployed firmware or hardware verification.

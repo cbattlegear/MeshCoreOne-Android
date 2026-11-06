@@ -73,7 +73,7 @@ class MessageHarvestAuthorityTest {
     }
 
     @Test
-    fun committedUnprovenAndExistingKeepStorageLineageWithoutReactionAuthority() {
+    fun committedUnprovenAndUnsupportedExistingValueShapeKeepNoReactionAuthority() {
         val inserted = ChannelReactionIngressResult.InsertedUnproven(
             message, ChannelReactionUnprovenReason.UNORDERED_INGRESS,
         )
@@ -81,12 +81,29 @@ class MessageHarvestAuthorityTest {
         assertSame(inserted, result.original)
         assertSame(row, result.savedRow)
         assertNull(result.savedRow!!.reactionCapture)
+        // Compatibility shape only: the current save role must reject all existing keys before DML.
         val existing = ChannelReactionIngressResult.Existing(EntityKey(radio, message.id))
         assertSame(row, RowBoundChannelIngress(existing, row).savedRow)
         assertFailsWith<IllegalArgumentException> { RowBoundChannelIngress(existing, null) }
         assertFailsWith<IllegalArgumentException> {
             RowBoundChannelIngress(ChannelReactionIngressResult.Rejected(ChannelReactionRejection.NOT_ELIGIBLE), row)
         }
+    }
+
+    @Test
+    fun existingKeyConflictCarriesNoReceiptAndDoesNotMutateTheRetainedRequestShape() {
+        val request = ChannelMessageRowSaveRequest(message, occurrence)
+        val result = RowBoundChannelIngress(
+            ChannelReactionIngressResult.Rejected(ChannelReactionRejection.CONFLICT), null,
+        )
+        assertEquals(
+            ChannelReactionRejection.CONFLICT,
+            (result.original as ChannelReactionIngressResult.Rejected).reason,
+        )
+        assertNull(result.savedRow)
+        assertSame(message, request.message)
+        assertSame(occurrence, request.occurrence)
+        assertFailsWith<IllegalArgumentException> { result.copy(savedRow = row) }
     }
 
     @Test

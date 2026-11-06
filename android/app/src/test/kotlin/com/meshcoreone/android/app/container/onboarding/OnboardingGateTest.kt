@@ -20,6 +20,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -156,6 +158,13 @@ class OnboardingGateTest {
     private fun awaitPublicationDelivery(deliveries: kotlinx.coroutines.channels.Channel<Unit>) {
         compose.waitUntil(5_000) { deliveries.tryReceive().isSuccess }
         compose.waitForIdle()
+    }
+
+    private fun awaitEnabled(node: SemanticsNodeInteraction) {
+        compose.waitUntil(5_000) {
+            !node.fetchSemanticsNode().config.contains(SemanticsProperties.Disabled)
+        }
+        node.assertIsEnabled()
     }
 
     @Test fun `completion publication guard rejects equal receipt replacement and survives recreation`() = runBlocking {
@@ -451,7 +460,7 @@ class OnboardingGateTest {
             compose.waitForIdle()
             assertTrue(flow.onboarding.canReconcileCompletion())
             assertTrue(flow.canCompleteWithoutDevice())
-            confirm.assertIsEnabled()
+            awaitEnabled(confirm)
 
             compose.runOnIdle { readbackAvailable = true }
             confirm.performClick()
@@ -511,7 +520,7 @@ class OnboardingGateTest {
             assertFalse(flags.hasCompleted.value)
             assertTrue(flow.onboarding.canStartCompletion())
             assertTrue(flow.preset.canApply(dependencies.presets.canApply.value, flow.preset.state.value))
-            apply.assertIsEnabled()
+            awaitEnabled(apply)
         } finally {
             releaseFinalizer.complete(Unit)
             processScope.cancel()

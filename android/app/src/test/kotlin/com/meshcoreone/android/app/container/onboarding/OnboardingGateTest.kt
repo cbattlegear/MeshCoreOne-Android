@@ -153,6 +153,11 @@ class OnboardingGateTest {
         }
     }
 
+    private fun awaitPublicationDelivery(deliveries: kotlinx.coroutines.channels.Channel<Unit>) {
+        compose.waitUntil(5_000) { deliveries.tryReceive().isSuccess }
+        compose.waitForIdle()
+    }
+
     @Test fun `completion publication guard rejects equal receipt replacement and survives recreation`() = runBlocking {
         val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
         val deliveries = kotlinx.coroutines.channels.Channel<Unit>(kotlinx.coroutines.channels.Channel.UNLIMITED)
@@ -180,24 +185,20 @@ class OnboardingGateTest {
             showFlow(dependencies, flowCoordinator = flow, onPublication = onPublication)
 
             flow.onboarding.completeOnboardingWithReceipt(receipt, {}) { it.trySeal() }
-            deliveries.receive()
-            compose.waitForIdle()
+            awaitPublicationDelivery(deliveries)
             val first = publications.single()
             assertEquals(receipt, first.receipt)
 
             host.recreate()
             showFlow(dependencies, flowCoordinator = flow, onPublication = onPublication)
-            deliveries.receive()
-            compose.waitForIdle()
+            awaitPublicationDelivery(deliveries)
             assertSame(first, publications[1])
             assertEquals(first.revision, publications[1].revision)
             assertSame(flow, callbackFlows[0])
             assertSame(flow, callbackFlows[1])
-
             flow.onboarding.resetOnboarding()
             flow.onboarding.completeOnboardingWithReceipt(receipt, {}) { it.trySeal() }
-            deliveries.receive()
-            compose.waitForIdle()
+            awaitPublicationDelivery(deliveries)
             val replacement = publications.last()
             assertEquals(first.receipt, replacement.receipt)
             assertTrue(replacement.revision > first.revision)
@@ -241,8 +242,7 @@ class OnboardingGateTest {
             assertNotSame(flow, replacementFlow)
             showFlow(dependencies, flowCoordinator = replacementFlow, onPublication = onPublication)
             replacementFlow.onboarding.completeOnboardingWithReceipt(receipt, {}) { it.trySeal() }
-            deliveries.receive()
-            compose.waitForIdle()
+            awaitPublicationDelivery(deliveries)
             assertSame(replacementFlow, callbackFlows.last())
         } finally {
             deliveries.close()

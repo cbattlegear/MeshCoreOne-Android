@@ -963,28 +963,145 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
 
     @Test fun disconnectDuringBadgeAwaitCannotReinstallNotificationsOrBatteryMonitoring() = runTest {
         val configured = mutableListOf<com.meshcoreone.android.core.contracts.domain.SessionToken>()
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var armed = false
+        val recorded = RecordingDelivery()
+        val delivery = object : com.meshcoreone.android.core.contracts.notifications.NotificationDeliveryPort by recorded {
+            override suspend fun setBadgeCount(count: Long) {
+                if (armed) {
+                    armed = false
+                    entered.complete(Unit)
+                    release.await()
+                }
+                recorded.setBadgeCount(count)
+            }
+        }
         val platform = object : com.meshcoreone.android.app.state.AppStatePlatform {
             override fun configureNotificationNavigation(
                 session: com.meshcoreone.android.app.state.AppSession, connectedDevice: () -> DeviceDTO?,
             ) { configured += session.token }
         }
-        withSettings(platform = platform) { h, _, _, _ ->
-            val notifications = configured.size
-            val wiring = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) {
-                h.appState.wireServicesIfConnected()
+        try {
+            withSettings(platform = platform, notificationDelivery = delivery) { h, _, _, _ ->
+                val notifications = configured.size
+                armed = true
+                val wiring = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) {
+                    h.appState.wireServicesIfConnected()
+                }
+                h.eventually("the real badge delivery is held before the wire can continue") { entered.isCompleted }
+                assertFalse(wiring.isCompleted)
+                val disconnect = backgroundScope.async { h.manager.disconnect() }
+                h.eventually("the held badge belongs to an actually retired graph") { h.sessions.current == null }
+                release.complete(Unit)
+                h.eventually("retired badge waiter and actual disconnect settle") { wiring.isCompleted && disconnect.isCompleted }
+                wiring.await()
+                disconnect.await()
+                h.settle()
+                assertEquals(notifications, configured.size)
+                assertEquals(0, h.appState.activeSessionJobCount)
+                assertEquals(0, h.appState.messageEventDispatcher.activeJobCount)
+                assertFalse(h.appState.batteryMonitor.isBootstrapActive)
+                assertFalse(h.appState.batteryMonitor.isRefreshLoopActive)
+                assertFalse(h.appState.hasSettingsEventsJob)
             }
-            assertFalse(wiring.isCompleted, "The real badge debounce suspends this continuation")
-            h.manager.disconnect()
-            h.eventually("retired badge waiter settles") { wiring.isCompleted }
-            wiring.await()
-            h.settle()
-            assertEquals(notifications, configured.size)
-            assertEquals(0, h.appState.activeSessionJobCount)
-            assertEquals(0, h.appState.messageEventDispatcher.activeJobCount)
-            assertFalse(h.appState.batteryMonitor.isBootstrapActive)
-            assertFalse(h.appState.batteryMonitor.isRefreshLoopActive)
-            assertFalse(h.appState.hasSettingsEventsJob)
+        } finally { release.complete(Unit) }
+    }
+
+    @Test fun checkedOldWiringCannotReplaceAnAlreadyWiredSuccessorsConsumersOrBattery() = runTest {
+        var completed = 0
+        for (stage in com.meshcoreone.android.app.state.AppState.WiringInstallation.entries) {
+            val configured = java.util.concurrent.CopyOnWriteArrayList<com.meshcoreone.android.core.contracts.domain.SessionToken>()
+            val platform = object : com.meshcoreone.android.app.state.AppStatePlatform {
+                override fun configureNotificationNavigation(
+                    session: com.meshcoreone.android.app.state.AppSession, connectedDevice: () -> DeviceDTO?,
+                ) { configured += session.token }
+            }
+            withSettings(platform = platform) { h, _, _, radio ->
+                val old = assertNotNull(h.sessions.current)
+                val device = assertNotNull(h.manager.connectedDevice)
+                val channel = ChannelDTO(radioId = device.radioId, index = 1u, name = "Successor delivery", secret = key(3).prefix(16))
+                store.saveChannel(channel)
+                radio.channel = channel
+                val reached = java.util.concurrent.CountDownLatch(1)
+                val resume = java.util.concurrent.CountDownLatch(1)
+                val calls = java.util.concurrent.atomic.AtomicInteger()
+                val batteryReads = java.util.concurrent.atomic.AtomicInteger()
+                h.appState.beforeWiringInstallationForTesting = { installation ->
+                    if (installation == stage && calls.incrementAndGet() == 1) {
+                        reached.countDown()
+                        assertTrue(resume.await(10, java.util.concurrent.TimeUnit.SECONDS))
+                    }
+                }
+                try {
+                    val stale = backgroundScope.async(kotlinx.coroutines.Dispatchers.Default) {
+                        h.appState.wireServicesIfConnected()
+                    }
+                    h.eventually("A passes the check before its $stage installation") { reached.count == 0L }
+                    h.manager.disconnect()
+                    h.links.configureRadio = { firmware ->
+                        radio.configure(firmware)
+                        val respond = firmware.respond
+                        firmware.respond = { command ->
+                            if (command[0] == 0x14.toUByte()) {
+                                batteryReads.incrementAndGet()
+                                listOf(Bytes.of(0x0c, 0xa0, 0x0f))
+                            } else respond(command)
+                        }
+                    }
+                    h.manager.connect(h.target())
+                    h.eventually("B owns ready consumers and its actual battery before A resumes") {
+                        h.appState.canRunSettingsStartupReads && h.sessions.current?.let { it !== old } == true &&
+                            h.appState.activeSessionJobCount == 4 && h.appState.batteryMonitor.isRefreshLoopActive &&
+                            h.appState.batteryMonitor.deviceBattery?.level == 4_000L
+                    }
+                    val current = assertNotNull(h.sessions.current)
+                    val messageJobs = h.appState.messageEventDispatcher.activeJobCount
+                    val notificationStart = configured.size
+                    val events = java.util.concurrent.CopyOnWriteArrayList<com.meshcoreone.android.app.state.MessageEvent>()
+                    val observer = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                        h.appState.messageEventStream.events().collect { events += it }
+                    }
+                    try {
+                        resume.countDown()
+                        h.eventually("A cannot replace B after its earlier successful check") { stale.isCompleted }
+                        stale.await()
+                        val firmware = h.links.radios.last()
+                        val respond = firmware.respond
+                        val incoming = java.util.concurrent.ConcurrentLinkedQueue(listOf(
+                            Bytes.of(0x11, 20, 0, 1, 0, 0, 0) + le32(EPOCH.epochSecond) + Bytes.utf8("Peer: after $stage"),
+                        ))
+                        firmware.respond = { command ->
+                            if (command[0] == 0x0a.toUByte()) listOf(incoming.poll() ?: Bytes.of(0x0a))
+                            else respond(command)
+                        }
+                        try { assertEquals(1L, current.messagePollingService.pollAllMessages()) }
+                        finally { firmware.respond = respond }
+                        val saved = store.fetchMessages(current.token.radioId, 1u).single { it.text == "after $stage" }
+                        h.eventually("B's real incoming message reaches its actual process dispatcher") {
+                            events.filterIsInstance<com.meshcoreone.android.app.state.MessageEvent.ChannelMessageReceived>()
+                                .count { it.message.id == saved.id } == 1
+                        }
+                        h.settle()
+                        assertEquals(current.token, h.sessions.current?.token)
+                        assertEquals(current.token, h.appState.sessionTokenForServicesVersion(h.appState.servicesVersion.value))
+                        assertEquals(4, h.appState.activeSessionJobCount)
+                        assertEquals(messageJobs, h.appState.messageEventDispatcher.activeJobCount)
+                        assertTrue(messageJobs > 0)
+                        assertTrue(configured.drop(notificationStart).all { it == current.token })
+                        assertTrue(batteryReads.get() > 0)
+                        assertEquals(4_000L, h.appState.batteryMonitor.deviceBattery?.level)
+                        assertTrue(h.appState.batteryMonitor.isRefreshLoopActive)
+                        assertTrue(h.appState.hasSettingsEventsJob)
+                        completed++
+                    } finally { observer.cancel() }
+                } finally {
+                    h.appState.beforeWiringInstallationForTesting = null
+                    resume.countDown()
+                }
+            }
         }
+        assertEquals(2, completed)
     }
 
     private suspend fun TestScope.assertConcurrentSettingsWiring(retireDuringInstallation: Boolean) {
@@ -1838,9 +1955,13 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
         exposeDependencies: (SettingsFeatureDependencies) -> Unit = {},
         firmwareVersion: UByte = 11u,
         platform: com.meshcoreone.android.app.state.AppStatePlatform = com.meshcoreone.android.app.state.AppStatePlatform.NONE,
+        notificationDelivery: com.meshcoreone.android.core.contracts.notifications.NotificationDeliveryPort? = null,
         action: suspend (ContainerHarness, DefaultFloodScopeStateHolder, MutableList<Throwable>, ScopeRadio) -> Unit,
     ) {
-        val h = ContainerHarness(this, store, persistenceOverride = persistence, platform = platform)
+        val h = ContainerHarness(
+            this, store, persistenceOverride = persistence, platform = platform,
+            notificationDeliveryOverride = notificationDelivery,
+        )
         val radio = ScopeRadio().also { it.firmwareVersion = firmwareVersion }
         var holder: DefaultFloodScopeStateHolder? = null
         try {

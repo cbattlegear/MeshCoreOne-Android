@@ -151,6 +151,8 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
     private val settingsEventsWiring = kotlinx.coroutines.sync.Mutex()
     private var settingsEventsRevision = 0L
     internal var onSettingsEventsSubscriptionForTesting: (() -> Unit)? = null
+    internal enum class WiringInstallation { CONSUMERS, NOTIFICATIONS }
+    internal var beforeWiringInstallationForTesting: ((WiringInstallation) -> Unit)? = null
     private var syncDataEventsJob: Job? = null
     private var advertisementEventsJob: Job? = null
     private var rxLogEventsJob: Job? = null
@@ -467,14 +469,11 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
     }
 
     /** Per-session teardown for connection loss and explicit disconnect; the coordinator registry stays. */
-    fun tearDownAppStateSessionState() {
-        val cancelled = synchronized(lock) {
-            listOfNotNull(settingsEventsJob, syncDataEventsJob, advertisementEventsJob, rxLogEventsJob).also {
-                settingsEventsJob = null; syncDataEventsJob = null; advertisementEventsJob = null; rxLogEventsJob = null
-                settingsEventsSession = null
-                settingsEventsRevision = Math.incrementExact(settingsEventsRevision)
-            }
-        }
+    fun tearDownAppStateSessionState() = synchronized(lock) {
+        val cancelled = listOfNotNull(settingsEventsJob, syncDataEventsJob, advertisementEventsJob, rxLogEventsJob)
+        settingsEventsJob = null; syncDataEventsJob = null; advertisementEventsJob = null; rxLogEventsJob = null
+        settingsEventsSession = null
+        settingsEventsRevision = Math.incrementExact(settingsEventsRevision)
         cancelled.forEach(Job::cancel)
         messageEventDispatcher.cancelAll()
         navigation.clearPendingLinks()
@@ -484,16 +483,20 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
     suspend fun wireServicesIfConnected() {
         val session = services
         if (session == null) {
-            tearDownAppStateSessionState()
-            syncCoordinator = null
-            connectionUI.handleDisconnect(
-                connectionState, connection.lastConnectedDeviceId, connection.shouldSuppressDisconnectedPill,
-            )
-            batteryMonitor.stop()
-            batteryMonitor.clearThresholds()
+            val revision = synchronized(lock) {
+                if (services != null) return
+                tearDownAppStateSessionState()
+                syncCoordinator = null
+                connectionUI.handleDisconnect(
+                    connectionState, connection.lastConnectedDeviceId, connection.shouldSuppressDisconnectedPill,
+                )
+                batteryMonitor.stop()
+                batteryMonitor.clearThresholds()
+                settingsEventsRevision
+            }
             deps.platform.onConnectionLost()
             synchronized(lock) {
-                if (services == null) {
+                if (services == null && settingsEventsRevision == revision) {
                     lastBumpedSession = null
                     servicesOrigin = null
                 }
@@ -503,50 +506,58 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
         val revision = synchronized(lock) { settingsEventsRevision }
         if (!isCurrentWiring(session, revision)) return
 
-        // The link is up, so drop any pairing-failure alert latched while backgrounded.
-        connectionUI.clearPairingFailure()
-        // Set before onConnectionEstablished to avoid a race with the first sync-activity event.
-        connectionUI.wireCallbacks(session.syncCoordinator, session.advertisementService, session.contactService, deps.resyncFailure)
+        synchronized(lock) {
+            if (!isCurrentWiring(session, revision)) return
+            // The link is up, so drop any pairing-failure alert latched while backgrounded.
+            connectionUI.clearPairingFailure()
+            // Set before onConnectionEstablished to avoid a race with the first sync-activity event.
+            connectionUI.wireCallbacks(session.syncCoordinator, session.advertisementService, session.contactService, deps.resyncFailure)
 
-        // A device switch does not fire onConnectionLost, so reset per-radio UI state here.
-        val newDeviceId = connectedDevice?.id
-        val oldDeviceId = lastConnectedDeviceIdForCli
-        if (newDeviceId != null && oldDeviceId != null && newDeviceId != oldDeviceId) navigation.clearPerRadioSelection()
-        lastConnectedDeviceIdForCli = newDeviceId
+            // A device switch does not fire onConnectionLost, so reset per-radio UI state here.
+            val newDeviceId = connectedDevice?.id
+            val oldDeviceId = lastConnectedDeviceIdForCli
+            if (newDeviceId != null && oldDeviceId != null && newDeviceId != oldDeviceId) navigation.clearPerRadioSelection()
+            lastConnectedDeviceIdForCli = newDeviceId
 
-        syncCoordinator = session.syncCoordinator
-        deps.platform.onSessionWired(session, connectedDevice)
-        if (!isCurrentWiring(session, revision)) return
-
-        wireSyncDataEvents(session)
+            syncCoordinator = session.syncCoordinator
+            deps.platform.onSessionWired(session, connectedDevice)
+        }
         if (!wireSettingsEventStream(session, revision) || !isCurrentWiring(session, revision)) return
-        wireDeviceUpdateCallbacks(session)
-        messageEventDispatcher.wire(session.subscribeMessageEvents())
-        wirePacketCallbacks(session, revision)
-        session.channelService.setSlotOccupantChangedHandler { radioId, indices -> handleChannelSlotOccupantChanged(radioId, indices) }
+        beforeWiringInstallationForTesting?.invoke(WiringInstallation.CONSUMERS)
+        synchronized(lock) {
+            if (!isCurrentWiring(session, revision)) return
+            wireSyncDataEvents(session)
+            wireDeviceUpdateCallbacks(session)
+            messageEventDispatcher.wire(session.subscribeMessageEvents())
+            wirePacketCallbacks(session, revision)
+            session.channelService.setSlotOccupantChangedHandler { radioId, indices ->
+                synchronized(lock) {
+                    if (isCurrentWiring(session, revision)) handleChannelSlotOccupantChanged(radioId, indices)
+                }
+            }
 
-        // Bump only when the container actually changed: connect fires onConnectionReady and then an explicit rewire.
-        val changed = synchronized(lock) {
-            if (services === session && lastBumpedSession !== session) {
+            // Bump only when the container actually changed: connect fires onConnectionReady and then an explicit rewire.
+            if (lastBumpedSession !== session) {
                 lastBumpedSession = session
                 servicesOrigin = session.token
                 servicesVersionFlow.value += 1
-                true
-            } else false
-        }
-        if (changed) {
-            deps.platform.onSessionChanged()
+                deps.platform.onSessionChanged()
+            }
         }
 
         if (!isCurrentWiring(session, revision)) return
         session.notificationService.updateBadgeCount()
         if (!isCurrentWiring(session, revision)) return
-        configureNotificationHandlers(session, revision)
-        if (session.transportType == TransportType.SIMULATOR) {
-            batteryMonitor.stop()
-            batteryMonitor.deviceBattery = null
-        } else {
-            batteryMonitor.start(session.batteryServices, connectedDevice)
+        beforeWiringInstallationForTesting?.invoke(WiringInstallation.NOTIFICATIONS)
+        synchronized(lock) {
+            if (!isCurrentWiring(session, revision)) return
+            configureNotificationHandlers(session, revision)
+            if (session.transportType == TransportType.SIMULATOR) {
+                batteryMonitor.stop()
+                batteryMonitor.deviceBattery = null
+            } else {
+                batteryMonitor.start(session.batteryServices, connectedDevice)
+            }
         }
     }
 

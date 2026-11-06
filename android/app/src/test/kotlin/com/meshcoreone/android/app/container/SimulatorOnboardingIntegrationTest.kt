@@ -585,11 +585,13 @@ class SimulatorOnboardingIntegrationTest : RoomProcessTest() {
                 com.meshcoreone.android.core.contracts.domain.PersistenceStoreError.InvalidData,
             ).resolve(host.get().resources)
             harness.eventually("ambiguous simulator seed failure", virtualBudgetMillis = 2_000, virtualStepMillis = 5) {
-                harness.diagnostics.any {
-                    it is com.meshcoreone.android.core.runtime.RuntimeDiagnostic.Failure &&
-                        it.operation == "connect.attempt.1" &&
-                        (it.cause as? com.meshcoreone.android.core.contracts.domain.PersistenceStoreException)?.error ==
-                        com.meshcoreone.android.core.contracts.domain.PersistenceStoreError.InvalidData
+                synchronized(harness.diagnostics) {
+                    harness.diagnostics.any {
+                        it is com.meshcoreone.android.core.runtime.RuntimeDiagnostic.Failure &&
+                            it.operation == "connect.attempt.1" &&
+                            (it.cause as? com.meshcoreone.android.core.contracts.domain.PersistenceStoreException)?.error ==
+                            com.meshcoreone.android.core.contracts.domain.PersistenceStoreError.InvalidData
+                    }
                 }
             }
             compose.waitUntil(30_000) {
@@ -597,11 +599,13 @@ class SimulatorOnboardingIntegrationTest : RoomProcessTest() {
                 compose.onAllNodesWithText(invalidData).fetchSemanticsNodes().isNotEmpty()
             }
             compose.onNode(hasText(invalidData)).assertIsDisplayed()
-            assertTrue(harness.diagnostics.any {
-                it is com.meshcoreone.android.core.runtime.RuntimeDiagnostic.Failure &&
-                    it.operation == "connect.attempt.1" &&
-                    (it.cause as? com.meshcoreone.android.core.contracts.domain.PersistenceStoreException)?.error ==
-                    com.meshcoreone.android.core.contracts.domain.PersistenceStoreError.InvalidData
+            assertTrue(synchronized(harness.diagnostics) {
+                harness.diagnostics.any {
+                    it is com.meshcoreone.android.core.runtime.RuntimeDiagnostic.Failure &&
+                        it.operation == "connect.attempt.1" &&
+                        (it.cause as? com.meshcoreone.android.core.contracts.domain.PersistenceStoreException)?.error ==
+                        com.meshcoreone.android.core.contracts.domain.PersistenceStoreError.InvalidData
+                }
             })
             assertEquals(DeviceConnectionState.DISCONNECTED, harness.manager.connectionState)
             assertTrue(compose.onAllNodesWithText(text(O.regionTitle)).fetchSemanticsNodes().isEmpty())
@@ -716,11 +720,13 @@ class SimulatorOnboardingIntegrationTest : RoomProcessTest() {
                 com.meshcoreone.android.core.contracts.domain.PersistenceStoreError.InvalidData,
             ).resolve(host.get().resources)
             harness.eventually("restored simulator conflict failure", virtualBudgetMillis = 2_000, virtualStepMillis = 5) {
-                harness.diagnostics.any {
-                    it is com.meshcoreone.android.core.runtime.RuntimeDiagnostic.Failure &&
-                        it.operation == "connect.attempt.1" &&
-                        (it.cause as? com.meshcoreone.android.core.contracts.domain.PersistenceStoreException)?.error ==
-                        com.meshcoreone.android.core.contracts.domain.PersistenceStoreError.InvalidData
+                synchronized(harness.diagnostics) {
+                    harness.diagnostics.any {
+                        it is com.meshcoreone.android.core.runtime.RuntimeDiagnostic.Failure &&
+                            it.operation == "connect.attempt.1" &&
+                            (it.cause as? com.meshcoreone.android.core.contracts.domain.PersistenceStoreException)?.error ==
+                            com.meshcoreone.android.core.contracts.domain.PersistenceStoreError.InvalidData
+                    }
                 }
             }
             compose.waitUntil(30_000) {
@@ -728,11 +734,13 @@ class SimulatorOnboardingIntegrationTest : RoomProcessTest() {
                 compose.onAllNodesWithText(invalidData).fetchSemanticsNodes().isNotEmpty()
             }
             compose.onNode(hasText(invalidData)).assertIsDisplayed()
-            assertTrue(harness.diagnostics.any {
-                it is com.meshcoreone.android.core.runtime.RuntimeDiagnostic.Failure &&
-                    it.operation == "connect.attempt.1" &&
-                    (it.cause as? com.meshcoreone.android.core.contracts.domain.PersistenceStoreException)?.error ==
-                    com.meshcoreone.android.core.contracts.domain.PersistenceStoreError.InvalidData
+            assertTrue(synchronized(harness.diagnostics) {
+                harness.diagnostics.any {
+                    it is com.meshcoreone.android.core.runtime.RuntimeDiagnostic.Failure &&
+                        it.operation == "connect.attempt.1" &&
+                        (it.cause as? com.meshcoreone.android.core.contracts.domain.PersistenceStoreException)?.error ==
+                        com.meshcoreone.android.core.contracts.domain.PersistenceStoreError.InvalidData
+                }
             })
             assertEquals(DeviceConnectionState.DISCONNECTED, harness.manager.connectionState)
             assertTrue(compose.onAllNodesWithText(text(O.regionTitle)).fetchSemanticsNodes().isEmpty())

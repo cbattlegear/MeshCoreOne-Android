@@ -145,7 +145,11 @@ uses the existing bounded `harness.eventually` pattern with a 2,000 ms virtual
 budget and 5 ms steps. Failure waits require the actual typed
 `connect.attempt.1` diagnostic, not merely the initially disconnected state;
 retry waits require READY. All existing UI, error, retained-data and offline
-assertions remain unchanged. Exact-successor hosted execution and review-thread
+assertions retain their predicates. Independent review additionally identified
+that diagnostic iteration must synchronize on the harness's synchronized list.
+Both failure polls and their existing diagnostic assertions now hold that list's
+monitor for traversal; runtime reporting never races an unprotected iterator.
+Exact-successor hosted execution and review-thread
 resolution remain pending; earlier head results do not verify this correction.
 
 The baseline main run

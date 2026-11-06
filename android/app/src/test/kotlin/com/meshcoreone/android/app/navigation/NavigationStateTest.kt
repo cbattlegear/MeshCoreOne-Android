@@ -2021,6 +2021,44 @@ class NavigationStateTest {
             assertThrows(IllegalArgumentException::class.java) { n.measureWindow(width) }
         }
         assertEquals(contact, n.state.value.pendingChatContact)
+
+        val process = NavigationCoordinator()
+        process.attachHostState(NavigationState())
+        process.installOnboardingSessionCapture { { true } }
+        process.navigate(FeatureRoute(FeatureId.ONBOARDING))
+        val original = process.publishedNavigation.value
+        val originalEntry = original.value.activeStack.last()
+        val witness = process.captureMountedOnboarding(original, originalEntry.id)
+        val saved = NavigationSavedState.restore(NavigationSavedState.encode(original.value))
+        assertTrue(process.back())
+        val afterBack = process.state.value
+        process.attachHostState(saved)
+        assertEquals(afterBack, process.state.value)
+        assertFalse(process.completeMountedOnboarding(witness, MountedOnboardingProducer.NoDevice))
+        process.navigate(FeatureRoute(FeatureId.ONBOARDING))
+        val replacement = process.publishedNavigation.value
+        assertNotEquals(originalEntry.id, replacement.value.activeStack.last().id)
+        assertTrue(process.completeOnboardingForTest(replacement, replacement.value.activeStack.last().id))
+
+        val issuedBeforeHost = NavigationCoordinator()
+        issuedBeforeHost.navigate(FeatureRoute(FeatureId.ONBOARDING))
+        val issued = issuedBeforeHost.state.value
+        assertTrue(issuedBeforeHost.back())
+        val beforeFirstAttach = issuedBeforeHost.state.value
+        issuedBeforeHost.attachHostState(NavigationSavedState.restore(NavigationSavedState.encode(issued)))
+        assertEquals(beforeFirstAttach, issuedBeforeHost.state.value)
+
+        val freshProcess = NavigationCoordinator()
+        freshProcess.navigate(FeatureRoute(FeatureId.ONBOARDING))
+        assertTrue(freshProcess.back())
+        val freshHost = NavigationCoordinator()
+        freshHost.navigate(FeatureRoute(FeatureId.ONBOARDING))
+        assertTrue(freshHost.back())
+        freshHost.navigate(FeatureRoute(FeatureId.ONBOARDING))
+        val freshSaved = NavigationSavedState.restore(NavigationSavedState.encode(freshHost.state.value))
+        freshProcess.attachHostState(freshSaved)
+        assertEquals(freshSaved.activeStack, freshProcess.state.value.activeStack)
+        assertEquals(freshSaved.nextEntryId, freshProcess.state.value.nextEntryId)
     }
     @Test fun unavailableMapConsumerAndOldErrorDismissalDoNotPretendSuccessOrLoseNewFailure() {
         assertEquals(MapNavigationOutcome.UNAVAILABLE, MapNavigationConsumer().navigateToMap(MapFocusRequest(1.0, 2.0)))

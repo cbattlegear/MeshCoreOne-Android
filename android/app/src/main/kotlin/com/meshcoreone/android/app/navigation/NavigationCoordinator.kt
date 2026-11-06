@@ -83,6 +83,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     private val notificationMutex = Mutex()
     private val drainMutex = Mutex()
     private val localCommitLock = Any()
+    private val hostStateClaimed = AtomicBoolean(false)
     private val onboardingIdentity = Any()
     private var commitBoundary: (() -> Unit) -> Unit = { action -> synchronized(localCommitLock, action) }
     private var onboardingSessionCapture: (NavigationState) -> (MountedOnboardingProducer) -> Boolean = { { false } }
@@ -175,23 +176,31 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     }
 
     // AndroidOnly: WP-407 Attach restored public screen state without overwriting live process radio/readiness.
-    internal fun attachHostState(restored: NavigationState) = mutableState.update {
-        if (restored == NavigationState() || it.stacks.values.any { stack -> stack.size > 1 } ||
-            it.selectedTab != AppTab.CHATS || it.pendingMapFocus != null ||
-            it.pendingContactLink != null || it.pendingChannelLink != null || it.pendingHashtag != null ||
-            it.pendingNotifications.isNotEmpty() || it.pendingChatContact != null || it.pendingChannel != null ||
-            it.pendingRoomSession != null || it.pendingRoomAuthentication != null || it.pendingContactDetail != null
-        ) return@update it
-        it.copy(
-            selectedTab = restored.selectedTab,
-            stacks = restored.stacks,
-            nextEntryId = maxOf(it.nextEntryId, restored.nextEntryId),
-            selectedSetting = restored.selectedSetting,
-            selectedTool = restored.selectedTool,
-            widthDp = restored.widthDp,
-            tabBarVisible = restored.tabBarVisible,
-            failure = restored.failure ?: it.failure,
-        )
+    internal fun attachHostState(restored: NavigationState) {
+        if (!hostStateClaimed.compareAndSet(false, true)) return
+        mutableState.update { current ->
+            // Saved entry IDs must not reuse identities already issued by this process.
+            val reusedEntry = restored.stacks.values.any { stack ->
+                stack.drop(1).any { entry -> entry.id < current.nextEntryId }
+            }
+            if (restored == NavigationState() || current.stacks.values.any { stack -> stack.size > 1 } ||
+                current.selectedTab != AppTab.CHATS || current.pendingMapFocus != null ||
+                current.pendingContactLink != null || current.pendingChannelLink != null || current.pendingHashtag != null ||
+                current.pendingNotifications.isNotEmpty() || current.pendingChatContact != null || current.pendingChannel != null ||
+                current.pendingRoomSession != null || current.pendingRoomAuthentication != null ||
+                current.pendingContactDetail != null || reusedEntry
+            ) return@update current
+            current.copy(
+                selectedTab = restored.selectedTab,
+                stacks = restored.stacks,
+                nextEntryId = maxOf(current.nextEntryId, restored.nextEntryId),
+                selectedSetting = restored.selectedSetting,
+                selectedTool = restored.selectedTool,
+                widthDp = restored.widthDp,
+                tabBarVisible = restored.tabBarVisible,
+                failure = restored.failure ?: current.failure,
+            )
+        }
     }
 
     fun selectTab(tab: AppTab) = mutableState.update { it.select(tab) }

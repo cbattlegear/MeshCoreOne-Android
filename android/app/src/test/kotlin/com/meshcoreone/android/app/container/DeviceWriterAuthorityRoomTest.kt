@@ -545,6 +545,12 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
             assertNotNull(editor.updateDevice(before.info(), "legacy-guard-off")).join()
             assertEquals("legacy-guard-off", store.fetchDevice(before.id)!!.appliedRadioPresetID)
             assertEquals("legacy-guard-off", h.manager.connectedDevice!!.appliedRadioPresetID)
+            assertNotNull(editor.addKnownRegion("US915")).join()
+            assertEquals(listOf("US915"), store.fetchDevice(before.id)!!.knownRegions)
+            assertEquals(store.fetchDevice(before.id), h.manager.connectedDevice)
+            assertNotNull(editor.removeKnownRegion("US915")).join()
+            assertEquals(emptyList<String>(), store.fetchDevice(before.id)!!.knownRegions)
+            assertEquals(store.fetchDevice(before.id), h.manager.connectedDevice)
         } finally {
             h.container.close()
         }
@@ -572,8 +578,11 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
 
             assertNull(editor.updateDevice(before.info(), "must-not-write"))
             assertFalse(editor.updateDevice(before.info(), "must-not-write", token))
+            assertFalse(editor.updatePathHashMode(2u, token))
             assertNull(editor.addKnownRegion("US915"))
             assertNull(editor.removeKnownRegion("US915"))
+            assertFalse(editor.addKnownRegion("US915", token))
+            assertFalse(editor.persistKnownRegionRemoval("US915", token))
 
             assertEquals(before, store.fetchDevice(before.id))
             assertEquals(before, h.manager.connectedDevice)

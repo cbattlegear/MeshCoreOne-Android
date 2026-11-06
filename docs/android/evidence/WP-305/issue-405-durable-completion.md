@@ -500,6 +500,10 @@ publication or dispatch occurred. The reported corrected successor is
 The producer reports establishment now owns a structured coroutine scope and binds its exact Job,
 settling only after children are terminal; the held-child cancellation control also exercises real
 rebuild. Independent review is pending, and this successor remains uncomposed and unexecuted.
+WP-302 subsequently found external disconnect/replacement does not cancel that structured rebuild
+scope: a pending `initialSync` child may keep the operations mutex after graph teardown and block
+successors. The producer has the exact anchors and external-retirement control request; `bc701e1`
+remains unaccepted.
 The reported minimal production
 composition is `ConnectionManager.kt` plus canonical `ChannelIdentityMutation.kt`
 (`a4cf97a36327721e9df7eb9afffbf12b37511d3c`); the cumulative WP-209 ancestry and 411d data/runtime
@@ -525,7 +529,8 @@ pending manager API, so they are not yet a compilable composed candidate. The ea
 fixture, onboarding-state and authority-control repairs were subsequently frozen in local commit
 `eff1f33e911`.
 
-The exact producer composition still requires favorable independent review of `bc701e1…` and the minimal
+The exact producer composition still requires a corrected successor addressing external retirement
+of the rebuild scope, favorable independent review, and the minimal
 canonical `ChannelIdentityMutation.kt` dependency as well as `ConnectionManager.kt`; no cumulative
 WP-209 ancestry is imported. Trusted current-main admissions for the caller files were previously
 verified. On caller head `dcb37285c8d`, `python tools\android-port\controller\validate.py` passed
@@ -559,3 +564,7 @@ assertion and verifies the old region removal committed. These controls remain u
 On this caller-only delta, pinned Python 3.12.4 runs of `controller/validate.py`,
 `test_inventory.py --check` and `portmap.py --repo .`, plus `git diff --check`, all exited 0.
 No Kotlin, Room, Gradle or hosted execution occurred.
+The guard-off parity control now also exercises direct region addition/removal against Room and
+live state. The missing-capture control explicitly covers token-bound path-hash, region-add and
+region-removal entry points as well as ordinary edits; none may request admission or fall back.
+These additional assertions are authored and unexecuted.

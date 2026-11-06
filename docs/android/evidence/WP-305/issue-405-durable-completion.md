@@ -466,7 +466,14 @@ WP-302 rejected `87d`: kotlinx-coroutines 1.10.2 can publish a `Deferred`'s comp
 running completion listeners, so `work.await()` may return before settlement. Its live check then
 accepts an unsettled successful graph; cancellation before the delayed callback can leave READY
 permanently unwritable after owner cleanup is unreachable. Exact source anchors were sent to WP-209.
-Neither 78c, 7db nor 87d is accepted, executed or published, and none is composed. The reported minimal production
+WP-209's updated source-only successor is
+`fb0eef752f361babf29057f20f63a1008d1a7844` (tree
+`1bfd1a5efd465becb80af31a582f294fdfd9976c`, exact manager blob
+`ca51f7faa664cdd5e8a0fd3d3c02b4d2aae5fef1`). It reportedly settles the exact active operation/work
+synchronously under the manager lock before every successful shared await return, using original
+initiator authority; the completion callback and revoked-success cleanup remain, and a blocked-listener
+fast-path control is authored. Independent review and extraction remain held; no runtime execution is
+claimed. Neither 78c, 7db, 87d nor fb0 is accepted, executed or published, and none is composed. The reported minimal production
 composition is `ConnectionManager.kt` plus canonical `ChannelIdentityMutation.kt`
 (`a4cf97a36327721e9df7eb9afffbf12b37511d3c`); the cumulative WP-209 ancestry and 411d data/runtime
 test graph change are not required for the runtime API.
@@ -491,8 +498,7 @@ pending manager API, so they are not yet a compilable composed candidate. The ea
 fixture, onboarding-state and authority-control repairs were subsequently frozen in local commit
 `eff1f33e911`.
 
-The exact producer composition still requires a corrected successor to `87d...`, favorable
-independent review, and the minimal
+The exact producer composition still requires favorable independent review of `fb0...` and the minimal
 canonical `ChannelIdentityMutation.kt` dependency as well as `ConnectionManager.kt`; no cumulative
 WP-209 ancestry is imported. Trusted current-main admissions for the caller files were previously
 verified. On caller head `dcb37285c8d`, `python tools\android-port\controller\validate.py` passed

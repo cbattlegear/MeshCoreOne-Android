@@ -546,6 +546,105 @@ class NotificationRecoveryClipboardTest {
             .assertIsDisplayed()
     }
 
+    @Test
+    fun competingDialogDuringDeleteKeepsBusyAndReportsItsLaterFailure() {
+        val original = save(46, "keep through competing modal")
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val failOnce = AtomicBoolean()
+        context = object : ContextWrapper(context) {
+            override fun getApplicationContext(): Context = this
+            override fun getNoBackupFilesDir(): File {
+                if (failOnce.compareAndSet(true, false)) {
+                    entered.countDown()
+                    check(release.await(10, TimeUnit.SECONDS))
+                    throw SecurityException("synthetic deferred disposition failure")
+                }
+                return super.getNoBackupFilesDir()
+            }
+        }
+        mount()
+        awaitText("keep through competing modal")
+        failOnce.set(true)
+        try {
+            compose.onNodeWithText(text(AppChatsStrings.chatsMessageActionDelete)).performClick()
+            compose.waitUntil(5_000) { entered.count == 0L }
+            compose.runOnIdle { otherDialog.value = true }
+            compose.onNodeWithText(text(NotificationStrings.string.notification_action_recovery_title))
+                .assertDoesNotExist()
+            compose.runOnIdle { otherDialog.value = false }
+            awaitText("keep through competing modal")
+            compose.onNodeWithText(text(AppLocalizableStrings.commonCancel)).assertIsNotEnabled()
+            compose.onNodeWithText(text(AppChatsStrings.chatsMessageActionDelete)).assertIsNotEnabled()
+            compose.runOnIdle { otherDialog.value = true }
+        } finally {
+            release.countDown()
+        }
+        // A real subsequent read waits for the disposition to leave the custody lock.
+        assertEquals(original.id, NotificationActionRecovery.load(context).items.single().entry.id)
+        compose.runOnIdle { otherDialog.value = false }
+        awaitText(text(NotificationStrings.string.notification_action_recovery_discard_failed))
+        awaitText("keep through competing modal")
+        assertEquals(original.id, entries().single().id)
+    }
+
+    @Test
+    fun duplicateOldDeleteCallbackCannotStartASecondDisposition() {
+        duplicateDispositionIsRejected(copy = false)
+    }
+
+    @Test
+    fun duplicateOldCopyCallbackCannotStartASecondDisposition() {
+        duplicateDispositionIsRejected(copy = true)
+    }
+
+    private fun duplicateDispositionIsRejected(copy: Boolean) {
+        save(47, "one disposition only")
+        // Keep a second record visible after successful removal, so late false errors are observable.
+        val remaining = save(48, "untouched next record")
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val gateOnce = AtomicBoolean()
+        context = object : ContextWrapper(context) {
+            override fun getApplicationContext(): Context = this
+            override fun getNoBackupFilesDir(): File {
+                if (gateOnce.compareAndSet(true, false)) {
+                    entered.countDown()
+                    check(release.await(10, TimeUnit.SECONDS))
+                }
+                return super.getNoBackupFilesDir()
+            }
+        }
+        mount()
+        awaitText("one disposition only")
+        val oldClick = requireNotNull(
+            compose.onNodeWithText(text(
+                if (copy) AppChatsStrings.chatsMessageActionCopy else AppChatsStrings.chatsMessageActionDelete,
+            )).fetchSemanticsNode().config[SemanticsActions.OnClick].action,
+        )
+        val version = NotificationActionRecovery.changes.value
+        gateOnce.set(true)
+        try {
+            compose.runOnUiThread {
+                assertTrue(oldClick())
+                assertTrue(oldClick())
+            }
+            compose.waitUntil(5_000) { entered.count == 0L }
+            compose.onNodeWithText(text(AppLocalizableStrings.commonCancel)).assertIsNotEnabled()
+            // Invoke the retained enabled semantics callback again while real IO is still gated.
+            compose.runOnUiThread { assertTrue(oldClick()) }
+        } finally {
+            release.countDown()
+        }
+        awaitText("untouched next record")
+        awaitCompletedRead()
+        compose.waitForIdle()
+        assertEquals(version + 1, NotificationActionRecovery.changes.value)
+        assertEquals(listOf(remaining.id), entries().map { it.id })
+        compose.onNodeWithText(text(NotificationStrings.string.notification_action_recovery_discard_failed))
+            .assertDoesNotExist()
+    }
+
     private fun awaitCompletedRead() {
         compose.waitUntil(5_000) {
             compose.onAllNodes(androidx.compose.ui.test.hasTestTag("notification-recovery-read-complete"))

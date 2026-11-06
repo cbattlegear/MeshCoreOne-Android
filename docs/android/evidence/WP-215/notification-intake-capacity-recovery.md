@@ -107,6 +107,11 @@ A status-only replacement cannot re-enable another disposition or abandon an
 in-flight operation's failure. That failure stays visible when the original
 record returns; starting another operation or explicitly closing clears the
 displayed operation error, not the underlying custody.
+Temporary competing-dialog deferral occurs only after the operation's remembered
+state and scope are established, so it hides recovery without cancelling an
+already running disposition. Both action callbacks also recheck the current busy
+state before launch; disabled presentation alone is not duplicate admission
+protection against a retained enabled callback.
 
 Recovery does not start an activity from the reply/mark-read broadcast: Android 12
 prohibits notification trampolines, and background-launch denial need not throw.
@@ -221,7 +226,7 @@ byte/oversize rejection, and deadline completion without cancellation, premature
 budget release or double finish. These are authored controls, not evidence that
 the Android receiver deadline has been exercised on a device.
 
-`NotificationRecoveryClipboardTest.kt` contains 21 authored App methods covering
+`NotificationRecoveryClipboardTest.kt` contains 24 authored App methods covering
 the actual clipboard and mounted dialog: exact sensitive copy, inaccessible
 clipboard, cancel/host destruction, single-record copy/discard, failed
 copy/discard, the process-only warning, deferral behind another dialog and the
@@ -244,6 +249,12 @@ any warning frame, then require the newer warning after frames resume. A fail-on
 mounted Delete control explicitly observes item-to-status-only replacement and
 disabled Cancel while blocked, then requires the failure and original record
 together after storage resumes.
+The paused-frame controls witness the IO-side disposal refresh, not independently
+the later UI coroutine continuation settling before that frame; no stronger
+execution claim is made. Three additional mounted declarations cover a
+competing-dialog hide/unhide during gated failed Delete (busy remains set and
+the later failure is shown), plus same-event and retained-callback duplicate
+Copy/Delete invocation while real IO is gated.
 
 **Zero methods have been executed for this draft.** These counts come from static
 source inspection, not runner discovery. A fresh store instance is not an
@@ -265,6 +276,8 @@ The same-generation/disposition follow-up adds four App declarations, for 29
 receiver and 20 App controls; none have executed.
 The operation-state follow-up adds one App declaration, for 29 receiver and
 21 App controls; none have executed.
+The deferral/admission follow-up adds three App declarations, for 29 receiver and
+24 App controls; none have executed.
 
 Actual allowed static checks:
 

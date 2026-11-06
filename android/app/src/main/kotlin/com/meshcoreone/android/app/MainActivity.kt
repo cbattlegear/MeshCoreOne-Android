@@ -289,7 +289,6 @@ open class MainActivity : ComponentActivity() {
 
 @Composable
 internal fun NotificationActionRecoveryDialog(blockedByOtherDialog: Boolean = false) {
-    if (blockedByOtherDialog) return
     val context = LocalContext.current
     val sequence by NotificationActionRecovery.changes.collectAsState()
     var dismissedSequence by remember { mutableStateOf<Long?>(null) }
@@ -306,6 +305,7 @@ internal fun NotificationActionRecoveryDialog(blockedByOtherDialog: Boolean = fa
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<Int?>(null) }
     val scope = rememberCoroutineScope()
+    if (blockedByOtherDialog) return
     if (item == null && recovery.storageFailure == null &&
         !recovery.notRetained && !recovery.manualOpenRequired && error == null && !busy
     ) return
@@ -377,7 +377,8 @@ internal fun NotificationActionRecoveryDialog(blockedByOtherDialog: Boolean = fa
                 if (item != null && text != null) {
                     TextButton(
                         enabled = !busy,
-                        onClick = {
+                        onClick = action@ {
+                            if (busy) return@action
                             busy = true
                             error = null
                             scope.launch {
@@ -402,7 +403,8 @@ internal fun NotificationActionRecoveryDialog(blockedByOtherDialog: Boolean = fa
                 if (item != null) {
                     TextButton(
                         enabled = !busy,
-                        onClick = {
+                        onClick = action@ {
+                            if (busy) return@action
                             busy = true
                             error = null
                             scope.launch {

@@ -134,6 +134,7 @@ private fun PairStep(
     val wifiState by flow.wifi.state.collectAsState()
     val completionUnsettled by flow.onboarding.unsettledCompletionFlow.collectAsState()
     val canReconcileCompletion by flow.onboarding.reconciliationReadyFlow.collectAsState()
+    val completionGate by flow.onboarding.completionGateFlow.collectAsState()
     val action = flow.deviceScan.primaryAction(demoEnabled, state.otherAppDeviceId)
     LaunchedEffect(state.sheet == PairSheet.WIFI) {
         if (state.sheet == PairSheet.WIFI) {
@@ -160,7 +161,7 @@ private fun PairStep(
         when (sheet) {
             PairSheet.NO_DEVICE -> NoDeviceSheetContent(
                 flow::confirmNoDevice, flow::dismissPairingSheet, isCompleting = completingWithoutDevice,
-                canConfirm = flow.canCompleteWithoutDevice() && (!completionUnsettled || canReconcileCompletion),
+                canConfirm = completionGate >= 0 && flow.canCompleteWithoutDevice() && (!completionUnsettled || canReconcileCompletion),
             )
             PairSheet.TROUBLESHOOTING -> TroubleshootingSheetContent(
                 pairedCount, clearing, flow::clearStalePairings, deps::openAppSettings, flow::dismissPairingSheet,
@@ -195,9 +196,10 @@ private fun PresetStep(flow: OnboardingFlowCoordinator, deps: OnboardingFeatureD
     val selection by deps.region.selection.collectAsState()
     val completionUnsettled by flow.onboarding.unsettledCompletionFlow.collectAsState()
     val canReconcile by flow.onboarding.reconciliationReadyFlow.collectAsState()
+    val completionGate by flow.onboarding.completionGateFlow.collectAsState()
     PresetStepScreen(
         state, selection?.let(deps.region.catalog::displayName), flow.preset.visiblePresets(),
-        flow.preset.canApply(canApply, state) && (!completionUnsettled || canReconcile),
+        completionGate >= 0 && flow.preset.canApply(canApply, state) && (!completionUnsettled || canReconcile),
         PresetStepActions(flow.preset::select, { flow.preset.apply() }, flow.preset::dismissError, flow.preset::retry, flow.preset::dismissRetryAlert),
         canReconcileCompletion = canReconcile,
     )

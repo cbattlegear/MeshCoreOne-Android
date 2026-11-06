@@ -5,6 +5,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -100,8 +101,12 @@ class SettingsPathHashRecreationTest : RoomProcessTest() {
                 }
             }
             fun choose(text: Int) {
-                try { compose.onNodeWithText(context.getString(S.pathHashModeLabel)).assertExists() }
-                catch (missing: AssertionError) {
+                try {
+                    h.eventually("Hash Size row composed") {
+                        compose.waitForIdle()
+                        compose.onAllNodesWithText(context.getString(S.pathHashModeLabel)).fetchSemanticsNodes().isNotEmpty()
+                    }
+                } catch (missing: AssertionError) {
                     throw AssertionError("Mounted tree: ${compose.onRoot(useUnmergedTree = true).printToString(40)}", missing)
                 }
                 compose.onNodeWithText(context.getString(S.pathHashModeLabel)).performScrollTo().performClick()

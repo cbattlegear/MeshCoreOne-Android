@@ -393,7 +393,13 @@ internal fun original(
 ): DynamicTest = DynamicTest.dynamicTest("$suite::$name$signature") { runTest(timeout = 10.seconds) { assertions() } }
 
 internal fun nativeCase(name: String, assertions: suspend TestScope.() -> Unit): DynamicTest =
-    DynamicTest.dynamicTest("WP-207::$name") { runTest(timeout = 10.seconds) { assertions() } }
+    DynamicTest.dynamicTest("WP-207::$name") {
+        try {
+            runTest(timeout = 10.seconds) { assertions() }
+        } catch (failure: org.opentest4j.AssertionFailedError) {
+            throw AssertionError("${failure.message} (${failure.stackTrace.firstOrNull { it.fileName?.contains("Test.kt") == true }})", failure)
+        }
+    }
 
 internal suspend fun TestScope.withFixture(assertions: suspend RuntimeFixture.() -> Unit) {
     val fixture = RuntimeFixture(this)

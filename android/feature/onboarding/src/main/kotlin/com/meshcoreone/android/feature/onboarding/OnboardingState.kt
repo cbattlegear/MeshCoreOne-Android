@@ -110,6 +110,9 @@ class OnboardingState(private val store: OnboardingFlagStore) {
     private var reconcilingAttempt: OnboardingCompletionAttempt? = null
     private val reconciliationReady = MutableStateFlow(false)
     val reconciliationReadyFlow: StateFlow<Boolean> = reconciliationReady.asStateFlow()
+    private val completionGate = MutableStateFlow(0L)
+    /** Advances after every completion-gate mutation so mounted actions re-read non-observable gate inputs. */
+    val completionGateFlow: StateFlow<Long> = completionGate.asStateFlow()
     private val resetMutex = Mutex()
     private var settlingResets = 0
     private var completionRevision = 0L
@@ -370,10 +373,12 @@ class OnboardingState(private val store: OnboardingFlagStore) {
     private fun setSettlingAttempt(attempt: OnboardingCompletionAttempt?) {
         settlingAttempt = attempt
         unsettled.value = attempt != null || settlingResets > 0
+        completionGate.update { it + 1 }
     }
 
     private fun refreshReconciliationReady() {
         reconciliationReady.value = !retired && settlingResets == 0 && uncertain != null && reconcilingAttempt == null
+        completionGate.update { it + 1 }
     }
 
     /**

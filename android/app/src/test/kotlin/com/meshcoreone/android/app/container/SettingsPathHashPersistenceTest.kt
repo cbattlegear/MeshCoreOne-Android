@@ -463,7 +463,9 @@ class SettingsPathHashPersistenceTest : RoomProcessTest() {
                 throw AssertionError(
                     "applying=${holder.state.value.isApplying} mode=${holder.state.value.device?.pathHashMode} " +
                         "error=${holder.state.value.errorMessage} conflicts=$conflicts failures=${failures.size} " +
-                        "stored=${store.fetchDevice(before.id)?.pathHashMode} sent=${h.links.radios.single().sent.count { it[0] == 0x3d.toUByte() }}",
+                        "stored=${store.fetchDevice(before.id)?.pathHashMode} sent=${h.links.radios.single().sent.count { it[0] == 0x3d.toUByte() }} " +
+                        "manager=${h.manager.connectedDevice?.pathHashMode} managerToken=${h.manager.connectedDeviceToken} " +
+                        "holderConn=${holder.state.value.connectionState} selected=${holder.state.value.selectedMode}",
                     timeout,
                 )
             }

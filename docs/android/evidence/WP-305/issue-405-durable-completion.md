@@ -214,6 +214,14 @@ the same completion callback across Activity recreation, rejects an old publicat
 receipt is republished, interposes a concurrent reset while the commit action is held, and rejects
 the publication after reset. This new regression has not been executed.
 
+The publication callback now also receives the exact `OnboardingFlowCoordinator`, and the new
+callback form requires the host to pass the coordinator it pinned when capturing its navigation
+witness. The same pinned coordinator is threaded through `OnboardingEntry` and `OnboardingFlow`;
+the effect still rejects a coordinator no longer owned by the process dependencies. The mounted
+regression asserts callback identity across recreation and after a deliberate owner replacement.
+WP-302 must capture the witness before starting the flow and pass that same coordinator to the
+entry; the producer does not capture or refresh navigation state.
+
 Trusted `reserve.py admit` accepted the three onboarding production paths as
 `wp-owned/modify`, the mounted regression as `reviewed-support-test/add-or-update-related-test`,
 and this evidence path as `wp-owned/record-evidence`. `git diff --check` passed;

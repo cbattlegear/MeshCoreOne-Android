@@ -39,16 +39,21 @@ fun OnboardingFlow(
     modifier: Modifier = Modifier,
     onCompletionReceipt: ((OnboardingCompletionReceipt) -> Boolean)? = null,
     onCompletionPublication: ((
+        OnboardingFlowCoordinator,
         OnboardingCompletionPublication,
         commit: (() -> Boolean) -> Boolean,
     ) -> Boolean)? = null,
     attemptKey: Any? = null,
     completionDeliveryKey: Any? = null,
+    flowCoordinator: OnboardingFlowCoordinator? = null,
 ) {
+    require(onCompletionPublication == null || flowCoordinator != null) {
+        "Publication callbacks require the coordinator pinned by the navigation host"
+    }
     val scope = rememberCoroutineScope()
     val ownerRevision = dependencies.flowCoordinatorRevision?.collectAsState()?.value
-    val flow = remember(dependencies, attemptKey, ownerRevision) {
-        dependencies.retainedFlowCoordinator()
+    val flow = remember(dependencies, attemptKey, ownerRevision, flowCoordinator) {
+        flowCoordinator ?: dependencies.retainedFlowCoordinator()
             ?: OnboardingFlowCoordinator(scope, dependencies).also { it.restoreStartingPath() }
     }
     val requester = dependencies.rememberPermissionRequester { flow.onPermissionResult() }
@@ -70,7 +75,7 @@ fun OnboardingFlow(
                     }
                 }
                 val accepted = if (onCompletionPublication != null) {
-                    onCompletionPublication(published, commitCurrent) && committed
+                    onCompletionPublication(flow, published, commitCurrent) && committed
                 } else if (onCompletionReceipt != null) {
                     commitCurrent { onCompletionReceipt(published.receipt) }
                 } else {

@@ -133,7 +133,9 @@ class OnboardingGateTest {
 
     private fun showFlow(
         dependencies: com.meshcoreone.android.feature.onboarding.OnboardingFeatureDependencies,
+        flowCoordinator: com.meshcoreone.android.feature.onboarding.OnboardingFlowCoordinator? = null,
         onPublication: ((
+            com.meshcoreone.android.feature.onboarding.OnboardingFlowCoordinator,
             com.meshcoreone.android.feature.onboarding.OnboardingCompletionPublication,
             commit: (() -> Boolean) -> Boolean,
         ) -> Boolean)? = null,
@@ -143,6 +145,7 @@ class OnboardingGateTest {
             OnboardingFlow(
                 dependencies, onCompleted = {}, onCompletionReceipt = onReceipt,
                 onCompletionPublication = onPublication,
+                flowCoordinator = flowCoordinator,
             )
         }
     }
@@ -152,6 +155,7 @@ class OnboardingGateTest {
         val deliveries = kotlinx.coroutines.channels.Channel<Unit>(kotlinx.coroutines.channels.Channel.UNLIMITED)
         val publications = mutableListOf<com.meshcoreone.android.feature.onboarding.OnboardingCompletionPublication>()
         val committers = mutableListOf<((() -> Boolean) -> Boolean)>()
+        val callbackFlows = mutableListOf<com.meshcoreone.android.feature.onboarding.OnboardingFlowCoordinator>()
         var navigationCommits = 0
         try {
             host.setup().visible()
@@ -160,15 +164,17 @@ class OnboardingGateTest {
             val flow = dependencies.retainedFlowCoordinator()
             val receipt = com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt.WithoutDevice
             val onPublication: (
+                com.meshcoreone.android.feature.onboarding.OnboardingFlowCoordinator,
                 com.meshcoreone.android.feature.onboarding.OnboardingCompletionPublication,
                 ((() -> Boolean) -> Boolean),
-            ) -> Boolean = { publication, commit ->
+            ) -> Boolean = { callbackFlow, publication, commit ->
+                callbackFlows += callbackFlow
                 publications += publication
                 committers += commit
                 deliveries.trySend(Unit)
                 false
             }
-            showFlow(dependencies, onPublication = onPublication)
+            showFlow(dependencies, flowCoordinator = flow, onPublication = onPublication)
 
             flow.onboarding.completeOnboardingWithReceipt(receipt, {}) { it.trySeal() }
             deliveries.receive()
@@ -177,11 +183,13 @@ class OnboardingGateTest {
             assertEquals(receipt, first.receipt)
 
             host.recreate()
-            showFlow(dependencies, onPublication = onPublication)
+            showFlow(dependencies, flowCoordinator = flow, onPublication = onPublication)
             deliveries.receive()
             compose.waitForIdle()
             assertSame(first, publications[1])
             assertEquals(first.revision, publications[1].revision)
+            assertSame(flow, callbackFlows[0])
+            assertSame(flow, callbackFlows[1])
 
             flow.onboarding.resetOnboarding()
             flow.onboarding.completeOnboardingWithReceipt(receipt, {}) { it.trySeal() }
@@ -224,6 +232,15 @@ class OnboardingGateTest {
             }
             assertFalse(flow.onboarding.commitCompletion(replacement) { navigationCommits++; true })
             assertEquals(1, navigationCommits)
+
+            dependencies.onFlowCompletionHandled(flow)
+            val replacementFlow = dependencies.retainedFlowCoordinator()
+            assertNotSame(flow, replacementFlow)
+            showFlow(dependencies, flowCoordinator = replacementFlow, onPublication = onPublication)
+            replacementFlow.onboarding.completeOnboardingWithReceipt(receipt, {}) { it.trySeal() }
+            deliveries.receive()
+            compose.waitForIdle()
+            assertSame(replacementFlow, callbackFlows.last())
         } finally {
             deliveries.close()
             processScope.cancel()

@@ -22,11 +22,13 @@ fun OnboardingEntry(
     dependencies: OnboardingFeatureDependencies? = null,
     onCompletionReceipt: ((OnboardingCompletionReceipt) -> Boolean)? = null,
     onCompletionPublication: ((
+        OnboardingFlowCoordinator,
         OnboardingCompletionPublication,
         commit: (() -> Boolean) -> Boolean,
     ) -> Boolean)? = null,
     attemptKey: Any? = null,
     completionDeliveryKey: Any? = null,
+    flowCoordinator: OnboardingFlowCoordinator? = null,
 ) {
     if (dependencies != null) {
         OnboardingFlow(
@@ -36,6 +38,7 @@ fun OnboardingEntry(
             onCompletionPublication = onCompletionPublication,
             attemptKey = attemptKey,
             completionDeliveryKey = completionDeliveryKey,
+            flowCoordinator = flowCoordinator,
         )
         return
     }

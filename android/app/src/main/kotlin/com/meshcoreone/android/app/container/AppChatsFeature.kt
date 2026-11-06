@@ -26,6 +26,7 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.services.reactions.ReactionParser
 import com.meshcoreone.android.core.services.reactions.ChannelReactionReplayResult
 import com.meshcoreone.android.core.services.reactions.ChannelReactionRetentionException
+import com.meshcoreone.android.core.services.reactions.ChannelReactionRetentionCancellation
 import com.meshcoreone.android.core.services.reactions.ChannelReactionUnretainedWork
 import com.meshcoreone.android.core.services.reactions.isHiddenOutgoingReaction
 import com.meshcoreone.android.feature.chats.composer.*
@@ -81,6 +82,8 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         val supportsUnscoped: Boolean,
     )
     private val floodScopeMutex = Mutex()
+    private val channelHistoryReplayMutex = Mutex()
+    private var channelHistoryRetention: ChannelReactionRetentionException? = null
     private var lastPushedScope: PushedFloodScope? = null
     private val visibleRoomKeepAlives = mutableMapOf<Pair<RadioSessionContainer, EntityKey>, Any>()
     private val store get() = container.processStore
@@ -454,10 +457,40 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         )
     }
 
+    internal suspend fun retainedChannelHistoryReactionFailure(): ChannelReactionRetentionException? =
+        channelHistoryReplayMutex.withLock { channelHistoryRetention }
+
     internal suspend fun prepareTimelineMessages(
         messages: List<MessageDTO>,
         indexing: ReactionIndexing?,
         channelCaptures: Map<MessageDTO, CapturedChannelReactionTarget>? = null,
+    ): List<MessageDTO> {
+        if (indexing?.scope is ReactionIndexScope.Channel && channelCaptures != null) {
+            return channelHistoryReplayMutex.withLock {
+                channelHistoryRetention?.let { throw it }
+                try {
+                    prepareTimelineMessagesNow(messages, indexing, channelCaptures)
+                } catch (cancelled: ChannelReactionRetentionCancellation) {
+                    channelHistoryRetention = ChannelReactionRetentionException(cancelled.work, cancelled)
+                    throw cancelled
+                } catch (failure: ChannelReactionRetentionException) {
+                    channelHistoryRetention = failure
+                    try {
+                        kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                    } catch (cancelled: CancellationException) {
+                        throw ChannelReactionRetentionCancellation(failure.work, cancelled)
+                    }
+                    throw failure
+                }
+            }
+        }
+        return prepareTimelineMessagesNow(messages, indexing, channelCaptures)
+    }
+
+    private suspend fun prepareTimelineMessagesNow(
+        messages: List<MessageDTO>,
+        indexing: ReactionIndexing?,
+        channelCaptures: Map<MessageDTO, CapturedChannelReactionTarget>?,
     ): List<MessageDTO> {
         if (indexing == null) return messages
         val radio = when (val target = indexing.scope) {

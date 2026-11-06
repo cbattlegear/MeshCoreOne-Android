@@ -125,7 +125,7 @@ sealed interface NativeChannelReactionParkResult {
 sealed interface ChannelReactionUnretainedWork {
     data class Selected(val work: ParkedChannelReaction) : ChannelReactionUnretainedWork
     data class Native(val work: SnapshotList<ParkedNativeChannelReaction>) : ChannelReactionUnretainedWork {
-        init { require(work.isNotEmpty()) }
+        init { require(work.isNotEmpty() && work.size <= ReactionService.MAX_PENDING_REACTIONS) }
     }
     data class Unselected(val work: UnselectedChannelReaction) : ChannelReactionUnretainedWork
 }
@@ -539,6 +539,13 @@ class ReactionService internal constructor(
         }
         val key = PendingReactionKey.of(pending.channelIndex, pending.parsed.targetSender, pending.parsed.messageHash)
         synchronized(lock) {
+            if (pendingReactions.count >= MAX_PENDING_REACTIONS) {
+                val work = ParkedNativeChannelReaction(pending, NativeChannelReactionFailure.CapacityExceeded)
+                throw ChannelReactionRetentionException(
+                    ChannelReactionUnretainedWork.Native(SnapshotList.of(work)),
+                    IllegalStateException("Never-targeted native reaction admission is full"),
+                )
+            }
             pendingReactions = pendingReactions.enqueue(
                 key, pending, MAX_PENDING_REACTIONS, pending.queueKeyOrder, pending.queueEntryOrder,
             )

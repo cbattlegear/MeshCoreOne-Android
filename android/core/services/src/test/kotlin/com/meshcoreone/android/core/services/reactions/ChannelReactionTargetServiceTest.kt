@@ -544,6 +544,32 @@ class ChannelReactionTargetServiceTest {
         }
     }
 
+    @Test fun neverTargetedAdmissionPreservesExistingHundredAndReturnsExactUnretainedArrivalOrdinals() {
+        val radio = RadioId(UUID.randomUUID())
+        val service = ReactionService()
+        val raw = service.buildReactionText("X", "Alice", "Hello", 100u)
+        val parsed = requireNotNull(ReactionParser.parse(raw))
+        val arrivals = List(101) { index ->
+            PendingReaction(
+                parsed, 3u, "Sender $index", raw, radio, Instant.EPOCH.minusSeconds(index.toLong()),
+                queueKeyOrder = 7, queueEntryOrder = index.toLong(),
+            )
+        }
+        arrivals.take(100).forEach(service::requeuePendingReaction)
+        val overflow = assertIs<ChannelReactionRetentionException>(
+            runCatching { service.requeuePendingReaction(arrivals.last()) }.exceptionOrNull(),
+        )
+        val work = assertIs<ChannelReactionUnretainedWork.Native>(overflow.work).work.single()
+        assertSame(arrivals.last(), work.pending)
+        assertIs<NativeChannelReactionFailure.CapacityExceeded>(work.failure)
+        assertNull(work.pending.boundTarget)
+        assertEquals(100L, work.pending.queueEntryOrder)
+        assertEquals(100 to 0, service.pendingCounts)
+        val original = service.indexMessage(UUID.randomUUID(), 3u, "Alice", "Hello", 100u)
+        assertEquals(arrivals.take(100), original)
+        assertEquals(0 to 0, service.pendingCounts)
+    }
+
     private data class Entry(
         val radio: Int,
         val sender: String,

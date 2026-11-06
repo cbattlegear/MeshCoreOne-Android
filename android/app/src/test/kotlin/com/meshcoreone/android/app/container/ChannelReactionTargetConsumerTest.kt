@@ -10,6 +10,7 @@ import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.model.ChannelDTO
+import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.MessageStatus
@@ -17,6 +18,7 @@ import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.ReactionDTO
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
+import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.core.services.reactions.ChannelReactionReplayResult
 import com.meshcoreone.android.core.services.reactions.PendingReaction
 import com.meshcoreone.android.core.services.reactions.ReactionParser
@@ -24,6 +26,8 @@ import com.meshcoreone.android.core.services.reactions.ReactionService
 import com.meshcoreone.android.core.services.reactions.NativeChannelReactionFailure
 import com.meshcoreone.android.core.services.reactions.NativeChannelReactionParkResult
 import com.meshcoreone.android.core.services.reactions.ParkedNativeChannelReaction
+import com.meshcoreone.android.core.services.reactions.ChannelReactionRetentionException
+import com.meshcoreone.android.core.services.reactions.ChannelReactionUnretainedWork
 import com.meshcoreone.android.feature.chats.timeline.ChatTimelineDependencies
 import com.meshcoreone.android.feature.chats.timeline.ChatViewModel
 import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
@@ -579,6 +583,65 @@ class ChannelReactionTargetConsumerTest : RoomProcessTest() {
             assertTrue(service.indexMessage(original.id, channel.index, "Alice", original.text, original.reactionTimestamp).isEmpty())
             assertIs<ChannelReactionReplayResult.Completed>(service.indexChannelMessageAndReplay(captured, "Alice", authority))
             assertEquals(0, calls, "An unretained overflow batch must not silently return to native replay")
+        }
+    }
+
+    @Test fun appProcessRetainsTheExactOverflowOutsideReplaceableErrorsAndBlocksFurtherHistoryAdmission() = runTest {
+        var calls = 0
+        fixture(this, beforeApply = { calls++ }) {
+            val original = message()
+            store.saveMessage(original)
+            val captured = authority.fetchChannelReactionWindow(channel.radioId, channel.index, 10, 0).single()
+            repeat(100) {
+                assertIs<NativeChannelReactionParkResult.Retained>(service.parkNativeChannelReaction(
+                    ParkedNativeChannelReaction(
+                        pending(original, "Retained $it").copy(boundTarget = captured), NativeChannelReactionFailure.Stale,
+                    ),
+                ))
+            }
+            queue(original, "Bob")
+            val failure = assertIs<ChannelReactionRetentionException>(
+                runCatching { dependencies.prepareMessages(window()) }.exceptionOrNull(),
+            )
+            val work = assertIs<ChannelReactionUnretainedWork.Native>(failure.work).work.single()
+            assertEquals("Bob", work.pending.senderNodeName)
+            assertEquals(receivedAt, work.pending.receivedAt)
+            assertNotNull(work.pending.boundTarget)
+            assertIs<NativeChannelReactionFailure.CapacityExceeded>(work.failure)
+            queue(original, "Carol")
+            assertSame(failure, runCatching { dependencies.prepareMessages(window()) }.exceptionOrNull())
+            val replacementTimeline = harness.container.chatsFeature.timeline(conversation)
+            val replacementWindow = replacementTimeline.data.fetchMessages(conversation, 51, 0)
+            assertSame(failure, runCatching { replacementTimeline.prepareMessages(replacementWindow) }.exceptionOrNull())
+            assertSame(failure, harness.container.chatsFeature.retainedChannelHistoryReactionFailure())
+            assertSame(work, assertIs<ChannelReactionUnretainedWork.Native>(failure.work).work.single())
+            assertEquals(0, calls, "No later history preparation may accept another batch after process custody fills")
+            assertTrue(store.fetchReactions(EntityKey(channel.radioId, original.id)).isEmpty())
+            assertEquals(listOf("Carol"), service.indexMessage(
+                original.id, channel.index, "Alice", original.text, original.reactionTimestamp,
+            ).map { it.senderNodeName }, "Blocked preparation must not drain a later arrival or replace the original overflow")
+            harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            harness.manager.connect(harness.target())
+            harness.eventually("replacement history session ready") {
+                harness.manager.connectionState == DeviceConnectionState.READY
+            }
+            assertFalse(service === assertNotNull(harness.sessions.current).reactionService)
+            val reconnectedTimeline = harness.container.chatsFeature.timeline(conversation)
+            assertSame(failure, runCatching { reconnectedTimeline.prepareMessages(emptyList()) }.exceptionOrNull())
+            assertSame(failure, harness.container.chatsFeature.retainedChannelHistoryReactionFailure())
+            val contact = ContactDTO(
+                radioId = channel.radioId, publicKey = key(3), name = "Direct", lastHeardTimestamp = null,
+            )
+            store.saveContact(contact)
+            val direct = original.copy(
+                id = UUID.randomUUID(), channelIndex = null, contactID = contact.id, senderNodeName = null,
+                text = "Ordinary direct delivery",
+            )
+            store.saveMessage(direct)
+            val directConversation = TimelineConversation.Direct(contact)
+            val directTimeline = harness.container.chatsFeature.timeline(directConversation)
+            val directWindow = directTimeline.data.fetchMessages(directConversation, 51, 0)
+            assertEquals(listOf(direct), directTimeline.prepareMessages(directWindow))
         }
     }
 

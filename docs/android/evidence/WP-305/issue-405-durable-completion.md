@@ -286,3 +286,14 @@ asserts B remains owned and incomplete. The test is authored but has not run. Th
 entry-keyed retained owner before multi-entry navigation is considered integrated. The broader
 candidate remains unpublished while exact-head run `42141885753` runs against the older `fb940ee`
 head; that run cannot verify this follow-up.
+
+The factory and regression were added in source commit
+`0e6854ecb5aca216ae503008e4a469e533ea19a2`, parent
+`35acb964eb6ff1a869da580bf32fa42e22547ba9`, with current-main merge base
+`35abcc1276082995eed216bf28bff04d77e176c8`. On that candidate, Windows
+`ci.py preflight --local` passed with the existing same-host state and a fresh absolute output
+directory; `controller/validate.py` passed (64 WPs / 1,866 tracked reference files);
+`test_inventory.py --check` passed (468 paths / 5,133 declarations); and `git diff --check`
+passed. The new Kotlin test and other Android tests were not run because the shared Gradle execution
+reservation remains held. The local commit is not pushed; PR #532 still points to `fb940ee`, and
+its active run is not evidence for this candidate.

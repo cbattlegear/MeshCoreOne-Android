@@ -317,6 +317,7 @@ internal class Harness(
     val localPublicKey: Bytes = SELF,
     startupPacket: Bytes? = null,
     radio: RadioId = RADIO,
+    private val useCriticalIngress: Boolean = false,
 ) {
     val token = token(radio, generation)
     private val fixtureJob = SupervisorJob(test.coroutineContext[Job])
@@ -388,7 +389,8 @@ internal class Harness(
         MessagingIssueReporter { diagnostics += it }, progress = progress, onQueryAccounting = onQueryAccounting)
         .also { queues += it }
     fun poller(role: MeshCoreSessionProtocol = session) =
-        MessagePollingService(token, role, store, signals, scope, clock, MessagingIssueReporter { diagnostics += it })
+        MessagePollingService(token, role, store, signals, scope, clock, MessagingIssueReporter { diagnostics += it },
+            useCriticalIngress = useCriticalIngress)
             .also { pollers += it }
     suspend fun pending(message: MessageDTO, attempt: Long? = 0, isResend: Boolean = false): PendingSendDTO {
         val channelIndex = message.channelIndex

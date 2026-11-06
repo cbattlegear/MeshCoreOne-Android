@@ -14,6 +14,7 @@ import com.meshcoreone.android.core.protocol.event.ContactMessage
 import java.time.Duration
 import java.time.Instant
 import java.util.UUID
+import kotlin.coroutines.cancellation.CancellationException
 
 interface AppStateProvider { suspend fun isInForeground(): Boolean }
 
@@ -95,6 +96,36 @@ data class ChannelReceiveEnvelope(
                 "Receive proof belongs to a different session or parsed message occurrence"
             }
         }
+    }
+}
+
+/**
+ * An original channel save whose commit outcome is unknown. The occurrence is not authority to
+ * retry the save or select a reaction target; a custody owner must preserve it without redrive.
+ */
+data class ChannelMessageIngressUnknown(
+    val envelope: ChannelReceiveEnvelope,
+    val messageDTO: MessageDTO,
+    val cause: Exception,
+) {
+    init {
+        require(messageDTO.radioId == envelope.session.radioId)
+        require(messageDTO.channelIndex == envelope.message.channelIndex)
+        require(messageDTO.contactID == null && messageDTO.direction == MessageDirection.INCOMING)
+    }
+}
+
+class ChannelMessageIngressUnknownException(
+    val work: ChannelMessageIngressUnknown,
+) : Exception("Original channel message save outcome is unknown; redrive is not permitted", work.cause)
+
+class ChannelMessageIngressUnknownCancellation(
+    val work: ChannelMessageIngressUnknown,
+    original: CancellationException,
+) : CancellationException("Original channel message save was cancelled with an unknown outcome; redrive is not permitted") {
+    init {
+        require(work.cause === original)
+        initCause(original)
     }
 }
 

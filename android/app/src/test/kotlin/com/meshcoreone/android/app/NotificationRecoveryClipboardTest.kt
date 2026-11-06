@@ -12,6 +12,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
@@ -671,7 +672,14 @@ class NotificationRecoveryClipboardTest {
         )
         compose.runOnUiThread { assertTrue(oldClick()) }
         awaitText("currently displayed text")
-        compose.waitForIdle()
+        compose.waitUntil(5_000) {
+            compose.onAllNodes(
+                androidx.compose.ui.test.hasText(text(AppLocalizableStrings.commonCancel)) and
+                    androidx.compose.ui.test.isEnabled(),
+            ).fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText(text(AppLocalizableStrings.commonCancel)).assertIsEnabled()
+        compose.onNodeWithText(text(AppChatsStrings.chatsMessageActionDelete)).assertIsEnabled()
         val clipboard = requireNotNull(context.getSystemService(ClipboardManager::class.java))
         clipboard.setPrimaryClip(android.content.ClipData.newPlainText("", "new clipboard custody"))
         compose.runOnUiThread { assertTrue(oldClick()) }

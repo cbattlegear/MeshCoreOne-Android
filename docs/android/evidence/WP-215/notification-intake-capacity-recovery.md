@@ -265,6 +265,9 @@ idle retained callbacks during competing-dialog deferral, and a live revision
 change in the same event before recomposition. Synchronous admission counts also
 strengthen the duplicate-in-flight controls; a rejected callback must not launch
 an operation at all, independent of IO scheduling.
+Settled stale-callback controls explicitly wait for the next item's Cancel and
+Delete actions to be enabled before invoking the retained callback, witnessing
+that the previous UI operation cleared busy rather than passing on that guard.
 
 **Zero methods have been executed for this draft.** These counts come from static
 source inspection, not runner discovery. A fresh store instance is not an

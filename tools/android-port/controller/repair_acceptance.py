@@ -1410,47 +1410,84 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
     if source_declarations is not None:
         source_declarations.update(declarations)
         return {}
-    # This one external Robolectric base has no JUnit lineage. Do not infer that
-    # property from @Implements or from an arbitrary shadow/base class name.
+    # Only these exact external Robolectric collaborators have known non-JUnit lineage.
     notification_shadows = set()
-    shadow_imports = {
-        "Implements": "org.robolectric.annotation.Implements",
-        "NotificationManager": "android.app.NotificationManager",
-        "ShadowNotificationManager": "org.robolectric.shadows.ShadowNotificationManager",
-        "Implementation": "org.robolectric.annotation.Implementation",
-    }
-    shadow_names = set(shadow_imports) | {"org", "android"}
-    if (
-        not unresolved_scope and not grouped_annotations
-        and all(imports.get(name) == {target} for name, target in shadow_imports.items())
-        and not any(names & shadow_names for names in declared_names.values())
-        and not any(
-            name != target.rsplit(".", 1)[-1]
-            for name, targets in imports.items() for target in targets
-            if target in shadow_imports.values()
-        )
-    ):
+    activity_shadows = set()
+    shadow_profiles = (
+        (notification_shadows, "NotificationManager", "ShadowNotificationManager", {
+            "Implements": "org.robolectric.annotation.Implements",
+            "NotificationManager": "android.app.NotificationManager",
+            "ShadowNotificationManager": "org.robolectric.shadows.ShadowNotificationManager",
+            "Implementation": "org.robolectric.annotation.Implementation",
+        }),
+        (activity_shadows, "Activity", "ShadowActivity", {
+            "Implements": "org.robolectric.annotation.Implements",
+            "Activity": "android.app.Activity",
+            "ShadowActivity": "org.robolectric.shadows.ShadowActivity",
+            "Implementation": "org.robolectric.annotation.Implementation",
+            "RealObject": "org.robolectric.annotation.RealObject",
+        }),
+    )
+
+    def shadow_predecessor(start):
+        cursor = start - 9
+        if cursor < 0:
+            return False
+        if tokens[cursor] in ("{", "}", ";"):
+            return True
+        if tokens[cursor] != ")":
+            return False
+        depth = 0
+        while cursor >= 0:
+            if tokens[cursor] == ")":
+                depth += 1
+            elif tokens[cursor] == "(":
+                depth -= 1
+                if depth == 0:
+                    break
+            cursor -= 1
+        cursor -= 1
+        if cursor < 0 or not name_token(tokens[cursor]):
+            return False
+        while cursor >= 2 and tokens[cursor - 1] == "." and name_token(tokens[cursor - 2]):
+            cursor -= 2
+        return cursor > 0 and tokens[cursor - 1] == "="
+
+    for shadows, target_name, base_name, shadow_imports in shadow_profiles:
+        shadow_names = set(shadow_imports) | {"org", "android"}
+        if (
+            unresolved_scope or grouped_annotations
+            or not all(imports.get(name) == {target} for name, target in shadow_imports.items())
+            or any(names & shadow_names for names in declared_names.values())
+            or any(
+                name != target.rsplit(".", 1)[-1]
+                for name, targets in imports.items() for target in targets
+                if target in shadow_imports.values()
+            )
+        ):
+            continue
         for start, body in header_bodies:
             scope = scopes[start]
             if (
                 len(scope) == 1 and scope[0] in class_bodies
                 and scope[0] not in inherited_bodies
                 and scopes[scope[0]] == ()
-                and tokens[start + 2:body] == [":", "ShadowNotificationManager", "(", ")"]
-                and start >= 9 and tokens[start - 9] in ("{", "}", ";")
+                and tokens[start + 2:body] == [":", base_name, "(", ")"]
+                and shadow_predecessor(start)
                 and tokens[start - 8:start] == [
-                    "@", "Implements", "(", "NotificationManager", ":", ":", "class", ")",
+                    "@", "Implements", "(", target_name, ":", ":", "class", ")",
                 ]
             ):
-                notification_shadows.add(body)
-    if notification_shadows and reject_inherited and inheritance is None:
+                shadows.add(body)
+        if shadows and inheritance is not None:
+            for target in shadow_imports.values():
+                inheritance({"external_non_junit": target}, True)
+    supported_shadows = notification_shadows | activity_shadows
+    if supported_shadows and reject_inherited and inheritance is None:
         raise PortError("External Robolectric identity requires immutable candidate source proof")
-    if notification_shadows and inheritance is not None:
-        for target in shadow_imports.values():
-            inheritance({"external_non_junit": target}, True)
     # Keep these bodies in lexical inheritance checks; only their known external
     # lineage is non-JUnit, not their annotations or nested declarations.
-    inherited_suites = inherited_bodies - anonymous_bodies - notification_shadows
+    inherited_suites = inherited_bodies - anonymous_bodies - supported_shadows
     if reject_inherited and (inherited_suites or bodyless_inheritance or unresolved_scope):
         if (
             inheritance is None or unresolved_scope or bodyless_inheritance or not inherited_suites
@@ -1485,13 +1522,18 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
                 return set()
         inherited_names = set()
         for body in inherited:
-            if body in notification_shadows:
+            if body in supported_shadows:
                 continue
             if inheritance is None or body not in declarations:
                 return set()
             inherited_names.update(inheritance(declarations[body], False))
         shadowed = set().union(*(declared_names.get(parent, set()) for parent in visible))
         resolved = imported_non_tests - shadowed - inherited_names
+        if activity_shadows.intersection(scope):
+            resolved &= {"Implementation"}
+            if "RealObject" not in shadowed | inherited_names:
+                resolved.add("RealObject")
+            return resolved
         return resolved & {"Implementation"} if notification_shadows.intersection(scope) else resolved
 
     for index, value in enumerate(tokens):
@@ -1657,12 +1699,18 @@ def _kotlin_junit_methods(text, declaring_classes=None, *, reject_inherited=Fals
                 raise PortError("Cannot establish Robolectric Config class identity")
             class_name = (package + "." if package else "") + tokens[index + 1].strip("`")
             class_sdk_configurations[class_name] = configured_sdk
-        if (
-            notification_shadows.intersection(scopes[start])
-            and index < len(tokens) and tokens[index] in ("fun", "val", "var", "get", "set")
-            and annotations != {"Implementation"}
-        ):
-            raise PortError("Cannot establish JUnit-free Robolectric collaborator annotations")
+        if index < len(tokens) and tokens[index] in ("fun", "val", "var", "get", "set"):
+            if notification_shadows.intersection(scopes[start]):
+                allowed_shadow_annotation = annotations == {"Implementation"}
+            elif activity_shadows.intersection(scopes[start]):
+                allowed_shadow_annotation = (
+                    annotations == {"Implementation"} and tokens[index] == "fun"
+                    or annotations == {"RealObject"} and tokens[index] in ("val", "var")
+                )
+            else:
+                allowed_shadow_annotation = True
+            if not allowed_shadow_annotation:
+                raise PortError("Cannot establish JUnit-free Robolectric collaborator annotations")
         non_test_annotations = (
             non_tests_at(start) if not annotations & (test_annotations | family_annotations) else set()
         )

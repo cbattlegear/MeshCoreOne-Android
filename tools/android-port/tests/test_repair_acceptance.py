@@ -836,6 +836,123 @@ class RepairExecutionTests(unittest.TestCase):
             + helper + " }"
         )
 
+    def activity_shadow_source(self):
+        return """
+            package sample
+            import android.app.Activity
+            import kotlin.Suppress
+            import org.junit.Before
+            import org.robolectric.annotation.Implements
+            import org.robolectric.annotation.Implementation
+            import org.robolectric.annotation.RealObject
+            import org.robolectric.shadows.ShadowActivity
+            class MapTest {
+                @Before @Suppress("DEPRECATION") fun setUp() {}
+                @Test fun keepsListReachable() {}
+                private fun request() = NotificationRequest(payload = Payload())
+                @Implements(Activity::class)
+                class LaunchShadow : ShadowActivity() {
+                    @RealObject private lateinit var activity: Activity
+                    @Implementation fun startActivity(intent: String) {}
+                }
+            }
+        """
+
+    def test_exact_activity_shadow_preserves_named_and_compiled_suite_proof(self):
+        from controller.repair_acceptance import _kotlin_junit_methods
+
+        source = self.activity_shadow_source()
+        for whole in (False, True):
+            manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs(
+                {TEST: source.encode()}, whole=whole,
+            )
+            with self.subTest(whole=whole), patch(
+                "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+            ):
+                validate_compiled_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+                for mutation in ("wrong-class", "unexecuted", "uncompiled", "stale-compiled"):
+                    records, inventory = copy.deepcopy(executed), copy.deepcopy(compiled)
+                    if mutation == "wrong-class":
+                        records["core/maps"][0]["class"] = "sample.MapTest.LaunchShadow"
+                    elif mutation == "unexecuted":
+                        records["core/maps"] = []
+                    elif mutation == "uncompiled":
+                        del inventory["core/maps"][TEST]
+                    else:
+                        inventory["core/maps"][TEST] = "7" * 40
+                    with self.subTest(mutation=mutation), self.assertRaises(PortError):
+                        validate_compiled_hosted_methods(scope, blobs, manifest.repo, records, inventory)
+        classes, external = {}, []
+        self.assertEqual(_kotlin_junit_methods(
+            source, classes, reject_inherited=True,
+            inheritance=lambda record, complete: external.append((record, complete)) or set(),
+        ), {"keepsListReachable": "test"})
+        self.assertEqual(classes, {"keepsListReachable": "sample.MapTest"})
+        self.assertEqual(external, [
+            ({"external_non_junit": target}, True) for target in (
+                "org.robolectric.annotation.Implements", "android.app.Activity",
+                "org.robolectric.shadows.ShadowActivity",
+                "org.robolectric.annotation.Implementation",
+                "org.robolectric.annotation.RealObject",
+            )
+        ])
+
+    def test_activity_shadow_cannot_hide_tests_or_ambiguous_lineage(self):
+        from controller.repair_acceptance import _kotlin_junit_methods
+
+        source = self.activity_shadow_source()
+        mutations = (
+            source.replace("ShadowActivity()", "Missing()"),
+            source.replace("ShadowActivity()", "ShadowActivity(), Marker"),
+            source.replace("annotation.Implements", "other.Implements"),
+            source.replace("shadows.ShadowActivity", "other.ShadowActivity"),
+            source.replace("import android.app.Activity", "import other.Activity"),
+            source.replace("annotation.Implementation", "other.Implementation"),
+            source.replace("annotation.RealObject", "other.RealObject"),
+            source.replace("import org.robolectric.annotation.RealObject",
+                           "import org.junit.Rule as RealObject"),
+            source.replace("@Implements(Activity::class)", ""),
+            source.replace("@Implements(Activity::class)",
+                           "@Other(value = Factory()) @Implements(Activity::class)"),
+            source.replace("class MapTest {", "class MapTest : Parent() {"),
+            source.replace("@RealObject", "@Test"),
+            source.replace("@RealObject", "@Before"),
+            source.replace("@RealObject private lateinit var activity: Activity",
+                           "@RealObject fun hidden() {}"),
+            source.replace("@Implementation fun startActivity(intent: String) {}",
+                           "@Implementation val hidden = 1"),
+            source.replace("@Implementation", "@Test"),
+            source.replace("class MapTest {", "class MapTest { annotation class RealObject;"),
+            source.replace("class MapTest {", "class MapTest { class ShadowActivity;"),
+            source.replace("@Implementation fun startActivity(intent: String) {}",
+                           "@Implementation fun startActivity(intent: String) {} class Hidden { @Test fun hidden() {} }"),
+        )
+        for index, changed in enumerate(mutations):
+            with self.subTest(index=index), self.assertRaises(PortError):
+                _kotlin_junit_methods(changed, {}, reject_inherited=True, inheritance=lambda *args: set())
+
+    def test_activity_shadow_rejects_candidate_external_identity_collisions(self):
+        for package, name in (
+            ("android.app", "Activity"),
+            ("org.robolectric.shadows", "ShadowActivity"),
+            ("org.robolectric.annotation", "RealObject"),
+            ("org.robolectric.annotation", "Implementation"),
+            ("org.robolectric.annotation", "Implements"),
+        ):
+            collision = f"android/core/maps/src/test/kotlin/elsewhere/{name}.kt"
+            for whole in (False, True):
+                sources = {
+                    TEST: self.activity_shadow_source().encode(),
+                    collision: f"package {package}\nclass {name}".encode(),
+                }
+                manifest, scope, blobs, contents, executed, compiled = self.lineage_inputs(
+                    sources, whole=whole,
+                )
+                with self.subTest(name=name, whole=whole), patch(
+                    "controller.staging.object_bytes", side_effect=lambda repo, blob: contents[blob],
+                ), self.assertRaisesRegex(PortError, "shadows the external Robolectric identity"):
+                    validate_compiled_hosted_methods(scope, blobs, manifest.repo, executed, compiled)
+
     def test_exact_notification_shadow_preserves_named_and_compiled_suite_proof(self):
         from controller.repair_acceptance import _kotlin_junit_methods
 

@@ -15,7 +15,8 @@ import java.util.UUID
 internal class MessageRepository(
     private val context: RoomRepositoryContext,
     pending: PendingSendRepository,
-) : MessagePersisting, PendingSendPersisting by pending, HeardRepeatPersisting, ReactionPersisting, FailedSendPersisting {
+) : MessagePersisting, PendingSendPersisting by pending, HeardRepeatPersisting, ReactionPersisting,
+    FailedSendPersisting, ChannelReactionTargetAuthority by ChannelReactionTargetRepository(context) {
     override suspend fun isDuplicateMessage(deduplicationKey: String, radioId: RadioId): Boolean =
         context.read("isDuplicateMessage") { database.messages().forDeduplicationKey(radioId.value, deduplicationKey).isNotEmpty() }
 
@@ -175,15 +176,21 @@ internal class MessageRepository(
     override suspend fun updateMessageTimestamp(key: EntityKey, timestamp: UInt) =
         mutateMessage("updateMessageTimestamp", key) { it.copy(timestamp = timestamp.toLong()) }
     override suspend fun updateMessageHeardRepeats(key: EntityKey, heardRepeats: Long) =
-        mutateMessage("updateMessageHeardRepeats", key) { it.copy(heardRepeats = heardRepeats) }
+        context.write("updateMessageHeardRepeats") {
+            if (database.messages().setHeardRepeats(key.radioId.value, key.id, heardRepeats) > 0) save()
+        }
     override suspend fun markMessageAsRead(key: EntityKey) =
-        mutateMessage("markMessageAsRead", key) { it.copy(isRead = true) }
+        context.write("markMessageAsRead") {
+            if (database.messages().markRead(key.radioId.value, key.id) > 0) save()
+        }
 
     override suspend fun updateMessageLinkPreview(
         key: EntityKey, url: String?, title: String?, imageData: Bytes?, iconData: Bytes?, fetched: Boolean,
-    ) = mutateMessage("updateMessageLinkPreview", key) {
-        it.copy(linkPreviewURL = url, linkPreviewTitle = title, linkPreviewImageData = imageData,
-            linkPreviewIconData = iconData, linkPreviewFetched = fetched)
+    ) = context.write("updateMessageLinkPreview") {
+        if (database.messages().setLinkPreview(
+                key.radioId.value, key.id, url, title, imageData, iconData, fetched,
+            ) > 0
+        ) save()
     }
 
     override suspend fun deleteMessage(key: EntityKey) = context.write("deleteMessage") {
@@ -230,7 +237,7 @@ internal class MessageRepository(
     override suspend fun incrementMessageHeardRepeats(key: EntityKey): Long = context.write("incrementMessageHeardRepeats") {
         val row = database.messages().byId(key.radioId.value, key.id) ?: return@write 0
         val next = checkedIncrement(row.heardRepeats)
-        database.messages().upsert(row.copy(heardRepeats = next))
+        database.messages().setHeardRepeats(key.radioId.value, key.id, next)
         save()
         next
     }
@@ -245,7 +252,7 @@ internal class MessageRepository(
     override suspend fun incrementMessageSendCount(key: EntityKey): Long = context.write("incrementMessageSendCount") {
         val row = database.messages().byId(key.radioId.value, key.id) ?: return@write 0
         val next = checkedIncrement(row.sendCount)
-        database.messages().upsert(row.copy(sendCount = next))
+        database.messages().setSendCount(key.radioId.value, key.id, next)
         save()
         next
     }
@@ -265,7 +272,9 @@ internal class MessageRepository(
         context.read("reactionExists") { database.reactions().exists(message.radioId.value, message.id, senderName, emoji) }
 
     override suspend fun updateMessageReactionSummary(message: EntityKey, summary: String?) =
-        mutateMessage("updateMessageReactionSummary", message) { it.copy(reactionSummary = summary) }
+        context.write("updateMessageReactionSummary") {
+            if (database.messages().setReactionSummary(message.radioId.value, message.id, summary) > 0) save()
+        }
 
     override suspend fun deleteReactionsForMessage(message: EntityKey) = context.write("deleteReactionsForMessage") {
         database.reactions().deleteForMessage(message.radioId.value, message.id)

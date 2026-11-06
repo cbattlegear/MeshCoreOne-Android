@@ -76,6 +76,24 @@ interface MessageDao : RowWriter<MessageEntity> {
     suspend fun markContactFailuresSeen(radioId: UUID, contactID: UUID): Int
     @Query("UPDATE messages SET failureSeen = 1 WHERE radioId = :radioId AND channelIndex = :index AND statusRawValue = 4 AND directionRawValue = 1 AND failureSeen = 0")
     suspend fun markChannelFailuresSeen(radioId: UUID, index: Long): Int
+    @Query("UPDATE messages SET heardRepeats = :heardRepeats WHERE radioId = :radioId AND id = :id")
+    suspend fun setHeardRepeats(radioId: UUID, id: UUID, heardRepeats: Long): Int
+    @Query("UPDATE messages SET isRead = 1 WHERE radioId = :radioId AND id = :id")
+    suspend fun markRead(radioId: UUID, id: UUID): Int
+    @Query("UPDATE messages SET sendCount = :sendCount WHERE radioId = :radioId AND id = :id")
+    suspend fun setSendCount(radioId: UUID, id: UUID, sendCount: Long): Int
+    @Query("""
+        UPDATE messages SET linkPreviewURL = :url, linkPreviewTitle = :title,
+          linkPreviewImageData = :imageData, linkPreviewIconData = :iconData,
+          linkPreviewFetched = :fetched
+        WHERE radioId = :radioId AND id = :id
+    """)
+    suspend fun setLinkPreview(
+        radioId: UUID, id: UUID, url: String?, title: String?,
+        imageData: Bytes?, iconData: Bytes?, fetched: Boolean,
+    ): Int
+    @Query("UPDATE messages SET reactionSummary = :summary WHERE radioId = :radioId AND id = :id")
+    suspend fun setReactionSummary(radioId: UUID, id: UUID, summary: String?): Int
     @Query("SELECT COUNT(*) FROM messages WHERE radioId = :radioId AND statusRawValue IN (0, 1)") suspend fun countPending(radioId: UUID): Long
     @Query("DELETE FROM messages WHERE radioId = :radioId AND id = :id") suspend fun delete(radioId: UUID, id: UUID): Int
     @Query("DELETE FROM messages WHERE radioId = :radioId AND contactID = :contactID") suspend fun deleteContactMessages(radioId: UUID, contactID: UUID): Int

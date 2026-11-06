@@ -31,6 +31,7 @@ class RoomPersistenceStore private constructor(
 ) : PersistenceStoreProtocol,
     DevicePersisting by devices, ContactPersisting by contacts, ChannelPersisting by channels,
     MessagePersisting by messages, HeardRepeatPersisting by messages, ReactionPersisting by messages,
+    ChannelReactionTargetAuthority by messages,
     FailedSendPersisting by messages, RoomPersisting by rooms, DiscoveredNodePersisting by discovered,
     TracePathPersisting by diagnostics, DebugLogPersisting by diagnostics, LinkPreviewPersisting by diagnostics,
     RxLogPersisting by diagnostics, NodeSnapshotPersisting by diagnostics, MetadataPersisting by metadata {
@@ -40,6 +41,8 @@ class RoomPersistenceStore private constructor(
         clock: Clock = Clock.systemUTC(),
         reporter: RepositoryIssueReporter = AndroidRepositoryIssueReporter,
     ) : this(RoomRepositoryContext(database, clock, scope, reporter))
+
+    val channelReactionTargetAuthority: ChannelReactionTargetAuthority get() = this
 
     override suspend fun fetchMessage(deduplicationKey: String, radioId: RadioId): MessageDTO? =
         messages.fetchMessage(deduplicationKey, radioId)

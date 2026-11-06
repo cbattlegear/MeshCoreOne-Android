@@ -1,4 +1,5 @@
 // AndroidOnly: WP-201 Actual v1 schema/constraints, nanosecond queries, rollback, persistence and radio-isolation evidence.
+// AndroidOnly: WP-202 Preserve schema assertions through the independent forward identity migration.
 package com.meshcoreone.android.core.database
 
 import android.content.Context
@@ -36,10 +37,13 @@ class RoomBoundaryTest {
     @Test fun actualSqliteTablesColumnsPrimaryKeysForeignKeysAndIdentityMatchTheKspExport() = runTest {
         db.devices().count()
         val export = JSONObject(File(requireNotNull(System.getProperty("roomSchemaDirectory")),
-            "com.meshcoreone.android.core.database.MeshCoreDatabase\\1.json".replace('\\', File.separatorChar)).readText()).getJSONObject("database")
-        assertEquals(1, export.getInt("version")); assertEquals(17, export.getJSONArray("entities").length())
+            "com.meshcoreone.android.core.database.MeshCoreDatabase\\${MeshCoreDatabase.SCHEMA_VERSION}.json".replace('\\', File.separatorChar)).readText()).getJSONObject("database")
+        assertEquals(MeshCoreDatabase.SCHEMA_VERSION, export.getInt("version"))
+        assertEquals(18, export.getJSONArray("entities").length())
         val sqlite = db.openHelper.readableDatabase
-        sqlite.query("PRAGMA user_version").use { assertTrue(it.moveToFirst()); assertEquals(1, it.getInt(0)) }
+        sqlite.query("PRAGMA user_version").use {
+            assertTrue(it.moveToFirst()); assertEquals(MeshCoreDatabase.SCHEMA_VERSION, it.getInt(0))
+        }
         sqlite.query("SELECT identity_hash FROM room_master_table WHERE id=42").use {
             assertTrue(it.moveToFirst()); assertEquals(export.getString("identityHash"), it.getString(0))
         }
@@ -60,14 +64,43 @@ class RoomBoundaryTest {
                 assertEquals(field.getString("affinity") to notNull, actual[field.getString("columnName")], "$name.${field.getString("columnName")}")
             }
             val pk = entity.getJSONObject("primaryKey").getJSONArray("columnNames")
-            if (name !in setOf("devices", "debug_log_entries", "link_preview_data", "node_status_snapshots")) {
+            if (name == "channel_reaction_identity") {
+                assertEquals(listOf("radioId", "messageID"), (0 until pk.length()).map { pk.getString(it) })
+            } else if (name !in setOf("devices", "debug_log_entries", "link_preview_data", "node_status_snapshots")) {
                 assertEquals(listOf("radioId", "id"), (0 until pk.length()).map { pk.getString(it) })
             }
             val keys = if (entity.has("foreignKeys")) entity.getJSONArray("foreignKeys") else JSONArray()
             foreignKeys += keys.length()
             if (keys.length() > 0) {
-                assertTrue(name == "message_repeats" || name == "trace_path_runs")
+                assertTrue(name == "message_repeats" || name == "trace_path_runs" || name == "channel_reaction_identity")
                 assertEquals("CASCADE", keys.getJSONObject(0).getString("onDelete"))
+                if (name == "channel_reaction_identity") {
+                    assertEquals(1, keys.length())
+                    val key = keys.getJSONObject(0)
+                    assertEquals("messages", key.getString("table"))
+                    assertEquals("CASCADE", key.getString("onUpdate"))
+                    val columns = key.getJSONArray("columns")
+                    val referenced = key.getJSONArray("referencedColumns")
+                    assertEquals(listOf("radioId", "messageID"), (0 until columns.length()).map { columns.getString(it) })
+                    assertEquals(listOf("radioId", "id"), (0 until referenced.length()).map { referenced.getString(it) })
+                    val actualKeys = mutableListOf<List<String>>()
+                    sqlite.query("PRAGMA foreign_key_list(`channel_reaction_identity`)").use { cursor ->
+                        while (cursor.moveToNext()) actualKeys += listOf(
+                            cursor.getString(cursor.getColumnIndexOrThrow("table")),
+                            cursor.getString(cursor.getColumnIndexOrThrow("from")),
+                            cursor.getString(cursor.getColumnIndexOrThrow("to")),
+                            cursor.getString(cursor.getColumnIndexOrThrow("on_update")),
+                            cursor.getString(cursor.getColumnIndexOrThrow("on_delete")),
+                        )
+                    }
+                    assertEquals(
+                        listOf(
+                            listOf("messages", "radioId", "radioId", "CASCADE", "CASCADE"),
+                            listOf("messages", "messageID", "id", "CASCADE", "CASCADE"),
+                        ),
+                        actualKeys,
+                    )
+                }
             }
             val indices = if (entity.has("indices")) entity.getJSONArray("indices") else JSONArray()
             for (i in 0 until indices.length()) {
@@ -79,7 +112,7 @@ class RoomBoundaryTest {
                 assertEquals((0 until names.length()).map { names.getString(it) }, columns, wanted.getString("name"))
             }
         }
-        assertEquals(2, foreignKeys)
+        assertEquals(3, foreignKeys)
     }
 
     @Test fun equalIdsObservedRowsAndUpsertsStayIsolatedByRadio() = runTest {
@@ -240,7 +273,7 @@ class RoomBoundaryTest {
             val reopened = fileDatabase(name)
             try {
                 assertEquals(id, assertNotNull(reopened.devices().byId(id)).id)
-                reopened.openHelper.writableDatabase.execSQL("PRAGMA user_version=2")
+                reopened.openHelper.writableDatabase.execSQL("PRAGMA user_version=99")
             } finally { reopened.close() }
             val unsupported = fileDatabase(name)
             try { assertFailsWith<IllegalStateException> { unsupported.devices().count() } } finally { unsupported.close() }

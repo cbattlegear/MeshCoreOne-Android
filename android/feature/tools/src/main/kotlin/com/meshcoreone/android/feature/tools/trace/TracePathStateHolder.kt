@@ -238,6 +238,7 @@ class TracePathStateHolder(
 
     private fun invalidatePathExecution() {
         pathSelectionRevision += 1
+        update { it.copy(acceptedComparison = null) }
         batch.cancelBatchTrace()
     }
 

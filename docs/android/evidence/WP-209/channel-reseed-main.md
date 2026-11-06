@@ -72,6 +72,25 @@ existing seed-family assertions and no physical-radio/HTTP calls. All previous
 App assertions remain unchanged. This seventh added method is likewise
 unexecuted; clean patch application is not compilation or product evidence.
 
+The local successor also composes only the independent App test delta
+`5386a5444ae9385afa6df2e987d88dc32d7bfa69`, not its parent history.
+`mountedAmbiguousSimulatorSeedShowsFailureAndRetriesAfterRepair` mounts actual
+onboarding with a duplicate slot whose existing row has the fixed fixture UUID.
+It requires localized InvalidData, disconnected state, retained channels and
+user messages, then fixture-only duplicate removal and a successful retry to
+READY with retained identity/history and offline boundaries. This eighth added
+method remains uncompiled/unexecuted.
+
+The reviewed prior candidate
+`7ce63fbaf329d4eb1f0922343d9acb0754c8b795` was published unchanged at
+`diagnostic/wp209-channel-reseed-7ce63fbaf3`, with remote SHA verification and
+empty same-ref run checks before dispatching existing `android-ci.yml` once:
+[42142531863](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42142531863).
+That run belongs only to `7ce`, not this local successor. It is not replaced,
+cancelled or overwritten by this preparation. No run result is transferred to
+the additional test or any subsequent SHA. No reproducible CI-result bundle is
+copied or committed here; the exact hosted job/log is authoritative.
+
 The baseline main run
 [42139516955](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42139516955)
 had a separate observed `ChatMapPreviewTest` failure. It is neither evidence for

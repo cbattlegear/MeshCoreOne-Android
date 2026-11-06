@@ -538,6 +538,91 @@ class SimulatorOnboardingIntegrationTest : RoomProcessTest() {
         }
     }
 
+    @Test fun mountedAmbiguousSimulatorSeedShowsFailureAndRetriesAfterRepair() = runTest {
+        val fixture = fixture(this)
+        try {
+            val harness = fixture.harness
+            val radio = MockDataProvider.simulatorRadioId
+            val index = MockDataProvider.publicChannelIndex
+            com.meshcoreone.android.core.services.simulator.SimulatorConnectionMode()
+                .seedDataStore(RoomSimulatorSeedStore(store))
+            val original = db.channels().forIndex(radio.value, index.toLong()).single()
+            assertEquals(MockDataProvider.publicChannelID, original.id)
+            val savedMessage = MessageDTO(
+                radioId = radio,
+                channelIndex = index,
+                text = "Existing user message",
+                timestamp = 1_700_000_000u,
+                createdAt = java.time.Instant.ofEpochSecond(1_700_000_000),
+                direction = MessageDirection.INCOMING,
+                status = com.meshcoreone.android.core.model.MessageStatus.DELIVERED,
+            )
+            store.saveMessage(savedMessage)
+            val duplicate = original.copy(id = UUID.randomUUID(), name = "Ambiguous legacy slot")
+            val otherRadio = RadioId(UUID.randomUUID())
+            val foreign = original.copy(radioId = otherRadio.value, name = "Unrelated radio")
+            db.channels().upsert(duplicate)
+            db.channels().upsert(foreign)
+            val before = store.fetchChannels(radio).associateBy { it.id }
+            val messages = store.fetchMessages(radio, index, limit = 500)
+            assertEquals(2, before.values.count { it.index == index })
+            assertTrue(messages.any { it.id == savedMessage.id && it.text == savedMessage.text })
+
+            host.get().setContent { MeshCoreTheme(motionScale = 0f) { OnboardingFlow(fixture.onboarding, {}) } }
+            button(O.welcomeGetStarted).performClick()
+            compose.onAllNodes(hasText(text(O.permissionsContinue)) and hasClickAction()).onLast().performClick()
+            val title = compose.onNode(hasText(text(O.deviceScanTitle)) and
+                SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading))
+            repeat(3) { title.performClick() }
+            compose.waitUntil(30_000) {
+                harness.settle()
+                compose.onAllNodesWithText(text(O.deviceScanDemoModeAlertTitle)).fetchSemanticsNodes().isNotEmpty()
+            }
+            button(L.commonOk).performClick()
+            button(O.deviceScanContinueDemo).performScrollTo().performClick()
+            val invalidData = com.meshcoreone.android.core.ui.UiErrorMapper().persistenceError(
+                com.meshcoreone.android.core.contracts.domain.PersistenceStoreError.InvalidData,
+            ).resolve(host.get().resources)
+            compose.waitUntil(30_000) {
+                harness.settle()
+                compose.onAllNodesWithText(invalidData).fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNode(hasText(invalidData)).assertIsDisplayed()
+            assertTrue(harness.diagnostics.any {
+                it is com.meshcoreone.android.core.runtime.RuntimeDiagnostic.Failure &&
+                    it.operation == "connect.attempt.1" &&
+                    (it.cause as? com.meshcoreone.android.core.contracts.domain.PersistenceStoreException)?.error ==
+                    com.meshcoreone.android.core.contracts.domain.PersistenceStoreError.InvalidData
+            })
+            assertEquals(DeviceConnectionState.DISCONNECTED, harness.manager.connectionState)
+            assertTrue(compose.onAllNodesWithText(text(O.regionTitle)).fetchSemanticsNodes().isEmpty())
+            assertEquals(before, store.fetchChannels(radio).associateBy { it.id })
+            assertEquals(messages, store.fetchMessages(radio, index, limit = 500))
+            assertEquals(foreign, db.channels().byId(otherRadio.value, foreign.id))
+
+            button(L.commonOk).performClick()
+            // Fixture-only repair; the production path must not delete either ambiguous row.
+            assertEquals(1, db.channels().delete(radio.value, duplicate.id))
+            button(O.deviceScanContinueDemo).performScrollTo().performClick()
+            compose.waitUntil(30_000) {
+                harness.settle()
+                compose.onAllNodesWithText(text(O.regionTitle)).fetchSemanticsNodes().isNotEmpty()
+            }
+            assertEquals(DeviceConnectionState.READY, harness.manager.connectionState)
+            assertTrue(harness.manager.isSimulatorConnection)
+            assertEquals(original.id, store.fetchChannels(radio).single { it.index == index }.id)
+            assertEquals(messages.associate { it.id to it.text },
+                store.fetchMessages(radio, index, limit = 500).associate { it.id to it.text })
+            assertEquals(savedMessage.text, assertNotNull(store.fetchMessage(EntityKey(radio, savedMessage.id))).text)
+            assertEquals(foreign, db.channels().byId(otherRadio.value, foreign.id))
+            assertSeedFamilies()
+            assertTrue(harness.links.radios.isEmpty())
+            assertTrue(fixture.httpRequests.isEmpty())
+        } finally {
+            fixture.close()
+        }
+    }
+
     private suspend fun assertSeedFamilies() {
         val radio = MockDataProvider.simulatorRadioId
         val contacts = store.fetchContacts(radio)

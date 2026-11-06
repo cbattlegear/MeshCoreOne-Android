@@ -397,7 +397,9 @@ internal fun nativeCase(name: String, assertions: suspend TestScope.() -> Unit):
         try {
             runTest(timeout = 10.seconds) { assertions() }
         } catch (failure: org.opentest4j.AssertionFailedError) {
-            throw AssertionError("${failure.message} (${failure.stackTrace.firstOrNull { it.fileName?.contains("Test.kt") == true }})", failure)
+            val where = failure.stackTrace.firstOrNull { it.fileName?.contains("Test.kt") == true }
+            System.err.println("NATIVE_CASE_FAILURE $name: ${failure.message} at $where")
+            throw AssertionError("${failure.message} ($where)", failure)
         }
     }
 

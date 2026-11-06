@@ -43,7 +43,9 @@ class AppSettingsFeature private constructor(
     }
     private val deviceValues = mutableMapOf<UUID, DevicePreferenceSnapshot>()
     val failure = MutableStateFlow<Throwable?>(null)
-    private val changes = combine(app.servicesVersion, app.sessionStateChangeCount, container.connectionManager.snapshot) { _, _, _ -> Unit }
+    private val changes = combine(
+        app.servicesVersion, app.sessionStateChangeCount, container.connectionManager.snapshot, container.deviceAccess.changes,
+    ) { _, _, _, _ -> Unit }
     private val device = changes.flatMapLatest {
         val current = app.connectedDevice
         if (current == null) flowOf(null) else storage.devicePreferences.observe(current.id).map { value ->

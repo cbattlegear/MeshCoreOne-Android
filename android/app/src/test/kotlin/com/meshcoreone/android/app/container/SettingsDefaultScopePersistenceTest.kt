@@ -883,6 +883,84 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
         assertSameSessionRewireKeepsChannelAcknowledgement(queued = true)
     }
 
+    @Test fun concurrentSettingsWiringKeepsTheInstallingSubscribersRoomAcknowledgement() = runTest {
+        assertConcurrentSettingsWiring(retireDuringInstallation = false)
+    }
+
+    @Test fun teardownDuringSettingsInstallationCannotReviveTheRetiredCollector() = runTest {
+        assertConcurrentSettingsWiring(retireDuringInstallation = true)
+    }
+
+    private suspend fun TestScope.assertConcurrentSettingsWiring(retireDuringInstallation: Boolean) {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var armed = false
+        val held = object : PersistenceStoreProtocol by store {
+            override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+                if (armed && dto.defaultFloodScopeName == "EU868") {
+                    armed = false
+                    entered.complete(Unit)
+                    release.await()
+                }
+                return store.saveDeviceIfUnchanged(dto, expected)
+            }
+        }
+        withSettings(held) { h, _, _, radio ->
+            val device = assertNotNull(h.manager.connectedDevice)
+            val channel = ChannelDTO(radioId = device.radioId, index = 1u, name = "Concurrent wiring")
+            store.saveChannel(channel)
+            radio.channel = channel
+            radio.mode = "EU868"
+            val installed = java.util.concurrent.CountDownLatch(1)
+            val finishInstallation = java.util.concurrent.CountDownLatch(1)
+            val subscriptions = java.util.concurrent.atomic.AtomicInteger()
+            h.appState.tearDownAppStateSessionState()
+            h.appState.onSettingsEventsSubscriptionForTesting = {
+                if (subscriptions.incrementAndGet() == 1) {
+                    installed.countDown()
+                    assertTrue(finishInstallation.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                }
+            }
+            try {
+                val first = backgroundScope.async(kotlinx.coroutines.Dispatchers.Default) {
+                    h.appState.wireServicesIfConnected()
+                }
+                h.eventually("first subscription exists before its owner is installed") { installed.count == 0L }
+                armed = true
+                val message = if (retireDuringInstallation) null else enqueueActualChannel(h, device, "Installing acknowledgement")
+                if (message != null) h.eventually("installing consumer is persisting the real scope") { entered.isCompleted }
+                if (retireDuringInstallation) h.appState.tearDownAppStateSessionState()
+                val second = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) {
+                    h.appState.wireServicesIfConnected()
+                }
+                assertFalse(second.isCompleted, "The second wire must suspend behind subscription installation")
+                assertEquals(1, subscriptions.get())
+                finishInstallation.countDown()
+                h.eventually("both public wiring calls complete") { first.isCompleted && second.isCompleted }
+                first.await()
+                second.await()
+                assertEquals(if (retireDuringInstallation) 2 else 1, subscriptions.get())
+                assertTrue(h.appState.hasSettingsEventsJob)
+                val pending = message ?: enqueueActualChannel(h, device, "After retired installation")
+                h.eventually("the current consumer holds the Room acknowledgement") { entered.isCompleted }
+                assertTrue(radio.channelTransmissions.isEmpty())
+                release.complete(Unit)
+                val sent = backgroundScope.async {
+                    while (store.hasPendingSend(EntityKey(device.radioId, pending.id))) kotlinx.coroutines.delay(1)
+                }
+                h.eventually("the current subscription sends once and removes the actual pending row") { sent.isCompleted }
+                sent.await()
+                assertEquals(1, radio.channelTransmissions.size)
+                assertEquals(MessageStatus.SENT, store.fetchMessage(EntityKey(device.radioId, pending.id))!!.status)
+                assertEquals("EU868", store.fetchDevice(device.id)!!.defaultFloodScopeName)
+            } finally {
+                h.appState.onSettingsEventsSubscriptionForTesting = null
+                finishInstallation.countDown()
+                release.complete(Unit)
+            }
+        }
+    }
+
     @Test fun sameSessionRewireKeepsNotificationScopeAcknowledgementUntilRoomCommits() = runTest {
         assertSameSessionRewireKeepsChannelAcknowledgement(queued = false)
     }
@@ -925,10 +1003,15 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
                 if (reply != null) assertFalse(reply.isCompleted)
                 assertEquals(session.token, h.sessions.current?.token)
                 release.complete(Unit)
-                h.eventually("the same acknowledgement permits exactly one send without another ready transition") {
-                    radio.channelTransmissions.size == 1 && (reply == null || reply.isCompleted) &&
-                        (message == null || !store.hasPendingSend(EntityKey(device.radioId, message.id)))
+                val sent = backgroundScope.async {
+                    while (radio.channelTransmissions.size != 1 || (reply != null && !reply.isCompleted) ||
+                        (message != null && store.hasPendingSend(EntityKey(device.radioId, message.id)))
+                    ) kotlinx.coroutines.delay(1)
                 }
+                h.eventually("the same acknowledgement permits exactly one send without another ready transition") {
+                    sent.isCompleted
+                }
+                sent.await()
                 rewire.join()
                 reply?.join()
                 assertEquals("EU868", h.manager.connectedDevice!!.defaultFloodScopeName)

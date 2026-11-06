@@ -148,6 +148,9 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
 
     private var settingsEventsJob: Job? = null
     private var settingsEventsSession: AppSession? = null
+    private val settingsEventsWiring = kotlinx.coroutines.sync.Mutex()
+    private var settingsEventsRevision = 0L
+    internal var onSettingsEventsSubscriptionForTesting: (() -> Unit)? = null
     private var syncDataEventsJob: Job? = null
     private var advertisementEventsJob: Job? = null
     private var rxLogEventsJob: Job? = null
@@ -469,6 +472,7 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
             listOfNotNull(settingsEventsJob, syncDataEventsJob, advertisementEventsJob, rxLogEventsJob).also {
                 settingsEventsJob = null; syncDataEventsJob = null; advertisementEventsJob = null; rxLogEventsJob = null
                 settingsEventsSession = null
+                settingsEventsRevision = Math.incrementExact(settingsEventsRevision)
             }
         }
         cancelled.forEach(Job::cancel)
@@ -554,10 +558,22 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
         })
     }
 
-    private fun wireSettingsEventStream(session: AppSession) {
-        if (synchronized(lock) { settingsEventsSession === session && settingsEventsJob?.isActive == true }) return
+    private suspend fun wireSettingsEventStream(session: AppSession) {
+        settingsEventsWiring.lock()
+        try {
+            installSettingsEventStream(session)
+        } finally {
+            settingsEventsWiring.unlock()
+        }
+    }
+
+    private fun installSettingsEventStream(session: AppSession) {
+        val revision = synchronized(lock) {
+            if (services !== session || (settingsEventsSession === session && settingsEventsJob?.isActive == true)) return
+            settingsEventsRevision
+        }
         val subscription = session.settingsService.events()
-        replaceJob({ settingsEventsJob }, { settingsEventsJob = it; settingsEventsSession = session }, sessionScope.launch(start = CoroutineStart.UNDISPATCHED) {
+        val next = sessionScope.launch(start = CoroutineStart.UNDISPATCHED) {
             try {
                 subscription.events.collect { wrapped ->
                     when (val event = wrapped.event) {
@@ -593,7 +609,25 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
             } finally {
                 subscription.close()
             }
-        })
+        }
+        var installed = false
+        try {
+            onSettingsEventsSubscriptionForTesting?.invoke()
+            val previous = synchronized(lock) {
+                if (settingsEventsRevision != revision || services !== session) return
+                settingsEventsJob.also {
+                    settingsEventsJob = next
+                    settingsEventsSession = session
+                    installed = true
+                }
+            }
+            previous?.cancel()
+        } finally {
+            if (!installed) {
+                subscription.close()
+                next.cancel()
+            }
+        }
     }
 
     private suspend fun persistSessionDeviceEdit(

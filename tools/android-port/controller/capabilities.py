@@ -210,13 +210,20 @@ class CapabilityEngine:
                 raise PortError("Notification action recovery requires its WP-215 source marker")
             for key, value in values.items():
                 decoded = CapabilityEngine._authored_android_copy(value, "Notification action recovery")
-                placeholders = decoded.replace("%%", "")
-                if key == "notification_action_recovery_original_target":
-                    if placeholders.count("%1$s") != 1:
-                        raise PortError("Notification action recovery target requires exactly one %1$s")
-                    placeholders = placeholders.replace("%1$s", "")
-                if "%" in placeholders:
-                    raise PortError("Notification action recovery contains an unsupported placeholder")
+                target = key == "notification_action_recovery_original_target"
+                placeholders, index = 0, 0
+                while index < len(decoded):
+                    if decoded[index] != "%":
+                        index += 1
+                    elif decoded.startswith("%%", index):
+                        index += 2
+                    elif target and decoded.startswith("%1$s", index):
+                        placeholders += 1
+                        index += 4
+                    else:
+                        raise PortError("Notification action recovery contains an unsupported placeholder")
+                if target and placeholders != 1:
+                    raise PortError("Notification action recovery target requires exactly one %1$s")
             if path in base_tree:
                 original_structure, original = CapabilityEngine._bounded_copy_resource(
                     read_blob(base_tree[path]), rule["keys"], "Notification action recovery", strict_utf8=True

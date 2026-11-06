@@ -181,7 +181,7 @@ class NotificationActionRecoveryCapabilityTests(unittest.TestCase):
     def test_exact_placeholder_contract_after_xml_and_android_decoding(self):
         target = KEYS[-1]
         for value in ("No target", "%1$s %1$s", "%s", "%1$d", "%1$S", "%%1$s",
-                      "%1$s %2$s", "%1$s %n"):
+                      "%1$s %2$s", "%1$s %n", "%1%%$s", "%1$%%s"):
             with self.subTest(value=value), self.assertRaises(PortError):
                 self.validate(self.xml({**self.values(), target: value}))
         for value in ("%s", "%1$s", r"\u00251$s", "%n"):
@@ -189,6 +189,8 @@ class NotificationActionRecoveryCapabilityTests(unittest.TestCase):
                 self.validate(self.xml({**self.values(), KEYS[0]: value}))
         self.validate(self.xml({**self.values(), target: r"Original target: \u00251$s"}))
         self.validate(self.xml({**self.values(), KEYS[0]: "Literal 100%%"}))
+        self.validate(self.xml({**self.values(), target: "Literal %% target: %1$s %%"}))
+        self.validate(self.xml({**self.values(), target: "%%%1$s"}))
         self.validate(self.xml().replace(b"%1$s", b"&#37;1$s"))
 
 

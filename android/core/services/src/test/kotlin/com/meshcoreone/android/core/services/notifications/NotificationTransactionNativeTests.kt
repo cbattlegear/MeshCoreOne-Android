@@ -2,24 +2,47 @@
 package com.meshcoreone.android.core.services.notifications
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.NotificationId
 import com.meshcoreone.android.core.contracts.domain.NotificationPostResult
 import com.meshcoreone.android.core.contracts.domain.UnreadCounts
+import com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt
+import com.meshcoreone.android.core.contracts.notifications.NotificationReadReceipt
+import com.meshcoreone.android.core.contracts.notifications.NotificationReplyOutcomeUncertain
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
+import com.meshcoreone.android.core.contracts.notifications.NotificationPostAdmission
+import com.meshcoreone.android.core.contracts.notifications.NotificationPostPermit
+import com.meshcoreone.android.core.contracts.notifications.NotificationPostRejection
+import com.meshcoreone.android.core.contracts.notifications.NotificationPostSelfDrainException
+import com.meshcoreone.android.core.contracts.notifications.SnapshotRemovalOutcome
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.NotificationLevel
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.ReactionDTO
+import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.protocol.model.ContactType
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import kotlin.test.fail
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.junit.jupiter.api.DynamicTest
 import org.junit.jupiter.api.TestFactory
 
@@ -34,6 +57,174 @@ class NotificationTransactionNativeTests {
 
     private fun NotificationHarness.ready(localNodeName: String? = "Me"): NotificationHarness =
         also { handler.configure(isConnectionReady = { true }, localNodeName = { localNodeName }) }
+
+    @TestFactory
+    fun notificationPermitOperationGate(): List<DynamicTest> = listOf(
+        nativeCase("self-drain preflight tracks exact nested lease ancestry, not unrelated roots or open leases") {
+            val root = NotificationPostPermit()
+            val child = root.childPermit()
+            val unrelated = NotificationPostPermit()
+            val lease = child.tryAcquire()!!
+            val unrelatedLease = unrelated.tryAcquire()!!
+
+            root.requireOutsideOperation()
+            lease.runSynchronous {
+                assertFailsWith<NotificationPostSelfDrainException> { root.requireOutsideOperation() }
+                assertFailsWith<NotificationPostSelfDrainException> { child.requireOutsideOperation() }
+                unrelated.requireOutsideOperation()
+                lease.runSynchronous {
+                    assertFailsWith<NotificationPostSelfDrainException> { root.requireOutsideOperation() }
+                }
+                assertFailsWith<NotificationPostSelfDrainException> { root.requireOutsideOperation() }
+            }
+            val sentinel = IllegalStateException("synchronous action failure")
+            assertSame(sentinel, assertFailsWith<IllegalStateException> {
+                lease.runSynchronous { throw sentinel }
+            })
+            root.requireOutsideOperation()
+
+            lease.close()
+            unrelatedLease.close()
+            assertFailsWith<IllegalStateException> { lease.runSynchronous { Unit } }
+            root.requireOutsideOperation()
+            root.close().join()
+            unrelated.close().join()
+        },
+        nativeCase("safe Unconfined subscriber closes root and suspends for the exact producer drain") {
+            val root = NotificationPostPermit()
+            val lease = root.tryAcquire()!!
+            val events = Channel<Unit>(Channel.UNLIMITED)
+            val enteredSubscriber = CompletableDeferred<Unit>()
+            val resumedSubscriber = CompletableDeferred<Unit>()
+            val recipient = AtomicReference<String?>("current")
+            val retirement = AtomicReference<NotificationPostPermit.RetirementCapture<String>?>(null)
+            val subscriber = launch(Dispatchers.Unconfined) {
+                events.receive()
+                val captured = root.closeAndCapture(recipient)
+                retirement.set(captured)
+                enteredSubscriber.complete(Unit)
+                val exactDrain = CompletableDeferred<Unit>()
+                captured.drained.whenComplete { _, failure ->
+                    if (failure == null) exactDrain.complete(Unit)
+                    else exactDrain.completeExceptionally(failure)
+                }
+                exactDrain.await()
+                root.requireOutsideOperation()
+                resumedSubscriber.complete(Unit)
+            }
+
+            lease.runSynchronous {
+                assertTrue(events.trySend(Unit).isSuccess)
+            }
+            enteredSubscriber.await()
+            val captured = retirement.get()!!
+            assertEquals("current", captured.recipient)
+            assertFalse(captured.drained.isDone)
+            lease.close()
+            subscriber.join()
+            assertTrue(resumedSubscriber.isCompleted)
+            captured.drained.join()
+        },
+        nativeCase("blocking self-drain preflight refuses before waiting for its own lease") {
+            val root = NotificationPostPermit()
+            val lease = root.tryAcquire()!!
+            val drained = root.close()
+
+            assertFailsWith<NotificationPostSelfDrainException> {
+                lease.runSynchronous {
+                    root.requireOutsideOperation()
+                    drained.get(100, TimeUnit.MILLISECONDS)
+                }
+            }
+            assertFalse(drained.isDone)
+            lease.close()
+            drained.get(2, TimeUnit.SECONDS)
+        },
+        nativeCase("cross-thread lease close cannot complete drain before a synchronous action exits") {
+            val root = NotificationPostPermit()
+            val lease = root.tryAcquire()!!
+            val enteredAction = CountDownLatch(1)
+            val releaseAction = CountDownLatch(1)
+            val actionFailure = AtomicReference<Throwable?>(null)
+            val worker = Thread({
+                try {
+                    lease.runSynchronous {
+                        enteredAction.countDown()
+                        if (!releaseAction.await(2, TimeUnit.SECONDS)) {
+                            throw IllegalStateException("timed out waiting to release permit action")
+                        }
+                        actionFailure.set(
+                            runCatching { root.requireOutsideOperation() }.exceptionOrNull(),
+                        )
+                    }
+                } catch (failure: Throwable) {
+                    actionFailure.compareAndSet(null, failure)
+                }
+            }, "notification-permit-action")
+            worker.start()
+
+            val recipient = AtomicReference<String?>("current")
+            assertTrue(enteredAction.await(2, TimeUnit.SECONDS))
+            val retirement = root.closeAndCapture(recipient)
+            assertEquals("current", retirement.recipient)
+            lease.close()
+            lease.close()
+            try {
+                assertFalse(retirement.drained.isDone)
+            } finally {
+                releaseAction.countDown()
+            }
+            worker.join(2_000)
+            assertFalse(worker.isAlive)
+            assertIs<NotificationPostSelfDrainException>(actionFailure.get())
+            retirement.drained.get(2, TimeUnit.SECONDS)
+            root.requireOutsideOperation()
+        },
+        nativeCase("root publication CAS linearizes with close-and-capture") {
+            val root = NotificationPostPermit()
+            val recipient = AtomicReference<String?>("initial")
+            val start = CountDownLatch(1)
+            val publication = AtomicReference<NotificationPostAdmission<Boolean>?>(null)
+            val retirement = AtomicReference<NotificationPostPermit.RetirementCapture<String>?>(null)
+            val threadFailure = AtomicReference<Throwable?>(null)
+            val publisher = Thread({
+                try {
+                    start.await()
+                    publication.set(root.compareAndSetRootStateWhileActive(recipient, "initial", "published"))
+                } catch (failure: Throwable) {
+                    threadFailure.set(failure)
+                }
+            }, "notification-permit-publisher")
+            val closer = Thread({
+                try {
+                    start.await()
+                    retirement.set(root.closeAndCapture(recipient))
+                } catch (failure: Throwable) {
+                    threadFailure.set(failure)
+                }
+            }, "notification-permit-closer")
+            publisher.start()
+            closer.start()
+            start.countDown()
+            publisher.join(2_000)
+            closer.join(2_000)
+
+            assertFalse(publisher.isAlive)
+            assertFalse(closer.isAlive)
+            assertNull(threadFailure.get())
+            when (val result = publication.get()) {
+                is NotificationPostAdmission.Admitted -> {
+                    assertTrue(result.value)
+                    assertEquals("published", retirement.get()?.recipient)
+                }
+                NotificationPostAdmission.Revoked ->
+                    assertEquals("initial", retirement.get()?.recipient)
+                null -> fail("publisher produced no root transition result")
+            }
+            assertNull(recipient.get())
+            retirement.get()!!.drained.get(2, TimeUnit.SECONDS)
+        },
+    )
 
     @TestFactory
     fun directQuickReply(): List<DynamicTest> = listOf(
@@ -80,25 +271,66 @@ class NotificationTransactionNativeTests {
             assertEquals(emptyList(), h.sender.sends)
             assertEquals("x", h.service.consumeDraft(contact.key))
         },
-        nativeCase("a caller cancelled right after a successful send still finishes the bookkeeping") {
+        nativeCase("cancellation after a known accepted send finishes bookkeeping without restoring a retry draft") {
             val h = NotificationHarness(this).authorize().ready()
             val contact = h.contact()
             h.delivery.show("dm", NotificationPayload.DirectMessage(contact.key, messageID))
-            h.journal.cancelCallerAt = "send"
-            val caller = launch { h.handler.handleQuickReply(contact.key, "sent") }
-            caller.join()
+            val sendGate = CompletableDeferred<Unit>()
+            h.journal.gates["send"] = sendGate
+            val receipt = NotificationActionReceipt()
+            val caller = launch { withContext(receipt) { h.handler.handleQuickReply(contact.key, "sent") } }
+            yieldUntil("accepted direct reply held before returning") { h.journal.events.contains("send") }
+            caller.cancel()
+            sendGate.complete(Unit)
+            caller.cancelAndJoin()
             assertTrue(caller.isCancelled)
+            assertEquals(NotificationActionReceipt.State.ACCEPTED, receipt.state)
             assertEquals(QUICK_REPLY_STEPS, h.journal.events)
             assertNull(h.service.consumeDraft(contact.key))
+            assertEquals(emptyList(), h.delivery.posted)
+            withContext(receipt) { h.handler.handleQuickReply(contact.key, "sent") }
+            assertEquals(1, h.sender.sends.size)
         },
-        nativeCase("cancellation during the send keeps the typed text as a draft, reports not sent, then propagates") {
+        nativeCase("cancellation before protocol dispatch keeps the text as a retryable draft") {
             val h = NotificationHarness(this).authorize().ready()
-            h.sender.cancel = true
+            h.sender.cancelBeforeWire = true
             val contact = h.contact()
-            assertFailsWith<CancellationException> { h.handler.handleQuickReply(contact.key, "keep me") }
+            val receipt = NotificationActionReceipt()
+            assertFailsWith<CancellationException> {
+                withContext(receipt) { h.handler.handleQuickReply(contact.key, "keep me") }
+            }
+            assertEquals(NotificationActionReceipt.State.READY, receipt.state)
+            assertEquals(emptyList(), h.sender.sends)
             assertEquals("keep me", h.service.consumeDraft(contact.key))
             assertEquals(NotificationPayload.QuickReplyFailed(contact.key), h.delivery.posted.single().payload)
             assertEquals(0, h.sync.notifications)
+        },
+        nativeCase("cancellation after protocol dispatch starts preserves an uncertain outcome without reporting unsent") {
+            val h = NotificationHarness(this).authorize().ready()
+            h.sender.cancel = true
+            val contact = h.contact()
+            val receipt = NotificationActionReceipt()
+            assertFailsWith<CancellationException> {
+                withContext(receipt) { h.handler.handleQuickReply(contact.key, "unknown") }
+            }
+            assertEquals(NotificationActionReceipt.State.UNCERTAIN, receipt.state)
+            assertNull(h.service.consumeDraft(contact.key))
+            assertEquals(emptyList(), h.delivery.posted)
+            assertEquals(0, h.sync.notifications)
+        },
+        nativeCase("a failed post-dispatch result remains uncertain and preserves its original cause") {
+            val h = NotificationHarness(this).authorize().ready()
+            val failure = IllegalStateException("dispatch result lost")
+            h.sender.uncertainFailure = failure
+            val contact = h.contact()
+            val receipt = NotificationActionReceipt()
+            val thrown = assertFailsWith<NotificationReplyOutcomeUncertain> {
+                withContext(receipt) { h.handler.handleQuickReply(contact.key, "unknown") }
+            }
+            assertSame(failure, thrown.cause)
+            assertEquals(NotificationActionReceipt.State.UNCERTAIN, receipt.state)
+            assertNull(h.service.consumeDraft(contact.key))
+            assertEquals(emptyList(), h.delivery.posted)
         },
         nativeCase("a failed send saves a draft and reports not sent") {
             val h = NotificationHarness(this).authorize().ready()
@@ -141,6 +373,18 @@ class NotificationTransactionNativeTests {
             assertNull(h.service.consumeDraft(contact.key))
             assertEquals(1, h.delivery.badgeSets.size)
         },
+        nativeCase("badge failure after an accepted reply is contained and never restores a retry draft") {
+            val h = NotificationHarness(this).authorize().ready()
+            h.counts.fail = true
+            val contact = h.contact()
+
+            h.handler.handleQuickReply(contact.key, "already sent")
+
+            assertEquals(1, h.sender.sends.size)
+            assertNull(h.service.consumeDraft(contact.key))
+            assertEquals(emptyList(), h.delivery.posted)
+            assertEquals(1, h.sync.notifications)
+        },
         nativeCase("notification permission denial never blocks a quick reply") {
             val h = NotificationHarness(this).ready()
             h.delivery.postResult = NotificationPostResult.PermissionDenied
@@ -171,20 +415,31 @@ class NotificationTransactionNativeTests {
             assertEquals(1, h.delivery.badgeSets.size)
             assertEquals(1, h.sync.notifications)
         },
-        nativeCase("a channel reply whose caller is cancelled after sending still finishes the bookkeeping") {
+        nativeCase("a channel reply accepted before caller cancellation finishes bookkeeping without a failure post") {
             val h = NotificationHarness(this).authorize().ready()
             h.delivery.show("c", NotificationPayload.ChannelMessage(RADIO_A, 1u, messageID))
-            h.journal.cancelCallerAt = "send"
-            val caller = launch { h.handler.handleChannelQuickReply(RADIO_A, 1u, "ack") }
-            caller.join()
+            val sendGate = CompletableDeferred<Unit>()
+            h.journal.gates["send"] = sendGate
+            val receipt = NotificationActionReceipt()
+            val caller = launch { withContext(receipt) { h.handler.handleChannelQuickReply(RADIO_A, 1u, "ack") } }
+            yieldUntil("accepted channel reply held before returning") { h.journal.events.contains("send") }
+            caller.cancel()
+            sendGate.complete(Unit)
+            caller.cancelAndJoin()
             assertTrue(caller.isCancelled)
+            assertEquals(NotificationActionReceipt.State.ACCEPTED, receipt.state)
             assertEquals(CHANNEL_REPLY_STEPS, h.journal.events)
+            assertEquals(emptyList(), h.delivery.posted)
         },
-        nativeCase("cancellation during a channel send reports not sent, then propagates") {
+        nativeCase("cancellation during a channel protocol dispatch stays uncertain and does not report unsent") {
             val h = NotificationHarness(this).authorize().ready()
             h.sender.cancel = true
-            assertFailsWith<CancellationException> { h.handler.handleChannelQuickReply(RADIO_A, 1u, "x") }
-            assertEquals(NotificationPayload.ChannelQuickReplyFailed(RADIO_A, 1u), h.delivery.posted.single().payload)
+            val receipt = NotificationActionReceipt()
+            assertFailsWith<CancellationException> {
+                withContext(receipt) { h.handler.handleChannelQuickReply(RADIO_A, 1u, "x") }
+            }
+            assertEquals(NotificationActionReceipt.State.UNCERTAIN, receipt.state)
+            assertEquals(emptyList(), h.delivery.posted)
             assertEquals(0, h.sync.notifications)
         },
         nativeCase("channel reply not ready or failing posts a failure with the display-name fallback and no draft") {
@@ -222,20 +477,84 @@ class NotificationTransactionNativeTests {
             assertEquals(1, h.delivery.badgeSets.size)
             assertEquals(1, h.sync.notifications)
         },
-        nativeCase("a caller cancelled after the mark-read writes still removes, refreshes the badge and notifies") {
+        nativeCase("mark-read cancellation before its first write leaves the action retryable") {
+            val h = NotificationHarness(this)
+            val contact = EntityKey(RADIO_A, UUID.randomUUID())
+            val actionReceipt = NotificationActionReceipt()
+            val readReceipt = NotificationReadReceipt()
+            val caller = launch(actionReceipt + readReceipt) {
+                currentCoroutineContext().cancel()
+                h.handler.handleMarkAsRead(contact, messageID)
+            }
+
+            caller.join()
+
+            assertTrue(caller.isCancelled)
+            assertEquals(NotificationActionReceipt.State.READY, actionReceipt.state)
+            assertEquals(NotificationReadReceipt.State.READY, readReceipt.state)
+            assertEquals(emptyList(), h.store.writes)
+            assertEquals(emptyList(), h.delivery.removals)
+        },
+        nativeCase("caller cancellation during a held mark-read write completes the commit and propagates afterward") {
             val h = NotificationHarness(this)
             val contact = EntityKey(RADIO_A, UUID.randomUUID())
             h.delivery.show("AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE", NotificationPayload.DirectMessage(contact, messageID))
-            h.journal.cancelCallerAt = "clearUnreadCount"
-            val caller = launch { h.handler.handleMarkAsRead(contact, messageID) }
-            caller.join()
+            val actionReceipt = NotificationActionReceipt()
+            val readReceipt = NotificationReadReceipt()
+            val writeGate = CompletableDeferred<Unit>()
+            h.store.gates["clearUnreadCount"] = writeGate
+            val caller = async {
+                withContext(actionReceipt + readReceipt) { h.handler.handleMarkAsRead(contact, messageID) }
+            }
+            yieldUntil("clearUnreadCount write held") { h.store.writes.any { it.first == "clearUnreadCount" } }
+            caller.cancel()
+            writeGate.complete(Unit)
+            caller.cancelAndJoin()
             assertTrue(caller.isCancelled)
+            assertEquals(NotificationActionReceipt.State.COMMITTED, actionReceipt.state)
+            assertEquals(NotificationReadReceipt.State.COMMITTED, readReceipt.state)
+            assertEquals(2, readReceipt.completedWrites)
             assertEquals(MARK_READ_STEPS, h.journal.events)
             val room = NotificationHarness(this)
             room.delivery.show("AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE", NotificationPayload.RoomMessage("R", contact, messageID))
-            room.journal.cancelCallerAt = "roomMarkAsRead"
-            launch { room.handler.handleRoomMarkAsRead(contact, messageID) }.join()
+            val roomActionReceipt = NotificationActionReceipt()
+            val roomReadReceipt = NotificationReadReceipt()
+            val roomGate = CompletableDeferred<Unit>()
+            room.journal.gates["roomMarkAsRead"] = roomGate
+            val roomCaller = async {
+                withContext(roomActionReceipt + roomReadReceipt) {
+                    room.handler.handleRoomMarkAsRead(contact, messageID)
+                }
+            }
+            yieldUntil("room mark-read write held") { room.journal.events.contains("roomMarkAsRead") }
+            roomCaller.cancel()
+            roomGate.complete(Unit)
+            roomCaller.cancelAndJoin()
+            assertEquals(NotificationActionReceipt.State.COMMITTED, roomActionReceipt.state)
+            assertEquals(NotificationReadReceipt.State.COMMITTED, roomReadReceipt.state)
             assertEquals(listOf("roomMarkAsRead", "removeDelivered", "setBadgeCount", "notifyConversationsChanged"), room.journal.events)
+        },
+        nativeCase("a partial mark-read failure is uncertain and cannot be replayed") {
+            val h = NotificationHarness(this)
+            val contact = EntityKey(RADIO_A, UUID.randomUUID())
+            val actionReceipt = NotificationActionReceipt()
+            val readReceipt = NotificationReadReceipt()
+            h.store.failing += "clearUnreadCount"
+            val failure = IllegalStateException("unread clear failed")
+            h.store.failures["clearUnreadCount"] = failure
+
+            withContext(actionReceipt + readReceipt) { h.handler.handleMarkAsRead(contact, messageID) }
+
+            assertEquals(NotificationActionReceipt.State.UNCERTAIN, actionReceipt.state)
+            assertEquals(NotificationReadReceipt.State.UNCERTAIN, readReceipt.state)
+            assertEquals(1, readReceipt.completedWrites)
+            assertEquals(emptyList(), h.delivery.removals)
+            assertEquals(0, h.sync.notifications)
+            val writeCount = h.store.writes.size
+            assertFailsWith<IllegalStateException> {
+                withContext(actionReceipt + readReceipt) { h.handler.handleMarkAsRead(contact, messageID) }
+            }
+            assertEquals(writeCount, h.store.writes.size)
         },
         nativeCase("stale radio: mark-read from another radio writes only that radio's rows") {
             val h = NotificationHarness(this, radioId = RADIO_B)
@@ -364,6 +683,322 @@ class NotificationTransactionNativeTests {
             h.store.failing += "fetchContact"
             h.handler.handleReactionNotification(messageID)
             assertEquals(1, h.delivery.posted.size)
+        },
+    )
+
+    @TestFactory
+    fun capturedReactionOutcomes(): List<DynamicTest> = listOf(
+        nativeCase("captured handler posts through the original permit and returns the actual post id") {
+            val h = NotificationHarness(this).authorize().ready()
+            val contact = h.contact()
+            h.outgoing(contactID = contact.id)
+            h.react("Bob")
+            val permit = NotificationPostPermit().childPermit()
+
+            val posted = assertIs<ReactionNotificationOutcome.Posted>(
+                h.handler.handleReactionNotification(messageID, permit),
+            )
+            assertEquals(h.delivery.posted.single().id, posted.id)
+        },
+        nativeCase("missing handler wiring and failed source lookups remain unresolved") {
+            val h = NotificationHarness(this).authorize()
+            val permit = NotificationPostPermit().childPermit()
+            val beforeConfiguration = assertIs<ReactionNotificationOutcome.Unresolved>(
+                h.handler.handleReactionNotification(messageID, permit),
+            )
+            assertEquals(
+                ReactionNotificationOutcome.UnresolvedReason.HANDLER_NOT_CONFIGURED,
+                beforeConfiguration.reason,
+            )
+            assertEquals(emptyList(), h.store.calls)
+
+            h.ready()
+            h.store.failing += "fetchMessage"
+            val lookupFailure = IllegalStateException("sentinel reaction lookup failure")
+            h.store.failures["fetchMessage"] = lookupFailure
+            val failedLookup = assertIs<ReactionNotificationOutcome.Unresolved>(
+                h.handler.handleReactionNotification(messageID, permit),
+            )
+            assertEquals(ReactionNotificationOutcome.UnresolvedReason.LOOKUP_FAILED, failedLookup.reason)
+            assertSame(lookupFailure, failedLookup.cause)
+            assertTrue(h.delivery.posted.isEmpty())
+        },
+        nativeCase("positive self-reaction suppression is distinct from unresolved lookup state") {
+            val h = NotificationHarness(this).authorize().ready(localNodeName = "Me")
+            h.outgoing(contactID = h.contact().id)
+            h.react("Me")
+
+            val suppressed = assertIs<ReactionNotificationOutcome.Suppressed>(
+                h.handler.handleReactionNotification(messageID, NotificationPostPermit()),
+            )
+            assertEquals(ReactionNotificationOutcome.SuppressionReason.SELF_REACTION, suppressed.reason)
+            assertTrue(h.delivery.posted.isEmpty())
+        },
+        nativeCase("post exceptions are uncertain after the adapter begins the attempt") {
+            val h = NotificationHarness(this).authorize().ready()
+            h.outgoing(contactID = h.contact().id)
+            h.react("Bob")
+            h.delivery.failing += "post"
+
+            val uncertain = assertIs<ReactionNotificationOutcome.Uncertain>(
+                h.handler.handleReactionNotification(messageID, NotificationPostPermit()),
+            )
+            assertEquals("delivery post failed", uncertain.failure.message)
+            assertEquals(1, h.delivery.posted.size)
+        },
+        nativeCase("retired owner rejects before reading message state or posting") {
+            val h = NotificationHarness(this).authorize().ready()
+            val root = NotificationPostPermit()
+            val permit = root.childPermit()
+            root.close()
+
+            val rejected = assertIs<ReactionNotificationOutcome.RejectedBeforeDispatch>(
+                h.handler.handleReactionNotification(messageID, permit),
+            )
+            assertEquals(NotificationPostRejection.OWNER_RETIRED, rejected.reason)
+            assertTrue(h.store.calls.isEmpty())
+            assertTrue(h.delivery.posted.isEmpty())
+        },
+        nativeCase("captured reaction lookup cancellation propagates without posting") {
+            val h = NotificationHarness(this).authorize().ready()
+            h.store.cancelling = "fetchMessage"
+
+            assertFailsWith<CancellationException> {
+                h.handler.handleReactionNotification(messageID, NotificationPostPermit())
+            }
+            assertTrue(h.delivery.posted.isEmpty())
+        },
+        nativeCase("captured reaction post cancellation propagates without fabricating a terminal outcome") {
+            val h = NotificationHarness(this).authorize().ready()
+            h.outgoing(contactID = h.contact().id)
+            h.react("Bob")
+            h.delivery.cancelling = "post"
+
+            assertFailsWith<CancellationException> {
+                h.handler.handleReactionNotification(messageID, NotificationPostPermit())
+            }
+
+            assertEquals(1, h.delivery.posted.size)
+        },
+    )
+
+    @TestFactory
+    fun capturedCleanupOutcomes(): List<DynamicTest> = listOf(
+        nativeCase("legacy badge update preserves prior state and propagates the original unread failure") {
+            val h = NotificationHarness(this).authorize()
+            h.counts.counts = UnreadCounts(2, 3, 4)
+            h.service.updateBadgeCount()
+            val priorBadge = h.service.badgeCount
+            val priorDelivery = h.delivery.badgeSets
+            assertEquals(9L, priorBadge)
+            assertEquals(listOf(9L), priorDelivery)
+
+            h.counts.counts = UnreadCounts(50, 60, 70)
+            val sentinel = IllegalStateException("sentinel unread query failure")
+            h.counts.failure = sentinel
+            h.counts.fail = true
+            val failure = assertFailsWith<IllegalStateException> { h.service.updateBadgeCount() }
+
+            assertSame(sentinel, failure)
+            assertEquals(priorBadge, h.service.badgeCount)
+            assertEquals(priorDelivery, h.delivery.badgeSets)
+        },
+        nativeCase("legacy badge update uses valid unread counts") {
+            val h = NotificationHarness(this).authorize()
+            h.counts.counts = UnreadCounts(4, 5, 6)
+
+            h.service.updateBadgeCount()
+
+            assertEquals(15L, h.service.badgeCount)
+            assertEquals(listOf(15L), h.delivery.badgeSets)
+        },
+        nativeCase("badge delivery failure is contained and does not imply the computed count was delivered") {
+            val h = NotificationHarness(this).authorize()
+            h.counts.counts = UnreadCounts(4, 5, 6)
+            h.delivery.failing += "setBadgeCount"
+
+            h.service.updateBadgeCount()
+
+            assertEquals(15L, h.service.badgeCount)
+            assertTrue(h.delivery.badgeSets.isEmpty())
+        },
+        nativeCase("a failed badge refresh after posting does not turn the post into an operation failure") {
+            val h = NotificationHarness(this).authorize()
+            h.counts.fail = true
+
+            h.service.postDirectMessageNotification(
+                from = "Alice",
+                contactID = UUID.randomUUID(),
+                messageText = "hello",
+                messageID = messageID,
+            )
+
+            assertEquals(1, h.delivery.posted.size)
+            assertEquals(0L, h.service.badgeCount)
+            assertTrue(h.delivery.badgeSets.isEmpty())
+        },
+        nativeCase("disabled badge explicitly resets to zero without querying unread counts") {
+            val h = NotificationHarness(this).authorize()
+            h.counts.counts = UnreadCounts(2, 3, 4)
+            h.service.updateBadgeCount()
+            h.preferences.set { it.copy(badgeEnabled = false) }
+            h.counts.fail = true
+            val priorCountCalls = h.counts.calls
+
+            h.service.updateBadgeCount()
+
+            assertEquals(0L, h.service.badgeCount)
+            assertEquals(listOf(9L, 0L), h.delivery.badgeSets)
+            assertEquals(priorCountCalls, h.counts.calls)
+        },
+        nativeCase("legacy badge cancellation from unread counting propagates without changing prior state") {
+            val h = NotificationHarness(this).authorize()
+            h.counts.counts = UnreadCounts(2, 3, 4)
+            h.service.updateBadgeCount()
+            val priorBadge = h.service.badgeCount
+            val priorDelivery = h.delivery.badgeSets
+            h.counts.cancel = true
+
+            assertFailsWith<CancellationException> { h.service.updateBadgeCount() }
+
+            assertEquals(priorBadge, h.service.badgeCount)
+            assertEquals(priorDelivery, h.delivery.badgeSets)
+        },
+        nativeCase("badge retirement during debounce prevents the final mutation") {
+            val clock = VirtualClock()
+            val h = NotificationHarness(this, clock = clock).authorize()
+            h.counts.counts = UnreadCounts(2, 3, 4)
+            val root = NotificationPostPermit()
+            val result = async { h.service.updateBadgeCount(root.childPermit()) }
+            yieldUntil("badge debounce started") { clock.sleeperCount == 1 }
+
+            root.close()
+            clock.wakeAll()
+            assertEquals(NotificationPostAdmission.Revoked, result.await())
+            assertTrue(h.delivery.badgeSets.isEmpty())
+        },
+        nativeCase("badge caller cancellation during debounce propagates before the final mutation") {
+            val clock = VirtualClock()
+            val h = NotificationHarness(this, clock = clock).authorize()
+            val update = async { h.service.updateBadgeCount(NotificationPostPermit()) }
+            yieldUntil("badge debounce started") { clock.sleeperCount == 1 }
+
+            update.cancelAndJoin()
+            assertTrue(update.isCancelled)
+            assertTrue(h.delivery.badgeSets.isEmpty())
+        },
+        nativeCase("superseding a pending debounce returns normally to the earlier caller") {
+            val clock = VirtualClock()
+            val h = NotificationHarness(this, clock = clock).authorize()
+            h.counts.counts = UnreadCounts(2, 3, 4)
+            val first = async { h.service.updateBadgeCount() }
+            yieldUntil("first badge debounce started") { clock.sleeperCount == 1 }
+            val second = async { h.service.updateBadgeCount() }
+            yieldUntil("replacement badge debounce started") { clock.sleeps.size == 2 && clock.sleeperCount == 1 }
+
+            first.await()
+            clock.wakeAll()
+            second.await()
+
+            assertEquals(listOf(9L), h.delivery.badgeSets)
+        },
+        nativeCase("superseding an already-started update waits for it and then runs the replacement") {
+            val clock = VirtualClock()
+            val h = NotificationHarness(this, clock = clock).authorize()
+            val firstRead = CompletableDeferred<Unit>()
+            h.counts.gates += firstRead
+            h.counts.counts = UnreadCounts(1, 2, 3)
+            val first = async { h.service.updateBadgeCount() }
+            yieldUntil("first badge debounce started") { clock.sleeperCount == 1 }
+            clock.wakeAll()
+            yieldUntil("first unread query started") { h.counts.calls == 1 }
+
+            h.counts.counts = UnreadCounts(10, 20, 30)
+            val second = async { h.service.updateBadgeCount() }
+            yieldUntil("replacement badge debounce started") { clock.sleeps.size == 2 && clock.sleeperCount == 1 }
+            clock.wakeAll()
+            firstRead.complete(Unit)
+
+            first.await()
+            second.await()
+
+            assertEquals(listOf(6L, 60L), h.delivery.badgeSets)
+        },
+        nativeCase("snapshot cleanup retirement during the delivered query prevents cancellation") {
+            val h = NotificationHarness(this).authorize()
+            val contact = h.contact()
+            h.delivery.show("dm", NotificationPayload.DirectMessage(contact.key, messageID))
+            val queryGate = CompletableDeferred<Unit>()
+            h.delivery.deliveredGate = queryGate
+            val root = NotificationPostPermit()
+            val result = async {
+                h.service.removeDeliveredNotifications(setOf(contact.id), root.childPermit())
+            }
+            yieldUntil("delivered-notification query started") { h.delivery.listCalls == 1 }
+
+            root.close()
+            queryGate.complete(Unit)
+            assertEquals(NotificationPostAdmission.Revoked, result.await())
+            assertTrue(h.delivery.snapshotRemovalRequests.isEmpty())
+            assertEquals(listOf(NotificationId("dm")), h.delivery.shownIds)
+        },
+        nativeCase("snapshot cleanup retirement during an empty query is not reported as admitted") {
+            val h = NotificationHarness(this).authorize()
+            val queryGate = CompletableDeferred<Unit>()
+            h.delivery.deliveredGate = queryGate
+            val root = NotificationPostPermit()
+            val result = async {
+                h.service.removeDeliveredNotifications(setOf(UUID.randomUUID()), root.childPermit())
+            }
+            yieldUntil("empty delivered-notification query started") { h.delivery.listCalls == 1 }
+
+            root.close()
+            queryGate.complete(Unit)
+            assertEquals(NotificationPostAdmission.Revoked, result.await())
+            assertTrue(h.delivery.snapshotRemovalRequests.isEmpty())
+        },
+        nativeCase("unknown post identity remains an explicit unresolved snapshot outcome") {
+            val h = NotificationHarness(this).authorize()
+            val contact = h.contact()
+            h.delivery.showWithoutIdentity("dm", NotificationPayload.DirectMessage(contact.key, messageID))
+
+            val admission = assertIs<NotificationPostAdmission.Admitted<*>>(
+                h.service.removeDeliveredNotifications(setOf(contact.id), NotificationPostPermit()),
+            )
+            val outcomes = assertIs<SnapshotList<*>>(admission.value)
+            assertEquals(
+                listOf(SnapshotRemovalOutcome.UNKNOWN_IDENTITY),
+                outcomes.toList(),
+            )
+            assertEquals(listOf(NotificationId("dm")), h.delivery.shownIds)
+        },
+        nativeCase("permit-aware badge query failure preserves prior state and propagates the original error") {
+            val h = NotificationHarness(this).authorize()
+            h.counts.counts = UnreadCounts(2, 3, 4)
+            h.service.updateBadgeCount()
+            val priorBadge = h.service.badgeCount
+            val priorDelivery = h.delivery.badgeSets
+            val sentinel = IllegalStateException("sentinel permit unread failure")
+            h.counts.failure = sentinel
+            h.counts.fail = true
+            val failure = assertFailsWith<IllegalStateException> {
+                h.service.updateBadgeCount(NotificationPostPermit())
+            }
+            assertSame(sentinel, failure)
+            assertEquals(priorBadge, h.service.badgeCount)
+            assertEquals(priorDelivery, h.delivery.badgeSets)
+        },
+        nativeCase("snapshot query cancellation propagates before any removal attempt") {
+            val h = NotificationHarness(this).authorize()
+            val contact = h.contact()
+            h.delivery.show("dm", NotificationPayload.DirectMessage(contact.key, messageID))
+            h.delivery.cancelling = "deliveredNotifications"
+
+            assertFailsWith<CancellationException> {
+                h.service.removeDeliveredNotifications(setOf(contact.id), NotificationPostPermit())
+            }
+            assertTrue(h.delivery.snapshotRemovalRequests.isEmpty())
+            assertEquals(listOf(NotificationId("dm")), h.delivery.shownIds)
         },
     )
 

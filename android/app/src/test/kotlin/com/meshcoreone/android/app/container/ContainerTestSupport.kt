@@ -1,5 +1,6 @@
 // AndroidOnly: WP-303 Test support: a protocol-speaking fake radio, runtime link/platform doubles and the Room-backed process harness.
 // AndroidOnly: WP-214 Observe actual session pipeline entry and vary the firmware model in graph tests.
+// AndroidOnly: WP-215 Select notification authorization without changing existing denied-default harness behavior.
 package com.meshcoreone.android.app.container
 
 import android.content.Context
@@ -274,12 +275,14 @@ internal object NoScanGateway : BleScanGateway {
     override fun stopScan() = Unit
 }
 
-/** Notification delivery that records posts and reports a denied permission (the WP-401 adapter is unmerged). */
-internal class RecordingDelivery : NotificationDeliveryPort {
+/** Notification delivery that records posts; denied remains the default for existing harness tests. */
+internal class RecordingDelivery(
+    private val authorization: NotificationAuthorizationStatus = NotificationAuthorizationStatus.DENIED,
+) : NotificationDeliveryPort {
     val posted = mutableListOf<NotificationRequest>()
     var badge: Long = 0
-    override suspend fun authorizationStatus(): NotificationAuthorizationStatus = NotificationAuthorizationStatus.DENIED
-    override suspend fun requestAuthorization(): Boolean = false
+    override suspend fun authorizationStatus(): NotificationAuthorizationStatus = authorization
+    override suspend fun requestAuthorization(): Boolean = authorization == NotificationAuthorizationStatus.AUTHORIZED
     override suspend fun registerCategories(categories: SnapshotList<NotificationCategoryDefinition>) = Unit
     override suspend fun post(request: NotificationRequest): NotificationPostResult { posted += request; return NotificationPostResult.Posted }
     override suspend fun setBadgeCount(count: Long) { badge = count }

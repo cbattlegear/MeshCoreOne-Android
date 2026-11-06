@@ -44,6 +44,13 @@ class NotificationActionReceipt : AbstractCoroutineContextElement(Key) {
         state = State.READY
     }
 
+    /** The first mark-read persistence write has started and may have committed despite failure. */
+    @Synchronized
+    fun writeStarted() {
+        check(state == State.READY)
+        state = State.IN_FLIGHT
+    }
+
     @Synchronized
     fun accepted() {
         check(state == State.READY || state == State.IN_FLIGHT || state == State.ACCEPTED)
@@ -55,7 +62,14 @@ class NotificationActionReceipt : AbstractCoroutineContextElement(Key) {
         if (state == State.IN_FLIGHT) state = State.UNCERTAIN
     }
 
-    /** All requested mark-read writes returned; partial writes are not a committed action. */
+    /** A mark-read action whose writes started is committed only after all of them return. */
+    @Synchronized
+    fun writeCommitted() {
+        check(state == State.IN_FLIGHT)
+        state = State.COMMITTED
+    }
+
+    /** A mark-read action with no started writes can commit only from its initial state. */
     @Synchronized
     fun committed() {
         check(state == State.READY)
@@ -65,3 +79,46 @@ class NotificationActionReceipt : AbstractCoroutineContextElement(Key) {
 
 class NotificationReplyOutcomeUncertain(cause: Throwable) :
     Exception("Notification reply acceptance is unknown; automatic retransmission is unsafe", cause)
+
+/**
+ * Process-memory local-write observation, never wire evidence. A failed write may have committed
+ * before throwing; completedWrites counts returned calls, not the full set of possible effects.
+ */
+class NotificationReadReceipt : AbstractCoroutineContextElement(Key) {
+    companion object Key : CoroutineContext.Key<NotificationReadReceipt>
+
+    enum class State { READY, STARTED, COMMITTED, UNCERTAIN }
+
+    @Volatile
+    var state: State = State.READY
+        private set
+
+    @Volatile
+    var completedWrites: Int = 0
+        private set
+
+    val preventsReplay: Boolean get() = state != State.READY
+
+    @Synchronized
+    fun started() {
+        check(state == State.READY)
+        state = State.STARTED
+    }
+
+    @Synchronized
+    fun writeReturned() {
+        check(state == State.STARTED)
+        completedWrites++
+    }
+
+    @Synchronized
+    fun committed() {
+        check(state == State.STARTED)
+        state = State.COMMITTED
+    }
+
+    @Synchronized
+    fun uncertain() {
+        if (state == State.STARTED) state = State.UNCERTAIN
+    }
+}

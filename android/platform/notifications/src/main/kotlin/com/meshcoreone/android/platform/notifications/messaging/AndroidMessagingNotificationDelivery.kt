@@ -16,24 +16,34 @@ import android.content.pm.ShortcutManager
 import android.graphics.drawable.Icon
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import com.meshcoreone.android.core.contracts.domain.NotificationId
 import com.meshcoreone.android.core.contracts.domain.NotificationPostResult
 import com.meshcoreone.android.core.contracts.notifications.DeliveredNotification
+import com.meshcoreone.android.core.contracts.notifications.DeliveredPostIdentity
 import com.meshcoreone.android.core.contracts.notifications.NotificationAction
 import com.meshcoreone.android.core.contracts.notifications.NotificationAuthorizationStatus
 import com.meshcoreone.android.core.contracts.notifications.NotificationCategory
 import com.meshcoreone.android.core.contracts.notifications.NotificationCategoryDefinition
 import com.meshcoreone.android.core.contracts.notifications.NotificationDeliveryPort
+import com.meshcoreone.android.core.contracts.notifications.NotificationPostAdmission
+import com.meshcoreone.android.core.contracts.notifications.NotificationPostAttempt
+import com.meshcoreone.android.core.contracts.notifications.NotificationPostPermit
+import com.meshcoreone.android.core.contracts.notifications.NotificationPostRejection
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.contracts.notifications.NotificationRequest
 import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
+import com.meshcoreone.android.core.contracts.notifications.SnapshotRemovalOutcome
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings
 import com.meshcoreone.android.core.model.SnapshotList
+import com.meshcoreone.android.core.model.snapshot
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
+import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
 
 class AndroidMessagingNotificationDelivery(
@@ -41,11 +51,28 @@ class AndroidMessagingNotificationDelivery(
     scope: CoroutineScope,
     routeAction: suspend (NotificationResponse) -> Boolean,
 ) : NotificationDeliveryPort {
+    internal constructor(
+        context: Context,
+        scope: CoroutineScope,
+        routeAction: suspend (NotificationResponse) -> Boolean,
+        postIdentityFactory: () -> UUID,
+        notificationPoster: (String, Notification) -> Unit,
+    ) : this(context, scope, routeAction) {
+        this.postIdentityFactory = postIdentityFactory
+        this.notificationPoster = notificationPoster
+    }
+
     private val context = context.applicationContext
     private val manager = this.context.getSystemService(NotificationManager::class.java)
     private val shortcutManager = this.context.getSystemService(ShortcutManager::class.java)
     private val definitions = ConcurrentHashMap<NotificationCategory, NotificationCategoryDefinition>()
     private val badge = AtomicLong(0)
+    private val postingLock = Any()
+    private val submittedPosts = HashMap<String, DeliveredPostIdentity>()
+    private var postIdentityFactory: () -> UUID = UUID::randomUUID
+    private var notificationPoster: (String, Notification) -> Unit = { requestTag, notification ->
+        manager.notify(requestTag, NOTIFICATION_ID, notification)
+    }
 
     init {
         NotificationActionDispatcher.install(scope, routeAction)
@@ -88,13 +115,89 @@ class AndroidMessagingNotificationDelivery(
         if (authorizationStatus() != NotificationAuthorizationStatus.AUTHORIZED) {
             return NotificationPostResult.PermissionDenied
         }
-        val notification = buildNotification(request)
-        return try {
-            manager.notify(tag(request.id), NOTIFICATION_ID, notification)
+        return synchronized(postingLock) {
+            val requestTag = tag(request.id)
+            val postIdentity = postIdentityFactory()
+            val notification = buildNotification(request, postIdentity)
+            try {
+                notificationPoster(requestTag, notification)
+            } catch (_: SecurityException) {
+                submittedPosts.remove(requestTag)
+                return@synchronized NotificationPostResult.PermissionDenied
+            } catch (failure: Exception) {
+                submittedPosts.remove(requestTag)
+                throw failure
+            }
+            submittedPosts[requestTag] = DeliveredPostIdentity(postIdentity)
             publishConversationShortcut(request)
             NotificationPostResult.Posted
-        } catch (_: SecurityException) {
-            NotificationPostResult.PermissionDenied
+        }
+    }
+
+    override suspend fun post(
+        request: NotificationRequest,
+        permit: NotificationPostPermit,
+    ): NotificationPostAdmission<NotificationPostAttempt> {
+        if (!permit.isActive) return NotificationPostAdmission.Revoked
+        val authorization = try {
+            authorizationStatus()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            return NotificationPostAdmission.Admitted(
+                NotificationPostAttempt.RejectedBeforeDispatch(
+                    NotificationPostRejection.AUTHORIZATION_CHECK_FAILED,
+                    failure,
+                ),
+            )
+        }
+        if (authorization != NotificationAuthorizationStatus.AUTHORIZED) {
+            return NotificationPostAdmission.Admitted(
+                NotificationPostAttempt.RejectedBeforeDispatch(NotificationPostRejection.PERMISSION_DENIED),
+            )
+        }
+        return permit.runIfActive {
+            synchronized(postingLock) {
+                val requestTag = tag(request.id)
+                val postIdentity = try {
+                    postIdentityFactory()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (failure: Exception) {
+                    return@synchronized NotificationPostAttempt.RejectedBeforeDispatch(
+                        NotificationPostRejection.REQUEST_BUILD_FAILED,
+                        failure,
+                    )
+                }
+                val notification = try {
+                    buildNotification(request, postIdentity)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (failure: Exception) {
+                    return@synchronized NotificationPostAttempt.RejectedBeforeDispatch(
+                        NotificationPostRejection.REQUEST_BUILD_FAILED,
+                        failure,
+                    )
+                }
+                try {
+                    notificationPoster(requestTag, notification)
+                } catch (failure: SecurityException) {
+                    submittedPosts.remove(requestTag)
+                    return@synchronized NotificationPostAttempt.Uncertain(failure)
+                } catch (failure: Exception) {
+                    submittedPosts.remove(requestTag)
+                    return@synchronized NotificationPostAttempt.Uncertain(failure)
+                }
+                submittedPosts[requestTag] = DeliveredPostIdentity(postIdentity)
+                try {
+                    publishConversationShortcut(request)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (failure: Exception) {
+                    return@synchronized NotificationPostAttempt.Uncertain(failure)
+                }
+                NotificationPostAttempt.Posted(request.id)
+            }
         }
     }
 
@@ -102,24 +205,88 @@ class AndroidMessagingNotificationDelivery(
         badge.set(count.coerceAtLeast(0))
     }
 
-    override suspend fun deliveredNotifications(): SnapshotList<DeliveredNotification> =
+    override suspend fun setBadgeCount(
+        count: Long,
+        permit: NotificationPostPermit,
+    ): NotificationPostAdmission<Unit> =
+        permit.runIfActive { badge.set(count.coerceAtLeast(0)) }
+
+    override suspend fun deliveredNotifications(): SnapshotList<DeliveredNotification> = synchronized(postingLock) {
         SnapshotList(manager.activeNotifications.mapNotNull { active ->
             val platformTag = active.tag?.takeIf { it.startsWith(TAG_PREFIX) } ?: return@mapNotNull null
             val tag = platformTag.removePrefix(TAG_PREFIX)
             val payload = NotificationPayloadCodec.read(Intent().putExtras(active.notification.extras))
-            DeliveredNotification(NotificationId(tag), payload)
+            val postIdentityValue = active.notification.extras.getString(EXTRA_POST_ID)
+            val postIdentity = if (postIdentityValue == null) {
+                submittedPosts[platformTag]
+            } else {
+                try {
+                    DeliveredPostIdentity(UUID.fromString(postIdentityValue))
+                } catch (_: IllegalArgumentException) {
+                    null
+                }
+            }
+            DeliveredNotification(NotificationId(tag), payload, postIdentity)
         })
+    }
 
     override suspend fun removeDelivered(ids: SnapshotList<NotificationId>) {
-        ids.forEach { manager.cancel(tag(it), NOTIFICATION_ID) }
+        synchronized(postingLock) {
+            ids.forEach {
+                val requestTag = tag(it)
+                manager.cancel(requestTag, NOTIFICATION_ID)
+                submittedPosts.remove(requestTag)
+            }
+        }
+    }
+
+    override suspend fun removeDeliveredSnapshot(
+        selected: SnapshotList<DeliveredNotification>,
+    ): SnapshotList<SnapshotRemovalOutcome> = synchronized(postingLock) {
+        removeSnapshotSynchronously(selected)
+    }
+
+    override suspend fun removeDeliveredSnapshot(
+        selected: SnapshotList<DeliveredNotification>,
+        permit: NotificationPostPermit,
+    ): NotificationPostAdmission<SnapshotList<SnapshotRemovalOutcome>> =
+        permit.runIfActive {
+            synchronized(postingLock) { removeSnapshotSynchronously(selected) }
+        }
+
+    private fun removeSnapshotSynchronously(
+        selected: SnapshotList<DeliveredNotification>,
+    ): SnapshotList<SnapshotRemovalOutcome> =
+        selected.map { notification ->
+            val identity = notification.postIdentity
+            val requestTag = tag(notification.id)
+            val current = submittedPosts[requestTag]
+            when {
+                identity == null || current == null -> SnapshotRemovalOutcome.UNKNOWN_IDENTITY
+                current != identity -> SnapshotRemovalOutcome.SUPERSEDED
+                else -> {
+                    manager.cancel(requestTag, NOTIFICATION_ID)
+                    submittedPosts.remove(requestTag)
+                    SnapshotRemovalOutcome.REMOVED
+                }
+            }
+        }.snapshot()
     }
 
     fun retryPendingActions() {
         NotificationActionDispatcher.retry()
     }
 
-    internal fun buildNotification(request: NotificationRequest): Notification {
-        val contentIntent = actionPendingIntent(request, action = null, mutable = false)
+    internal fun buildNotification(
+        request: NotificationRequest,
+        postIdentity: UUID = postIdentityFactory(),
+    ): Notification {
+        val contentIntent = actionPendingIntent(
+            request,
+            action = null,
+            mutable = false,
+            postIdentity = postIdentity,
+        )
         val payloadExtras = NotificationPayloadCodec.write(Intent(), request.payload).extras
         val builder = Notification.Builder(context, channelFor(request.payload, request.soundEnabled))
             .setSmallIcon(context.applicationInfo.icon)
@@ -137,6 +304,7 @@ class AndroidMessagingNotificationDelivery(
                 else Notification.CATEGORY_MESSAGE,
             )
             .addExtras(payloadExtras)
+            .addExtras(Bundle().apply { putString(EXTRA_POST_ID, postIdentity.toString()) })
         request.threadIdentifier?.let(builder::setGroup)
 
         if (request.category in MESSAGE_CATEGORIES) {
@@ -162,7 +330,12 @@ class AndroidMessagingNotificationDelivery(
                         Notification.Action.Builder(
                             null,
                             definition.title,
-                            actionPendingIntent(request, definition.action, mutable = true),
+                            actionPendingIntent(
+                                request,
+                                definition.action,
+                                mutable = true,
+                                postIdentity = postIdentity,
+                            ),
                         ).addRemoteInput(remoteInput).build(),
                     )
                 }
@@ -170,7 +343,12 @@ class AndroidMessagingNotificationDelivery(
                     Notification.Action.Builder(
                         null,
                         definition.title,
-                        actionPendingIntent(request, definition.action, mutable = false),
+                        actionPendingIntent(
+                            request,
+                            definition.action,
+                            mutable = false,
+                            postIdentity = postIdentity,
+                        ),
                     ).build(),
                 )
                 NotificationAction.DISMISS -> Unit
@@ -195,12 +373,21 @@ class AndroidMessagingNotificationDelivery(
         request: NotificationRequest,
         action: NotificationAction?,
         mutable: Boolean,
+        postIdentity: UUID = postIdentityFactory(),
     ): PendingIntent {
         val actionName = action?.rawValue ?: ACTION_OPEN
         val intent = NotificationPayloadCodec.write(
             Intent(context, NotificationActionReceiver::class.java)
                 .setAction(ACTION_PREFIX + actionName)
-                .setData(Uri.parse("meshcore-notification://action/${Uri.encode(request.id.value)}/$actionName"))
+                .setData(
+                    Uri.Builder()
+                        .scheme("meshcore-notification")
+                        .authority("action")
+                        .appendPath(request.id.value)
+                        .appendPath(actionName)
+                        .appendQueryParameter("post", postIdentity.toString())
+                        .build(),
+                )
                 .putExtra(NotificationActionReceiver.EXTRA_ACTION, action?.rawValue),
             request.payload,
         )
@@ -267,6 +454,7 @@ class AndroidMessagingNotificationDelivery(
         internal const val ACTION_PREFIX = "com.meshcoreone.android.notification."
         internal const val ACTION_OPEN = "OPEN"
         internal const val TAG_PREFIX = "mesh-message:"
+        internal const val EXTRA_POST_ID = "mc1.notification.post-id"
         internal const val CONVERSATION_CATEGORY = "com.meshcoreone.android.category.CONVERSATION"
         internal val MESSAGE_CATEGORIES = setOf(
             NotificationCategory.DIRECT_MESSAGE,

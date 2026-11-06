@@ -12,15 +12,23 @@ import com.meshcoreone.android.core.contracts.domain.UnreadCounts
 import com.meshcoreone.android.core.contracts.notifications.NotificationAuthorizationStatus
 import com.meshcoreone.android.core.contracts.notifications.NotificationCategory
 import com.meshcoreone.android.core.contracts.notifications.NotificationDeliveryPort
+import com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt
+import com.meshcoreone.android.core.contracts.notifications.NotificationPostAdmission
+import com.meshcoreone.android.core.contracts.notifications.NotificationPostAttempt
+import com.meshcoreone.android.core.contracts.notifications.NotificationPostPermit
+import com.meshcoreone.android.core.contracts.notifications.NotificationPostRejection
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.contracts.notifications.NotificationRequest
+import com.meshcoreone.android.core.contracts.notifications.SnapshotRemovalOutcome
 import com.meshcoreone.android.core.model.NotificationLevel
 import com.meshcoreone.android.core.model.NotificationPreferences
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.model.canonicalString
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.protocol.model.ContactType
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import java.util.logging.Level
 import java.util.logging.Logger
@@ -44,6 +52,43 @@ data class ActiveConversation(
     val roomSessionID: UUID? = null,
 )
 
+// AndroidOnly: WP-215 Captured reaction posting reports actual policy and platform boundaries.
+sealed interface ReactionNotificationOutcome {
+    /** NotificationManager.notify returned; this is not durable delivery or proof of display. */
+    data class Posted(val id: NotificationId) : ReactionNotificationOutcome
+    data class Suppressed(val reason: SuppressionReason) : ReactionNotificationOutcome
+    data class RejectedBeforeDispatch(
+        val reason: NotificationPostRejection,
+        val cause: Exception? = null,
+        val capability: String? = null,
+    ) : ReactionNotificationOutcome
+    data class Uncertain(val failure: Exception) : ReactionNotificationOutcome
+    data class Unresolved(
+        val reason: UnresolvedReason,
+        val cause: Exception? = null,
+    ) : ReactionNotificationOutcome
+
+    enum class SuppressionReason {
+        NOT_AUTHORIZED,
+        DISABLED_BY_PREFERENCE,
+        SYNC_SUPPRESSED,
+        FOREGROUND_CONVERSATION,
+        NOT_OUTGOING,
+        SELF_REACTION,
+        MUTED_CONVERSATION,
+    }
+
+    enum class UnresolvedReason {
+        HANDLER_NOT_CONFIGURED,
+        MESSAGE_NOT_FOUND,
+        REACTION_NOT_FOUND,
+        CONVERSATION_NOT_FOUND,
+        LOOKUP_FAILED,
+        LIFECYCLE_STATE_UNAVAILABLE,
+        CONTENT_CONSTRUCTION_FAILED,
+    }
+}
+
 /**
  * Notification business policy for one radio session: what to notify, suppression, active-conversation
  * tracking, badge policy, drafts, and routing of notification responses to the action callbacks.
@@ -51,8 +96,9 @@ data class ActiveConversation(
  *
  * Swift `@MainActor` state becomes atomics plus a lock that is never held across a suspension. The
  * Swift 5 s `NotificationPreferences()` cache becomes a read of [preferencesPort], which is already an
- * in-memory snapshot. Every delivery, clock and unread-count failure is contained, so notification
- * problems never block messaging. [radioId] qualifies the Swift bare contact/session UUIDs.
+ * in-memory snapshot. Notification post/reply paths contain follow-up badge failures so a completed
+ * message operation is not reported as failed; explicit badge updates propagate unread-count failures.
+ * [radioId] qualifies the Swift bare contact/session UUIDs.
  *
  * Exposes every member of WP-209's `ContactCleanupNotifications` and the posting members of WP-214's
  * `SyncNotificationServicing` with identical signatures.
@@ -150,11 +196,19 @@ class NotificationService(
     /** Serializes badge computations so an older read can never overwrite a newer one. */
     private val badgeUpdateMutex = Mutex()
 
+    private data class PendingBadgeUpdate(
+        val job: Job,
+        val superseded: AtomicBoolean,
+        val failure: AtomicReference<Exception?>,
+    )
+
     /** Guarded by [lock]: the debounced badge task. */
-    private var pendingBadgeUpdate: Job? = null
+    private var pendingBadgeUpdate: PendingBadgeUpdate? = null
 
     /** Guarded by [lock]: in-memory quick-reply drafts, lost with the session as in Swift. */
     private val pendingDrafts = HashMap<EntityKey, String>()
+    /** Guarded by [lock]: receipt that currently owns an action-created draft. */
+    private val pendingDraftOwners = HashMap<EntityKey, NotificationActionReceipt>()
 
     // MARK: - Setup and authorization
 
@@ -198,7 +252,7 @@ class NotificationService(
                 payload = NotificationPayload.DirectMessage(EntityKey(radioId, contactID), messageID),
             ),
         )
-        if (prefs.badgeEnabled) updateBadgeCount()
+        if (prefs.badgeEnabled) contained("updateBadgeCount", Unit) { updateBadgeCount() }
     }
 
     suspend fun postChannelMessageNotification(
@@ -224,7 +278,7 @@ class NotificationService(
                 payload = NotificationPayload.ChannelMessage(radioId, channelIndex, messageID),
             ),
         )
-        if (prefs.badgeEnabled) updateBadgeCount()
+        if (prefs.badgeEnabled) contained("updateBadgeCount", Unit) { updateBadgeCount() }
     }
 
     suspend fun postRoomMessageNotification(
@@ -247,7 +301,7 @@ class NotificationService(
                 payload = NotificationPayload.RoomMessage(roomName, EntityKey(radioId, sessionID), messageID),
             ),
         )
-        if (prefs.badgeEnabled) updateBadgeCount()
+        if (prefs.badgeEnabled) contained("updateBadgeCount", Unit) { updateBadgeCount() }
     }
 
     /** Posts that a new contact of [contactType] was discovered; not subject to sync suppression, as in Swift. */
@@ -311,6 +365,68 @@ class NotificationService(
         )
     }
 
+    /**
+     * Captured-owner reaction posting. The permit gates only the adapter's final synchronous post.
+     * A Posted outcome means the platform notify call returned; it is not durable delivery.
+     */
+    suspend fun postReactionNotification(
+        reactorName: String,
+        body: String,
+        messageID: UUID,
+        contactID: UUID?,
+        channelIndex: UByte?,
+        radioId: RadioId?,
+        postPermit: NotificationPostPermit,
+    ): ReactionNotificationOutcome {
+        if (!isAuthorized) {
+            return ReactionNotificationOutcome.Suppressed(ReactionNotificationOutcome.SuppressionReason.NOT_AUTHORIZED)
+        }
+        val prefs = preferences()
+        if (!prefs.reactionNotificationsEnabled) {
+            return ReactionNotificationOutcome.Suppressed(
+                ReactionNotificationOutcome.SuppressionReason.DISABLED_BY_PREFERENCE,
+            )
+        }
+        if (isSuppressingNotifications) {
+            return ReactionNotificationOutcome.Suppressed(ReactionNotificationOutcome.SuppressionReason.SYNC_SUPPRESSED)
+        }
+        if (!postPermit.isActive) {
+            return ReactionNotificationOutcome.RejectedBeforeDispatch(NotificationPostRejection.OWNER_RETIRED)
+        }
+        val contact = contactID?.let { EntityKey(this.radioId, it) }
+        val channelRadio = if (channelIndex != null) radioId else null
+        val thread = when {
+            channelIndex != null && channelRadio != null -> "reaction-channel-${channelRadio.canonicalString}-$channelIndex"
+            contactID != null -> "reaction-contact-${contactID.canonicalString()}"
+            else -> null
+        }
+        val request = try {
+            NotificationRequest(
+                id = NotificationId("reaction-${messageID.canonicalString()}-$reactorName-${timeSuffix()}"),
+                category = NotificationCategory.REACTION,
+                title = reactorName,
+                body = body,
+                soundEnabled = prefs.soundEnabled,
+                badge = null,
+                threadIdentifier = thread,
+                payload = NotificationPayload.Reaction(
+                    messageID,
+                    contact,
+                    channelIndex.takeIf { channelRadio != null },
+                    channelRadio,
+                ),
+            )
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            return ReactionNotificationOutcome.RejectedBeforeDispatch(
+                NotificationPostRejection.REQUEST_BUILD_FAILED,
+                failure,
+            )
+        }
+        return deliver(request, postPermit)
+    }
+
     /** Posts a low battery warning, identified by device name so repeats replace each other. */
     suspend fun postLowBatteryNotification(deviceName: String, batteryPercentage: Long) {
         if (!isAuthorized) return
@@ -369,47 +485,118 @@ class NotificationService(
      * Keyed by radio plus id (Swift: contact UUID) so a same-UUID contact of another radio never sees it.
      */
     fun saveDraft(contact: EntityKey, text: String) {
-        synchronized(lock) { pendingDrafts[contact] = text }
+        synchronized(lock) {
+            pendingDrafts[contact] = text
+            pendingDraftOwners.remove(contact)
+        }
+    }
+
+    internal fun saveActionDraft(contact: EntityKey, text: String, owner: NotificationActionReceipt) {
+        synchronized(lock) {
+            pendingDrafts[contact] = text
+            pendingDraftOwners[contact] = owner
+        }
+    }
+
+    internal fun clearActionDraft(contact: EntityKey, owner: NotificationActionReceipt) {
+        synchronized(lock) {
+            if (pendingDraftOwners[contact] === owner) {
+                pendingDrafts.remove(contact)
+                pendingDraftOwners.remove(contact)
+            }
+        }
     }
 
     /** Retrieves and removes the draft for [contact], or null when none exists. */
-    fun consumeDraft(contact: EntityKey): String? = synchronized(lock) { pendingDrafts.remove(contact) }
+    fun consumeDraft(contact: EntityKey): String? = synchronized(lock) {
+        pendingDraftOwners.remove(contact)
+        pendingDrafts.remove(contact)
+    }
 
     // MARK: - Badge
 
     /**
      * Recomputes the badge after a 100 ms debounce. A later call cancels a pending one that has not
-     * started computing; this call then returns without the update, as Swift's awaited task does.
-     * A computation that already started finishes (Swift's update is not cooperative) and computations
-     * run one at a time in start order, so the newest read always lands last.
+     * started computing; the earlier caller then returns normally. A computation that already started
+     * finishes, and computations run one at a time in start order. Unread-count failures and cancellation
+     * propagate to the caller; badge-delivery failures remain logged and contained.
      */
     suspend fun updateBadgeCount() {
+        val superseded = AtomicBoolean(false)
+        val failure = AtomicReference<Exception?>()
         val task = scope.launch(start = CoroutineStart.LAZY) {
-            // Swift `try? await Task.sleep`: a failed sleep is ignored, only cancellation stops the update.
-            contained("badgeDebounce", Unit) { clock.sleep(BADGE_DEBOUNCE) }
-            ensureActive()
-            withContext(NonCancellable) { badgeUpdateMutex.withLock { contained("badgeUpdate", Unit) { performBadgeUpdate() } } }
+            try {
+                // Swift `try? await Task.sleep`: a failed sleep is ignored, only cancellation stops the update.
+                contained("badgeDebounce", Unit) { clock.sleep(BADGE_DEBOUNCE) }
+                ensureActive()
+                withContext(NonCancellable) { badgeUpdateMutex.withLock { performBadgeUpdate() } }
+            } catch (cancelled: CancellationException) {
+                if (!superseded.get()) failure.set(cancelled)
+                throw cancelled
+            } catch (problem: Exception) {
+                failure.set(problem)
+            }
         }
-        val previous = synchronized(lock) { pendingBadgeUpdate.also { pendingBadgeUpdate = task } }
-        previous?.cancel()
+        val current = PendingBadgeUpdate(task, superseded, failure)
+        val previous = synchronized(lock) { pendingBadgeUpdate.also { pendingBadgeUpdate = current } }
+        previous?.let {
+            it.superseded.set(true)
+            it.job.cancel()
+        }
         task.start()
         task.join()
+        failure.get()?.let { throw it }
+    }
+
+    /**
+     * Recomputes the badge with the same debounce, carrying the exact owner through suspension.
+     * The permit is used only by the delivery adapter for its final synchronous badge mutation.
+     * Unread-count failures and cancellation propagate; revoked final mutations return [NotificationPostAdmission.Revoked].
+     */
+    suspend fun updateBadgeCount(permit: NotificationPostPermit): NotificationPostAdmission<Unit> {
+        if (!permit.isActive) return NotificationPostAdmission.Revoked
+        contained("badgeDebounce", Unit) { clock.sleep(BADGE_DEBOUNCE) }
+        ensureActive()
+        return badgeUpdateMutex.withLock {
+            ensureActive()
+            if (!permit.isActive) return@withLock NotificationPostAdmission.Revoked
+            performBadgeUpdate(permit)
+        }
     }
 
     private suspend fun performBadgeUpdate() {
         val prefs = preferences()
         if (!prefs.badgeEnabled) {
-            badgeCount = 0
             contained("setBadgeCount", Unit) { delivery.setBadgeCount(0) }
+            badgeCount = 0
             return
         }
-        val counts = contained("unreadCounts", ZERO_COUNTS) { unreadCounting.unreadCounts() }
+        val counts = unreadCounting.unreadCounts()
         var total = 0L
         if (prefs.contactMessagesEnabled) total += counts.contacts
         if (prefs.channelMessagesEnabled) total += counts.channels
         if (prefs.roomMessagesEnabled) total += counts.rooms
-        badgeCount = total
         contained("setBadgeCount", Unit) { delivery.setBadgeCount(total) }
+        badgeCount = total
+    }
+
+    private suspend fun performBadgeUpdate(
+        permit: NotificationPostPermit,
+    ): NotificationPostAdmission<Unit> {
+        val prefs = preferences()
+        val counts = if (prefs.badgeEnabled) unreadCounting.unreadCounts() else ZERO_COUNTS
+        var total = 0L
+        if (prefs.badgeEnabled && prefs.contactMessagesEnabled) total += counts.contacts
+        if (prefs.badgeEnabled && prefs.channelMessagesEnabled) total += counts.channels
+        if (prefs.badgeEnabled && prefs.roomMessagesEnabled) total += counts.rooms
+        ensureActive()
+        return when (delivery.setBadgeCount(total, permit)) {
+            is NotificationPostAdmission.Admitted -> {
+                badgeCount = total
+                NotificationPostAdmission.Admitted(Unit)
+            }
+            NotificationPostAdmission.Revoked -> NotificationPostAdmission.Revoked
+        }
     }
 
     // MARK: - Removing delivered notifications
@@ -426,6 +613,28 @@ class NotificationService(
     suspend fun removeDeliveredNotifications(contactIds: Set<UUID>) {
         if (contactIds.isEmpty()) return
         removeDeliveredMatching { it.contact?.id in contactIds }
+    }
+
+    /**
+     * Queries outside the permit, then asks the adapter to conditionally remove those exact posts.
+     * Per-post outcomes are preserved; unknown identities are never downgraded to logical-ID removal.
+     */
+    suspend fun removeDeliveredNotifications(
+        contactIds: Set<UUID>,
+        permit: NotificationPostPermit,
+    ): NotificationPostAdmission<SnapshotList<SnapshotRemovalOutcome>> {
+        if (!permit.isActive) return NotificationPostAdmission.Revoked
+        if (contactIds.isEmpty()) {
+            return permit.runIfActive { SnapshotList(emptyList()) }
+        }
+        val delivered = delivery.deliveredNotifications()
+        val selected = delivered.filter { notification ->
+            notification.payload?.let { PayloadKeys.of(it).contact?.id in contactIds } == true
+        }.snapshot()
+        if (selected.isEmpty()) {
+            return permit.runIfActive { SnapshotList(emptyList()) }
+        }
+        return delivery.removeDeliveredSnapshot(selected, permit)
     }
 
     /** Removes every delivered notification for the channel at [channelIndex] on [radioId]. */
@@ -476,6 +685,51 @@ class NotificationService(
                 logger.warning("Failed to post notification: permission denied")
             is NotificationPostResult.Unsupported ->
                 logger.warning("Failed to post notification: unsupported ${result.capability}")
+        }
+    }
+
+    private suspend fun deliver(
+        request: NotificationRequest,
+        permit: NotificationPostPermit,
+    ): ReactionNotificationOutcome {
+        val foreground = try {
+            appState.isInForeground()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            return ReactionNotificationOutcome.Unresolved(
+                ReactionNotificationOutcome.UnresolvedReason.LIFECYCLE_STATE_UNAVAILABLE,
+                failure,
+            )
+        }
+        if (foreground && !shouldPresentWhileForeground(request.payload)) {
+            return ReactionNotificationOutcome.Suppressed(ReactionNotificationOutcome.SuppressionReason.FOREGROUND_CONVERSATION)
+        }
+        val admission = try {
+            delivery.post(request, permit)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (unsupported: UnsupportedOperationException) {
+            return ReactionNotificationOutcome.RejectedBeforeDispatch(
+                NotificationPostRejection.UNSUPPORTED,
+                unsupported,
+            )
+        } catch (failure: Exception) {
+            return ReactionNotificationOutcome.Uncertain(failure)
+        }
+        return when (admission) {
+            NotificationPostAdmission.Revoked ->
+                ReactionNotificationOutcome.RejectedBeforeDispatch(NotificationPostRejection.OWNER_RETIRED)
+            is NotificationPostAdmission.Admitted -> when (val attempt = admission.value) {
+                is NotificationPostAttempt.Posted -> ReactionNotificationOutcome.Posted(attempt.id)
+                is NotificationPostAttempt.RejectedBeforeDispatch ->
+                    ReactionNotificationOutcome.RejectedBeforeDispatch(
+                        attempt.reason,
+                        attempt.cause,
+                        attempt.capability,
+                    )
+                is NotificationPostAttempt.Uncertain -> ReactionNotificationOutcome.Uncertain(attempt.failure)
+            }
         }
     }
 

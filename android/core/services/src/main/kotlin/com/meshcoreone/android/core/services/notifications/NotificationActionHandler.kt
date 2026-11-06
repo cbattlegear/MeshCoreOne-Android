@@ -3,12 +3,19 @@ package com.meshcoreone.android.core.services.notifications
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt
+import com.meshcoreone.android.core.contracts.notifications.NotificationReadReceipt
+import com.meshcoreone.android.core.contracts.notifications.NotificationPostPermit
+import com.meshcoreone.android.core.contracts.notifications.NotificationPostRejection
+import com.meshcoreone.android.core.contracts.notifications.NotificationReplyOutcomeUncertain
 import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.RadioId
 import java.util.UUID
 import java.util.logging.Level
 import java.util.logging.Logger
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 
@@ -61,35 +68,33 @@ class NotificationActionHandler(
         val stored = contained("fetchContact", null) { dataStore.fetchContact(contact) } ?: return
 
         if (connectionReady() && contact.radioId == radioId && stored.radioId == radioId) {
-            val sent = try {
-                messageService.sendDirectMessage(text, stored)
-                true
-            } catch (cancelled: CancellationException) {
-                // Swift's catch-all keeps the typed text on cancellation too; do that, then rethrow.
-                withContext(NonCancellable) { replyNotSent(contact, stored.displayName, text) }
-                throw cancelled
-            } catch (failure: Exception) {
-                logger.log(Level.INFO, "Quick reply failed; saving draft", failure)
-                false
-            }
-            if (sent) {
-                // The message is out; finish the bookkeeping even if the caller is cancelled now.
-                withContext(NonCancellable) {
-                    // Clear unread state - user replied so they've seen the chat.
+            val receipt = currentCoroutineContext()[NotificationActionReceipt] ?: NotificationActionReceipt()
+            sendReply(
+                actionReceipt = receipt,
+                send = { messageService.sendDirectMessage(text, stored) },
+                notSent = { replyNotSent(contact, stored.displayName, text, receipt) },
+                accepted = {
+                    notificationService.clearActionDraft(contact, receipt)
                     contained("clearUnreadCount", Unit) { dataStore.clearUnreadCount(contact) }
                     notificationService.removeDeliveredNotifications(contact.id)
-                    notificationService.updateBadgeCount()
+                    notificationService.contained("updateBadgeCount", Unit) { notificationService.updateBadgeCount() }
                     contained("notifyConversationsChanged", Unit) { syncCoordinator.notifyConversationsChanged() }
-                }
-                return
-            }
+                },
+            )
+            return
         }
 
         replyNotSent(contact, stored.displayName, text)
     }
 
-    private suspend fun replyNotSent(contact: EntityKey, displayName: String, text: String) {
-        notificationService.saveDraft(contact, text)
+    private suspend fun replyNotSent(
+        contact: EntityKey,
+        displayName: String,
+        text: String,
+        owner: NotificationActionReceipt? = null,
+    ) {
+        if (owner == null) notificationService.saveDraft(contact, text)
+        else notificationService.saveActionDraft(contact, text, owner)
         notificationService.postQuickReplyFailedNotification(displayName, contact)
     }
 
@@ -103,26 +108,56 @@ class NotificationActionHandler(
             return
         }
 
-        try {
-            messageService.sendChannelMessage(text, channelIndex, radioId)
-        } catch (cancelled: CancellationException) {
-            withContext(NonCancellable) {
+        sendReply(
+            send = { messageService.sendChannelMessage(text, channelIndex, radioId) },
+            notSent = {
                 notificationService.postChannelQuickReplyFailedNotification(channelName, radioId, channelIndex)
+            },
+            accepted = {
+                contained("clearChannelUnreadCount", Unit) { dataStore.clearChannelUnreadCount(radioId, channelIndex) }
+                notificationService.removeDeliveredNotifications(channelIndex, radioId)
+                notificationService.contained("updateBadgeCount", Unit) { notificationService.updateBadgeCount() }
+                contained("notifyConversationsChanged", Unit) { syncCoordinator.notifyConversationsChanged() }
+            },
+        )
+    }
+
+    private suspend fun sendReply(
+        actionReceipt: NotificationActionReceipt? = null,
+        send: suspend () -> Unit,
+        notSent: suspend () -> Unit,
+        accepted: suspend () -> Unit,
+    ) {
+        val receipt = actionReceipt ?: currentCoroutineContext()[NotificationActionReceipt] ?: NotificationActionReceipt()
+        try {
+            withContext(receipt) {
+                send()
+                receipt.accepted()
+            }
+        } catch (cancelled: CancellationException) {
+            receipt.uncertain()
+            withContext(NonCancellable) {
+                when {
+                    receipt.isAccepted -> accepted()
+                    receipt.preventsReplay ->
+                        logger.log(Level.WARNING, "Reply acceptance unknown; not restoring an unsent draft", cancelled)
+                    else -> notSent()
+                }
             }
             throw cancelled
         } catch (failure: Exception) {
-            logger.log(Level.INFO, "Channel quick reply failed", failure)
-            notificationService.postChannelQuickReplyFailedNotification(channelName, radioId, channelIndex)
-            return
+            receipt.uncertain()
+            when {
+                receipt.isAccepted -> logger.log(Level.WARNING, "Reply accepted before follow-up failed", failure)
+                receipt.preventsReplay -> throw NotificationReplyOutcomeUncertain(failure)
+                else -> {
+                    logger.log(Level.INFO, "Quick reply failed before acceptance", failure)
+                    notSent()
+                    return
+                }
+            }
         }
-
-        withContext(NonCancellable) {
-            // Clear unread state - user replied so they've seen the channel.
-            contained("clearChannelUnreadCount", Unit) { dataStore.clearChannelUnreadCount(radioId, channelIndex) }
-            notificationService.removeDeliveredNotifications(channelIndex, radioId)
-            notificationService.updateBadgeCount()
-            contained("notifyConversationsChanged", Unit) { syncCoordinator.notifyConversationsChanged() }
-        }
+        withContext(NonCancellable) { accepted() }
     }
 
     /** The stored name, then the localized fallback, then a last-resort English literal. */
@@ -131,31 +166,61 @@ class NotificationActionHandler(
 
     // MARK: - Mark as Read
 
-    suspend fun handleMarkAsRead(contact: EntityKey, messageID: UUID) = markRead("handleMarkAsRead", messageID) {
+    suspend fun handleMarkAsRead(contact: EntityKey, messageID: UUID) = markRead("handleMarkAsRead", messageID) { progress ->
         dataStore.markMessageAsRead(EntityKey(contact.radioId, messageID))
+        progress.writeReturned()
         dataStore.clearUnreadCount(contact)
+        progress.writeReturned()
     }
 
     suspend fun handleChannelMarkAsRead(radioId: RadioId, channelIndex: UByte, messageID: UUID) =
-        markRead("handleChannelMarkAsRead", messageID) {
+        markRead("handleChannelMarkAsRead", messageID) { progress ->
             dataStore.markMessageAsRead(EntityKey(radioId, messageID))
+            progress.writeReturned()
             dataStore.clearChannelUnreadCount(radioId, channelIndex)
+            progress.writeReturned()
         }
 
-    suspend fun handleRoomMarkAsRead(session: EntityKey, messageID: UUID) = markRead("handleRoomMarkAsRead", messageID) {
+    suspend fun handleRoomMarkAsRead(session: EntityKey, messageID: UUID) = markRead("handleRoomMarkAsRead", messageID) { progress ->
         roomServerService.markAsRead(session)
+        progress.writeReturned()
     }
 
     /**
-     * Swift `do { writes; remove; badge; notify } catch { /* silently ignore */ }`. Once the writes have
-     * landed, the tail runs to completion even if the caller is cancelled (Swift's tail is not cooperative).
+     * Started writes finish before cancellation can hide their return. Only all returned writes are
+     * committed; partial or uncertain writes retain a process-local no-replay receipt.
      */
-    private suspend inline fun markRead(operation: String, messageID: UUID, writes: () -> Unit) {
+    private suspend inline fun markRead(
+        operation: String,
+        messageID: UUID,
+        writes: suspend (NotificationReadReceipt) -> Unit,
+    ) {
+        currentCoroutineContext().ensureActive()
+        val actionReceipt = currentCoroutineContext()[NotificationActionReceipt] ?: NotificationActionReceipt()
+        val progress = currentCoroutineContext()[NotificationReadReceipt] ?: NotificationReadReceipt()
+        check(!progress.preventsReplay) { "A started notification read action cannot be replayed" }
         contained(operation, Unit) {
-            writes()
             withContext(NonCancellable) {
+                try {
+                    actionReceipt.writeStarted()
+                    progress.started()
+                    writes(progress)
+                    progress.committed()
+                    actionReceipt.writeCommitted()
+                } catch (failure: Throwable) {
+                    progress.uncertain()
+                    actionReceipt.uncertain()
+                    if (failure is CancellationException && progress.state == NotificationReadReceipt.State.UNCERTAIN) {
+                        logger.log(
+                            Level.WARNING,
+                            "Notification read writes may be partial; automatic replay requires recovery",
+                            failure,
+                        )
+                    }
+                    throw failure
+                }
                 notificationService.removeDeliveredNotification(messageID)
-                notificationService.updateBadgeCount()
+                notificationService.contained("updateBadgeCount", Unit) { notificationService.updateBadgeCount() }
                 syncCoordinator.notifyConversationsChanged()
             }
         }
@@ -212,6 +277,123 @@ class NotificationActionHandler(
             contactID = contactID,
             channelIndex = channelIndex,
             radioId = if (channelIndex != null) message.radioId else null,
+        )
+    }
+
+    /**
+     * Handles a reaction for the captured wiring generation and reports the observed disposition.
+     * Suppression is returned only for positive policy decisions; missing state and lookup failures
+     * remain unresolved. Cancellation propagates so the owner can retain recovery custody.
+     */
+    suspend fun handleReactionNotification(
+        messageID: UUID,
+        postPermit: NotificationPostPermit,
+    ): ReactionNotificationOutcome {
+        if (!postPermit.isActive) {
+            return ReactionNotificationOutcome.RejectedBeforeDispatch(NotificationPostRejection.OWNER_RETIRED)
+        }
+        val localNodeName = configuration?.localNodeName
+            ?: return ReactionNotificationOutcome.Unresolved(
+                ReactionNotificationOutcome.UnresolvedReason.HANDLER_NOT_CONFIGURED,
+            )
+        val key = EntityKey(radioId, messageID)
+        val message = try {
+            dataStore.fetchMessage(key)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            logger.log(Level.WARNING, "Reaction notification unresolved: fetchMessage failed", failure)
+            return ReactionNotificationOutcome.Unresolved(
+                ReactionNotificationOutcome.UnresolvedReason.LOOKUP_FAILED,
+                failure,
+            )
+        } ?: return ReactionNotificationOutcome.Unresolved(
+            ReactionNotificationOutcome.UnresolvedReason.MESSAGE_NOT_FOUND,
+        )
+        if (message.direction != MessageDirection.OUTGOING) {
+            return ReactionNotificationOutcome.Suppressed(ReactionNotificationOutcome.SuppressionReason.NOT_OUTGOING)
+        }
+
+        val latestReaction = try {
+            dataStore.fetchReactions(key, limit = 1)?.firstOrNull()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            logger.log(Level.WARNING, "Reaction notification unresolved: fetchReactions failed", failure)
+            return ReactionNotificationOutcome.Unresolved(
+                ReactionNotificationOutcome.UnresolvedReason.LOOKUP_FAILED,
+                failure,
+            )
+        } ?: return ReactionNotificationOutcome.Unresolved(
+            ReactionNotificationOutcome.UnresolvedReason.REACTION_NOT_FOUND,
+        )
+
+        val nodeName = try {
+            localNodeName()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            logger.log(Level.WARNING, "Reaction notification unresolved: localNodeName failed", failure)
+            return ReactionNotificationOutcome.Unresolved(
+                ReactionNotificationOutcome.UnresolvedReason.LOOKUP_FAILED,
+                failure,
+            )
+        }
+        if (nodeName != null && NotificationSwiftText.equal(latestReaction.senderName, nodeName)) {
+            return ReactionNotificationOutcome.Suppressed(ReactionNotificationOutcome.SuppressionReason.SELF_REACTION)
+        }
+
+        val contactID = message.contactID
+        val channelIndex = message.channelIndex
+        val isMuted = try {
+            when {
+                contactID != null ->
+                    dataStore.fetchContact(EntityKey(message.radioId, contactID))?.isMuted
+                        ?: return ReactionNotificationOutcome.Unresolved(
+                            ReactionNotificationOutcome.UnresolvedReason.CONVERSATION_NOT_FOUND,
+                        )
+                channelIndex != null ->
+                    dataStore.fetchChannel(message.radioId, channelIndex)?.isMuted
+                        ?: return ReactionNotificationOutcome.Unresolved(
+                            ReactionNotificationOutcome.UnresolvedReason.CONVERSATION_NOT_FOUND,
+                        )
+                else -> false
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            logger.log(Level.WARNING, "Reaction notification unresolved: conversation lookup failed", failure)
+            return ReactionNotificationOutcome.Unresolved(
+                ReactionNotificationOutcome.UnresolvedReason.LOOKUP_FAILED,
+                failure,
+            )
+        }
+        if (isMuted) {
+            return ReactionNotificationOutcome.Suppressed(ReactionNotificationOutcome.SuppressionReason.MUTED_CONVERSATION)
+        }
+
+        val body = try {
+            val preview = reactionPreview(message.text)
+            notificationService.strings?.reactionNotificationBody(latestReaction.emoji, preview)
+                ?: "Reacted ${latestReaction.emoji} to your message: \"$preview\""
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            logger.log(Level.WARNING, "Reaction notification unresolved: content construction failed", failure)
+            return ReactionNotificationOutcome.Unresolved(
+                ReactionNotificationOutcome.UnresolvedReason.CONTENT_CONSTRUCTION_FAILED,
+                failure,
+            )
+        }
+
+        return notificationService.postReactionNotification(
+            reactorName = latestReaction.senderName,
+            body = body,
+            messageID = messageID,
+            contactID = contactID,
+            channelIndex = channelIndex,
+            radioId = if (channelIndex != null) message.radioId else null,
+            postPermit = postPermit,
         )
     }
 

@@ -10,11 +10,18 @@ import com.meshcoreone.android.core.contracts.domain.NotificationStringProvider
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.UnreadCounts
 import com.meshcoreone.android.core.contracts.notifications.DeliveredNotification
+import com.meshcoreone.android.core.contracts.notifications.DeliveredPostIdentity
 import com.meshcoreone.android.core.contracts.notifications.NotificationAuthorizationStatus
+import com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt
 import com.meshcoreone.android.core.contracts.notifications.NotificationCategoryDefinition
 import com.meshcoreone.android.core.contracts.notifications.NotificationDeliveryPort
+import com.meshcoreone.android.core.contracts.notifications.NotificationPostAdmission
+import com.meshcoreone.android.core.contracts.notifications.NotificationPostAttempt
+import com.meshcoreone.android.core.contracts.notifications.NotificationPostPermit
+import com.meshcoreone.android.core.contracts.notifications.NotificationPostRejection
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.contracts.notifications.NotificationRequest
+import com.meshcoreone.android.core.contracts.notifications.SnapshotRemovalOutcome
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.MessageDTO
@@ -83,6 +90,7 @@ internal fun allEnabledPreferences(): NotificationPreferences = NotificationPref
 internal class Journal {
     private val lock = Any()
     private val entries = ArrayList<String>()
+    val gates = java.util.concurrent.ConcurrentHashMap<String, CompletableDeferred<Unit>>()
     @Volatile var cancelCallerAt: String? = null
     val events: List<String> get() = synchronized(lock) { entries.toList() }
 
@@ -92,6 +100,13 @@ internal class Journal {
 
     suspend fun record(event: String) {
         note(event)
+        gates.remove(event)?.await()
+        if (event == cancelCallerAt) currentCoroutineContext().cancel()
+    }
+
+    suspend fun recordAfter(event: String, effect: () -> Unit) {
+        note(event)
+        effect()
         if (event == cancelCallerAt) currentCoroutineContext().cancel()
     }
 }
@@ -105,16 +120,20 @@ internal class FakeDelivery(private val journal: Journal = Journal()) : Notifica
     val failing = HashSet<String>()
     var cancelling: String? = null
     private val postedRequests = ArrayList<NotificationRequest>()
-    private val shown = LinkedHashMap<NotificationId, NotificationPayload?>()
+    private val shown = LinkedHashMap<NotificationId, DeliveredNotification>()
     private val badges = ArrayList<Long>()
     private val removed = ArrayList<List<NotificationId>>()
     private var categories: SnapshotList<NotificationCategoryDefinition>? = null
+    @Volatile var deliveredGate: CompletableDeferred<Unit>? = null
+    private val snapshotRemovals = ArrayList<List<DeliveredNotification>>()
     var listCalls = 0
         private set
 
     val posted: List<NotificationRequest> get() = synchronized(lock) { postedRequests.toList() }
     val badgeSets: List<Long> get() = synchronized(lock) { badges.toList() }
     val removals: List<List<NotificationId>> get() = synchronized(lock) { removed.toList() }
+    val snapshotRemovalRequests: List<List<DeliveredNotification>>
+        get() = synchronized(lock) { snapshotRemovals.toList() }
     val registered: SnapshotList<NotificationCategoryDefinition>? get() = synchronized(lock) { categories }
     val shownIds: List<NotificationId> get() = synchronized(lock) { shown.keys.toList() }
 
@@ -124,9 +143,21 @@ internal class FakeDelivery(private val journal: Journal = Journal()) : Notifica
     }
 
     /** A notification some other owner posted (no WP-215 payload). */
-    fun showForeign(id: String) = synchronized(lock) { shown[NotificationId(id)] = null }
+    fun showForeign(id: String) = synchronized(lock) {
+        val notificationId = NotificationId(id)
+        shown[notificationId] = DeliveredNotification(notificationId, null)
+    }
 
-    fun show(id: String, payload: NotificationPayload) = synchronized(lock) { shown[NotificationId(id)] = payload }
+    fun show(id: String, payload: NotificationPayload) = synchronized(lock) {
+        val notificationId = NotificationId(id)
+        shown[notificationId] =
+            DeliveredNotification(notificationId, payload, DeliveredPostIdentity(UUID.randomUUID()))
+    }
+
+    fun showWithoutIdentity(id: String, payload: NotificationPayload) = synchronized(lock) {
+        val notificationId = NotificationId(id)
+        shown[notificationId] = DeliveredNotification(notificationId, payload)
+    }
 
     override suspend fun authorizationStatus(): NotificationAuthorizationStatus {
         maybeFail("authorizationStatus")
@@ -147,20 +178,59 @@ internal class FakeDelivery(private val journal: Journal = Journal()) : Notifica
         synchronized(lock) { postedRequests += request }
         journal.record("post")
         maybeFail("post")
-        if (postResult == NotificationPostResult.Posted) synchronized(lock) { shown[request.id] = request.payload }
+        if (postResult == NotificationPostResult.Posted) {
+            synchronized(lock) {
+                shown[request.id] =
+                    DeliveredNotification(request.id, request.payload, DeliveredPostIdentity(UUID.randomUUID()))
+            }
+        }
         return postResult
     }
 
+    override suspend fun post(
+        request: NotificationRequest,
+        permit: NotificationPostPermit,
+    ): NotificationPostAdmission<NotificationPostAttempt> =
+        permit.runIfActive {
+            journal.note("post")
+            synchronized(lock) { postedRequests += request }
+            maybeFail("post")
+            if (postResult == NotificationPostResult.Posted) {
+                synchronized(lock) {
+                    shown[request.id] =
+                        DeliveredNotification(request.id, request.payload, DeliveredPostIdentity(UUID.randomUUID()))
+                }
+                NotificationPostAttempt.Posted(request.id)
+            } else {
+                NotificationPostAttempt.RejectedBeforeDispatch(NotificationPostRejection.PERMISSION_DENIED)
+            }
+        }
+
     override suspend fun setBadgeCount(count: Long) {
-        synchronized(lock) { badges += count }
-        journal.record("setBadgeCount")
-        maybeFail("setBadgeCount")
+        journal.recordAfter("setBadgeCount") {
+            maybeFail("setBadgeCount")
+            synchronized(lock) { badges += count }
+        }
     }
 
+    override suspend fun setBadgeCount(
+        count: Long,
+        permit: NotificationPostPermit,
+    ): NotificationPostAdmission<Unit> =
+        permit.runIfActive {
+            journal.note("setBadgeCount")
+            maybeFail("setBadgeCount")
+            synchronized(lock) { badges += count }
+        }
+
     override suspend fun deliveredNotifications(): SnapshotList<DeliveredNotification> {
-        synchronized(lock) { listCalls += 1 }
+        val gate = synchronized(lock) {
+            listCalls += 1
+            deliveredGate
+        }
+        gate?.await()
         maybeFail("deliveredNotifications")
-        return synchronized(lock) { shown.map { DeliveredNotification(it.key, it.value) }.snapshot() }
+        return synchronized(lock) { shown.values.snapshot() }
     }
 
     override suspend fun removeDelivered(ids: SnapshotList<NotificationId>) {
@@ -168,6 +238,38 @@ internal class FakeDelivery(private val journal: Journal = Journal()) : Notifica
         journal.record("removeDelivered")
         maybeFail("removeDelivered")
         synchronized(lock) { ids.forEach { shown.remove(it) } }
+    }
+
+    override suspend fun removeDeliveredSnapshot(
+        selected: SnapshotList<DeliveredNotification>,
+    ): SnapshotList<SnapshotRemovalOutcome> = synchronized(lock) {
+        removeSnapshot(selected)
+    }
+
+    override suspend fun removeDeliveredSnapshot(
+        selected: SnapshotList<DeliveredNotification>,
+        permit: NotificationPostPermit,
+    ): NotificationPostAdmission<SnapshotList<SnapshotRemovalOutcome>> =
+        permit.runIfActive {
+            synchronized(lock) { removeSnapshot(selected) }
+        }
+
+    private fun removeSnapshot(selected: SnapshotList<DeliveredNotification>): SnapshotList<SnapshotRemovalOutcome> {
+        journal.note("removeDeliveredSnapshot")
+        maybeFail("removeDeliveredSnapshot")
+        synchronized(lock) { snapshotRemovals += selected.toList() }
+        return SnapshotList(selected.map { old ->
+            val current = shown[old.id]
+            val currentIdentity = current?.postIdentity
+            when {
+                old.postIdentity == null || currentIdentity == null -> SnapshotRemovalOutcome.UNKNOWN_IDENTITY
+                currentIdentity != old.postIdentity -> SnapshotRemovalOutcome.SUPERSEDED
+                else -> {
+                    shown.remove(old.id)
+                    SnapshotRemovalOutcome.REMOVED
+                }
+            }
+        })
     }
 }
 
@@ -195,6 +297,7 @@ internal class FakeAppState : AppStateProvider {
 internal class FakeUnreadCounts : NotificationUnreadCounting {
     @Volatile var counts = UnreadCounts(0, 0, 0)
     @Volatile var fail = false
+    @Volatile var failure: Exception? = null
     @Volatile var cancel = false
     @Volatile var calls = 0
         private set
@@ -204,7 +307,7 @@ internal class FakeUnreadCounts : NotificationUnreadCounting {
         val snapshot = counts
         gates.poll()?.await()
         if (cancel) throw kotlinx.coroutines.CancellationException("store scope cancelled")
-        if (fail) throw IllegalStateException("store closed")
+        if (fail) throw failure ?: IllegalStateException("store closed")
         return snapshot
     }
 }
@@ -255,6 +358,8 @@ internal class FakeStore(private val journal: Journal = Journal()) : Persistence
     val messages = HashMap<EntityKey, MessageDTO>()
     val reactions = HashMap<EntityKey, List<ReactionDTO>>()
     val failing = HashSet<String>()
+    val failures = HashMap<String, Exception>()
+    val gates = java.util.concurrent.ConcurrentHashMap<String, CompletableDeferred<Unit>>()
     var cancelling: String? = null
     private val recorded = ArrayList<Pair<String, Any>>()
     val calls: List<Pair<String, Any>> get() = synchronized(lock) { recorded.toList() }
@@ -263,8 +368,9 @@ internal class FakeStore(private val journal: Journal = Journal()) : Persistence
     private suspend fun record(operation: String, argument: Any) {
         synchronized(lock) { recorded += operation to argument }
         if (!operation.startsWith("fetch")) journal.record(operation)
+        gates.remove(operation)?.await()
         if (operation == cancelling) throw kotlinx.coroutines.CancellationException("cancelled in $operation")
-        if (operation in failing) throw IllegalStateException("store $operation failed")
+        if (operation in failing) throw failures[operation] ?: IllegalStateException("store $operation failed")
     }
 
     override suspend fun fetchContact(key: EntityKey): ContactDTO? = record("fetchContact", key).let { contacts[key] }
@@ -282,20 +388,56 @@ internal class FakeSender(private val journal: Journal = Journal()) : Notificati
     private val lock = Any()
     var fail = false
     var cancel = false
+    var cancelBeforeWire = false
+    var uncertainFailure: Exception? = null
     private val sent = ArrayList<Pair<String, Any>>()
     val sends: List<Pair<String, Any>> get() = synchronized(lock) { sent.toList() }
     override suspend fun sendDirectMessage(text: String, contact: ContactDTO): MessageDTO {
+        if (cancelBeforeWire) throw kotlinx.coroutines.CancellationException("cancelled before wire dispatch")
+        val receipt = currentCoroutineContext()[NotificationActionReceipt]
+        receipt?.wireStarted()
         synchronized(lock) { sent += text to contact.id }
+        if (cancel) {
+            journal.record("send")
+            receipt?.uncertain()
+            throw kotlinx.coroutines.CancellationException("send outcome unknown")
+        }
+        if (fail) {
+            journal.record("send")
+            receipt?.wireRejected()
+            throw IllegalStateException("not connected")
+        }
+        uncertainFailure?.let { failure ->
+            journal.record("send")
+            receipt?.uncertain()
+            throw failure
+        }
+        receipt?.accepted()
         journal.record("send")
-        if (cancel) throw kotlinx.coroutines.CancellationException("send cancelled")
-        if (fail) throw IllegalStateException("not connected")
         return MessageDTO(radioId = contact.radioId, contactID = contact.id, text = text, timestamp = 1u)
     }
     override suspend fun sendChannelMessage(text: String, channelIndex: UByte, radioId: RadioId) {
+        if (cancelBeforeWire) throw kotlinx.coroutines.CancellationException("cancelled before wire dispatch")
+        val receipt = currentCoroutineContext()[NotificationActionReceipt]
+        receipt?.wireStarted()
         synchronized(lock) { sent += text to (radioId to channelIndex) }
+        if (cancel) {
+            journal.record("send")
+            receipt?.uncertain()
+            throw kotlinx.coroutines.CancellationException("send outcome unknown")
+        }
+        if (fail) {
+            journal.record("send")
+            receipt?.wireRejected()
+            throw IllegalStateException("not connected")
+        }
+        uncertainFailure?.let { failure ->
+            journal.record("send")
+            receipt?.uncertain()
+            throw failure
+        }
+        receipt?.accepted()
         journal.record("send")
-        if (cancel) throw kotlinx.coroutines.CancellationException("send cancelled")
-        if (fail) throw IllegalStateException("not connected")
     }
 }
 

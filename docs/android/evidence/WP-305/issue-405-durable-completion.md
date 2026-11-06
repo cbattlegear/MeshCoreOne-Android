@@ -439,8 +439,13 @@ review found two further post-success-marker revocation windows. WP-209 correcte
 `0ab2453cd1a00d9775595d4260543b938d14d71b`); its exact `ConnectionManager.kt` blob is
 `024a9c30aa38ab085ae9e0226ef316d1464b4961`. WP-302 then found a caller-lifetime cancellation
 window in that candidate: a permanently cancelled initiating Job can revoke an already-established
-process-owned generation. The producer is correcting that settlement boundary; 2a0e is not
-accepted, executed or published, and remains uncomposed here. The reported minimal production
+process-owned generation. WP-209 supplied another corrected source candidate
+`78c011d163c55e1f592ce670ca75eac2c709d485` (tree
+`168e0ab9d77d6cb71e62480e25e4179964fe8f41`), exact manager blob
+`91ba84242605000d27f284cfbbde831f2125edd5`. It moves establishment settlement to terminal
+successful work completion, keeps reconnect-cycle equality after settlement, and adds post-return
+caller-cancellation controls. WP-302's independent re-review is pending; 78c is not accepted,
+executed or published and remains uncomposed. The reported minimal production
 composition is `ConnectionManager.kt` plus canonical `ChannelIdentityMutation.kt`
 (`a4cf97a36327721e9df7eb9afffbf12b37511d3c`); the cumulative WP-209 ancestry and 411d data/runtime
 test graph change are not required for the runtime API.
@@ -463,7 +468,7 @@ correction and added Room control are local commit `dcb37285c8d` directly after 
 WP-305 writer commit `113b46a39fef60cf389174c3d632ff95675207f1` and intentionally reference the
 pending manager API, so they are not yet a compilable composed candidate.
 
-The exact producer composition still requires favorable review of `2a0e...` and the minimal
+The exact producer composition still requires favorable review of `78c...` and the minimal
 canonical `ChannelIdentityMutation.kt` dependency as well as `ConnectionManager.kt`; no cumulative
 WP-209 ancestry is imported. Trusted current-main admissions for the caller files were previously
 verified. On caller head `dcb37285c8d`, `python tools\android-port\controller\validate.py` passed

@@ -292,9 +292,11 @@ class AppOnboarding(
     fun forRerun(): OnboardingFeatureDependencies = rerunDependencies
 
     private class Rerun(private val base: AppOnboarding) : OnboardingFeatureDependencies by base {
-        override val flowCoordinatorRevision: StateFlow<Long>? = null
+        private val flowRevision = MutableStateFlow(0L)
+        override val flowCoordinatorRevision: StateFlow<Long> = flowRevision.asStateFlow()
         private var sessionFlags: OnboardingFlagStore = InMemoryOnboardingFlagStore()
         private var flowCoordinator: OnboardingFlowCoordinator? = null
+        private val retiringFlowCoordinators = mutableSetOf<OnboardingFlowCoordinator>()
 
         override val flags: OnboardingFlagStore get() = sessionFlags
 
@@ -314,10 +316,25 @@ class AppOnboarding(
 
         @Synchronized
         override fun onFlowCompletionHandled(coordinator: OnboardingFlowCoordinator) {
-            if (flowCoordinator === coordinator) {
-                coordinator.onboarding.retireCompletion()
-                flowCoordinator = null
-                sessionFlags = InMemoryOnboardingFlagStore()
+            retireFlowCoordinator(coordinator)
+        }
+
+        @Synchronized
+        override fun onFlowCoordinatorEntryRemoved(coordinator: OnboardingFlowCoordinator) {
+            retireFlowCoordinator(coordinator)
+        }
+
+        private fun retireFlowCoordinator(coordinator: OnboardingFlowCoordinator) {
+            if (flowCoordinator !== coordinator) return
+            coordinator.onboarding.retireCompletion()
+            flowCoordinator = null
+            sessionFlags = InMemoryOnboardingFlagStore()
+            flowRevision.value = Math.incrementExact(flowRevision.value)
+            if (coordinator.onboarding.hasUnsettledCompletion && retiringFlowCoordinators.add(coordinator)) {
+                base.flowScope.launch {
+                    coordinator.onboarding.unsettledCompletionFlow.first { !it }
+                    synchronized(this@Rerun) { retiringFlowCoordinators.remove(coordinator) }
+                }
             }
         }
 

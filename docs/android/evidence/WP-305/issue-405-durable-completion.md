@@ -222,9 +222,20 @@ regression asserts callback identity across recreation and after a deliberate ow
 WP-302 must capture the witness before starting the flow and pass that same coordinator to the
 entry; the producer does not capture or refresh navigation state.
 
+Settings reruns also expose `onFlowCoordinatorEntryRemoved(coordinator)`, a narrow host callback
+for permanent navigation-entry removal only (never Activity/composition disposal). The rerun owner
+retires only the exact current coordinator, rotates to a fresh in-memory flag store and owner
+revision, and retains any unsettled retired coordinator until its settlement completes. The rerun
+uses `InMemoryOnboardingFlagStore`, so its completion write has no disk-backed uncertain outcome;
+the regression instead interposes after sealing, removes the exact entry, mounts a fresh flow, and
+then lets the old attempt settle. The new flow remains incomplete and current, and stale removal is
+idempotent. This regression is not yet executed. The #302 host must call this seam only after actual
+entry removal and outside the manager/registry/graph commit boundary.
+
 Trusted `reserve.py admit` accepted the three onboarding production paths as
 `wp-owned/modify`, the mounted regression as `reviewed-support-test/add-or-update-related-test`,
-and this evidence path as `wp-owned/record-evidence`. `git diff --check` passed;
+this evidence path as `wp-owned/record-evidence`, and the two recovery integration-test fixture
+updates as `reviewed-support-test/add-or-update-related-test`. `git diff --check` passed;
 `python tools/android-port/controller/validate.py` passed (64 WPs / 1,866 tracked reference
 files); `python tools/android-port/test_inventory.py --check` passed (468 pinned paths /
 5,133 declarations). Native Windows `ci.py preflight --local` exited 0 and invoked

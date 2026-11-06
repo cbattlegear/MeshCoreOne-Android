@@ -49,6 +49,8 @@ import com.meshcoreone.android.feature.onboarding.OnboardingState
 import com.meshcoreone.android.feature.onboarding.PermissionStatus
 import com.meshcoreone.android.feature.onboarding.ui.OnboardingFlow
 import com.meshcoreone.android.feature.onboarding.PairSheet
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -61,6 +63,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotSame
@@ -1430,7 +1433,83 @@ class OnboardingGateTest {
             assertNotSame(rerunFlow, nextRerunFlow)
             assertFalse(nextRerunFlow.onboarding.hasCompletedOnboarding)
             assertTrue(firstRunFlow.onboarding.hasCompletedOnboarding)
+
+            nextRerunFlow.getStarted()
+            val revision = checkNotNull(rerun.flowCoordinatorRevision).value
+            rerun.onFlowCoordinatorEntryRemoved(nextRerunFlow)
+            assertFalse(rerun.ownsFlowCoordinator(nextRerunFlow))
+            assertFalse(nextRerunFlow.onboarding.canStartCompletion())
+            val afterRemoval = checkNotNull(rerun.retainedFlowCoordinator())
+            assertNotSame(nextRerunFlow, afterRemoval)
+            assertTrue(afterRemoval.onboarding.onboardingPath.isEmpty())
+            assertEquals(revision + 1, checkNotNull(rerun.flowCoordinatorRevision).value)
+
+            rerun.onFlowCoordinatorEntryRemoved(nextRerunFlow)
+            assertSame(afterRemoval, rerun.retainedFlowCoordinator())
+            assertEquals(revision + 1, checkNotNull(rerun.flowCoordinatorRevision).value)
         } finally {
+            processScope.cancel()
+        }
+    }
+
+    @Test fun `Settings rerun entry removal replaces flow while sealed completion settles`() = runBlocking {
+        val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val sealed = CompletableDeferred<Unit>()
+        val releaseSeal = CountDownLatch(1)
+        val presetTarget = OnboardingPresetTarget(
+            java.util.UUID.randomUUID(), 1, java.util.UUID.randomUUID(),
+        )
+        val presets = object : OnboardingPresetPort {
+            override val canApply = MutableStateFlow(true)
+            override fun currentTarget() = presetTarget
+            override fun sealCompletion(
+                completionTarget: OnboardingPresetTarget?,
+                attempt: com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt,
+            ): Boolean {
+                if (completionTarget != presetTarget || !attempt.trySeal()) return false
+                sealed.complete(Unit)
+                check(releaseSeal.await(5, TimeUnit.SECONDS)) { "Timed out waiting to release sealed completion" }
+                return true
+            }
+            override suspend fun apply(presetId: String) = OnboardingPresetOutcome.Applied
+        }
+        try {
+            host.setup().visible()
+            val baseFlags = flags(completed = true)
+            val base = onboarding(baseFlags, baseFlags.hasCompleted, processScope, presets = presets)
+            val rerun = base.forRerun()
+            val oldFlow = checkNotNull(rerun.retainedFlowCoordinator())
+            oldFlow.onboarding.replacePath(listOf(OnboardingStep.PRESET))
+            val presetId = oldFlow.preset.visiblePresets().first().id
+            oldFlow.preset.select(presetId)
+
+            val applying = async(Dispatchers.Default) { oldFlow.preset.apply(presetId) }
+            withTimeout(5_000) { sealed.await() }
+
+            val revision = checkNotNull(rerun.flowCoordinatorRevision).value
+            rerun.onFlowCoordinatorEntryRemoved(oldFlow)
+            assertFalse(rerun.ownsFlowCoordinator(oldFlow))
+            assertTrue(oldFlow.onboarding.hasUnsettledCompletion)
+
+            val replacement = checkNotNull(rerun.retainedFlowCoordinator())
+            assertNotSame(oldFlow, replacement)
+            assertFalse(replacement.onboarding.hasCompletedOnboarding)
+            assertEquals(revision + 1, checkNotNull(rerun.flowCoordinatorRevision).value)
+            showFlow(rerun)
+            compose.waitForIdle()
+            assertSame(replacement, rerun.retainedFlowCoordinator())
+
+            releaseSeal.countDown()
+            withTimeout(5_000) {
+                oldFlow.onboarding.unsettledCompletionFlow.first { !it }
+            }
+            applying.await()
+            assertFalse(oldFlow.onboarding.hasCompletedOnboarding)
+            assertFalse(replacement.onboarding.hasCompletedOnboarding)
+            rerun.onFlowCoordinatorEntryRemoved(oldFlow)
+            assertSame(replacement, rerun.retainedFlowCoordinator())
+        } finally {
+            releaseSeal.countDown()
             processScope.cancel()
         }
     }

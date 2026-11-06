@@ -166,6 +166,9 @@ interface OnboardingFeatureDependencies {
     /** Called after the active flow has delivered its durable completion to its host. */
     fun onFlowCompletionHandled(coordinator: OnboardingFlowCoordinator) = Unit
 
+    /** Called only when this coordinator's navigation entry is permanently removed, never on Activity recreation. */
+    fun onFlowCoordinatorEntryRemoved(coordinator: OnboardingFlowCoordinator) = Unit
+
     /**
      * Activity-result bridge: the app returns a launcher (rememberLauncherForActivityResult) that
      * requests one runtime permission just in time and calls [onResult] afterwards. Kept as a

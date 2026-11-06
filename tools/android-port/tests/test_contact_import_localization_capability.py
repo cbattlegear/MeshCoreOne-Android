@@ -104,6 +104,8 @@ class ContactImportLocalizationCapabilityTests(unittest.TestCase):
         full_current = json.loads((REPO / "docs/android/automation-policy.json").read_text(encoding="utf-8"))
         untouched = copy.deepcopy(full_current)
         current = copy.deepcopy(full_current)
+        simulator = current["reservation_policy"]["capabilities"].pop()
+        self.assertEqual(simulator["id"], "reviewed-support-simulator-preference-recovery-copy")
         notification = current["reservation_policy"]["capabilities"].pop()
         self.assertEqual(notification["id"], "reviewed-support-notification-enrollment-copy")
         original_text = subprocess.check_output(

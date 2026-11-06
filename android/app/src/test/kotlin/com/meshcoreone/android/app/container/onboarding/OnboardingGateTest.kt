@@ -337,6 +337,8 @@ class OnboardingGateTest {
             releaseFinalizer.complete(Unit)
             flow.onboarding.reconciliationReadyFlow.first { it }
             compose.waitForIdle()
+            assertTrue(flow.onboarding.canReconcileCompletion())
+            assertTrue(flow.canCompleteWithoutDevice())
             confirm.assertIsEnabled()
 
             compose.runOnIdle { readbackAvailable = true }
@@ -395,6 +397,8 @@ class OnboardingGateTest {
             compose.waitForIdle()
             assertEquals(listOf(attemptId), reads)
             assertFalse(flags.hasCompleted.value)
+            assertTrue(flow.onboarding.canStartCompletion())
+            assertTrue(flow.preset.canApply(dependencies.presets.canApply.value, flow.preset.state.value))
             apply.assertIsEnabled()
         } finally {
             releaseFinalizer.complete(Unit)

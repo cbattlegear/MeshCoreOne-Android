@@ -41,6 +41,77 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.CoroutineContext
 
 class SettingsPathHashPersistenceTest : RoomProcessTest() {
+    @Test fun cachedUnsupportedButVerifiedSupportedPersistsTheActuallyWrittenHash() = runTest {
+        capabilityMismatch(cachedSupported = false, failHashSave = false)
+    }
+
+    @Test fun cachedSupportedButVerifiedUnsupportedNeverPersistsAnUnwrittenHash() = runTest {
+        capabilityMismatch(cachedSupported = true, failHashSave = false)
+    }
+
+    @Test fun verifiedHashSaveFailureCannotAcknowledgeRecoveryDespiteCachedUnsupported() = runTest {
+        capabilityMismatch(cachedSupported = false, failHashSave = true)
+    }
+
+    private suspend fun TestScope.capabilityMismatch(cachedSupported: Boolean, failHashSave: Boolean) {
+        val ui = HeldSettingsDispatcher(StandardTestDispatcher(testScheduler))
+        val firmware = AtomicInteger(10)
+        val persistence = object : PersistenceStoreProtocol by store, DeviceEditPersisting by store {
+            override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+                if (failHashSave && dto.pathHashMode == 2u.toUByte()) {
+                    throw IllegalStateException("verified hash metadata rejected")
+                }
+                return store.saveDeviceIfUnchanged(dto, expected)
+            }
+        }
+        withSettings(
+            persistence, beforeClose = { ui.resume() },
+            mainScope = CoroutineScope(backgroundScope.coroutineContext + ui),
+            firmwareVersion = { firmware.get() },
+            beforeRadioWrite = { ui.pause() },
+        ) { h, _, _, radioMode ->
+            val cached = assertNotNull(h.manager.connectedDevice).copy(
+                firmwareVersion = if (cachedSupported) 10u else 9u,
+            )
+            store.saveDevice(cached)
+            assertNotNull(h.manager.replaceConnectedDevice(cached))
+            firmware.set(if (cachedSupported) 9 else 10)
+            val service = assertNotNull(h.sessions.current).settingsService
+            val configurator = AppStateRadioConfigurator(h.container)
+            val preset = RadioPresets.all.first().copy(
+                id = "capability-mismatch", frequencyMHz = 868.0, bandwidthKHz = 250.0,
+                spreadingFactor = 10u, codingRate = 5u, pathHashSize = 3,
+            )
+            val applied = runCatching { configurator.applyPreset(preset, configurator.currentTarget()) }
+            assertTrue(ui.pending > 0, "Actual queued events must remain unable to repair the direct callback")
+            val saved = assertNotNull(store.fetchDevice(cached.id))
+            if (failHashSave) {
+                assertTrue(generateSequence(assertNotNull(applied.exceptionOrNull())) { it.cause }
+                    .any { it.message == "verified hash metadata rejected" })
+                assertTrue(service.pathHashModeNeedsRecovery)
+                assertEquals(2u.toUByte(), radioMode())
+                assertEquals(cached.pathHashMode, saved.pathHashMode)
+            } else {
+                applied.getOrThrow()
+                val expected = if (cachedSupported) cached.pathHashMode else 2u.toUByte()
+                assertEquals(expected, radioMode())
+                assertEquals(expected, saved.pathHashMode)
+                assertFalse(service.pathHashModeNeedsRecovery)
+            }
+            assertEquals(preset.id, saved.appliedRadioPresetID)
+            assertEquals(saved, h.manager.connectedDevice)
+            assertEquals(
+                if (cachedSupported) emptyList() else listOf(2),
+                h.links.radios.single().sent.filter { it[0] == 0x3d.toUByte() }.map { it[2].toInt() },
+            )
+            ui.resume()
+            h.settle()
+            assertEquals(saved, store.fetchDevice(cached.id))
+            assertEquals(saved, h.manager.connectedDevice)
+            assertEquals(failHashSave, service.pathHashModeNeedsRecovery)
+        }
+    }
+
     @Test fun ordinarySettingsHashWaitsForOnboardingRadioAndMetadataCommit() = runTest {
         mixedPresetThenSettings("commit")
     }
@@ -551,6 +622,8 @@ class SettingsPathHashPersistenceTest : RoomProcessTest() {
         persistence: PersistenceStoreProtocol = store,
         beforeClose: () -> Unit = {},
         mainScope: CoroutineScope = backgroundScope,
+        firmwareVersion: () -> Int = { 10 },
+        beforeRadioWrite: () -> Unit = {},
         action: suspend (ContainerHarness, PathHashModeStateHolder, MutableList<Throwable>, () -> UByte) -> Unit,
     ) {
         val h = ContainerHarness(this, store, persistenceOverride = persistence, mainScope = mainScope)
@@ -564,6 +637,7 @@ class SettingsPathHashPersistenceTest : RoomProcessTest() {
                     when (command[0].toInt()) {
                         0x1f -> listOf(Bytes.of(0x12, command[1].toInt()) + Bytes(ByteArray(48)))
                         0x0b -> {
+                            beforeRadioWrite()
                             val frequency = (0..3).fold(0u) { value, index ->
                                 value or (command[index + 1].toUInt() shl (index * 8))
                             }
@@ -577,7 +651,7 @@ class SettingsPathHashPersistenceTest : RoomProcessTest() {
                         )
                         0x3d -> { mode.set(command[2].toInt()); listOf(Bytes.of(0)) }
                         0x16 -> listOf(
-                            Bytes.of(13, 10, 50, 8) + le32(0) + Bytes.utf8("01 Jan 2025").paddedOrTruncated(12) +
+                            Bytes.of(13, firmwareVersion(), 50, 8) + le32(0) + Bytes.utf8("01 Jan 2025").paddedOrTruncated(12) +
                                 Bytes.utf8("T-Deck").paddedOrTruncated(40) +
                                 Bytes.utf8("v1.13.0").paddedOrTruncated(20) + Bytes.of(0, mode.get()),
                         )

@@ -174,14 +174,12 @@ class AppStateRadioConfigurator(private val container: AppContainer) : Onboardin
             ) {
                 throw SettingsServiceException(SettingsServiceError.NotConnected)
             }
-            val pathHashMode =
-                preset.pathHashMode.takeIf { container.connectionManager.connectedDevice?.supportsPathHashMode == true }
-            session.settingsService.applyRadioPresetVerified(preset) { info ->
+            session.settingsService.applyRadioPresetVerified(preset) { info, verifiedPathHashMode ->
                 kotlinx.coroutines.currentCoroutineContext().ensureActive()
                 if (!container.connectionPort.updateDevice(info, preset.id, token)) {
                     throw SettingsServiceException(SettingsServiceError.NotConnected)
                 }
-                pathHashMode?.let { mode ->
+                verifiedPathHashMode?.let { mode ->
                     if (!container.connectionPort.updatePathHashMode(mode, token)) {
                         throw SettingsServiceException(SettingsServiceError.NotConnected)
                     }

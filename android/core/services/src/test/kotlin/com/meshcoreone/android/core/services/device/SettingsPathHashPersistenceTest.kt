@@ -31,7 +31,7 @@ class SettingsPathHashPersistenceTest {
         var metadata = false
         try {
             val write = request {
-                fixture.settings.applyRadioPresetVerified(RadioPresets.all.first()) { metadata = true }
+                fixture.settings.applyRadioPresetVerified(RadioPresets.all.first()) { _, _ -> metadata = true }
             }
             runCurrent()
             val failure = kotlin.test.assertFailsWith<SettingsServiceException> { write.await() }
@@ -52,7 +52,7 @@ class SettingsPathHashPersistenceTest {
         var metadata = false
         try {
             val write = request {
-                fixture.settings.applyRadioPresetVerified(RadioPresets.all.first()) { metadata = true }
+                fixture.settings.applyRadioPresetVerified(RadioPresets.all.first()) { _, _ -> metadata = true }
             }
             assertNotNull(received.await().persistence)
             assertFalse(write.isCompleted)
@@ -80,7 +80,7 @@ class SettingsPathHashPersistenceTest {
         var metadata = false
         try {
             val write = backgroundScope.async {
-                fixture.settings.applyRadioPresetVerified(RadioPresets.all.first()) { metadata = true }
+                fixture.settings.applyRadioPresetVerified(RadioPresets.all.first()) { _, _ -> metadata = true }
             }
             val pending = received.await().persistence
             write.cancel()

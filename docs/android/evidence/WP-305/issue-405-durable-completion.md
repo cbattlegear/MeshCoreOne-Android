@@ -850,3 +850,27 @@ The editor control cancels one queued fence, proves the following fence still wa
 neither fence adds a save, then exercises stale-origin refusal and current-origin acceptance.
 That isolated editor control uses the existing guard-off test access; it does not substitute for
 the actual manager/adapter/Room generation controls or establish standalone-main dependency closure.
+
+### Bind direct metadata to the actual verified preset result
+
+The 3431 source review found another false-ACK route: onboarding sampled cached device capability
+while the service independently queried current firmware capability. Cached unsupported/current
+supported could skip the direct hash save while still advancing the verified revision; the inverse
+could persist a hash never written by the service. This is a discriminating interleaving/input
+control, not a claim that stable firmware normally changes capability mid-session.
+
+The callback now receives `(SelfInfo, verifiedPathHashMode: UByte?)`. The hash argument is populated
+only after this operation actually writes and verifies that mode; null means no hash was written.
+Onboarding no longer samples cached support to decide its save. It persists only the supplied
+verified hash, and the service advances that operation's revision only after the callback returns
+successfully. The one-argument service API remains unchanged. The callback still must not reenter
+any method acquiring the same service operation lock.
+
+Three new actual adapter/Room source controls cover both capability mismatches and a direct hash
+save failure with cached support false/current support true. They pause the actual AppState
+dispatcher at the preset RF command, after the fence has drained, so queued hash/device events
+cannot manufacture the direct callback's success. Before releasing those events they require
+the actual command set, radio/Room/live values and recovery status to agree with the verified write;
+the failure control requires the real metadata error and an unacknowledged recovery revision.
+They then resume the consumer and recheck durable/live values and recovery.
+These controls remain uncompiled and unexecuted under the shared execution hold.

@@ -386,32 +386,34 @@ class SettingsService(
         applyRadioPresetOrdered(preset, null)
 
     /**
-     * The callback must durably persist the verified device and supported preset hash. It shares
-     * radio ordering and must not reenter any service method acquiring the same operation lock.
+     * The callback must durably persist the device and supplied verified hash (null if not written).
+     * It shares radio ordering and must not reenter any service method acquiring the same operation lock.
      */
     suspend fun applyRadioPresetVerified(
         preset: RadioPreset,
-        persist: suspend (SelfInfo) -> Unit,
+        persist: suspend (SelfInfo, UByte?) -> Unit,
     ): SelfInfo = applyRadioPresetOrdered(preset, persist)
 
     private suspend fun applyRadioPresetOrdered(
         preset: RadioPreset,
-        persist: (suspend (SelfInfo) -> Unit)?,
+        persist: (suspend (SelfInfo, UByte?) -> Unit)?,
     ): SelfInfo = operation {
         if (persist != null) awaitEarlierDeviceEdits()
         val actual = writeRadioAndVerify(
             preset.frequencyKHz, preset.bandwidthHz, preset.spreadingFactor, preset.codingRate, null,
         )
         var revision: Long? = null
+        var verifiedPathHashMode: UByte? = null
         preset.pathHashMode?.let { mode ->
             if (configuration { queryDevice() }.supportsPathHashMode) {
                 writePathHashAndVerify(mode)
+                verifiedPathHashMode = mode
                 revision = synchronized(eventLock) { pathHashRevision }
             }
         }
         publish(SettingsEvent.DeviceUpdated(actual, preset.id))
         if (persist != null) {
-            persist(actual)
+            persist(actual, verifiedPathHashMode)
             context.requireCurrent()
             revision?.let { committed ->
                 synchronized(eventLock) {

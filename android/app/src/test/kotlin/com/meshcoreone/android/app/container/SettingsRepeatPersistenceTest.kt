@@ -1098,6 +1098,7 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
         } finally { hold.complete(Unit) }
     }
 
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @Test fun failedDefinitelyUnsentCleanupCanBeRetriedThroughTheActualRepeatAction() = runTest {
         for (reconnect in listOf(false, true)) {
         val committed = CompletableDeferred<Job>()
@@ -1157,6 +1158,8 @@ class SettingsRepeatPersistenceTest : RoomProcessTest() {
                 }
                 rejectCleanup = false
                 if (reconnect) {
+                    testScheduler.advanceTimeBy(30_000)
+                    assertTrue(h.manager.shouldAllowConnection(false), "Recovery respects the real 30-second connection cooldown")
                     h.manager.connect(h.target(before.id))
                     h.eventually("successful successor activation clears the actual off-state snapshot") {
                         h.sessions.current?.token != null && h.sessions.current?.token != token &&

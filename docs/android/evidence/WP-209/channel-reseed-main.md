@@ -20,14 +20,20 @@ its subsequent upsert inserts another row at the imported radio/index.
 This is a source finding until the exact candidate's controls actually execute.
 
 The repair first respects the exact radio/UUID match and its existing index.
-When the UUID is absent, only a unique same-radio/index row may be reconciled.
-`ChannelEntity.applying(dto)` retains that row's UUID/radio/index and established
-DTO field-update semantics. A duplicated active slot fails with typed
+When the UUID is absent, only a unique same-radio/index row with the same secret
+and enable state may be reconciled. The current row is retained completely:
+the replay must not overwrite restored name, unread/date, favorite, notification
+or flood-scope metadata with seed defaults. A missing-ID secret or enable-state
+mismatch fails with typed InvalidData before any mutation; main has no safe
+persisted occupant rotation/invalidation primitive to substitute here.
+Exact scoped-ID updates retain their established `ChannelEntity.applying(dto)`
+semantics. A duplicated active slot fails with typed
 `PersistenceStoreError.InvalidData` before either known-ID or unknown-ID
 mutation. No duplicate is guessed, consolidated or deleted. Unrelated radios
 and slots are untouched.
 
 This is DTO reconciliation, not occupant/dispatch authorization. A changed-key
+DTO with an unknown UUID is refused, retaining text and pending rows. A known-ID
 DTO continues to use the established DTO-update behavior without deleting text.
 The actual-radio `saveChannel(radioId, info)` still deletes prior history when
 its currently stored secret differs; that path is unchanged. No durable
@@ -38,16 +44,18 @@ incarnation or original-message/pending revision proof is supplied by this fix.
 `ChannelReseedRoomTest` adds six real-Room test methods using the existing native
 SQLite fixture, not a persistence fake:
 
-- Actual `AppBackupService` empty-store import followed by three fixed-DTO replays;
-  imported UUID, sent/incoming/unsent messages and a channel pending row survive.
-- Changed-key DTO replay preserves existing identity/history; subsequent
+- Actual `AppBackupService` customized-metadata empty-store import followed by
+  three fixed-DTO replays; complete imported channel metadata/UUID,
+  sent/incoming/unsent messages and a channel pending row survive.
+- Missing-ID changed-key DTO replay fails without changing channel/history/pending; subsequent
   different-key actual-radio update retains its existing cleanup behavior.
 - Ambiguous legacy same-slot rows reject both known and missing UUIDs without
   deleting channels, unsent text or the pending row.
 - Same UUID across foreign radios, unrelated slots and exact-ID wrong supplied
   index remain partitioned and preserve existing exact-ID application semantics.
 - New unoccupied slot still uses the supplied UUID.
-- Repeated disable/enable replay keeps current UUID and related rows.
+- Missing-ID enable-state mismatch fails with current state/text/pending retained;
+  explicit known-ID updates preserve their original behavior.
 
 Source checks performed:
 
@@ -90,6 +98,13 @@ That run belongs only to `7ce`, not this local successor. It is not replaced,
 cancelled or overwritten by this preparation. No run result is transferred to
 the additional test or any subsequent SHA. No reproducible CI-result bundle is
 copied or committed here; the exact hosted job/log is authoritative.
+
+Independent review identified that the earlier `7ce` fallback improperly applied
+the unknown-ID DTO to the current row. The original new changed-key/toggle tests
+also incorrectly blessed that behavior. This local correction strengthens those
+new controls to require visible mismatch refusal and adds a customized imported
+metadata witness. No pre-existing test or known-ID API behavior is weakened or
+changed. `7ce` is a superseded diagnostic, not the safe successor or merge target.
 
 The baseline main run
 [42139516955](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42139516955)

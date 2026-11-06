@@ -13,6 +13,7 @@ import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.PendingSendKind
+import com.meshcoreone.android.core.model.NotificationLevel
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import java.util.UUID
@@ -32,11 +33,17 @@ class ChannelReseedRoomTest : BackupRoomTest() {
     @Test
     fun actualEmptyStoreImportThenThreeFixedDTOReplaysPreserveTheImportedUUIDAndHistory() = runTest {
         val seed = seedChannel()
+        val customized = seed.copy(
+            name = "Restored custom name", isFavorite = true, notificationLevel = NotificationLevel.MENTIONS_ONLY,
+            unreadCount = 8, unreadMentionCount = 3, lastMessageDate = AT,
+            floodScopeModeRawValue = "specific", regionScope = "restored-region",
+        )
         service.importBackup(backupEnvelope(
-            devices = listOf(backupDevice(radio = RADIO_A)), channels = listOf(seed),
+            devices = listOf(backupDevice(radio = RADIO_A)), channels = listOf(customized),
         ), store)
         val imported = store.fetchChannels(RADIO_A).single()
         assertNotEquals(seed.id, imported.id)
+        assertEquals(customized.copy(id = imported.id), imported)
         val sent = message(contactID = null, channelIndex = 2u)
         val incoming = message(contactID = null, channelIndex = 2u, direction = MessageDirection.INCOMING)
         val unsent = message(contactID = null, channelIndex = 2u, status = MessageStatus.FAILED)
@@ -55,16 +62,22 @@ class ChannelReseedRoomTest : BackupRoomTest() {
     }
 
     @Test
-    fun changedKeyDTOReplayKeepsExistingDTOUpdateSemanticsWithoutDeletingHistoryOrAddingASlot() = runTest {
+    fun missingUUIDChangedKeyReplayFailsWithoutChangingCurrentIdentityHistoryOrPendingText() = runTest {
         val current = seedChannel()
         store.saveChannel(current)
-        val sent = message(contactID = null, channelIndex = 2u)
+        val sent = message(contactID = null, channelIndex = 2u, status = MessageStatus.FAILED)
         store.saveMessage(sent)
+        val queued = queuedChannel(sent)
+        store.upsertPendingSend(queued)
         val replay = current.copy(id = UUID.randomUUID(), name = "changed", secret = Bytes(ByteArray(16) { 2 }))
-        repeat(3) { store.saveChannel(replay) }
-        assertEquals(current.copy(name = replay.name, secret = replay.secret), store.fetchChannels(RADIO_A).single())
+        repeat(3) {
+            val failure = assertFailsWith<PersistenceStoreException> { store.saveChannel(replay) }
+            assertEquals(PersistenceStoreError.InvalidData, failure.error)
+        }
+        assertEquals(current, store.fetchChannels(RADIO_A).single())
         assertNull(store.fetchChannel(EntityKey(RADIO_A, replay.id)))
         assertEquals(sent, store.fetchMessage(EntityKey(RADIO_A, sent.id)))
+        assertEquals(listOf(queued), store.fetchPendingSendsForMessage(EntityKey(RADIO_A, sent.id)).toList())
         store.saveChannel(RADIO_A, ChannelInfo(2u, "actual radio replacement", Bytes(ByteArray(16) { 3 })))
         assertEquals(1, store.fetchChannels(RADIO_A).size)
         assertNull(store.fetchMessage(EntityKey(RADIO_A, sent.id)))
@@ -97,7 +110,7 @@ class ChannelReseedRoomTest : BackupRoomTest() {
         store.saveChannel(current)
         store.saveChannel(foreign)
         store.saveChannel(current.copy(id = UUID.randomUUID(), name = "replayed"))
-        assertEquals(current.copy(name = "replayed"), store.fetchChannels(RADIO_A).single())
+        assertEquals(current, store.fetchChannels(RADIO_A).single())
         assertEquals(foreign, store.fetchChannels(RADIO_B).single())
         store.saveChannel(current.copy(index = 7u, name = "known id metadata"))
         assertEquals(current.copy(name = "known id metadata"), store.fetchChannels(RADIO_A).single())
@@ -113,7 +126,7 @@ class ChannelReseedRoomTest : BackupRoomTest() {
     }
 
     @Test
-    fun enableStateReplayPreservesCurrentIdentityRelatedRowsAndOtherSlots() = runTest {
+    fun missingUUIDEnableMismatchFailsButKnownUUIDRetainsItsExplicitUpdateSemantics() = runTest {
         val current = seedChannel()
         val otherSlot = current.copy(id = UUID.randomUUID(), index = 3u, name = "other slot")
         store.saveChannel(current)
@@ -123,12 +136,23 @@ class ChannelReseedRoomTest : BackupRoomTest() {
         val queued = queuedChannel(text)
         store.upsertPendingSend(queued)
         for (enabled in listOf(false, true, false, true)) {
-            store.saveChannel(current.copy(id = UUID.randomUUID(), isEnabled = enabled))
+            val before = assertNotNull(store.fetchChannel(EntityKey(RADIO_A, current.id)))
+            val mismatch = before.copy(id = UUID.randomUUID(), isEnabled = !before.isEnabled)
+            val failure = assertFailsWith<PersistenceStoreException> { store.saveChannel(mismatch) }
+            assertEquals(PersistenceStoreError.InvalidData, failure.error)
+            assertEquals(before, store.fetchChannel(EntityKey(RADIO_A, current.id)))
+            store.saveChannel(before.copy(id = UUID.randomUUID(), name = "same occupant"))
+            store.saveChannel(current.copy(isEnabled = enabled))
             assertEquals(current.copy(isEnabled = enabled), store.fetchChannel(EntityKey(RADIO_A, current.id)))
             assertEquals(otherSlot, store.fetchChannel(RADIO_A, 3u))
             assertEquals(2, store.fetchChannels(RADIO_A).size)
             assertEquals(text, store.fetchMessage(EntityKey(RADIO_A, text.id)))
             assertEquals(listOf(queued), store.fetchPendingSendsForMessage(EntityKey(RADIO_A, text.id)).toList())
         }
+        val updated = current.copy(secret = Bytes(ByteArray(16) { 4 }), isEnabled = false)
+        store.saveChannel(updated)
+        assertEquals(updated, store.fetchChannel(EntityKey(RADIO_A, current.id)))
+        assertEquals(text, store.fetchMessage(EntityKey(RADIO_A, text.id)))
+        assertEquals(listOf(queued), store.fetchPendingSendsForMessage(EntityKey(RADIO_A, text.id)).toList())
     }
 }

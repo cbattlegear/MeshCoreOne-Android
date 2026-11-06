@@ -488,9 +488,12 @@ corrected successor and independent disposition remained pending until WP-209 su
 `a4cf97a36327721e9df7eb9afffbf12b37511d3c`). The producer reports it addresses successful/live
 establishment settlement on failure paths, preserves successful restoration-only adoption, adds a
 duplicate-adoption→late-diagnostic→registered-reconnect control, and changes the real-monitor test
-caller to UNDISPATCHED. WP-302 exact-source review has been requested and is pending; no Kotlin/Room
-execution, publication or dispatch occurred. `c0dcd30…` remains unaccepted; `66eab2a` is not accepted
-or composed. The reported minimal production
+caller to UNDISPATCHED. WP-302 found a remaining direct-rebuild child-lifetime gap: rebuild settles
+inline before `initialSync` children of the initiating Job finish, so cancelling that Job while a
+real child is held in cleanup still admits writes. The existing child control only exercises connect.
+WP-302 sent a rebuild variant and operation-owned-scope distinction to WP-209. This is source-only:
+`c0dcd30…` remains unaccepted, and `66eab2a` is not accepted or composed. No Kotlin/Room execution,
+publication or dispatch occurred. The reported minimal production
 composition is `ConnectionManager.kt` plus canonical `ChannelIdentityMutation.kt`
 (`a4cf97a36327721e9df7eb9afffbf12b37511d3c`); the cumulative WP-209 ancestry and 411d data/runtime
 test graph change are not required for the runtime API.
@@ -515,7 +518,8 @@ pending manager API, so they are not yet a compilable composed candidate. The ea
 fixture, onboarding-state and authority-control repairs were subsequently frozen in local commit
 `eff1f33e911`.
 
-The exact producer composition still requires favorable independent review of `66eab2a…` and the minimal
+The exact producer composition still requires a corrected successor addressing the direct-rebuild
+child-lifetime finding, favorable independent review, and the minimal
 canonical `ChannelIdentityMutation.kt` dependency as well as `ConnectionManager.kt`; no cumulative
 WP-209 ancestry is imported. Trusted current-main admissions for the caller files were previously
 verified. On caller head `dcb37285c8d`, `python tools\android-port\controller\validate.py` passed

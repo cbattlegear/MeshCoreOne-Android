@@ -16,6 +16,7 @@ import com.meshcoreone.android.app.container.onboarding.WriteBehindOnboardingFla
 import com.meshcoreone.android.app.container.onboarding.FakePermissionFacts
 import com.meshcoreone.android.app.container.onboarding.RequestedPermissions
 import com.meshcoreone.android.feature.onboarding.OnboardingPermissionKind
+import com.meshcoreone.android.feature.onboarding.ui.OnboardingFlow
 import com.meshcoreone.android.core.connectivity.permissions.ConnectivityPermission
 import com.meshcoreone.android.core.connectivity.pairing.BluetoothScanPairingService
 import com.meshcoreone.android.core.connectivity.pairing.BluetoothEndpoint
@@ -84,7 +85,10 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
 
     private class PermissionDialogRequest(val requestCode: Int, val permissions: Array<String>)
 
-    private class LocalNetworkPermissionDialog(private val host: android.app.Activity) : ActivityCompat.PermissionCompatDelegate {
+    private class PermissionDialog(
+        private val host: android.app.Activity,
+        private val allowed: Set<ConnectivityPermission>,
+    ) : ActivityCompat.PermissionCompatDelegate {
         var request: PermissionDialogRequest? = null
             private set
         var launches = 0
@@ -92,7 +96,9 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
 
         override fun requestPermissions(activity: android.app.Activity, permissions: Array<String>, requestCode: Int): Boolean {
             if (activity !== host) return false
-            if (!permissions.contentEquals(arrayOf(ConnectivityPermission.ACCESS_LOCAL_NETWORK.manifestName))) return false
+            check(permissions.isNotEmpty() && permissions.all { name -> allowed.any { it.manifestName == name } }) {
+                "Unexpected permission request: ${permissions.toList()}"
+            }
             check(request == null) { "A permission dialog is already awaiting its result" }
             launches++
             request = PermissionDialogRequest(requestCode, permissions.copyOf())
@@ -135,7 +141,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         }
     }
 
-    private var localNetworkDialog: LocalNetworkPermissionDialog? = null
+    private var permissionDialog: PermissionDialog? = null
 
     @android.annotation.SuppressLint("RestrictedApi")
     private suspend fun TestScope.withSettings(
@@ -150,6 +156,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         openSettings: () -> Unit = {},
         requests: RequestedPermissions = RequestedPermissions(),
         controlledLocalNetworkDialog: Boolean = false,
+        controlledBluetoothDialog: Boolean = false,
         test: suspend (ContainerHarness, AppSettingsFeature) -> Unit,
     ) {
         DemoModeManager.installStandardDefaults(demoDefaults)
@@ -174,18 +181,19 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         val storage = MeshCoreStorage.get(compose.activity)
         val previousDelegate = ActivityCompat.getPermissionCompatDelegate()
         try {
-            if (controlledLocalNetworkDialog) {
-                assertEquals(37, android.os.Build.VERSION.SDK_INT)
+            if (controlledLocalNetworkDialog || controlledBluetoothDialog) {
+                if (controlledLocalNetworkDialog) assertEquals(37, android.os.Build.VERSION.SDK_INT)
                 assertNull(previousDelegate)
-                localNetworkDialog = LocalNetworkPermissionDialog(compose.activity)
-                ActivityCompat.setPermissionCompatDelegate(localNetworkDialog)
+                permissionDialog = PermissionDialog(compose.activity,
+                    if (controlledBluetoothDialog) bluetoothPermissions else setOf(ConnectivityPermission.ACCESS_LOCAL_NETWORK))
+                ActivityCompat.setPermissionCompatDelegate(permissionDialog)
             }
             val feature = AppSettingsFeature.create(h.container, storage)
             test(h, feature)
         } finally {
-            if (controlledLocalNetworkDialog) {
+            if (controlledLocalNetworkDialog || controlledBluetoothDialog) {
                 ActivityCompat.setPermissionCompatDelegate(previousDelegate)
-                localNetworkDialog = null
+                permissionDialog = null
             }
             compose.runOnUiThread { compose.activity.setContent {} }
             h.container.close()
@@ -273,7 +281,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             "snapshot=${platform.permissions.snapshot.value}, " +
             "request=${request?.requestCode}:${request?.requestedPermissions?.toList()}"
         assertEquals(context, OnboardingPermissionKind.LOCAL_NETWORK, feature.selectionRequestedPermission.value)
-        localNetworkDialog?.let { dialog ->
+        permissionDialog?.let { dialog ->
             assertEquals(1, dialog.launches)
             assertArrayEquals(arrayOf(ConnectivityPermission.ACCESS_LOCAL_NETWORK.manifestName), requireNotNull(dialog.request).permissions)
         }
@@ -300,7 +308,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         facts: FakePermissionFacts, granted: Boolean,
         permissions: Set<ConnectivityPermission> = setOf(ConnectivityPermission.ACCESS_LOCAL_NETWORK),
     ) {
-        val request = localNetworkDialog?.takeRequest() ?: requireNotNull(shadowOf(compose.activity).lastRequestedPermission)
+        val request = permissionDialog?.takeRequest() ?: requireNotNull(shadowOf(compose.activity).lastRequestedPermission)
             .let { PermissionDialogRequest(it.requestCode, it.requestedPermissions) }
         assertArrayEquals(permissions.map { it.manifestName }.sorted().toTypedArray(), request.permissions)
         if (granted) {
@@ -380,7 +388,11 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         bluetoothPermissionControl(grant = false)
     }
 
-    private suspend fun TestScope.fallbackScanFailureControl(startup: Boolean, direct: Boolean = false) {
+    private suspend fun TestScope.fallbackScanFailureControl(
+        startup: Boolean,
+        direct: Boolean = false,
+        onboarding: Boolean = false,
+    ) {
         val service = BluetoothScanPairingService()
         val failure = IllegalStateException(if (startup) "Scanner could not start" else "Scanner callback failed")
         var failScan: ((Throwable) -> Unit)? = null
@@ -395,8 +407,26 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             override fun stopScan() { stops++ }
         })
         withSettings(pairingService = service, scans = scans) { h, feature ->
-            mount(h, feature, includeConnectionRecovery = true)
-            val directJob = if (direct) h.appState.startDeviceScan() else {
+            if (onboarding) {
+                val dependencies = requireNotNull(h.container.onboarding).forRerun()
+                compose.runOnUiThread {
+                    compose.activity.setContent {
+                        MeshCoreTheme(motionScale = 0f) {
+                            OnboardingFlow(dependencies, {})
+                            AppConnectionRecoveryDialogs(h.appState)
+                        }
+                    }
+                }
+                compose.onNodeWithText(compose.activity.getString(O.welcomeGetStarted)).performScrollTo().performClick()
+                compose.onNode(hasText(compose.activity.getString(O.permissionsContinue)) and hasClickAction())
+                    .performScrollTo().performClick()
+            } else {
+                mount(h, feature, includeConnectionRecovery = true)
+            }
+            val directJob = if (onboarding) {
+                compose.onNodeWithText(compose.activity.getString(O.deviceScanAddDevice)).performScrollTo().performClick()
+                null
+            } else if (direct) h.appState.startDeviceScan() else {
                 open(h)
                 clickSelectionRow(compose.activity.getString(S.deviceSelectionScanBluetooth))
                 null
@@ -405,23 +435,33 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
                 h.eventuallyMounted("fallback scanner callback installed") { failScan != null }
                 requireNotNull(failScan)(failure)
             }
-            h.eventuallyMounted("scanner error resolves waiting pairing and reaches Settings") {
-                h.appState.connectionUI.showingConnectionFailedAlert &&
+            h.eventuallyMounted("scanner error resolves waiting pairing and reaches connection recovery") {
+                if (onboarding) {
+                    !h.appState.connectionUI.showingConnectionFailedAlert &&
+                        compose.onAllNodesWithText(requireNotNull(failure.message)).fetchSemanticsNodes().isNotEmpty()
+                } else h.appState.connectionUI.showingConnectionFailedAlert &&
                     h.appState.connectionUI.connectionFailedMessage ==
                     com.meshcoreone.android.core.ui.UiText.Verbatim(requireNotNull(failure.message))
             }
             h.eventuallyMounted("scanner error cancels pairing and scan") {
                 !service.isPresenting.value && !h.container.connectionPort.isPairingFlowActive &&
-                    (directJob ?: feature.selectionScanJob)?.isCompleted == true
+                    (if (onboarding) !h.appState.connectionUI.isBusy
+                    else (directJob ?: feature.selectionScanJob)?.isCompleted == true)
             }
             assertEquals(1, starts)
             assertEquals(if (startup) 0 else 1, stops)
             assertFalse(scans.isScanning)
             assertTrue(h.links.links.isEmpty())
+            compose.onNodeWithText(requireNotNull(failure.message)).assertIsDisplayed()
+            if (onboarding) assertFalse(h.appState.connectionUI.showingConnectionFailedAlert)
             compose.onNodeWithText(compose.activity.getString(L.commonOk)).assertIsDisplayed().performClick()
             assertNull(feature.failure.value)
             assertFalse(h.appState.connectionUI.showingConnectionFailedAlert)
             compose.onAllNodes(isDialog()).assertCountEquals(0)
+            if (onboarding) {
+                compose.onNodeWithText(compose.activity.getString(O.deviceScanAddDevice)).assertIsDisplayed().assertIsEnabled()
+                compose.onNodeWithText(compose.activity.getString(O.regionTitle)).assertDoesNotExist()
+            }
             assertEquals(1, starts)
         }
     }
@@ -438,11 +478,22 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         fallbackScanFailureControl(startup = true, direct = true)
     }
 
+    @Test fun onboardingScannerStartupFailureResolvesPairingAndShowsOneVisibleError() = runTest {
+        fallbackScanFailureControl(startup = true, onboarding = true)
+    }
+
+    @Test fun onboardingScannerCallbackFailureResolvesPairingAndShowsOneVisibleError() = runTest {
+        fallbackScanFailureControl(startup = false, onboarding = true)
+    }
+
     private suspend fun TestScope.savedBlePermissionControl(grant: Boolean, cancel: Boolean = false, scanAfter: Boolean = false) {
         val facts = FakePermissionFacts(sdk = 31)
         val service = BluetoothScanPairingService()
         var openedSettings = 0
-        withSettings(permissionFacts = facts, pairingService = service, openSettings = { openedSettings++ }) { h, feature ->
+        withSettings(
+            permissionFacts = facts, pairingService = service, openSettings = { openedSettings++ },
+            controlledBluetoothDialog = true,
+        ) { h, feature ->
             val device = saved(h)
             val before = h.links.links.size
             mount(h, feature)
@@ -500,6 +551,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
                 assertEquals(context, OnboardingPermissionKind.BLUETOOTH, feature.selectionRequestedPermission.value)
                 assertFalse(feature.selectionPermissionDenied.value)
                 assertFalse(service.isPresenting.value)
+                assertEquals(2, requireNotNull(permissionDialog).launches)
                 permissionResult(facts, true, bluetoothPermissions)
                 h.eventuallyMounted("SCAN remains requestable after a CONNECT-only grant") { service.isPresenting.value }
                 compose.onNodeWithText(compose.activity.getString(L.commonCancel)).performClick()
@@ -545,7 +597,9 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
     private suspend fun TestScope.setupPermissionControl(grant: Boolean, cancel: Boolean = false) {
         val facts = FakePermissionFacts(sdk = 37)
         var openedSettings = 0
-        withSettings(permissionFacts = facts, openSettings = { openedSettings++ }) { h, feature ->
+        withSettings(
+            permissionFacts = facts, openSettings = { openedSettings++ }, controlledBluetoothDialog = true,
+        ) { h, feature ->
             val selected = UUID.randomUUID()
             val other = UUID.randomUUID()
             h.pairing.registered[selected] = "Selected setup"
@@ -566,6 +620,8 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             ) {
                 feature.selectionRequestedPermission.value == OnboardingPermissionKind.BLUETOOTH
             }
+            assertEquals(1, requireNotNull(permissionDialog).launches)
+            assertFalse(feature.selectionPermissionDenied.value)
             permissionResult(facts, grant, setOf(ConnectivityPermission.BLUETOOTH_CONNECT))
             if (!grant) {
                 permissionSettingsButton().assertIsDisplayed()
@@ -743,44 +799,6 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
                 !service.isPresenting.value && !h.container.connectionPort.isPairingFlowActive && stops == 1
             }
 
-            @Test fun cancellingPermissionBlockedPickerDoesNotRestartAfterGrantOrResume() = runTest {
-                val facts = FakePermissionFacts(sdk = 31, granted = bluetoothPermissions)
-                val service = BluetoothScanPairingService()
-                var starts = 0
-                val scans = BleScanCoordinator(object : BleScanGateway {
-                    override fun startScan(onDevice: (DiscoveredDevice) -> Unit, onFailure: (Throwable) -> Unit) { starts++ }
-                    override fun stopScan() = Unit
-                })
-                withSettings(permissionFacts = facts, pairingService = service, scans = scans) { h, feature ->
-                    mount(h, feature)
-                    open(h)
-                    clickSelectionRow(compose.activity.getString(S.deviceSelectionScanBluetooth))
-                    h.eventuallyMounted("picker scans before permission is revoked") { starts == 1 && service.isPresenting.value }
-                    facts.granted = setOf(ConnectivityPermission.BLUETOOTH_CONNECT)
-                    shadowOf(compose.activity.application).denyPermissions(ConnectivityPermission.BLUETOOTH_SCAN.manifestName)
-                    compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
-                    compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
-                    h.eventuallyMounted("live discovery retains its missing permission action") {
-                        feature.selectionRequestedPermission.value == OnboardingPermissionKind.BLUETOOTH
-                    }
-                    compose.onNode(
-                        hasText(compose.activity.getString(L.commonCancel)) and
-                            hasAnyAncestor(hasTestTag("settings-scan-picker")),
-                    ).performClick()
-                    h.eventuallyMounted("picker cancellation clears retained scan intent") {
-                        !service.isPresenting.value && feature.selectionAction.value == null &&
-                            !h.container.connectionPort.isPairingFlowActive
-                    }
-                    permissionResult(facts, granted = true, permissions = bluetoothPermissions)
-                    compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
-                    compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
-                    compose.waitForIdle()
-                    h.settle()
-                    assertNull(feature.selectionAction.value)
-                    assertFalse(service.isPresenting.value)
-                    assertEquals(1, starts)
-                }
-            }
             compose.runOnUiThread { h.container.navigation.selectTab(AppTab.SETTINGS) }
             compose.waitForIdle()
             h.settle()
@@ -788,6 +806,47 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             compose.onNodeWithText(compose.activity.getString(O.deviceScannerTitle)).assertDoesNotExist()
             assertTrue(h.links.links.isEmpty())
             assertFalse(h.appState.connectionUI.showingConnectionFailedAlert)
+        }
+    }
+
+    @Test fun cancellingPermissionBlockedPickerDoesNotRestartAfterGrantOrResume() = runTest {
+        val facts = FakePermissionFacts(sdk = 31, granted = bluetoothPermissions)
+        val service = BluetoothScanPairingService()
+        var starts = 0
+        val scans = BleScanCoordinator(object : BleScanGateway {
+            override fun startScan(onDevice: (DiscoveredDevice) -> Unit, onFailure: (Throwable) -> Unit) { starts++ }
+            override fun stopScan() = Unit
+        })
+        withSettings(
+            permissionFacts = facts, pairingService = service, scans = scans, controlledBluetoothDialog = true,
+        ) { h, feature ->
+            mount(h, feature)
+            open(h)
+            clickSelectionRow(compose.activity.getString(S.deviceSelectionScanBluetooth))
+            h.eventuallyMounted("picker scans before permission is revoked") { starts == 1 && service.isPresenting.value }
+            facts.granted = setOf(ConnectivityPermission.BLUETOOTH_CONNECT)
+            shadowOf(compose.activity.application).denyPermissions(ConnectivityPermission.BLUETOOTH_SCAN.manifestName)
+            compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+            compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+            h.eventuallyMounted("live discovery retains its missing permission action") {
+                feature.selectionRequestedPermission.value == OnboardingPermissionKind.BLUETOOTH
+            }
+            compose.onNode(
+                hasText(compose.activity.getString(L.commonCancel)) and
+                    hasAnyAncestor(hasTestTag("settings-scan-picker")),
+            ).performClick()
+            h.eventuallyMounted("picker cancellation clears retained scan intent") {
+                !service.isPresenting.value && feature.selectionAction.value == null &&
+                    !h.container.connectionPort.isPairingFlowActive
+            }
+            permissionResult(facts, granted = true, permissions = bluetoothPermissions)
+            compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+            compose.activityRule.scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+            compose.waitForIdle()
+            h.settle()
+            assertNull(feature.selectionAction.value)
+            assertFalse(service.isPresenting.value)
+            assertEquals(1, starts)
         }
     }
 
@@ -1145,7 +1204,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             open(h)
             clickSelectionRow(compose.activity.getString(S.deviceSelectionScanBluetooth))
             compose.waitForIdle()
-            h.eventually("first Settings collector starts fallback scan") { starts == 1 }
+            h.eventuallyMounted("first Settings collector starts fallback scan") { starts == 1 }
 
             val duplicateStarted = CompletableDeferred<Unit>()
             val duplicate = backgroundScope.launch {
@@ -1511,7 +1570,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             endpoints.firstWrite.await()
 
             compose.runOnUiThread { compose.activity.setContent {} }
-            h.eventually("host disposal cancels pairing and scan") {
+            h.eventuallyMounted("host disposal cancels pairing and scan") {
                 !service.isPresenting.value && !h.container.connectionPort.isPairingFlowActive &&
                     stops == 1 && feature.selectionScanJob?.isCompleted == true
             }
@@ -1695,7 +1754,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
                 h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
             }
             assertEquals(before + 1, h.links.links.size)
-            assertEquals(1, requireNotNull(localNetworkDialog).launches)
+            assertEquals(1, requireNotNull(permissionDialog).launches)
         }
     }
 
@@ -1766,7 +1825,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
                 h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
             }
             assertEquals(before + 1, h.links.links.size)
-            assertEquals(1, requireNotNull(localNetworkDialog).launches)
+            assertEquals(1, requireNotNull(permissionDialog).launches)
         }
     }
 

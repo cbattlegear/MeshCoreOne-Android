@@ -9,6 +9,7 @@ import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.database.toEntity
 import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.model.ChannelDTO
+import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import java.util.UUID
@@ -246,6 +247,10 @@ class ChannelOperationRoomTest : RepositoryTest() {
         val info = ChannelInfo(row.index, "radio sync", row.secret)
         val syncFailure = assertFailsWith<PersistenceStoreException> { store.saveChannel(row.radioId, info) }
         assertEquals(PersistenceStoreError.InvalidData, syncFailure.error)
+        val batchFailure = assertFailsWith<PersistenceStoreException> {
+            store.batchSaveChannels(row.radioId, listOf(info).snapshot(), emptyList<UByte>().snapshot(), null)
+        }
+        assertEquals(PersistenceStoreError.InvalidData, batchFailure.error)
         assertEquals(before, store.fetchChannels(row.radioId))
         assertEquals(authority, db.channelOccupantAuthorities().forSlot(row.radioId.value, row.index.toLong()))
     }
@@ -310,5 +315,79 @@ class ChannelOperationRoomTest : RepositoryTest() {
             disk.close()
             assertTrue(context.deleteDatabase(name))
         }
+    }
+
+    @Test fun ordinaryRadioInfoNeverResolvesAndRadioErasureKeepsAnUnresolvedTombstone() = runTest {
+        val device = device()
+        val row = channel()
+        store.saveDevice(device)
+        val info = ChannelInfo(row.index, row.name, row.secret)
+        val actualId = store.saveChannel(row.radioId, info)
+        val initial = assertNotNull(db.channelOccupantAuthorities().forSlot(row.radioId.value, row.index.toLong()))
+        assertFalse(initial.isResolved)
+        assertNull(initial.boundRowId)
+        assertNull(store.fetchChannelOccupantEpoch(row.radioId, row.index))
+        repeat(3) {
+            assertEquals(actualId, store.saveChannel(row.radioId, info))
+            assertEquals(initial, db.channelOccupantAuthorities().forSlot(row.radioId.value, row.index.toLong()))
+        }
+        db.withTransaction {
+            assertEquals(1, db.channelOccupantAuthorities().resolveCurrent(
+                row.radioId.value, row.index.toLong(), initial.epoch, actualId, row.secret,
+            ))
+        }
+        assertEquals(initial.epoch, store.fetchChannelOccupantEpoch(row.radioId, row.index))
+        store.deleteDeviceAndData(device.id)
+        assertTrue(store.fetchChannels(row.radioId).isEmpty())
+        val tombstone = assertNotNull(db.channelOccupantAuthorities().forSlot(row.radioId.value, row.index.toLong()))
+        assertNotEquals(initial.epoch, tombstone.epoch)
+        assertFalse(tombstone.isResolved)
+        assertNull(tombstone.boundRowId)
+        assertNull(store.fetchChannelOccupantEpoch(row.radioId, row.index))
+        store.saveDevice(device)
+        store.saveChannel(row.radioId, info)
+        val recreated = assertNotNull(db.channelOccupantAuthorities().forSlot(row.radioId.value, row.index.toLong()))
+        assertNotEquals(initial.epoch, recreated.epoch)
+        assertNotEquals(tombstone.epoch, recreated.epoch)
+        assertFalse(recreated.isResolved)
+        assertNull(recreated.boundRowId)
+        assertNull(store.fetchChannelOccupantEpoch(row.radioId, row.index))
+    }
+
+    @Test fun restoreFirstExcludesTheNextOperationUntilItsInvalidationCommits() = runTest {
+        val row = channel()
+        val epoch = resolvedStorageFixture(row)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val effects = mutableListOf<String>()
+        val restoring = launch {
+            store.withBackupRestore { database, _ ->
+                val staged = assertNotNull(database.channelOccupantAuthorities().forSlot(row.radioId.value, row.index.toLong()))
+                assertNotEquals(epoch, staged.epoch)
+                assertFalse(staged.isResolved)
+                assertNull(staged.boundRowId)
+                entered.complete(Unit)
+                release.await()
+                effects += "restore callback completed"
+            }
+        }
+        entered.await()
+        val operation = launch {
+            repository().withChannelOperation { scoped, _ ->
+                effects += "next operation entered"
+                assertNull(scoped.fetchChannelOccupantEpoch(row.radioId, row.index))
+                val committed = assertNotNull(db.channelOccupantAuthorities().forSlot(row.radioId.value, row.index.toLong()))
+                assertNotEquals(epoch, committed.epoch)
+                assertFalse(committed.isResolved)
+                assertNull(committed.boundRowId)
+            }
+        }
+        runCurrent()
+        assertFalse(operation.isCompleted)
+        assertTrue(effects.isEmpty())
+        release.complete(Unit)
+        restoring.join()
+        operation.join()
+        assertEquals(listOf("restore callback completed", "next operation entered"), effects)
     }
 }

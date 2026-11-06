@@ -62,12 +62,18 @@ as well as explicit data erasure; metadata-only device updates keep their
 existing transaction behavior. Their data assertions do not substitute for epoch/restore
 proof controls.
 
-Six additional real-Room controls exercise read-only historical epoch lookup,
+Eight additional real-Room controls exercise read-only historical epoch lookup,
 known-ID secret invalidation, both enable transitions, exact reseed preservation,
 mismatch refusal before row/epoch mutation, restore-wide invalidation and
 transaction rollback, duplicate refusal during lookup/radio synchronization,
 missing-trigger refusal without repair, and actual file-backed database
-close/reopen. Positive persisted rows in these controls are explicit DAO storage
+close/reopen, ordinary radio-info saves remaining unresolved, and radio erase /
+recreation retaining an unresolved tombstone without reusing the old epoch.
+Both single and batch synchronization refuse duplicate slots before mutation.
+Restore-first ordering also holds the next operation outside until its actual
+transaction commits invalidation; the earlier held-operation control covers the
+opposite ordering. Neither control substitutes a fake protocol send for dispatch.
+Positive persisted rows in these controls are explicit DAO storage
 fixtures. They are **not** lifecycle-issued authority or evidence of live
 reconciliation, original wire provenance, or simulator end-to-end resolution.
 
@@ -120,3 +126,11 @@ mismatch from current assignment/admission/live-overlap authority.
 composition. No Kotlin compilation or JUnit execution occurred. The retained
 local execution owner was not changed or bypassed. Hosted results belong only
 to their exact candidate and are not copied into a second result bundle.
+
+The independent `5ff2c83` hosted run `42151470903` failed seven producer-owned
+reaction-storage controls; it is not acceptance for this successor. Exact
+producer repair `7f3e696bff86c3d1c4d43d36464cae646064018b` was composed
+disjointly, retaining `SCHEMA_VERSION` rather than regressing to a schema-2
+expectation. It fixes canonical UUID SQL fixture bindings, optional legacy
+export indices and failure diagnostics only; remaining producer failures and
+fresh execution are still pending. No result or schema export is transferred.

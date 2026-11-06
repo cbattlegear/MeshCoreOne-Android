@@ -11,6 +11,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
@@ -476,10 +477,24 @@ class NotificationRecoveryClipboardTest {
                 if (copy) AppChatsStrings.chatsMessageActionCopy else AppChatsStrings.chatsMessageActionDelete,
             )).performClick()
             compose.waitUntil(5_000) { entered.count == 0L }
-            compose.runOnUiThread { NotificationActionRecovery.handoffNotRetained() }
-            awaitText(text(NotificationStrings.string.notification_action_recovery_not_retained))
+            compose.mainClock.autoAdvance = false
+            compose.runOnUiThread {
+                NotificationActionRecovery.handoffNotRetained()
+                release.countDown()
+            }
+            val completionDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (NotificationActionRecovery.changes.value < observed + 2 &&
+                System.nanoTime() < completionDeadline
+            ) {
+                Thread.sleep(1)
+            }
+            assertTrue(NotificationActionRecovery.changes.value >= observed + 2)
+            // No frame has displayed the new loss before the older disposition completes.
+            compose.onNodeWithText(text(NotificationStrings.string.notification_action_recovery_not_retained))
+                .assertDoesNotExist()
         } finally {
             release.countDown()
+            compose.mainClock.autoAdvance = true
         }
         compose.waitUntil(5_000) { NotificationActionRecovery.changes.value >= observed + 2 }
         awaitCompletedRead()
@@ -490,6 +505,45 @@ class NotificationRecoveryClipboardTest {
             val clipboard = requireNotNull(context.getSystemService(ClipboardManager::class.java))
             assertEquals("dispose only this original", clipboard.primaryClip!!.getItemAt(0).text.toString())
         }
+    }
+
+    @Test
+    fun failedOlderDeleteRemainsVisibleAfterItsItemTemporarilyLeavesTheSnapshot() {
+        val original = save(45, "keep after failed deletion")
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val failOnce = AtomicBoolean()
+        context = object : ContextWrapper(context) {
+            override fun getApplicationContext(): Context = this
+            override fun getNoBackupFilesDir(): File {
+                if (failOnce.compareAndSet(true, false)) {
+                    entered.countDown()
+                    check(release.await(10, TimeUnit.SECONDS))
+                    throw SecurityException("synthetic fail-once disposition")
+                }
+                return super.getNoBackupFilesDir()
+            }
+        }
+        mount()
+        awaitText("keep after failed deletion")
+        failOnce.set(true)
+        try {
+            compose.onNodeWithText(text(AppChatsStrings.chatsMessageActionDelete)).performClick()
+            compose.waitUntil(5_000) { entered.count == 0L }
+            compose.runOnUiThread { NotificationActionRecovery.handoffNotRetained() }
+            awaitText(text(NotificationStrings.string.notification_action_recovery_not_retained))
+            compose.onNodeWithTag("notification-recovery-read-pending").assertExists()
+            compose.onNodeWithText("keep after failed deletion").assertDoesNotExist()
+            compose.onNodeWithText(text(AppLocalizableStrings.commonCancel)).assertIsNotEnabled()
+        } finally {
+            release.countDown()
+        }
+        awaitText(text(NotificationStrings.string.notification_action_recovery_discard_failed))
+        awaitText("keep after failed deletion")
+        awaitCompletedRead()
+        assertEquals(original.id, entries().single().id)
+        compose.onNodeWithText(text(NotificationStrings.string.notification_action_recovery_discard_failed))
+            .assertIsDisplayed()
     }
 
     private fun awaitCompletedRead() {

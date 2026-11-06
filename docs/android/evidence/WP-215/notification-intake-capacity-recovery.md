@@ -102,6 +102,11 @@ durable records or clear loss/manual-open flags.
 Successful Copy/Delete does not assign a dismissal generation at all: disposal's
 own refresh drives the next snapshot. An older operation cannot hide a concurrent
 loss warning by reading the latest collected generation after its IO resumes.
+Busy/error state belongs to the mounted host rather than the current item key.
+A status-only replacement cannot re-enable another disposition or abandon an
+in-flight operation's failure. That failure stays visible when the original
+record returns; starting another operation or explicitly closing clears the
+displayed operation error, not the underlying custody.
 
 Recovery does not start an activity from the reply/mark-read broadcast: Android 12
 prohibits notification trampolines, and background-launch denial need not throw.
@@ -216,7 +221,7 @@ byte/oversize rejection, and deadline completion without cancellation, premature
 budget release or double finish. These are authored controls, not evidence that
 the Android receiver deadline has been exercised on a device.
 
-`NotificationRecoveryClipboardTest.kt` contains 20 authored App methods covering
+`NotificationRecoveryClipboardTest.kt` contains 21 authored App methods covering
 the actual clipboard and mounted dialog: exact sensitive copy, inaccessible
 clipboard, cancel/host destruction, single-record copy/discard, failed
 copy/discard, the process-only warning, deferral behind another dialog and the
@@ -233,6 +238,12 @@ visibility, an honest signal-free completed-failure title, and blocked Copy and
 Delete with a newly published loss before completion. Read-state test tags ensure
 the failed-read acknowledgment control waits for the mounted completed read,
 rather than accidentally cancelling its indistinguishable pending predecessor.
+The Copy/Delete success controls now hold the Compose frame clock while publishing
+the loss and releasing the older disposition, require the disposal refresh before
+any warning frame, then require the newer warning after frames resume. A fail-once
+mounted Delete control explicitly observes item-to-status-only replacement and
+disabled Cancel while blocked, then requires the failure and original record
+together after storage resumes.
 
 **Zero methods have been executed for this draft.** These counts come from static
 source inspection, not runner discovery. A fresh store instance is not an
@@ -252,6 +263,8 @@ The startup/failed-read follow-up adds two App declarations, for 29 receiver and
 16 App controls; none have executed.
 The same-generation/disposition follow-up adds four App declarations, for 29
 receiver and 20 App controls; none have executed.
+The operation-state follow-up adds one App declaration, for 29 receiver and
+21 App controls; none have executed.
 
 Actual allowed static checks:
 

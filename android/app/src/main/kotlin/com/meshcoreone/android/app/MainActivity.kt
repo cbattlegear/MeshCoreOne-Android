@@ -302,18 +302,20 @@ internal fun NotificationActionRecoveryDialog(blockedByOtherDialog: Boolean = fa
     }
     val recovery = snapshot?.takeIf { it.version == sequence } ?: NotificationActionRecovery.statusSnapshot()
     val item = recovery.items.firstOrNull()
+    // Operation state belongs to this host, not to an item temporarily absent during a read.
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<Int?>(null) }
+    val scope = rememberCoroutineScope()
     if (item == null && recovery.storageFailure == null &&
-        !recovery.notRetained && !recovery.manualOpenRequired
+        !recovery.notRetained && !recovery.manualOpenRequired && error == null && !busy
     ) return
     if (dismissedSequence == sequence) return
     if (!recovery.recordsAvailable &&
         dismissedUnavailable == (recovery.version to recovery.readCompleted)
     ) return
-    var busy by remember(item?.entry?.id) { mutableStateOf(false) }
-    var error by remember(item?.entry?.id) { mutableStateOf<Int?>(null) }
-    val scope = rememberCoroutineScope()
     val close = {
         if (!busy) {
+            error = null
             if (!recovery.recordsAvailable) {
                 // Closing an incomplete read must not acknowledge unseen records or status.
                 dismissedUnavailable = recovery.version to recovery.readCompleted
@@ -376,8 +378,9 @@ internal fun NotificationActionRecoveryDialog(blockedByOtherDialog: Boolean = fa
                     TextButton(
                         enabled = !busy,
                         onClick = {
+                            busy = true
+                            error = null
                             scope.launch {
-                                busy = true
                                 try {
                                     if (!copyRejectedNotificationText(context, text)) {
                                         error = NotificationStrings.string.notification_action_recovery_copy_failed
@@ -400,8 +403,9 @@ internal fun NotificationActionRecoveryDialog(blockedByOtherDialog: Boolean = fa
                     TextButton(
                         enabled = !busy,
                         onClick = {
+                            busy = true
+                            error = null
                             scope.launch {
-                                busy = true
                                 try {
                                     val failure = withContext(Dispatchers.IO) {
                                         NotificationActionRecovery.dispose(context.applicationContext, item)

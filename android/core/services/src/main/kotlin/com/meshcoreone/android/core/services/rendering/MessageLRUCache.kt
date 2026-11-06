@@ -25,6 +25,7 @@ internal data class MessageCandidate(
     val timestamp: UInt,
     val indexedAt: Instant,
     val channelTarget: CapturedChannelReactionTarget? = null,
+    val indexOrder: Long = 0,
 )
 
 /**
@@ -43,12 +44,14 @@ internal class MessageLRUCache(
     private var order: List<MessageCacheKey> = emptyList()
     private var dmCache: Map<DirectMessageCacheKey, List<MessageCandidate>> = emptyMap()
     private var dmOrder: List<DirectMessageCacheKey> = emptyList()
+    private var nextChannelIndexOrder: Long = 0
 
     /** Indexes a channel message for later lookup. */
     fun index(messageID: UUID, channelIndex: UByte, senderName: String, text: String, timestamp: UInt) {
         val key = MessageCacheKey(channelIndex, SwiftText.canonical(senderName), ReactionWireFormat.generateMessageHash(text, timestamp))
-        val candidate = MessageCandidate(messageID, text, timestamp, clock.instant())
         synchronized(lock) {
+            val candidate = MessageCandidate(messageID, text, timestamp, clock.instant(), indexOrder = nextChannelIndexOrder)
+            nextChannelIndexOrder = Math.incrementExact(nextChannelIndexOrder)
             val (newOrder, evicted) = touched(order, key)
             order = newOrder
             cache = withCandidate(evicted?.let { cache - it } ?: cache, key, candidate)
@@ -68,10 +71,11 @@ internal class MessageLRUCache(
             channelIndex, SwiftText.canonical(senderName),
             ReactionWireFormat.generateMessageHash(message.text, message.reactionTimestamp), message.radioId,
         )
-        val candidate = MessageCandidate(
-            message.id, message.text, message.reactionTimestamp, clock.instant(), captured,
-        )
         synchronized(lock) {
+            val candidate = MessageCandidate(
+                message.id, message.text, message.reactionTimestamp, clock.instant(), captured, nextChannelIndexOrder,
+            )
+            nextChannelIndexOrder = Math.incrementExact(nextChannelIndexOrder)
             val (newOrder, evicted) = touched(order, key)
             order = newOrder
             cache = withCandidate(evicted?.let { cache - it } ?: cache, key, candidate)
@@ -85,6 +89,19 @@ internal class MessageLRUCache(
         messageHash: String,
     ): List<MessageCandidate> = synchronized(lock) {
         cache[MessageCacheKey(channelIndex, SwiftText.canonical(senderName), messageHash, radioId)].orEmpty()
+    }
+
+    fun lookupChannelCandidates(
+        radioId: RadioId,
+        channelIndex: UByte,
+        senderName: String,
+        messageHash: String,
+    ): List<MessageCandidate> = synchronized(lock) {
+        val sender = SwiftText.canonical(senderName)
+        val bound = cache[MessageCacheKey(channelIndex, sender, messageHash, radioId)].orEmpty()
+        val unbound = cache[MessageCacheKey(channelIndex, sender, messageHash)].orEmpty()
+        (bound + unbound).sortedByDescending { it.indexOrder }.distinctBy { it.messageID }
+            .sortedBy { it.indexOrder }.takeLast(maxCandidatesPerKey)
     }
 
     /** A summary write advances only its exact predecessor, without creating an indexing arrival. */
@@ -141,6 +158,7 @@ internal class MessageLRUCache(
             order = emptyList()
             dmCache = emptyMap()
             dmOrder = emptyList()
+            nextChannelIndexOrder = 0
         }
     }
 

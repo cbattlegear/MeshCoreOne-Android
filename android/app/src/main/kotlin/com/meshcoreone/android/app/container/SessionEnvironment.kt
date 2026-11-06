@@ -2,6 +2,7 @@
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.contracts.domain.AppStateProvider
+import com.meshcoreone.android.core.contracts.domain.ChannelReactionTargetAuthority
 import com.meshcoreone.android.core.contracts.domain.MessagingIssueReporter
 import com.meshcoreone.android.core.contracts.domain.NotificationPreferencesPort
 import com.meshcoreone.android.core.contracts.domain.NotificationStringProvider
@@ -69,6 +70,7 @@ class SessionEnvironment(
     val messageServiceConfig: MessageServiceConfig = MessageServiceConfig(),
     val chatSendQueueConfig: ChatSendQueueConfig = ChatSendQueueConfig(),
     val onChannelQueryAccounting: ((ChannelQueryAccountingEvent) -> Unit)? = null,
+    val channelReactionTargets: ChannelReactionTargetAuthority? = null,
 )
 
 /** Observes container creation and teardown so the process owner can prove no graph leaks. */

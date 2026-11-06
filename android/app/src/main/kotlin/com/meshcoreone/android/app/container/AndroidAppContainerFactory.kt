@@ -219,6 +219,7 @@ object AndroidAppContainerFactory {
         val container = AppContainer(
             AppContainerDependencies(
                 store = store,
+                channelReactionTargets = store.channelReactionTargetAuthority,
                 passwords = SecretStoreVault(storage.secrets),
                 connectionPreferences = DataStoreConnectionPreferences(storage.preferences),
                 connectivity = connectivity,

@@ -60,6 +60,27 @@ sealed interface ChannelReactionCacheLookup {
     data object Miss : ChannelReactionCacheLookup
 }
 
+enum class ParkedChannelReactionFormat { MCO_V1, MCO_V3 }
+
+sealed interface ParkedChannelReactionFailure {
+    data object Stale : ParkedChannelReactionFailure
+    data class Rejected(val reason: ChannelReactionRejection) : ParkedChannelReactionFailure
+    data class Unknown(val cause: Exception) : ParkedChannelReactionFailure
+}
+
+/** Original non-native wire selection retained for diagnosis, never fed into native matching/retry. */
+data class ParkedChannelReaction(
+    val captured: CapturedChannelReactionTarget,
+    val reaction: ReactionDTO,
+    val format: ParkedChannelReactionFormat,
+    val failure: ParkedChannelReactionFailure,
+)
+
+sealed interface ChannelReactionParkResult {
+    data object Retained : ChannelReactionParkResult
+    data class Overflow(val unretained: ParkedChannelReaction) : ChannelReactionParkResult
+}
+
 /** A DM reaction waiting for its target message to be indexed. */
 data class PendingDMReaction(
     val parsed: ParsedDMReaction,
@@ -100,6 +121,7 @@ class ReactionService internal constructor(
     // Pending reactions queues: no TTL, session lifetime. Guarded by [lock].
     private var pendingReactions = PendingQueue.empty<PendingReactionKey, PendingReaction>()
     private var pendingDMReactions = PendingQueue.empty<PendingDMReactionKey, PendingDMReaction>()
+    private var parkedChannelReactions = PendingQueue.empty<Unit, ParkedChannelReaction>()
 
     /** [targetSender] is canonical (NFC) because Swift hashes `String` keys by canonical equivalence. */
     private data class PendingReactionKey(val channelIndex: UByte, val targetSender: String, val messageHash: String) {
@@ -137,15 +159,11 @@ class ReactionService internal constructor(
         channelIndex: UByte,
         radioId: RadioId,
     ): ChannelReactionCacheLookup {
-        val bound = messageCache.lookupChannelTargets(
+        val selected = messageCache.lookupChannelCandidates(
             radioId, channelIndex, parsed.targetSender, parsed.messageHash,
-        ).mostRecentlyIndexed()?.channelTarget
-        if (bound != null) return ChannelReactionCacheLookup.Bound(bound)
-        val unbound = messageCache.lookup(channelIndex, parsed.targetSender, parsed.messageHash).mostRecentlyIndexed()
-        if (unbound != null) {
-            return ChannelReactionCacheLookup.Unbound(unbound.messageID)
-        }
-        return ChannelReactionCacheLookup.Miss
+        ).mostRecentlyIndexed() ?: return ChannelReactionCacheLookup.Miss
+        return selected.channelTarget?.let { ChannelReactionCacheLookup.Bound(it) }
+            ?: ChannelReactionCacheLookup.Unbound(selected.messageID)
     }
 
     /**
@@ -271,6 +289,29 @@ class ReactionService internal constructor(
         }
     }
 
+    fun parkChannelReaction(work: ParkedChannelReaction): ChannelReactionParkResult {
+        require(work.reaction.radioId == work.captured.message.radioId)
+        require(work.reaction.messageID == work.captured.message.id)
+        require(work.reaction.channelIndex == work.captured.message.channelIndex)
+        require(work.reaction.channelIndex != null && work.reaction.contactID == null)
+        val result = synchronized(lock) {
+            if (parkedChannelReactions.count >= MAX_PENDING_REACTIONS) ChannelReactionParkResult.Overflow(work)
+            else {
+                parkedChannelReactions = parkedChannelReactions.enqueue(Unit, work, MAX_PENDING_REACTIONS)
+                ChannelReactionParkResult.Retained
+            }
+        }
+        if (result is ChannelReactionParkResult.Overflow) {
+            logger.severe("Channel reaction failure queue is full; original work returned as typed unretained overflow")
+        } else {
+            logger.warning("Original ${work.format} channel reaction retained without replay authority: ${work.failure::class.simpleName}")
+        }
+        return result
+    }
+
+    fun retainedChannelReactionFailures(radioId: RadioId): List<ParkedChannelReaction> =
+        synchronized(lock) { parkedChannelReactions.valuesInOrder().filter { it.reaction.radioId == radioId } }
+
     /** Builds channel reaction wire text: `@[sender]emoji` then newline and hash. */
     fun buildReactionText(emoji: String, targetSender: String, targetText: String, targetTimestamp: UInt): String =
         "@[$targetSender]$emoji\n${ReactionParser.generateMessageHash(targetText, targetTimestamp)}"
@@ -314,9 +355,10 @@ class ReactionService internal constructor(
     /** Clears all pending reactions (call on disconnect). */
     internal fun clearPendingReactions() {
         val cleared = synchronized(lock) {
-            val count = pendingReactions.count + pendingDMReactions.count
+            val count = pendingReactions.count + pendingDMReactions.count + parkedChannelReactions.count
             pendingReactions = pendingReactions.cleared()
             pendingDMReactions = pendingDMReactions.cleared()
+            parkedChannelReactions = parkedChannelReactions.cleared()
             count
         }
         if (cleared > 0) logger.fine { "Cleared $cleared pending reaction(s)" }
@@ -425,7 +467,9 @@ class ReactionService internal constructor(
     }
 
     /** Test-visible total of queued reactions (channel, DM). */
-    internal val pendingCounts: Pair<Int, Int> get() = synchronized(lock) { pendingReactions.count to pendingDMReactions.count }
+    internal val pendingCounts: Pair<Int, Int> get() = synchronized(lock) {
+        (pendingReactions.count + parkedChannelReactions.count) to pendingDMReactions.count
+    }
 
     internal companion object {
         const val MAX_PENDING_REACTIONS: Int = 100
@@ -452,6 +496,10 @@ internal class PendingQueue<K, V> private constructor(
     val count: Int get() = entries.values.sumOf { it.size }
 
     fun cleared(): PendingQueue<K, V> = PendingQueue(emptyMap(), emptyMap(), nextOrder)
+
+    fun valuesInOrder(): List<V> = keyOrders.entries.sortedBy { it.value }.flatMap { (key, _) ->
+        entries.getValue(key).map { it.value }
+    }
 
     fun mapValues(transform: (V) -> V): PendingQueue<K, V> = PendingQueue(
         entries.mapValues { (_, values) -> values.map { entry -> entry.copy(value = transform(entry.value)) } },

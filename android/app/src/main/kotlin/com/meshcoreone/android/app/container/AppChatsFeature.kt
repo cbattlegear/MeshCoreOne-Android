@@ -11,6 +11,9 @@ import com.meshcoreone.android.app.navigation.ContactLinkRequest
 import com.meshcoreone.android.app.navigation.HashtagJoinRequest
 import com.meshcoreone.android.app.state.MessageEvent
 import com.meshcoreone.android.core.contracts.domain.ChannelQuery
+import com.meshcoreone.android.core.contracts.domain.CapturedChannelReactionTarget
+import com.meshcoreone.android.core.contracts.domain.ChannelReactionTargetAuthority
+import com.meshcoreone.android.core.contracts.domain.MessageWindow
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
@@ -21,6 +24,7 @@ import com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueService
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.services.reactions.ReactionParser
+import com.meshcoreone.android.core.services.reactions.ChannelReactionReplayResult
 import com.meshcoreone.android.core.services.reactions.isHiddenOutgoingReaction
 import com.meshcoreone.android.feature.chats.composer.*
 import com.meshcoreone.android.feature.chats.actions.BlockedSenderHistoryDeletionException
@@ -36,6 +40,7 @@ import com.meshcoreone.android.core.services.remote.stopSessionKeepAlive
 import java.time.Clock
 import java.time.Instant
 import java.util.UUID
+import java.util.IdentityHashMap
 import java.util.logging.Level
 import java.util.logging.Logger
 import kotlinx.coroutines.flow.*
@@ -450,6 +455,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
     internal suspend fun prepareTimelineMessages(
         messages: List<MessageDTO>,
         indexing: ReactionIndexing?,
+        channelCaptures: Map<MessageDTO, CapturedChannelReactionTarget>? = null,
     ): List<MessageDTO> {
         if (indexing == null) return messages
         val radio = when (val target = indexing.scope) {
@@ -458,6 +464,42 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         }
         check(messages.all { it.radioId == radio }) { "Reaction indexing crossed a conversation radio" }
         return messages.map { message ->
+            if (indexing.scope is ReactionIndexScope.Channel && channelCaptures != null) {
+                val target = indexing.scope
+                check(message.channelIndex == target.channel.index && message.contactID == null) {
+                    "Reaction indexing crossed a channel conversation"
+                }
+                val captured = channelCaptures[message]?.takeIf { it.message === message }
+                    ?: throw PersistenceStoreException(PersistenceStoreError.FetchFailed(
+                        "Original channel history binding was lost; ID-based recapture is not permitted",
+                    ))
+                val name = if (message.isOutgoing) target.localNodeName else message.senderNodeName
+                if (name == null) return@map message
+                var actualSnapshot = message
+                val result = indexing.service.indexChannelMessageAndReplay(
+                    captured, name, channelReactionAuthority(),
+                ) { applied ->
+                    val actual = applied.successor.message
+                    if (actual.radioId == radio && actual.id == message.id && actual.channelIndex == message.channelIndex) {
+                        // Display the complete committed snapshot; this does not rebind the indexed capture.
+                        actualSnapshot = actual
+                    }
+                    if (applied.inserted) app.messageEventStream.send(MessageEvent.ReactionReceived(
+                        applied.successor.message.id, applied.summary,
+                    ))
+                }
+                return@map when (result) {
+                    is ChannelReactionReplayResult.Completed ->
+                        if (actualSnapshot !== message) actualSnapshot else result.target.message
+                    is ChannelReactionReplayResult.Failed -> throw result.cause
+                    is ChannelReactionReplayResult.Stale -> throw PersistenceStoreException(
+                        PersistenceStoreError.FetchFailed("Original channel history reaction target became stale"),
+                    )
+                    is ChannelReactionReplayResult.Rejected -> throw PersistenceStoreException(
+                        PersistenceStoreError.SaveFailed("Channel history reaction replay rejected: ${result.reason}"),
+                    )
+                }
+            }
             val reactions = when (val target = indexing.scope) {
                 is ReactionIndexScope.Direct -> indexing.service.indexDMMessage(
                     message.id, target.contact.id, message.text, message.reactionTimestamp,
@@ -509,8 +551,27 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         }
     }
 
-    fun timeline(conversation: TimelineConversation): ChatTimelineDependencies = object : ChatTimelineDependencies {
+    private fun channelReactionAuthority(): ChannelReactionTargetAuthority =
+        container.channelReactionTargets ?: throw PersistenceStoreException(
+            PersistenceStoreError.FetchFailed("Original channel reaction target authority is unavailable"),
+        )
+
+    fun timeline(
+        conversation: TimelineConversation,
+        reactionOverride: (() -> ReactionIndexing?)? = null,
+    ): ChatTimelineDependencies = object : ChatTimelineDependencies {
         private val radio = conversation.id.radioId
+        private val receiptLock = Any()
+        private val channelReceipts = IdentityHashMap<MessageDTO, CapturedChannelReactionTarget>()
+
+        private fun rememberOriginalWindow(captures: List<CapturedChannelReactionTarget>): List<MessageDTO> =
+            synchronized(receiptLock) {
+                channelReceipts.clear()
+                captures.map { capture ->
+                    channelReceipts[capture.message] = capture
+                    capture.message
+                }
+            }
         override fun bindTimeline(owner: Any, scope: CoroutineScope, zoneId: ZoneId, initial: ChatTimelineState) =
             bindState(conversation,
                 app.mountedChatCoordinator(conversation.id),
@@ -520,13 +581,21 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             message.isHiddenOutgoingReaction(isDM = conversation is TimelineConversation.Direct)
         override val content get() = this@AppChatsFeature.content
         override suspend fun prepareMessages(messages: List<MessageDTO>): List<MessageDTO> {
+            val captures = synchronized(receiptLock) {
+                IdentityHashMap<MessageDTO, CapturedChannelReactionTarget>().also { selected ->
+                    for (message in messages) channelReceipts.remove(message)?.let { selected[message] = it }
+                }
+            }
+            if (reactionOverride != null) {
+                return prepareTimelineMessages(messages, reactionOverride.invoke(), captures)
+            }
             val current = container.sessions.current?.takeIf { it.token.radioId == radio } ?: return messages
             return prepareTimelineMessages(messages, ReactionIndexing(current.reactionService, when (conversation) {
                 is TimelineConversation.Direct -> ReactionIndexScope.Direct(conversation.contact)
                 is TimelineConversation.Channel -> ReactionIndexScope.Channel(
                     conversation.channel, app.connectedDevice?.takeIf { it.radioId == radio }?.nodeName,
                 )
-            }))
+            }), captures)
         }
         override fun admissionIdentity() = container.sessions.current?.takeIf { it.token.radioId == radio }?.token
         override fun isCurrentAdmission(identity: SessionToken?) =
@@ -561,8 +630,10 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                     is TimelineConversation.Direct -> store.fetchMessages(
                         EntityKey(conversation.contact.radioId, conversation.contact.id), limit.toLong(), offset.toLong(),
                     )
-                    is TimelineConversation.Channel -> store.fetchMessages(
-                        conversation.channel.radioId, conversation.channel.index, limit.toLong(), offset.toLong(),
+                    is TimelineConversation.Channel -> rememberOriginalWindow(
+                        channelReactionAuthority().fetchChannelReactionWindow(
+                            conversation.channel.radioId, conversation.channel.index, limit.toLong(), offset.toLong(),
+                        ),
                     )
                 }
             override suspend fun fetchMessageWindow(conversation: TimelineConversation, anchorSortDate: Instant?, floorLimit: Int) =
@@ -570,9 +641,11 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                     is TimelineConversation.Direct -> store.fetchMessageWindow(
                         EntityKey(conversation.contact.radioId, conversation.contact.id), anchorSortDate, floorLimit.toLong(),
                     )
-                    is TimelineConversation.Channel -> store.fetchMessageWindow(
+                    is TimelineConversation.Channel -> channelReactionAuthority().fetchChannelReactionWindow(
                         conversation.channel.radioId, conversation.channel.index, anchorSortDate, floorLimit.toLong(),
-                    )
+                    ).let { window ->
+                        MessageWindow(rememberOriginalWindow(window.messages).snapshot(), window.hasMore)
+                    }
                 }
             override suspend fun fetchMessage(messageId: UUID) = store.fetchMessage(EntityKey(radio, messageId))
             override suspend fun unreadAnchorMessageId(conversation: TimelineConversation): UUID? =
@@ -891,12 +964,10 @@ internal class CoordinatedPrimeTimeline(
             is ChatConversationType.Dm -> TimelineConversation.Direct(conversation.contact)
             is ChatConversationType.Channel -> TimelineConversation.Channel(conversation.channel)
         }
-        val dependencies = object : ChatTimelineDependencies by feature.timeline(target) {
+        val dependencies = object : ChatTimelineDependencies by feature.timeline(target, reactionOverride = { reactions }) {
             override fun bindTimeline(owner: Any, scope: CoroutineScope, zoneId: ZoneId, initial: ChatTimelineState) =
                 feature.bindState(target, shared, this@CoordinatedPrimeTimeline, zoneId, initial,
                     bound, senderTables, envInputs).also { binding = it }
-            override suspend fun prepareMessages(messages: List<MessageDTO>) =
-                feature.prepareTimelineMessages(messages, reactions)
         }
         val mounted = ChatViewModel(target, dependencies, scope).also { viewModel = it }
         when (populateMode) {

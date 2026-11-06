@@ -112,6 +112,7 @@ class RadioSessionContainer private constructor(
     private var lastKnownRegionEdit = 0L
     private var closed = false
     internal val chatSendQueueProgress: ChatSendQueueProgress = env.chatSendQueueProgress
+    internal val channelReactionTargets get() = env.channelReactionTargets
     private val session: MeshCoreSession = inputs.connection.session
     private val radioId: RadioId = token.radioId
     private val gaps = GapReporter { message -> logger.info(message) }
@@ -242,6 +243,7 @@ class RadioSessionContainer private constructor(
 
     private fun buildSyncDependencies() = SyncDependencies(
         dataStore = dataStore,
+        channelReactionTargets = env.channelReactionTargets,
         contactService = contactService,
         channelService = channelService,
         messagePollingService = messagePollingService,

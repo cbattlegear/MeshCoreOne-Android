@@ -8,12 +8,19 @@ import com.meshcoreone.android.core.model.ReactionDTO
 import com.meshcoreone.android.core.model.RxLogEntryDTO
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.contracts.domain.ParsedReaction
+import com.meshcoreone.android.core.contracts.domain.CapturedChannelReactionTarget
+import com.meshcoreone.android.core.contracts.domain.ChannelReactionApplyResult
+import com.meshcoreone.android.core.contracts.domain.ChannelReactionTargetAuthority
 import com.meshcoreone.android.core.services.messaging.ChannelRXCorrelation
 import com.meshcoreone.android.core.services.reactions.HeardRepeatsService
 import com.meshcoreone.android.core.services.reactions.MeshCoreOpenReactionParser
 import com.meshcoreone.android.core.services.reactions.ParsedDMReaction
 import com.meshcoreone.android.core.services.reactions.ReactionParser
 import com.meshcoreone.android.core.services.reactions.ReactionService
+import com.meshcoreone.android.core.services.reactions.ChannelReactionCacheLookup
+import com.meshcoreone.android.core.services.reactions.ChannelReactionReplayResult
+import com.meshcoreone.android.core.services.reactions.PendingReaction
+import com.meshcoreone.android.core.services.reactions.ParkedChannelReaction
 import com.meshcoreone.android.core.services.remote.CLIResponse
 import com.meshcoreone.android.core.services.rendering.MentionUtilities
 import com.meshcoreone.android.core.services.sync.SyncCLIEchoParsing
@@ -71,6 +78,31 @@ internal class GapReporter(private val sink: (String) -> Unit) {
 internal class SyncReactionAdapter(
     private val reactions: ReactionService,
 ) : SyncReactionServicing {
+    override suspend fun findChannelTarget(
+        parsed: ParsedReaction, channelIndex: UByte, radioId: RadioId,
+    ): ChannelReactionCacheLookup = reactions.findChannelTarget(parsed, channelIndex, radioId)
+
+    override suspend fun indexChannelMessageAndReplay(
+        captured: CapturedChannelReactionTarget,
+        senderName: String,
+        authority: ChannelReactionTargetAuthority,
+        onApplied: (ChannelReactionApplyResult.Applied) -> Unit,
+    ): ChannelReactionReplayResult = reactions.indexChannelMessageAndReplay(
+        captured, senderName, authority, onApplied,
+    )
+
+    override suspend fun applyChannelReaction(
+        captured: CapturedChannelReactionTarget,
+        reaction: ReactionDTO,
+        authority: ChannelReactionTargetAuthority,
+        onApplied: (ChannelReactionApplyResult.Applied) -> Unit,
+    ): ChannelReactionApplyResult = reactions.applyChannelReaction(captured, reaction, authority, onApplied)
+
+    override suspend fun requeuePendingReaction(pending: PendingReaction) =
+        reactions.requeuePendingReaction(pending)
+
+    override suspend fun parkChannelReaction(work: ParkedChannelReaction) = reactions.parkChannelReaction(work)
+
     override suspend fun indexDMMessage(id: UUID, contactID: UUID, text: String, timestamp: UInt): List<SyncPendingDMReaction> =
         reactions.indexDMMessage(id, contactID, text, timestamp).map {
             SyncPendingDMReaction(

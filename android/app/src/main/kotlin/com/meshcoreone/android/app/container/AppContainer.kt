@@ -164,6 +164,7 @@ class AppContainerDependencies(
     val onChannelQueryAccounting: ((ChannelQueryAccountingEvent) -> Unit)? = null,
     /** Releases process-owned resources (database, storage) once the runtime has closed. */
     val onClose: suspend () -> Unit = {},
+    val channelReactionTargets: com.meshcoreone.android.core.contracts.domain.ChannelReactionTargetAuthority? = null,
 )
 
 /**
@@ -186,6 +187,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
             (dependencies.linkFactory as? AndroidRuntimeLinkFactory)?.transportFor(it)
         }
     internal val processStore get() = dependencies.store
+    internal val channelReactionTargets get() = dependencies.channelReactionTargets
     internal val uiScope = CoroutineScope(dependencies.mainScope.coroutineContext + SupervisorJob(processJob))
     val foreground: ProcessForegroundState = dependencies.foreground
     val bootstrapDebugLog: DebugLogBuffer? = dependencies.newBootstrapDebugLog(processScope)
@@ -216,6 +218,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
         chatSendQueueConfig = dependencies.chatSendQueueConfig,
         onSessionLifecycle = dependencies.sessionLifecycle,
         bootstrapDebugLog = bootstrapDebugLog,
+        channelReactionTargets = dependencies.channelReactionTargets,
     )
 
     val connectionManager: ConnectionManager = ConnectionManager(

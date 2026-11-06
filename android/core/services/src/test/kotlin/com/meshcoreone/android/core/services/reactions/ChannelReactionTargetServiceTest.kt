@@ -5,6 +5,7 @@ import com.meshcoreone.android.core.contracts.domain.ParsedReaction
 import com.meshcoreone.android.core.contracts.domain.CapturedChannelReactionTarget
 import com.meshcoreone.android.core.contracts.domain.ChannelReactionTarget
 import com.meshcoreone.android.core.model.MessageDTO
+import com.meshcoreone.android.core.model.ReactionDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.services.rendering.MessageLRUCache
 import java.time.Clock
@@ -104,6 +105,45 @@ class ChannelReactionTargetServiceTest {
         ).captured)
     }
 
+    private fun mixedLookup(boundFirst: Boolean, equalClock: Boolean) {
+        val radio = RadioId(UUID.randomUUID())
+        val clock = CacheClock()
+        val cache = MessageLRUCache(clock = clock)
+        val service = ReactionService(cache, clock)
+        val bound = capture(radio)
+        val unboundId = UUID.randomUUID()
+        fun indexBound() = cache.indexChannelTarget(bound, "Alice")
+        fun indexUnbound() = cache.index(unboundId, 3u, "Alice", "Hello", 100u)
+        if (boundFirst) indexBound() else indexUnbound()
+        if (!equalClock) clock.now = Instant.EPOCH.plusSeconds(1)
+        if (boundFirst) indexUnbound() else indexBound()
+        val parsed = ParsedReaction("X", "Alice", ReactionParser.generateMessageHash("Hello", 100u))
+        val result = service.findChannelTarget(parsed, 3u, radio)
+        val expectBound = if (equalClock) boundFirst else !boundFirst
+        if (expectBound) assertSame(bound, assertIs<ChannelReactionCacheLookup.Bound>(result).captured)
+        else assertEquals(unboundId, assertIs<ChannelReactionCacheLookup.Unbound>(result).messageID)
+    }
+
+    @Test fun newerUnboundCollisionParksInsteadOfMutatingAnOlderBoundCandidate() = mixedLookup(true, false)
+    @Test fun newerBoundCollisionWinsOverAnOlderUnboundCandidate() = mixedLookup(false, false)
+    @Test fun equalClockKeepsFirstBoundBeforeLaterUnboundCandidate() = mixedLookup(true, true)
+    @Test fun equalClockKeepsFirstUnboundBeforeLaterBoundCandidate() = mixedLookup(false, true)
+
+    @Test fun unboundSameIdReindexRetiresSelectionWithoutOverwritingStoredBoundAuthority() {
+        val radio = RadioId(UUID.randomUUID())
+        val clock = CacheClock()
+        val cache = MessageLRUCache(clock = clock)
+        val service = ReactionService(cache, clock)
+        val original = capture(radio)
+        val parsed = ParsedReaction("X", "Alice", ReactionParser.generateMessageHash("Hello", 100u))
+        cache.indexChannelTarget(original, "Alice")
+        cache.index(original.message.id, 3u, "Alice", "Hello", 100u)
+        assertEquals(original.message.id, assertIs<ChannelReactionCacheLookup.Unbound>(
+            service.findChannelTarget(parsed, 3u, radio),
+        ).messageID)
+        assertSame(original, cache.lookupChannelTargets(radio, 3u, "Alice", parsed.messageHash).single().channelTarget)
+    }
+
     @Test fun parkedUnboundOriginalNeverBecomesLegacyEligibleAfterAnotherArrival() {
         val radio = RadioId(UUID.randomUUID())
         val service = ReactionService()
@@ -113,6 +153,61 @@ class ChannelReactionTargetServiceTest {
         ))
         assertTrue(service.indexMessage(UUID.randomUUID(), 3u, "Alice", "Hello", 100u).isEmpty())
         assertEquals(1 to 0, service.pendingCounts)
+    }
+
+    @Test fun parkedMcoFormatsKeepTheirExactOriginalWireAndTargetOutsideNativeReplay() {
+        val radio = RadioId(UUID.randomUUID())
+        val target = capture(radio)
+        val service = ReactionService()
+        val failure = IllegalStateException("unknown original return")
+        val first = ParkedChannelReaction(
+            target, ReactionDTO(
+                radioId = radio, messageID = target.message.id, channelIndex = 3u,
+                emoji = "X", senderName = "Bob", rawText = "original v1 wire", messageHash = "mco-v1-hash",
+                receivedAt = Instant.EPOCH.plusSeconds(50),
+            ), ParkedChannelReactionFormat.MCO_V1, ParkedChannelReactionFailure.Stale,
+        )
+        val second = ParkedChannelReaction(
+            target, first.reaction.copy(
+                id = UUID.randomUUID(), rawText = "original v3 wire", messageHash = "mco-v3-hash",
+                receivedAt = Instant.EPOCH,
+            ), ParkedChannelReactionFormat.MCO_V3, ParkedChannelReactionFailure.Unknown(failure),
+        )
+        service.parkChannelReaction(first)
+        service.parkChannelReaction(second)
+        assertTrue(service.indexMessage(target.message.id, 3u, "Alice", "Hello", 100u).isEmpty())
+        val retained = service.retainedChannelReactionFailures(radio)
+        assertSame(first, retained[0])
+        assertSame(second, retained[1])
+        assertSame(failure, assertIs<ParkedChannelReactionFailure.Unknown>(retained[1].failure).cause)
+        assertEquals(listOf("mco-v1-hash", "mco-v3-hash"), retained.map { it.reaction.messageHash })
+        assertTrue(service.retainedChannelReactionFailures(RadioId(UUID.randomUUID())).isEmpty())
+    }
+
+    @Test fun parkedMcoQueueReportsOverflowWithoutDisplacingAnyRetainedOriginal() {
+        val radio = RadioId(UUID.randomUUID())
+        val target = capture(radio)
+        val service = ReactionService()
+        val all = List(101) { ordinal ->
+            ParkedChannelReaction(
+                target, ReactionDTO(
+                    radioId = radio, messageID = target.message.id, channelIndex = 3u,
+                    emoji = "X", senderName = ordinal.toString(), rawText = "wire $ordinal",
+                    messageHash = "format-specific", receivedAt = Instant.EPOCH.minusSeconds(ordinal.toLong()),
+                ), ParkedChannelReactionFormat.MCO_V3,
+                ParkedChannelReactionFailure.Rejected(
+                    com.meshcoreone.android.core.contracts.domain.ChannelReactionRejection.CONFLICT,
+                ),
+            )
+        }
+        all.take(100).forEach { assertIs<ChannelReactionParkResult.Retained>(service.parkChannelReaction(it)) }
+        val overflow = assertIs<ChannelReactionParkResult.Overflow>(service.parkChannelReaction(all.last()))
+        assertSame(all.last(), overflow.unretained)
+        assertEquals(all.take(100), service.retainedChannelReactionFailures(radio))
+        assertEquals(100 to 0, service.pendingCounts)
+        service.clearPendingReactions()
+        assertTrue(service.retainedChannelReactionFailures(radio).isEmpty())
+        assertEquals(0 to 0, service.pendingCounts)
     }
 
     private data class Entry(

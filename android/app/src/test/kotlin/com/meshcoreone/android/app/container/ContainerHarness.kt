@@ -126,6 +126,8 @@ internal class ContainerHarness(
     regionStore: com.meshcoreone.android.app.state.RegionSelectionStore? = null,
     preferencesOverride: ProcessConnectionPreferences? = null,
     simulatorSeedStore: com.meshcoreone.android.core.services.simulator.SimulatorSeedStore = RoomSimulatorSeedStore(store),
+    channelReactionTargets: com.meshcoreone.android.core.contracts.domain.ChannelReactionTargetAuthority? =
+        store.channelReactionTargetAuthority,
     onSessionCreated: (RadioSessionContainer) -> Unit = {},
 ) {
     val scheduler: TestCoroutineScheduler = test.testScheduler
@@ -142,6 +144,7 @@ internal class ContainerHarness(
     val container = AppContainer(
         AppContainerDependencies(
             store = persistenceOverride,
+            channelReactionTargets = channelReactionTargets,
             passwords = MemoryVault(),
             connectionPreferences = preferencesOverride ?: preferences,
             connectivity = newConnectivity(pairing, onForeground = { foregroundCalls += it }, currentLink = {

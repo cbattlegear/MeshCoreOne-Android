@@ -676,3 +676,41 @@ Pinned Python 3.12.4 `controller/validate.py`, `test_inventory.py --check`,
 No compilation, Kotlin/Room execution, hosted rerun, hardware evidence, manager acceptance,
 activation, push or dispatch is claimed. The exact frozen composition must receive full independent
 source review before any later authorized diagnostics; execution and publication holds remain.
+
+### Actual-main integration correction
+
+The preceding source composition `49d797ee9f6cd11cbbfa08f90c9b647599e70025` refreshed
+admissions against main but did not integrate main's tree or ancestry. It therefore differed from
+`5f4d9b92b2eb30d02f001567ef7e4f1dd6e80f66` in 92 paths, including missing or older trusted
+policy/controller files. It is not a latest-main verification candidate.
+
+Under the coordinator's correction assignment, actual `origin/main` was fetched and confirmed at
+`5f4d9b92b2eb30d02f001567ef7e4f1dd6e80f66`, then merged into the preserved `49d797ee`
+candidate without rebasing. Relative to their merge base
+`35abcc1276082995eed216bf28bff04d77e176c8`, main changes 12 paths and the caller changes
+80 paths. These sets are disjoint. The merge has no textual conflict; an exhaustive tree comparison
+confirmed that all 12 main-changed paths match main's blobs and all 80 caller-changed paths retain
+their exact `49d797ee` blobs before this evidence addition. No held producer, schema, build graph
+or cumulative unmerged producer ancestry was added. The merged channel-reseed implementation and
+its controls come from actual main, not a held source candidate.
+
+The seven trusted paths are carried byte-for-byte from main:
+
+| Path | Git blob |
+| --- | --- |
+| `docs/android/AUTOMATION.md` | `8fa6f12910825b496d43c08af4be8bf58b648e75` |
+| `docs/android/automation-policy.json` | `10bf918158203e444d0a80c79f94497e390af03b` |
+| `tools/android-port/controller/capabilities.py` | `6e0529126a04ab86c5b4270c99c0f523dbbeb8c9` |
+| `tools/android-port/controller/scope_amendment.py` | `34cc9452dc61f3421481cce8b7bd5b2b6505db79` |
+| `tools/android-port/tests/test_contact_import_localization_capability.py` | `c98f09ed4e6049053d80728a8531262e64b67810` |
+| `tools/android-port/tests/test_notification_enrollment_resource_capability.py` | `ab21127850fb03158d75db4d880a22bdda705ed0` |
+| `tools/android-port/tests/test_simulator_recovery_copy_capability.py` | `fecf67af6563ea31236fad61eb64e7ac6f7a3b47` |
+
+The composed manager `746a2aec219b0ac758ecf2eb42a5e8242d5f1ab9`, runtime controls
+`4e5ec78a4dc97847e1e82bca12ab250be603d56a`, canonical production
+`a4cf97a36327721e9df7eb9afffbf12b37511d3c` and canonical controls
+`6800d1e8d73f1c22b665476d3599c42f93f21a6a` remain unchanged. The direct comparison to
+actual main contains the preserved 80 caller paths, not the seven trusted paths. Disjoint paths
+do not establish semantic acceptance: the full current-main composition, including the interaction
+with main's simulator reseed work, still requires independent review. No build, Kotlin/Room run,
+activation, push, dispatch or acceptance is authorized or claimed by this correction.

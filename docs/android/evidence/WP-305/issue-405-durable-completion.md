@@ -223,6 +223,13 @@ files); `python tools/android-port/test_inventory.py --check` passed (468 pinned
 `android/scaffold/check_environment.py`; no Gradle command was run because the shared
 execution reservation remains held. These checks do not execute the new Kotlin regression.
 
+Exact hosted run [42139553314](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42139553314)
+on `32544b2da2220ee03d5b62431d81d625025ca8bd` failed at
+`:app:compileDebugUnitTestKotlin`: adding the new optional `showFlow` parameter after the existing
+receipt handler redirected legacy trailing-lambda test calls to the new callback type. The mounted
+test did not execute. The helper parameters are reordered in the successor; fresh exact-head CI is
+required.
+
 For lock-order review only, paired consumer PR #495 was inspected at exact head
 `9a9b2e0fae9fc9a7aa8b8887270799a4d0781842` against base
 `8eaa4ecd35fb25f32aca5d0d3cd0414e3eaa4bcd`; that candidate is open, unmerged and not current-main

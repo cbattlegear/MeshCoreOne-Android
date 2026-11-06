@@ -133,11 +133,11 @@ class OnboardingGateTest {
 
     private fun showFlow(
         dependencies: com.meshcoreone.android.feature.onboarding.OnboardingFeatureDependencies,
-        onReceipt: ((com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt) -> Boolean)? = null,
         onPublication: ((
             com.meshcoreone.android.feature.onboarding.OnboardingCompletionPublication,
             commit: (() -> Boolean) -> Boolean,
         ) -> Boolean)? = null,
+        onReceipt: ((com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt) -> Boolean)? = null,
     ) = host.get().setContent {
         MeshCoreTheme {
             OnboardingFlow(

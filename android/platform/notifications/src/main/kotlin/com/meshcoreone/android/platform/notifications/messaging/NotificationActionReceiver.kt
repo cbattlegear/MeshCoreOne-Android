@@ -491,6 +491,7 @@ object NotificationActionRecovery {
                 (stored as? NotificationRecoveryRead.Failed)?.reason,
                 lost,
                 manualOpenRequired,
+                recordsAvailable = stored is NotificationRecoveryRead.Ready,
             )
         }
     }

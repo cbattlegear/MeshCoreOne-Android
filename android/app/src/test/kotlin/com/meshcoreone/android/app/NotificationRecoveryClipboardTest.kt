@@ -318,6 +318,60 @@ class NotificationRecoveryClipboardTest {
         assertEquals(2, entries().size)
     }
 
+    @Test
+    fun ordinaryStartupDoesNotShowRecoveryWhileItsInitialReadIsPending() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        context = object : ContextWrapper(context) {
+            override fun getApplicationContext(): Context = this
+            override fun getNoBackupFilesDir(): File {
+                entered.countDown()
+                check(release.await(10, TimeUnit.SECONDS))
+                return super.getNoBackupFilesDir()
+            }
+        }
+        try {
+            mount()
+            compose.waitUntil(5_000) { entered.count == 0L }
+            compose.onNodeWithText(text(NotificationStrings.string.notification_action_recovery_title))
+                .assertDoesNotExist()
+            assertFalse(NotificationActionRecovery.statusSnapshot().manualOpenRequired)
+            assertFalse(NotificationActionRecovery.statusSnapshot().notRetained)
+        } finally {
+            release.countDown()
+        }
+        compose.waitForIdle()
+        compose.onNodeWithText(text(NotificationStrings.string.notification_action_recovery_title))
+            .assertDoesNotExist()
+    }
+
+    @Test
+    fun failedReadCancelDoesNotAcknowledgeFlagsOrUnknownDurableRecords() {
+        val original = save(42, "original in unavailable storage")
+        val available = context
+        context = object : ContextWrapper(context) {
+            override fun getApplicationContext(): Context = this
+            override fun getNoBackupFilesDir(): File = throw SecurityException("synthetic read denial")
+        }
+        NotificationActionRecovery.requireManualOpen()
+        NotificationActionRecovery.handoffNotRetained()
+        val unread = NotificationActionRecovery.load(context)
+        assertFalse(unread.recordsAvailable)
+        assertTrue(unread.storageFailure != null)
+        mount()
+        awaitText(text(NotificationStrings.string.notification_action_recovery_storage_unavailable))
+        compose.onNodeWithText(text(AppLocalizableStrings.commonCancel)).performClick()
+        compose.waitForIdle()
+        val afterCancel = NotificationActionRecovery.statusSnapshot()
+        assertEquals(unread.version, afterCancel.version)
+        assertTrue(afterCancel.manualOpenRequired)
+        assertTrue(afterCancel.notRetained)
+        compose.onNodeWithText(text(NotificationStrings.string.notification_action_recovery_title))
+            .assertDoesNotExist()
+        context = available
+        assertEquals(original.id, entries().single().id)
+    }
+
     private fun mount() {
         check(!mounted)
         mounted = true

@@ -4,14 +4,14 @@
 
 **BLOCKED / NOT BUILD- OR TEST-VERIFIED.** This is an independently admitted source
 draft, not a feature-completion, dispatch, device-durability or acceptance receipt.
-The new localized resource is still denied by the actual trusted policy. Its
-resource identifiers in the draft intentionally remain unresolved until the
-prerequisite is trusted and the exact operation is admitted. This candidate is
-not currently buildable or publishable as a completed fix.
+The resource prerequisite has now landed and its eleven English keys are present
+after fresh trusted admission. Resource resolution is no longer a known missing
+input; compilation and hosted test execution remain unperformed.
 
 - Repository: `cbattlegear/MeshCoreOne-Android`.
 - WP: `WP-215`, bounded pre-admission reply/mark-read capacity recovery for #514.
 - Base: `5f4d9b92b2eb30d02f001567ef7e4f1dd6e80f66`.
+- Landed policy reconciled: `a6c77661f07bd7a43eb97da9ec4ed8e2b0ada866` (#620).
 - Swift specification: `db14559b39d32322b06477c6ae676112f583db50`, unchanged.
 - Branch: `wp215-notification-capacity-recovery-20261106`, same isolated worktree.
 - Producer session: `a830aafb-8aa1-4bf3-8692-c5bf1c017e70`.
@@ -89,6 +89,10 @@ observed unavailable generation locally; it acknowledges no flags or unseen
 records, and a later complete snapshot can display the actual originals.
 Per-host reads are serialized with a cancellable mutex to avoid accumulating
 blocked IO readers on each status update.
+An initial pending read with no actual custody/failure signal shows no warning
+dialog. A failed storage read remains `recordsAvailable = false`, even if
+process-memory items are available; dismissing it cannot acknowledge unknown
+durable records or clear loss/manual-open flags.
 
 Recovery does not start an activity from the reply/mark-read broadcast: Android 12
 prohibits notification trampolines, and background-launch denial need not throw.
@@ -138,6 +142,7 @@ The trusted `reserve.py admit` command succeeded on the base above for:
 | `android/app/src/main/kotlin/com/meshcoreone/android/app/MainActivity.kt` | `modify-related-consumer` | `reviewed-support-consumer` |
 | `android/platform/notifications/src/androidTest/kotlin/com/meshcoreone/android/platform/notifications/messaging/NotificationActionReceiverCapacityTest.kt` | `add-or-update-related-test` | `reviewed-support-test` |
 | `android/app/src/test/kotlin/com/meshcoreone/android/app/NotificationRecoveryClipboardTest.kt` | `add-or-update-related-test` | `reviewed-support-test` |
+| `android/platform/notifications/src/main/res/values/notification_action_recovery.xml` | `add-or-update-notification-action-recovery-copy` | `reviewed-support-notification-action-recovery-copy` (fresh admission after landed #620) |
 | `docs/android/evidence/WP-215/notification-intake-capacity-recovery.md` | `record-evidence` | `wp-owned` |
 | `docs/android/deviations/WP-215.md` | `record-evidence` | `wp-owned` |
 
@@ -166,14 +171,17 @@ Its eleven `notification_action_recovery_` keys are `title`, `rejected_reply`,
 `copy_failed`, `discard_failed`, `launch_failed` and `original_target`.
 Only `original_target` has a formatter: exactly one `%1$s`.
 
-Trusted-main admission is currently missing. The capability owner's local
+Historically, trusted-main admission was missing. The capability owner's local
 `832e44f0c61b6e91062f966a80c0dc560b991a52` proposal is not edit authority and was
 not imported. Its later independent clean-main proposal,
 tree `0264a22afb1d3712f40715ef80126d65086c3f36` on base `5f4d9b92`, is also not
-trusted admission and was not imported. The coordinator is arranging that
-prerequisite. Neither the XML nor the policy has been edited in this candidate.
-English-only authored copy, once admitted, will not count as reviewed
-translations or complete-locale UI acceptance.
+trusted admission and was not imported. PR #620 subsequently landed normally at
+`a6c77661f07bd7a43eb97da9ec4ed8e2b0ada866`; the existing branch reconciles that
+actual main history, not a proposed policy tree. A fresh exact WP/path/operation
+admission returned `reviewed-support-notification-action-recovery-copy` before
+creating the product XML. Its actual UTF-8 bytes pass the landed immutable support
+validator. No policy was authored in this lane. English-only authored copy does
+not count as reviewed translations or complete-locale UI acceptance.
 
 ## Authored controls, not execution evidence
 
@@ -199,7 +207,7 @@ byte/oversize rejection, and deadline completion without cancellation, premature
 budget release or double finish. These are authored controls, not evidence that
 the Android receiver deadline has been exercised on a device.
 
-`NotificationRecoveryClipboardTest.kt` contains 14 authored App methods covering
+`NotificationRecoveryClipboardTest.kt` contains 16 authored App methods covering
 the actual clipboard and mounted dialog: exact sensitive copy, inaccessible
 clipboard, cancel/host destruction, single-record copy/discard, failed
 copy/discard, the process-only warning, deferral behind another dialog and the
@@ -209,6 +217,8 @@ A mounted blocked-storage control gates an actual custody call, observes the
 independently published manual-open/loss status, invokes a stale unavailable
 dialog callback, requires no disposition/acknowledgment, and then releases storage
 to require both actual originals.
+Two further mounted controls require no warning during a signal-free gated
+initial read and no flag acknowledgment after a failed storage read.
 
 **Zero methods have been executed for this draft.** These counts come from static
 source inspection, not runner discovery. A fresh store instance is not an
@@ -224,6 +234,8 @@ adds four receiver declarations, for 29 receiver and 13 App controls, still zero
 executed.
 The independent-status follow-up adds one mounted App declaration, for 29 receiver
 and 14 App controls; none have executed.
+The startup/failed-read follow-up adds two App declarations, for 29 receiver and
+16 App controls; none have executed.
 
 Actual allowed static checks:
 
@@ -251,8 +263,8 @@ unconfigured; this document does not invent replacement verification commands.
 
 ## Remaining gates
 
-Trust and actually admit the resource prerequisite, complete its source copy,
-then obtain permission and exact-candidate affected hosted execution with
+The resource prerequisite and source copy are now present. Obtain delegated
+exact-candidate affected hosted execution with
 positive discovery. Build/type correctness, actual API/device receiver timing,
 background-launch restrictions, secure-window/clipboard behavior, process-death
 reopening and native storage durability remain unverified. A source-only local

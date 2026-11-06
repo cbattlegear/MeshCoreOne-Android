@@ -301,7 +301,7 @@ internal fun NotificationActionRecoveryDialog(blockedByOtherDialog: Boolean = fa
     }
     val recovery = snapshot?.takeIf { it.version == sequence } ?: NotificationActionRecovery.statusSnapshot()
     val item = recovery.items.firstOrNull()
-    if (recovery.recordsAvailable && item == null && recovery.storageFailure == null &&
+    if (item == null && recovery.storageFailure == null &&
         !recovery.notRetained && !recovery.manualOpenRequired
     ) return
     if (dismissedSequence == sequence) return

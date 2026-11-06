@@ -45,7 +45,8 @@ class SimulatorRecoveryCopyCapabilityTests(unittest.TestCase):
         self.assertEqual(self.rule["keys"], KEYS)
         self.assertEqual(self.rule["operations"], [OPERATION])
         self.assertEqual(self.rule["work_packages"], ["WP-217"])
-        self.assertEqual(self.policy["reservation_policy"]["capabilities"][-1], self.rule)
+        self.assertEqual(next(rule for rule in self.policy["reservation_policy"]["capabilities"]
+                              if rule["id"] == self.rule["id"]), self.rule)
         previous = CapabilityEngine(self.base_policy())
         for path in PATHS:
             admission = self.engine.admit("WP-217", self.manifest.wp("WP-217")["write_paths"],
@@ -95,6 +96,8 @@ class SimulatorRecoveryCopyCapabilityTests(unittest.TestCase):
         raw = (REPO / "docs/android/automation-policy.json").read_text(encoding="utf-8")
         full_current = json.loads(raw)
         current = copy.deepcopy(full_current)
+        action = current["reservation_policy"]["capabilities"].pop()
+        self.assertEqual(action["id"], "reviewed-support-notification-action-recovery-copy")
         self.assertEqual(current["reservation_policy"]["capabilities"].pop(), self.rule)
         self.assertEqual(current, previous)
         self.assertEqual(routine_support_predecessor(full_current), routine_support_predecessor(previous))
@@ -126,11 +129,13 @@ class SimulatorRecoveryCopyCapabilityTests(unittest.TestCase):
             ("validation", []), ("extra", True),
         ):
             changed = copy.deepcopy(self.policy)
-            changed["reservation_policy"]["capabilities"][-1][field] = value
+            next(rule for rule in changed["reservation_policy"]["capabilities"]
+                 if rule["id"] == self.rule["id"])[field] = value
             with self.subTest(field=field, value=value), self.assertRaises(PortError):
                 routine_support_predecessor(changed)
         changed = copy.deepcopy(self.policy)
-        changed["reservation_policy"]["capabilities"][-1]["id"] = "reviewed-support-other-copy"
+        next(rule for rule in changed["reservation_policy"]["capabilities"]
+             if rule["id"] == self.rule["id"])["id"] = "reviewed-support-other-copy"
         with self.assertRaises(PortError):
             routine_support_predecessor(changed)
         for mode in ("duplicate", "reordered"):

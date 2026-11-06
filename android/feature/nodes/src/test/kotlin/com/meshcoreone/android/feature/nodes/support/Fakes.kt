@@ -4,6 +4,7 @@ package com.meshcoreone.android.feature.nodes.support
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.model.ContactDTO
+import com.meshcoreone.android.core.model.Coordinate
 import com.meshcoreone.android.core.model.ContactFrame
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.DiscoveredNodeDTO
@@ -311,10 +312,11 @@ internal class Harness(
     val announcer = RecordingAnnouncer()
     val timeouts = FixedTimeouts()
     val codec = FakeUriCodec()
+    val locations = MutableStateFlow<Coordinate?>(null)
     val dependencies = NodesFeatureDependencies(
         session = session, uriCodec = codec, timeouts = timeouts,
         messages = UserFacingMessages { error -> "failed: ${error.message}" },
-        announcer = announcer, preferences = preferences, clock = clock, locale = { locale },
+        announcer = announcer, preferences = preferences, clock = clock, locale = { locale }, locations = locations,
     )
 
     /** Wires a connected radio: every provider returns its double. */

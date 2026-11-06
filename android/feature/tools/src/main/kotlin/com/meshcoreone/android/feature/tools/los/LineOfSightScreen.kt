@@ -85,6 +85,7 @@ import com.meshcoreone.android.core.maps.MapProjectionHandle
 import com.meshcoreone.android.core.maps.MapScreenPoint
 import com.meshcoreone.android.core.maps.MapLibreRuntime
 import com.meshcoreone.android.core.model.Coordinate
+import com.meshcoreone.android.core.model.ContactDTO
 import java.text.NumberFormat
 import java.util.Locale
 import kotlin.math.abs
@@ -94,27 +95,14 @@ import kotlinx.coroutines.flow.collectLatest
 fun LineOfSightEntry(
     dependencies: LineOfSightFeatureDependencies,
     modifier: Modifier = Modifier,
+    preselectedContact: ContactDTO? = null,
 ) {
-    val scope = rememberCoroutineScope()
-    val holder = remember(dependencies) {
-        LineOfSightStateHolder(
-            scope = scope,
-            elevationSource = dependencies.elevationSource,
-            pathAnalyzer = dependencies.pathAnalyzer,
-            analysisContext = dependencies.analysisContext,
-            failureReporter = dependencies.failureReporter,
-        ).also {
-            it.configure(dependencies.contactSource, dependencies.radioId, dependencies.deviceFrequencyKHz())
-        }
-    }
+    val holder = rememberLineOfSightStateHolder(dependencies, preselectedContact)
     val state by holder.state.collectAsStateWithLifecycleCompat()
     val mapPresentation = remember { LineOfSightMapPresentation() }
     var encodedCamera by rememberSaveable { mutableStateOf<String?>(null) }
     val camera = encodedCamera?.let(MapCamera::decode) ?: LineOfSightMapPresentation.WORLD_CAMERA
 
-    DisposableEffect(holder) {
-        onDispose(holder::dispose)
-    }
     LaunchedEffect(holder) {
         holder.loadRepeaters()
         if (encodedCamera == null) {
@@ -139,6 +127,34 @@ fun LineOfSightEntry(
         onCameraChanged = { encodedCamera = it.encode() },
         modifier = modifier,
     )
+}
+
+@Composable
+internal fun rememberLineOfSightStateHolder(
+    dependencies: LineOfSightFeatureDependencies,
+    preselectedContact: ContactDTO?,
+): LineOfSightStateHolder {
+    val scope = rememberCoroutineScope()
+    var preselectionConsumed by rememberSaveable(preselectedContact?.radioId, preselectedContact?.id) {
+        mutableStateOf(false)
+    }
+    val holder = remember(dependencies, preselectedContact?.radioId, preselectedContact?.id) {
+        LineOfSightStateHolder(
+            scope = scope,
+            elevationSource = dependencies.elevationSource,
+            pathAnalyzer = dependencies.pathAnalyzer,
+            analysisContext = dependencies.analysisContext,
+            failureReporter = dependencies.failureReporter,
+            preselectedContact = preselectedContact.takeUnless { preselectionConsumed },
+            onPointAEdited = { preselectionConsumed = true },
+        ).also {
+            it.configure(dependencies.contactSource, dependencies.radioId, dependencies.deviceFrequencyKHz())
+        }
+    }
+    DisposableEffect(holder) {
+        onDispose(holder::dispose)
+    }
+    return holder
 }
 
 @Composable

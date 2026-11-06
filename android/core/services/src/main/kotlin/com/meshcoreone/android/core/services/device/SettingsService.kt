@@ -57,7 +57,11 @@ class SettingsService(
             try {
                 for (event in channel) {
                     if (!context.isCurrent) break
-                    val persistence = (event.event as? SettingsEvent.PathHashModeUpdated)?.persistence
+                    val persistence = when (val value = event.event) {
+                        is SettingsEvent.PathHashModeUpdated -> value.persistence
+                        is SettingsEvent.PersistenceBarrier -> value.persistence
+                        else -> null
+                    }
                     if (persistence != null && synchronized(eventLock) {
                             subscription !== this@Subscription || persistence.isCancelled
                         }) continue
@@ -379,22 +383,66 @@ class SettingsService(
     }
 
     suspend fun applyRadioPresetVerified(preset: RadioPreset): SelfInfo =
-        applyRadioPresetVerified(preset) {}
+        applyRadioPresetOrdered(preset, null)
 
-    /** The metadata callback shares radio ordering and must not reenter this service's operations. */
+    /**
+     * The callback must durably persist the verified device and supported preset hash. It shares
+     * radio ordering and must not reenter any service method acquiring the same operation lock.
+     */
     suspend fun applyRadioPresetVerified(
         preset: RadioPreset,
         persist: suspend (SelfInfo) -> Unit,
+    ): SelfInfo = applyRadioPresetOrdered(preset, persist)
+
+    private suspend fun applyRadioPresetOrdered(
+        preset: RadioPreset,
+        persist: (suspend (SelfInfo) -> Unit)?,
     ): SelfInfo = operation {
+        if (persist != null) awaitEarlierDeviceEdits()
         val actual = writeRadioAndVerify(
             preset.frequencyKHz, preset.bandwidthHz, preset.spreadingFactor, preset.codingRate, null,
         )
+        var revision: Long? = null
         preset.pathHashMode?.let { mode ->
-            if (configuration { queryDevice() }.supportsPathHashMode) writePathHashAndVerify(mode)
+            if (configuration { queryDevice() }.supportsPathHashMode) {
+                writePathHashAndVerify(mode)
+                revision = synchronized(eventLock) { pathHashRevision }
+            }
         }
         publish(SettingsEvent.DeviceUpdated(actual, preset.id))
-        persist(actual)
+        if (persist != null) {
+            persist(actual)
+            context.requireCurrent()
+            revision?.let { committed ->
+                synchronized(eventLock) {
+                    persistedPathHashRevision = maxOf(persistedPathHashRevision, committed)
+                }
+            }
+        }
         actual
+    }
+
+    /**
+     * The single consumer drains earlier events and its editor queue before acknowledging. It must
+     * not call any service operation: the newer preset owns radio ordering while awaiting this fence.
+     */
+    private suspend fun awaitEarlierDeviceEdits() {
+        context.requireCurrent()
+        val completion = CompletableDeferred<Unit>()
+        val owner = synchronized(eventLock) {
+            val target = subscription?.takeUnless { eventsFinished }
+                ?: throw SettingsServiceException(SettingsServiceError.NotConnected)
+            target.pendingPersistence.add(completion)
+            target.channel.trySend(SessionEvent(context.token, SettingsEvent.PersistenceBarrier(completion))).getOrThrow()
+            target
+        }
+        try {
+            completion.await()
+            context.requireCurrent()
+        } finally {
+            synchronized(eventLock) { owner.pendingPersistence.remove(completion) }
+            completion.cancel()
+        }
     }
 
     suspend fun setTxPowerVerified(power: Byte): SelfInfo = operation {

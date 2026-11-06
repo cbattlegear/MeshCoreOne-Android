@@ -136,6 +136,8 @@ class ConnectionManagerAppPort(
     override fun updatePathHashMode(mode: UByte) { editor.updatePathHashMode(mode) }
     override suspend fun updatePathHashMode(mode: UByte, expectedToken: SessionToken): Boolean =
         editor.updatePathHashMode(mode, expectedToken)
+    override suspend fun awaitDeviceEdits(expectedToken: SessionToken): Boolean =
+        editor.awaitDeviceEdits(expectedToken)
     override fun updateDefaultFloodScopeName(name: String?) { editor.updateDefaultFloodScopeName(name) }
     override suspend fun updateDefaultFloodScopeName(name: String?, expectedToken: SessionToken): Boolean =
         editor.updateDefaultFloodScopeName(name, expectedToken)

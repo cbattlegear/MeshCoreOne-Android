@@ -21,12 +21,15 @@ import com.meshcoreone.android.feature.settings.device.PathHashModeStateHolder
 import com.meshcoreone.android.feature.settings.device.SettingsEnvironment
 import com.meshcoreone.android.feature.settings.device.SettingsNavigator
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import org.junit.Test
@@ -35,6 +38,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.coroutines.CoroutineContext
 
 class SettingsPathHashPersistenceTest : RoomProcessTest() {
     @Test fun ordinarySettingsHashWaitsForOnboardingRadioAndMetadataCommit() = runTest {
@@ -142,15 +146,15 @@ class SettingsPathHashPersistenceTest : RoomProcessTest() {
                 armed = true
                 holder.onModeSelected(1u)
                 h.eventually("ordinary Settings is held in its actual event consumer") { entered.isCompleted }
+                assertEquals(1u.toUByte(), assertNotNull(h.sessions.current).settingsService.queryDevice().pathHashMode)
                 val configurator = AppStateRadioConfigurator(h.container)
                 val preset = RadioPresets.all.first().copy(
                     id = "later-preset", frequencyMHz = 868.0, bandwidthKHz = 250.0,
                     spreadingFactor = 10u, codingRate = 5u, pathHashSize = 3,
                 )
                 val later = async { configurator.applyPreset(preset, configurator.currentTarget()) }
-                h.eventually("later preset radio write does not wait on the earlier Settings ACK") {
-                    radioMode() == 2u.toUByte()
-                }
+                h.settle()
+                assertEquals(1u.toUByte(), radioMode(), "The preset fence must drain the earlier event first")
                 assertTrue(holder.state.value.isApplying)
                 assertFalse(later.isCompleted)
                 release.complete(Unit)
@@ -167,12 +171,111 @@ class SettingsPathHashPersistenceTest : RoomProcessTest() {
                 assertEquals(preset.frequencyKHz, saved.frequency)
                 assertEquals(saved, h.manager.connectedDevice)
                 assertEquals(2u.toUByte(), radioMode())
+                assertFalse(assertNotNull(h.sessions.current).settingsService.pathHashModeNeedsRecovery)
                 assertEquals(
                     listOf(1, 2),
                     h.links.radios.single().sent.filter { it[0] == 0x3d.toUByte() }.map { it[2].toInt() },
                 )
             }
         } finally { release.complete(Unit) }
+    }
+
+    @Test fun queuedSettingsBeforeConsumerEntryCannotOverwriteSuccessfulPreset() = runTest {
+        queuedSettingsBeforePreset(cancelEarlier = false)
+    }
+
+    @Test fun cancelledQueuedSettingsCannotOverwriteSuccessfulPreset() = runTest {
+        queuedSettingsBeforePreset(cancelEarlier = true)
+    }
+
+    private suspend fun TestScope.queuedSettingsBeforePreset(cancelEarlier: Boolean) {
+        val ui = HeldSettingsDispatcher(StandardTestDispatcher(testScheduler))
+        var saves = 0
+        val observed = object : PersistenceStoreProtocol by store, DeviceEditPersisting by store {
+            override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+                saves++
+                return store.saveDeviceIfUnchanged(dto, expected)
+            }
+        }
+        withSettings(
+            observed, beforeClose = { ui.resume() },
+            mainScope = CoroutineScope(backgroundScope.coroutineContext + ui),
+        ) { h, holder, failures, radioMode ->
+            val before = assertNotNull(h.manager.connectedDevice)
+            val service = assertNotNull(h.sessions.current).settingsService
+            val savesBefore = saves
+            ui.pause()
+            service.refreshDeviceInfo()
+            val cancelledWrite = if (cancelEarlier) {
+                async { service.setPathHashModePersisted(1u) }
+            } else {
+                holder.onModeSelected(1u)
+                null
+            }
+            h.eventually("verified Settings event is queued before the actual subscriber can enter the editor") {
+                radioMode() == 1u.toUByte() && ui.pending > 0
+            }
+            assertEquals(savesBefore, saves, "No earlier event has entered any conditional Room writer")
+            assertEquals(before, store.fetchDevice(before.id))
+            assertTrue(service.pathHashModeNeedsRecovery)
+            // A read still uses the real radio lock while the ordinary Settings ACK is pending.
+            assertEquals(1u.toUByte(), service.queryDevice().pathHashMode)
+            if (cancelledWrite != null) {
+                cancelledWrite.cancel()
+                cancelledWrite.join()
+                assertTrue(cancelledWrite.isCancelled)
+            } else {
+                assertTrue(holder.state.value.isApplying)
+            }
+            val configurator = AppStateRadioConfigurator(h.container)
+            val preset = RadioPresets.all.first().copy(
+                id = "queued-after-settings", frequencyMHz = 868.0, bandwidthKHz = 250.0,
+                spreadingFactor = 10u, codingRate = 5u, pathHashSize = 3,
+            )
+            val later = async(start = CoroutineStart.UNDISPATCHED) {
+                configurator.applyPreset(preset, configurator.currentTarget())
+            }
+            h.settle()
+            assertEquals(1u.toUByte(), radioMode(), "The preset cannot overtake the undelivered Settings event")
+            assertFalse(later.isCompleted)
+            assertEquals(savesBefore, saves)
+            ui.resume()
+            later.await()
+            assertFalse(service.pathHashModeNeedsRecovery, "Direct preset persistence must acknowledge its own revision")
+            h.eventually("the actual subscriber drains and the preset is the final durable value") {
+                !holder.state.value.isApplying && h.manager.connectedDevice?.pathHashMode == 2u.toUByte()
+            }
+            h.settle()
+            assertTrue(failures.isEmpty())
+            val saved = assertNotNull(store.fetchDevice(before.id))
+            assertEquals(2u.toUByte(), radioMode())
+            assertEquals(2u.toUByte(), saved.pathHashMode)
+            assertEquals(preset.id, saved.appliedRadioPresetID)
+            assertEquals(preset.frequencyKHz, saved.frequency)
+            assertEquals(saved, h.manager.connectedDevice)
+        }
+    }
+
+    /** Pauses only the actual AppState/UI dispatch; radio and Settings caller scopes remain live. */
+    private class HeldSettingsDispatcher(private val delegate: CoroutineDispatcher) : CoroutineDispatcher() {
+        private val lock = Any()
+        private var paused = false
+        private val queued = mutableListOf<Pair<CoroutineContext, Runnable>>()
+        val pending: Int get() = synchronized(lock) { queued.size }
+        fun pause() = synchronized(lock) { paused = true }
+        fun resume() {
+            val ready = synchronized(lock) {
+                paused = false
+                queued.toList().also { queued.clear() }
+            }
+            ready.forEach { (context, action) -> delegate.dispatch(context, action) }
+        }
+        override fun dispatch(context: CoroutineContext, block: Runnable) {
+            val held = synchronized(lock) {
+                if (paused) { queued += context to block; true } else false
+            }
+            if (!held) delegate.dispatch(context, block)
+        }
     }
 
     @Test fun replacementDrainsAdmittedPresetAndRefusesQueuedOldSettingsWrite() = runTest {
@@ -447,9 +550,10 @@ class SettingsPathHashPersistenceTest : RoomProcessTest() {
     private suspend fun TestScope.withSettings(
         persistence: PersistenceStoreProtocol = store,
         beforeClose: () -> Unit = {},
+        mainScope: CoroutineScope = backgroundScope,
         action: suspend (ContainerHarness, PathHashModeStateHolder, MutableList<Throwable>, () -> UByte) -> Unit,
     ) {
-        val h = ContainerHarness(this, store, persistenceOverride = persistence)
+        val h = ContainerHarness(this, store, persistenceOverride = persistence, mainScope = mainScope)
         var holder: PathHashModeStateHolder? = null
         try {
             val mode = AtomicInteger(0)

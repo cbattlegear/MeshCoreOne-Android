@@ -792,3 +792,54 @@ publication under the runtime monitor, avoiding a token check/use race with exte
 The action cannot suspend and its contract forbids I/O or lifecycle/device operations. JVM monitor
 reentrancy and synchronous observers remain an explicit independent-review concern; the actual
 handler must keep this action bounded to the local flag mutation. No coroutine authority is minted.
+
+### Queued-before-consumer mixed Settings successor
+
+Independent source review rejected c414's reverse-order control: it held the earlier event *inside*
+the editor, not before subscriber delivery. An earlier verified Settings hash could remain queued,
+a later preset could directly persist and return, and then the older event could overwrite Room.
+The same review found that direct preset persistence did not advance its recovery revision.
+c414 and 632a remain immutable; this is a separate source-only successor, not execution evidence.
+
+The callback-bearing preset operation now enqueues an acknowledged `PersistenceBarrier` into the
+same single Settings subscription **before** its newer radio writes. The preset retains the actual
+service operation lock while waiting, so no intervening radio mutation can slip between the fence
+and its callback. The ordinary `setPathHashModePersisted` ACK still waits outside that lock, unchanged.
+The barrier handler does not call any service operation: it awaits the editor's existing FIFO
+`sessionEdits` mutex using the original event token and real generation lease, without saving a row.
+This also drains earlier legacy handlers' UNDISPATCHED-launched editor jobs, not just their delivery.
+After the drain, the preset writes/verifies and awaits metadata under the same radio operation.
+Only a successful real callback advances the exact hash revision that this operation verified;
+the legacy one-argument overload does not pretend an empty callback persisted anything.
+
+Barrier completions participate in existing subscriber replacement/close failure and cancellation
+cleanup. An absent subscriber fails before the callback operation changes the radio. A stale
+barrier cannot recapture a successor as origin authority. No new channel gate or authority is minted.
+The callback and barrier consumer must not reenter operations taking the service's non-reentrant
+mutex. Callback failure/cancellation does not acknowledge the unpersisted hash revision.
+
+New actual-AppState/adapter/Room source controls pause the UI dispatcher before the earlier
+DeviceUpdated and hash events reach the editor, leaving real radio and Settings caller scopes live.
+They require zero conditional saves before release, an ordinary radio read while its ACK is pending,
+no overtaking preset radio or success, final radio/Room/live/preset agreement, and cleared recovery
+after direct success. A cancellation variant cancels the queued ordinary waiter. The existing
+reverse control is corrected to require the fence to drain its held earlier event first.
+Service controls also exercise cancelled and replaced barriers before any radio/callback write.
+These controls are authored, not compiled or executed.
+
+Fresh actual-main 5f4d trusted capability checks admitted SettingsEvent, SettingsService and the
+barrier-only AppState arm as `reviewed-support-consumer/modify-related-consumer`; related tests use
+`reviewed-support-test/add-or-update-related-test`. Producer 244 confirmed no live barrier-arm edit
+and specifically disposed this bounded arm; its separately frozen handler remains unchanged and
+requires explicit new sealed-case composition. No frozen ca657/c477 service blob is imported:
+future composition must retain its `nextRadioRevision()` and all acknowledged/default-scope/Repeat
+changes, transferring only the bounded callback/fence delta.
+
+On this successor's source, same-host `ci.py preflight --local --state <existing Windows state>
+--output <fresh absolute TEMP directory>`, `C:\Python312\python.exe
+.\tools\android-port\controller\validate.py`, `C:\Python312\python.exe
+.\tools\android-port\test_inventory.py --check`, `C:\Python312\python.exe
+.\tools\android-port\portmap.py --repo .` and `git diff --check` all passed.
+This is readiness/source evidence only, not Kotlin compilation, test discovery or execution.
+The shared Gradle execution hold, held canonical dependency, independent composition review and
+publication/activation/dispatch holds remain unchanged.

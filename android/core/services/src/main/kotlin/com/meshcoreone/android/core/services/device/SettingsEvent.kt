@@ -8,6 +8,7 @@ import com.meshcoreone.android.core.protocol.model.SelfInfo
 import kotlinx.coroutines.CompletableDeferred
 
 sealed interface SettingsEvent {
+    data class PersistenceBarrier(val persistence: CompletableDeferred<Unit>) : SettingsEvent
     data class DeviceUpdated(val info: SelfInfo, val appliedRadioPresetID: String?) : SettingsEvent
     data class AutoAddConfigUpdated(val config: AutoAddConfig) : SettingsEvent
     data class ClientRepeatUpdated(val enabled: Boolean) : SettingsEvent

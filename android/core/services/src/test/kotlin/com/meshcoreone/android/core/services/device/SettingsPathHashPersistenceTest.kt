@@ -26,6 +26,61 @@ import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class SettingsPathHashPersistenceTest {
+    @Test fun replacingSubscriberFailsPresetFenceBeforeRadioOrMetadataWrites() = runTest {
+        val fixture = settingsFixture()
+        val subscription = fixture.settings.events()
+        val received = CompletableDeferred<SettingsEvent.PersistenceBarrier>()
+        val collector = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            subscription.events.collect { received.complete(assertIs<SettingsEvent.PersistenceBarrier>(it.event)) }
+        }
+        var metadata = false
+        try {
+            val write = request {
+                fixture.settings.applyRadioPresetVerified(RadioPresets.all.first()) { metadata = true }
+            }
+            assertNotNull(received.await().persistence)
+            assertFalse(write.isCompleted)
+            assertEquals(1, fixture.radio.sent.size)
+            fixture.settings.events().close()
+            runCurrent()
+            val failure = kotlin.test.assertFailsWith<SettingsServiceException> { write.await() }
+            assertEquals(SettingsServiceError.NotConnected, failure.error)
+            assertFalse(metadata)
+            assertEquals(1, fixture.radio.sent.size)
+        } finally {
+            subscription.close()
+            collector.cancel()
+            fixture.close()
+        }
+    }
+
+    @Test fun cancelledPresetFenceCannotWriteRadioOrAcknowledgeRecovery() = runTest {
+        val fixture = settingsFixture()
+        val subscription = fixture.settings.events()
+        val received = CompletableDeferred<SettingsEvent.PersistenceBarrier>()
+        val collector = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            subscription.events.collect { received.complete(assertIs<SettingsEvent.PersistenceBarrier>(it.event)) }
+        }
+        var metadata = false
+        try {
+            val write = backgroundScope.async {
+                fixture.settings.applyRadioPresetVerified(RadioPresets.all.first()) { metadata = true }
+            }
+            val pending = received.await().persistence
+            write.cancel()
+            runCurrent()
+            kotlin.test.assertFailsWith<CancellationException> { write.await() }
+            assertTrue(pending.isCancelled)
+            assertFalse(metadata)
+            assertEquals(1, fixture.radio.sent.size)
+            assertFalse(fixture.settings.pathHashModeNeedsRecovery)
+        } finally {
+            subscription.close()
+            collector.cancel()
+            fixture.close()
+        }
+    }
+
     @Test fun successWaitsForPersistenceWithoutHoldingTheRadioOperationLock() = runTest {
         val fixture = settingsFixture()
         val subscription = fixture.settings.events()

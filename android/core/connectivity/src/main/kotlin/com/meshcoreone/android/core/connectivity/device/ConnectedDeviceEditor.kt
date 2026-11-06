@@ -129,6 +129,20 @@ class ConnectedDeviceEditor(
     suspend fun updatePathHashMode(mode: UByte, expectedToken: SessionToken): Boolean =
         sessionEdit("pathHashMode", expectedToken) { it.copy(pathHashMode = mode) }
 
+    suspend fun awaitDeviceEdits(expectedToken: SessionToken): Boolean {
+        if (!access.requiresGenerationDeviceWriteLease) {
+            return sessionEdits.withLock { access.currentDevice(expectedToken) != null }
+        }
+        val (token, device) = access.captureDeviceWrite() ?: return false
+        if (token != expectedToken) return false
+        return sessionEdits.withLock {
+            access.withDeviceWrite(token, device.id) {
+                val current = access.currentDevice(token)
+                current != null && current.id == device.id && current.radioId == device.radioId
+            } ?: false
+        }
+    }
+
     private suspend fun sessionEdit(
         operation: String,
         expectedToken: SessionToken,

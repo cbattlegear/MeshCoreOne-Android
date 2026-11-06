@@ -558,6 +558,11 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
             try {
                 subscription.events.collect { wrapped ->
                     when (val event = wrapped.event) {
+                        is SettingsEvent.PersistenceBarrier -> {
+                            persistSessionDeviceEdit("settings write barrier", event.persistence) {
+                                connection.awaitDeviceEdits(wrapped.token)
+                            }
+                        }
                         is SettingsEvent.DeviceUpdated -> {
                             val presetId = event.appliedRadioPresetID
                             if (presetId == null) {

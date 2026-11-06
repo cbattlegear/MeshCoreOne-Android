@@ -63,6 +63,8 @@ interface AppConnectionPort {
     fun updatePathHashMode(mode: UByte)
     suspend fun updatePathHashMode(mode: UByte, expectedToken: SessionToken): Boolean =
         throw UnsupportedOperationException("Session-bound path hash replacement is not supported")
+    suspend fun awaitDeviceEdits(expectedToken: SessionToken): Boolean =
+        throw UnsupportedOperationException("Session-bound device edit draining is not supported")
     fun updateDefaultFloodScopeName(name: String?)
     suspend fun updateDefaultFloodScopeName(name: String?, expectedToken: SessionToken): Boolean =
         throw UnsupportedOperationException("Session-bound default-scope updates are not supported")

@@ -40,7 +40,7 @@ tasks.withType<Test>().configureEach {
         showExceptions = true
         showCauses = true
         showStackTraces = true
-        stackTraceFilters = emptySet()
+        stackTraceFilters.clear()
     }
 }
 

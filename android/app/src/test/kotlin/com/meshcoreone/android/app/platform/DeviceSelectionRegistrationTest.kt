@@ -217,7 +217,10 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         }
     }
 
-    private fun mountNavigationShell(h: ContainerHarness, feature: AppSettingsFeature, withOnboarding: Boolean = false) {
+    private fun mountNavigationShell(
+        h: ContainerHarness, feature: AppSettingsFeature, withOnboarding: Boolean = false,
+        includeConnectionRecovery: Boolean = false,
+    ) {
         compose.runOnUiThread {
             h.container.navigation.selectTab(AppTab.SETTINGS)
             compose.activity.setContent {
@@ -226,6 +229,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
                         h.container.navigation, settings = feature,
                         onboarding = if (withOnboarding) requireNotNull(h.container.onboarding).forRerun() else null,
                     )
+                    if (includeConnectionRecovery) AppConnectionRecoveryDialogs(h.container)
                 }
             }
         }
@@ -1418,6 +1422,73 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
                 else onDevice(DiscoveredDevice(replacementId, replacementAddress, "Direct replacement radio", -41))
             }
 
+            private suspend fun TestScope.mountedImmediateDiscoveryReplacement(onboarding: Boolean) {
+                val service = BluetoothScanPairingService()
+                val address = "D2:00:00:00:00:19"
+                val id = DeviceEndpointIdentity.deviceId(address)
+                var starts = 0
+                var stops = 0
+                val scans = BleScanCoordinator(object : BleScanGateway {
+                    override fun startScan(onDevice: (DiscoveredDevice) -> Unit, onFailure: (Throwable) -> Unit) {
+                        starts++
+                        onDevice(DiscoveredDevice(id, address, "Immediate replacement radio", -40))
+                    }
+                    override fun stopScan() { stops++ }
+                })
+                val resolver = compose.activity.contentResolver
+                val previousScale = android.provider.Settings.Global.getFloat(
+                    resolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f,
+                )
+                try {
+                    android.provider.Settings.Global.putFloat(resolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
+                    withSettings(pairingService = service, scans = scans, knownEndpoints = InMemoryKnownEndpointStore()) { h, feature ->
+                        if (onboarding) {
+                            val dependencies = requireNotNull(h.container.onboarding).forRerun()
+                            compose.runOnUiThread {
+                                compose.activity.setContent { MeshCoreTheme(motionScale = 0f) { OnboardingFlow(dependencies, {}) } }
+                            }
+                        } else mount(h, feature)
+                        val first = h.appState.startDeviceScan()
+                        h.eventuallyMounted("first discovery has a mounted scanner") { service.isPresenting.value && starts == 1 }
+                        lateinit var replacement: kotlinx.coroutines.Job
+                        compose.runOnUiThread {
+                            first.cancel()
+                            h.settle()
+                            assertTrue(first.isCompleted)
+                            assertFalse(service.isPresenting.value)
+                            replacement = h.appState.startDeviceScan()
+                            h.settle()
+                            assertTrue(service.isPresenting.value)
+                        }
+                        h.eventuallyMounted("same composed picker switches to replacement discovery") {
+                            starts == 2 && compose.onAllNodesWithText("Immediate replacement radio").fetchSemanticsNodes().size == 1
+                        }
+                        assertEquals(1, stops)
+                        assertTrue(replacement.isActive)
+                        assertTrue(h.appState.connectionUI.isBusy)
+                        compose.onNodeWithText("Immediate replacement radio").performClick()
+                        h.eventually("replacement can connect through the unchanged picker", virtualBudgetMillis = 3_000) {
+                            compose.waitForIdle()
+                            h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY &&
+                                replacement.isCompleted
+                        }
+                        assertEquals(id, h.manager.connectedDevice?.id)
+                        assertEquals(2, starts)
+                        assertEquals(2, stops)
+                    }
+                } finally {
+                    android.provider.Settings.Global.putFloat(resolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, previousScale)
+                }
+            }
+
+            @Test fun settingsPickerReattachesWhenImmediateReplacementConflatesRequestedState() = runTest {
+                mountedImmediateDiscoveryReplacement(onboarding = false)
+            }
+
+            @Test fun onboardingPickerReattachesWhenImmediateReplacementConflatesRequestedState() = runTest {
+                mountedImmediateDiscoveryReplacement(onboarding = true)
+            }
+
             override fun stopScan() { stops++ }
         })
         withSettings(pairingService = service, scans = scans, knownEndpoints = endpoints) { h, _ ->
@@ -2163,7 +2234,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         }
     }
 
-    private suspend fun TestScope.removeAndRetryScanFailureControl(switchAway: Boolean) {
+    private suspend fun TestScope.removeAndRetryScanFailureControl(switchAway: Boolean, retainedSetup: Boolean = false) {
         val facts = FakePermissionFacts(
             sdk = 31, granted = setOf(ConnectivityPermission.BLUETOOTH_CONNECT),
         )
@@ -2186,9 +2257,27 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             )
             val device = saved(h)
             h.links.configureRadio = { it.connectFailure = BleTransportException(BleError.AuthenticationFailed) }
-            mount(h, feature, includeConnectionRecovery = true)
+            if (retainedSetup) mountNavigationShell(h, feature, withOnboarding = true, includeConnectionRecovery = true)
+            else mount(h, feature, includeConnectionRecovery = true)
             open(h)
             compose.onNodeWithText(device.nodeName).performClick()
+            if (retainedSetup) {
+                compose.runOnUiThread {
+                    h.container.navigation.navigateToSetting(
+                        com.meshcoreone.android.app.navigation.SettingsDetail.SUPPORT,
+                    )
+                }
+            }
+            val settingsStack = h.container.navigation.state.value.stacks.getValue(AppTab.SETTINGS)
+            if (retainedSetup) {
+                compose.runOnUiThread {
+                    h.container.navigation.navigate(com.meshcoreone.android.core.contracts.FeatureRoute(
+                        com.meshcoreone.android.core.contracts.FeatureId.ONBOARDING,
+                    ))
+                }
+                assertTrue(h.container.navigation.state.value.activeStack.last().destination is
+                    com.meshcoreone.android.app.navigation.NavigationDestination.Auxiliary)
+            }
             if (switchAway) {
                 compose.runOnUiThread { h.container.navigation.selectTab(AppTab.CHATS) }
                 compose.waitForIdle()
@@ -2202,6 +2291,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
 
             compose.onNodeWithText(compose.activity.getString(L.alertConnectionFailedRemoveAndRetry)).performClick()
             assertEquals(AppTab.SETTINGS, h.container.navigation.state.value.selectedTab)
+            if (retainedSetup) assertEquals(settingsStack, h.container.navigation.state.value.activeStack)
             h.eventuallyMounted("direct retry requests scan permission while pairing is active") {
                 feature.selectionRequestedPermission.value == OnboardingPermissionKind.BLUETOOTH &&
                     service.isPresenting.value
@@ -2236,6 +2326,19 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
 
     @Test fun savedFailureAfterLeavingSettingsRoutesRemoveAndRetryBackToItsPickerHost() = runTest {
         removeAndRetryScanFailureControl(switchAway = true)
+    }
+
+    @Test fun savedFailureRecoveryRemovesRetainedSetupRouteBeforeRequestingScanPermission() = runTest {
+        val resolver = compose.activity.contentResolver
+        val previousScale = android.provider.Settings.Global.getFloat(
+            resolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 1f,
+        )
+        try {
+            android.provider.Settings.Global.putFloat(resolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
+            removeAndRetryScanFailureControl(switchAway = true, retainedSetup = true)
+        } finally {
+            android.provider.Settings.Global.putFloat(resolver, android.provider.Settings.Global.ANIMATOR_DURATION_SCALE, previousScale)
+        }
     }
 
     @Test fun savedOtherAppFailureUsesTheDistinctWarningWithoutForgetting() = runTest {

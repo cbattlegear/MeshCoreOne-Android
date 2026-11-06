@@ -28,6 +28,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -49,6 +51,7 @@ class ScanFallbackPort(
     override val isRequested: StateFlow<Boolean> get() = service.isPresenting
     private val selectionLock = Any()
     private var activeAttempt: DiscoveryAttempt? = null
+    private val discoveryAttempt = MutableStateFlow<DiscoveryAttempt?>(null)
     private var nextAttemptId = 0L
     private val endpointWriteLock = Mutex()
 
@@ -61,6 +64,7 @@ class ScanFallbackPort(
             val previousJobs = activeAttempt?.let(::retireAttempt)
             val attempt = DiscoveryAttempt(++nextAttemptId, discoveryJob, onSelectionCommitted)
             activeAttempt = attempt
+            discoveryAttempt.value = attempt
             attempt.generation to previousJobs
         }
         cancel(previousJobs)
@@ -75,17 +79,13 @@ class ScanFallbackPort(
         cancel(jobs)
     }
 
-    override fun discoveries(): Flow<List<OnboardingScanDiscovery>> = channelFlow {
-        val (attempt, staleJobs) = synchronized(selectionLock) {
-            val current = activeAttempt
-            if (current != null && current.active && current.discoveryJob?.isActive != false) {
-                current to null
-            } else {
-                val staleJobs = current?.let(::retireAttempt)
-                DiscoveryAttempt(++nextAttemptId, null).also { activeAttempt = it } to staleJobs
-            }
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    override fun discoveries(): Flow<List<OnboardingScanDiscovery>> =
+        discoveryAttempt.flatMapLatest { attempt ->
+            if (attempt == null) flowOf(emptyList()) else discoveries(attempt)
         }
-        cancel(staleJobs)
+
+    private fun discoveries(attempt: DiscoveryAttempt): Flow<List<OnboardingScanDiscovery>> = channelFlow {
         val scanJob = synchronized(selectionLock) {
             if (activeAttempt !== attempt || !attempt.active || attempt.discoveryJob?.isActive == false) null
             else {
@@ -212,6 +212,7 @@ class ScanFallbackPort(
                             attempt.selectionJob = null
                             attempt.scanJob?.cancel()
                             activeAttempt = null
+                            discoveryAttempt.value = null
                             attempt.endpoints.remove(id)
                             attempt.onSelectionCommitted()
                             service.select(id)
@@ -240,6 +241,7 @@ class ScanFallbackPort(
                     attempt.active = false
                     attempt.selectionJob = null
                     activeAttempt = null
+                    discoveryAttempt.value = null
                     service.fail(failure)
                     true
                 }
@@ -265,7 +267,10 @@ class ScanFallbackPort(
         val jobs = AttemptJobs(attempt.selectionJob, attempt.scanJob)
         attempt.selectionJob = null
         attempt.scanJob = null
-        if (activeAttempt === attempt) activeAttempt = null
+        if (activeAttempt === attempt) {
+            activeAttempt = null
+            discoveryAttempt.value = null
+        }
         attempt.scanResult.complete(null)
         return jobs
     }

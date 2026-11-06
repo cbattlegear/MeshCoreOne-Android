@@ -17,7 +17,6 @@ import androidx.compose.ui.semantics.semantics
 import com.meshcoreone.android.app.state.AppState
 import com.meshcoreone.android.app.state.ConnectionUiSnapshot
 import com.meshcoreone.android.app.state.PairingFailureKind
-import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as S
 import com.meshcoreone.android.core.ui.uiString
 import kotlinx.coroutines.launch
@@ -27,7 +26,7 @@ fun AppConnectionRecoveryDialogs(container: AppContainer) {
     AppConnectionRecoveryDialogs(container.appState) {
         val onboarding = container.onboarding
         if (onboarding?.pairing?.scanFallback != null && onboarding.hasCompleted.value) {
-            container.navigation.selectTab(AppTab.SETTINGS)
+            container.navigation.showSettingsPairingRecovery()
         }
     }
 }

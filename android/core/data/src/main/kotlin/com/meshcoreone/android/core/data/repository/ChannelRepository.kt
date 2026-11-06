@@ -6,6 +6,8 @@ import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.database.*
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
+import com.meshcoreone.android.core.protocol.session.MeshCoreSession
+import com.meshcoreone.android.core.runtime.ConnectionManager
 import java.time.Instant
 import java.util.UUID
 
@@ -14,6 +16,50 @@ internal class ChannelRepository(
     private val rooms: RoomRepository,
     private val identityScope: ChannelIdentityWriteScope? = null,
 ) : ChannelPersisting, ChannelOccupantAuthority {
+    internal suspend fun reconcileChannelOccupant(
+        manager: ConnectionManager,
+        token: SessionToken,
+        session: MeshCoreSession,
+        channelIndex: UByte,
+    ): String = withChannelOperation { _, scope ->
+        manager.withChannelOperationLease(token, session, token.radioId, scope) { lease ->
+            val captured = context.read("captureChannelOccupant") {
+                verifyChannelOccupantStorage()
+                val rows = database.channels().forIndex(token.radioId.value, channelIndex.toLong())
+                val row = rows.singleOrNull()
+                val authority = database.channelOccupantAuthorities().forSlot(token.radioId.value, channelIndex.toLong())
+                if (row == null || !row.isEnabled || authority == null) {
+                    throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+                }
+                row to authority.epoch
+            }
+            val info = lease.readChannel(channelIndex)
+            lease.withChannelIdentityMutation(token.radioId) {
+                context.write("reconcileChannelOccupant") {
+                    verifyChannelOccupantStorage()
+                    val rows = database.channels().forIndex(token.radioId.value, channelIndex.toLong())
+                    val row = rows.singleOrNull()
+                    val authority = database.channelOccupantAuthorities().forSlot(token.radioId.value, channelIndex.toLong())
+                    if (row == null || !row.isEnabled || row.id != captured.first.id ||
+                        row.secret != captured.first.secret || authority?.epoch != captured.second ||
+                        info.index != channelIndex || info.secret != row.secret) {
+                        throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+                    }
+                    val affected = database.channelOccupantAuthorities().resolveCurrent(
+                        token.radioId.value, channelIndex.toLong(), captured.second, row.id, row.secret,
+                    )
+                    if (affected != 1) throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+                    val resolved = database.channelOccupantAuthorities().forSlot(token.radioId.value, channelIndex.toLong())
+                        ?: throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+                    if (resolved.epoch != captured.second || !resolved.isResolved || resolved.boundRowId != row.id) {
+                        throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+                    }
+                    resolved.epoch
+                }
+            }
+        }
+    }
+
     override suspend fun fetchChannelOccupantEpoch(radioId: RadioId, channelIndex: UByte): String? =
         context.read("fetchChannelOccupantEpoch") {
             verifyChannelOccupantStorage()

@@ -6,6 +6,10 @@ package com.meshcoreone.android.core.data.runtime
 import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.data.repository.RepositoryTest
 import com.meshcoreone.android.core.data.repository.OriginalCase
+import com.meshcoreone.android.core.data.backup.AppBackupService
+import com.meshcoreone.android.core.data.backup.envelope
+import com.meshcoreone.android.core.datastore.MeshCoreStorage
+import com.meshcoreone.android.core.database.toEntity
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
@@ -152,12 +156,142 @@ class ConnectionRuntimeRoomIntegrationTest : RepositoryTest() {
         } finally { h.manager.close() }
     }
 
+    @Test
+    fun actualManagerAndProtocolQueryResolveStorageThenActualBackupInvalidatesWithoutLosingText() = runTest(scheduler) {
+        val h = Harness(this)
+        val preferences = MeshCoreStorage.get(context)
+        try {
+            h.manager.connect(h.target)
+            val inputs = h.latestInputs.connection
+            val row = ChannelDTO(
+                radioId = inputs.token.radioId, index = 2u, name = "custom metadata",
+                secret = Bytes(ByteArray(16) { 1 }), isFavorite = true, unreadCount = 8,
+            )
+            store.saveChannel(row)
+            val initial = assertNotNull(db.channelOccupantAuthorities().forSlot(row.radioId.value, 2L))
+            assertFalse(initial.isResolved)
+            assertNull(store.fetchChannelOccupantEpoch(row.radioId, row.index))
+            val epoch = store.reconcileChannelOccupant(h.manager, inputs.token, inputs.session, row.index)
+            assertEquals(initial.epoch, epoch)
+            assertEquals(epoch, store.fetchChannelOccupantEpoch(row.radioId, row.index))
+            assertEquals(1, h.radios.single().channelReads)
+            val resolved = assertNotNull(db.channelOccupantAuthorities().forSlot(row.radioId.value, 2L))
+            assertTrue(resolved.isResolved)
+            assertEquals(row.id, resolved.boundRowId)
+            assertEquals(row, store.fetchChannel(EntityKey(row.radioId, row.id)))
+            val text = MessageDTO(
+                radioId = row.radioId, channelIndex = row.index, text = "retained original user text",
+                timestamp = 1_704_067_200u, createdAt = AT, status = MessageStatus.FAILED,
+            )
+            val pending = PendingSendDTO(
+                UUID.randomUUID(), row.radioId, text.id, PendingSendKind.CHANNEL, null, row.index,
+                false, text.text, text.timestamp, null, 0, AT, attemptCount = 0,
+            )
+            store.saveMessage(text)
+            store.upsertPendingSend(pending)
+            AppBackupService(preferences.backupPreferences, "1.0", "1", clock).importBackup(
+                envelope(devices = listOf(assertNotNull(h.manager.connectedDevice)), channels = listOf(row)), store,
+            )
+            val invalidated = assertNotNull(db.channelOccupantAuthorities().forSlot(row.radioId.value, 2L))
+            assertNotEquals(epoch, invalidated.epoch)
+            assertFalse(invalidated.isResolved)
+            assertNull(invalidated.boundRowId)
+            repeat(3) {
+                store.saveChannel(row.copy(id = UUID.randomUUID()))
+                assertEquals(invalidated, db.channelOccupantAuthorities().forSlot(row.radioId.value, 2L))
+                assertNull(store.fetchChannelOccupantEpoch(row.radioId, row.index))
+                assertEquals(row, store.fetchChannel(EntityKey(row.radioId, row.id)))
+                assertEquals(text, store.fetchMessage(EntityKey(row.radioId, text.id)))
+                assertEquals(listOf(pending), store.fetchPendingSendsForMessage(EntityKey(row.radioId, text.id)).toList())
+            }
+        } finally {
+            h.manager.close()
+            preferences.close()
+        }
+    }
+
+    @Test
+    fun actualWireKeyMismatchAndRawAbaDuringTheQueryRefuseResolutionWithoutOverwritingStoredData() = runTest(scheduler) {
+        val h = Harness(this)
+        try {
+            h.manager.connect(h.target)
+            val inputs = h.latestInputs.connection
+            val row = ChannelDTO(
+                radioId = inputs.token.radioId, index = 2u, name = "original",
+                secret = Bytes(ByteArray(16) { 1 }),
+            )
+            store.saveChannel(row)
+            val before = assertNotNull(db.channelOccupantAuthorities().forSlot(row.radioId.value, 2L))
+            h.radios.single().channelSecret = Bytes(ByteArray(16) { 2 })
+            val mismatch = assertFailsWith<PersistenceStoreException> {
+                store.reconcileChannelOccupant(h.manager, inputs.token, inputs.session, row.index)
+            }
+            assertEquals(PersistenceStoreError.InvalidData, mismatch.error)
+            assertEquals(before, db.channelOccupantAuthorities().forSlot(row.radioId.value, 2L))
+            assertEquals(row, store.fetchChannel(EntityKey(row.radioId, row.id)))
+            h.radios.single().channelSecret = row.secret
+            h.radios.single().beforeChannelReply = {
+                db.channels().upsert(row.copy(secret = Bytes(ByteArray(16) { 3 })).toEntity())
+                db.channels().upsert(row.toEntity())
+            }
+            val aba = assertFailsWith<PersistenceStoreException> {
+                store.reconcileChannelOccupant(h.manager, inputs.token, inputs.session, row.index)
+            }
+            assertEquals(PersistenceStoreError.InvalidData, aba.error)
+            val invalidated = assertNotNull(db.channelOccupantAuthorities().forSlot(row.radioId.value, 2L))
+            assertNotEquals(before.epoch, invalidated.epoch)
+            assertFalse(invalidated.isResolved)
+            assertNull(invalidated.boundRowId)
+            assertEquals(row, store.fetchChannel(EntityKey(row.radioId, row.id)))
+            assertNull(store.fetchChannelOccupantEpoch(row.radioId, row.index))
+        } finally { h.manager.close() }
+    }
+
+    @Test
+    fun actualRetirementWaitsForTheProtocolQueryAndRoomResolutionThenRejectsTheRetiredConnection() = runTest(scheduler) {
+        val h = Harness(this)
+        try {
+            h.manager.connect(h.target)
+            val inputs = h.latestInputs.connection
+            val row = ChannelDTO(radioId = inputs.token.radioId, index = 2u, name = "local",
+                secret = Bytes(ByteArray(16) { 1 }))
+            store.saveChannel(row)
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            h.radios.single().beforeChannelReply = {
+                entered.complete(Unit)
+                release.await()
+            }
+            val resolving = backgroundScope.async {
+                store.reconcileChannelOccupant(h.manager, inputs.token, inputs.session, row.index)
+            }
+            entered.await()
+            val retiring = backgroundScope.async { h.manager.disconnect() }
+            runCurrent()
+            assertFalse(retiring.isCompleted)
+            assertEquals(0, h.radios.single().closes)
+            release.complete(Unit)
+            val epoch = resolving.await()
+            assertTrue(retiring.await().isComplete)
+            assertEquals(epoch, store.fetchChannelOccupantEpoch(row.radioId, row.index))
+            assertTrue(assertNotNull(db.channelOccupantAuthorities().forSlot(row.radioId.value, 2L)).isResolved)
+            assertEquals(1, h.radios.single().closes)
+            val reads = h.radios.single().channelReads
+            assertFailsWith<IllegalStateException> {
+                store.reconcileChannelOccupant(h.manager, inputs.token, inputs.session, row.index)
+            }
+            assertEquals(reads, h.radios.single().channelReads)
+            assertEquals(epoch, store.fetchChannelOccupantEpoch(row.radioId, row.index))
+        } finally { h.manager.close() }
+    }
+
     private inner class Harness(test: TestScope) {
         val target = ConnectionTarget.Bluetooth(BluetoothPairingHandle(BluetoothAddress("C0:00:00:00:00:02"), null), UUID.randomUUID())
         val preferences = mutableMapOf<String, RuntimePreferenceValue>()
         val hydrated = mutableListOf<SnapshotList<PendingSendDTO>>()
         val radios = mutableListOf<Radio>()
         val scopes = mutableListOf<Job>()
+        lateinit var latestInputs: RuntimeServiceInputs
         var platformActivations = 0
         private val runtimeClock = object : RuntimeClock {
             override val elapsed get() = scheduler.currentTime.milliseconds
@@ -202,6 +336,7 @@ class ConnectionRuntimeRoomIntegrationTest : RepositoryTest() {
                 }
             },
             RuntimeServiceFactory { inputs, ownership ->
+                latestInputs = inputs
                 scopes += checkNotNull(inputs.connection.scope.coroutineContext[Job])
                 val service = object : RuntimeServices {
                     override val token = inputs.connection.token
@@ -238,6 +373,9 @@ class ConnectionRuntimeRoomIntegrationTest : RepositoryTest() {
         private var incoming = Channel<Bytes>(Channel.UNLIMITED)
         var closes = 0
         var readers = 0
+        var channelReads = 0
+        var channelSecret = Bytes(ByteArray(16) { 1 })
+        var beforeChannelReply: suspend () -> Unit = {}
         override suspend fun isConnected() = connected
         override suspend fun connect() { if (!connected) { connected = true; incoming = Channel(Channel.UNLIMITED) } }
         override suspend fun disconnect() { if (connected) { connected = false; closes++; incoming.close() } }
@@ -260,6 +398,12 @@ class ConnectionRuntimeRoomIntegrationTest : RepositoryTest() {
                 0x3b -> Bytes.of(0x19, 0, 0)
                 5 -> Bytes.of(9) + le32(AT.epochSecond)
                 6 -> Bytes.of(0)
+                0x1f -> {
+                    channelReads++
+                    beforeChannelReply()
+                    Bytes.of(18, data[1].toInt() and 255) +
+                        Bytes.utf8("actual radio name").paddedOrTruncated(32) + channelSecret
+                }
                 else -> throw AssertionError("Unexpected runtime packet ${data.hexString}")
             }
             incoming.send(response)

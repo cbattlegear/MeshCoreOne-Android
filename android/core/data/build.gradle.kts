@@ -9,6 +9,7 @@ dependencies {
     implementation(project(":core:protocol"))
     implementation(project(":core:model"))
     implementation(project(":core:contracts"))
+    implementation(project(":core:runtime"))
     implementation(project(":core:database"))
     implementation(project(":core:datastore"))
     implementation(libs.androidx.room.runtime)

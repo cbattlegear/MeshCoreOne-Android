@@ -10,6 +10,8 @@ import com.meshcoreone.android.core.database.toEntity
 import com.meshcoreone.android.core.data.backup.snapshotBackupKey
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.session.MeshCoreSession
+import com.meshcoreone.android.core.runtime.ConnectionManager
 import java.time.Clock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.currentCoroutineContext
@@ -44,6 +46,13 @@ class RoomPersistenceStore private constructor(
     ) : this(RoomRepositoryContext(database, clock, scope, reporter))
 
     val channelReactionTargetAuthority: ChannelReactionTargetAuthority get() = this
+
+    internal suspend fun reconcileChannelOccupant(
+        manager: ConnectionManager,
+        token: SessionToken,
+        session: MeshCoreSession,
+        channelIndex: UByte,
+    ): String = channels.reconcileChannelOccupant(manager, token, session, channelIndex)
 
     override suspend fun fetchMessage(deduplicationKey: String, radioId: RadioId): MessageDTO? =
         messages.fetchMessage(deduplicationKey, radioId)

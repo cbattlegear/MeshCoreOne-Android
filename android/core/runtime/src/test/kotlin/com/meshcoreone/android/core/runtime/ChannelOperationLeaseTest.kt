@@ -71,6 +71,15 @@ class ChannelOperationLeaseTest {
                         }.await()
                         assertFailsWith<IllegalStateException> { manager.disconnect() }
                         assertFailsWith<IllegalStateException> { manager.close() }
+                        assertFailsWith<IllegalStateException> { manager.teardownSessionForReconnect() }
+                        assertFailsWith<IllegalStateException> { manager.rebuildSession(platform.target.deviceId) }
+                        assertFailsWith<IllegalStateException> { manager.disconnectTransport() }
+                        assertFailsWith<IllegalStateException> { manager.disconnectTransport(requireComplete = true) }
+                        assertFailsWith<IllegalStateException> { manager.handleReconnectionFailure() }
+                        assertFailsWith<IllegalStateException> { manager.awaitShutdown() }
+                        assertEquals(DeviceConnectionState.READY, manager.connectionState)
+                        assertEquals(0, services.single().teardowns)
+                        lease.withChannelIdentityMutation(inputs.token.radioId) { Unit }
                         assertFailsWith<IllegalStateException> {
                             manager.withChannelOperationLease(inputs.token, inputs.session, inputs.token.radioId, scope) {
                                 fail("Recursive lease admitted")

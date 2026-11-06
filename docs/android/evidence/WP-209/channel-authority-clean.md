@@ -110,8 +110,7 @@ unresolved authority must be witnessed as persisted state, not inferred only
 from a null public lookup.
 
 Missing work: the producer's real schema export and composed execution;
-guarded reconciliation bound to the actual WP-207 manager/session lease, without
-inventing an issuer; adapt the real simulator reconnect controls to the selected
+adapt the real simulator reconnect controls to the selected
 opaque-epoch contract, preserving customized metadata and history/pending.
 Database producer controls cover raw-writer, ABA and migration storage semantics,
 but do not prove all-writer dispatch exclusion. Any runtime activation remains
@@ -147,9 +146,39 @@ both replacement and disconnect drain, and exceptional/cancelled release.
 These controls are authored only, not executed.
 
 No App factory/service activation consumes this new method. The data module's
-concrete guarded-reconciliation bridge still requires architectural review of
-the directly admitted production data-to-runtime edge; there is no runtime-to-
-data dependency cycle. The existing test dependency is not production approval.
+production data-to-runtime edge was subsequently reviewed and explicitly accepted
+by the coordinator under the trusted `update-directly-required-build-wiring`
+capability. Runtime production depends only on protocol/model/contracts; there
+is no runtime-to-data cycle. Actual Gradle graph verification and the required
+full hosted build remain pending, not inferred from source inspection or the
+pre-existing test dependency.
+
+The data-internal reconciliation entry acquires process operation, then the
+genuine manager lease, captures a unique enabled stored row and epoch, performs
+`GET_CHANNEL` on that lease's actual `MeshCoreSession`, and enters lease-owned
+identity exclusion followed by the existing awaited Room transaction. The
+transaction refuses changed epochs, duplicates, disabled/replaced rows and
+wire-key/index mismatches before resolution. It does not create occupants or
+overwrite metadata/secret/row ID, and a count alone is not treated as proof:
+the resolved epoch/binding/state are checked again in the same transaction.
+Its locks and counted permit surround the awaited worker's terminal commit or
+rollback; no scope is passed to the foreign worker Job as authority.
+
+Three additional real-manager/protocol/Room controls use the existing
+`ConnectionRuntimeRoomIntegrationTest` harness: actual wire resolution followed
+by actual backup invalidation with original text/pending preservation, wire-key
+mismatch and raw-DAO ABA during the query refusing resolution, and retirement
+waiting for query plus Room completion before transport teardown. They are
+unexecuted and establish no original-message receive provenance or protection
+from out-of-band physical radio configuration changes.
+
+Independent bounded source review of `594deb` found a self-drain deadlock in
+additional public reconnect/transport teardown entrypoints. The successor adds
+the same no-self-retirement guard before their state changes, the rebuild helper,
+shutdown wait, and shared generation-close boundary. The callback control checks
+all these entrypoints refuse immediately while state/teardown stay unchanged,
+then verifies the genuine lease is still usable. No reviewer approval or runtime
+execution is inferred from this correction.
 
 ## Source validation status
 

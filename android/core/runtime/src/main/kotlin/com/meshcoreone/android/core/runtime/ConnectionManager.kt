@@ -8,6 +8,7 @@ import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
 import com.meshcoreone.android.core.protocol.event.ConnectionState
+import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.protocol.event.FrequencyRange
 import com.meshcoreone.android.core.protocol.session.MeshCoreSession
 import com.meshcoreone.android.core.protocol.session.SessionClock
@@ -107,6 +108,16 @@ class ConnectionManager(
         internal val ownerJob: Job,
     ) {
         val radioId: RadioId get() = token.radioId
+
+        suspend fun readChannel(index: UByte): ChannelInfo {
+            manager.requireChannelLease(this, radioId)
+            synchronized(manager.lock) {
+                check(manager.isCurrent(generation) && !generation.channelOperationsRetired) {
+                    "A retired channel operation cannot start another protocol query"
+                }
+            }
+            return session.getChannel(index)
+        }
 
         suspend fun <T> withChannelIdentityMutation(radioId: RadioId, block: suspend () -> T): T =
             manager.withChannelLeaseIdentity(this, radioId, block)
@@ -966,6 +977,7 @@ class ConnectionManager(
     }
 
     override suspend fun teardownSessionForReconnect() {
+        requireNoChannelOperationLease()
         val old = synchronized(lock) {
             active?.also {
                 active = null
@@ -986,6 +998,7 @@ class ConnectionManager(
     }
 
     override suspend fun rebuildSession(deviceId: UUID) {
+        requireNoChannelOperationLease()
         val reentrant = currentCoroutineContext()[RuntimeOperation]?.owner === operationIdentity
         val expectedCoordinator = reconnectionCoordinator.reconnectGeneration
         val expectedRevision = synchronized(lock) { revision }
@@ -1002,6 +1015,7 @@ class ConnectionManager(
         expectedCoordinator: Long,
         reentrant: Boolean,
     ) {
+        requireNoChannelOperationLease()
         synchronized(lock) {
             if (!wantsCurrent(expectedRevision)) throw CancellationException("Superseded rebuild claim")
             if (rebuildDevice != null && rebuildDevice != deviceId) throw CancellationException("Superseded session rebuild")
@@ -1036,6 +1050,7 @@ class ConnectionManager(
     override suspend fun disconnectTransport() = disconnectTransport(requireComplete = false)
 
     suspend fun disconnectTransport(requireComplete: Boolean) {
+        requireNoChannelOperationLease()
         val owner = synchronized(lock) { retained ?: active } ?: return
         val report = (if (requireComplete) revalidateRetainedTeardown(owner) else null) ?: closeGeneration(owner, true)
         synchronized(lock) { if (retained === owner) retained = null; if (active === owner) active = null }
@@ -1067,6 +1082,7 @@ class ConnectionManager(
     }
 
     override suspend fun handleReconnectionFailure() {
+        requireNoChannelOperationLease()
         val expectedCoordinator = reconnectionCoordinator.reconnectGeneration
         val expectedRevision = synchronized(lock) { revision }
         val owner = synchronized(lock) {
@@ -1313,9 +1329,12 @@ class ConnectionManager(
         val except = if (reentrant) synchronized(lock) { pending } else null
         return withContext(NonCancellable) { startShutdown(null, except).await() }
     }
-    suspend fun awaitShutdown(): TeardownReport = withContext(NonCancellable) {
-        val work = synchronized(lock) { shutdown } ?: throw IllegalStateException("Runtime has not shut down")
-        work.await()
+    suspend fun awaitShutdown(): TeardownReport {
+        requireNoChannelOperationLease()
+        return withContext(NonCancellable) {
+            val work = synchronized(lock) { shutdown } ?: throw IllegalStateException("Runtime has not shut down")
+            work.await()
+        }
     }
 
     private fun startShutdown(cause: Throwable?, except: Job? = null): Deferred<TeardownReport> = synchronized(lock) {
@@ -1359,6 +1378,7 @@ class ConnectionManager(
         owner: RadioGeneration, disconnectPhysical: Boolean, primary: Throwable? = null,
         publishDisconnected: Boolean = true,
     ): TeardownReport {
+        requireNoChannelOperationLease()
         synchronized(lock) {
             retireChannelOperationsLocked(owner)
             owner.correlationAccounting?.cancel()

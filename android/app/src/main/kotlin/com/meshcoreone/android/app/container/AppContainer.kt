@@ -278,6 +278,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
             connection = connectionPort,
             scope = dependencies.mainScope,
             session = { sessions.current },
+            sessionOwnershipMonitor = sessions.ownershipMonitor,
             processStore = { dependencies.store },
             draftStore = dependencies.draftStore,
             connectionUi = ConnectionUiState(dependencies.mainScope, dependencies.runtimeClock, dependencies.accessibility),
@@ -388,11 +389,16 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
         return dependencies.mainScope.launch { appState.initialize() }
     }
 
-    /** Reconciles app state on every disconnected edge, covering failures the runtime reports no loss callback for. */
+    /** Reconciles once disconnected state and actual graph withdrawal are both visible. */
     private fun watchDisconnects() {
         dependencies.mainScope.launch {
-            connectionManager.snapshot.map { it.state }.distinctUntilChanged()
-                .filter { it == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.DISCONNECTED }
+            kotlinx.coroutines.flow.combine(
+                connectionManager.snapshot.map { it.state }.distinctUntilChanged(),
+                sessions.currentSessions,
+            ) { state, session -> state to session }
+                .filter { (state, session) ->
+                    state == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.DISCONNECTED && session == null
+                }
                 .collect { appState.reconcileSessionLoss() }
         }
     }

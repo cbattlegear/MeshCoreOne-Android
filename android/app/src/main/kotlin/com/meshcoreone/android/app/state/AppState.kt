@@ -42,6 +42,8 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -94,6 +96,8 @@ class AppStateDependencies(
      */
     val closeChatRoute: () -> Unit = {},
     val themeService: com.meshcoreone.android.core.designsystem.ThemeService? = null,
+    /** Must be the live session provider's publication/withdrawal monitor. */
+    internal val sessionOwnershipMonitor: Any = Any(),
 )
 
 /**
@@ -113,12 +117,15 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
     val messageEventStream: MessageEventStream = deps.messageEventStream
     val messageEventDispatcher = MessageEventDispatcher(this, messageEventStream, scope)
 
-    private val lock = Any()
+    private val lock = deps.sessionOwnershipMonitor
+    internal var afterBatterySourceValidatedForTesting: (() -> Unit)? = null
 
     init {
         batteryMonitor.withCurrentServices = { source, publish ->
             synchronized(lock) {
-                if (services?.batteryServices !== source) throw CancellationException("Battery source has retired")
+                val current = services
+                if (current == null || current.isTornDown || current.batteryServices !== source) throw RetiredBatterySource()
+                afterBatterySourceValidatedForTesting?.invoke()
                 publish()
             }
         }
@@ -584,7 +591,7 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
     }
 
     private fun isCurrentWiring(session: AppSession, revision: Long): Boolean =
-        synchronized(lock) { services === session && settingsEventsRevision == revision }
+        synchronized(lock) { services === session && !session.isTornDown && settingsEventsRevision == revision }
 
     private suspend fun wireSettingsEventStream(session: AppSession, revision: Long): Boolean {
         settingsEventsWiring.lock()
@@ -597,7 +604,7 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
 
     private fun installSettingsEventStream(session: AppSession, revision: Long): Boolean {
         synchronized(lock) {
-            if (services !== session || settingsEventsRevision != revision) return false
+            if (services !== session || session.isTornDown || settingsEventsRevision != revision) return false
             if (settingsEventsSession === session && settingsEventsJob?.isActive == true) return true
         }
         val subscription = session.settingsService.events()
@@ -642,7 +649,7 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
         try {
             onSettingsEventsSubscriptionForTesting?.invoke()
             val previous = synchronized(lock) {
-                if (settingsEventsRevision != revision || services !== session) return false
+                if (settingsEventsRevision != revision || services !== session || session.isTornDown) return false
                 settingsEventsJob.also {
                     settingsEventsJob = next
                     settingsEventsSession = session
@@ -862,9 +869,15 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
         connection.checkSyncHealth()
 
         services?.takeIf { it.transportType != TransportType.SIMULATOR }?.let { session ->
-            batteryMonitor.checkMissedBatteryThreshold(connectedDevice, session.batteryServices)
-            batteryMonitor.startRefreshLoop(session.batteryServices, connectedDevice)
+            try {
+                batteryMonitor.checkMissedBatteryThreshold(connectedDevice, session.batteryServices)
+                currentCoroutineContext().ensureActive()
+                batteryMonitor.startRefreshLoop(session.batteryServices, connectedDevice)
+            } catch (retired: RetiredBatterySource) {
+                currentCoroutineContext().ensureActive()
+            }
         }
+        currentCoroutineContext().ensureActive()
         deps.platform.resumeOfflineMaps()
     }
 

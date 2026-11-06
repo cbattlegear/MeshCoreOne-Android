@@ -112,6 +112,7 @@ class RadioSessionContainer private constructor(
     private val scope: CoroutineScope,
     private val ownership: FactoryOwnership,
     reactionPersistenceMutex: Mutex,
+    private val retirementMonitor: Any,
 ) : RuntimeServices, AppSession {
     override val transportType: TransportType get() = inputs.transportType
     private val logger: Logger = Logger.getLogger("com.mc1.RadioSessionContainer")
@@ -334,7 +335,9 @@ class RadioSessionContainer private constructor(
     private val isClosed: Boolean get() = synchronized(lock) { closed }
 
     /** Whether teardown has started: a closed container accepts no new monitors or services. */
-    val isTornDown: Boolean get() = isClosed
+    override val isTornDown: Boolean get() = isClosed
+    internal var beforeRetirementForTesting: (() -> Unit)? = null
+    internal var afterRetirementForTesting: (suspend () -> Unit)? = null
 
     /** Live coroutines under this graph's supervisor job (leak accounting: zero after teardown). */
     val liveJobCount: Int get() = containerJob.descendants()
@@ -537,11 +540,14 @@ class RadioSessionContainer private constructor(
     }
 
     override suspend fun tearDown(): TeardownReport {
-        val (receipt, claimed) = synchronized(lock) {
-            teardown?.let { it to false } ?: CompletableDeferred<TeardownReport>().also {
-                teardown = it
-                closed = true
-            }.let { it to true }
+        beforeRetirementForTesting?.invoke()
+        val (receipt, claimed) = synchronized(retirementMonitor) {
+            synchronized(lock) {
+                teardown?.let { it to false } ?: CompletableDeferred<TeardownReport>().also {
+                    teardown = it
+                    closed = true
+                }.let { it to true }
+            }
         }
         if (!claimed) return withContext(NonCancellable) { receipt.await() }
         val issues = mutableListOf<TeardownIssue>()
@@ -553,6 +559,7 @@ class RadioSessionContainer private constructor(
             }
         }
         withContext(NonCancellable) {
+            afterRetirementForTesting?.invoke()
             step(LifecycleStage.STOP_SERVICES) { resetSyncState() }
             // Stop the monitors before clearing handlers so the event tasks that read them are cancelled first.
             step(LifecycleStage.STOP_SERVICES) { stopEventMonitoring() }
@@ -607,13 +614,14 @@ class RadioSessionContainer private constructor(
             ownership: FactoryOwnership,
             env: SessionEnvironment,
             reactionPersistenceMutex: Mutex,
+            retirementMonitor: Any = Any(),
         ): RadioSessionContainer {
             val parent = inputs.connection.scope.coroutineContext[Job]
             val job = SupervisorJob(parent)
             val scope = CoroutineScope(inputs.connection.scope.coroutineContext + job)
             ownership.own(LifecycleStage.STOP_SERVICES) { job.cancelAndJoin() }
             val container = RadioSessionContainer(
-                inputs.connection.token, inputs, env, job, scope, ownership, reactionPersistenceMutex,
+                inputs.connection.token, inputs, env, job, scope, ownership, reactionPersistenceMutex, retirementMonitor,
             )
             ownership.register(container)
             env.onSessionLifecycle.created(container)

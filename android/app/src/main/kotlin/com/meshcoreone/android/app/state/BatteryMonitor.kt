@@ -30,6 +30,8 @@ interface BatteryServices {
     suspend fun postLowBatteryNotification(deviceName: String, batteryPercentage: Long)
 }
 
+internal class RetiredBatterySource : CancellationException("Battery source has retired")
+
 /**
  * Device battery polling, threshold checks and low-battery notifications. One bootstrap job and one refresh
  * loop at most: starting again replaces (cancels) the previous job, so a reconnect cannot leave a duplicate
@@ -105,24 +107,29 @@ class BatteryMonitor(
             startRefreshLoop(services, device)
         }
         var installed = false
+        var previous: Job? = null
         try {
             withCurrentServices(services) {
-                synchronized(lock) { bootstrapJob?.cancel(); bootstrapJob = job }
+                previous = synchronized(lock) { bootstrapJob.also { bootstrapJob = job } }
                 installed = true
             }
         } finally {
             if (!installed) job.cancel()
         }
+        previous?.cancel()
         job.start()
         return job
     }
 
     /** Stops monitoring (disconnect or background). */
     fun stop() {
-        synchronized(lock) {
-            bootstrapJob?.cancel(); bootstrapJob = null
-            refreshJob?.cancel(); refreshJob = null
+        val cancelled = synchronized(lock) {
+            listOfNotNull(bootstrapJob, refreshJob).also {
+                bootstrapJob = null
+                refreshJob = null
+            }
         }
+        cancelled.forEach(Job::cancel)
     }
 
     /** Clears notification thresholds for a fresh connection. */
@@ -165,14 +172,16 @@ class BatteryMonitor(
             }
         }
         var installed = false
+        var previous: Job? = null
         try {
             withCurrentServices(services) {
-                synchronized(lock) { refreshJob?.cancel(); refreshJob = job }
+                previous = synchronized(lock) { refreshJob.also { refreshJob = job } }
                 installed = true
             }
         } finally {
             if (!installed) job.cancel()
         }
+        previous?.cancel()
         job.start()
     }
 
@@ -190,9 +199,14 @@ class BatteryMonitor(
         afterBatteryReadForTesting?.invoke(source)
         withCurrentServices(source) {
             context.ensureActive()
-            deviceBattery = info
             if (recordFetch) synchronized(lock) { lastSuccessfulFetch = now() }
-            if (info != null) notifyChanged(info)
+            deviceBattery = info
+            if (info != null) {
+                withCurrentServices(source) {
+                    context.ensureActive()
+                    notifyChanged(info)
+                }
+            }
         }
     }
 

@@ -968,7 +968,7 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
                 session: com.meshcoreone.android.app.state.AppSession, connectedDevice: () -> DeviceDTO?,
             ) { configured += session.token }
         }
-        withSettings(platform = platform) { h, _, _, _ ->
+        withSettings(platform = platform, startProcess = true) { h, _, _, _ ->
             val notifications = configured.size
             val reached = java.util.concurrent.CountDownLatch(1)
             val resume = java.util.concurrent.CountDownLatch(1)
@@ -1065,7 +1065,7 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
                         val firmware = h.links.radios.last()
                         val respond = firmware.respond
                         val incoming = java.util.concurrent.ConcurrentLinkedQueue(listOf(
-                            Bytes.of(0x11, 20, 0, 1, 0, 0, 0) + le32(EPOCH.epochSecond) + Bytes.utf8("Peer: after $stage"),
+                            Bytes.of(0x11, 20, 0, 0, 1, 0, 0) + le32(EPOCH.epochSecond) + Bytes.utf8("Peer: after $stage"),
                         ))
                         firmware.respond = { command ->
                             if (command[0] == 0x0a.toUByte()) listOf(incoming.poll() ?: Bytes.of(0x0a))
@@ -1145,7 +1145,11 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
                     }
                     val outcome = CompletableDeferred<Throwable?>()
                     read.invokeOnCompletion { outcome.complete(it) }
-                    h.eventually("A's $operation read returned before publication") { reached.count == 0L }
+                    h.eventually(
+                        "A's $operation read returned before publication",
+                        virtualBudgetMillis = if (operation.endsWith("-failure")) 6_000 else 1_000,
+                        virtualStepMillis = 10,
+                    ) { reached.count == 0L }
                     h.manager.disconnect()
                     val configure = h.links.configureRadio
                     h.links.configureRadio = { firmware ->
@@ -1184,16 +1188,166 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
         assertEquals(5, completed)
     }
 
-    @Test fun foregroundBatteryReadCannotPublishOrRestartAnOldSourceAfterReplacement() = runTest {
+    @Test fun batteryPublicationAndRegistryWithdrawalShareTheActualOwnershipBoundary() = runTest {
         var completed = 0
-        for (failRead in listOf(false, true)) {
+        for (disposition in listOf("withdraw", "live", "cancel", "retired")) {
             val updates = java.util.concurrent.CopyOnWriteArrayList<Long>()
             val platform = object : com.meshcoreone.android.app.state.AppStatePlatform {
                 override suspend fun onBatteryChanged(battery: com.meshcoreone.android.core.protocol.model.BatteryInfo) {
                     updates += battery.level
                 }
             }
-            withSettings(platform = platform) { h, _, _, _ ->
+            val main = CoroutineScope(backgroundScope.coroutineContext + kotlinx.coroutines.Dispatchers.Default)
+            withSettings(platform = platform, mainScope = main) { h, _, _, _ ->
+                val old = assertNotNull(h.sessions.current)
+                val device = assertNotNull(h.manager.connectedDevice)
+                val monitor = h.appState.batteryMonitor
+                h.eventually("bootstrap finishes before the post-validation boundary") {
+                    monitor.isRefreshLoopActive && monitor.deviceBattery?.level == 3_700L
+                }
+                val firmware = h.links.radios.last()
+                val respond = firmware.respond
+                firmware.respond = { command ->
+                    if (command[0] == 0x14.toUByte()) listOf(Bytes.of(0x0c, 0x3c, 0x0f))
+                    else respond(command)
+                }
+                val reached = java.util.concurrent.CountDownLatch(1)
+                val release = java.util.concurrent.CountDownLatch(1)
+                val armed = java.util.concurrent.atomic.AtomicBoolean(true)
+                val ownerThread = java.util.concurrent.atomic.AtomicReference<Thread>()
+                val withdrawingThread = java.util.concurrent.atomic.AtomicReference<Thread>()
+                val closed = CompletableDeferred<Unit>()
+                val finishTeardown = CompletableDeferred<Unit>()
+                val changed = monitor.onBatteryChanged
+                val reentries = java.util.concurrent.atomic.AtomicInteger()
+                if (disposition == "live") {
+                    monitor.onBatteryChanged = { info ->
+                        if (info.level == 3_900L) {
+                            reentries.incrementAndGet()
+                            monitor.startRefreshLoop(old.batteryServices, device)
+                        }
+                        changed?.invoke(info)
+                    }
+                }
+                val holdRead: () -> Unit = {
+                    if (armed.compareAndSet(true, false)) {
+                        ownerThread.set(Thread.currentThread())
+                        reached.countDown()
+                        assertTrue(release.await(10, java.util.concurrent.TimeUnit.SECONDS))
+                    }
+                }
+                if (disposition == "retired") {
+                    monitor.afterBatteryReadForTesting = { source ->
+                        if (source === old.batteryServices) holdRead()
+                    }
+                    old.afterRetirementForTesting = {
+                        closed.complete(Unit)
+                        finishTeardown.await()
+                    }
+                } else {
+                    h.appState.afterBatterySourceValidatedForTesting = holdRead
+                }
+                try {
+                    val read = backgroundScope.async(kotlinx.coroutines.Dispatchers.Default) {
+                        monitor.fetchDeviceBattery(old.batteryServices, device)
+                    }
+                    h.eventually("A holds the actual post-validation pre-publication phase") { reached.count == 0L }
+                    val teardown = if (disposition == "withdraw" || disposition == "retired") {
+                        old.beforeRetirementForTesting = { withdrawingThread.set(Thread.currentThread()) }
+                        backgroundScope.async(kotlinx.coroutines.Dispatchers.IO) { old.tearDown() }
+                    } else null
+                    if (disposition == "withdraw") {
+                        h.eventually("real graph teardown attempts close admission on another dispatcher") {
+                            withdrawingThread.get() != null
+                        }
+                        h.eventually("close is blocked by the admitted publication, not a separate monitor") {
+                            withdrawingThread.get()?.state == Thread.State.BLOCKED || teardown!!.isCompleted
+                        }
+                        assertFalse(teardown!!.isCompleted)
+                        assertEquals(Thread.State.BLOCKED, withdrawingThread.get().state)
+                        assertTrue(ownerThread.get() !== withdrawingThread.get())
+                    } else if (disposition == "retired") {
+                        h.eventually("actual close is committed while shutdown and withdrawal remain held") { closed.isCompleted }
+                        assertTrue(old.isTornDown)
+                        assertTrue(h.sessions.current === old)
+                        assertFailsWith<kotlinx.coroutines.CancellationException> {
+                            monitor.startRefreshLoop(old.batteryServices, device)
+                        }
+                    }
+                    if (disposition == "cancel") read.cancel()
+                    release.countDown()
+                    h.eventually("the admitted read finishes or propagates real cancellation") { read.isCompleted }
+                    if (disposition == "cancel" || disposition == "retired") {
+                        assertFailsWith<kotlinx.coroutines.CancellationException> { read.await() }
+                        assertEquals(3_700L, monitor.deviceBattery?.level)
+                        assertFalse(updates.contains(3_900L))
+                    } else {
+                        read.await()
+                        assertEquals(3_900L, monitor.deviceBattery?.level)
+                        if (disposition == "live") {
+                            h.eventually("the admitted live value reaches its reentrant callback") { updates.contains(3_900L) }
+                            assertEquals(1, reentries.get())
+                        }
+                    }
+                    finishTeardown.complete(Unit)
+                    if (teardown != null) {
+                        h.eventually("withdrawal finishes after publication exits") { teardown.isCompleted }
+                        val report = teardown.await()
+                        assertTrue(report.isComplete, "Unexpected teardown issue: ${report.issues}")
+                        assertNull(h.sessions.current)
+                        h.manager.disconnect()
+                        val configure = h.links.configureRadio
+                        h.links.configureRadio = { next ->
+                            configure(next)
+                            val reply = next.respond
+                            next.respond = { command ->
+                                if (command[0] == 0x14.toUByte()) listOf(Bytes.of(0x0c, 0xa0, 0x0f))
+                                else reply(command)
+                            }
+                        }
+                        h.manager.connect(h.target())
+                        h.eventually("B owns the actual graph, callback and refresh loop after ordered withdrawal") {
+                            h.appState.canRunSettingsStartupReads && h.sessions.current?.let { it !== old } == true &&
+                                monitor.deviceBattery?.level == 4_000L && updates.contains(4_000L) &&
+                                monitor.isRefreshLoopActive
+                        }
+                        assertEquals(4, h.appState.activeSessionJobCount)
+                        assertFailsWith<kotlinx.coroutines.CancellationException> {
+                            monitor.startRefreshLoop(old.batteryServices, device)
+                        }
+                        assertEquals(4_000L, monitor.deviceBattery?.level)
+                        assertTrue(monitor.isRefreshLoopActive)
+                    } else {
+                        assertEquals(old.token, h.sessions.current?.token)
+                        assertTrue(monitor.isRefreshLoopActive)
+                    }
+                    completed++
+                } finally {
+                    h.appState.afterBatterySourceValidatedForTesting = null
+                    monitor.afterBatteryReadForTesting = null
+                    old.beforeRetirementForTesting = null
+                    old.afterRetirementForTesting = null
+                    if (disposition == "live") monitor.onBatteryChanged = changed
+                    release.countDown()
+                    finishTeardown.complete(Unit)
+                }
+            }
+        }
+        assertEquals(4, completed)
+    }
+
+    @Test fun foregroundBatteryReadCannotPublishOrRestartAnOldSourceAfterReplacement() = runTest {
+        var completed = 0
+        for ((failRead, cancelForeground) in listOf(false to false, true to false, false to true, true to true)) {
+            val updates = java.util.concurrent.CopyOnWriteArrayList<Long>()
+            val mapResumptions = java.util.concurrent.atomic.AtomicInteger()
+            val platform = object : com.meshcoreone.android.app.state.AppStatePlatform {
+                override suspend fun onBatteryChanged(battery: com.meshcoreone.android.core.protocol.model.BatteryInfo) {
+                    updates += battery.level
+                }
+                override fun resumeOfflineMaps() { mapResumptions.incrementAndGet() }
+            }
+            withSettings(platform = platform, observeBleLink = true, startProcess = true) { h, _, _, _ ->
                 val old = assertNotNull(h.sessions.current)
                 val monitor = h.appState.batteryMonitor
                 h.eventually("initial battery work completes before the actual foreground read") {
@@ -1211,14 +1365,17 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
                 monitor.afterBatteryReadForTesting = { source ->
                     if (source === old.batteryServices && !reached.isCompleted) {
                         reached.complete(Unit)
-                        resume.await()
+                        kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { resume.await() }
                     }
                 }
                 try {
                     val foreground = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) {
                         h.appState.handleReturnToForeground()
                     }
-                    h.eventually("the foreground continuation awaits A's completed read or ordinary failure") {
+                    h.eventually(
+                        "the foreground continuation awaits A's completed read or ordinary failure",
+                        virtualBudgetMillis = if (failRead) 6_000 else 1_000, virtualStepMillis = 10,
+                    ) {
                         reached.isCompleted
                     }
                     h.manager.disconnect()
@@ -1239,10 +1396,17 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
                     }
                     val current = assertNotNull(h.sessions.current)
                     val updateStart = updates.size
+                    assertEquals(0, mapResumptions.get())
+                    if (cancelForeground) foreground.cancel()
                     resume.complete(Unit)
                     h.eventually("retired foreground publication or restart is refused") { foreground.isCompleted }
-                    assertFailsWith<kotlinx.coroutines.CancellationException> { foreground.await() }
+                    if (cancelForeground) {
+                        assertFailsWith<kotlinx.coroutines.CancellationException> { foreground.await() }
+                    } else {
+                        foreground.await()
+                    }
                     h.settle()
+                    assertEquals(if (cancelForeground) 0 else 1, mapResumptions.get())
                     assertEquals(current.token, h.sessions.current?.token)
                     assertEquals(4_000L, monitor.deviceBattery?.level)
                     assertTrue(updates.drop(updateStart).all { it == 4_000L })
@@ -1255,7 +1419,7 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
                 }
             }
         }
-        assertEquals(2, completed)
+        assertEquals(4, completed)
     }
 
     private suspend fun TestScope.assertConcurrentSettingsWiring(retireDuringInstallation: Boolean) {
@@ -2110,16 +2274,20 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
         firmwareVersion: UByte = 11u,
         platform: com.meshcoreone.android.app.state.AppStatePlatform = com.meshcoreone.android.app.state.AppStatePlatform.NONE,
         mainScope: CoroutineScope? = null,
+        observeBleLink: Boolean = false,
+        startProcess: Boolean = false,
         action: suspend (ContainerHarness, DefaultFloodScopeStateHolder, MutableList<Throwable>, ScopeRadio) -> Unit,
     ) {
         val h = ContainerHarness(
             this, store, persistenceOverride = persistence, platform = platform,
             mainScope = mainScope ?: backgroundScope,
+            observeBleLink = observeBleLink,
         )
         val radio = ScopeRadio().also { it.firmwareVersion = firmwareVersion }
         var holder: DefaultFloodScopeStateHolder? = null
         try {
             h.links.configureRadio = radio::configure
+            if (startProcess) h.container.start().join()
             h.connectForegroundSettings()
             h.eventually("foreground startup and sync finish") {
                 h.sessions.current?.syncCoordinator?.state == SyncState.Synced && h.appState.canRunSettingsStartupReads

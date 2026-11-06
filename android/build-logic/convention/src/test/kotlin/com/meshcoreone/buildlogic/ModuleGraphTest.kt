@@ -63,6 +63,38 @@ class ModuleGraphTest {
     }
 
     @Test
+    fun `Room reconciliation can consume the genuine runtime lease without a production cycle`() {
+        val modules = fixture(":core:data", ":core:runtime", ":core:contracts", ":core:model", ":core:protocol")
+        for (configuration in listOf(
+            "implementation", "debugCompileClasspath", "debugRuntimeClasspath",
+            "releaseCompileClasspath", "releaseRuntimeClasspath",
+        )) modules.getValue(":core:data").edge(":core:runtime", configuration)
+        modules.getValue(":core:runtime").edge(":core:contracts")
+        modules.getValue(":core:runtime").edge(":core:model")
+        modules.getValue(":core:runtime").edge(":core:protocol")
+        assertEquals(emptyList(), violations(modules))
+    }
+
+    @Test
+    fun `runtime cannot depend back on Room or form a production cycle`() {
+        val modules = fixture(":core:data", ":core:runtime")
+        modules.getValue(":core:data").edge(":core:runtime")
+        modules.getValue(":core:runtime").edge(":core:data")
+        val result = violations(modules)
+        assertTrue(result.any { it.startsWith("Unlisted production edge") && it.contains(":core:runtime -> :core:data") })
+        assertTrue(result.any { it.startsWith("Dependency cycle") })
+    }
+
+    @Test
+    fun `Room runtime lease does not authorize concrete runtime dependencies in services`() {
+        val modules = fixture(":core:services", ":core:runtime")
+        modules.getValue(":core:services").edge(":core:runtime")
+        assertTrue(violations(modules).any {
+            it.startsWith("Unlisted production edge") && it.contains(":core:services -> :core:runtime")
+        })
+    }
+
+    @Test
     fun `theme consumer can observe the process-owned preference store`() {
         val modules = fixture(":core:designsystem", ":core:datastore", ":core:model", ":core:l10n", ":core:contracts")
         modules.getValue(":core:designsystem").edge(":core:model")

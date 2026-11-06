@@ -25,7 +25,7 @@ Compose, Room, Bluetooth or concrete runtime/service types in their public API.
 | `core:designsystem` | `core:model`, `core:l10n`, `core:datastore` |
 | `core:database` | `core:model` |
 | `core:datastore` | `core:model`, `core:contracts` |
-| `core:data` | `core:protocol`, `core:model`, `core:contracts`, `core:database`, `core:datastore` |
+| `core:data` | `core:protocol`, `core:model`, `core:contracts`, `core:database`, `core:datastore`, `core:runtime` |
 | `core:ble` | `core:protocol`, `core:model`, `core:contracts` |
 | `core:connectivity` | `core:protocol`, `core:model`, `core:contracts`, `core:ble` |
 | `core:runtime` | `core:protocol`, `core:model`, `core:contracts` |
@@ -45,6 +45,13 @@ No feature-to-feature or feature-to-platform edge is allowed. Shared map code is
 In particular, **runtime never depends on services**, and services never depend on
 runtime/database/data/connectivity. Constructor-injected ports break those cycles.
 Database entities/DAOs do not construct repositories or services.
+
+The coordinator-approved `core:data -> core:runtime` edge lets Room reconciliation
+consume the actual manager-issued lifecycle lease through terminal commit or
+rollback. It does not authorize a reverse runtime-to-data edge, a services-to-runtime
+edge, or a public caller-minted authority substitute. Runtime remains pure JVM
+with only protocol/model/contracts production dependencies; this edge does not
+change the frozen WP dependency DAG or activate the service graph.
 
 A valid construction order is protocol/l10n; model; contracts; database/datastore/
 ble/runtime/services/platform adapters; designsystem; ui/data/connectivity/maps;

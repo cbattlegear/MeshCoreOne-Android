@@ -29,7 +29,7 @@ internal val allowedEdges: Map<String, Set<String>> = buildMap {
     put(":core:designsystem", setOf(":core:model", ":core:l10n", ":core:datastore"))
     put(":core:database", setOf(":core:model"))
     put(":core:datastore", setOf(":core:model", ":core:contracts"))
-    put(":core:data", setOf(":core:protocol", ":core:model", ":core:contracts", ":core:database", ":core:datastore"))
+    put(":core:data", setOf(":core:protocol", ":core:model", ":core:contracts", ":core:database", ":core:datastore", ":core:runtime"))
     put(":core:ble", setOf(":core:protocol", ":core:model", ":core:contracts"))
     put(":core:connectivity", setOf(":core:protocol", ":core:model", ":core:contracts", ":core:ble"))
     put(":core:runtime", setOf(":core:protocol", ":core:model", ":core:contracts"))

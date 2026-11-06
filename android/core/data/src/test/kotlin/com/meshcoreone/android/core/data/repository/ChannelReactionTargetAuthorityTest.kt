@@ -320,7 +320,7 @@ class ChannelReactionTargetAuthorityTest {
         val original = incoming().toEntity()
         db.messages().insert(original)
         val identity = assertNotNull(db.channelReactionIdentities().forMessage(original.radioId, original.id))
-        val failure = IOException("controlled identity rollback")
+        val failure = IdentityRollbackFailure(identity.incarnation)
 
         val actual = assertFailsWith<IOException> {
             db.withTransaction {
@@ -333,6 +333,7 @@ class ChannelReactionTargetAuthorityTest {
         }
 
         assertSame(failure, actual)
+        assertEquals(identity.incarnation, assertIs<IdentityRollbackFailure>(actual).originalIncarnation)
         assertEquals(original, db.messages().byId(original.radioId, original.id))
         assertEquals(identity, db.channelReactionIdentities().forMessage(original.radioId, original.id))
     }
@@ -341,7 +342,7 @@ class ChannelReactionTargetAuthorityTest {
         val original = incoming().toEntity()
         db.messages().insert(original)
         val identity = assertNotNull(db.channelReactionIdentities().forMessage(original.radioId, original.id))
-        val cancellation = CancellationException("controlled identity cancellation")
+        val cancellation = IdentityRollbackCancellation(identity.incarnation)
 
         val actual = assertFailsWith<CancellationException> {
             db.withTransaction {
@@ -358,6 +359,7 @@ class ChannelReactionTargetAuthorityTest {
         }
 
         assertSame(cancellation, actual)
+        assertEquals(identity.incarnation, assertIs<IdentityRollbackCancellation>(actual).originalIncarnation)
         assertEquals(original, db.messages().byId(original.radioId, original.id))
         assertEquals(identity, db.channelReactionIdentities().forMessage(original.radioId, original.id))
     }
@@ -859,7 +861,7 @@ class ChannelReactionTargetAuthorityTest {
         val migrated = rawFileDatabase(migrationName)
         try {
             val sqlite = migrated.openHelper.readableDatabase
-            assertEquals(MeshCoreDatabase.SCHEMA_VERSION, sqlite.version)
+            assertEquals(2, sqlite.version)
             sqlite.query(
                 "SELECT * FROM messages WHERE radioId = ? AND id = ?",
                 arrayOf(legacyRadioId, legacyMessageId),
@@ -915,6 +917,13 @@ class ChannelReactionTargetAuthorityTest {
             context.deleteDatabase(migrationName)
         }
     }
+
+    // Coroutine debug recovery must not clone away the controlled transaction's identity.
+    private class IdentityRollbackFailure(val originalIncarnation: String) :
+        IOException("controlled identity rollback")
+
+    private class IdentityRollbackCancellation(val originalIncarnation: String) :
+        CancellationException("controlled identity cancellation")
 
     private fun rawFileDatabase(fileName: String): MeshCoreDatabase =
         Room.databaseBuilder(context, MeshCoreDatabase::class.java, fileName)

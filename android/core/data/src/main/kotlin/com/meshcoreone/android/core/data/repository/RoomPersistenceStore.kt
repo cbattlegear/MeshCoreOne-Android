@@ -7,6 +7,8 @@ import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.database.toDTO
 import com.meshcoreone.android.core.database.toEntity
+import com.meshcoreone.android.core.data.backup.BackupModelKind
+import com.meshcoreone.android.core.data.backup.ImportResult
 import com.meshcoreone.android.core.data.backup.snapshotBackupKey
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -99,10 +101,16 @@ class RoomPersistenceStore private constructor(
     internal suspend fun <T> withBackupSnapshot(block: suspend (MeshCoreDatabase, Clock) -> T): T =
         context.read("fetchBackupExportSnapshot") { block(database, clock) }
 
-    internal suspend fun <T> withBackupRestore(
+    internal suspend fun withBackupRestore(
         afterCommit: () -> Unit = {},
-        block: suspend (MeshCoreDatabase, Clock) -> T,
-    ): T = context.restoreBackup(afterCommit) { block(database, clock) }
+        block: suspend (MeshCoreDatabase, Clock) -> ImportResult,
+    ): ImportResult = context.restoreBackup(afterCommit) {
+        val result = block(database, clock)
+        if (result.counts.getValue(BackupModelKind.DEVICES).inserted > 0) {
+            devices.stageDeviceAuthorityChange(this)
+        }
+        result
+    }
 
     fun observeContacts(radioId: RadioId): Flow<SnapshotList<ContactDTO>> =
         context.observe("observeContacts", context.database.contacts().observe(radioId.value)) {

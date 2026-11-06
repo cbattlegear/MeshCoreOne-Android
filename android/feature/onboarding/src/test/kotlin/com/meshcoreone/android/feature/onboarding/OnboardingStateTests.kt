@@ -2,12 +2,18 @@
 package com.meshcoreone.android.feature.onboarding
 
 import com.meshcoreone.android.core.contracts.AppTab
+import com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Test
 
@@ -184,6 +190,41 @@ class OnboardingStateTests : SourceCaseProof() {
         val failedOnboarding = OnboardingState(failing)
         assertFailsWith<IllegalStateException> { failedOnboarding.completeOnboarding() }
         assertFalse(failedOnboarding.hasCompletedOnboarding)
+    }
+
+    @Test fun settledCompletionEmissionFollowsClearingTheSynchronousRetryGuard() = runBlocking {
+        val failure = IllegalStateException("write failed")
+        val flags = object : OnboardingFlagStore {
+            override fun getBoolean(key: String) = false
+            override fun setBoolean(key: String, value: Boolean) = Unit
+            override suspend fun persistBoolean(
+                key: String,
+                value: Boolean,
+                requireCurrent: () -> Unit,
+                seal: (OnboardingCompletionAttempt) -> Boolean,
+                attempt: OnboardingCompletionAttempt,
+                onFinished: (Result<Unit>) -> Unit,
+            ) {
+                onFinished(Result.failure(failure))
+                throw failure
+            }
+        }
+        val onboarding = OnboardingState(flags)
+        var observedSettling = false
+        var retryReadyWhenSettled: Boolean? = null
+        val collector = CoroutineScope(Dispatchers.Unconfined).launch {
+            onboarding.unsettledCompletionFlow.collect { unsettled ->
+                if (unsettled) observedSettling = true
+                else if (observedSettling) retryReadyWhenSettled = onboarding.canStartCompletion()
+            }
+        }
+
+        try {
+            assertFailsWith<IllegalStateException> { onboarding.completeOnboarding() }
+            assertEquals(true, retryReadyWhenSettled)
+        } finally {
+            collector.cancel()
+        }
     }
 
     @Test fun failedTipDonationRetainsPendingStateForRetry() = runBlocking {

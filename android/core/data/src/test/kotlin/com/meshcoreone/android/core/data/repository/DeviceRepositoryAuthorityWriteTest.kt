@@ -107,6 +107,35 @@ class DeviceRepositoryAuthorityWriteTest : RepositoryTest() {
         assertEquals(canonical.copy(nodeName = "Fresh edit"), repository.fetchDevice(canonical.id))
     }
 
+    @Test fun committedAuthorityWriteInvalidatesTicketBeforeFailingAfterCommitCallback() = runTest(scheduler) {
+        val canonical = device(
+            radio = RADIO_A,
+            id = UUID.fromString("00000000-0000-0000-0000-000000000251"),
+        ).copy(publicKey = key(0x49), nodeName = "Canonical")
+        val ghost = device(
+            radio = RADIO_B,
+            id = UUID.fromString("00000000-0000-0000-0000-000000000252"),
+        ).copy(publicKey = key(0x4A), nodeName = "Restored")
+        repository.saveDevice(canonical)
+        repository.saveDevice(ghost)
+        val ticket = assertNotNull(repository.fetchDeviceWriteSnapshot(canonical.id))
+
+        val failure = assertFailsWith<IllegalStateException> {
+            repository.writeWithDeviceAuthority("resolveSimulatorIdentityKeepCanonical") {
+                database.devices().delete(ghost.id)
+                save()
+                afterCommit { error("Injected after-commit failure") }
+            }
+        }
+
+        assertEquals("Injected after-commit failure", failure.message)
+        assertNull(repository.fetchDevice(ghost.id))
+        assertFalse(
+            repository.saveDeviceIfUnchanged(ticket.device.copy(nodeName = "Stale edit"), ticket),
+        )
+        assertEquals(canonical, repository.fetchDevice(canonical.id))
+    }
+
     @Test fun ignoredGhostDeleteFailsAndPreservesRowsAndTicketAuthority() = runTest(scheduler) {
         val canonical = device(
             radio = RADIO_A,

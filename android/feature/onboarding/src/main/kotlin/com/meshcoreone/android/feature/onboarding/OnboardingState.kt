@@ -196,7 +196,6 @@ class OnboardingState(private val store: OnboardingFlagStore) {
             store.persistBoolean(KEY_HAS_COMPLETED, true, validate, seal, attempt) { result ->
                 synchronized(completionLock) {
                     val unknown = result.exceptionOrNull() is OnboardingCompletionOutcomeUnknown
-                    if (settlingAttempt === attempt && !unknown) setSettlingAttempt(null)
                     if (pendingAttempt === attempt) {
                         if (unknown) {
                             resetRequired = true
@@ -211,6 +210,7 @@ class OnboardingState(private val store: OnboardingFlagStore) {
                         }
                         refreshReconciliationReady()
                     }
+                    if (settlingAttempt === attempt && !unknown) setSettlingAttempt(null)
                 }
             }
             synchronized(completionLock) {

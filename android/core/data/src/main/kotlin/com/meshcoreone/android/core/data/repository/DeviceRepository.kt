@@ -24,11 +24,13 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
         context.write(operation) {
             val nextRevision = Math.incrementExact(revision)
             val nextAuthority = if (changesAuthority) Math.incrementExact(authorityRevision) else authorityRevision
-            val result = action()
-            if (saves) afterCommit {
-                revision = nextRevision
-                if (changesAuthority) authorityRevision = nextAuthority
+            afterCommit {
+                if (saves) {
+                    revision = nextRevision
+                    if (changesAuthority) authorityRevision = nextAuthority
+                }
             }
+            val result = action()
             result
         }
 
@@ -37,6 +39,15 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
         operation: String,
         action: suspend RepositoryTransaction.() -> T,
     ): T = write(operation, action = action)
+
+    internal fun stageDeviceAuthorityChange(transaction: RepositoryTransaction) {
+        val nextRevision = Math.incrementExact(revision)
+        val nextAuthority = Math.incrementExact(authorityRevision)
+        transaction.afterCommit {
+            revision = nextRevision
+            authorityRevision = nextAuthority
+        }
+    }
 
     override suspend fun fetchDeviceWriteSnapshot(id: UUID): DeviceWriteSnapshot? = context.read("fetchDeviceWriteSnapshot") {
         database.devices().byId(id)?.let { DeviceWriteSnapshot(it.toDTO(), revision, authorityRevision) }

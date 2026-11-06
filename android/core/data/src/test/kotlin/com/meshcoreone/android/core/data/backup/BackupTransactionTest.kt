@@ -24,6 +24,49 @@ class BackupTransactionTest : BackupRoomTest() {
         assertEquals(1, db.contacts().forRadio(RADIO.value).size)
     }
 
+    @Test fun committedDeviceImportInvalidatesADeviceTicketWhenTheCanonicalRowIsUnchanged() = runBlocking {
+        val canonical = device(publicKey = key(0x31), id = id(101))
+        store.saveDevice(canonical)
+        val ticket = assertNotNull(store.fetchDeviceWriteSnapshot(canonical.id))
+        val restored = device(publicKey = key(0x32), id = id(102))
+
+        val result = service.importBackup(envelope(devices = listOf(restored)), store)
+
+        assertEquals(1L, result.count(BackupModelKind.DEVICES).inserted)
+        assertEquals(canonical, store.fetchDevice(canonical.id))
+        assertFalse(store.saveDeviceIfUnchanged(ticket.device.copy(nodeName = "Stale edit"), ticket))
+        assertEquals(canonical, store.fetchDevice(canonical.id))
+    }
+
+    @Test fun noOpDeviceImportPreservesAValidDeviceTicket() = runBlocking {
+        val existing = device(publicKey = key(0x41), id = id(111))
+        store.saveDevice(existing)
+        val ticket = assertNotNull(store.fetchDeviceWriteSnapshot(existing.id))
+
+        val result = service.importBackup(envelope(devices = listOf(existing)), store)
+
+        assertEquals(0L, result.count(BackupModelKind.DEVICES).inserted)
+        val current = assertNotNull(store.fetchDeviceWriteSnapshot(existing.id))
+        assertEquals(ticket.revision, current.revision)
+        assertEquals(ticket.authorityRevision, current.authorityRevision)
+        assertTrue(store.saveDeviceIfUnchanged(ticket.device.copy(nodeName = "Current edit"), ticket))
+        assertEquals(existing.copy(nodeName = "Current edit"), store.fetchDevice(existing.id))
+    }
+
+    @Test fun rolledBackDeviceImportPreservesAValidDeviceTicket() = runBlocking {
+        val canonical = device(publicKey = key(0x51), id = id(121))
+        store.saveDevice(canonical)
+        val ticket = assertNotNull(store.fetchDeviceWriteSnapshot(canonical.id))
+        val restored = device(publicKey = key(0x52), id = id(122))
+        val failing = newService(BackupImportHooks(beforeCommit = { throw IOException("injected commit failure") }))
+
+        expectImportFailure { failing.importBackup(envelope(devices = listOf(restored)), store) }
+
+        assertEquals(listOf(canonical), store.fetchDevices().toList())
+        assertTrue(store.saveDeviceIfUnchanged(ticket.device.copy(nodeName = "Current edit"), ticket))
+        assertEquals(canonical.copy(nodeName = "Current edit"), store.fetchDevice(canonical.id))
+    }
+
     @OriginalCase("BackupIntegrationTests::Failed import rolls back reconcile-phase mutations to pre-existing rows()")
     @Test fun preCommitFailureRollsBackRowsAndMetadataTogether() = runBlocking {
         val local = contact().copy(name = "Pre-existing")

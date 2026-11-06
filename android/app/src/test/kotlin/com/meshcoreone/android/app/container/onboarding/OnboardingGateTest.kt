@@ -5,6 +5,7 @@ package com.meshcoreone.android.app.container.onboarding
 import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
+import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.LocalActivityResultRegistryOwner
 import androidx.activity.compose.setContent
@@ -78,6 +79,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
@@ -162,6 +164,7 @@ class OnboardingGateTest {
 
     private fun awaitEnabled(node: SemanticsNodeInteraction) {
         compose.waitUntil(5_000) {
+            shadowOf(Looper.getMainLooper()).idle()
             !node.fetchSemanticsNode().config.contains(SemanticsProperties.Disabled)
         }
         node.assertIsEnabled()

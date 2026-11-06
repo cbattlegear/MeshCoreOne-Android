@@ -2,6 +2,8 @@
 // ReferenceInput: MC1Tests/Views/Tools/CLI/CLIToolViewModelLocalCommandsTests.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.app.container
 
+import com.meshcoreone.android.core.contracts.domain.DeviceEditPersisting
+import com.meshcoreone.android.core.contracts.domain.DeviceWriteSnapshot
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -144,10 +146,11 @@ class CliSettingsReadbackTest : RoomProcessTest() {
         onSaveDevice: (DeviceDTO) -> Unit = {},
         assertions: suspend (ContainerHarness, FirmwareRadio, CliToolStateHolder) -> Unit,
     ) {
-        val observedStore = object : PersistenceStoreProtocol by store {
-            override suspend fun saveDevice(dto: DeviceDTO) {
-                onSaveDevice(dto)
-                store.saveDevice(dto)
+        val observedStore = object : PersistenceStoreProtocol by store, DeviceEditPersisting by store {
+            override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+                val saved = store.saveDeviceIfUnchanged(dto, expected)
+                if (saved) onSaveDevice(dto)
+                return saved
             }
         }
         val h = ContainerHarness(this, store, persistenceOverride = observedStore)

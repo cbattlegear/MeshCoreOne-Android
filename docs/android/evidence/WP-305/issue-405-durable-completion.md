@@ -473,7 +473,11 @@ WP-209's updated source-only successor is
 synchronously under the manager lock before every successful shared await return, using original
 initiator authority; the completion callback and revoked-success cleanup remain, and a blocked-listener
 fast-path control is authored. Independent review and extraction remain held; no runtime execution is
-claimed. Neither 78c, 7db, 87d nor fb0 is accepted, executed or published, and none is composed. The reported minimal production
+claimed. WP-302 found an analogous `work.join()` fast path in `finishFailedSubmission`: a late
+non-cancellation reporter exception can retire a successful still-live graph before its completion
+callback settles it, contradicting existing `RuntimeOwnershipTest` behavior. WP-302 sent exact source
+anchors and a real-monitor regression request to WP-209. Neither 78c, 7db, 87d nor fb0 is accepted,
+executed or published, and none is composed. The reported minimal production
 composition is `ConnectionManager.kt` plus canonical `ChannelIdentityMutation.kt`
 (`a4cf97a36327721e9df7eb9afffbf12b37511d3c`); the cumulative WP-209 ancestry and 411d data/runtime
 test graph change are not required for the runtime API.
@@ -498,7 +502,8 @@ pending manager API, so they are not yet a compilable composed candidate. The ea
 fixture, onboarding-state and authority-control repairs were subsequently frozen in local commit
 `eff1f33e911`.
 
-The exact producer composition still requires favorable independent review of `fb0...` and the minimal
+The exact producer composition still requires a corrected successor to `fb0...`, favorable
+independent review, and the minimal
 canonical `ChannelIdentityMutation.kt` dependency as well as `ConnectionManager.kt`; no cumulative
 WP-209 ancestry is imported. Trusted current-main admissions for the caller files were previously
 verified. On caller head `dcb37285c8d`, `python tools\android-port\controller\validate.py` passed

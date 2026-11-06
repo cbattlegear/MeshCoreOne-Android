@@ -1,5 +1,5 @@
 // PortedFrom: MC1Services/Sources/MC1Services/Services/PersistenceStore.swift@db14559b39d32322b06477c6ae676112f583db50
-// Android Room schema; v2 adds durable channel reaction identity through a non-destructive migration.
+// Android Room schema; forward migrations retain message identity and unresolved channel occupants.
 package com.meshcoreone.android.core.database
 
 import android.content.Context
@@ -19,9 +19,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         RemoteNodeSessionEntity::class, RoomMessageEntity::class,
         SavedTracePathEntity::class, TracePathRunEntity::class, RxLogEntryEntity::class, DebugLogEntryEntity::class,
         LinkPreviewEntity::class, DiscoveredNodeEntity::class, NodeStatusSnapshotEntity::class,
-        BlockedChannelSenderEntity::class, PendingSendEntity::class,
+        BlockedChannelSenderEntity::class, PendingSendEntity::class, ChannelOccupantAuthorityEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
 @TypeConverters(ValueConverters::class)
@@ -37,6 +37,11 @@ abstract class MeshCoreDatabase : RoomDatabase() {
             "MeshCoreDatabase cannot replace a different migration from version 1 to 2"
         }
         configuration.migrationContainer.addMigrations(Migration1To2)
+        val occupantMigration = configuration.migrationContainer.getMigrations()[2]?.get(3)
+        require(occupantMigration == null || occupantMigration === Migration2To3) {
+            "MeshCoreDatabase cannot replace a different migration from version 2 to 3"
+        }
+        configuration.migrationContainer.addMigrations(Migration2To3)
         super.init(
             configuration.copy(
                 callbacks = listOf(IdentityCreationCallback, IdentityVerificationCallback) +
@@ -50,6 +55,11 @@ abstract class MeshCoreDatabase : RoomDatabase() {
     abstract fun channels(): ChannelDao
     abstract fun messages(): MessageDao
     abstract fun channelReactionIdentities(): ChannelReactionIdentityDao
+    abstract fun channelOccupantAuthorities(): ChannelOccupantAuthorityDao
+
+    fun requireChannelOccupantTriggersInstalled() {
+        ChannelOccupantSql.requireInstalled(openHelper.readableDatabase)
+    }
     abstract fun repeats(): MessageRepeatDao
     abstract fun reactions(): ReactionDao
     abstract fun pendingSends(): PendingSendDao
@@ -65,7 +75,7 @@ abstract class MeshCoreDatabase : RoomDatabase() {
     abstract fun blockedSenders(): BlockedChannelSenderDao
 
     companion object {
-        const val SCHEMA_VERSION = 2
+        const val SCHEMA_VERSION = 3
         fun open(context: Context, name: String = "meshcoreone.db"): MeshCoreDatabase =
             Room.databaseBuilder(context.applicationContext, MeshCoreDatabase::class.java, name)
                 .build()
@@ -74,6 +84,7 @@ abstract class MeshCoreDatabase : RoomDatabase() {
     private object IdentityCreationCallback : Callback() {
         override fun onCreate(database: SupportSQLiteDatabase) {
             ChannelReactionIdentitySql.install(database)
+            ChannelOccupantSql.install(database)
         }
     }
 
@@ -81,6 +92,7 @@ abstract class MeshCoreDatabase : RoomDatabase() {
         override fun onOpen(database: SupportSQLiteDatabase) {
             // Never repair missing triggers on reopen: intervening writes may have escaped invalidation.
             ChannelReactionIdentitySql.requireInstalled(database)
+            ChannelOccupantSql.requireInstalled(database)
         }
     }
 }

@@ -850,7 +850,7 @@ class ChannelReactionTargetAuthorityTest {
         val migrated = rawFileDatabase(migrationName)
         try {
             val sqlite = migrated.openHelper.readableDatabase
-            assertEquals(2, sqlite.version)
+            assertEquals(MeshCoreDatabase.SCHEMA_VERSION, sqlite.version)
             sqlite.query(
                 "SELECT * FROM messages WHERE radioId = ? AND id = ?",
                 arrayOf(legacyRadioId, legacyMessageId),

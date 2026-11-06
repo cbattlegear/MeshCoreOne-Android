@@ -536,7 +536,14 @@ class NotificationService(
                 // Swift `try? await Task.sleep`: a failed sleep is ignored, only cancellation stops the update.
                 contained("badgeDebounce", Unit) { clock.sleep(BADGE_DEBOUNCE) }
                 ensureActive()
-                withContext(NonCancellable) { badgeUpdateMutex.withLock { performBadgeUpdate() } }
+                withContext(NonCancellable) {
+                    try {
+                        badgeUpdateMutex.withLock { performBadgeUpdate() }
+                    } catch (problem: Exception) {
+                        // Capture before leaving this context so stack recovery cannot replace the original failure.
+                        failure.set(problem)
+                    }
+                }
             } catch (cancelled: CancellationException) {
                 if (!superseded.get()) failure.set(cancelled)
                 throw cancelled

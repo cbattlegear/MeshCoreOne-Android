@@ -328,7 +328,10 @@ class NotificationTransactionNativeTests {
             val thrown = assertFailsWith<NotificationReplyOutcomeUncertain> {
                 withContext(receipt) { h.handler.handleQuickReply(contact.key, "unknown") }
             }
-            assertSame(failure, thrown.cause)
+            assertTrue(
+                generateSequence<Throwable>(thrown) { it.cause }.any { it === failure },
+                "The exact dispatch failure must remain in the cause chain across coroutine stack recovery",
+            )
             assertEquals(NotificationActionReceipt.State.UNCERTAIN, receipt.state)
             assertNull(h.service.consumeDraft(contact.key))
             assertEquals(emptyList(), h.delivery.posted)
@@ -924,6 +927,33 @@ class NotificationTransactionNativeTests {
             second.await()
 
             assertEquals(listOf(6L, 60L), h.delivery.badgeSets)
+        },
+        nativeCase("supersession cannot hide a genuine failure or cancellation from an already-started badge query") {
+            for (problem in listOf(IllegalStateException("held unread failure"), CancellationException("held unread cancellation"))) {
+                val clock = VirtualClock()
+                val h = NotificationHarness(this, clock = clock).authorize()
+                val readGate = CompletableDeferred<Unit>()
+                h.counts.gates += readGate
+                h.counts.failure = problem
+                h.counts.fail = true
+                val first = async { assertFailsWith<Exception> { h.service.updateBadgeCount() } }
+                yieldUntil("first badge debounce started") { clock.sleeperCount == 1 }
+                clock.wakeAll()
+                yieldUntil("first unread query held") { h.counts.calls == 1 }
+
+                val replacement = async { h.service.updateBadgeCount() }
+                yieldUntil("replacement debounce superseded old job") { clock.sleeps.size == 2 && clock.sleeperCount == 1 }
+                readGate.complete(Unit)
+
+                assertSame(problem, first.await())
+                assertEquals(0L, h.service.badgeCount)
+                assertTrue(h.delivery.badgeSets.isEmpty())
+                h.counts.fail = false
+                h.counts.counts = UnreadCounts(1, 2, 3)
+                clock.wakeAll()
+                replacement.await()
+                assertEquals(listOf(6L), h.delivery.badgeSets)
+            }
         },
         nativeCase("snapshot cleanup retirement during the delivered query prevents cancellation") {
             val h = NotificationHarness(this).authorize()

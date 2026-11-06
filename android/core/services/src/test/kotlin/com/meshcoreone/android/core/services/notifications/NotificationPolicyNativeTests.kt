@@ -217,13 +217,18 @@ class NotificationPolicyNativeTests {
             assertEquals(listOf(14L, 0L), h.delivery.badgeSets)
             assertEquals(1, h.counts.calls)
         },
-        nativeCase("failing unread counts and badge delivery are contained") {
+        nativeCase("unread failure propagates without a fabricated zero while badge delivery failure is contained") {
             val h = NotificationHarness(this)
             h.counts.fail = true
             h.delivery.failing += "setBadgeCount"
-            h.service.updateBadgeCount()
+            assertFailsWith<IllegalStateException> { h.service.updateBadgeCount() }
             assertEquals(0L, h.service.badgeCount)
-            assertEquals(listOf(0L), h.delivery.badgeSets)
+            assertEquals(emptyList(), h.delivery.badgeSets)
+            h.counts.fail = false
+            h.counts.counts = UnreadCounts(2, 0, 0)
+            h.service.updateBadgeCount()
+            assertEquals(2L, h.service.badgeCount)
+            assertEquals(emptyList(), h.delivery.badgeSets)
         },
         nativeCase("rapid badge updates are debounced into one recompute") {
             val clock = VirtualClock()
@@ -277,7 +282,7 @@ class NotificationPolicyNativeTests {
         nativeCase("cancellation raised by unread counts or delivery is never contained as a failure") {
             val h = NotificationHarness(this).authorize()
             h.counts.cancel = true
-            h.service.updateBadgeCount()
+            assertFailsWith<CancellationException> { h.service.updateBadgeCount() }
             assertEquals(emptyList(), h.delivery.badgeSets, "a cancelled read must not become a zero badge")
             h.counts.cancel = false
             h.counts.counts = UnreadCounts(2, 0, 0)

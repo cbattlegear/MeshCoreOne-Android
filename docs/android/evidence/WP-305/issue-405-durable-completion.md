@@ -568,3 +568,25 @@ The guard-off parity control now also exercises direct region addition/removal a
 live state. The missing-capture control explicitly covers token-bound path-hash, region-add and
 region-removal entry points as well as ordinary edits; none may request admission or fall back.
 These additional assertions are authored and unexecuted.
+
+The rejected-admission control separately exercises seven ordinary/token-bound edit and region
+entry points with a valid capture but null lease admission. It asserts no write-ticket fetch, device
+save or direct region DAO operation runs, all seven admission requests retain the captured identity,
+and actual Room/live values remain unchanged. This control is authored, not executed.
+
+### Canonical-contract extraction admission
+
+The live remote main remains `0d10b838a181cd3bd34af1a0200435149dbc6bb0`; it contains no
+`ChannelIdentityMutation.kt`. Although the generic support selector lexically matches that path,
+`CapabilityEngine.validate_support_changes` requires `modify-related-consumer` paths to exist in both
+base and candidate. It therefore cannot authorize adding this canonical contract. WP-209 confirmed
+WP-201 is its actual producer, and the published `08e` contract is unmerged/unverified, not a trusted
+merged prerequisite. WP-209 is escalating the new-file producer admission/transfer requirement to the
+coordinator. Extraction remains held on this concrete admission blocker as well as independent review.
+
+WP-209's latest reported review-only manager pin is
+`33334b1ff627f286365133b70a971d744dfc1b19` (tree
+`3356311b59b1cb8385fab061ec66ffd974893676`, manager blob
+`96aacd0e4c3a3d0db9c1a0b310518763d6232815`). It reportedly repairs rebuild reentrant cleanup marker
+loss identified in `06e183d`; exact independent review is pending. No composition or runtime
+acceptance is claimed.

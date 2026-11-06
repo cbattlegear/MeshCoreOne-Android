@@ -591,6 +591,50 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
         }
     }
 
+    @Test fun rejectedGenerationAdmissionRefusesEveryEditorWriteWithoutExecutingItsBlock() = runTest {
+        val paused = PausedStore(store)
+        val h = ContainerHarness(this, store, persistenceOverride = paused)
+        var admissions = 0
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            val before = assertNotNull(h.manager.connectedDevice)
+            val token = assertNotNull(h.manager.snapshot.value.token)
+            val rejectedAdmission = object : ConnectedDeviceAccess by h.container.deviceAccess {
+                override val requiresGenerationDeviceWriteLease: Boolean get() = true
+                override suspend fun <T : Any> withDeviceWrite(
+                    token: SessionToken,
+                    deviceId: UUID,
+                    block: suspend () -> T,
+                ): T? {
+                    assertEquals(before.id, deviceId)
+                    assertEquals(h.manager.snapshot.value.token, token)
+                    admissions++
+                    return null
+                }
+            }
+            paused.beforeSnapshot = { error("Rejected admission must not read a write ticket") }
+            paused.beforeSave = { error("Rejected admission must not save a device") }
+            paused.beforeAdd = { error("Rejected admission must not add a region") }
+            paused.beforeRemove = { error("Rejected admission must not remove a region") }
+            val editor = editorFor(rejectedAdmission, paused, this)
+
+            assertNotNull(editor.updateDevice(before.info(), "must-not-write")).join()
+            assertFalse(editor.updateDevice(before.info(), "must-not-write", token))
+            assertFalse(editor.updatePathHashMode(2u, token))
+            assertNotNull(editor.addKnownRegion("US915")).join()
+            assertNotNull(editor.removeKnownRegion("US915")).join()
+            assertFalse(editor.addKnownRegion("US915", token))
+            assertFalse(editor.persistKnownRegionRemoval("US915", token))
+
+            assertEquals(7, admissions)
+            assertEquals(before, store.fetchDevice(before.id))
+            assertEquals(before, h.manager.connectedDevice)
+        } finally {
+            h.container.close()
+        }
+    }
+
     @Test fun concurrentOnboardingPresetsSerializeRadioAndDeviceMetadata() = runTest {
         val paused = PausedStore(store)
         val h = ContainerHarness(this, store, persistenceOverride = paused)

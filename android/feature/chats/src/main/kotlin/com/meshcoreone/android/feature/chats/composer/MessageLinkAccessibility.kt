@@ -2,6 +2,7 @@
 package com.meshcoreone.android.feature.chats.composer
 
 import com.meshcoreone.android.feature.chats.list.MeshCoreLinkParser
+import com.meshcoreone.android.feature.chats.list.ChatMailtoPolicy
 import com.meshcoreone.android.feature.chats.list.MeshCoreLinkParsing
 
 /** Localized, target-bearing names of the TalkBack custom actions (Compose layer supplies the resource-backed one). */
@@ -48,10 +49,11 @@ object MessageLinkAccessibility {
 
     private fun name(url: String, names: LinkActionNames, parser: MeshCoreLinkParsing): String {
         val parts = urlShape.find(url) ?: return names.openLink()
-        val scheme = parts.groupValues[1].lowercase()
+        val scheme = parts.groupValues[1].lowercase(java.util.Locale.ROOT)
         val host = hostOf(parts.groupValues[2])
         return when (scheme) {
             "http", "https" -> if (host.isEmpty()) names.openLink() else names.openWebLink(host)
+            "mailto" -> ChatMailtoPolicy.recipient(url)?.let(names::openWebLink) ?: names.openLink()
             MeshCoreLinkParser.SCHEME -> when (host) {
                 "map" -> names.openMapLink()
                 "contact" -> parser.parseContactURL(url)?.name?.let(names::addContact) ?: names.openLink()

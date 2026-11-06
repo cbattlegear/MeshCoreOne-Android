@@ -854,7 +854,9 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                     if (mode == "cancelled-submission") h.manager.connect(h.target())
                     else h.manager.rebuildSession(deviceId)
                 }
-                h.eventually("the successor graph is exposed during held sync", virtualBudgetMillis = 0) {
+                // Session wiring awaits a 100 ms badge debounce before starting the held contact sync.
+                // Advance short startup timers without reaching the stream's 60-second inactivity timeout.
+                h.eventually("the successor graph is exposed during held sync ($mode)", virtualBudgetMillis = 1_000) {
                     uiScheduler.runCurrent()
                     val graph = h.sessions.current
                     syncRequested.isCompleted && !attempt.isCompleted && graph != null && graph !== retired &&

@@ -94,6 +94,11 @@ DAO storage fixture, injects a pre-commit failure and checks complete row/epoch,
 failed-message and pending-text preservation, then commits the same import and
 checks durable invalidation and three subsequent no-op replays. This remains
 storage/import evidence, not a live positive-authority issuer.
+Another actual import control cancels immediately before commit and checks
+epoch rollback, then cancels the caller after commit and checks successful
+committed-result delivery, persisted unresolved invalidation, and a subsequent
+writer acquiring the released operation/identity lanes. It does not interpret
+post-commit cancellation as rollback.
 
 ## Preservation and pending composition
 

@@ -23,6 +23,11 @@ import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import java.io.IOException
 import java.util.UUID
 import kotlin.test.*
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
 
@@ -231,5 +236,60 @@ class ChannelReseedRoomTest : BackupRoomTest() {
             assertEquals(invalidated, db.channelOccupantAuthorities().forSlot(RADIO_A.value, 2L))
             assertNull(store.fetchChannelOccupantEpoch(RADIO_A, 2u))
         }
+    }
+
+    @Test
+    fun cancelledRestoreRollsBackEpochBeforeCommitButKeepsCommittedInvalidationAfterCommit() = runTest {
+        val local = seedChannel()
+        store.saveDevice(backupDevice(radio = RADIO_A))
+        store.saveChannel(local)
+        // Storage fixture only: cancellation tests do not establish live radio resolution.
+        val original = db.withTransaction {
+            val state = assertNotNull(db.channelOccupantAuthorities().forSlot(RADIO_A.value, 2L))
+            assertEquals(1, db.channelOccupantAuthorities().resolveCurrent(
+                RADIO_A.value, 2L, state.epoch, local.id, local.secret,
+            ))
+            assertNotNull(db.channelOccupantAuthorities().forSlot(RADIO_A.value, 2L))
+        }
+        val value = backupEnvelope(devices = listOf(backupDevice(radio = RADIO_A)), channels = listOf(local))
+        var cancellationObserved = false
+        val preCommit = newService(BackupImportHooks(beforeCommit = { currentCoroutineContext().cancel() }))
+        val cancelled = launch {
+            try {
+                preCommit.importBackup(value, store)
+            } catch (_: CancellationException) {
+                cancellationObserved = true
+            }
+        }
+        cancelled.join()
+        assertTrue(cancellationObserved)
+        assertEquals(original, db.channelOccupantAuthorities().forSlot(RADIO_A.value, 2L))
+        assertEquals(original.epoch, store.fetchChannelOccupantEpoch(RADIO_A, 2u))
+
+        var caller: Job? = null
+        var committedResultDelivered = false
+        var unexpectedCancellation = false
+        val postCommit = newService(BackupImportHooks(afterCommit = { requireNotNull(caller).cancel() }))
+        caller = launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
+            try {
+                postCommit.importBackup(value, store)
+                committedResultDelivered = true
+            } catch (_: CancellationException) {
+                unexpectedCancellation = true
+            }
+        }
+        caller.start()
+        caller.join()
+        assertTrue(caller.isCancelled)
+        assertTrue(committedResultDelivered)
+        assertFalse(unexpectedCancellation)
+        val committed = assertNotNull(db.channelOccupantAuthorities().forSlot(RADIO_A.value, 2L))
+        assertNotEquals(original.epoch, committed.epoch)
+        assertFalse(committed.isResolved)
+        assertNull(committed.boundRowId)
+        assertNull(store.fetchChannelOccupantEpoch(RADIO_A, 2u))
+        store.saveChannel(local.copy(name = "writer after cancellation"))
+        assertEquals("writer after cancellation", store.fetchChannel(EntityKey(RADIO_A, local.id))?.name)
+        assertEquals(committed, db.channelOccupantAuthorities().forSlot(RADIO_A.value, 2L))
     }
 }

@@ -1,17 +1,26 @@
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
-from .backends import Backend, Observation
+from .backends import Backend, CloudBackend, GitHubApi, LocalHostBackend, Observation
 from .capabilities import CapabilityEngine
 from .errors import PortError, ReceiptError
 from .gates import Binding, merge_decision, policy_revision, verify_completion
 from .ledger import Identity, Ledger
-from .model import Manifest, SHA
-from .render import issue_payload
+from .model import Manifest, REFERENCE_SHA, SHA, git
+from .render import issue_payload, marker
 from .settings import Settings
 from .schema import digest, positive_integer
 from .verification import dispatch_software_lane
+
+
+REVIEWED_POLICY_TRANSITIONS = {
+    (
+        "fba743efe1ff4ad690fd7c8714abf15fd83b3d664060906b1debd68bc40ffefb",
+        "de026f7de86d91bf86ef26cc98075c2707e3f8e153f06d97ef159c401a7a792e",
+    ): "completion-required-checks-v1",
+}
 
 
 @dataclass(frozen=True)
@@ -202,6 +211,197 @@ class Controller:
             wp_id, attempt, expected_revision, capabilities, operations, paths,
             overlap_intents, record["authorization_context"],
         )
+
+    def reconcile_policy(self, wp_id: str, attempt: str, expected_revision: int, now: float):
+        """Rebind one authenticated existing local task without dispatching or merging."""
+        from .authority import GitHubGateAuthority
+        from .dispatch import require_trusted_controller
+
+        if self.settings.paused or self.policy["paused"]:
+            raise PortError("Paused policy blocks live policy reconciliation")
+        if (
+            not isinstance(self.backend, LocalHostBackend)
+            or not isinstance(self.authority, GitHubGateAuthority)
+            or not isinstance(self.authority.backend, CloudBackend)
+            or not isinstance(self.authority.backend.api, GitHubApi)
+        ):
+            raise PortError("Policy reconciliation requires authenticated native-host and GitHub authorities")
+        record = self._reconciliation_record(wp_id, attempt, expected_revision)
+        LocalHostBackend.require_policy_owner(self.backend, wp_id, record)
+        if self.settings.ledger_path is None or not self.ledger.path.is_file():
+            raise PortError("Policy reconciliation requires the existing shared ledger")
+        ledger_path = self.ledger.path.resolve(strict=True)
+        if self.settings.ledger_path.resolve(strict=True) != ledger_path:
+            raise PortError("Configured ledger differs from the current reservation ledger")
+        cloud = self.authority.backend
+        if (
+            cloud.policy != self.policy or cloud.settings != self.settings
+            or cloud.manifest.data != self.manifest.data or cloud.manifest.exclusions != self.manifest.exclusions
+            or cloud.manifest.repo.resolve() != self.manifest.repo.resolve()
+        ):
+            raise PortError("GitHub authority differs from the trusted policy or manifest")
+        cloud.authenticate()
+        base = require_trusted_controller(self.manifest.repo, cloud)
+        self.backend.preflight(wp_id, base)
+        observation = self.backend.same_task(wp_id, record)
+        pr_number = observation.identity.pr_number
+
+        head = self._reconciliation_pr_head(cloud, wp_id, record, pr_number, base)
+        previous, binding, transition = self._reconciliation_binding(wp_id, record, pr_number, base, cloud)
+
+        def guard():
+            if cloud.current_base() != base or self.backend.current_base() != base:
+                raise PortError("Default branch advanced during policy reconciliation")
+            self.backend.preflight(wp_id, base)
+            capabilities = self.backend.host.capabilities()
+            native_ledger = capabilities.get("ledger_path") if isinstance(capabilities, dict) else None
+            if (
+                not isinstance(native_ledger, str) or not Path(native_ledger).is_absolute()
+                or Path(native_ledger).resolve(strict=True) != ledger_path
+            ):
+                raise PortError("Authenticated native host did not identify the same shared ledger")
+            if self.backend.same_task(wp_id, record).identity.pr_number != pr_number:
+                raise PortError("The existing session's open PR changed during policy reconciliation")
+            if self._reconciliation_pr_head(cloud, wp_id, record, pr_number, base) != head:
+                raise PortError("The existing PR head changed during policy reconciliation")
+
+        witness = {
+            "session_id": observation.identity.session_id, "pr_number": pr_number,
+            "branch": record["branch"], "worktree": record["worktree"],
+            "trusted_base": base, "pr_head": head, "reviewed_transition": transition,
+        }
+        guard()
+        updated = self.ledger._reconcile_policy_binding(record, binding, witness, now)
+        return {
+            "action": "same-task-policy-reconciled", "work_package": wp_id,
+            "attempt": attempt, "revision": updated["revision"], "session_id": witness["session_id"],
+            "pr_number": pr_number, "previous_binding": previous, "binding": updated["binding"],
+            "previous_binding_evidence_valid": False, "dispatched": False, "merged": False,
+        }
+
+    def _reconciliation_record(self, wp_id, attempt, expected_revision):
+        if type(expected_revision) is not int or expected_revision < 1:
+            raise PortError("Policy reconciliation requires a positive reservation revision")
+        record = self.ledger.get(wp_id)
+        if (
+            record is None or record["attempt"] != attempt or record["revision"] != expected_revision
+            or record["backend"] != "local"
+        ):
+            raise PortError("Missing or stale same-task policy reservation")
+        if (
+            record["record_state"] != "advisory"
+            or record["migration_revision"] != "capability-reservation-v1"
+            or record["state"] not in ("leased", "dispatching", "running", "repair_wait", "review_wait", "gate_wait")
+            or record["completion"] is not None
+        ):
+            raise PortError("Policy reconciliation requires a typed, held, nonterminal reservation")
+        return record
+
+    def _reconciliation_pr_head(self, cloud, wp_id, record, pr_number, base):
+        pr = cloud.api.request("GET", f"{cloud.prefix}/pulls/{pr_number}")
+        if not isinstance(pr, dict):
+            raise PortError("GitHub returned a malformed PR")
+        head = pr.get("head", {})
+        target = pr.get("base", {})
+        body = pr.get("body") or ""
+        if (
+            pr.get("number") != pr_number or pr.get("state") != "open" or pr.get("merged") is not False
+            or not isinstance(head, dict) or head.get("ref") != record["branch"]
+            or not isinstance(head.get("repo"), dict)
+            or head.get("repo", {}).get("full_name") != self.policy["repository"]
+            or not isinstance(head.get("sha"), str) or SHA.fullmatch(head["sha"]) is None
+            or not isinstance(target, dict) or target.get("ref") != self.policy["default_branch"]
+            or target.get("sha") != base
+            or not isinstance(target.get("repo"), dict)
+            or target.get("repo", {}).get("full_name") != self.policy["repository"]
+            or not isinstance(body, str) or body.count(marker(wp_id)) != 1
+        ):
+            raise PortError("GitHub does not confirm the same open WP/branch/repository PR")
+        return head["sha"]
+
+    def _reconciliation_binding(self, wp_id, record, pr_number, base, cloud):
+        from .merged_acceptance import MergedAcceptance
+        from .native_review import trusted_inputs
+        from .scope_amendment import completion_policy_predecessor
+
+        previous = record["binding"]
+        if (
+            not isinstance(previous, dict)
+            or set(previous) != {
+                "repository", "work_package", "base_sha", "source_sha", "manifest_sha256", "policy_revision",
+            }
+            or any(not isinstance(value, str) or not value for value in previous.values())
+            or SHA.fullmatch(previous["base_sha"]) is None
+        ):
+            raise PortError("Malformed historical reservation binding")
+        history = MergedAcceptance(cloud, self.manifest, self.policy)
+        with history.candidate_history(pr_number, previous["base_sha"], base) as repo:
+            git(repo, "merge-base", "--is-ancestor", previous["base_sha"], base)
+            old_manifest, old_policy = trusted_inputs(repo, previous["base_sha"])
+            current_manifest, current_policy = trusted_inputs(repo, base)
+        if (
+            current_manifest.data != self.manifest.data or current_manifest.exclusions != self.manifest.exclusions
+            or current_policy != self.policy
+            or old_manifest.data != current_manifest.data or old_manifest.exclusions != current_manifest.exclusions
+            or current_manifest.data["reference"]["commit"] != REFERENCE_SHA
+        ):
+            raise PortError("Policy reconciliation refuses source, manifest or trusted-input drift")
+        expected_previous = {
+            "repository": self.policy["repository"], "work_package": wp_id,
+            "base_sha": previous["base_sha"], "source_sha": REFERENCE_SHA,
+            "manifest_sha256": old_manifest.sha256,
+            "policy_revision": policy_revision(old_manifest, old_policy),
+        }
+        binding = self.binding(wp_id, base)
+        transition = REVIEWED_POLICY_TRANSITIONS.get((previous["policy_revision"], binding["policy_revision"]))
+        if (
+            previous != expected_previous or transition is None
+            or current_policy.get("required_checks") != ["android-ci", "parity-review"]
+            or old_policy != completion_policy_predecessor(current_policy)
+        ):
+            raise PortError("Unreviewed or inconsistent policy transition; retain the historical binding")
+        self._validate_reconciliation_scope(wp_id, record, old_manifest, old_policy, current_policy)
+        return previous, binding, transition
+
+    @staticmethod
+    def _validate_reconciliation_scope(wp_id, record, manifest, old_policy, current_policy):
+        old_engine, current_engine = CapabilityEngine(old_policy), CapabilityEngine(current_policy)
+        caps, paths, operations = record["capabilities"], record["paths"], record["reservation_operations"]
+        if (
+            old_engine.revision != current_engine.revision
+            or not isinstance(caps, dict) or not caps
+            or not isinstance(paths, list) or not paths
+            or not isinstance(operations, list) or not operations
+            or any(not isinstance(value, str) or not value for value in paths + operations)
+            or len(paths) != len(set(paths)) or len(operations) != len(set(operations))
+            or any(
+                not isinstance(key, str) or not key or not isinstance(values, list) or not values
+                or any(not isinstance(path, str) or not path for path in values)
+                or len(values) != len(set(values))
+                for key, values in caps.items()
+            )
+            or set(paths) != {path for values in caps.values() for path in values}
+        ):
+            raise PortError("Historical capability scope is missing, malformed or changed")
+        used = set()
+        for capability, scoped_paths in caps.items():
+            for path in scoped_paths:
+                matched = False
+                for operation in operations:
+                    try:
+                        prior = old_engine.admit(wp_id, manifest.wp(wp_id)["write_paths"], path, operation)
+                    except PortError:
+                        continue
+                    if prior.capability_id == capability:
+                        current = current_engine.admit(wp_id, manifest.wp(wp_id)["write_paths"], path, operation)
+                        if current != prior:
+                            raise PortError("Capability admission changed across the policy transition")
+                        matched = True
+                        used.add(operation)
+                if not matched:
+                    raise PortError(f"Historical capability no longer admits {capability}: {path}")
+        if used != set(operations):
+            raise PortError("Historical reservation contains an operation with no admitted path")
 
     def admit_successor_attempt(
         self, wp_id: str, predecessor_attempt: str, predecessor_revision: int,

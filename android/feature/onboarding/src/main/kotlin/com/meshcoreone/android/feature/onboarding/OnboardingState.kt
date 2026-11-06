@@ -23,7 +23,10 @@ sealed interface OnboardingCompletionReceipt {
     data object Restored : OnboardingCompletionReceipt
 }
 
-internal class OnboardingCompletionPublication(val receipt: OnboardingCompletionReceipt, val revision: Long)
+class OnboardingCompletionPublication internal constructor(
+    val receipt: OnboardingCompletionReceipt,
+    val revision: Long,
+)
 
 /** A finalizer may have committed; reconcile its original ID or acknowledge an explicit reset before replacing it. */
 interface OnboardingCompletionOutcomeUnknown
@@ -176,7 +179,7 @@ class OnboardingState(private val store: OnboardingFlagStore) {
             check(!completed.value) { "Onboarding completion is awaiting exact-flow settlement" }
             check(pendingAttempt == null) { "An onboarding completion is already pending" }
             pendingAttempt = attempt
-            val reserved = ++completionRevision
+            val reserved = nextCompletionRevision()
             setSettlingAttempt(attempt)
             reserved
         }
@@ -289,12 +292,30 @@ class OnboardingState(private val store: OnboardingFlagStore) {
     }
 
     internal fun ownsCompletion(value: OnboardingCompletionPublication): Boolean =
+        synchronized(completionLock) { isCurrentCompletion(value) }
+
+    /**
+     * Commits a consumer action only while this exact, durably acknowledged publication is current.
+     * The synchronous navigation action runs under the publication lock; it must not perform I/O or call user code.
+     */
+    fun commitCompletion(value: OnboardingCompletionPublication, commit: () -> Boolean): Boolean =
         synchronized(completionLock) {
-            !retired && !resetRequired && value.revision == completionRevision && publication.value === value
+            if (!isCurrentCompletion(value)) return@synchronized false
+            commit()
         }
 
+    private fun isCurrentCompletion(value: OnboardingCompletionPublication): Boolean =
+        !retired && !resetRequired && settlingResets == 0 && settlingAttempt == null && uncertain == null &&
+            value.revision == completionRevision && publication.value === value && completed.value &&
+            store.getBoolean(KEY_HAS_COMPLETED)
+
+    private fun nextCompletionRevision(): Long {
+        completionRevision = Math.incrementExact(completionRevision)
+        return completionRevision
+    }
+
     private fun invalidateCompletion(): Long = synchronized(completionLock) {
-        val revision = ++completionRevision
+        val revision = nextCompletionRevision()
         pendingAttempt?.reject(IllegalStateException("Onboarding attempt was retired"))
         pendingAttempt = null
         uncertain = null

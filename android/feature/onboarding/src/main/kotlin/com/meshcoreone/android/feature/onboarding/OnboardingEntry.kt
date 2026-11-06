@@ -21,6 +21,10 @@ fun OnboardingEntry(
     onNavigate: (FeatureRoute) -> Unit,
     dependencies: OnboardingFeatureDependencies? = null,
     onCompletionReceipt: ((OnboardingCompletionReceipt) -> Boolean)? = null,
+    onCompletionPublication: ((
+        OnboardingCompletionPublication,
+        commit: (() -> Boolean) -> Boolean,
+    ) -> Boolean)? = null,
     attemptKey: Any? = null,
     completionDeliveryKey: Any? = null,
 ) {
@@ -29,6 +33,7 @@ fun OnboardingEntry(
             dependencies,
             onCompleted = { onNavigate(FeatureRoute(FeatureId.CHATS)) },
             onCompletionReceipt = onCompletionReceipt,
+            onCompletionPublication = onCompletionPublication,
             attemptKey = attemptKey,
             completionDeliveryKey = completionDeliveryKey,
         )

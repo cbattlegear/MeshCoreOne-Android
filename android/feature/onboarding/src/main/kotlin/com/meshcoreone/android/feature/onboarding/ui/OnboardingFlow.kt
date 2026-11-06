@@ -20,6 +20,7 @@ import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings as S
 import com.meshcoreone.android.core.ui.SharedUiScaffold
 import com.meshcoreone.android.feature.onboarding.OnboardingFeatureDependencies
+import com.meshcoreone.android.feature.onboarding.OnboardingCompletionPublication
 import com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt
 import com.meshcoreone.android.feature.onboarding.OnboardingFlowCoordinator
 import com.meshcoreone.android.feature.onboarding.OnboardingPermissionKind
@@ -37,6 +38,10 @@ fun OnboardingFlow(
     onCompleted: () -> Unit,
     modifier: Modifier = Modifier,
     onCompletionReceipt: ((OnboardingCompletionReceipt) -> Boolean)? = null,
+    onCompletionPublication: ((
+        OnboardingCompletionPublication,
+        commit: (() -> Boolean) -> Boolean,
+    ) -> Boolean)? = null,
     attemptKey: Any? = null,
     completionDeliveryKey: Any? = null,
 ) {
@@ -56,12 +61,20 @@ fun OnboardingFlow(
         val published = completion
         if (published != null && flow.onboarding.ownsCompletion(published)) {
             if (dependencies.ownsFlowCoordinator(flow)) {
-                val receipt = published.receipt
-                val accepted = if (onCompletionReceipt != null) {
-                    onCompletionReceipt(receipt)
+                var commitAttempted = false
+                var committed = false
+                val commitCurrent: (() -> Boolean) -> Boolean = { commit ->
+                    if (commitAttempted) false else {
+                        commitAttempted = true
+                        flow.onboarding.commitCompletion(published, commit).also { committed = it }
+                    }
+                }
+                val accepted = if (onCompletionPublication != null) {
+                    onCompletionPublication(published, commitCurrent) && committed
+                } else if (onCompletionReceipt != null) {
+                    commitCurrent { onCompletionReceipt(published.receipt) }
                 } else {
-                    onCompleted()
-                    true
+                    commitCurrent { onCompleted(); true }
                 }
                 if (accepted) dependencies.onFlowCompletionHandled(flow)
             } else {

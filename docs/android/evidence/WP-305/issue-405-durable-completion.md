@@ -202,3 +202,41 @@ and named the positional test-helper callback; its exact-head run
 - Physical API 31/37 permission-dialog and device Back/sheet-dismissal behavior, radio/BLE/Wi-Fi
   hardware, native-tip UX review, and full WP-305 acceptance remain unverified. Mounted shell
   behavior is covered by Robolectric Compose tests, not physical-device evidence.
+
+## Current-main completion-publication handoff
+
+The local producer follow-up is based on current `main` `f6cf1bf73aad361ef3327c4e31a8ff5107272904`.
+It exposes an opaque `OnboardingCompletionPublication` (receipt plus non-reused revision) and a
+synchronous producer guard. The guard checks object identity, revision, completed state, durable
+preference readback and reset/retirement/uncertainty state while holding the producer lock, then
+executes only the navigation commit action before releasing that lock. The mounted regression reuses
+the same completion callback across Activity recreation, rejects an old publication after an equal
+receipt is republished, interposes a concurrent reset while the commit action is held, and rejects
+the publication after reset. This new regression has not been executed.
+
+Trusted `reserve.py admit` accepted the three onboarding production paths as
+`wp-owned/modify`, the mounted regression as `reviewed-support-test/add-or-update-related-test`,
+and this evidence path as `wp-owned/record-evidence`. `git diff --check` passed;
+`python tools/android-port/controller/validate.py` passed (64 WPs / 1,866 tracked reference
+files); `python tools/android-port/test_inventory.py --check` passed (468 pinned paths /
+5,133 declarations). Native Windows `ci.py preflight --local` exited 0 and invoked
+`android/scaffold/check_environment.py`; no Gradle command was run because the shared
+execution reservation remains held. These checks do not execute the new Kotlin regression.
+
+For lock-order review only, paired consumer PR #495 was inspected at exact head
+`9a9b2e0fae9fc9a7aa8b8887270799a4d0781842` against base
+`8eaa4ecd35fb25f32aca5d0d3cd0414e3eaa4bcd`; that candidate is open, unmerged and not current-main
+compatible yet. Its navigation boundary nests ConnectionManager -> SessionRegistry -> current
+RadioSessionContainer, with the coordinator commit inside the boundary. The producer guard therefore
+precedes that chain. The inspected commit path does not acquire the producer lock in reverse; it
+checks the retained completion witness and session through the boundary, and retires only the
+navigation witness on commit. Reset takes/releases the producer lock before preference I/O;
+writer completion callbacks run after releasing the writer queue lock; AppContainer drains the
+onboarding writer before runtime teardown; and flow-retirement callbacks run after the guarded
+navigation callback returns. RadioSessionContainer teardown marks the graph closed under its fence,
+then performs suspending service shutdown outside it. This is a bounded exact-source inspection, not
+an executed concurrency test of #495 or proof of its eventual integration.
+
+No producer/consumer integration, mounted tip display, native-tip equivalence or full WP-305
+acceptance is claimed by this handoff. The local shared Gradle execution reservation remains held;
+local Gradle execution was not attempted.

@@ -134,8 +134,100 @@ class OnboardingGateTest {
     private fun showFlow(
         dependencies: com.meshcoreone.android.feature.onboarding.OnboardingFeatureDependencies,
         onReceipt: ((com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt) -> Boolean)? = null,
+        onPublication: ((
+            com.meshcoreone.android.feature.onboarding.OnboardingCompletionPublication,
+            commit: (() -> Boolean) -> Boolean,
+        ) -> Boolean)? = null,
     ) = host.get().setContent {
-        MeshCoreTheme { OnboardingFlow(dependencies, onCompleted = {}, onCompletionReceipt = onReceipt) }
+        MeshCoreTheme {
+            OnboardingFlow(
+                dependencies, onCompleted = {}, onCompletionReceipt = onReceipt,
+                onCompletionPublication = onPublication,
+            )
+        }
+    }
+
+    @Test fun `completion publication guard rejects equal receipt replacement and survives recreation`() = runBlocking {
+        val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val deliveries = kotlinx.coroutines.channels.Channel<Unit>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+        val publications = mutableListOf<com.meshcoreone.android.feature.onboarding.OnboardingCompletionPublication>()
+        val committers = mutableListOf<((() -> Boolean) -> Boolean)>()
+        var navigationCommits = 0
+        try {
+            host.setup().visible()
+            val flags = WriteBehindOnboardingFlags(emptyMap(), processScope, { _, _ -> })
+            val dependencies = onboarding(flags, flags.hasCompleted, processScope)
+            val flow = dependencies.retainedFlowCoordinator()
+            val receipt = com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt.WithoutDevice
+            val onPublication: (
+                com.meshcoreone.android.feature.onboarding.OnboardingCompletionPublication,
+                ((() -> Boolean) -> Boolean),
+            ) -> Boolean = { publication, commit ->
+                publications += publication
+                committers += commit
+                deliveries.trySend(Unit)
+                false
+            }
+            showFlow(dependencies, onPublication = onPublication)
+
+            flow.onboarding.completeOnboardingWithReceipt(receipt, {}) { it.trySeal() }
+            deliveries.receive()
+            compose.waitForIdle()
+            val first = publications.single()
+            assertEquals(receipt, first.receipt)
+
+            host.recreate()
+            showFlow(dependencies, onPublication = onPublication)
+            deliveries.receive()
+            compose.waitForIdle()
+            assertSame(first, publications[1])
+            assertEquals(first.revision, publications[1].revision)
+
+            flow.onboarding.resetOnboarding()
+            flow.onboarding.completeOnboardingWithReceipt(receipt, {}) { it.trySeal() }
+            deliveries.receive()
+            compose.waitForIdle()
+            val replacement = publications.last()
+            assertEquals(first.receipt, replacement.receipt)
+            assertTrue(replacement.revision > first.revision)
+            assertNotSame(first, replacement)
+            assertFalse(committers.first().invoke { navigationCommits++; true })
+            assertEquals(0, navigationCommits)
+
+            val commitEntered = java.util.concurrent.CountDownLatch(1)
+            val releaseCommit = java.util.concurrent.CountDownLatch(1)
+            val resetStarted = java.util.concurrent.CountDownLatch(1)
+            val executor = java.util.concurrent.Executors.newFixedThreadPool(2)
+            try {
+                val commit = executor.submit<Boolean> {
+                    committers.last().invoke {
+                        commitEntered.countDown()
+                        check(releaseCommit.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                        navigationCommits++
+                        true
+                    }
+                }
+                assertTrue(commitEntered.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                val reset = executor.submit<Boolean> {
+                    resetStarted.countDown()
+                    runBlocking { flow.onboarding.resetOnboarding() }
+                    true
+                }
+                assertTrue(resetStarted.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                assertFalse(reset.isDone)
+                releaseCommit.countDown()
+                assertTrue(commit.get(5, java.util.concurrent.TimeUnit.SECONDS))
+                assertTrue(reset.get(5, java.util.concurrent.TimeUnit.SECONDS))
+            } finally {
+                releaseCommit.countDown()
+                executor.shutdownNow()
+            }
+            assertFalse(flow.onboarding.commitCompletion(replacement) { navigationCommits++; true })
+            assertEquals(1, navigationCommits)
+        } finally {
+            deliveries.close()
+            processScope.cancel()
+        }
     }
 
     @Test fun `raw flag before producer acknowledgement survives recreation without becoming startup completion`() =

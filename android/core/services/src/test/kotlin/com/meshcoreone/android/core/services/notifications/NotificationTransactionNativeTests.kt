@@ -36,13 +36,17 @@ import kotlin.test.assertTrue
 import kotlin.test.fail
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.withContext
 import org.junit.jupiter.api.DynamicTest
 import org.junit.jupiter.api.TestFactory
@@ -867,6 +871,81 @@ class NotificationTransactionNativeTests {
 
             assertEquals(priorBadge, h.service.badgeCount)
             assertEquals(priorDelivery, h.delivery.badgeSets)
+        },
+        nativeCase("a pre-cancelled badge worker scope propagates cancellation to an active caller") {
+            val workerJob = Job()
+            workerJob.cancel()
+            val clock = VirtualClock()
+            val h = NotificationHarness(CoroutineScope(coroutineContext + workerJob), clock = clock)
+
+            assertFailsWith<CancellationException> { h.service.updateBadgeCount() }
+
+            assertTrue(currentCoroutineContext()[Job]!!.isActive)
+            assertTrue(clock.sleeps.isEmpty())
+            assertEquals(0, h.counts.calls)
+            assertTrue(h.delivery.badgeSets.isEmpty())
+        },
+        nativeCase("worker cancellation after lazy scheduling but before entry is not a successful badge update") {
+            val scheduler = TestCoroutineScheduler()
+            val workerJob = Job()
+            val clock = VirtualClock()
+            val h = NotificationHarness(
+                CoroutineScope(workerJob + StandardTestDispatcher(scheduler)),
+                clock = clock,
+            )
+            val caller = async { assertFailsWith<CancellationException> { h.service.updateBadgeCount() } }
+            yieldUntil("lazy worker scheduled without executing") { workerJob.children.any() }
+
+            workerJob.cancel()
+            scheduler.runCurrent()
+            caller.await()
+
+            assertTrue(currentCoroutineContext()[Job]!!.isActive)
+            assertTrue(clock.sleeps.isEmpty())
+            assertEquals(0, h.counts.calls)
+            assertTrue(h.delivery.badgeSets.isEmpty())
+        },
+        nativeCase("worker cancellation waits for already-started badge computation then propagates") {
+            val workerJob = Job()
+            val clock = VirtualClock()
+            val h = NotificationHarness(CoroutineScope(coroutineContext + workerJob), clock = clock)
+            val readGate = CompletableDeferred<Unit>()
+            h.counts.gates += readGate
+            h.counts.counts = UnreadCounts(1, 2, 3)
+            val caller = async { assertFailsWith<CancellationException> { h.service.updateBadgeCount() } }
+            yieldUntil("badge worker debounce sleeping") { clock.sleeperCount == 1 }
+            clock.wakeAll()
+            yieldUntil("badge computation started") { h.counts.calls == 1 }
+
+            workerJob.cancel()
+            assertFalse(caller.isCompleted)
+            readGate.complete(Unit)
+            caller.await()
+
+            assertTrue(currentCoroutineContext()[Job]!!.isActive)
+            assertEquals(6L, h.service.badgeCount)
+            assertEquals(listOf(6L), h.delivery.badgeSets)
+        },
+        nativeCase("worker cancellation cannot replace an already-started badge query's original failure") {
+            val workerJob = Job()
+            val clock = VirtualClock()
+            val h = NotificationHarness(CoroutineScope(coroutineContext + workerJob), clock = clock)
+            val readGate = CompletableDeferred<Unit>()
+            val sentinel = IllegalStateException("query failed while worker retired")
+            h.counts.gates += readGate
+            h.counts.failure = sentinel
+            h.counts.fail = true
+            val caller = async { assertFailsWith<IllegalStateException> { h.service.updateBadgeCount() } }
+            yieldUntil("badge worker debounce sleeping") { clock.sleeperCount == 1 }
+            clock.wakeAll()
+            yieldUntil("badge query held") { h.counts.calls == 1 }
+
+            workerJob.cancel()
+            readGate.complete(Unit)
+
+            assertSame(sentinel, caller.await())
+            assertEquals(0L, h.service.badgeCount)
+            assertTrue(h.delivery.badgeSets.isEmpty())
         },
         nativeCase("badge retirement during debounce prevents the final mutation") {
             val clock = VirtualClock()

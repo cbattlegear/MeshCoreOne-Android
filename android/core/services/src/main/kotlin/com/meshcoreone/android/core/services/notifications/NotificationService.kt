@@ -545,10 +545,15 @@ class NotificationService(
                     }
                 }
             } catch (cancelled: CancellationException) {
-                if (!superseded.get()) failure.set(cancelled)
+                if (!superseded.get()) failure.compareAndSet(null, cancelled)
                 throw cancelled
             } catch (problem: Exception) {
                 failure.set(problem)
+            }
+        }
+        task.invokeOnCompletion { cause ->
+            if (cause is CancellationException && !superseded.get()) {
+                failure.compareAndSet(null, cause)
             }
         }
         val current = PendingBadgeUpdate(task, superseded, failure)

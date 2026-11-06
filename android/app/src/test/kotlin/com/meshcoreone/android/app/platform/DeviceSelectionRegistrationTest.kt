@@ -1535,7 +1535,10 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
                 assertTrue(replacement.isActive)
                 assertTrue(h.appState.connectionUI.isBusy)
                 compose.onNodeWithText("Immediate replacement radio").performClick()
-                h.eventually("replacement can connect through the unchanged picker", virtualBudgetMillis = 3_000) {
+                h.eventually(
+                    "replacement can connect through the unchanged picker",
+                    virtualBudgetMillis = 3_000, virtualStepMillis = 10,
+                ) {
                     compose.waitForIdle()
                     h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY &&
                         replacement.isCompleted

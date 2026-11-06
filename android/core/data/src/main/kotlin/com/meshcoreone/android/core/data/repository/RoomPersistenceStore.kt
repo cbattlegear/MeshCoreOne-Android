@@ -29,6 +29,7 @@ class RoomPersistenceStore private constructor(
     private val diagnostics: DiagnosticRepository = DiagnosticRepository(context),
     private val metadata: MetadataRepository = MetadataRepository(context),
 ) : PersistenceStoreProtocol,
+    ChannelOccupantAuthority by channels,
     DevicePersisting by devices, ContactPersisting by contacts, ChannelPersisting by channels,
     MessagePersisting by messages, HeardRepeatPersisting by messages, ReactionPersisting by messages,
     ChannelReactionTargetAuthority by messages,
@@ -105,7 +106,11 @@ class RoomPersistenceStore private constructor(
     internal suspend fun <T> withBackupRestore(
         afterCommit: () -> Unit = {},
         block: suspend (MeshCoreDatabase, Clock) -> T,
-    ): T = context.restoreBackup(afterCommit) { block(database, clock) }
+    ): T = context.restoreBackup(afterCommit) {
+        verifyChannelOccupantStorage()
+        database.channelOccupantAuthorities().invalidateAll()
+        block(database, clock)
+    }
 
     fun observeContacts(radioId: RadioId): Flow<SnapshotList<ContactDTO>> =
         context.observe("observeContacts", context.database.contacts().observe(radioId.value)) {

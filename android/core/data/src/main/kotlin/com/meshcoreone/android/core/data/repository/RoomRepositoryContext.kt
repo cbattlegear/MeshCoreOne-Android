@@ -58,6 +58,14 @@ internal class RepositoryTransaction(
     fun afterCommit(action: () -> Unit) { committed += action }
     fun complete() { committed.forEach { it() } }
 
+    fun verifyChannelOccupantStorage() {
+        try {
+            database.requireChannelOccupantTriggersInstalled()
+        } catch (cause: IllegalStateException) {
+            throw PersistenceStoreException(PersistenceStoreError.InvalidData, cause)
+        }
+    }
+
     suspend fun rxRows(radioId: RadioId): List<RxLogEntryEntity> {
         val rows = database.rxLogs().newest(radioId.value, -1).associateByTo(LinkedHashMap()) { it.id }
         for ((key, row) in pendingRx) if (key.radioId == radioId) rows[row.id] = row
@@ -84,10 +92,20 @@ internal class RoomRepositoryContext(
         flushBeforeRollback: Boolean = false,
         block: suspend RepositoryTransaction.() -> T,
     ): T = if (scope == null) {
-        channelIdentity.withChannelIdentityRestore { write(operation, flushBeforeRollback, block) }
+        channelIdentity.withChannelIdentityRestore {
+            write(operation, flushBeforeRollback) {
+                verifyChannelOccupantStorage()
+                block()
+            }
+        }
     } else {
         channelIdentity.requireChannelOperationScope(scope)
-        scope.withChannelIdentityMutation { write(operation, flushBeforeRollback, block) }
+        scope.withChannelIdentityMutation {
+            write(operation, flushBeforeRollback) {
+                verifyChannelOccupantStorage()
+                block()
+            }
+        }
     }
 
     private val mutex = Mutex()

@@ -17,6 +17,11 @@ Swift remains read-only at `db14559b39d32322b06477c6ae676112f583db50`.
 - Canonical WP-201 operation/admission source
   `058da29fdd0c642eb82591c688c1ff8e1d5c4d6b` is composed without held ancestry.
   Its fourteen authored controls are unexecuted here.
+- Exact WP-202 occupant storage source
+  `b495ced4d54b9b348e2292232b258afe79f6ac75`, sole parent `5ff2c83`, was
+  composed disjointly at `70fe86cc8e9a3d5b3e069f0fed435f099a2074fe`.
+  Its ten database controls and migration are unexecuted; no schema 3 export
+  has been generated or borrowed.
 - f805 exclusively owns the new occupant database storage, shared database
   declaration, migrations, exports and database tests. Follow-on version 3 is
   provisional on the exact new inputs, not an accepted/global allocation. No
@@ -55,22 +60,41 @@ writes and device identity erasure waiting behind the owned operation. Device
 creation, deletion, ghost demotion and radio-identity reconciliation participate
 as well as explicit data erasure; metadata-only device updates keep their
 existing transaction behavior. Their data assertions do not substitute for epoch/restore
-proof controls, which await the database producer.
+proof controls.
+
+Six additional real-Room controls exercise read-only historical epoch lookup,
+known-ID secret invalidation, both enable transitions, exact reseed preservation,
+mismatch refusal before row/epoch mutation, restore-wide invalidation and
+transaction rollback, duplicate refusal during lookup/radio synchronization,
+missing-trigger refusal without repair, and actual file-backed database
+close/reopen. Positive persisted rows in these controls are explicit DAO storage
+fixtures. They are **not** lifecycle-issued authority or evidence of live
+reconciliation, original wire provenance, or simulator end-to-end resolution.
+
+The public delegate returns an opaque persisted `String` value only for a
+resolved, enabled, unique exact row binding with an existing radio device,
+within one Room read transaction. Missing/unresolved/stale bindings return null;
+duplicates and missing/incompatible triggers throw reported typed `InvalidData`.
+Channel and participating device writes verify the exact trigger definitions
+before their mutation. Restore invalidates every epoch in its existing Room
+transaction before import writes, preserving rollback and original post-commit
+semantics.
 
 ## Preservation and pending composition
 
 The #603 missing-ID matching-slot fallback remains a true no-op preserving the
 whole row. Mismatch and ambiguity refuse before mutation. Known-ID row identity
 and actual-radio replacement/cascade behavior remain unchanged. The separate
-opaque persisted epoch will invalidate independently of the stable row ID;
+opaque persisted epoch invalidates independently of the stable row ID;
 unresolved authority must be witnessed as persisted state, not inferred only
 from a null public lookup.
 
-Missing work: compose the database producer's exact immutable API and real
-export; integrate read/restore invalidation and guarded reconciliation without
-inventing an issuer; add epoch, secret/enable, ABA, customized metadata,
-history/pending and close/reopen controls; adapt the real simulator reconnect
-controls to the selected opaque-epoch contract. Any runtime activation remains
+Missing work: the producer's real schema export and composed execution;
+guarded reconciliation bound to the actual WP-207 manager/session lease, without
+inventing an issuer; adapt the real simulator reconnect controls to the selected
+opaque-epoch contract, preserving customized metadata and history/pending.
+Database producer controls cover raw-writer, ABA and migration storage semantics,
+but do not prove all-writer dispatch exclusion. Any runtime activation remains
 excluded. #601 stays open until actual composed acceptance is reviewed/executed.
 
 ## Checks and limitations

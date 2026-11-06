@@ -13,7 +13,21 @@ internal class ChannelRepository(
     private val context: RoomRepositoryContext,
     private val rooms: RoomRepository,
     private val identityScope: ChannelIdentityWriteScope? = null,
-) : ChannelPersisting {
+) : ChannelPersisting, ChannelOccupantAuthority {
+    override suspend fun fetchChannelOccupantEpoch(radioId: RadioId, channelIndex: UByte): String? =
+        context.read("fetchChannelOccupantEpoch") {
+            verifyChannelOccupantStorage()
+            val rows = database.channels().forIndex(radioId.value, channelIndex.toLong())
+            if (rows.size > 1) throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+            val row = rows.singleOrNull() ?: return@read null
+            val authority = database.channelOccupantAuthorities().forSlot(radioId.value, channelIndex.toLong())
+                ?: return@read null
+            authority.epoch.takeIf {
+                authority.isResolved && authority.boundRowId == row.id && row.isEnabled &&
+                    database.devices().forRadio(radioId.value).isNotEmpty()
+            }
+        }
+
     internal suspend fun <T> withChannelOperation(
         block: suspend (ChannelRepository, ChannelIdentityWriteScope) -> T,
     ): T {
@@ -43,7 +57,9 @@ internal class ChannelRepository(
 
     override suspend fun saveChannel(radioId: RadioId, info: ChannelInfo): UUID =
         channelWrite("saveChannelInfo", flushBeforeRollback = true) {
-            val existing = database.channels().forIndex(radioId.value, info.index.toLong()).firstOrNull()
+            val occupants = database.channels().forIndex(radioId.value, info.index.toLong())
+            if (occupants.size > 1) throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+            val existing = occupants.singleOrNull()
             val row = if (existing != null) applyingRadioInfo(existing, info) else ChannelDTO.fromInfo(radioId, info).toEntity()
             database.channels().upsert(row)
             save()
@@ -72,7 +88,11 @@ internal class ChannelRepository(
         pruneBeyond: UByte?,
     ): SnapshotList<ChannelDTO> = channelWrite("batchSaveChannels", flushBeforeRollback = true) {
         val byIndex = LinkedHashMap<Long, ChannelEntity>()
-        for (row in database.channels().forRadio(radioId.value)) byIndex.putIfAbsent(row.index, row)
+        for (row in database.channels().forRadio(radioId.value)) {
+            if (byIndex.putIfAbsent(row.index, row) != null) {
+                throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+            }
+        }
         for (info in configured) {
             val existing = byIndex[info.index.toLong()]
             val row = if (existing == null) ChannelDTO.fromInfo(radioId, info).toEntity() else applyingRadioInfo(existing, info)

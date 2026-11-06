@@ -326,3 +326,36 @@ The shared radio-to-metadata serialization boundary and Room interposition regre
 remain unexecuted because the shared Gradle reservation is held. Run `42141885753` is still
 in progress on older head `fb940ee72ab565555db46e54988789fd1756f54c`; it is not evidence for
 this candidate. The `aa880b2` commit is local and unpushed, and PR #532 still points to `fb940ee`.
+
+## Additive follow-up: retry fixture and simulator writer authority
+
+The related `HistoryReactionReplayFailureTest` repair is in commit
+`121bea50975de31f7f10ca4b85185ca13ca7d4e3` (parent
+`a002a8d08807f162536d9291197af42472ef585d`). It restores
+`DeviceEditPersisting by store` on the test's three persistence wrappers while retaining their
+reaction overrides and fault cases; the production versioned-persistence guard remains unchanged.
+The source-reported fixture failure and requested repair are tracked at
+[issue #406 comment](https://github.com/cbattlegear/MeshCoreOne-Android/issues/406#issuecomment-6675594458).
+Trusted `reviewed-support-test` / `add-or-update-related-test` admission passed for
+`HistoryReactionReplayFailureTest.kt`. Exact-head run
+[42153267661](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42153267661)
+targets `121bea50975de31f7f10ca4b85185ca13ca7d4e3` and was still in progress when recorded; no
+test outcome is claimed here.
+
+The narrow producer-side authority primitive and Room regression controls are in local commit
+`b7f3d81591ced6c7e57e2651177d726c1f886351` (tree
+`3a1b38812f5e7a57a464febf8762fad5d1c1ea26`, parent
+`121bea50975de31f7f10ca4b85185ca13ca7d4e3`). The internal
+`DeviceRepository.writeWithDeviceAuthority` delegates to the existing writer/transaction, so revision
+and authority-revision updates remain post-commit and conditional on `save()`. The new real-Room test
+covers committed ghost-only retirement invalidating a ticket captured beforehand without changing
+the canonical DTO, no-write canonical reseed preserving a fresh valid ticket, and ignored/rolled-back
+retirement preserving rows and ticket authority. Trusted current-main admissions passed for
+`DeviceRepository.kt` (`reviewed-support-consumer` / `modify-related-consumer`) and
+`DeviceRepositoryAuthorityWriteTest.kt` (`reviewed-support-test` / `add-or-update-related-test`);
+the policy blob matches current main `0d10b838a181cd3bd34af1a0200435149dbc6bb0`. `git diff --check`
+and the new test file's whitespace check passed. No Gradle test was run and no push/publication was
+made. These tests exercise the shared writer primitive only, not the actual
+`saveSimulatorDevice` / `resolveSimulatorDevicePreferenceConflict` call sites; those must be
+composed and tested against the exact APIs before claiming stale-ticket coverage. The primitive
+depends on the unmerged WP-305 writer foundation, which current main does not contain.

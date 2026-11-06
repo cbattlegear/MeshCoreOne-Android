@@ -447,9 +447,26 @@ process-owned generation. WP-209 supplied another corrected source candidate
 successful work completion, keeps reconnect-cycle equality after settlement, and adds post-return
 caller-cancellation controls. WP-302's review found another owner/duplicate completion window:
 successful shared work can remain READY but refuse edits when the original caller is cancelled
-before resuming after `work.await`. WP-209 is addressing that schedule and has been asked for a
-controlled-dispatcher regression. 78c is not accepted, executed or published and remains
-uncomposed. The reported minimal production
+before resuming after `work.await`. The latest source-only successor is
+`7dbf35ed7a471a48ef309e194cd201163f007edc` (tree
+`c20c6e96cd8f201a29db1826bf8a109f74f08b69`, exact manager blob
+`79abbf437643593e130d5e24a8a4d2de2305535e`). It moves settlement to the exact successful work
+completion callback registered before waiters and adds controlled CONNECTING duplicate/gated-owner
+and cancelled-work controls. WP-302 has been asked to review this exact candidate; that review is
+pending. WP-302 found that the callback can skip settlement when the initiator is already cancelled,
+leaving successfully completed work and a READY graph installed but permanently unwritable while
+cancellation handling is delayed. A held real work child after the success marker and gated-owner
+dispatcher expose this ordering. WP-209's new source-only candidate is
+`87d6601ebba1cfb29aefee9796f2faefb30dd24d` (tree
+`6529054ddc1b3664f0cf3fb93d61d1e0534781bc`, exact manager blob
+`c9ca20135c54db9780d4405acfd023ffac4c347b`). It safely retires when original cancellation wins
+before settlement despite successful work and prevents a duplicate from returning success for a
+revoked completion; the real work-child/gated-owner/CONNECTING-duplicate control covers the ordering.
+WP-302 rejected `87d`: kotlinx-coroutines 1.10.2 can publish a `Deferred`'s completed state before
+running completion listeners, so `work.await()` may return before settlement. Its live check then
+accepts an unsettled successful graph; cancellation before the delayed callback can leave READY
+permanently unwritable after owner cleanup is unreachable. Exact source anchors were sent to WP-209.
+Neither 78c, 7db nor 87d is accepted, executed or published, and none is composed. The reported minimal production
 composition is `ConnectionManager.kt` plus canonical `ChannelIdentityMutation.kt`
 (`a4cf97a36327721e9df7eb9afffbf12b37511d3c`); the cumulative WP-209 ancestry and 411d data/runtime
 test graph change are not required for the runtime API.
@@ -474,8 +491,8 @@ pending manager API, so they are not yet a compilable composed candidate. The ea
 fixture, onboarding-state and authority-control repairs were subsequently frozen in local commit
 `eff1f33e911`.
 
-The exact producer composition still requires favorable review of a later corrected successor to
-`78c...` and the minimal
+The exact producer composition still requires a corrected successor to `87d...`, favorable
+independent review, and the minimal
 canonical `ChannelIdentityMutation.kt` dependency as well as `ConnectionManager.kt`; no cumulative
 WP-209 ancestry is imported. Trusted current-main admissions for the caller files were previously
 verified. On caller head `dcb37285c8d`, `python tools\android-port\controller\validate.py` passed
@@ -487,9 +504,11 @@ PR #532 remains draft at pushed head
 `121bea50975de31f7f10ca4b85185ca13ca7d4e3`; the local commits remain unpushed and unpublished.
 
 Documented native-Windows readiness preflight passed with pinned Python 3.12.4 and existing
-same-host state. `controller/validate.py` passed (64 WPs / 1,866 tracked reference files),
-`test_inventory.py --check` passed (468 paths / 5,133 declarations), `portmap.py --repo .` exited 0,
-and `git diff --check` passed. No Kotlin compilation, Room/Android test, local Gradle execution or
-new hosted run was performed; the shared Gradle execution reservation remains held without cleanup
-proof. PR #532 remains draft at pushed head `121bea50975de31f7f10ca4b85185ca13ca7d4e3`; no push
-or PR update was made for this worktree.
+same-host state. On local HEAD `3e31e4d4ebd`, the pinned native-Windows Python 3.12.4 run of
+`controller/ci.py preflight --local --state $env:ANDROID_CI_STATE --output <fresh absolute temp dir>`
+reported `result: valid`; `controller/validate.py`, `test_inventory.py --check`,
+`portmap.py --repo .`, and `git diff --check` all exited 0. These are readiness, ownership,
+inventory and traceability checks only. No Kotlin compilation, Room/Android test, local Gradle
+execution or new hosted run was performed; the shared Gradle execution reservation remains held
+without cleanup proof. PR #532 remains draft at pushed head
+`121bea50975de31f7f10ca4b85185ca13ca7d4e3`; no push or PR update was made for this worktree.

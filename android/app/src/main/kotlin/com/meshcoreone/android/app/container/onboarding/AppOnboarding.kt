@@ -62,6 +62,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** Process-lifetime platform pieces the container cannot derive itself; built once by the container factory. */
 class OnboardingPlatform(
@@ -137,6 +139,9 @@ class AppStateOnboardingHost(private val container: AppContainer) : OnboardingCo
 
 /** [OnboardingRadioConfigurator] over the live session's settings service and the connected-device editor. */
 class AppStateRadioConfigurator(private val container: AppContainer) : OnboardingRadioConfigurator {
+    // SettingsService serializes radio writes separately from the token-bound Room metadata edit.
+    private val presetOperation = Mutex()
+
     override fun sealCompletion(
         target: OnboardingPresetTarget?,
         attempt: OnboardingCompletionAttempt,
@@ -160,20 +165,27 @@ class AppStateRadioConfigurator(private val container: AppContainer) : Onboardin
     override suspend fun applyPreset(preset: RadioPreset) = applyPreset(preset, currentTarget())
 
     override suspend fun applyPreset(preset: RadioPreset, expectedTarget: OnboardingPresetTarget?) {
-        val session = container.appState.services ?: throw SettingsServiceException(SettingsServiceError.NotConnected)
-        val token = session.token
-        if (expectedTarget != OnboardingPresetTarget(token.epoch.value, token.generation.value, token.radioId.value)) {
-            throw SettingsServiceException(SettingsServiceError.NotConnected)
-        }
-        val pathHashMode = preset.pathHashMode.takeIf { container.connectionManager.connectedDevice?.supportsPathHashMode == true }
-        val info = session.settingsService.applyRadioPresetVerified(preset)
-        kotlinx.coroutines.currentCoroutineContext().ensureActive()
-        if (!container.connectionPort.updateDevice(info, preset.id, token)) {
-            throw SettingsServiceException(SettingsServiceError.NotConnected)
-        }
-        pathHashMode?.let { mode ->
-            if (!container.connectionPort.updatePathHashMode(mode, token)) {
+        presetOperation.withLock {
+            val session = container.appState.services
+                ?: throw SettingsServiceException(SettingsServiceError.NotConnected)
+            val token = session.token
+            if (expectedTarget != OnboardingPresetTarget(
+                    token.epoch.value, token.generation.value, token.radioId.value,
+                )
+            ) {
                 throw SettingsServiceException(SettingsServiceError.NotConnected)
+            }
+            val pathHashMode =
+                preset.pathHashMode.takeIf { container.connectionManager.connectedDevice?.supportsPathHashMode == true }
+            val info = session.settingsService.applyRadioPresetVerified(preset)
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+            if (!container.connectionPort.updateDevice(info, preset.id, token)) {
+                throw SettingsServiceException(SettingsServiceError.NotConnected)
+            }
+            pathHashMode?.let { mode ->
+                if (!container.connectionPort.updatePathHashMode(mode, token)) {
+                    throw SettingsServiceException(SettingsServiceError.NotConnected)
+                }
             }
         }
     }

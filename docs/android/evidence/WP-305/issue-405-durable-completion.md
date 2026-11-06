@@ -288,6 +288,23 @@ entry-keyed retained owner for every rerun entry before multi-entry navigation i
 integrated. The broader candidate remains unpublished while exact-head run `42141885753` runs
 against the older `fb940ee` head; that run cannot verify this follow-up.
 
+### Same-session preset serialization
+
+Source inspection confirmed the concern: `SettingsService` releases its radio-operation mutex
+when `applyRadioPresetVerified` returns, while `ConnectedDeviceEditor` independently serializes
+Room edits and validates only the session token. Two preset continuations for the same live
+session therefore had no shared authority across radio readback and device-metadata persistence.
+`AppStateRadioConfigurator` now holds one container-owned mutex across verified radio writes,
+token-bound device persistence, and optional path-hash persistence. `AppContainer.onboarding` is
+process-owned and lazy, and every rerun owner delegates to its same preset port, so concurrent
+entries use that same serialization boundary.
+
+`DeviceWriterAuthorityRoomTest.concurrentOnboardingPresetsSerializeRadioAndDeviceMetadata`
+uses the real same-session container, fake protocol radio and Room persistence. It pauses A's
+device write after A's verified radio result, starts B, asserts B cannot write the radio before
+A's metadata commit, then verifies B's radio and device metadata are the final values. This
+interposition is authored, not executed; no source-level race is claimed as an observed failure.
+
 The factory and regression were added in source commit
 `0e6854ecb5aca216ae503008e4a469e533ea19a2`, parent
 `35acb964eb6ff1a869da580bf32fa42e22547ba9`, with current-main merge base

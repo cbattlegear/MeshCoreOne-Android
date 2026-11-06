@@ -2,10 +2,12 @@
 package com.meshcoreone.android.app.container
 
 import androidx.room.withTransaction
+import com.meshcoreone.android.app.container.onboarding.AppStateRadioConfigurator
 import com.meshcoreone.android.app.navigation.addSettingsKnownRegion
 import com.meshcoreone.android.app.navigation.removeSettingsKnownRegion
 import com.meshcoreone.android.core.contracts.domain.DeviceEditPersisting
 import com.meshcoreone.android.core.contracts.domain.DeviceWriteSnapshot
+import com.meshcoreone.android.core.contracts.domain.OnboardingPresetTarget
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.model.ChannelDTO
@@ -15,9 +17,13 @@ import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.SelfInfo
+import com.meshcoreone.android.core.services.device.RadioPresets
 import com.meshcoreone.android.feature.settings.device.SettingsNotConnectedException
+import java.util.Collections
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
@@ -214,6 +220,79 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
             assertEquals("new-preset", actual.appliedRadioPresetID)
             assertEquals(actual, h.manager.connectedDevice)
         } finally { release.complete(Unit); h.container.close() }
+    }
+
+    @Test fun concurrentOnboardingPresetsSerializeRadioAndDeviceMetadata() = runTest {
+        val paused = PausedStore(store)
+        val h = ContainerHarness(this, store, persistenceOverride = paused)
+        val radioFrequencyKHz = AtomicInteger(915_000)
+        val radioWrites = Collections.synchronizedList(mutableListOf<UInt>())
+        val deviceWriteEntered = CompletableDeferred<Unit>()
+        val releaseDeviceWrite = CompletableDeferred<Unit>()
+        try {
+            h.links.configureRadio = { radio ->
+                radio.respond = { command ->
+                    when (command[0].toInt()) {
+                        0x0b -> {
+                            val frequency = (0..3).fold(0u) { value, index ->
+                                value or (command[index + 1].toUInt() shl (index * 8))
+                            }
+                            radioFrequencyKHz.set(frequency.toInt())
+                            radioWrites += frequency
+                            listOf(Bytes.of(0))
+                        }
+                        0x01 -> listOf(
+                            Bytes.of(5, 1, 22, 22) + key(7) + le32(0) + le32(0) + Bytes.of(0, 0, 2, 0) +
+                                le32(radioFrequencyKHz.get().toLong()) + le32(250_000) + Bytes.of(10, 5) +
+                                Bytes.utf8("TestNode"),
+                        )
+                        else -> null
+                    }
+                }
+            }
+            h.manager.connect(h.target())
+            h.settle()
+            h.assertReady()
+
+            val before = assertNotNull(h.manager.connectedDevice)
+            val token = assertNotNull(h.manager.snapshot.value.token)
+            val target = OnboardingPresetTarget(token.epoch.value, token.generation.value, token.radioId.value)
+            val firstPreset = RadioPresets.all.first().copy(id = "first-preset", frequencyMHz = 868.0)
+            val secondPreset = RadioPresets.all.first().copy(id = "second-preset", frequencyMHz = 915.0)
+            val configurator = AppStateRadioConfigurator(h.container)
+            radioWrites.clear()
+            paused.beforeSave = { deviceWriteEntered.complete(Unit); releaseDeviceWrite.await() }
+            fun radioWritesSnapshot() = synchronized(radioWrites) { radioWrites.toList() }
+
+            val first = async(start = CoroutineStart.UNDISPATCHED) {
+                configurator.applyPreset(firstPreset, target)
+            }
+            deviceWriteEntered.await()
+            val secondStarted = CompletableDeferred<Unit>()
+            val second = async(start = CoroutineStart.UNDISPATCHED) {
+                secondStarted.complete(Unit)
+                configurator.applyPreset(secondPreset, target)
+            }
+            secondStarted.await()
+            h.settle()
+
+            assertEquals(listOf(firstPreset.frequencyKHz), radioWritesSnapshot())
+            assertFalse(second.isCompleted, "The second radio write waits for the first device metadata commit")
+
+            releaseDeviceWrite.complete(Unit)
+            first.await()
+            second.await()
+            h.settle()
+
+            assertEquals(listOf(firstPreset.frequencyKHz, secondPreset.frequencyKHz), radioWritesSnapshot())
+            val saved = assertNotNull(store.fetchDevice(before.id))
+            assertEquals(secondPreset.frequencyKHz, saved.frequency)
+            assertEquals(secondPreset.id, saved.appliedRadioPresetID)
+            assertEquals(saved, h.manager.connectedDevice)
+        } finally {
+            releaseDeviceWrite.complete(Unit)
+            h.container.close()
+        }
     }
 
     @Test fun ocvWriterPausedAfterItsReadCannotOverwriteACompletedPreset() = runTest {

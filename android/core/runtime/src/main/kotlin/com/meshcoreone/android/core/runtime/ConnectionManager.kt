@@ -88,7 +88,28 @@ class ConnectionManager(
         var lossHandled = false
         var correlationAccounting: Deferred<Unit>? = null
         var identityHandoff: Deferred<Unit>? = null
+        var channelOperationsRetired = false
+        var channelOperationsDrained: CompletableDeferred<Unit>? = null
         val registrationReady = CompletableDeferred<Unit>()
+    }
+
+    /**
+     * A manager-issued in-flight operation, not a radio slot/origin proof. Constructor visibility is
+     * not authentication: every use must match this manager's private issued-instance registry.
+     * Retirement refuses new admissions and waits for admitted callbacks before service teardown.
+     */
+    class ChannelOperationLease internal constructor(
+        internal val manager: ConnectionManager,
+        internal val generation: RadioGeneration,
+        internal val token: SessionToken,
+        internal val session: MeshCoreSession,
+        internal val identityScope: ChannelIdentityWriteScope,
+        internal val ownerJob: Job,
+    ) {
+        val radioId: RadioId get() = token.radioId
+
+        suspend fun <T> withChannelIdentityMutation(radioId: RadioId, block: suspend () -> T): T =
+            manager.withChannelLeaseIdentity(this, radioId, block)
     }
 
     private val lock = Any()
@@ -113,6 +134,88 @@ class ConnectionManager(
     private var revision = 0L
     private var active: RadioGeneration? = null
     private var retained: RadioGeneration? = null
+    private val channelOperationLeases = mutableSetOf<ChannelOperationLease>()
+
+    suspend fun <T> withChannelOperationLease(
+        token: SessionToken,
+        session: MeshCoreSession,
+        radioId: RadioId,
+        identityScope: ChannelIdentityWriteScope,
+        block: suspend (ChannelOperationLease) -> T,
+    ): T {
+        ChannelIdentityMutex.PROCESS.requireChannelOperationScope(identityScope)
+        val job = checkNotNull(currentCoroutineContext()[Job])
+        val lease = synchronized(lock) {
+            val owner = active
+            check(owner != null && isCurrent(owner) && owner.job.isActive &&
+                !owner.channelOperationsRetired && owner.target != ConnectionTarget.Simulator &&
+                owner.token == token && owner.session === session && token.radioId == radioId &&
+                owner.device?.radioId == radioId &&
+                values.value.token == token && values.value.state.isConnected &&
+                owner.services != null && owner.ownership != null &&
+                channelOperationLeases.none { it.ownerJob === job }) {
+                "Channel operation does not belong to the current physical radio session"
+            }
+            checkNotNull(owner.ownership).verifyReturned(checkNotNull(owner.services).services)
+            ChannelOperationLease(this, owner, token, session, identityScope, job).also {
+                channelOperationLeases += it
+            }
+        }
+        try {
+            return block(lease)
+        } finally {
+            synchronized(lock) {
+                channelOperationLeases.remove(lease)
+                val owner = lease.generation
+                if (owner.channelOperationsRetired && channelOperationLeases.none { it.generation === owner }) {
+                    owner.channelOperationsDrained?.complete(Unit)
+                }
+            }
+        }
+    }
+
+    private suspend fun <T> withChannelLeaseIdentity(
+        lease: ChannelOperationLease,
+        radioId: RadioId,
+        block: suspend () -> T,
+    ): T {
+        requireChannelLease(lease, radioId)
+        return lease.identityScope.withChannelIdentityMutation {
+            requireChannelLease(lease, radioId)
+            block()
+        }
+    }
+
+    private suspend fun requireChannelLease(lease: ChannelOperationLease, radioId: RadioId) {
+        val caller = currentCoroutineContext()
+        caller.ensureActive()
+        check(caller[Job] === lease.ownerJob) { "Channel lease belongs to a different callback Job" }
+        ChannelIdentityMutex.PROCESS.requireChannelOperationScope(lease.identityScope)
+        synchronized(lock) {
+            check(lease.manager === this && lease in channelOperationLeases &&
+                lease.radioId == radioId && lease.generation.token == lease.token &&
+                lease.generation.session === lease.session) {
+                "Channel lease is foreign, expired, or bound to a different radio session"
+            }
+        }
+    }
+
+    private fun retireChannelOperationsLocked(owner: RadioGeneration): CompletableDeferred<Unit> {
+        owner.channelOperationsRetired = true
+        return owner.channelOperationsDrained ?: CompletableDeferred<Unit>().also { drained ->
+            owner.channelOperationsDrained = drained
+            if (channelOperationLeases.none { it.generation === owner }) drained.complete(Unit)
+        }
+    }
+
+    private suspend fun requireNoChannelOperationLease() {
+        val job = currentCoroutineContext()[Job]
+        synchronized(lock) {
+            check(channelOperationLeases.none { it.ownerJob === job }) {
+                "A channel operation cannot await retirement of its own lease"
+            }
+        }
+    }
     private var pending: Deferred<Unit>? = null
     private var pendingTarget: ConnectionTarget? = null
     private var precedingStop: Deferred<TeardownReport>? = null
@@ -276,6 +379,7 @@ class ConnectionManager(
         forceReconnect: Boolean,
         expectedRevision: Long? = null,
     ) {
+        requireNoChannelOperationLease()
         currentCoroutineContext().ensureActive()
         synchronized(lock) { if (expectedRevision != null && revision != expectedRevision) return }
         val initiatingJob = currentCoroutineContext()[Job]
@@ -797,6 +901,7 @@ class ConnectionManager(
         reason: RuntimeDisconnectReason,
         expectedOwner: RadioGeneration? = null,
     ): Pair<TeardownReport, Long>? {
+        requireNoChannelOperationLease()
         val reentrant = currentCoroutineContext()[RuntimeOperation]?.owner === operationIdentity
         val before = snapshot.value
         val (cleanup, expectedRevision) = synchronized(lock) {
@@ -1203,6 +1308,7 @@ class ConnectionManager(
     }
 
     suspend fun close(): TeardownReport {
+        requireNoChannelOperationLease()
         val reentrant = currentCoroutineContext()[RuntimeOperation]?.owner === operationIdentity
         val except = if (reentrant) synchronized(lock) { pending } else null
         return withContext(NonCancellable) { startShutdown(null, except).await() }
@@ -1254,6 +1360,7 @@ class ConnectionManager(
         publishDisconnected: Boolean = true,
     ): TeardownReport {
         synchronized(lock) {
+            retireChannelOperationsLocked(owner)
             owner.correlationAccounting?.cancel()
             if (primary != null && provenForeignAdmission(primary, owner)) {
                 owner.link?.let { PhysicalOwnership.release(it.transport, owner.physicalOwner) }
@@ -1272,6 +1379,8 @@ class ConnectionManager(
         }
         val serviceWork = synchronized(owner.lock) {
             owner.servicesClosed ?: cleanupScope.async(start = CoroutineStart.LAZY) {
+                val channelOperations = synchronized(lock) { retireChannelOperationsLocked(owner) }
+                channelOperations.await()
                 val issues = mutableListOf<TeardownIssue>()
                 suspend fun attempt(stage: LifecycleStage, action: suspend () -> Unit) {
                     try { action() } catch (failure: Exception) { issues += TeardownIssue(stage, failure) }
@@ -1341,7 +1450,10 @@ class ConnectionManager(
 
     private fun detachOwnersLocked(state: DeviceConnectionState, intent: ConnectionIntent = values.value.intent): List<RadioGeneration> {
         val owners = listOfNotNull(active, retained).distinct()
-        owners.forEach { it.correlationAccounting?.cancel() }
+        owners.forEach {
+            retireChannelOperationsLocked(it)
+            it.correlationAccounting?.cancel()
+        }
         active = null
         retained = null
         deviceValue = null

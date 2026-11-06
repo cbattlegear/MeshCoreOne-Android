@@ -117,7 +117,41 @@ Database producer controls cover raw-writer, ABA and migration storage semantics
 but do not prove all-writer dispatch exclusion. Any runtime activation remains
 excluded. #601 stays open until actual composed acceptance is reviewed/executed.
 
-## Checks and limitations
+## Reassigned lifecycle issuer
+
+Coordinator assignment
+`assignment:fc9361f4-ec03-4739-994b-ddb9b4e4cec9:call_0aL5cY4YSoZHW3oQ3Ud7tZRZ`
+transferred the stalled lifecycle seam to this existing active session. The
+prior runtime owner's retained two-file uncommitted diff was inspected
+read-only: old-base offline installation changes, not a channel lease issuer.
+Those edits remain untouched and are not transplanted into this successor.
+
+The actual `ConnectionManager` now issues a concrete nested lease only inside
+an already owned canonical process-operation scope, after checking the current
+manager-owned generation, active generation Job, published connection/token,
+actual session reference, radio/device partition and registered live factory
+graph. Its internal constructor is not treated as authentication: each use
+requires exact membership in the manager's private issued-instance registry,
+the exact callback Job and canonical scope. A copied token, foreign connection,
+foreign gate, child Job, fabricated instance or escaped callback cannot use it.
+Simulator placeholder sessions are explicitly ineligible.
+
+Retirement rejects new admissions and waits for admitted callbacks to reach
+terminal outcome before service or transport teardown. The drain is awaited
+outside the manager lock; callback cleanup can remove its permit and complete
+the drain even under cancellation. An admitted callback may finish after
+retirement starts; this is not a claim that revocation cancels existing work.
+Self-retirement from the owning callback refuses rather than waiting on its own
+permit. Six new real-manager/session controls exercise binding, expiry/forging,
+both replacement and disconnect drain, and exceptional/cancelled release.
+These controls are authored only, not executed.
+
+No App factory/service activation consumes this new method. The data module's
+concrete guarded-reconciliation bridge still requires architectural review of
+the directly admitted production data-to-runtime edge; there is no runtime-to-
+data dependency cycle. The existing test dependency is not production approval.
+
+## Source validation status
 
 Trusted named `modify-related-consumer` and `add-or-update-related-test`
 admissions passed for the repository/helper/control paths; canonical contract

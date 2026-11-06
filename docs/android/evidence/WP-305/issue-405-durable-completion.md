@@ -627,3 +627,52 @@ Both `SettingsPathHashPersistenceTest` and `SettingsPathHashRecreationTest` now 
 `Bytes.of(0x12, command[1].toInt()) + Bytes(ByteArray(48))`. Foreground sync, readiness, Room/live,
 failure/retry and recreation assertions are unchanged; no production protocol behavior was changed.
 The repaired fixtures require an actual exact-candidate hosted rerun before claiming resolution.
+
+### Source-only manager composition for independent review
+
+The coordinator cleared the exact WP-201 two-file source pair from
+`d24674e5778d2b401bc6866f64a205224c0b5b1e` after its independent producer review.
+Local consumption commit `e3ebcba31728b149fbb04812a9c395d76e3583a2` retains production blob
+`a4cf97a36327721e9df7eb9afffbf12b37511d3c` and test blob
+`6800d1e8d73f1c22b665476d3599c42f93f21a6a` exactly. This uses the genuine WP-201
+create/test admission and explicit source-consumption clearance, not a fictional transferable
+controller receipt or modify-existing admission for a missing file.
+
+After withdrawing the earlier `cb1` clearance because of an additional reported deadlock, the
+coordinator cleared only corrected producer `d29f27f9072be0a38116ab1d0287c36a269d0588`
+(tree `9bc7e56b5b4b1c0fe010eb9bf198c4fcddfb9fbe`, manager blob
+`c4861d1a781b6bf3489630f3b8f8583d013084e4`) and matching runtime controls for source composition.
+WP-302's favorable disposition is narrow source review of the previously reported defects,
+not full manager acceptance or Kotlin execution.
+
+The composition is based on preserved caller `e3ebcba31728b149fbb04812a9c395d76e3583a2`.
+Actual `origin/main` was refreshed to `5f4d9b92b2eb30d02f001567ef7e4f1dd6e80f66`;
+its policy blob is `10bf918158203e444d0a80c79f94497e390af03b` and manifest blob is
+`e81605857f5aa7b893dcd63224fb27a45d7b0f3a`.
+The main advance adds the WP-217 simulator recovery-copy capability and validator changes;
+it does not change the runtime baseline or manifest. No policy changes were imported.
+Trusted `reserve.py admit` returned `reviewed-support-consumer/modify-related-consumer` for
+the existing manager and `reviewed-support-test/add-or-update-related-test` for its controls.
+
+Only the manager delta relative to refreshed main and `ChannelOperationLeaseTest.kt` were
+three-way merged through a disposable alternate Git index before applying the clean result.
+No cumulative producer ancestry, Room fixture, held schema, data implementation or build changes
+were imported. The merge had no textual conflict. The composed manager blob is
+`746a2aec219b0ac758ecf2eb42a5e8242d5f1ab9`; its differences from the exact reviewed producer
+are precisely the retained WP-305 versioned insert/edit/activation, public-key persistence and
+onboarding/token-bound read/publication hunks. These shared-manager overlaps still require full
+independent source review of the composition.
+
+The runtime control blob is exactly `4e5ec78a4dc97847e1e82bca12ab250be603d56a`.
+It declares 37 `nativeCase` controls (source count only, not runner discovery).
+All other producer runtime files equal refreshed main; the caller retains its existing versioned
+`TestDevices` fixture and `RuntimeSeamTest` controls rather than replacing them with older producer
+versions. The only new production contract required by this runtime delta is the already consumed
+canonical identity gate. Runtime classes, protocol types and test helpers otherwise resolve to
+existing runtime dependencies; no additional producer data/schema files are a runtime API prerequisite.
+
+Pinned Python 3.12.4 `controller/validate.py`, `test_inventory.py --check`,
+`portmap.py --repo .`, and the staged `git diff --check` passed on the source composition.
+No compilation, Kotlin/Room execution, hosted rerun, hardware evidence, manager acceptance,
+activation, push or dispatch is claimed. The exact frozen composition must receive full independent
+source review before any later authorized diagnostics; execution and publication holds remain.

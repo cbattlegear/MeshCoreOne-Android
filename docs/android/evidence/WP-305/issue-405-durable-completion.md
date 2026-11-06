@@ -339,8 +339,18 @@ The source-reported fixture failure and requested repair are tracked at
 Trusted `reviewed-support-test` / `add-or-update-related-test` admission passed for
 `HistoryReactionReplayFailureTest.kt`. Exact-head run
 [42153267661](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42153267661)
-targets `121bea50975de31f7f10ca4b85185ca13ca7d4e3` and was still in progress when recorded; no
-test outcome is claimed here.
+targets `121bea50975de31f7f10ca4b85185ca13ca7d4e3` and failed. Its Android logs report 32 unique
+failing `HistoryReactionReplayFailureTest` cases; the first setup failure is
+`UnsupportedOperationException: Connection initialization requires versioned device persistence`
+at `ConnectionManager.establish:610`. The remaining `FaultStore` wrapper was still typed only as
+`PersistenceStoreProtocol`, hiding the real Room store's `DeviceEditPersisting` capability. The same
+run also failed two mounted `OnboardingGateTest` enabled-state cases with `ComposeTimeoutException`
+in `awaitEnabled`; the log reports queued main-looper runnables after the timeout. The local,
+unexecuted follow-up now types `FaultStore` as `RoomPersistenceStore` and delegates both
+`PersistenceStoreProtocol` and `DeviceEditPersisting`; its bounded Compose wait drains the
+Robolectric main looper before checking enabled semantics. These edits are not covered by run
+`42153267661`. No local Gradle test was run because the shared Gradle execution reservation remains
+held.
 
 The narrow producer-side authority primitive and Room regression controls are in local commit
 `b7f3d81591ced6c7e57e2651177d726c1f886351` (tree
@@ -369,3 +379,105 @@ trigger, asserts the DAO reports zero deleted rows, throws a typed `PersistenceS
 after a staged canonical-row write, and verifies rollback restores both rows and leaves the old
 ticket usable. This is still a primitive-level control, not a call through the two #602 APIs, and
 has not been compiled or executed.
+
+### Follow-up after exact-head run 42153267661
+
+The current worktree is still based on local `HEAD` `113b46a39fef60cf389174c3d632ff95675207f1`
+(tree `4c845cf815efcbedb827442bf9d368dbf21874cf`, parent
+`a0a6a8e4f2f9cd20e44c6783b5014630eab8118c`), merge base
+`35abcc1276082995eed216bf28bff04d77e176c8`, against `origin/main`
+`0d10b838a181cd3bd34af1a0200435149dbc6bb0`. The changes below are uncommitted and are not part
+of run `42153267661` or a new immutable candidate.
+
+The exact run emitted 54 unique App test failure markers: 32 `HistoryReactionReplayFailureTest`, 3
+`CliSettingsReadbackTest`, 4 `TraceToolsEntryLifetimeTest`, 1 `RxRegionConsumerTest`, 1
+`NodeConfigMountedPartialImportTest`, 3 `DeviceWriterAuthorityRoomTest`, 7
+`SettingsPathHashPersistenceTest`, 1 `SettingsPathHashRecreationTest`, and 2 mounted
+`OnboardingGateTest`. The local source-only repair addresses the missing `DeviceEditPersisting`
+delegation in the first five wrapper families; CLI now observes only successful conditional device
+writes. The two region controls now seed the corresponding Room rows because `saveDevice` preserves
+stored known regions. The `DeviceWriterAuthorityRoomTest` activation control remains unresolved: its
+hosted failure is `UncompletedCoroutinesError` after one minute. All seven settings-persistence
+failures and the recreation failure occur during the initial `h.manager.connect(...)`, before the
+settings actions. Five persistence cases and the recreation case report
+`CancellationException: Superseded connection generation` at `ConnectionManager.establish:670`
+after `initialSync`; the other two persistence cases report it at
+`syncDeviceTimeIfNeeded:795` and `:787`. Both fixture families call `foreground.activityStarted()`
+immediately before connecting. The log does not establish why the generation retires.
+
+For the two mounted onboarding failures, the run's model/publication assertions passed before the
+mounted enabled-button waits timed out. Source inspection found that the known-uncommitted completion
+callback emitted `unsettled=false` before clearing `pendingAttempt`, while the Compose gates also read
+synchronous retry guards and received no later unsettled-flow emission. The local fix clears the
+attempt guard before publishing settled state and adds a regression that observes the guard at that
+emission. The mounted assertions remain, and the bounded test wait also idles Robolectric's main
+looper as the run reported queued callbacks. These are source-grounded repairs, not an executed fix;
+the model-ordering and test-looper effects remain separately unverified.
+
+The producer-side worktree also stages the shared device authority revision before caller-registered
+post-commit callbacks, so a later callback exception cannot suppress authority invalidation after a
+committed write. Backup imports stage the same authority update when they insert devices; the restore
+transaction applies its device-authority callback before the preference post-commit hook. Added Room
+controls cover insertion invalidating an unchanged canonical-row ticket, no-op import preserving a
+fresh ticket, rollback preserving a valid ticket, and a committed write followed by a throwing
+post-commit callback rejecting a stale ticket. These controls remain primitive-level; no #602
+`saveSimulatorDevice` / `resolveSimulatorDevicePreferenceConflict` caller integration is present.
+
+The separate #495 stale-editor issue remains a bounded cross-boundary acceptance blocker: the
+caller-side binding is now frozen, but cannot provide retirement ordering until the manager producer
+is reviewed and composed. The original session-currency check before suspending Room I/O was
+insufficient; an in-transaction predicate alone does not close the check/commit race. WP-209's first
+frozen manager candidate `3dbcd1b3b4281509cefe0914e432114efa5a0a14` was not accepted after
+WP-302 identified a cancellation/reconnect-authority admission hole. WP-209 supplied corrected
+candidate `4180c56030b33b6dff71de2fa7b00d870323ca19` (tree
+`47ab8dc1de21c4c45c4fad563c7fc86a17bbd4b3`), retaining
+`captureDeviceWrite(): Pair<SessionToken, DeviceDTO>?` and
+`withDeviceWrite(token, deviceId, block): T?`. It binds capture/admission to live establishment
+authority and shares the generation drain through awaited terminal storage outcomes, but WP-302's
+review found two further post-success-marker revocation windows. WP-209 corrected these in
+`2a0e196bf38c4eda0e5ea609d107364cbff2694c` (tree
+`0ab2453cd1a00d9775595d4260543b938d14d71b`); its exact `ConnectionManager.kt` blob is
+`024a9c30aa38ab085ae9e0226ef316d1464b4961`. WP-302 then found a caller-lifetime cancellation
+window in that candidate: a permanently cancelled initiating Job can revoke an already-established
+process-owned generation. The producer is correcting that settlement boundary; 2a0e is not
+accepted, executed or published, and remains uncomposed here. The reported minimal production
+composition is `ConnectionManager.kt` plus canonical `ChannelIdentityMutation.kt`
+(`a4cf97a36327721e9df7eb9afffbf12b37511d3c`); the cumulative WP-209 ancestry and 411d data/runtime
+test graph change are not required for the runtime API.
+
+The bounded caller delta now adds an explicit manager-lease policy to `ConnectedDeviceAccess`,
+atomic capture and manager lease delegation in `ManagerDeviceAccess`, and lease coverage for the
+whole ordinary `persistEdit` retry/Room/publication and direct known-region add/remove operation.
+Guarded capture/admission failure refuses without legacy fallback; explicitly guard-off fakes retain
+the old no-token behavior. The caller never recaptures after suspension. New real-Room paused-store
+controls cover delayed stale same-ID capture rejection, commit and rollback drains on disconnect,
+successor installation drain, direct region-add and region-remove drains, guard-off parity, and
+missing guarded-capture refusal. WP-302 source review found that reusing the captured DTO as the
+post-`sessionEdits` merge baseline could overwrite a queued same-generation update. The caller now
+reads the latest DTO through the original token only after the mutex and lease are acquired, then
+validates its device identity; the direct region path uses the same fresh, token-bound baseline for
+the default-scope decision. The existing real-Room 868→915 queued-edit assertion remains, and a new
+queued default-scope/region assertion verifies it does not clear a scope changed by the earlier edit.
+These controls are authored, not executed. The caller freeze is local commit `fca33e0adbf`; the freshness
+correction and added Room control are local commit `dcb37285c8d` directly after it. Both follow
+WP-305 writer commit `113b46a39fef60cf389174c3d632ff95675207f1` and intentionally reference the
+pending manager API, so they are not yet a compilable composed candidate.
+
+The exact producer composition still requires favorable review of `2a0e...` and the minimal
+canonical `ChannelIdentityMutation.kt` dependency as well as `ConnectionManager.kt`; no cumulative
+WP-209 ancestry is imported. Trusted current-main admissions for the caller files were previously
+verified. On caller head `dcb37285c8d`, `python tools\android-port\controller\validate.py` passed
+(64 WPs / 1,866 tracked reference files), `python tools\android-port\test_inventory.py --check`
+passed (468 paths / 5,133 declarations; inventory only), `python tools\android-port\portmap.py --repo .`
+exited 0 (traceability only), and `git diff --check` passed. No Kotlin compilation,
+Room/Android test or new hosted run occurred because the shared Gradle reservation remains held.
+PR #532 remains draft at pushed head
+`121bea50975de31f7f10ca4b85185ca13ca7d4e3`; this local follow-up is uncommitted and unpublished.
+
+Documented native-Windows readiness preflight passed with pinned Python 3.12.4 and existing
+same-host state. `controller/validate.py` passed (64 WPs / 1,866 tracked reference files),
+`test_inventory.py --check` passed (468 paths / 5,133 declarations), `portmap.py --repo .` exited 0,
+and `git diff --check` passed. No Kotlin compilation, Room/Android test, local Gradle execution or
+new hosted run was performed; the shared Gradle execution reservation remains held without cleanup
+proof. PR #532 remains draft at pushed head `121bea50975de31f7f10ca4b85185ca13ca7d4e3`; no push
+or PR update was made for this worktree.

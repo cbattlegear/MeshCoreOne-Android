@@ -10,6 +10,7 @@ import com.meshcoreone.android.core.contracts.domain.NotificationPreferencesPort
 import com.meshcoreone.android.core.contracts.domain.NotificationStringProvider
 import com.meshcoreone.android.core.contracts.domain.UnreadCounts
 import com.meshcoreone.android.core.contracts.notifications.NotificationAuthorizationStatus
+import com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt
 import com.meshcoreone.android.core.contracts.notifications.NotificationCategory
 import com.meshcoreone.android.core.contracts.notifications.NotificationDeliveryPort
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
@@ -155,6 +156,7 @@ class NotificationService(
 
     /** Guarded by [lock]: in-memory quick-reply drafts, lost with the session as in Swift. */
     private val pendingDrafts = HashMap<EntityKey, String>()
+    private val pendingDraftOwners = HashMap<EntityKey, NotificationActionReceipt>()
 
     // MARK: - Setup and authorization
 
@@ -369,11 +371,33 @@ class NotificationService(
      * Keyed by radio plus id (Swift: contact UUID) so a same-UUID contact of another radio never sees it.
      */
     fun saveDraft(contact: EntityKey, text: String) {
-        synchronized(lock) { pendingDrafts[contact] = text }
+        synchronized(lock) {
+            pendingDrafts[contact] = text
+            pendingDraftOwners.remove(contact)
+        }
+    }
+
+    internal fun saveActionDraft(contact: EntityKey, text: String, owner: NotificationActionReceipt) {
+        synchronized(lock) {
+            pendingDrafts[contact] = text
+            pendingDraftOwners[contact] = owner
+        }
+    }
+
+    internal fun clearActionDraft(contact: EntityKey, owner: NotificationActionReceipt) {
+        synchronized(lock) {
+            if (pendingDraftOwners[contact] === owner) {
+                pendingDrafts.remove(contact)
+                pendingDraftOwners.remove(contact)
+            }
+        }
     }
 
     /** Retrieves and removes the draft for [contact], or null when none exists. */
-    fun consumeDraft(contact: EntityKey): String? = synchronized(lock) { pendingDrafts.remove(contact) }
+    fun consumeDraft(contact: EntityKey): String? = synchronized(lock) {
+        pendingDraftOwners.remove(contact)
+        pendingDrafts.remove(contact)
+    }
 
     // MARK: - Badge
 

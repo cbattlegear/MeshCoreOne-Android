@@ -3,6 +3,9 @@ package com.meshcoreone.android.core.services.notifications
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt
+import com.meshcoreone.android.core.contracts.notifications.NotificationReplyOutcomeUncertain
+import com.meshcoreone.android.core.contracts.notifications.NotificationReadReceipt
 import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.RadioId
 import java.util.UUID
@@ -10,6 +13,8 @@ import java.util.logging.Level
 import java.util.logging.Logger
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 
 /**
@@ -61,35 +66,34 @@ class NotificationActionHandler(
         val stored = contained("fetchContact", null) { dataStore.fetchContact(contact) } ?: return
 
         if (connectionReady() && contact.radioId == radioId && stored.radioId == radioId) {
-            val sent = try {
-                messageService.sendDirectMessage(text, stored)
-                true
-            } catch (cancelled: CancellationException) {
-                // Swift's catch-all keeps the typed text on cancellation too; do that, then rethrow.
-                withContext(NonCancellable) { replyNotSent(contact, stored.displayName, text) }
-                throw cancelled
-            } catch (failure: Exception) {
-                logger.log(Level.INFO, "Quick reply failed; saving draft", failure)
-                false
-            }
-            if (sent) {
-                // The message is out; finish the bookkeeping even if the caller is cancelled now.
-                withContext(NonCancellable) {
+            val action = currentCoroutineContext()[NotificationActionReceipt] ?: NotificationActionReceipt()
+            sendReply(
+                actionReceipt = action,
+                send = { messageService.sendDirectMessage(text, stored) },
+                notSent = { replyNotSent(contact, stored.displayName, text, action) },
+                accepted = {
+                    notificationService.clearActionDraft(contact, action)
                     // Clear unread state - user replied so they've seen the chat.
                     contained("clearUnreadCount", Unit) { dataStore.clearUnreadCount(contact) }
                     notificationService.removeDeliveredNotifications(contact.id)
                     notificationService.updateBadgeCount()
                     contained("notifyConversationsChanged", Unit) { syncCoordinator.notifyConversationsChanged() }
-                }
-                return
-            }
+                },
+            )
+            return
         }
 
         replyNotSent(contact, stored.displayName, text)
     }
 
-    private suspend fun replyNotSent(contact: EntityKey, displayName: String, text: String) {
-        notificationService.saveDraft(contact, text)
+    private suspend fun replyNotSent(
+        contact: EntityKey,
+        displayName: String,
+        text: String,
+        owner: NotificationActionReceipt? = null,
+    ) {
+        if (owner == null) notificationService.saveDraft(contact, text)
+        else notificationService.saveActionDraft(contact, text, owner)
         notificationService.postQuickReplyFailedNotification(displayName, contact)
     }
 
@@ -103,26 +107,56 @@ class NotificationActionHandler(
             return
         }
 
-        try {
-            messageService.sendChannelMessage(text, channelIndex, radioId)
-        } catch (cancelled: CancellationException) {
-            withContext(NonCancellable) {
+        sendReply(
+            send = { messageService.sendChannelMessage(text, channelIndex, radioId) },
+            notSent = {
                 notificationService.postChannelQuickReplyFailedNotification(channelName, radioId, channelIndex)
+            },
+            accepted = {
+                contained("clearChannelUnreadCount", Unit) { dataStore.clearChannelUnreadCount(radioId, channelIndex) }
+                notificationService.removeDeliveredNotifications(channelIndex, radioId)
+                notificationService.updateBadgeCount()
+                contained("notifyConversationsChanged", Unit) { syncCoordinator.notifyConversationsChanged() }
+            },
+        )
+    }
+
+    private suspend fun sendReply(
+        actionReceipt: NotificationActionReceipt? = null,
+        send: suspend () -> Unit,
+        notSent: suspend () -> Unit,
+        accepted: suspend () -> Unit,
+    ) {
+        val receipt = actionReceipt ?: currentCoroutineContext()[NotificationActionReceipt] ?: NotificationActionReceipt()
+        try {
+            withContext(receipt) {
+                send()
+                receipt.accepted()
+            }
+        } catch (cancelled: CancellationException) {
+            receipt.uncertain()
+            withContext(NonCancellable) {
+                when {
+                    receipt.isAccepted -> accepted()
+                    receipt.preventsReplay ->
+                        logger.log(Level.WARNING, "Reply acceptance unknown; not restoring an unsent draft", cancelled)
+                    else -> notSent()
+                }
             }
             throw cancelled
         } catch (failure: Exception) {
-            logger.log(Level.INFO, "Channel quick reply failed", failure)
-            notificationService.postChannelQuickReplyFailedNotification(channelName, radioId, channelIndex)
-            return
+            receipt.uncertain()
+            when {
+                receipt.isAccepted -> logger.log(Level.WARNING, "Reply accepted before follow-up failed", failure)
+                receipt.preventsReplay -> throw NotificationReplyOutcomeUncertain(failure)
+                else -> {
+                    logger.log(Level.INFO, "Quick reply failed before acceptance", failure)
+                    notSent()
+                    return
+                }
+            }
         }
-
-        withContext(NonCancellable) {
-            // Clear unread state - user replied so they've seen the channel.
-            contained("clearChannelUnreadCount", Unit) { dataStore.clearChannelUnreadCount(radioId, channelIndex) }
-            notificationService.removeDeliveredNotifications(channelIndex, radioId)
-            notificationService.updateBadgeCount()
-            contained("notifyConversationsChanged", Unit) { syncCoordinator.notifyConversationsChanged() }
-        }
+        withContext(NonCancellable) { accepted() }
     }
 
     /** The stored name, then the localized fallback, then a last-resort English literal. */
@@ -131,32 +165,59 @@ class NotificationActionHandler(
 
     // MARK: - Mark as Read
 
-    suspend fun handleMarkAsRead(contact: EntityKey, messageID: UUID) = markRead("handleMarkAsRead", messageID) {
+    suspend fun handleMarkAsRead(contact: EntityKey, messageID: UUID) = markRead("handleMarkAsRead", messageID) { progress ->
         dataStore.markMessageAsRead(EntityKey(contact.radioId, messageID))
+        progress.writeReturned()
         dataStore.clearUnreadCount(contact)
+        progress.writeReturned()
     }
 
     suspend fun handleChannelMarkAsRead(radioId: RadioId, channelIndex: UByte, messageID: UUID) =
-        markRead("handleChannelMarkAsRead", messageID) {
+        markRead("handleChannelMarkAsRead", messageID) { progress ->
             dataStore.markMessageAsRead(EntityKey(radioId, messageID))
+            progress.writeReturned()
             dataStore.clearChannelUnreadCount(radioId, channelIndex)
+            progress.writeReturned()
         }
 
-    suspend fun handleRoomMarkAsRead(session: EntityKey, messageID: UUID) = markRead("handleRoomMarkAsRead", messageID) {
+    suspend fun handleRoomMarkAsRead(session: EntityKey, messageID: UUID) = markRead("handleRoomMarkAsRead", messageID) { progress ->
         roomServerService.markAsRead(session)
+        progress.writeReturned()
     }
 
     /**
-     * Swift `do { writes; remove; badge; notify } catch { /* silently ignore */ }`. Once the writes have
-     * landed, the tail runs to completion even if the caller is cancelled (Swift's tail is not cooperative).
+     * Started local writes finish before caller cancellation can hide their return. Commitment means
+     * every requested write returned, not that the group is atomic or a partial failure is rolled back.
      */
-    private suspend inline fun markRead(operation: String, messageID: UUID, writes: () -> Unit) {
+    private suspend fun markRead(
+        operation: String,
+        messageID: UUID,
+        writes: suspend (NotificationReadReceipt) -> Unit,
+    ) {
+        currentCoroutineContext().ensureActive()
+        val receipt = currentCoroutineContext()[NotificationActionReceipt] ?: NotificationActionReceipt()
+        val progress = currentCoroutineContext()[NotificationReadReceipt] ?: NotificationReadReceipt()
+        check(!progress.preventsReplay) { "A started notification read action cannot be replayed" }
         contained(operation, Unit) {
-            writes()
             withContext(NonCancellable) {
-                notificationService.removeDeliveredNotification(messageID)
-                notificationService.updateBadgeCount()
-                syncCoordinator.notifyConversationsChanged()
+                progress.started()
+                try {
+                    writes(progress)
+                    progress.committed()
+                } finally {
+                    progress.uncertain()
+                    if (progress.state == NotificationReadReceipt.State.UNCERTAIN) {
+                        logger.warning("Notification read writes may be partial; automatic replay requires recovery")
+                    }
+                }
+                receipt.committed()
+                // A collaborator may cancel the current write operation while returning success.
+                // Start a fresh post-commit context before any suspending bookkeeping.
+                withContext(NonCancellable) {
+                    notificationService.removeDeliveredNotification(messageID)
+                    notificationService.updateBadgeCount()
+                    syncCoordinator.notifyConversationsChanged()
+                }
             }
         }
     }

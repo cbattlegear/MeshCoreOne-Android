@@ -10,6 +10,8 @@ import android.content.Intent
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteDatabaseCorruptException
 import android.database.sqlite.SQLiteException
+import android.os.Handler
+import android.os.Looper
 import android.widget.Toast
 import com.meshcoreone.android.core.contracts.notifications.NotificationAction
 import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
@@ -18,6 +20,12 @@ import java.io.File
 import java.net.URISyntaxException
 import java.util.ArrayDeque
 import java.util.UUID
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ScheduledThreadPoolExecutor
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.logging.Logger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -27,7 +35,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-class NotificationActionReceiver : BroadcastReceiver() {
+open class NotificationActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val payload = NotificationPayloadCodec.read(intent) ?: return
         val action = intent.getStringExtra(EXTRA_ACTION)?.let { raw ->
@@ -43,15 +51,26 @@ class NotificationActionReceiver : BroadcastReceiver() {
         if (result == EnqueueResult.REJECTED_CAPACITY &&
             (action == NotificationAction.REPLY || action == NotificationAction.MARK_READ)
         ) {
-            val retained = NotificationActionRecovery.retain(context, NotificationResponse(payload, action, originalText))
-            val status = when (retained) {
-                NotificationRecoveryRetention.DURABLE -> R.string.notification_action_recovery_saved
-                NotificationRecoveryRetention.PROCESS_ONLY -> R.string.notification_action_recovery_memory_only
-                NotificationRecoveryRetention.NOT_RETAINED -> R.string.notification_action_recovery_not_retained
-            }
-            Toast.makeText(context, status, Toast.LENGTH_LONG).show()
             // Android 12 forbids an action broadcast from starting a recovery activity.
             NotificationActionRecovery.requireManualOpen()
+            val pending = checkNotNull(goAsync()) { "Recovery requires a platform-dispatched broadcast" }
+            recoveryQueue.submit(
+                NotificationResponse(payload, action, originalText),
+                work = {
+                    showRetention(context, NotificationActionRecovery.retain(
+                        context, NotificationResponse(payload, action, originalText),
+                    ))
+                },
+                rejected = {
+                    NotificationActionRecovery.handoffNotRetained()
+                    showRetention(context, NotificationRecoveryRetention.NOT_RETAINED)
+                },
+                timedOut = {
+                    NotificationActionRecovery.requireManualOpen()
+                    logger.severe("Notification recovery broadcast lifetime ended; custody outcome remains unconfirmed")
+                },
+                finish = pending::finish,
+            )
         }
         if (action == null) {
             context.packageManager.getLaunchIntentForPackage(context.packageName)?.apply {
@@ -63,6 +82,102 @@ class NotificationActionReceiver : BroadcastReceiver() {
     companion object {
         internal const val EXTRA_ACTION = "mc1.notification.action"
         internal const val REMOTE_INPUT_KEY = "mc1.notification.reply"
+        private val recoveryQueue = NotificationRecoveryBroadcastQueue()
+        private val main = Handler(Looper.getMainLooper())
+        private val logger = Logger.getLogger("com.mc1.NotificationRecovery")
+
+        private fun showRetention(context: Context, retained: NotificationRecoveryRetention) {
+            val status = when (retained) {
+                NotificationRecoveryRetention.DURABLE -> R.string.notification_action_recovery_saved
+                NotificationRecoveryRetention.PROCESS_ONLY -> R.string.notification_action_recovery_memory_only
+                NotificationRecoveryRetention.NOT_RETAINED -> R.string.notification_action_recovery_not_retained
+            }
+            main.post { Toast.makeText(context, status, Toast.LENGTH_LONG).show() }
+        }
+    }
+}
+
+/**
+ * FIFO handoff, not durable custody. A deadline finishes the broadcast without cancelling a
+ * possibly committing write. Timed-out work still occupies its bounded slot until it settles.
+ */
+internal class NotificationRecoveryBroadcastQueue(
+    private val timeoutMillis: Long = 8_000,
+) : AutoCloseable {
+    private val lock = Any()
+    private var count = 0
+    private var bytes = 0L
+    private val worker = ThreadPoolExecutor(
+        1, 1, 0, TimeUnit.MILLISECONDS, ArrayBlockingQueue<Runnable>(32),
+        { task -> Thread(task, "mc1-rejected-actions").apply { isDaemon = true } },
+    )
+    private val deadlines = ScheduledThreadPoolExecutor(1) { task ->
+        Thread(task, "mc1-rejected-action-deadlines").apply { isDaemon = true }
+    }.apply { removeOnCancelPolicy = true }
+
+    fun submit(
+        response: NotificationResponse,
+        work: () -> Unit,
+        rejected: () -> Unit,
+        timedOut: () -> Unit,
+        finish: () -> Unit,
+    ): Boolean {
+        val size = if ((response.userText?.length ?: 0) > NotificationActionRecoveryStore.MAX_ENTRY_BYTES) {
+            NotificationActionRecoveryStore.MAX_ENTRY_BYTES + 1
+        } else {
+            NotificationActionRecovery.recoveryBytes(response)
+        }
+        val completed = AtomicBoolean()
+        val finishOnce = { if (completed.compareAndSet(false, true)) finish() }
+        synchronized(lock) {
+            if (size > NotificationActionRecoveryStore.MAX_ENTRY_BYTES ||
+                count >= NotificationActionRecoveryStore.MAX_ENTRIES ||
+                bytes + size > NotificationActionRecoveryStore.MAX_TOTAL_BYTES
+            ) {
+                try { rejected() } finally { finishOnce() }
+                return false
+            }
+            count += 1
+            bytes += size
+            val deadline = try {
+                deadlines.schedule({
+                    if (completed.compareAndSet(false, true)) {
+                        try { timedOut() } finally { finish() }
+                    }
+                }, timeoutMillis, TimeUnit.MILLISECONDS)
+            } catch (_: RejectedExecutionException) {
+                count -= 1
+                bytes -= size
+                try { rejected() } finally { finishOnce() }
+                return false
+            }
+            try {
+                worker.execute {
+                    try {
+                        work()
+                    } finally {
+                        deadline.cancel(false)
+                        synchronized(lock) {
+                            count -= 1
+                            bytes -= size
+                        }
+                        finishOnce()
+                    }
+                }
+            } catch (_: RejectedExecutionException) {
+                deadline.cancel(false)
+                count -= 1
+                bytes -= size
+                try { rejected() } finally { finishOnce() }
+                return false
+            }
+        }
+        return true
+    }
+
+    override fun close() {
+        worker.shutdown()
+        deadlines.shutdown()
     }
 }
 
@@ -319,6 +434,8 @@ enum class NotificationRecoveryRetention { DURABLE, PROCESS_ONLY, NOT_RETAINED }
 /** Separate, bounded process-only fallback when durable custody is unavailable. Never evicts a draft. */
 object NotificationActionRecovery {
     private val lock = Any()
+    // Failure/status publication must never wait for the storage lock on the receiver thread.
+    private val statusLock = Any()
     private val memory = linkedMapOf<UUID, RejectedNotificationAction>()
     private var memoryBytes = 0L
     private var lost = false
@@ -337,7 +454,6 @@ object NotificationActionRecovery {
                     memory.size >= NotificationActionRecoveryStore.MAX_ENTRIES ||
                     memoryBytes + bytes > NotificationActionRecoveryStore.MAX_TOTAL_BYTES
                 ) {
-                    lost = true
                     logger.severe("Rejected notification action could not be retained; reason=${result.reason}")
                     NotificationRecoveryRetention.NOT_RETAINED
                 } else {
@@ -349,21 +465,26 @@ object NotificationActionRecovery {
                 }
             }
         }
-        refresh()
+        synchronized(statusLock) {
+            if (retained == NotificationRecoveryRetention.NOT_RETAINED) lost = true
+            refresh()
+        }
         retained
     }
 
     fun load(context: Context): NotificationRecoverySnapshot = synchronized(lock) {
         val stored = NotificationActionRecoveryStore(context).read()
         val persistent = (stored as? NotificationRecoveryRead.Ready)?.entries.orEmpty()
-        NotificationRecoverySnapshot(
-            updates.value,
-            persistent.map { NotificationRecoveryItem(it, persistent = true) } +
-                memory.values.map { NotificationRecoveryItem(it, persistent = false) },
-            (stored as? NotificationRecoveryRead.Failed)?.reason,
-            lost,
-            manualOpenRequired,
-        )
+        synchronized(statusLock) {
+            NotificationRecoverySnapshot(
+                updates.value,
+                persistent.map { NotificationRecoveryItem(it, persistent = true) } +
+                    memory.values.map { NotificationRecoveryItem(it, persistent = false) },
+                (stored as? NotificationRecoveryRead.Failed)?.reason,
+                lost,
+                manualOpenRequired,
+            )
+        }
     }
 
     fun dispose(context: Context, item: NotificationRecoveryItem): NotificationRecoveryFailure? = synchronized(lock) {
@@ -380,14 +501,14 @@ object NotificationActionRecovery {
         failure
     }
 
-    fun requireManualOpen() = synchronized(lock) {
+    fun requireManualOpen() = synchronized(statusLock) {
         manualOpenRequired = true
         logger.info("Rejected notification action recovery requires user-directed app opening")
         refresh()
     }
 
     /** A stale dialog cannot acknowledge a failure or response it has never displayed. */
-    fun acknowledgeFailure(observedVersion: Long): Long? = synchronized(lock) {
+    fun acknowledgeFailure(observedVersion: Long): Long? = synchronized(statusLock) {
         if (updates.value != observedVersion) return@synchronized null
         lost = false
         manualOpenRequired = false
@@ -395,11 +516,17 @@ object NotificationActionRecovery {
         updates.value
     }
 
-    fun refresh() = synchronized(lock) {
+    internal fun handoffNotRetained() = synchronized(statusLock) {
+        lost = true
+        logger.severe("Rejected notification action exceeded bounded recovery handoff; input not retained")
+        refresh()
+    }
+
+    fun refresh() = synchronized(statusLock) {
         updates.value += 1
     }
 
-    private fun recoveryBytes(response: NotificationResponse): Long =
+    internal fun recoveryBytes(response: NotificationResponse): Long =
         NotificationPayloadCodec.write(Intent(), response.payload).toUri(0).toByteArray(Charsets.UTF_8).size.toLong() +
             (response.userText?.toByteArray(Charsets.UTF_8)?.size ?: 0)
 }

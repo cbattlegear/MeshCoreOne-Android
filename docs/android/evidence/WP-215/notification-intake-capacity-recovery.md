@@ -56,6 +56,29 @@ and a user-visible failure rather than claiming that a notification retap can
 recover RemoteInput. Process-only drafts can be lost when the process dies;
 there is no claim to the contrary.
 
+Rejected-action storage work now runs on a separate single-worker FIFO after
+`goAsync()`, not on the receiver main thread. The handoff independently bounds
+queued plus running work to 32 entries, 128 KiB per entry and 1 MiB total using
+the same logical UTF-8 accounting. Overflow/oversize input is explicitly not
+retained; no older entry is evicted. Status/generation publication uses a separate
+short lock that never encloses SQLite work. Accepted dispatcher behavior is
+unchanged.
+
+Each admitted handoff schedules an eight-second nominal deadline on a separate
+executor and finishes the actual broadcast pending result exactly once, either
+after work settles or at that deadline. The deadline does not cancel a possibly
+committing SQLite call, release its occupied handoff budget, claim loss, or claim
+durable retention. It republishes the manual-open requirement and logs a
+content-free unconfirmed-outcome warning. The captured original input stays in
+the bounded worker queue while that process survives; it is not a committed
+recovery record and is not yet available in the recovery dialog. The later
+retention result alone chooses the saved/process-only/not-retained status.
+Finishing a broadcast removes its process-lifetime protection: process death
+before actual custody can lose an in-flight or queued original, and a commit
+interrupted at that boundary can have an unknown outcome. Scheduling an
+eight-second callback is not a hard real-time guarantee or proof against ANRs.
+Native receiver timing and process-kill evidence remain separate gates.
+
 Recovery does not start an activity from the reply/mark-read broadcast: Android 12
 prohibits notification trampolines, and background-launch denial need not throw.
 Instead the content-free status tells the user to open MeshCore One themselves.
@@ -70,6 +93,7 @@ Platform references:
 
 - <https://developer.android.com/about/versions/12/behavior-changes-12#notification-trampolines>
 - <https://developer.android.com/guide/components/activities/secure-bal>
+- <https://developer.android.com/topic/performance/anrs/diagnose-and-fix-anrs#broadcast-receiver-timeout>
 
 The foreground surface offers only explicit copy, delete and cancel. Cancel,
 Back/dismissal, host destruction and cancelled reading do not dispose records.
@@ -142,7 +166,7 @@ translations or complete-locale UI acceptance.
 
 ## Authored controls, not execution evidence
 
-`NotificationActionReceiverCapacityTest.kt` contains 25 authored methods using the
+`NotificationActionReceiverCapacityTest.kt` contains 29 authored methods using the
 real receiver, RemoteInput, dispatcher and private SQLite adapter. They cover
 queue-full reply and mark-read, unchanged accepted normalization/FIFO, blank
 input, exact code-unit reopening, count/byte/multibyte limits, bounded fallback
@@ -155,6 +179,14 @@ for rejected-action recovery while original private custody remains available.
 Separate reply and mark-read controls assert this boundary. A corrupt-byte
 fixture asserts the database file is preserved and new text uses process-only
 fallback rather than silent recreation.
+Receiver controls now use registered ordered broadcasts and wait for their real
+pending-result completion instead of invoking rejected `onReceive` calls
+directly. A gated private-directory lookup asserts off-main execution, return
+before storage settles, and completion only after release. Additional handoff
+controls cover FIFO/count bounds, original input at the receiver boundary,
+byte/oversize rejection, and deadline completion without cancellation, premature
+budget release or double finish. These are authored controls, not evidence that
+the Android receiver deadline has been exercised on a device.
 
 `NotificationRecoveryClipboardTest.kt` contains 13 authored App methods covering
 the actual clipboard and mounted dialog: exact sensitive copy, inaccessible
@@ -172,6 +204,9 @@ the original test body. A static comment/string-stripped brace-depth check now
 finds all 25 receiver and 13 App `@Test` declarations at class depth. This repairs
 source structure; only later authorized hosted runner discovery can establish
 which methods actually execute.
+That 25-method count describes the discovery-fix commit; the off-main follow-up
+adds four receiver declarations, for 29 receiver and 13 App controls, still zero
+executed.
 
 Actual allowed static checks:
 

@@ -4,11 +4,14 @@ package com.meshcoreone.android.platform.notifications.messaging
 import android.app.RemoteInput
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.BroadcastReceiver
 import android.content.Intent
+import android.content.IntentFilter
 import android.database.sqlite.SQLiteDatabase
 import android.os.Bundle
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import com.meshcoreone.android.core.contracts.notifications.NotificationAction
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
@@ -16,6 +19,9 @@ import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
 import com.meshcoreone.android.core.model.RadioId
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -64,7 +70,7 @@ class NotificationActionReceiverCapacityTest {
     fun queueFullReplyRetainsOriginalRemoteInputAndDoesNotReorderAcceptedActions() = runTest {
         val accepted = fillQueue()
         val original = " \tkeep this exact reply\n "
-        NotificationActionReceiver().onReceive(context, intent(999, NotificationAction.REPLY, original))
+        receive(context, intent(999, NotificationAction.REPLY, original))
 
         val saved = entries().single()
         assertEquals(response(999, NotificationAction.REPLY, original), saved.response)
@@ -78,7 +84,7 @@ class NotificationActionReceiverCapacityTest {
     @Test
     fun queueFullMarkReadRetainsExactOriginalMessageWithoutPerformingIt() = runTest {
         val accepted = fillQueue()
-        NotificationActionReceiver().onReceive(context, intent(700, NotificationAction.MARK_READ))
+        receive(context, intent(700, NotificationAction.MARK_READ))
         val saved = entries().single()
         assertEquals(response(700, NotificationAction.MARK_READ), saved.response)
         assertNull(saved.response.userText)
@@ -90,7 +96,7 @@ class NotificationActionReceiverCapacityTest {
 
     @Test
     fun acceptedReplyKeepsExistingTrimAndNeverCreatesARecoveryDraft() = runTest {
-        NotificationActionReceiver().onReceive(context, intent(5, NotificationAction.REPLY, " \taccepted\n "))
+        receive(context, intent(5, NotificationAction.REPLY, " \taccepted\n "))
         assertTrue(entries().isEmpty())
         assertFalse(File(context.noBackupFilesDir, "notification-action-recovery.sqlite").exists())
         val delivered = mutableListOf<NotificationResponse>()
@@ -101,7 +107,7 @@ class NotificationActionReceiverCapacityTest {
 
     @Test
     fun acceptedMarkReadEntersOnlyTheDispatcher() = runTest {
-        NotificationActionReceiver().onReceive(context, intent(6, NotificationAction.MARK_READ))
+        receive(context, intent(6, NotificationAction.MARK_READ))
         assertTrue(entries().isEmpty())
         val delivered = mutableListOf<NotificationResponse>()
         NotificationActionDispatcher.install(this) { delivered += it; true }
@@ -111,7 +117,7 @@ class NotificationActionReceiverCapacityTest {
 
     @Test
     fun blankReplyDoesNotEnterEitherQueue() = runTest {
-        NotificationActionReceiver().onReceive(context, intent(5, NotificationAction.REPLY, " \t\n "))
+        receive(context, intent(5, NotificationAction.REPLY, " \t\n "))
         assertTrue(entries().isEmpty())
         assertTrue(NotificationActionDispatcher.drainOnce())
     }
@@ -243,7 +249,7 @@ class NotificationActionReceiverCapacityTest {
         val failing = recoveryContext(blocked)
         fillQueue()
         val original = response(81, NotificationAction.REPLY, " \tprivate text\n ")
-        NotificationActionReceiver().onReceive(failing, intent(81, NotificationAction.REPLY, original.userText))
+        receive(failing, intent(81, NotificationAction.REPLY, original.userText))
         val snapshot = NotificationActionRecovery.load(failing)
         assertEquals(NotificationRecoveryFailure.STORAGE_UNAVAILABLE, snapshot.storageFailure)
         assertEquals(original, snapshot.items.single().entry.response)
@@ -272,7 +278,7 @@ class NotificationActionReceiverCapacityTest {
     @Test
     fun actionBroadcastRequiresUserOpeningWithoutAttemptingARecoveryTrampoline() {
         fillQueue()
-        NotificationActionReceiver().onReceive(context, intent(90, NotificationAction.REPLY, "original"))
+        receive(context, intent(90, NotificationAction.REPLY, "original"))
         val snapshot = NotificationActionRecovery.load(context)
         assertTrue(snapshot.manualOpenRequired)
         assertTrue(snapshot.items.single().persistent)
@@ -283,7 +289,7 @@ class NotificationActionReceiverCapacityTest {
     @Test
     fun rejectedMarkReadAlsoRequiresManualOpeningWithoutAnActivityTrampoline() {
         fillQueue()
-        NotificationActionReceiver().onReceive(context, intent(94, NotificationAction.MARK_READ))
+        receive(context, intent(94, NotificationAction.MARK_READ))
         val snapshot = NotificationActionRecovery.load(context)
         assertTrue(snapshot.manualOpenRequired)
         assertEquals(response(94, NotificationAction.MARK_READ), snapshot.items.single().entry.response)
@@ -409,7 +415,7 @@ class NotificationActionReceiverCapacityTest {
     @Test
     fun cancellationOfAnAcceptedDrainNeverDisposesTheRejectedDraft() = runTest {
         fillQueue()
-        NotificationActionReceiver().onReceive(context, intent(800, NotificationAction.REPLY, "recover me"))
+        receive(context, intent(800, NotificationAction.REPLY, "recover me"))
         val savedId = entries().single().id
         val owner = Job()
         val scope = CoroutineScope(coroutineContext + owner)
@@ -435,6 +441,196 @@ class NotificationActionReceiverCapacityTest {
         runCurrent()
         reader.cancelAndJoin()
         assertEquals(entry.id, entries().single().id)
+    }
+
+    @Test
+    fun receiverReturnsBeforeBlockedStorageAndFinishesItsRealPendingResultAfterCustody() {
+        fillQueue()
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val returned = CountDownLatch(1)
+        val finished = CountDownLatch(1)
+        val gated = object : ContextWrapper(context) {
+            override fun getNoBackupFilesDir(): File {
+                assertFalse(android.os.Looper.myLooper() == android.os.Looper.getMainLooper())
+                entered.countDown()
+                check(release.await(5, TimeUnit.SECONDS)) { "Storage gate was not released" }
+                return context.noBackupFilesDir
+            }
+        }
+        val receiver = object : NotificationActionReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                super.onReceive(gated, intent)
+                returned.countDown()
+            }
+        }
+        val application = ApplicationProvider.getApplicationContext<Context>()
+        val action = "${application.packageName}.RECOVERY_ASYNC_TEST"
+        application.registerReceiver(receiver, IntentFilter(action), Context.RECEIVER_NOT_EXPORTED)
+        try {
+            application.sendOrderedBroadcast(
+                intent(801, NotificationAction.REPLY, " \tstill original\n ").setAction(action)
+                    .setPackage(application.packageName),
+                null, object : BroadcastReceiver() {
+                    override fun onReceive(context: Context, intent: Intent) { finished.countDown() }
+                }, null, 0, null, null,
+            )
+            waitForBroadcast(returned)
+            assertTrue(entered.await(5, TimeUnit.SECONDS))
+            assertEquals(1L, finished.count)
+        } finally {
+            release.countDown()
+            waitForBroadcast(finished)
+            application.unregisterReceiver(receiver)
+        }
+        assertEquals(response(801, NotificationAction.REPLY, " \tstill original\n "), entries().single().response)
+    }
+
+    @Test
+    fun boundedHandoffKeepsFifoAndFinishesEveryAcceptedOrRejectedBroadcastOnce() {
+        NotificationRecoveryBroadcastQueue().use { queue ->
+            val entered = CountDownLatch(1)
+            val release = CountDownLatch(1)
+            val finished = CountDownLatch(33)
+            val order = java.util.Collections.synchronizedList(mutableListOf<Int>())
+            val finishes = AtomicInteger()
+            val rejected = AtomicInteger()
+            val unexpectedDeadlines = AtomicInteger()
+            try {
+                (1..33).forEach { id ->
+                    val admitted = queue.submit(
+                        response(id, NotificationAction.REPLY, " \t$id\n "),
+                        work = {
+                            if (id == 1) {
+                                entered.countDown()
+                                check(release.await(5, TimeUnit.SECONDS))
+                            }
+                            order += id
+                        },
+                        rejected = { rejected.incrementAndGet() },
+                        timedOut = { unexpectedDeadlines.incrementAndGet() },
+                        finish = { finishes.incrementAndGet(); finished.countDown() },
+                    )
+                    assertEquals(id <= 32, admitted)
+                    if (id == 1) assertTrue(entered.await(5, TimeUnit.SECONDS))
+                }
+                assertEquals(1, rejected.get())
+                assertEquals(1, finishes.get())
+            } finally {
+                release.countDown()
+            }
+            assertTrue(finished.await(5, TimeUnit.SECONDS))
+            assertEquals((1..32).toList(), order.toList())
+            assertEquals(33, finishes.get())
+            assertEquals(0, unexpectedDeadlines.get())
+        }
+    }
+
+    @Test
+    fun deadlineFinishesOnceWithoutCancellingAnUnconfirmedWriteOrReleasingItsBudget() {
+        NotificationRecoveryBroadcastQueue(timeoutMillis = 50).use { queue ->
+            val entered = CountDownLatch(1)
+            val release = CountDownLatch(1)
+            val settled = CountDownLatch(1)
+            val deadline = CountDownLatch(1)
+            val finished = CountDownLatch(1)
+            val finishes = AtomicInteger()
+            val text = "x".repeat(120 * 1024)
+            try {
+                assertTrue(queue.submit(
+                    response(1, NotificationAction.REPLY, text),
+                    work = {
+                        entered.countDown()
+                        try { check(release.await(5, TimeUnit.SECONDS)) } finally { settled.countDown() }
+                    },
+                    rejected = { error("Unexpected rejection") },
+                    timedOut = { deadline.countDown() },
+                    finish = { finishes.incrementAndGet(); finished.countDown() },
+                ))
+                assertTrue(entered.await(5, TimeUnit.SECONDS))
+                assertTrue(deadline.await(5, TimeUnit.SECONDS))
+                assertTrue(finished.await(5, TimeUnit.SECONDS))
+                assertEquals(1L, settled.count)
+                // Eight 120-KiB entries fit; the ninth cannot steal a timed-out work slot.
+                (2..8).forEach { id ->
+                    assertTrue(queue.submit(
+                        response(id, NotificationAction.REPLY, text),
+                        work = {}, rejected = { error("Unexpected rejection") },
+                        timedOut = {}, finish = {},
+                    ))
+                }
+                val rejected = AtomicInteger()
+                val rejectedFinish = AtomicInteger()
+                assertFalse(queue.submit(
+                    response(9, NotificationAction.REPLY, text),
+                    work = { error("Over-budget work must not run") },
+                    rejected = { rejected.incrementAndGet() }, timedOut = {},
+                    finish = { rejectedFinish.incrementAndGet() },
+                ))
+                assertEquals(1, rejected.get())
+                assertEquals(1, rejectedFinish.get())
+            } finally {
+                release.countDown()
+            }
+            assertTrue(settled.await(5, TimeUnit.SECONDS))
+            val drained = CountDownLatch(1)
+            assertTrue(queue.submit(
+                response(10, NotificationAction.MARK_READ),
+                work = { drained.countDown() }, rejected = { error("Unexpected rejection") },
+                timedOut = {}, finish = {},
+            ))
+            assertTrue(drained.await(5, TimeUnit.SECONDS))
+            assertEquals(1, finishes.get())
+        }
+    }
+
+    @Test
+    fun handoffRejectsOversizeInputWithoutRunningStorageOrClaimingRetention() {
+        NotificationRecoveryBroadcastQueue().use { queue ->
+            val rejected = AtomicInteger()
+            val finishes = AtomicInteger()
+            assertFalse(queue.submit(
+                response(1, NotificationAction.REPLY, "x".repeat(128 * 1024 + 1)),
+                work = { error("Oversize work must not run") },
+                rejected = { rejected.incrementAndGet() },
+                timedOut = { error("Rejected work has no deadline") },
+                finish = { finishes.incrementAndGet() },
+            ))
+            assertEquals(1, rejected.get())
+            assertEquals(1, finishes.get())
+        }
+    }
+
+    private fun receive(recoveryContext: Context, intent: Intent) {
+        val application = ApplicationProvider.getApplicationContext<Context>()
+        val action = "${application.packageName}.RECOVERY_TEST"
+        val receiver = object : NotificationActionReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                super.onReceive(recoveryContext, intent)
+            }
+        }
+        val finished = CountDownLatch(1)
+        application.registerReceiver(receiver, IntentFilter(action), Context.RECEIVER_NOT_EXPORTED)
+        try {
+            application.sendOrderedBroadcast(
+                intent.setAction(action).setPackage(application.packageName),
+                null, object : BroadcastReceiver() {
+                    override fun onReceive(context: Context, intent: Intent) { finished.countDown() }
+                }, null, 0, null, null,
+            )
+            waitForBroadcast(finished)
+        } finally {
+            application.unregisterReceiver(receiver)
+        }
+    }
+
+    private fun waitForBroadcast(completion: CountDownLatch) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (completion.count != 0L && System.nanoTime() < deadline) {
+            InstrumentationRegistry.getInstrumentation().waitForIdleSync()
+            completion.await(1, TimeUnit.MILLISECONDS)
+        }
+        assertEquals("Broadcast did not complete", 0L, completion.count)
     }
 
     private fun fillQueue(): List<NotificationResponse> = (1..32).map {

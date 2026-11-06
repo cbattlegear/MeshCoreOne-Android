@@ -19,6 +19,7 @@ import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.ReactionDTO
+import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.core.services.sync.SyncDataEvent
@@ -257,6 +258,7 @@ class ReactionOwnerIntegrationTest : RoomProcessTest() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val manager = context.getSystemService(NotificationManager::class.java)
         val adapter = AndroidMessagingNotificationDelivery(context, backgroundScope) { true }
+        adapter.registerCategories(SnapshotList.empty())
         val h = ContainerHarness(this, store, persistenceOverride = persistence, platformDeliveryOverride = adapter)
         h.links.configureRadio = { firmware ->
             firmware.knownContacts += contactFrame(key(4), "Action peer")
@@ -290,8 +292,14 @@ class ReactionOwnerIntegrationTest : RoomProcessTest() {
                 if (channel) NotificationCategory.CHANNEL_MESSAGE else NotificationCategory.DIRECT_MESSAGE,
                 "Original A", "Original body", false, null, null, payload,
             )
-            assertTrue(adapter.post(request, original.notificationPostPermit) is NotificationPostAdmission.Admitted)
-            val first = manager.activeNotifications.single { it.notification.extras.getString("android.title") == "Original A" }
+            val originalPost = adapter.post(request, original.notificationPostPermit)
+            assertTrue(
+                "A actual adapter outcome: $originalPost",
+                originalPost is NotificationPostAdmission.Admitted && originalPost.value is NotificationPostAttempt.Posted,
+            )
+            val first = requireNotNull(manager.activeNotifications.singleOrNull { it.tag == "mesh-message:${request.id.value}" }) {
+                "A actual adapter reported posted but its exact tag is not visible"
+            }
             val firstIdentity = first.notification.extras.getString("mc1.notification.post-id")
             held = true
             val action = launch(actionReceipt + readReceipt) {

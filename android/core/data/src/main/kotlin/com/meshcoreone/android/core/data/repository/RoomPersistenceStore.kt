@@ -48,6 +48,46 @@ class RoomPersistenceStore private constructor(
     override suspend fun setSessionNotificationLevel(key: EntityKey, level: NotificationLevel) =
         rooms.setSessionNotificationLevel(key, level)
 
+    /**
+     * Android-only WP-202 safety adaptation for simulator seeding after backup restore.
+     * The simulator keeps its canonical identity/configuration; saved preferences survive re-seeding.
+     */
+    suspend fun saveSimulatorDevice(dto: DeviceDTO) = context.write("saveSimulatorDevice") {
+        val current = database.devices().byId(dto.id)
+        if (dto.connectionMethods.isNotEmpty() || current?.let {
+                it.radioId != dto.radioId.value || it.publicKey != dto.publicKey || it.connectionMethods.isNotEmpty()
+            } == true) {
+            throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+        }
+        if (database.devices().forRadio(dto.radioId.value).any { it.publicKey != dto.publicKey }) {
+            throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+        }
+        val candidates = database.devices().forPublicKey(dto.publicKey).filter {
+            it.radioId == dto.radioId.value && it.id != dto.id
+        }
+        if (candidates.size > 1 || candidates.any { it.isActive || it.connectionMethods.isNotEmpty() }) {
+            throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+        }
+        val restored = candidates.singleOrNull()
+        val saved = current?.toDTO()
+        val imported = restored?.toDTO()
+        val merged = dto.copy(
+            defaultFloodScopeName = saved?.defaultFloodScopeName ?: imported?.defaultFloodScopeName ?: dto.defaultFloodScopeName,
+            preRepeatFrequency = saved?.preRepeatFrequency ?: imported?.preRepeatFrequency ?: dto.preRepeatFrequency,
+            preRepeatBandwidth = saved?.preRepeatBandwidth ?: imported?.preRepeatBandwidth ?: dto.preRepeatBandwidth,
+            preRepeatSpreadingFactor = saved?.preRepeatSpreadingFactor ?: imported?.preRepeatSpreadingFactor ?: dto.preRepeatSpreadingFactor,
+            preRepeatCodingRate = saved?.preRepeatCodingRate ?: imported?.preRepeatCodingRate ?: dto.preRepeatCodingRate,
+            lastContactSync = maxOf(dto.lastContactSync, saved?.lastContactSync ?: 0u, imported?.lastContactSync ?: 0u),
+            ocvPreset = saved?.ocvPreset ?: imported?.ocvPreset ?: dto.ocvPreset,
+            appliedRadioPresetID = saved?.appliedRadioPresetID ?: imported?.appliedRadioPresetID ?: dto.appliedRadioPresetID,
+            customOCVArrayString = saved?.customOCVArrayString ?: imported?.customOCVArrayString ?: dto.customOCVArrayString,
+            knownRegions = (saved?.knownRegions.orEmpty() + imported?.knownRegions.orEmpty() + dto.knownRegions).distinct().snapshot(),
+        )
+        database.devices().upsert(merged.toEntity())
+        if (restored != null) database.devices().delete(restored.id)
+        save()
+    }
+
     suspend fun existingNodeStatusSnapshotKeys(): SnapshotSet<Pair<Bytes, Long>> =
         context.read("existingNodeStatusSnapshotKeys") {
             database.nodeSnapshots().backupAll().map { snapshotBackupKey(it.toDTO()) }.snapshotSet()

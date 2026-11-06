@@ -21,7 +21,7 @@ import com.meshcoreone.android.core.services.simulator.NodeStatusSnapshotKey
 import com.meshcoreone.android.core.services.simulator.SimulatorSeedStore
 
 class RoomSimulatorSeedStore(private val store: RoomPersistenceStore) : SimulatorSeedStore {
-    override suspend fun saveDevice(dto: DeviceDTO) = store.saveDevice(dto)
+    override suspend fun saveDevice(dto: DeviceDTO) = store.saveSimulatorDevice(dto)
     override suspend fun fetchContact(key: EntityKey): ContactDTO? = store.fetchContact(key)
     override suspend fun saveContact(dto: ContactDTO) = store.saveContact(dto)
     override suspend fun saveChannel(dto: ChannelDTO) = store.saveChannel(dto)

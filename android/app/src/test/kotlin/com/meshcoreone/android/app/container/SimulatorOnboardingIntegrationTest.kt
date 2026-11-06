@@ -430,6 +430,83 @@ class SimulatorOnboardingIntegrationTest : RoomProcessTest() {
         }
     }
 
+    @Test fun freshBackupSimulatorDeviceReconcilesWithoutLosingRestoredData() = runTest {
+        val fixture = fixture(this)
+        try {
+            val harness = fixture.harness
+            val now = java.time.Instant.ofEpochSecond(1_700_000_000)
+            val seedDevice = MockDataProvider.simulatorDevice(now)
+            val radio = seedDevice.radioId
+            val restoredContact = com.meshcoreone.android.core.model.ContactDTO(
+                radioId = radio,
+                publicKey = Bytes(ByteArray(32) { 0xDD.toByte() }),
+                name = "Restored contact",
+                lastHeardTimestamp = null,
+            )
+            val restoredMessage = MessageDTO(
+                radioId = radio,
+                contactID = restoredContact.id,
+                text = "Restored simulator conversation",
+                timestamp = 1_700_000_000u,
+                createdAt = now,
+                direction = MessageDirection.INCOMING,
+                status = com.meshcoreone.android.core.model.MessageStatus.DELIVERED,
+            )
+            assertTrue(store.fetchDevices().isEmpty())
+            val backup = com.meshcoreone.android.core.data.backup.AppBackupEnvelope(
+                exportDate = now,
+                appVersion = "simulator-device-regression",
+                appBuild = "1",
+                devices = SnapshotList(listOf(seedDevice.copy(knownRegions = SnapshotList.of("US915")))),
+                contacts = SnapshotList(listOf(restoredContact)),
+                messages = SnapshotList(listOf(restoredMessage)),
+            ).withActualManifest()
+            com.meshcoreone.android.core.data.backup.AppBackupService(
+                fixture.storage.backupPreferences, "simulator-device-regression", "1",
+            ).importBackup(backup, store)
+
+            val imported = store.fetchDevices().single()
+            assertNotEquals(seedDevice.id, imported.id)
+            assertEquals(radio, imported.radioId)
+            assertEquals(seedDevice.publicKey, imported.publicKey)
+            assertEquals(listOf("US915"), imported.knownRegions)
+            assertFalse(imported.isActive)
+            assertTrue(store.fetchChannels(radio).isEmpty())
+            val unrelated = seedDevice.copy(
+                id = UUID.randomUUID(),
+                radioId = RadioId(UUID.randomUUID()),
+                publicKey = Bytes(ByteArray(32) { 0xEE.toByte() }),
+                nodeName = "Unrelated device",
+                isActive = false,
+            )
+            store.saveDevice(unrelated)
+
+            repeat(3) {
+                assertEquals(OnboardingConnectOutcome.Connected, fixture.onboarding.demo.connectDemo())
+                harness.settle()
+                assertEquals(DeviceConnectionState.READY, harness.manager.connectionState)
+                val matching = store.fetchDevices().filter { it.publicKey == seedDevice.publicKey }
+                assertEquals(1, matching.size, "simulator reconnect must reconcile the imported device")
+                val active = matching.single()
+                assertEquals(seedDevice.id, active.id)
+                assertEquals(radio, active.radioId)
+                assertTrue(active.isActive)
+                assertEquals(listOf("US915"), active.knownRegions)
+                assertEquals(seedDevice.id, store.fetchActiveDevice()?.id)
+                assertNull(store.fetchDevice(imported.id))
+                assertEquals(restoredContact.name, assertNotNull(store.fetchContact(EntityKey(radio, restoredContact.id))).name)
+                assertEquals(restoredMessage.text, assertNotNull(store.fetchMessage(EntityKey(radio, restoredMessage.id))).text)
+                assertEquals(unrelated.radioId, assertNotNull(store.fetchDevice(unrelated.id)).radioId)
+                assertEquals(4, store.fetchChannels(radio).size)
+                assertTrue(harness.links.radios.isEmpty())
+                assertTrue(fixture.httpRequests.isEmpty())
+                harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            }
+        } finally {
+            fixture.close()
+        }
+    }
+
     @Test fun simulatorCoordinateThumbnailIsOfflineEvenWhenNetworkIsAvailable() = runTest {
         val fixture = fixture(this)
         try {

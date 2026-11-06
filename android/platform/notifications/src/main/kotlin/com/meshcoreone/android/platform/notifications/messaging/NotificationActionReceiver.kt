@@ -96,9 +96,7 @@ sealed interface NotificationRecoveryWrite {
  * Pre-admission drafts, never accepted-action receipts or permission to replay a channel index.
  * The original target and untrimmed text are kept until an explicit, confirmed disposition.
  */
-class NotificationActionRecoveryStore(context: Context) {
-    private val file = File(context.noBackupFilesDir, "notification-action-recovery.sqlite")
-
+class NotificationActionRecoveryStore(private val context: Context) {
     fun retain(response: NotificationResponse): NotificationRecoveryWrite = synchronized(lock) {
         val action = response.action
             ?: return@synchronized NotificationRecoveryWrite.Failed(NotificationRecoveryFailure.INVALID_RECORD)
@@ -110,6 +108,14 @@ class NotificationActionRecoveryStore(context: Context) {
             (response.userText?.toByteArray(Charsets.UTF_8)?.size ?: 0)
         if (bytes > MAX_ENTRY_BYTES) {
             return@synchronized NotificationRecoveryWrite.Failed(NotificationRecoveryFailure.TOO_LARGE)
+        }
+        val decodedPayload = try {
+            NotificationPayloadCodec.read(Intent.parseUri(payload, 0))
+        } catch (_: URISyntaxException) {
+            null
+        }
+        if (decodedPayload != response.payload) {
+            return@synchronized NotificationRecoveryWrite.Failed(NotificationRecoveryFailure.INVALID_RECORD)
         }
         when (val existing = read()) {
             is NotificationRecoveryRead.Failed -> return@synchronized NotificationRecoveryWrite.Failed(existing.reason)
@@ -156,6 +162,7 @@ class NotificationActionRecoveryStore(context: Context) {
             val database = open(create = false) ?: return@synchronized NotificationRecoveryRead.Ready(emptyList())
             database.use {
                 val entries = mutableListOf<RejectedNotificationAction>()
+                val ids = mutableSetOf<UUID>()
                 var bytes = 0L
                 it.rawQuery(
                     "SELECT id, payload, action, original_text, byte_count FROM drafts ORDER BY sequence", null,
@@ -177,6 +184,7 @@ class NotificationActionRecoveryStore(context: Context) {
                         } catch (_: IllegalArgumentException) {
                             throw InvalidRecoveryRecord()
                         }
+                        if (!ids.add(id)) throw InvalidRecoveryRecord()
                         val action = NotificationAction.entries.firstOrNull { action ->
                             action.rawValue == cursor.getString(2)
                         }
@@ -212,10 +220,16 @@ class NotificationActionRecoveryStore(context: Context) {
         try {
             val database = open(create = false) ?: return@synchronized NotificationRecoveryFailure.INVALID_RECORD
             database.use {
-                if (it.delete("drafts", "id = ?", arrayOf(id.toString())) != 1) {
-                    NotificationRecoveryFailure.INVALID_RECORD
-                } else {
-                    null
+                it.beginTransaction()
+                try {
+                    if (it.delete("drafts", "id = ?", arrayOf(id.toString())) != 1) {
+                        NotificationRecoveryFailure.INVALID_RECORD
+                    } else {
+                        it.setTransactionSuccessful()
+                        null
+                    }
+                } finally {
+                    it.endTransaction()
                 }
             }
         } catch (_: InvalidRecoveryRecord) {
@@ -228,6 +242,8 @@ class NotificationActionRecoveryStore(context: Context) {
     }
 
     private fun open(create: Boolean): SQLiteDatabase? {
+        val directory = context.noBackupFilesDir ?: throw SQLiteException("Recovery storage directory unavailable")
+        val file = File(directory, "notification-action-recovery.sqlite")
         if (file.parentFile?.isDirectory != true) throw SQLiteException("Recovery storage directory unavailable")
         val existed = file.exists()
         if (!existed && !create) return null
@@ -298,6 +314,7 @@ class NotificationActionRecoveryStore(context: Context) {
 class NotificationRecoveryItem(val entry: RejectedNotificationAction, val persistent: Boolean)
 
 class NotificationRecoverySnapshot(
+    val version: Long,
     val items: List<NotificationRecoveryItem>,
     val storageFailure: NotificationRecoveryFailure?,
     val notRetained: Boolean,
@@ -347,6 +364,7 @@ object NotificationActionRecovery {
         val stored = NotificationActionRecoveryStore(context).read()
         val persistent = (stored as? NotificationRecoveryRead.Ready)?.entries.orEmpty()
         NotificationRecoverySnapshot(
+            updates.value,
             persistent.map { NotificationRecoveryItem(it, persistent = true) } +
                 memory.values.map { NotificationRecoveryItem(it, persistent = false) },
             (stored as? NotificationRecoveryRead.Failed)?.reason,
@@ -375,10 +393,13 @@ object NotificationActionRecovery {
         refresh()
     }
 
-    fun acknowledgeFailure() = synchronized(lock) {
+    /** A stale dialog cannot acknowledge a failure or response it has never displayed. */
+    fun acknowledgeFailure(observedVersion: Long): Long? = synchronized(lock) {
+        if (updates.value != observedVersion) return@synchronized null
         lost = false
         launchUnavailable = false
         refresh()
+        updates.value
     }
 
     fun refresh() = synchronized(lock) {

@@ -140,6 +140,7 @@ open class MainActivity : ComponentActivity() {
             val resolved by produceContainer()
             val screen: @Composable () -> Unit = {
                 val answer = resolved
+                val connectionRecovery = answer?.container?.appState?.connectionUI?.state?.collectAsState()?.value
                 if (answer == null) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
                 } else if (answer.failure != null) {
@@ -185,7 +186,10 @@ open class MainActivity : ComponentActivity() {
                     }
                     answer.container?.let { AppConnectionRecoveryDialogs(it.appState) }
                 }
-                NotificationActionRecoveryDialog()
+                NotificationActionRecoveryDialog(
+                    blockedByOtherDialog = connectionRecovery?.showingConnectionFailedAlert == true ||
+                        connectionRecovery?.otherAppWarningDeviceId != null,
+                )
             }
             val themeService = resolved?.container?.themeService
             if (themeService != null) ThemeServiceHost(themeService) { screen() }
@@ -281,14 +285,15 @@ open class MainActivity : ComponentActivity() {
 }
 
 @Composable
-internal fun NotificationActionRecoveryDialog() {
+internal fun NotificationActionRecoveryDialog(blockedByOtherDialog: Boolean = false) {
+    if (blockedByOtherDialog) return
     val context = LocalContext.current
     val sequence by NotificationActionRecovery.changes.collectAsState()
     var dismissedSequence by remember { mutableStateOf<Long?>(null) }
-    val snapshot by produceState<Pair<Long, NotificationRecoverySnapshot>?>(null, sequence) {
-        value = sequence to withContext(Dispatchers.IO) { NotificationActionRecovery.load(context.applicationContext) }
+    val snapshot by produceState<NotificationRecoverySnapshot?>(null, sequence) {
+        value = withContext(Dispatchers.IO) { NotificationActionRecovery.load(context.applicationContext) }
     }
-    val recovery = snapshot?.takeIf { it.first == sequence }?.second ?: return
+    val recovery = snapshot?.takeIf { it.version == sequence } ?: return
     val item = recovery.items.firstOrNull()
     if (item == null && recovery.storageFailure == null && !recovery.notRetained && !recovery.foregroundUnavailable) return
     if (dismissedSequence == sequence) return
@@ -297,8 +302,9 @@ internal fun NotificationActionRecoveryDialog() {
     val scope = rememberCoroutineScope()
     val close = {
         if (!busy) {
-            NotificationActionRecovery.acknowledgeFailure()
-            dismissedSequence = NotificationActionRecovery.changes.value
+            NotificationActionRecovery.acknowledgeFailure(recovery.version)?.let { acknowledgedVersion ->
+                dismissedSequence = acknowledgedVersion
+            }
         }
     }
     AlertDialog(

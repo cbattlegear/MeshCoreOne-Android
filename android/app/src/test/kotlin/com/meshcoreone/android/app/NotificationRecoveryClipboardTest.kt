@@ -7,7 +7,9 @@ import android.content.ContextWrapper
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithText
@@ -52,6 +54,7 @@ class NotificationRecoveryClipboardTest {
     private var clipboardUnavailable = false
     private var mounted = false
     private var closed = false
+    private val otherDialog = mutableStateOf(false)
 
     @Before
     fun prepare() {
@@ -62,7 +65,7 @@ class NotificationRecoveryClipboardTest {
             override fun getSystemService(name: String): Any? =
                 if (name == CLIPBOARD_SERVICE && clipboardUnavailable) null else super.getSystemService(name)
         }
-        NotificationActionRecovery.acknowledgeFailure()
+        NotificationActionRecovery.acknowledgeFailure(NotificationActionRecovery.load(context).version)
     }
 
     @After
@@ -71,7 +74,7 @@ class NotificationRecoveryClipboardTest {
         NotificationActionRecovery.load(context).items.filter { !it.persistent }.forEach {
             assertNull(NotificationActionRecovery.dispose(context, it))
         }
-        NotificationActionRecovery.acknowledgeFailure()
+        NotificationActionRecovery.acknowledgeFailure(NotificationActionRecovery.load(context).version)
     }
 
     @Test
@@ -105,12 +108,58 @@ class NotificationRecoveryClipboardTest {
     }
 
     @Test
+    fun oldDialogCancelCannotAcknowledgeANewerUnseenRejection() {
+        val entry = save(30, "older displayed response")
+        mount()
+        awaitText("older displayed response")
+        val oldCancel = requireNotNull(
+            compose.onNodeWithText(text(AppLocalizableStrings.commonCancel))
+                .fetchSemanticsNode().config[SemanticsActions.OnClick].action,
+        )
+        compose.mainClock.autoAdvance = false
+        try {
+            compose.runOnUiThread {
+                assertEquals(
+                    NotificationRecoveryRetention.NOT_RETAINED,
+                    NotificationActionRecovery.retain(context, response(31, "x".repeat(128 * 1024))),
+                )
+                // Invoke the displayed callback in this same event, before a new dialog can compose.
+                assertTrue(oldCancel())
+            }
+            val afterOldCancel = NotificationActionRecovery.load(context)
+            assertTrue(afterOldCancel.notRetained)
+            assertEquals(entry.id, afterOldCancel.items.single().entry.id)
+        } finally {
+            compose.mainClock.autoAdvance = true
+        }
+        awaitText(text(NotificationStrings.string.notification_action_recovery_not_retained))
+        assertTrue(NotificationActionRecovery.load(context).notRetained)
+        compose.onNodeWithText(text(AppLocalizableStrings.commonCancel)).performClick()
+        compose.waitForIdle()
+        assertFalse(NotificationActionRecovery.load(context).notRetained)
+        assertEquals(entry.id, entries().single().id)
+    }
+
+    @Test
     fun destroyingTheHostDoesNotDisposeTheDurableRecoveryRecord() {
         val entry = save(4, "keep on host cancellation")
         mount()
         awaitText("keep on host cancellation")
         activity.pause().stop().destroy()
         closed = true
+        assertEquals(entry.id, entries().single().id)
+    }
+
+    @Test
+    fun anExistingModalDefersRecoveryWithoutAcknowledgingOrDisposingIt() {
+        val entry = save(32, "deferred original")
+        otherDialog.value = true
+        mount()
+        compose.waitForIdle()
+        compose.onNodeWithText(text(NotificationStrings.string.notification_action_recovery_title)).assertDoesNotExist()
+        assertEquals(entry.id, entries().single().id)
+        compose.runOnIdle { otherDialog.value = false }
+        awaitText("deferred original")
         assertEquals(entry.id, entries().single().id)
     }
 
@@ -197,7 +246,9 @@ class NotificationRecoveryClipboardTest {
         mounted = true
         activity.get().setContent {
             CompositionLocalProvider(LocalContext provides context) {
-                MeshCoreTheme(motionScale = 0f) { NotificationActionRecoveryDialog() }
+                MeshCoreTheme(motionScale = 0f) {
+                    NotificationActionRecoveryDialog(blockedByOtherDialog = otherDialog.value)
+                }
             }
         }
     }

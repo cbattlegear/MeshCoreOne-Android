@@ -67,6 +67,18 @@ the original record remains available and an error is surfaced. There is no
 automatic aging, replacement of old drafts, channel resampling or accepted-action
 replay.
 
+Snapshots carry the actual version observed under the custody lock. A dialog can
+acknowledge failure flags only if that exact version is still current. Closing an
+old dialog cannot acknowledge a newer response, loss warning or launch failure.
+Recovery waits behind existing connection-recovery dialogs without changing
+custody or acknowledging its unseen state.
+
+Before a durable insert, the serialized target must decode to the exact original
+typed payload. Private-directory denial is classified inside the typed storage
+boundary rather than thrown while constructing the adapter. Duplicate recovery
+IDs are corruption; a disposition affecting anything other than one row rolls
+back its transaction instead of deleting multiple rows.
+
 ## Actual admissions and ownership
 
 The trusted `reserve.py admit` command succeeded on the base above for:
@@ -107,24 +119,29 @@ Only `original_target` has a formatter: exactly one `%1$s`.
 
 Trusted-main admission is currently missing. The capability owner's local
 `832e44f0c61b6e91062f966a80c0dc560b991a52` proposal is not edit authority and was
-not imported. The coordinator is arranging an independently reviewable
+not imported. Its later independent clean-main proposal,
+tree `0264a22afb1d3712f40715ef80126d65086c3f36` on base `5f4d9b92`, is also not
+trusted admission and was not imported. The coordinator is arranging that
 prerequisite. Neither the XML nor the policy has been edited in this candidate.
 English-only authored copy, once admitted, will not count as reviewed
 translations or complete-locale UI acceptance.
 
 ## Authored controls, not execution evidence
 
-`NotificationActionReceiverCapacityTest.kt` contains 18 authored methods using the
+`NotificationActionReceiverCapacityTest.kt` contains 23 authored methods using the
 real receiver, RemoteInput, dispatcher and private SQLite adapter. They cover
 queue-full reply and mark-read, unchanged accepted normalization/FIFO, blank
 input, exact code-unit reopening, count/byte/multibyte limits, bounded fallback
 and exhaustion, unavailable storage/foreground, malformed existing state,
-explicit/stale/failed disposition, drain cancellation and reader cancellation.
+explicit/stale/failed disposition, drain cancellation and reader cancellation,
+direct/room target round trips, private-directory denial, duplicate-ID rollback,
+and stale-snapshot acknowledgment of newer retained responses or failures.
 
-`NotificationRecoveryClipboardTest.kt` contains nine authored App methods covering
+`NotificationRecoveryClipboardTest.kt` contains 11 authored App methods covering
 the actual clipboard and mounted dialog: exact sensitive copy, inaccessible
 clipboard, cancel/host destruction, single-record copy/discard, failed
-copy/discard and the process-only warning.
+copy/discard, the process-only warning, deferral behind another dialog and the
+old-displayed-cancel/new-unseen-rejection interleaving.
 
 **Zero methods have been executed for this draft.** These counts come from static
 source inspection, not runner discovery. A fresh store instance is not an
@@ -137,6 +154,16 @@ Actual allowed static checks:
   with the base, after newline normalization: identical.
 - `reserve.py admit` / advisory `transfer` commands above: succeeded for the
   stated paths/operations only. This is capability evidence, not Kotlin execution.
+- `python tools\android-port\controller\validate.py`: passed; pinned manifest,
+  source ownership and DAG valid. This does not compile candidate Kotlin.
+- `python tools\android-port\controller\verification_config.py --check`: passed;
+  configuration valid, feature verification remains unconfigured. No feature or
+  dependency acceptance is implied.
+
+An independent source-only review of the original local `571fd742f` draft found
+the stale-dialog acknowledgment interleaving. The successor source repairs that
+finding with version-bound snapshots/conditional acknowledgment and deterministic
+authored controls. The original review is not a review of the successor bytes.
 
 No Gradle, Android, hosted test or instrumentation command was run. The retained
 execution reservation `local-check:f516a7e271f444dd9cb2efcc8b995a16` was not cleared,

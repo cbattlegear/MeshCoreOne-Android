@@ -10,6 +10,7 @@ import android.os.Bundle
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.meshcoreone.android.core.contracts.notifications.NotificationAction
+import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
 import com.meshcoreone.android.core.model.RadioId
@@ -46,7 +47,7 @@ class NotificationActionReceiverCapacityTest {
     fun prepare() {
         context = recoveryContext(File(folder.root, "private").apply { mkdir() })
         NotificationActionDispatcher.resetForTesting()
-        NotificationActionRecovery.acknowledgeFailure()
+        NotificationActionRecovery.acknowledgeFailure(NotificationActionRecovery.load(context).version)
     }
 
     @After
@@ -55,7 +56,7 @@ class NotificationActionReceiverCapacityTest {
         NotificationActionRecovery.load(context).items.filter { !it.persistent }.forEach {
             assertNull(NotificationActionRecovery.dispose(context, it))
         }
-        NotificationActionRecovery.acknowledgeFailure()
+        NotificationActionRecovery.acknowledgeFailure(NotificationActionRecovery.load(context).version)
     }
 
     @Test
@@ -126,6 +127,26 @@ class NotificationActionReceiverCapacityTest {
     }
 
     @Test
+    fun originalDirectAndRoomTargetMetadataSurvivePrivateRecoveryWithoutRouting() = runTest {
+        val entity = EntityKey(radio, UUID.fromString("20000000-0000-0000-0000-000000000002"))
+        val originals = listOf(
+            NotificationResponse(
+                NotificationPayload.DirectMessage(entity, UUID(0, 100)),
+                NotificationAction.REPLY, " \tprivate direct reply\n ",
+            ),
+            NotificationResponse(
+                NotificationPayload.RoomMessage(" Room;#% \uD83D\uDE80\u0000 ", entity, UUID(0, 101)),
+                NotificationAction.REPLY, " \tprivate room reply\n ",
+            ),
+        )
+        originals.forEach {
+            assertEquals(NotificationRecoveryRetention.DURABLE, NotificationActionRecovery.retain(context, it))
+        }
+        assertEquals(originals, entries().map { it.response })
+        assertTrue(NotificationActionDispatcher.drainOnce())
+    }
+
+    @Test
     fun durableCountLimitNeverEvictsAnOlderDraft() {
         val store = NotificationActionRecoveryStore(context)
         val originals = (1..32).map { response(it, NotificationAction.REPLY, "original-$it") }
@@ -155,6 +176,40 @@ class NotificationActionReceiverCapacityTest {
         val snapshot = NotificationActionRecovery.load(context)
         assertTrue(snapshot.items.isEmpty())
         assertTrue(snapshot.notRetained)
+    }
+
+    @Test
+    fun staleSnapshotCannotAcknowledgeANewerLossOrForegroundFailure() {
+        val displayed = NotificationActionRecovery.load(context)
+        assertEquals(
+            NotificationRecoveryRetention.NOT_RETAINED,
+            NotificationActionRecovery.retain(context, response(91, NotificationAction.REPLY, "x".repeat(128 * 1024))),
+        )
+        NotificationActionRecovery.foregroundUnavailable()
+        val unseen = NotificationActionRecovery.load(context)
+        assertTrue(unseen.version > displayed.version)
+        assertNull(NotificationActionRecovery.acknowledgeFailure(displayed.version))
+        val unchanged = NotificationActionRecovery.load(context)
+        assertEquals(unseen.version, unchanged.version)
+        assertTrue(unchanged.notRetained)
+        assertTrue(unchanged.foregroundUnavailable)
+
+        val acknowledged = NotificationActionRecovery.acknowledgeFailure(unchanged.version)
+        val afterAcknowledgment = NotificationActionRecovery.load(context)
+        assertEquals(acknowledged, afterAcknowledgment.version)
+        assertFalse(afterAcknowledgment.notRetained)
+        assertFalse(afterAcknowledgment.foregroundUnavailable)
+    }
+
+    @Test
+    fun staleSnapshotCannotHideANewerDurablyRetainedResponse() {
+        val displayed = NotificationActionRecovery.load(context)
+        val original = response(92, NotificationAction.REPLY, "new response")
+        assertEquals(NotificationRecoveryRetention.DURABLE, NotificationActionRecovery.retain(context, original))
+        val unseen = NotificationActionRecovery.load(context)
+        assertNull(NotificationActionRecovery.acknowledgeFailure(displayed.version))
+        assertEquals(unseen.version, NotificationActionRecovery.changes.value)
+        assertEquals(original, NotificationActionRecovery.load(context).items.single().entry.response)
     }
 
     @Test
@@ -193,6 +248,24 @@ class NotificationActionReceiverCapacityTest {
         assertEquals(original, snapshot.items.single().entry.response)
         assertFalse(snapshot.items.single().persistent)
         assertFalse(snapshot.notRetained)
+    }
+
+    @Test
+    fun deniedPrivateDirectoryIsATypedFailureAndStillPreservesExactProcessCustody() {
+        val denied = object : ContextWrapper(context) {
+            override fun getNoBackupFilesDir(): File = throw SecurityException("synthetic private-directory denial")
+        }
+        val original = response(82, NotificationAction.REPLY, " \tkeep despite storage denial\n ")
+        val store = NotificationActionRecoveryStore(denied)
+        assertEquals(
+            NotificationRecoveryFailure.STORAGE_UNAVAILABLE,
+            (store.retain(original) as NotificationRecoveryWrite.Failed).reason,
+        )
+        assertEquals(NotificationRecoveryRetention.PROCESS_ONLY, NotificationActionRecovery.retain(denied, original))
+        val snapshot = NotificationActionRecovery.load(denied)
+        assertEquals(NotificationRecoveryFailure.STORAGE_UNAVAILABLE, snapshot.storageFailure)
+        assertEquals(original, snapshot.items.single().entry.response)
+        assertFalse(snapshot.items.single().persistent)
     }
 
     @Test
@@ -276,6 +349,29 @@ class NotificationActionReceiverCapacityTest {
             (store.read() as NotificationRecoveryRead.Failed).reason,
         )
         assertNotEquals(first.id, snapshot.items.single().entry.id)
+    }
+
+    @Test
+    fun duplicateIdsAreCorruptAndDispositionRollsBackInsteadOfDeletingBothRows() {
+        val store = NotificationActionRecoveryStore(context)
+        val entry = (store.retain(response(1, NotificationAction.REPLY, "original")) as NotificationRecoveryWrite.Stored).entry
+        val file = File(context.noBackupFilesDir, "notification-action-recovery.sqlite")
+        SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READWRITE).use {
+            it.execSQL("ALTER TABLE drafts RENAME TO original_drafts")
+            it.execSQL("CREATE TABLE drafts AS SELECT * FROM original_drafts")
+            it.execSQL("INSERT INTO drafts SELECT * FROM original_drafts")
+        }
+        assertEquals(
+            NotificationRecoveryFailure.INVALID_RECORD,
+            (store.read() as NotificationRecoveryRead.Failed).reason,
+        )
+        assertEquals(NotificationRecoveryFailure.INVALID_RECORD, store.dispose(entry.id))
+        SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY).use {
+            it.rawQuery("SELECT COUNT(*) FROM drafts", null).use { row ->
+                assertTrue(row.moveToFirst())
+                assertEquals(2, row.getInt(0))
+            }
+        }
     }
 
     @Test

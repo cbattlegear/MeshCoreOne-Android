@@ -11,6 +11,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -48,7 +49,7 @@ internal fun RemoteNodeStatusContent(
     val state by helper.state.collectAsStateWithLifecycle()
     val repeaterState = repeater?.state?.collectAsStateWithLifecycle()?.value
     val scope = rememberCoroutineScope()
-    val locale = Locale.getDefault()
+    val locale = LocalConfiguration.current.locales[0]
     val system = MeasurementSystem.of(locale)
     var map by remember { mutableStateOf<String?>(null) }
     var discoverConfirmation by remember { mutableStateOf(false) }
@@ -63,7 +64,7 @@ internal fun RemoteNodeStatusContent(
             TextButton({ map = null }) { Text(stringResource(L.remoteNodesDone)) }
             if (map == "neighbors" && repeaterState != null) {
                 var filter by remember { mutableStateOf(MapFilterState()) }
-                val plotted = remember(repeaterState.neighbors, catalog, filter) {
+                val plotted = remember(repeaterState.neighbors, catalog, filter, locale) {
                     NeighborSNRMapBuilder.build(
                         session, repeaterState.neighbors, catalog.contacts, catalog.discoveredNodes, null,
                         filter, repeaterState.neighborKeyDisplayByteCount, locale,
@@ -269,7 +270,7 @@ internal fun RemoteTelemetrySection(
     onMap: () -> Unit,
 ) {
     val state by helper.state.collectAsStateWithLifecycle()
-    val locale = Locale.getDefault()
+    val locale = LocalConfiguration.current.locales[0]
     val system = MeasurementSystem.of(locale)
     RemoteSection(
         L.remoteNodesStatusTelemetry, state.telemetryExpanded,

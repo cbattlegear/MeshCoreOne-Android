@@ -1514,6 +1514,120 @@ class OnboardingGateTest {
         }
     }
 
+    @Test fun `overlapping Settings entries keep delayed completion and retirement isolated`() = runBlocking {
+        val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val sealed = CompletableDeferred<Unit>()
+        val releaseSeal = CountDownLatch(1)
+        val target = OnboardingPresetTarget(java.util.UUID.randomUUID(), 1, java.util.UUID.randomUUID())
+        val presets = object : OnboardingPresetPort {
+            override val canApply = MutableStateFlow(true)
+            override fun currentTarget() = target
+            override fun sealCompletion(
+                completionTarget: OnboardingPresetTarget?,
+                attempt: com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt,
+            ): Boolean {
+                if (completionTarget != target || !attempt.trySeal()) return false
+                sealed.complete(Unit)
+                check(releaseSeal.await(5, TimeUnit.SECONDS)) { "Timed out waiting to release sealed completion" }
+                return true
+            }
+            override suspend fun apply(presetId: String) = OnboardingPresetOutcome.Applied
+        }
+        var showFirst by mutableStateOf(true)
+        var showSecond by mutableStateOf(false)
+        val publicationFlowsA = mutableListOf<com.meshcoreone.android.feature.onboarding.OnboardingFlowCoordinator>()
+        val publicationFlowsB = mutableListOf<com.meshcoreone.android.feature.onboarding.OnboardingFlowCoordinator>()
+        try {
+            host.setup().visible()
+            val baseFlags = flags(completed = true)
+            val base = onboarding(baseFlags, baseFlags.hasCompleted, processScope, presets = presets)
+            val ownerA = base.createRerunOwner()
+            val ownerB = base.createRerunOwner()
+            assertNotSame(ownerA, ownerB)
+            val flowA = checkNotNull(ownerA.retainedFlowCoordinator())
+            val flowB = checkNotNull(ownerB.retainedFlowCoordinator())
+            assertNotSame(flowA, flowB)
+
+            flowA.onboarding.replacePath(listOf(OnboardingStep.PRESET))
+            val presetId = flowA.preset.visiblePresets().first().id
+            flowA.preset.select(presetId)
+
+            fun mountEntries() {
+                host.get().setContent {
+                    MeshCoreTheme {
+                        Box {
+                            if (showFirst) {
+                                OnboardingFlow(
+                                    ownerA,
+                                    onCompleted = {},
+                                    modifier = Modifier.testTag("settings-entry-a"),
+                                    onCompletionPublication = { callbackFlow, _, commit ->
+                                        publicationFlowsA += callbackFlow
+                                        commit { false }
+                                    },
+                                    flowCoordinator = flowA,
+                                )
+                            }
+                            if (showSecond) {
+                                OnboardingFlow(
+                                    ownerB,
+                                    onCompleted = {},
+                                    modifier = Modifier.testTag("settings-entry-b"),
+                                    onCompletionPublication = { callbackFlow, _, commit ->
+                                        publicationFlowsB += callbackFlow
+                                        commit { false }
+                                    },
+                                    flowCoordinator = flowB,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            mountEntries()
+            compose.waitForIdle()
+            val applying = async(Dispatchers.Default) { flowA.preset.apply(presetId) }
+            withTimeout(5_000) { sealed.await() }
+
+            compose.runOnIdle { showSecond = true }
+            compose.waitForIdle()
+            compose.onNodeWithTag("settings-entry-a").assertIsDisplayed()
+            compose.onNodeWithTag("settings-entry-b").assertIsDisplayed()
+            assertTrue(publicationFlowsA.isEmpty())
+            assertTrue(publicationFlowsB.isEmpty())
+            host.recreate()
+            mountEntries()
+            compose.waitForIdle()
+            compose.onNodeWithTag("settings-entry-a").assertIsDisplayed()
+            compose.onNodeWithTag("settings-entry-b").assertIsDisplayed()
+            assertSame(flowA, ownerA.retainedFlowCoordinator())
+            assertSame(flowB, ownerB.retainedFlowCoordinator())
+
+            releaseSeal.countDown()
+            withTimeout(5_000) { flowA.onboarding.completionPublication.first { it != null } }
+            compose.waitForIdle()
+            applying.await()
+
+            assertEquals(listOf(flowA), publicationFlowsA)
+            assertTrue(publicationFlowsB.isEmpty())
+            assertTrue(ownerA.ownsFlowCoordinator(flowA))
+            assertTrue(ownerB.ownsFlowCoordinator(flowB))
+            assertFalse(flowB.onboarding.hasCompletedOnboarding)
+
+            compose.runOnIdle { showFirst = false }
+            compose.waitForIdle()
+            ownerA.onFlowCoordinatorEntryRemoved(flowA)
+            assertFalse(ownerA.ownsFlowCoordinator(flowA))
+            assertTrue(ownerB.ownsFlowCoordinator(flowB))
+            assertSame(flowB, ownerB.retainedFlowCoordinator())
+            assertFalse(flowB.onboarding.hasCompletedOnboarding)
+        } finally {
+            releaseSeal.countDown()
+            processScope.cancel()
+        }
+    }
+
     @Test fun `pending denied permission result is restored after Activity recreation`() {
         val reportedLocationResults = mutableListOf<Boolean>()
         val flags = flags(completed = false)

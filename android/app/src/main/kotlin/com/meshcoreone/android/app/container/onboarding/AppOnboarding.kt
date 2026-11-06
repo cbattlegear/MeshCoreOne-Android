@@ -286,10 +286,16 @@ class AppOnboarding(
     override fun InterceptBack(enabled: Boolean, onBack: () -> Unit) = BackHandler(enabled, onBack)
 
     /**
-     * The same bindings with a throwaway flag store, for re-running radio setup from Settings after onboarding:
-     * a completed persisted flag would otherwise end the flow on entry. Completion here persists nothing.
+     * Legacy single-entry rerun owner with in-memory completion flags. Multi-entry hosts must retain one
+     * [createRerunOwner] result per navigation entry.
      */
     fun forRerun(): OnboardingFeatureDependencies = rerunDependencies
+
+    /**
+     * Creates an isolated Settings-rerun owner. The navigation host must retain the returned instance by
+     * navigation-entry identity across Activity recreation and retire only that entry's owner on removal.
+     */
+    fun createRerunOwner(): OnboardingFeatureDependencies = Rerun(this)
 
     private class Rerun(private val base: AppOnboarding) : OnboardingFeatureDependencies by base {
         private val flowRevision = MutableStateFlow(0L)

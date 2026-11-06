@@ -2003,7 +2003,7 @@ class NavigationStateTest {
         )
         for (tokens in malformed) assertEquals(NavigationFailure.InvalidSavedState, NavigationSavedState.restore(tokens).failure)
     }
-    @Test fun restorationCannotOverwriteLiveHostAndInvalidWindowWidthIsNotSilentlyAccepted() {
+    @Test fun restorationCannotOverwriteLiveHostAndInvalidWindowWidthIsNotSilentlyAccepted() = runTest {
         val cold = NavigationCoordinator()
         val restored = NavigationState(selectedTab = AppTab.NODES)
         cold.restoreHostState(restored)
@@ -2041,12 +2041,52 @@ class NavigationStateTest {
         assertTrue(process.completeOnboardingForTest(replacement, replacement.value.activeStack.last().id))
 
         val issuedBeforeHost = NavigationCoordinator()
+        issuedBeforeHost.installOnboardingSessionCapture { { true } }
         issuedBeforeHost.navigate(FeatureRoute(FeatureId.ONBOARDING))
-        val issued = issuedBeforeHost.state.value
+        val issuedSnapshot = issuedBeforeHost.publishedNavigation.value
+        val issued = issuedSnapshot.value
+        val issuedEntry = issued.activeStack.last()
+        val oldIdentity = checkNotNull(issuedSnapshot.entryIdentity(issuedEntry.id))
+        val oldWitness = checkNotNull(issuedBeforeHost.captureMountedOnboarding(issuedSnapshot, issuedEntry.id))
+        val separateCoordinator = NavigationCoordinator()
+        separateCoordinator.navigate(FeatureRoute(FeatureId.ONBOARDING))
+        val separateSnapshot = separateCoordinator.publishedNavigation.value
+        assertEquals(issuedEntry.id, separateSnapshot.value.activeStack.last().id)
+        assertNotEquals(oldIdentity, separateSnapshot.entryIdentity(issuedEntry.id))
         assertTrue(issuedBeforeHost.back())
-        val beforeFirstAttach = issuedBeforeHost.state.value
         issuedBeforeHost.attachHostState(NavigationSavedState.restore(NavigationSavedState.encode(issued)))
-        assertEquals(beforeFirstAttach, issuedBeforeHost.state.value)
+        val attached = issuedBeforeHost.publishedNavigation.value
+        assertEquals(issued.activeStack, attached.value.activeStack)
+        val newIdentity = checkNotNull(attached.entryIdentity(issuedEntry.id))
+        assertNotEquals(oldIdentity, newIdentity)
+        assertFalse(issuedBeforeHost.completeMountedOnboarding(oldWitness, MountedOnboardingProducer.NoDevice))
+        issuedBeforeHost.selectTab(AppTab.SETTINGS)
+        issuedBeforeHost.measureWindow(900f)
+        assertEquals(newIdentity, issuedBeforeHost.publishedNavigation.value.entryIdentity(issuedEntry.id))
+        issuedBeforeHost.selectTab(AppTab.CHATS)
+        val returned = issuedBeforeHost.publishedNavigation.value
+        assertEquals(newIdentity, returned.entryIdentity(issuedEntry.id))
+        assertTrue(issuedBeforeHost.completeOnboardingForTest(returned, issuedEntry.id))
+
+        val notificationBeforeHost = NavigationCoordinator()
+        notificationBeforeHost.replaceRadio(radio)
+        notificationBeforeHost.setNavigationReady(true)
+        val roomPayload = NotificationPayload.RoomMessage(room.name, EntityKey(radio, room.id), message)
+        assertEquals(
+            NavigationOutcome.Navigated,
+            notificationBeforeHost.handleNotification(roomPayload, lookup()),
+        )
+        assertEquals(issuedEntry.id, notificationBeforeHost.state.value.roomAuthenticationDeliveryId)
+        notificationBeforeHost.replaceRadio(otherRadio)
+        assertNull(notificationBeforeHost.state.value.pendingRoomAuthentication)
+        notificationBeforeHost.setNavigationReady(true)
+        val beforeNotificationRestore = notificationBeforeHost.state.value
+        notificationBeforeHost.attachHostState(NavigationSavedState.restore(NavigationSavedState.encode(issued)))
+        val afterNotificationRestore = notificationBeforeHost.state.value
+        assertEquals(issued.stacks, afterNotificationRestore.stacks)
+        assertEquals(beforeNotificationRestore.radioId, afterNotificationRestore.radioId)
+        assertEquals(beforeNotificationRestore.generation, afterNotificationRestore.generation)
+        assertEquals(beforeNotificationRestore.navigationReady, afterNotificationRestore.navigationReady)
 
         val freshProcess = NavigationCoordinator()
         freshProcess.navigate(FeatureRoute(FeatureId.ONBOARDING))
@@ -2059,6 +2099,36 @@ class NavigationStateTest {
         freshProcess.attachHostState(freshSaved)
         assertEquals(freshSaved.activeStack, freshProcess.state.value.activeStack)
         assertEquals(freshSaved.nextEntryId, freshProcess.state.value.nextEntryId)
+
+        val noOpAttachment = NavigationStateStore(NavigationState())
+        noOpAttachment.attachHostOnce { it }
+        assertEquals(0L, noOpAttachment.snapshot().revision)
+        noOpAttachment.attachHostOnce { restored }
+        assertEquals(NavigationState(), noOpAttachment.value)
+
+        val competingHosts = NavigationStateStore(NavigationState())
+        val firstPrepared = CountDownLatch(1)
+        val releaseFirst = CountDownLatch(1)
+        val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
+        try {
+            val first = executor.submit {
+                competingHosts.attachHostOnce {
+                    firstPrepared.countDown()
+                    check(releaseFirst.await(5, TimeUnit.SECONDS))
+                    restored
+                }
+            }
+            assertTrue(firstPrepared.await(5, TimeUnit.SECONDS))
+            val winner = NavigationState(selectedTab = AppTab.MAP)
+            competingHosts.attachHostOnce { winner }
+            assertEquals(winner, competingHosts.value)
+            releaseFirst.countDown()
+            first.get(5, TimeUnit.SECONDS)
+            assertEquals(winner, competingHosts.value)
+        } finally {
+            releaseFirst.countDown()
+            executor.shutdownNow()
+        }
     }
     @Test fun unavailableMapConsumerAndOldErrorDismissalDoNotPretendSuccessOrLoseNewFailure() {
         assertEquals(MapNavigationOutcome.UNAVAILABLE, MapNavigationConsumer().navigateToMap(MapFocusRequest(1.0, 2.0)))

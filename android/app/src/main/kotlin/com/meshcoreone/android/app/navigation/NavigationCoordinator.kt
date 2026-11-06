@@ -83,7 +83,6 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     private val notificationMutex = Mutex()
     private val drainMutex = Mutex()
     private val localCommitLock = Any()
-    private val hostStateClaimed = AtomicBoolean(false)
     private val onboardingIdentity = Any()
     private var commitBoundary: (() -> Unit) -> Unit = { action -> synchronized(localCommitLock, action) }
     private var onboardingSessionCapture: (NavigationState) -> (MountedOnboardingProducer) -> Boolean = { { false } }
@@ -177,19 +176,14 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
 
     // AndroidOnly: WP-407 Attach restored public screen state without overwriting live process radio/readiness.
     internal fun attachHostState(restored: NavigationState) {
-        if (!hostStateClaimed.compareAndSet(false, true)) return
-        mutableState.update { current ->
-            // Saved entry IDs must not reuse identities already issued by this process.
-            val reusedEntry = restored.stacks.values.any { stack ->
-                stack.drop(1).any { entry -> entry.id < current.nextEntryId }
-            }
+        mutableState.attachHostOnce { current ->
             if (restored == NavigationState() || current.stacks.values.any { stack -> stack.size > 1 } ||
                 current.selectedTab != AppTab.CHATS || current.pendingMapFocus != null ||
                 current.pendingContactLink != null || current.pendingChannelLink != null || current.pendingHashtag != null ||
                 current.pendingNotifications.isNotEmpty() || current.pendingChatContact != null || current.pendingChannel != null ||
                 current.pendingRoomSession != null || current.pendingRoomAuthentication != null ||
-                current.pendingContactDetail != null || reusedEntry
-            ) return@update current
+                current.pendingContactDetail != null
+            ) return@attachHostOnce current
             current.copy(
                 selectedTab = restored.selectedTab,
                 stacks = restored.stacks,

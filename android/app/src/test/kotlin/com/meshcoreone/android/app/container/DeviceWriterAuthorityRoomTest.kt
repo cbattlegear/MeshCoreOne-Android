@@ -300,6 +300,69 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
         }
     }
 
+    @Test fun capturedOldGenerationRegionWritesCannotMutateSameIdSuccessorBeforeAdmission() = runTest {
+        val paused = PausedStore(store)
+        val h = ContainerHarness(this, store, persistenceOverride = paused)
+        val admissionEntered = CompletableDeferred<Unit>()
+        val releaseAdmission = CompletableDeferred<Unit>()
+        try {
+            val pairingId = UUID.randomUUID()
+            h.manager.connect(h.target(pairingId))
+            h.settle()
+            val before = assertNotNull(h.manager.connectedDevice)
+            val oldToken = assertNotNull(h.manager.snapshot.value.token)
+            val managerAccess = h.container.deviceAccess
+            var admissions = 0
+            val delayedAdmission = object : ConnectedDeviceAccess by managerAccess {
+                override suspend fun <T : Any> withDeviceWrite(
+                    token: SessionToken,
+                    deviceId: UUID,
+                    block: suspend () -> T,
+                ): T? {
+                    assertEquals(oldToken, token)
+                    assertEquals(before.id, deviceId)
+                    if (++admissions == 4) admissionEntered.complete(Unit)
+                    releaseAdmission.await()
+                    return managerAccess.withDeviceWrite(token, deviceId, block)
+                }
+            }
+            // Separate producers let all four capture G1 before any lease is admitted.
+            val ordinaryAdd = assertNotNull(editorFor(delayedAdmission, paused, this).addKnownRegion("US915"))
+            val ordinaryRemove = assertNotNull(editorFor(delayedAdmission, paused, this).removeKnownRegion("US915"))
+            val boundAdd = async(start = CoroutineStart.UNDISPATCHED) {
+                editorFor(delayedAdmission, paused, this).addKnownRegion("US915", oldToken)
+            }
+            val boundRemove = async(start = CoroutineStart.UNDISPATCHED) {
+                editorFor(delayedAdmission, paused, this).persistKnownRegionRemoval("US915", oldToken)
+            }
+            admissionEntered.await()
+
+            h.manager.disconnect()
+            h.manager.connect(h.target(pairingId))
+            h.settle()
+            val successor = assertNotNull(h.manager.connectedDevice)
+            assertEquals(before.id, successor.id)
+            assertEquals(before.radioId, successor.radioId)
+            assertTrue(oldToken != h.manager.snapshot.value.token)
+            val persistedSuccessor = assertNotNull(store.fetchDevice(successor.id))
+            var regionDaoCalls = 0
+            paused.beforeAdd = { regionDaoCalls++ }
+            paused.beforeRemove = { regionDaoCalls++ }
+
+            releaseAdmission.complete(Unit)
+            ordinaryAdd.join()
+            ordinaryRemove.join()
+            assertFalse(boundAdd.await())
+            assertFalse(boundRemove.await())
+            assertEquals(0, regionDaoCalls, "Rejected G1 admission must not invoke either direct region DAO")
+            assertEquals(persistedSuccessor, store.fetchDevice(successor.id))
+            assertEquals(successor, h.manager.connectedDevice)
+        } finally {
+            releaseAdmission.complete(Unit)
+            h.container.close()
+        }
+    }
+
     @Test fun retirementWaitsForAdmittedDeviceWriteThroughRoomCommitWithoutSuccessor() = runTest {
         val paused = PausedStore(store)
         val h = ContainerHarness(this, store, persistenceOverride = paused)

@@ -590,3 +590,9 @@ WP-209's latest reported review-only manager pin is
 `96aacd0e4c3a3d0db9c1a0b310518763d6232815`). It reportedly repairs rebuild reentrant cleanup marker
 loss identified in `06e183d`; exact independent review is pending. No composition or runtime
 acceptance is claimed.
+
+An additional authored actual-Room control holds all four ordinary/token-bound direct-region
+entry points after G1 capture but before admission, installs same-ID G2, then releases admission.
+It asserts both suspend results are false, neither region DAO is invoked, and G2's Room/live state
+is unchanged. Separate editor producers avoid serializing the four captures on one editor mutex;
+each still passes its original G1 token and device ID. This is not executed coverage.

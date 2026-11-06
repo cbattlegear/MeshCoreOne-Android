@@ -21,6 +21,9 @@ import com.meshcoreone.android.core.services.reactions.ChannelReactionReplayResu
 import com.meshcoreone.android.core.services.reactions.PendingReaction
 import com.meshcoreone.android.core.services.reactions.ReactionParser
 import com.meshcoreone.android.core.services.reactions.ReactionService
+import com.meshcoreone.android.core.services.reactions.NativeChannelReactionFailure
+import com.meshcoreone.android.core.services.reactions.NativeChannelReactionParkResult
+import com.meshcoreone.android.core.services.reactions.ParkedNativeChannelReaction
 import com.meshcoreone.android.feature.chats.timeline.ChatTimelineDependencies
 import com.meshcoreone.android.feature.chats.timeline.ChatViewModel
 import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
@@ -116,15 +119,18 @@ class ChannelReactionTargetConsumerTest : RoomProcessTest() {
         direction = MessageDirection.INCOMING, status = MessageStatus.DELIVERED,
     )
 
-    private fun Fixture.queue(message: MessageDTO, sender: String = "Bob", radio: RadioId = channel.radioId) {
+    private fun Fixture.pending(message: MessageDTO, sender: String = "Bob", radio: RadioId = channel.radioId): PendingReaction {
         val wire = service.buildReactionText(
             emoji = emoji, targetSender = "Alice", targetText = message.text,
             targetTimestamp = message.reactionTimestamp,
         )
-        service.requeuePendingReaction(PendingReaction(
+        return PendingReaction(
             assertNotNull(ReactionParser.parse(wire)), channel.index, sender, wire, radio, receivedAt,
-        ))
+        )
     }
+
+    private fun Fixture.queue(message: MessageDTO, sender: String = "Bob", radio: RadioId = channel.radioId) =
+        service.requeuePendingReaction(pending(message, sender, radio))
 
     private suspend fun Fixture.window(): List<MessageDTO> =
         dependencies.data.fetchMessages(conversation, 51, 0)
@@ -256,8 +262,12 @@ class ChannelReactionTargetConsumerTest : RoomProcessTest() {
                 assertEquals(original, store.fetchMessage(EntityKey(channel.radioId, original.id)))
                 assertTrue(store.fetchReactions(EntityKey(channel.radioId, original.id)).isEmpty())
                 viewModel.open()
-                assertIs<PersistenceStoreException>(viewModel.state.value.loadError)
+                assertNull(viewModel.state.value.loadError)
+                assertEquals(original, viewModel.state.value.messages.single())
                 assertTrue(store.fetchReactions(EntityKey(channel.radioId, original.id)).isEmpty())
+                assertIs<NativeChannelReactionFailure.Stale>(
+                    service.retainedNativeChannelReactionFailures(channel.radioId).single().failure,
+                )
             } finally {
                 viewModel.close()
             }
@@ -276,10 +286,11 @@ class ChannelReactionTargetConsumerTest : RoomProcessTest() {
             assertIs<PersistenceStoreException>(
                 runCatching { dependencies.prepareMessages(window()) }.exceptionOrNull(),
             )
-            assertIs<PersistenceStoreException>(
-                runCatching { dependencies.prepareMessages(window()) }.exceptionOrNull(),
-            )
+            assertNull(dependencies.prepareMessages(window()).single().reactionSummary)
             assertTrue(store.fetchReactions(EntityKey(channel.radioId, original.id)).isEmpty())
+            assertIs<NativeChannelReactionFailure.Stale>(
+                service.retainedNativeChannelReactionFailures(channel.radioId).single().failure,
+            )
         }
     }
 
@@ -389,24 +400,27 @@ class ChannelReactionTargetConsumerTest : RoomProcessTest() {
 
     @Test fun commitThenThrowRemainsUnknownAndNeverReplaysAgainstANewWindowBinding() = runTest {
         var throwOnce = true
+        val lostReturn = IllegalStateException("Injected lost atomic return after real commit")
         fixture(this, afterApply = {
             if (throwOnce && it is ChannelReactionApplyResult.Applied) {
                 throwOnce = false
-                throw IllegalStateException("Injected lost atomic return after real commit")
+                throw lostReturn
             }
         }) {
             val original = message()
             store.saveMessage(original)
             queue(original)
             queue(original, "Carol")
-            assertIs<IllegalStateException>(
-                runCatching { dependencies.prepareMessages(window()) }.exceptionOrNull(),
-            )
+            assertSame(lostReturn, runCatching { dependencies.prepareMessages(window()) }.exceptionOrNull())
             assertEquals(listOf("Bob"), store.fetchReactions(EntityKey(channel.radioId, original.id)).map { it.senderName })
-            assertIs<IllegalStateException>(
-                runCatching { dependencies.prepareMessages(window()) }.exceptionOrNull(),
-            )
+            assertEquals("$emoji:1", dependencies.prepareMessages(window()).single().reactionSummary)
             assertEquals(1, store.fetchReactions(EntityKey(channel.radioId, original.id)).size)
+            val retained = service.retainedNativeChannelReactionFailures(channel.radioId)
+            assertEquals(listOf("Bob", "Carol"), retained.map { it.pending.senderNodeName })
+            retained.forEach {
+                assertSame(lostReturn, assertIs<NativeChannelReactionFailure.Unknown>(it.failure).cause)
+                assertEquals(receivedAt, it.pending.receivedAt)
+            }
         }
     }
 
@@ -433,10 +447,13 @@ class ChannelReactionTargetConsumerTest : RoomProcessTest() {
             assertTrue(attempt.isCancelled)
             assertEquals(listOf("Bob"), store.fetchReactions(EntityKey(channel.radioId, original.id)).map { it.senderName })
             val fresh = authority.fetchChannelReactionWindow(channel.radioId, channel.index, 10, 0).single()
-            assertIs<ChannelReactionReplayResult.Failed>(
+            assertIs<ChannelReactionReplayResult.Completed>(
                 service.indexChannelMessageAndReplay(fresh, "Alice", authority),
             )
             assertEquals(2, calls, "UNKNOWN must not start another atomic mutation")
+            assertEquals(listOf("Carol", "Dave"), service.retainedNativeChannelReactionFailures(
+                channel.radioId,
+            ).map { it.pending.senderNodeName })
         }
     }
 
@@ -448,6 +465,7 @@ class ChannelReactionTargetConsumerTest : RoomProcessTest() {
             val captured = authority.fetchChannelReactionWindow(channel.radioId, channel.index, 10, 0).single()
             val failure = assertIs<ChannelReactionReplayResult.Failed>(
                 service.indexChannelMessageAndReplay(captured, "Alice", authority) {
+                    repeat(100) { ordinal -> queue(message(ordinal + 1), "Later $ordinal") }
                     throw IllegalStateException("Injected observer failure after known commit")
                 },
             )
@@ -462,6 +480,158 @@ class ChannelReactionTargetConsumerTest : RoomProcessTest() {
             val saved = store.fetchReactions(EntityKey(channel.radioId, original.id))
             assertEquals(3, saved.size)
             assertEquals(first, saved.single { it.senderName == "Bob" })
+            repeat(100) { ordinal ->
+                val later = message(ordinal + 1)
+                assertEquals(listOf("Later $ordinal"), service.indexMessage(
+                    later.id, channel.index, "Alice", later.text, later.reactionTimestamp,
+                ).map { it.senderNodeName })
+            }
+        }
+    }
+
+    @Test fun inFlightNativeReservationsSurviveConcurrentArrivalsAndNeverSilentlyDisplaceOriginals() = runTest {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val writeFailure = IllegalStateException("Original atomic return unavailable")
+        var calls = 0
+        fixture(this, beforeApply = {
+            calls++
+            entered.complete(Unit)
+            release.await()
+            throw writeFailure
+        }) {
+            val original = message()
+            store.saveMessage(original)
+            repeat(100) { queue(original, "Original $it") }
+            val captured = authority.fetchChannelReactionWindow(channel.radioId, channel.index, 10, 0).single()
+            var result: ChannelReactionReplayResult? = null
+            val attempt = launch {
+                result = service.indexChannelMessageAndReplay(captured, "Alice", authority)
+            }
+            try {
+                entered.await()
+                val extra = ParkedNativeChannelReaction(
+                    pending(original, "Unretained").copy(boundTarget = captured), NativeChannelReactionFailure.Stale,
+                )
+                val overflow = assertIs<NativeChannelReactionParkResult.Overflow>(service.parkNativeChannelReaction(extra))
+                assertSame(extra, overflow.unretained, "All 100 in-flight items must still reserve their slots")
+                repeat(100) { ordinal -> queue(message(ordinal + 1), "Later $ordinal") }
+                release.complete(Unit)
+                attempt.join()
+                assertSame(writeFailure, assertIs<ChannelReactionReplayResult.Failed>(result).cause)
+                val retained = service.retainedNativeChannelReactionFailures(channel.radioId)
+                assertEquals((0 until 100).map { "Original $it" }, retained.map { it.pending.senderNodeName })
+                retained.forEach {
+                    assertSame(captured, it.pending.boundTarget)
+                    assertSame(writeFailure, assertIs<NativeChannelReactionFailure.Unknown>(it.failure).cause)
+                    assertEquals(receivedAt, it.pending.receivedAt)
+                }
+                assertTrue(store.fetchReactions(EntityKey(channel.radioId, original.id)).isEmpty())
+                assertIs<ChannelReactionReplayResult.Completed>(
+                    service.indexChannelMessageAndReplay(captured, "Alice", authority),
+                )
+                assertEquals(1, calls, "Terminal UNKNOWN entries must not revisit matching or storage")
+                repeat(100) { ordinal ->
+                    val later = message(ordinal + 1)
+                    assertEquals(listOf("Later $ordinal"), service.indexMessage(
+                        later.id, channel.index, "Alice", later.text, later.reactionTimestamp,
+                    ).map { it.senderNodeName })
+                }
+            } finally {
+                release.complete(Unit)
+                attempt.cancelAndJoin()
+            }
+        }
+    }
+
+    @Test fun wholeNativeBatchOverflowReturnsOriginalBoundWorkBeforeAnyWriteOrCallback() = runTest {
+        var calls = 0
+        fixture(this, beforeApply = { calls++ }) {
+            val original = message()
+            store.saveMessage(original)
+            val captured = authority.fetchChannelReactionWindow(channel.radioId, channel.index, 10, 0).single()
+            val prior = List(99) {
+                ParkedNativeChannelReaction(
+                    pending(original, "Retained $it").copy(boundTarget = captured), NativeChannelReactionFailure.Stale,
+                )
+            }
+            prior.forEach {
+                assertIs<NativeChannelReactionParkResult.Retained>(service.parkNativeChannelReaction(it))
+            }
+            queue(original, "Bob")
+            queue(original, "Carol")
+            val overflow = assertIs<ChannelReactionReplayResult.Overflow>(
+                service.indexChannelMessageAndReplay(captured, "Alice", authority) { error("No write may have run") },
+            )
+            assertEquals(0, calls)
+            assertTrue(store.fetchReactions(EntityKey(channel.radioId, original.id)).isEmpty())
+            assertNull(store.fetchMessage(EntityKey(channel.radioId, original.id))?.reactionSummary)
+            assertEquals(listOf("Bob", "Carol"), overflow.unretained.map { it.pending.senderNodeName })
+            overflow.unretained.forEach {
+                assertSame(captured, it.pending.boundTarget)
+                assertEquals(receivedAt, it.pending.receivedAt)
+                assertEquals(pending(original).rawText, it.pending.rawText)
+                assertIs<NativeChannelReactionFailure.CapacityExceeded>(it.failure)
+            }
+            prior.forEachIndexed { index, work ->
+                assertSame(work, service.retainedNativeChannelReactionFailures(channel.radioId)[index])
+            }
+            assertTrue(service.indexMessage(original.id, channel.index, "Alice", original.text, original.reactionTimestamp).isEmpty())
+            assertIs<ChannelReactionReplayResult.Completed>(service.indexChannelMessageAndReplay(captured, "Alice", authority))
+            assertEquals(0, calls, "An unretained overflow batch must not silently return to native replay")
+        }
+    }
+
+    @Test fun actualReactionInsertAbortRollsBackWithoutUnsafeRetry() = runTest {
+        atomicRollback(this, "BEFORE INSERT ON reactions WHEN NEW.senderName = 'Carol'")
+    }
+
+    @Test fun actualPostInsertAbortRollsBackTheRowAndSummaryTogether() = runTest {
+        atomicRollback(this, "AFTER INSERT ON reactions WHEN NEW.senderName = 'Carol'")
+    }
+
+    @Test fun actualSummaryWriteAbortRollsBackTheInsertedReaction() = runTest {
+        atomicRollback(this, "BEFORE UPDATE OF reactionSummary ON messages WHEN NEW.reactionSummary LIKE '%:2'")
+    }
+
+    @Test fun actualPostSummaryWriteAbortRollsBackTheEntireReactionTransaction() = runTest {
+        atomicRollback(this, "AFTER UPDATE OF reactionSummary ON messages WHEN NEW.reactionSummary LIKE '%:2'")
+    }
+
+    private suspend fun atomicRollback(test: TestScope, triggerPoint: String) {
+        fixture(test) {
+            val original = message()
+            val key = EntityKey(channel.radioId, original.id)
+            store.saveMessage(original)
+            listOf("Bob", "Carol", "Dave").forEach { queue(original, it) }
+            val captured = authority.fetchChannelReactionWindow(channel.radioId, channel.index, 10, 0).single()
+            val sql = db.openHelper.writableDatabase
+            sql.execSQL(
+                "CREATE TRIGGER wp309_reject_atomic $triggerPoint " +
+                    "BEGIN SELECT RAISE(ABORT, 'wp309 actual atomic rollback'); END",
+            )
+            val observed = mutableListOf<String>()
+            val failed = try {
+                assertIs<ChannelReactionReplayResult.Failed>(
+                    service.indexChannelMessageAndReplay(captured, "Alice", authority) { observed += it.summary },
+                )
+            } finally {
+                sql.execSQL("DROP TRIGGER wp309_reject_atomic")
+            }
+            assertTrue(failed.mutationUncertain, "The public role does not certify rollback even when the test knows it occurred")
+            assertEquals(listOf("$emoji:1"), observed)
+            val committed = store.fetchReactions(key).single()
+            assertEquals("Bob", committed.senderName)
+            assertEquals(receivedAt, committed.receivedAt)
+            assertEquals("$emoji:1", store.fetchMessage(key)?.reactionSummary)
+            val retained = service.retainedNativeChannelReactionFailures(channel.radioId)
+            assertEquals(listOf("Carol", "Dave"), retained.map { it.pending.senderNodeName })
+            retained.forEach { assertSame(failed.cause, assertIs<NativeChannelReactionFailure.Unknown>(it.failure).cause) }
+            assertEquals("$emoji:1", dependencies.prepareMessages(window()).single().reactionSummary)
+            assertEquals(listOf(committed), store.fetchReactions(key), "Fresh windows cannot blindly retry the original unknown work")
+            retained.forEachIndexed { index, work ->
+                assertSame(work, service.retainedNativeChannelReactionFailures(channel.radioId)[index])
+            }
         }
     }
 }

@@ -11,6 +11,7 @@ import com.meshcoreone.android.core.contracts.domain.ParsedReaction
 import com.meshcoreone.android.core.contracts.domain.ReactionPersisting
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.ReactionDTO
+import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.services.rendering.MessageCandidate
 import com.meshcoreone.android.core.services.rendering.MessageLRUCache
 import com.meshcoreone.android.core.services.rendering.SwiftText
@@ -52,6 +53,7 @@ sealed interface ChannelReactionReplayResult {
         val cause: Exception,
         val mutationUncertain: Boolean,
     ) : ChannelReactionReplayResult
+    data class Overflow(val unretained: SnapshotList<ParkedNativeChannelReaction>) : ChannelReactionReplayResult
 }
 
 sealed interface ChannelReactionCacheLookup {
@@ -93,11 +95,51 @@ data class UnselectedChannelReaction(
     val receivedAt: Instant,
     val format: UnselectedChannelReactionFormat,
     val failure: Exception,
+    val originalUnboundMessageId: UUID? = null,
 )
 
 sealed interface UnselectedChannelReactionParkResult {
     data object Retained : UnselectedChannelReactionParkResult
     data class Overflow(val unretained: UnselectedChannelReaction) : UnselectedChannelReactionParkResult
+}
+
+sealed interface NativeChannelReactionFailure {
+    data object Stale : NativeChannelReactionFailure
+    data class Rejected(val reason: ChannelReactionRejection) : NativeChannelReactionFailure
+    data class Unknown(val cause: Exception) : NativeChannelReactionFailure
+    data object CapacityExceeded : NativeChannelReactionFailure
+    data class Unbound(val messageID: UUID) : NativeChannelReactionFailure
+    data class AuthorityUnavailable(val cause: Exception) : NativeChannelReactionFailure
+}
+
+data class ParkedNativeChannelReaction(
+    val pending: PendingReaction,
+    val failure: NativeChannelReactionFailure,
+)
+
+sealed interface NativeChannelReactionParkResult {
+    data object Retained : NativeChannelReactionParkResult
+    data class Overflow(val unretained: ParkedNativeChannelReaction) : NativeChannelReactionParkResult
+}
+
+sealed interface ChannelReactionUnretainedWork {
+    data class Selected(val work: ParkedChannelReaction) : ChannelReactionUnretainedWork
+    data class Native(val work: SnapshotList<ParkedNativeChannelReaction>) : ChannelReactionUnretainedWork {
+        init { require(work.isNotEmpty()) }
+    }
+    data class Unselected(val work: UnselectedChannelReaction) : ChannelReactionUnretainedWork
+}
+
+class ChannelReactionRetentionException(
+    val work: ChannelReactionUnretainedWork,
+    cause: Exception,
+) : Exception("Original channel reaction work exceeded retention capacity; no redrive is permitted", cause)
+
+class ChannelReactionRetentionCancellation(
+    val work: ChannelReactionUnretainedWork,
+    original: CancellationException,
+) : CancellationException("Original channel reaction cancellation exceeded retention capacity; no redrive is permitted") {
+    init { initCause(original) }
 }
 
 /** A DM reaction waiting for its target message to be indexed. */
@@ -142,6 +184,16 @@ class ReactionService internal constructor(
     private var pendingDMReactions = PendingQueue.empty<PendingDMReactionKey, PendingDMReaction>()
     private var parkedChannelReactions = PendingQueue.empty<Unit, ParkedChannelReaction>()
     private var unselectedChannelReactions = PendingQueue.empty<Unit, UnselectedChannelReaction>()
+    private data class NativeEntry(
+        val order: Long,
+        val pending: PendingReaction,
+        val parked: ParkedNativeChannelReaction? = null,
+    ) {
+        val failure: NativeChannelReactionFailure? get() = parked?.failure
+    }
+    private var nativeChannelReactions: List<NativeEntry> = emptyList()
+    private var inFlightNativeOrders: Set<Long> = emptySet()
+    private var nextNativeOrder = 0L
 
     /** [targetSender] is canonical (NFC) because Swift hashes `String` keys by canonical equivalence. */
     private data class PendingReactionKey(val channelIndex: UByte, val targetSender: String, val messageHash: String) {
@@ -207,7 +259,7 @@ class ReactionService internal constructor(
             val (remaining, taken) = pendingReactions.takeMatching(
                 key, {
                     it.radioId == message.radioId &&
-                        !it.originalAuthorityUnavailable && it.unboundOriginalMessageID == null
+                        !it.mutationUncertain && !it.originalAuthorityUnavailable && it.unboundOriginalMessageID == null
                 },
             ) {
                     value, keyOrder, entryOrder ->
@@ -217,20 +269,32 @@ class ReactionService internal constructor(
                 )
             }
             pendingReactions = remaining
-            taken.orEmpty()
+            val selected = taken.orEmpty()
+            if (nativeChannelReactions.size + selected.size > MAX_PENDING_REACTIONS) {
+                logger.severe("Original channel replay batch exceeded protected retention capacity; exact selected work returned")
+                return@withLock ChannelReactionReplayResult.Overflow(SnapshotList(selected.map {
+                    ParkedNativeChannelReaction(it, NativeChannelReactionFailure.CapacityExceeded)
+                }))
+            }
+            selected.forEach { appendNativeEntry(it) }
+            nativeChannelReactions.filter {
+                it.failure == null && it.pending.radioId == message.radioId &&
+                    PendingReactionKey.of(
+                        it.pending.channelIndex, it.pending.parsed.targetSender, it.pending.parsed.messageHash,
+                    ) == key
+            }.sortedWith(compareBy<NativeEntry> { it.pending.queueEntryOrder ?: Long.MAX_VALUE }.thenBy { it.order })
+                .also { entries -> inFlightNativeOrders = inFlightNativeOrders + entries.map { it.order } }
         }
         val successors = IdentityHashMap<ChannelReactionTarget, CapturedChannelReactionTarget>()
         var consumed = 0
         var uncertainOriginal: ChannelReactionTarget? = null
+        var terminalOriginal: ChannelReactionTarget? = null
+        var terminalFailure: NativeChannelReactionFailure? = null
         try {
-            for (pending in batch) {
+            for (entry in batch) {
+                val pending = entry.pending
                 val original = requireNotNull(pending.boundTarget)
                 val selected = successors[original.target] ?: original
-                if (pending.mutationUncertain) {
-                    val cause = IllegalStateException("Original channel reaction mutation outcome remains unknown")
-                    logger.log(Level.WARNING, cause.message, cause)
-                    return@withLock ChannelReactionReplayResult.Failed(selected, cause, true)
-                }
                 require(selected.message.radioId == pending.radioId)
                 require(selected.message.channelIndex == pending.channelIndex)
                 val reaction = ReactionDTO(
@@ -250,31 +314,55 @@ class ReactionService internal constructor(
                         successors[original.target] = result.successor
                         consumed++
                         advanceChannelTarget(selected, result.successor)
+                        synchronized(lock) {
+                            nativeChannelReactions = nativeChannelReactions.filterNot { it.order == entry.order }
+                            inFlightNativeOrders = inFlightNativeOrders - entry.order
+                        }
                         onApplied(result)
                     }
                     ChannelReactionApplyResult.Stale -> {
+                        terminalOriginal = original.target
+                        terminalFailure = NativeChannelReactionFailure.Stale
                         messageCache.evictChannelTarget(selected)
                         return@withLock ChannelReactionReplayResult.Stale(selected)
                     }
-                    is ChannelReactionApplyResult.Rejected ->
+                    is ChannelReactionApplyResult.Rejected -> {
+                        terminalOriginal = original.target
+                        terminalFailure = NativeChannelReactionFailure.Rejected(result.reason)
                         return@withLock ChannelReactionReplayResult.Rejected(selected, result.reason)
+                    }
                 }
             }
             ChannelReactionReplayResult.Completed(successors[captured.target] ?: captured)
         } catch (cancelled: CancellationException) {
+            terminalOriginal = uncertainOriginal
+            terminalFailure = uncertainOriginal?.let { NativeChannelReactionFailure.Unknown(cancelled) }
             throw cancelled
         } catch (error: Exception) {
+            terminalOriginal = uncertainOriginal
+            terminalFailure = uncertainOriginal?.let { NativeChannelReactionFailure.Unknown(error) }
             logger.log(Level.WARNING, "Channel reaction replay failed; unfinished original work retained", error)
             ChannelReactionReplayResult.Failed(
                 successors[captured.target] ?: captured, error, uncertainOriginal != null,
             )
         } finally {
-            for (pending in batch.drop(consumed).asReversed()) {
-                val original = requireNotNull(pending.boundTarget)
-                requeuePendingReaction(pending.copy(
-                    boundTarget = successors[original.target] ?: original,
-                    mutationUncertain = pending.mutationUncertain || original.target === uncertainOriginal,
-                ))
+            synchronized(lock) {
+                val unfinished = batch.drop(consumed).associateBy { it.order }
+                nativeChannelReactions = nativeChannelReactions.map { entry ->
+                    val original = unfinished[entry.order]?.pending?.boundTarget ?: return@map entry
+                    val successor = successors[original.target] ?: original
+                    val failure = terminalFailure.takeIf { original.target === terminalOriginal }
+                    val retained = entry.pending.copy(
+                        boundTarget = successor,
+                        mutationUncertain = entry.pending.mutationUncertain ||
+                            failure is NativeChannelReactionFailure.Unknown,
+                    )
+                    entry.copy(
+                        pending = retained,
+                        parked = failure?.let { ParkedNativeChannelReaction(retained, it) },
+                    )
+                }
+                inFlightNativeOrders = inFlightNativeOrders - batch.map { it.order }.toSet()
             }
         }
     }
@@ -306,8 +394,40 @@ class ReactionService internal constructor(
             pendingReactions = pendingReactions.mapValues { pending ->
                 if (pending.boundTarget?.target === predecessor.target) pending.copy(boundTarget = successor) else pending
             }
+            nativeChannelReactions = nativeChannelReactions.map { entry ->
+                if (entry.failure == null && entry.pending.boundTarget?.target === predecessor.target) {
+                    entry.copy(pending = entry.pending.copy(boundTarget = successor))
+                } else entry
+            }
         }
     }
+
+    private fun appendNativeEntry(pending: PendingReaction, parked: ParkedNativeChannelReaction? = null) {
+        val order = nextNativeOrder
+        nextNativeOrder = Math.incrementExact(nextNativeOrder)
+        nativeChannelReactions = nativeChannelReactions + NativeEntry(order, pending, parked)
+    }
+
+    fun parkNativeChannelReaction(work: ParkedNativeChannelReaction): NativeChannelReactionParkResult {
+        val result = synchronized(lock) {
+            if (nativeChannelReactions.size >= MAX_PENDING_REACTIONS) NativeChannelReactionParkResult.Overflow(work)
+            else {
+                appendNativeEntry(work.pending, work)
+                NativeChannelReactionParkResult.Retained
+            }
+        }
+        if (result is NativeChannelReactionParkResult.Overflow) {
+            logger.severe("Protected native reaction retention is full; exact original work returned as typed overflow")
+        } else {
+            logger.warning("Original native reaction retained without redrive authority: ${work.failure::class.simpleName}")
+        }
+        return result
+    }
+
+    fun retainedNativeChannelReactionFailures(radioId: RadioId): List<ParkedNativeChannelReaction> =
+        synchronized(lock) {
+            nativeChannelReactions.mapNotNull { entry -> entry.parked?.takeIf { entry.pending.radioId == radioId } }
+        }
 
     fun parkChannelReaction(work: ParkedChannelReaction): ChannelReactionParkResult {
         require(work.reaction.radioId == work.captured.message.radioId)
@@ -384,6 +504,39 @@ class ReactionService internal constructor(
 
     /** Returns an unfinished history replay to the bounded queue without replacing its arrival metadata. */
     fun requeuePendingReaction(pending: PendingReaction) {
+        val terminal = when {
+            pending.mutationUncertain -> NativeChannelReactionFailure.Unknown(
+                IllegalStateException("Original channel mutation outcome unknown; original exception unavailable"),
+            )
+            pending.unboundOriginalMessageID != null -> NativeChannelReactionFailure.Unbound(pending.unboundOriginalMessageID)
+            pending.originalAuthorityUnavailable -> NativeChannelReactionFailure.AuthorityUnavailable(
+                IllegalStateException("Original channel target authority unavailable"),
+            )
+            else -> null
+        }
+        if (terminal != null) {
+            val work = ParkedNativeChannelReaction(pending, terminal)
+            if (parkNativeChannelReaction(work) is NativeChannelReactionParkResult.Overflow) {
+                throw ChannelReactionRetentionException(
+                    ChannelReactionUnretainedWork.Native(SnapshotList(listOf(work))),
+                    IllegalStateException("Protected native retention is full"),
+                )
+            }
+            return
+        }
+        if (pending.boundTarget != null) {
+            synchronized(lock) {
+                if (nativeChannelReactions.size >= MAX_PENDING_REACTIONS) {
+                    val work = ParkedNativeChannelReaction(pending, NativeChannelReactionFailure.CapacityExceeded)
+                    throw ChannelReactionRetentionException(
+                        ChannelReactionUnretainedWork.Native(SnapshotList(listOf(work))),
+                        IllegalStateException("Protected native retention is full"),
+                    )
+                }
+                appendNativeEntry(pending)
+            }
+            return
+        }
         val key = PendingReactionKey.of(pending.channelIndex, pending.parsed.targetSender, pending.parsed.messageHash)
         synchronized(lock) {
             pendingReactions = pendingReactions.enqueue(
@@ -396,11 +549,16 @@ class ReactionService internal constructor(
     internal fun clearPendingReactions() {
         val cleared = synchronized(lock) {
             val count = pendingReactions.count + pendingDMReactions.count +
-                parkedChannelReactions.count + unselectedChannelReactions.count
+                parkedChannelReactions.count + unselectedChannelReactions.count +
+                nativeChannelReactions.count { it.order !in inFlightNativeOrders }
             pendingReactions = pendingReactions.cleared()
             pendingDMReactions = pendingDMReactions.cleared()
             parkedChannelReactions = parkedChannelReactions.cleared()
             unselectedChannelReactions = unselectedChannelReactions.cleared()
+            nativeChannelReactions = nativeChannelReactions.filter { it.order in inFlightNativeOrders }
+            if (nativeChannelReactions.isNotEmpty()) {
+                logger.warning("Pending clear preserved in-flight original native reaction custody")
+            }
             count
         }
         if (cleared > 0) logger.fine { "Cleared $cleared pending reaction(s)" }
@@ -510,7 +668,8 @@ class ReactionService internal constructor(
 
     /** Test-visible total of queued reactions (channel, DM). */
     internal val pendingCounts: Pair<Int, Int> get() = synchronized(lock) {
-        (pendingReactions.count + parkedChannelReactions.count + unselectedChannelReactions.count) to pendingDMReactions.count
+        (pendingReactions.count + parkedChannelReactions.count + unselectedChannelReactions.count +
+            nativeChannelReactions.size) to pendingDMReactions.count
     }
 
     internal companion object {

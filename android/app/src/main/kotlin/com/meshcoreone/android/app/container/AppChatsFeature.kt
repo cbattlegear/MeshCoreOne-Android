@@ -25,6 +25,8 @@ import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.services.reactions.ReactionParser
 import com.meshcoreone.android.core.services.reactions.ChannelReactionReplayResult
+import com.meshcoreone.android.core.services.reactions.ChannelReactionRetentionException
+import com.meshcoreone.android.core.services.reactions.ChannelReactionUnretainedWork
 import com.meshcoreone.android.core.services.reactions.isHiddenOutgoingReaction
 import com.meshcoreone.android.feature.chats.composer.*
 import com.meshcoreone.android.feature.chats.actions.BlockedSenderHistoryDeletionException
@@ -498,6 +500,11 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                     is ChannelReactionReplayResult.Rejected -> throw PersistenceStoreException(
                         PersistenceStoreError.SaveFailed("Channel history reaction replay rejected: ${result.reason}"),
                     )
+                    is ChannelReactionReplayResult.Overflow ->
+                        throw ChannelReactionRetentionException(
+                            ChannelReactionUnretainedWork.Native(result.unretained),
+                            IllegalStateException("Original history reaction batch exceeded protected retention capacity"),
+                        )
                 }
             }
             val reactions = when (val target = indexing.scope) {

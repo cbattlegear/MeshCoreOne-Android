@@ -7,6 +7,7 @@ import com.meshcoreone.android.core.contracts.domain.ChannelReactionTarget
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.ReactionDTO
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.services.rendering.MessageLRUCache
 import java.time.Clock
 import java.time.Instant
@@ -421,6 +422,126 @@ class ChannelReactionTargetServiceTest {
         assertEquals(0 to 0, service.pendingCounts)
         assertIs<UnselectedChannelReactionParkResult.Retained>(service.parkUnselectedChannelReaction(cancelled))
         assertSame(cancelled, service.retainedUnselectedChannelReactionFailures(radio).single())
+    }
+
+    @Test fun originalUnboundSelectionIsDiagnosticOnlyAndNeverBecomesOrdinaryPendingWork() {
+        val radio = RadioId(UUID.randomUUID())
+        val service = ReactionService()
+        val originalId = UUID.randomUUID()
+        val work = UnselectedChannelReaction(
+            rawText = service.buildReactionText("X", "Alice", "Hello", 100u),
+            channelIndex = 3u, radioId = radio, senderNodeName = "Bob", localNodeName = null,
+            receivedAt = Instant.EPOCH, format = UnselectedChannelReactionFormat.NATIVE,
+            failure = IllegalStateException("Original cache hit had no authority"), originalUnboundMessageId = originalId,
+        )
+        service.parkUnselectedChannelReaction(work)
+        assertTrue(service.indexMessage(UUID.randomUUID(), 3u, "Alice", "Hello", 100u).isEmpty())
+        assertSame(work, service.retainedUnselectedChannelReactionFailures(radio).single())
+        assertEquals(originalId, service.retainedUnselectedChannelReactionFailures(radio).single().originalUnboundMessageId)
+    }
+
+    @Test fun terminalNativeCustodyKeepsTheExactPendingTargetOrdinalsAndFailureOutsideLegacyMatching() {
+        val radio = RadioId(UUID.randomUUID())
+        val service = ReactionService()
+        val target = capture(radio)
+        val raw = service.buildReactionText("X", "Alice", "Hello", 100u)
+        val parsed = requireNotNull(ReactionParser.parse(raw))
+        val cancellation = kotlinx.coroutines.CancellationException("Original apply cancelled")
+        val failures = listOf(
+            NativeChannelReactionFailure.Stale,
+            NativeChannelReactionFailure.Unknown(cancellation),
+            NativeChannelReactionFailure.Rejected(
+                com.meshcoreone.android.core.contracts.domain.ChannelReactionRejection.CONFLICT,
+            ),
+        )
+        val all = failures.mapIndexed { index, failure ->
+            ParkedNativeChannelReaction(PendingReaction(
+                parsed, 3u, "Sender $index", raw, radio, Instant.EPOCH.minusSeconds(index.toLong()),
+                queueKeyOrder = 7, queueEntryOrder = index.toLong(), boundTarget = target,
+            ), failure)
+        }
+        all.forEach { assertIs<NativeChannelReactionParkResult.Retained>(service.parkNativeChannelReaction(it)) }
+        all.forEachIndexed { index, work ->
+            val retained = service.retainedNativeChannelReactionFailures(radio)[index]
+            assertSame(work, retained)
+            assertSame(work.pending, retained.pending)
+            assertSame(target, retained.pending.boundTarget)
+            assertSame(work.failure, retained.failure)
+            assertEquals(7, retained.pending.queueKeyOrder?.toInt())
+            assertEquals(index, retained.pending.queueEntryOrder?.toInt())
+        }
+        assertSame(cancellation, assertIs<NativeChannelReactionFailure.Unknown>(
+            service.retainedNativeChannelReactionFailures(radio)[1].failure,
+        ).cause)
+        assertTrue(service.indexMessage(target.message.id, 3u, "Alice", "Hello", 100u).isEmpty())
+        assertEquals(3 to 0, service.pendingCounts)
+        assertTrue(service.retainedNativeChannelReactionFailures(RadioId(UUID.randomUUID())).isEmpty())
+    }
+
+    @Test fun protectedNativeCapacityCannotBeDisplacedByOrdinaryArrivalsAndReturnsExactOverflow() {
+        val radio = RadioId(UUID.randomUUID())
+        val service = ReactionService()
+        val target = capture(radio)
+        val raw = service.buildReactionText("X", "Alice", "Hello", 100u)
+        val parsed = requireNotNull(ReactionParser.parse(raw))
+        val all = List(101) { index ->
+            ParkedNativeChannelReaction(PendingReaction(
+                parsed, 3u, "Sender $index", raw, radio, Instant.EPOCH.minusSeconds(index.toLong()),
+                queueKeyOrder = 5, queueEntryOrder = index.toLong(), boundTarget = target,
+            ), NativeChannelReactionFailure.Stale)
+        }
+        all.take(100).forEach {
+            assertIs<NativeChannelReactionParkResult.Retained>(service.parkNativeChannelReaction(it))
+        }
+        repeat(101) { service.queuePendingReaction(parsed, 3u, "Ordinary $it", raw, radio) }
+        val overflow = assertIs<NativeChannelReactionParkResult.Overflow>(service.parkNativeChannelReaction(all.last()))
+        assertSame(all.last(), overflow.unretained)
+        assertEquals(200 to 0, service.pendingCounts)
+        all.take(100).forEachIndexed { index, work ->
+            assertSame(work, service.retainedNativeChannelReactionFailures(radio)[index])
+        }
+        val ordinary = service.indexMessage(target.message.id, 3u, "Alice", "Hello", 100u)
+        assertEquals((1..100).map { "Ordinary $it" }, ordinary.map { it.senderNodeName })
+        assertEquals(100 to 0, service.pendingCounts)
+        val failedRequeue = runCatching { service.requeuePendingReaction(all.last().pending) }.exceptionOrNull()
+        val envelope = assertIs<ChannelReactionRetentionException>(failedRequeue)
+        assertSame(all.last().pending, assertIs<ChannelReactionUnretainedWork.Native>(envelope.work).work.single().pending)
+        service.clearPendingReactions()
+        assertTrue(service.retainedNativeChannelReactionFailures(radio).isEmpty())
+        assertEquals(0 to 0, service.pendingCounts)
+    }
+
+    @Test fun retentionEnvelopesKeepExactWorkAndCancellationCauseWithoutReturningRawRedriveInput() {
+        val radio = RadioId(UUID.randomUUID())
+        val target = capture(radio)
+        val service = ReactionService()
+        val raw = service.buildReactionText("X", "Alice", "Hello", 100u)
+        val cause = kotlinx.coroutines.CancellationException("Original cancellation")
+        val native = ParkedNativeChannelReaction(PendingReaction(
+            requireNotNull(ReactionParser.parse(raw)), 3u, "Bob", raw, radio, Instant.EPOCH, boundTarget = target,
+        ), NativeChannelReactionFailure.Unknown(cause))
+        val selected = ParkedChannelReaction(
+            target, ReactionDTO(
+                radioId = radio, messageID = target.message.id, channelIndex = 3u, emoji = "X", senderName = "Bob",
+                rawText = "actual MCO wire", messageHash = "mco-original", receivedAt = Instant.EPOCH,
+            ), ParkedChannelReactionFormat.MCO_V3, ParkedChannelReactionFailure.Unknown(cause),
+        )
+        val unselected = UnselectedChannelReaction(
+            raw, 3u, radio, "Bob", "Self", Instant.EPOCH, UnselectedChannelReactionFormat.NATIVE, cause,
+        )
+        val work = listOf(
+            ChannelReactionUnretainedWork.Selected(selected),
+            ChannelReactionUnretainedWork.Native(SnapshotList.of(native)),
+            ChannelReactionUnretainedWork.Unselected(unselected),
+        )
+        work.forEach {
+            val failure = ChannelReactionRetentionException(it, cause)
+            val cancelled = ChannelReactionRetentionCancellation(it, cause)
+            assertSame(it, failure.work)
+            assertSame(it, cancelled.work)
+            assertSame(cause, failure.cause)
+            assertSame(cause, cancelled.cause)
+        }
     }
 
     private data class Entry(

@@ -1033,18 +1033,21 @@ class MessageService(
                 val intent = callerIntent ?: run {
                     if (radioId != token.radioId) throw MessageServiceException(MessageServiceError.ChannelNotFound)
                     val channel = dataStore.fetchChannel(radioId, channelIndex)
-                        ?: throw MessageServiceException(MessageServiceError.ChannelNotFound)
                     ownership.check("createPendingChannel.origin")
-                    preparePendingChannelMessage(text, ChannelHistoryScope(radioId, channelIndex, channel.id), textType)
+                    channel?.let {
+                        preparePendingChannelMessage(text, ChannelHistoryScope(radioId, channelIndex, it.id), textType)
+                    }
                 }
-                val creation = intent.creation
-                if (creation.origin.radioId != radioId || creation.origin.channelIndex != channelIndex ||
-                    creation.text != text || creation.textType != textType
-                ) throw channelCreationFailure("caller arguments differ from the original intent")
-                rejectChannelText(text, radioId)
-                val canonical = savePendingChannelCreation(intent)
-                ownership.check("createPendingChannel.saved")
-                return@owned canonical
+                if (intent != null) {
+                    val creation = intent.creation
+                    if (creation.origin.radioId != radioId || creation.origin.channelIndex != channelIndex ||
+                        creation.text != text || creation.textType != textType
+                    ) throw channelCreationFailure("caller arguments differ from the original intent")
+                    rejectChannelText(text, radioId)
+                    val canonical = savePendingChannelCreation(intent)
+                    ownership.check("createPendingChannel.saved")
+                    return@owned canonical
+                }
             }
             val dto = outgoingChannel(text, channelIndex, radioId, textType)
             savePendingCreation(dto)

@@ -125,6 +125,25 @@ class PendingChannelMessageIntentTest {
                 assertFalse("saveMessage" in h.store.calls)
             }
         },
+        native("channelIntentMissingLocalSlotPreservesUnboundHistoryWithoutInventingAnOrigin") {
+            val h = Harness(this); h.start()
+            val role = CreationRole(h.store)
+            usingProducer(h, role) { service ->
+                val receipt = PendingMessageCreation()
+                val message = withContext(receipt) {
+                    service.createPendingChannelMessage("unbound history", 0u, RADIO)
+                }
+                assertEquals(MessageStatus.PENDING, message.status)
+                assertEquals("unbound history", message.text)
+                assertEquals(0.toUByte(), message.channelIndex)
+                assertEquals(message, h.stored(message.id))
+                assertEquals(PendingMessageCreation.Snapshot(PendingMessageCreation.State.COMMITTED, message), receipt.snapshot)
+                assertTrue(role.requests.isEmpty())
+                assertTrue(role.activations.isEmpty())
+                assertFalse(role.revoked)
+                assertTrue(h.sends(com.meshcoreone.android.core.protocol.model.CommandCode.SEND_CHANNEL_MESSAGE).isEmpty())
+            }
+        },
         native("channelIntentCancellationBeforeCommitIsUnknownAndNeverReplaysTheInsert") {
             val h = Harness(this); h.start()
             val role = CreationRole(h.store)

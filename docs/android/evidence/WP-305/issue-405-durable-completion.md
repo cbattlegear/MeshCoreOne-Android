@@ -874,3 +874,10 @@ the actual command set, radio/Room/live values and recovery status to agree with
 the failure control requires the real metadata error and an unacknowledged recovery revision.
 They then resume the consumer and recheck durable/live values and recovery.
 These controls remain uncompiled and unexecuted under the shared execution hold.
+
+The existing manager-backed Room refusal controls also include `awaitDeviceEdits`: unavailable
+original capture must refuse before lease admission, and rejected original-generation admission
+must refuse without executing the drain callback or touching a write ticket, save or region DAO.
+This extends the rejected-admission matrix from 11 to 12 entry points without weakening its
+unchanged Room/live assertions. It is source coverage on the held composed tree, not evidence that
+the requested independent actual-main foundation has been produced.

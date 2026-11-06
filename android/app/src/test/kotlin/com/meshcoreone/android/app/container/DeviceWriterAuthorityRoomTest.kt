@@ -647,6 +647,7 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
             assertFalse(editor.updateClientRepeat(true, token))
             assertFalse(editor.updateDefaultFloodScopeName("US915", token))
             assertFalse(editor.updatePathHashMode(2u, token))
+            assertFalse(editor.awaitDeviceEdits(token))
             assertNull(editor.addKnownRegion("US915"))
             assertNull(editor.removeKnownRegion("US915"))
             assertFalse(editor.addKnownRegion("US915", token))
@@ -694,12 +695,13 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
             assertFalse(editor.updateClientRepeat(true, token))
             assertFalse(editor.updateDefaultFloodScopeName("US915", token))
             assertFalse(editor.updatePathHashMode(2u, token))
+            assertFalse(editor.awaitDeviceEdits(token))
             assertNotNull(editor.addKnownRegion("US915")).join()
             assertNotNull(editor.removeKnownRegion("US915")).join()
             assertFalse(editor.addKnownRegion("US915", token))
             assertFalse(editor.persistKnownRegionRemoval("US915", token))
 
-            assertEquals(11, admissions)
+            assertEquals(12, admissions)
             assertEquals(before, store.fetchDevice(before.id))
             assertEquals(before, h.manager.connectedDevice)
         } finally {

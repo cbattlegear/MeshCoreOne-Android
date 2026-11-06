@@ -166,6 +166,12 @@ death and propagation of unrelated programming failures.
 **Zero methods have been executed for this draft.** These counts come from static
 source inspection, not runner discovery. A fresh store instance is not an
 observed process-kill, native disk/fsync or device-restoration experiment.
+The initial `8fcfd4dff` corrupt-byte method was mistakenly nested inside the
+existing-version test. The follow-up moves it to class scope while preserving
+the original test body. A static comment/string-stripped brace-depth check now
+finds all 25 receiver and 13 App `@Test` declarations at class depth. This repairs
+source structure; only later authorized hosted runner discovery can establish
+which methods actually execute.
 
 Actual allowed static checks:
 

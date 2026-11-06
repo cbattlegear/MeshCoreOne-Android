@@ -65,6 +65,9 @@ sealed interface TimelineEvent {
 
     data class HistoryChanged(override val conversationId: ChatConversationID) : TimelineEvent
 
+    /** Refetch persisted state without reaction reconciliation, status writes or read/seen side effects. */
+    data class PersistenceInvalidated(override val conversationId: ChatConversationID) : TimelineEvent
+
     data class MessageReceived(
         override val conversationId: ChatConversationID,
         val message: MessageDTO,

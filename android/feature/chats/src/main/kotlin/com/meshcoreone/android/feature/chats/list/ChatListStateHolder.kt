@@ -51,7 +51,10 @@ class ChatListStateHolder(
             }
         }
         scope.launch {
-            dependencies.messageEvents.collect { if (shouldRefreshFailedSendIndicators(it)) refreshFailedSendIndicators() }
+            dependencies.messageEvents.collect {
+                if (it == ChatListEvent.MESSAGE_PERSISTENCE_CHANGED) requestConversationReload()
+                else if (shouldRefreshFailedSendIndicators(it)) refreshFailedSendIndicators()
+            }
         }
     }
 

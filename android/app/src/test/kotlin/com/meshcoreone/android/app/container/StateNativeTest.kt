@@ -233,6 +233,7 @@ class StateNativeTest {
         sources.send(MessageStatusEvent.Retrying(messageId, 2, 4))
         sources.send(MessageStatusEvent.RoutingChanged(contact.id, true))
         sources.send(MessageStatusEvent.Failed(messageId))
+        sources.send(MessageStatusEvent.PersistenceChanged(EntityKey(radio, messageId)))
         testScheduler.runCurrent()
         assertEquals(
             listOf<MessageEvent>(
@@ -243,6 +244,7 @@ class StateNativeTest {
                 MessageEvent.MessageStatusResolved(messageId, MessageStatus.SENT, 7u), MessageEvent.MessageResent(messageId),
                 MessageEvent.MessageRetrying(messageId, 2, 4), MessageEvent.RoutingChanged(contact.id, true),
                 MessageEvent.MessageFailed(messageId),
+                MessageEvent.MessagePersistenceChanged(EntityKey(radio, messageId)),
             ).sortedBy { it.toString() },
             received.sortedBy { it.toString() },
         )

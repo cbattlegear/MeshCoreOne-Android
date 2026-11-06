@@ -138,6 +138,7 @@ class MessageEventDispatcher(
                 stream.send(MessageEvent.MessageRetrying(event.messageID, event.attempt, event.maxAttempts))
             is MessageStatusEvent.RoutingChanged -> stream.send(MessageEvent.RoutingChanged(event.contactID, event.isFlood))
             is MessageStatusEvent.Failed -> stream.send(MessageEvent.MessageFailed(event.messageID))
+            is MessageStatusEvent.PersistenceChanged -> stream.send(MessageEvent.MessagePersistenceChanged(event.key))
         }
     }
 }

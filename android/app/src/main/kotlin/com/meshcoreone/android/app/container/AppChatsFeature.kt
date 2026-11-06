@@ -223,7 +223,9 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         override val connectionState get() = this@AppChatsFeature.connectionState
         override val currentRadioId = MutableStateFlow(radio)
         override val reloadRequests get() = changes
-        override val messageEvents: Flow<ChatListEvent> get() = events().mapNotNull(::listEvent)
+        override val messageEvents: Flow<ChatListEvent> get() = events()
+            .filter { it !is MessageEvent.MessagePersistenceChanged || it.key.radioId == radio }
+            .mapNotNull(::listEvent)
         override val clock: Clock = Clock.systemUTC()
         override val diagnostics = ChatListDiagnostics { operation, failure -> report(operation, failure) }
         override fun conversationServices(): ChatConversationServices? {
@@ -616,6 +618,10 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                     if (conversation is TimelineConversation.Channel && event.radioId == radio) {
                         emit(TimelineEvent.HistoryChanged(conversation.id))
                     }
+                    emptyList()
+                }
+                is MessageEvent.MessagePersistenceChanged -> {
+                    if (event.key.radioId == radio) emit(TimelineEvent.PersistenceInvalidated(conversation.id))
                     emptyList()
                 }
                 is MessageEvent.MessageStatusResolved -> listOf(event.messageID)
@@ -1089,6 +1095,7 @@ private fun listEvent(event: MessageEvent): ChatListEvent? = when (event) {
     is MessageEvent.MessageStatusResolved -> ChatListEvent.MESSAGE_STATUS_RESOLVED
     is MessageEvent.MessageResent -> ChatListEvent.MESSAGE_RESENT
     is MessageEvent.MessageFailed -> ChatListEvent.MESSAGE_FAILED
+    is MessageEvent.MessagePersistenceChanged -> ChatListEvent.MESSAGE_PERSISTENCE_CHANGED
     is MessageEvent.MessageRetrying -> ChatListEvent.MESSAGE_RETRYING
     is MessageEvent.HeardRepeatRecorded -> ChatListEvent.HEARD_REPEAT_RECORDED
     is MessageEvent.ReactionReceived -> ChatListEvent.REACTION_RECEIVED

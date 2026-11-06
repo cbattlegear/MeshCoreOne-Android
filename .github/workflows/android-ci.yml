@@ -175,7 +175,7 @@ jobs:
           retention-days: 1
 
       - name: Expose actual WP-202 resolved dependency graph
-        if: ${{ always() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/diagnostic/wp202-schema3-08eeb7a68cfa-diag1' }}
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/diagnostic/wp202-schema3-001f47834078-diag2' }}
         run: |
           $graph = Join-Path $env:GITHUB_WORKSPACE 'android/core/data/build/reports/wp202/dependency-graphs.tsv'
           if (!(Test-Path -LiteralPath $graph -PathType Leaf)) { throw 'Actual dependency graph is missing' }
@@ -183,7 +183,7 @@ jobs:
           Write-Output "WP202_DEPENDENCY_GRAPH_SOURCE=$env:GITHUB_SHA"
           Get-Content -LiteralPath $graph
       - name: Collect generated Room v3 schema for WP-202 diagnostic
-        if: ${{ always() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/diagnostic/wp202-schema3-08eeb7a68cfa-diag1' }}
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/diagnostic/wp202-schema3-001f47834078-diag2' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: room-schema-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}

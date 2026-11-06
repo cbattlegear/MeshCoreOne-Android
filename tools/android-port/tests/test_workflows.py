@@ -149,7 +149,7 @@ class WorkflowTests(unittest.TestCase):
         steps = workflow["jobs"]["build"]["steps"]
         condition = (
             "${{ always() && github.event_name == 'workflow_dispatch' && "
-            "github.ref == 'refs/heads/diagnostic/wp202-schema3-08eeb7a68cfa-diag1' }}"
+            "github.ref == 'refs/heads/diagnostic/wp202-schema3-001f47834078-diag2' }}"
         )
         index, upload = next(
             (i, step) for i, step in enumerate(steps)

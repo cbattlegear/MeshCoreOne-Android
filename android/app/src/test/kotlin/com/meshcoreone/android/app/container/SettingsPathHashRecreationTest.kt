@@ -6,6 +6,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onLast
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -110,7 +111,7 @@ class SettingsPathHashRecreationTest : RoomProcessTest() {
                     throw AssertionError("Mounted tree: ${compose.onRoot(useUnmergedTree = true).printToString(40)}", missing)
                 }
                 compose.onNodeWithText(context.getString(S.pathHashModeLabel)).performScrollTo().performClick()
-                compose.onNodeWithText(context.getString(text)).performClick()
+                compose.onAllNodesWithText(context.getString(text)).onLast().performClick()
             }
             mount()
             choose(S.pathHashModeOneByte)

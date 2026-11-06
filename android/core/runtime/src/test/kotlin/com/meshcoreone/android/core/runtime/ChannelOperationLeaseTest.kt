@@ -794,26 +794,26 @@ class ChannelOperationLeaseTest {
                     if (succeed) {
                         release.complete(Unit)
                         test.runCurrent()
-                        assertTrue(duplicate.isCompleted && !duplicate.isCancelled, "duplicate completed=${duplicate.isCompleted} cancelled=${duplicate.isCancelled}")
-                        assertFalse(owner.isCompleted, "owner completed early")
-                        assertTrue(queued.isNotEmpty(), "owner continuation not queued")
-                        val captured = assertNotNull(manager.captureDeviceWrite(), "capture before owner cancel state=${manager.connectionState}")
+                        check(duplicate.isCompleted && !duplicate.isCancelled) { "duplicate completed=${duplicate.isCompleted} cancelled=${duplicate.isCancelled}" }
+                        check(!owner.isCompleted) { "owner completed early" }
+                        check(queued.isNotEmpty()) { "owner continuation not queued" }
+                        val captured = checkNotNull(manager.captureDeviceWrite()) { "capture before owner cancel state=${manager.connectionState}" }
                         val inputs = services.single().inputs.connection
                         owner.cancel()
-                        assertEquals(captured, manager.captureDeviceWrite(), "capture after owner cancel")
-                        assertEquals(captured.second, manager.withDeviceWrite(captured.first, captured.second.id) {
+                        check(captured == manager.captureDeviceWrite()) { "capture after owner cancel" }
+                        check(captured.second == manager.withDeviceWrite(captured.first, captured.second.id) {
                             captured.second
-                        })
+                        }) { "withDeviceWrite after owner cancel" }
                         var admitted = false
                         manager.withChannelOperationScope { scope ->
                             manager.withChannelOperationLease(inputs.token, inputs.session, inputs.token.radioId, scope) {
                                 admitted = true
                             }
                         }
-                        assertTrue(admitted, "lease admitted")
+                        check(admitted) { "lease admitted" }
                     } else {
                         owner.cancel()
-                        assertNull(manager.captureDeviceWrite(), "capture after failed-owner cancel")
+                        check(manager.captureDeviceWrite() == null) { "capture after failed-owner cancel" }
                     }
                 } finally {
                     holdOwner = false
@@ -827,7 +827,7 @@ class ChannelOperationLeaseTest {
                     owner.cancelAndJoin()
                     if (!succeed && duplicate != null) {
                         duplicate.join()
-                        assertTrue(duplicate.isCancelled, "duplicate not cancelled after owner failure")
+                        check(duplicate.isCancelled) { "duplicate not cancelled after owner failure" }
                     }
                     duplicate?.cancelAndJoin()
                     release.complete(Unit)

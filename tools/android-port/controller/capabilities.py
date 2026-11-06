@@ -187,6 +187,42 @@ class CapabilityEngine:
                         raise PortError("Notification enrollment copy cannot delete an existing string key")
                     if original_structure != candidate_structure:
                         raise PortError("Notification enrollment copy cannot change unrelated resource content")
+        action_resources = {
+            path for path, operation in path_operations.items()
+            if operation == "add-or-update-notification-action-recovery-copy"
+        }
+        if action_resources:
+            from .scope_amendment import NOTIFICATION_ACTION_RECOVERY_COPY_CAPABILITY
+
+            rule = NOTIFICATION_ACTION_RECOVERY_COPY_CAPABILITY
+            path = rule["path_rules"][0]
+            if action_resources != {path} or read_blob is None:
+                raise PortError("Notification action recovery requires its exact path and immutable blob reader")
+            if path not in candidate_tree:
+                raise PortError("Notification action recovery cannot delete its resource")
+            raw = read_blob(candidate_tree[path])
+            structure, values = CapabilityEngine._bounded_copy_resource(
+                raw, rule["keys"], "Notification action recovery", strict_utf8=True
+            )
+            if set(values) != set(rule["keys"]):
+                raise PortError("Notification action recovery requires exactly eleven approved keys")
+            if re.search(rb"<!--\s*AndroidOnly: WP-215 [^<>]+-->", raw) is None:
+                raise PortError("Notification action recovery requires its WP-215 source marker")
+            for key, value in values.items():
+                decoded = CapabilityEngine._authored_android_copy(value, "Notification action recovery")
+                placeholders = decoded.replace("%%", "")
+                if key == "notification_action_recovery_original_target":
+                    if placeholders.count("%1$s") != 1:
+                        raise PortError("Notification action recovery target requires exactly one %1$s")
+                    placeholders = placeholders.replace("%1$s", "")
+                if "%" in placeholders:
+                    raise PortError("Notification action recovery contains an unsupported placeholder")
+            if path in base_tree:
+                original_structure, original = CapabilityEngine._bounded_copy_resource(
+                    read_blob(base_tree[path]), rule["keys"], "Notification action recovery", strict_utf8=True
+                )
+                if not set(original).issubset(values) or original_structure != structure:
+                    raise PortError("Notification action recovery cannot change unrelated content or delete keys")
         simulator_resources = {
             path for path, operation in path_operations.items()
             if operation == "add-or-update-simulator-preference-recovery-copy"
@@ -296,8 +332,12 @@ class CapabilityEngine:
 
     @staticmethod
     def _simulator_copy_comparison(message: str):
+        return CapabilityEngine._authored_android_copy(message, "Simulator preference recovery").casefold()
+
+    @staticmethod
+    def _authored_android_copy(message: str, label: str):
         if message.lstrip().startswith(("@", "?")):
-            raise PortError("Simulator preference recovery requires authored copy, not Android references")
+            raise PortError(f"{label} requires authored copy, not Android references")
         quoted, index = False, 0
         while index < len(message):
             char = message[index]
@@ -306,9 +346,9 @@ class CapabilityEngine:
             elif char == '"':
                 quoted = not quoted
             elif char == "'" and not quoted:
-                raise PortError("Simulator preference recovery apostrophes must be escaped or double-quoted")
+                raise PortError(f"{label} apostrophes must be escaped or double-quoted")
             index += 1
-        return CapabilityEngine._android_copy_comparison(message).casefold()
+        return CapabilityEngine._android_copy_comparison(message)
 
     @staticmethod
     def _android_copy_comparison(message: str):

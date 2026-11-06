@@ -215,8 +215,12 @@ class RepeatSnapshotAuthority {
     @Synchronized fun reconcilingUnsentAbortRequest(device: DeviceDTO, token: SessionToken): DeviceDTO {
         val created = pending[device.identity()] ?: return device
         if (!created.abortRequested) return device
-        if (created.attempt.token != token) throw DeviceWriteConflict()
-        return abortingUnsentSnapshot(device, created.receipt, created.attempt)
+        if (created.attempt.token != token) throw RepeatSnapshotReconciliationRequired()
+        return try {
+            abortingUnsentSnapshot(device, created.receipt, created.attempt)
+        } catch (_: DeviceWriteConflict) {
+            throw RepeatSnapshotReconciliationRequired()
+        }
     }
 
     /** Retain the proven disposition until a lifecycle-bound clear actually commits. */

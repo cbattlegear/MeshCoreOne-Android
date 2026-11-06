@@ -47,6 +47,9 @@ import kotlin.test.assertTrue
 
 class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
     @Test fun reopeningAdvancedAfterFailedTxPersistenceReconcilesPowerBeforeAnUnrelatedRfEdit() = runTest {
+        for (followup in listOf("success", "failed-untouched", "failed-explicit")) {
+        val laterFailure = followup != "success"
+        val intendedPower: Byte = if (followup == "failed-explicit") 15 else 10
         var rejectPower = false
         val rejected = object : PersistenceStoreProtocol by store {
             override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
@@ -89,17 +92,40 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
                     h.eventually("fresh Advanced initially captures the stale stored power") { reopened.state.value.hasLoaded }
                     assertEquals(before.txPower.toInt(), reopened.state.value.txPower)
                     reopened.onSpreadingFactorSelected(9)
+                    if (followup == "failed-explicit") reopened.onTxPowerTextChanged(intendedPower.toString())
+                    val token = assertNotNull(h.sessions.current).token
+                    val failuresBefore = failures.size
+                    if (laterFailure) radio.powerFailure = 6u
                     reopened.apply()
+                    if (laterFailure) {
+                        h.eventually("later TX rejects while the reconciled RF and power remain committed") {
+                            !reopened.state.value.isApplying && failures.size > failuresBefore
+                        }
+                        assertEquals(token, h.sessions.current?.token)
+                        h.assertReady()
+                        assertFalse(reopened.state.value.showSuccess)
+                        assertNotNull(reopened.state.value.errorMessage)
+                        assertEquals(10.toByte(), store.fetchDevice(before.id)?.txPower)
+                        assertEquals(9.toUByte(), store.fetchDevice(before.id)?.spreadingFactor)
+                        assertEquals(intendedPower.toInt(), reopened.state.value.txPower)
+                        assertEquals(intendedPower.toString(), reopened.state.value.txPowerText)
+                        radio.powerFailure = null
+                        reopened.dismissError()
+                        reopened.apply()
+                    }
                     h.eventually("RF-only fresh action preserves the reconciled actual power") { reopened.state.value.showSuccess }
                     val saved = assertNotNull(store.fetchDevice(before.id))
-                    assertEquals(10.toByte(), saved.txPower)
+                    assertEquals(intendedPower, saved.txPower)
                     assertEquals(9.toUByte(), saved.spreadingFactor)
                     assertEquals(saved, h.manager.connectedDevice)
-                    assertEquals(listOf(PacketBuilder.setTxPower(10), PacketBuilder.setTxPower(10)), radio.powerWrites)
+                    val expected = listOf(PacketBuilder.setTxPower(10), PacketBuilder.setTxPower(intendedPower)) +
+                        if (laterFailure) listOf(PacketBuilder.setTxPower(intendedPower)) else emptyList()
+                    assertEquals(expected, radio.powerWrites)
                     assertFalse(h.sessions.current!!.settingsService.radioSettingsNeedsRecovery)
                     assertNull(reopened.state.value.errorMessage)
                 } finally { reopened.stop() }
             } finally { first.stop(); rejectPower = false }
+        }
         }
     }
 
@@ -1425,6 +1451,7 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
         var firmwareVersion: UByte = 11u
         val radioWrites = mutableListOf<Bytes>()
         val powerWrites = mutableListOf<Bytes>()
+        var powerFailure: UByte? = null
         private var radioParams: Bytes? = null
         private var txPower: Byte? = null
         private var repeatEnabled = false
@@ -1452,8 +1479,10 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
                     }
                     0x0c -> {
                         powerWrites += command
-                        txPower = command[1].toByte()
-                        listOf(Bytes.of(0))
+                        powerFailure?.let { listOf(Bytes.of(1, it.toInt())) } ?: run {
+                            txPower = command[1].toByte()
+                            listOf(Bytes.of(0))
+                        }
                     }
                     0x01 -> if (radioParams == null && txPower == null) null else {
                         val self = radio.selfPacket().toByteArray()

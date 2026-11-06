@@ -217,7 +217,7 @@ class AdvancedRadioStateHolder(
                 expectedDevice = device,
             )
             target.requireCurrent(mutable.value.device, mutable.value.sessionToken)
-            // RF is already committed even if the subsequent power write fails.
+            // RF is committed; retain reconciled power intent if its subsequent write fails.
             appliedTarget = target
             mutable.update {
                 it.copy(
@@ -226,6 +226,8 @@ class AdvancedRadioStateHolder(
                     bandwidth = RadioOptions.nearestBandwidth(bandwidthToSend),
                     spreadingFactor = sfToSend.toInt(),
                     codingRate = crToSend.toInt(),
+                    txPower = powerToSend.toInt(),
+                    txPowerText = powerToSend.toString(),
                 )
             }
             service.setTxPowerVerified(powerToSend)

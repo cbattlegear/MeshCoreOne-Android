@@ -97,6 +97,67 @@ NOTIFICATION_ENROLLMENT_COPY_CAPABILITY = {
 }
 
 
+SIMULATOR_PREFERENCE_RECOVERY_COPY_CAPABILITY = {
+    "id": "reviewed-support-simulator-preference-recovery-copy",
+    "work_packages": ["WP-217"],
+    "path_rules": [
+        "android/app/src/main/res/values/simulator_preference_recovery.xml",
+        "android/app/src/main/res/values-de/simulator_preference_recovery.xml",
+        "android/app/src/main/res/values-es/simulator_preference_recovery.xml",
+        "android/app/src/main/res/values-fr/simulator_preference_recovery.xml",
+        "android/app/src/main/res/values-it/simulator_preference_recovery.xml",
+        "android/app/src/main/res/values-ko/simulator_preference_recovery.xml",
+        "android/app/src/main/res/values-nl/simulator_preference_recovery.xml",
+        "android/app/src/main/res/values-pl/simulator_preference_recovery.xml",
+        "android/app/src/main/res/values-pt/simulator_preference_recovery.xml",
+        "android/app/src/main/res/values-ru/simulator_preference_recovery.xml",
+        "android/app/src/main/res/values-uk/simulator_preference_recovery.xml",
+        "android/app/src/main/res/values-b+zh+Hans/simulator_preference_recovery.xml",
+    ],
+    "operations": ["add-or-update-simulator-preference-recovery-copy"],
+    "keys": [
+        "simulator_preference_recovery_title",
+        "simulator_preference_recovery_explanation",
+        "simulator_preference_recovery_current",
+        "simulator_preference_recovery_recovered",
+        "simulator_preference_recovery_apply",
+        "simulator_preference_recovery_applying",
+        "simulator_preference_recovery_retry",
+        "simulator_preference_recovery_not_set",
+        "simulator_preference_recovery_empty_text",
+        "simulator_preference_recovery_no_regions",
+        "simulator_preference_recovery_flood_scope",
+        "simulator_preference_recovery_repeat_frequency",
+        "simulator_preference_recovery_repeat_bandwidth",
+        "simulator_preference_recovery_repeat_spreading_factor",
+        "simulator_preference_recovery_repeat_coding_rate",
+        "simulator_preference_recovery_last_contact_sync",
+        "simulator_preference_recovery_ocv_preset",
+        "simulator_preference_recovery_radio_preset",
+        "simulator_preference_recovery_custom_ocv",
+        "simulator_preference_recovery_known_regions",
+    ],
+    "invariants": [
+        "only-WP217-twelve-explicit-source-XML-paths-and-twenty-approved-keys-no-file-key-or-locale-deletion",
+        "Android-only-authored-copy-not-generator-output-or-Swift-source-map-preserve-pinned-db14559b39d32322b06477c6ae676112f583db50-and-existing-catalog-bytes",
+        "genuine-translations-in-all-twelve-supported-locales-values-pt-is-pt-PT-no-English-fallback-disguised-as-localization",
+        "explain-explicit-current-or-recovered-preference-choice-cancel-keeps-both-no-message-channel-contact-or-radio-data-deletion-promises-beyond-reviewed-behavior",
+        "immutable-base-candidate-resource-blobs-preserve-unrelated-notices-and-content-consumer-and-test-admission-remains-separate",
+        "trusted-main-landing-legitimate-assignment-path-operation-admission-and-resolved-overlap-before-product-edit-no-new-lease-or-historical-owner-reattestation",
+        "policy-admission-only-no-runtime-installation-native-execution-hold-relaxation-feature-or-backup-compatibility-acceptance",
+    ],
+    "validation": [
+        "exact-WP217-operation-twelve-path-twenty-key positives-and-wrong-WP-operation-path-traversal-denials",
+        "immutable-XML-missing-deleted-locale-key-extra-duplicate-malformed-empty-content-unrelated-change-and-normalized-English-fallback-regressions",
+        "simulator-only-actual-UTF8-declaration-Android-reference-apostrophe-and-case-only-fallback-denials-with-escaped-literal-positives",
+        "complete-predecessor-policy-object-and-raw-Git-blob-unchanged-including-existing-admission-and-protected-gates",
+        "actual-controller-staging-supplies-immutable-blob-reader-and-trusted-base-policy-not-candidate-self-admission",
+        "future-exact-candidate-resource-and-mounted-Compose-assertions-for-all-twelve-locales-with-positive-hosted-discovery",
+        "structural-validation-or-string-inequality-is-not-translation-quality-product-behavior-or-native-acceptance",
+    ],
+}
+
+
 def routine_support_predecessor(policy):
     """Project reviewed additive capability extensions back to the historical policy."""
     if not isinstance(policy, dict):
@@ -124,6 +185,11 @@ def routine_support_predecessor(policy):
             and rule != NOTIFICATION_ENROLLMENT_COPY_CAPABILITY
         ):
             raise PortError("Notification enrollment copy changed outside the exact reviewed amendment")
+        if (
+            rule["id"] == SIMULATOR_PREFERENCE_RECOVERY_COPY_CAPABILITY["id"]
+            and rule != SIMULATOR_PREFERENCE_RECOVERY_COPY_CAPABILITY
+        ):
+            raise PortError("Simulator preference recovery copy changed outside the exact reviewed amendment")
         if set(rule) not in (
             {"id", "path_rules", "operations", "invariants", "validation"},
             {"id", "path_rules", "operations", "invariants", "validation", "work_packages"},
@@ -146,11 +212,15 @@ def routine_support_predecessor(policy):
             or len(set(rule["work_packages"])) != len(rule["work_packages"])
         ):
             raise PortError("Malformed reviewed support capability work_packages")
-        if "keys" in rule and (
-            rule["id"] != NOTIFICATION_ENROLLMENT_COPY_CAPABILITY["id"]
-            or rule["keys"] != NOTIFICATION_ENROLLMENT_COPY_CAPABILITY["keys"]
-        ):
-            raise PortError("Malformed notification enrollment resource key admission")
+        if "keys" in rule:
+            keyed_rules = {
+                item["id"]: item["keys"] for item in (
+                    NOTIFICATION_ENROLLMENT_COPY_CAPABILITY,
+                    SIMULATOR_PREFERENCE_RECOVERY_COPY_CAPABILITY,
+                )
+            }
+            if rule["id"] not in keyed_rules or rule["keys"] != keyed_rules[rule["id"]]:
+                raise PortError("Malformed bounded resource key admission")
         for path in rule["path_rules"]:
             roots = ("android/", "tools/android-port/", "docs/android/")
             root = next((value for value in roots if path.startswith(value)), None)

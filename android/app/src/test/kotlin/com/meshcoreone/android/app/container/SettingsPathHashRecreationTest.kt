@@ -25,7 +25,6 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
-import androidx.compose.ui.test.assertExists
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.printToString
 import org.junit.Rule

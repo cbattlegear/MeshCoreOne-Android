@@ -131,7 +131,9 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     }
 
     fun navigateToLineOfSight(contact: ContactDTO) = mutableState.update {
-        it.push(AppTab.TOOLS, NavigationDestination.Tool(ToolSelection.LINE_OF_SIGHT, contact))
+        it.removeDestinations { destination ->
+            destination is NavigationDestination.Tool && destination.selection == ToolSelection.LINE_OF_SIGHT
+        }.push(AppTab.TOOLS, NavigationDestination.Tool(ToolSelection.LINE_OF_SIGHT, contact))
             .copy(selectedTool = ToolSelection.LINE_OF_SIGHT)
     }
 

@@ -22,6 +22,7 @@ import com.meshcoreone.android.app.navigation.NavigationCoordinator
 import com.meshcoreone.android.app.navigation.NavigationDestination
 import com.meshcoreone.android.app.navigation.NavigationSavedState
 import com.meshcoreone.android.app.navigation.ToolSelection
+import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.l10n.generated.AppToolsStrings
 import com.meshcoreone.android.core.model.ContactDTO
@@ -55,6 +56,7 @@ class LineOfSightPreselectionTest {
     private lateinit var host: ActivityController<ComponentActivity>
     private val navigation = NavigationCoordinator()
     private val render = mutableIntStateOf(0)
+    private var widthDp = 900
     private val elevationReads = mutableListOf<Coordinate>()
     private val radio = RadioId(UUID(0, 315))
     private val selected = ContactDTO(
@@ -101,7 +103,7 @@ class LineOfSightPreselectionTest {
     private fun mountShell() {
         host.get().setContent {
             MeshCoreTheme(motionScale = 0f) {
-                Box(Modifier.width(900.dp).height((1200 + render.intValue).dp)) {
+                Box(Modifier.width(widthDp.dp).height((1200 + render.intValue).dp)) {
                     NativeNavigationShell(navigation, lineOfSight = dependencies)
                 }
             }
@@ -127,6 +129,41 @@ class LineOfSightPreselectionTest {
         mount(null)
         assertEmptyEndpoints()
         compose.runOnIdle { assertEquals(emptyList<Coordinate>(), elevationReads) }
+    }
+
+    @Test
+    @Config(qualifiers = "en-rUS-w400dp-h1200dp-mdpi")
+    fun explicitSameContactHandoffGetsAFreshCompactEntryAfterClearAndTabSwitch() {
+        widthDp = 400
+        mount(selected)
+        compose.onNodeWithText(selected.name).assertIsDisplayed()
+        val originalId = navigation.state.value.activeStack.last().id
+        compose.onNodeWithTag("los-clear-all").performClick()
+        assertEmptyEndpoints()
+        compose.runOnIdle {
+            assertFalse(navigation.state.value.isSidebarWide)
+            assertEquals(400f, navigation.state.value.widthDp, 1f)
+            navigation.selectTab(AppTab.NODES)
+        }
+        compose.waitForIdle()
+        compose.runOnIdle { navigation.selectTab(AppTab.TOOLS) }
+        assertEmptyEndpoints()
+        compose.runOnIdle {
+            assertEquals(originalId, navigation.state.value.activeStack.last().id)
+            assertEquals(1, elevationReads.size)
+            navigation.navigateToContactDetail(selected)
+        }
+        compose.waitForIdle()
+        compose.runOnIdle { navigation.navigateToLineOfSight(selected) }
+        compose.onNodeWithText(selected.name).assertIsDisplayed()
+        compose.runOnIdle {
+            val entries = navigation.state.value.activeStack.filter {
+                (it.destination as? NavigationDestination.Tool)?.selection == ToolSelection.LINE_OF_SIGHT
+            }
+            assertEquals(1, entries.size)
+            assertFalse("A new explicit handoff must not reuse cleared entry state", originalId == entries.single().id)
+            assertEquals(listOf(Coordinate(37.8, -122.4), Coordinate(37.8, -122.4)), elevationReads)
+        }
     }
 
     @Test fun clearedContactIsNotReappliedAfterActualActivityRecreation() {

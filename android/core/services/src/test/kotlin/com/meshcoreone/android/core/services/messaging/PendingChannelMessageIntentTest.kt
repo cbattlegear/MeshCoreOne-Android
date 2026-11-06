@@ -184,6 +184,74 @@ class PendingChannelMessageIntentTest {
                 assertFalse("fetchMessage" in h.store.calls, "DTO equality is not original creation proof")
             }
         },
+        native("channelIntentExactReadOnlyInspectionRecoversCommitAfterCancelledReturn") {
+            val h = Harness(this); h.start()
+            val role = CreationRole(h.store)
+            val committed = CompletableDeferred<Unit>()
+            role.after = { committed.complete(Unit); awaitCancellation() }
+            role.inspect = { request -> committedObservation(request, h.stored(request.creation.messageID)) }
+            usingProducer(h, role) { service ->
+                val intent = service.preparePendingChannelMessage("original", origin)
+                val receipt = PendingMessageCreation()
+                val call = backgroundScope.async(intent + receipt) {
+                    service.createPendingChannelMessage("original", 0u, RADIO)
+                }
+                committed.await()
+                call.cancelAndJoin()
+                assertFailsWith<CancellationException> { call.await() }
+                assertEquals(PendingMessageCreation.State.COMMITTED, receipt.snapshot.state)
+                assertEquals(h.store.messages.values.single(), receipt.snapshot.message)
+                assertEquals(role.requests.single(), role.inspections.single())
+                assertFalse("fetchMessage" in h.store.calls)
+                assertTrue(h.sends(com.meshcoreone.android.core.protocol.model.CommandCode.SEND_CHANNEL_MESSAGE).isEmpty())
+            }
+        },
+        native("channelIntentHistoricalCommitDoesNotInventAnAvailableRowOrReplayCreation") {
+            val h = Harness(this); h.start()
+            val role = CreationRole(h.store)
+            val committed = CompletableDeferred<Unit>()
+            role.after = { h.store.messages.clear(); committed.complete(Unit); awaitCancellation() }
+            role.inspect = { request -> committedObservation(request, null) }
+            usingProducer(h, role) { service ->
+                val intent = service.preparePendingChannelMessage("original", origin)
+                val receipt = PendingMessageCreation()
+                val call = backgroundScope.async(intent + receipt) {
+                    service.createPendingChannelMessage("original", 0u, RADIO)
+                }
+                committed.await()
+                call.cancelAndJoin()
+                assertEquals(PendingMessageCreation.State.COMMITTED_UNAVAILABLE, receipt.snapshot.state)
+                assertEquals(intent.creation.messageID, receipt.snapshot.message?.id)
+                assertEquals(intent.creation.text, receipt.snapshot.message?.text)
+                assertEquals(role.requests.single(), role.inspections.single())
+                assertTrue(h.store.messages.isEmpty())
+                assertFalse("fetchMessage" in h.store.calls)
+            }
+        },
+        native("channelIntentMismatchedReadOnlyProofLeavesUnknownAndPreservesOriginalCancellation") {
+            val h = Harness(this); h.start()
+            val role = CreationRole(h.store)
+            val committed = CompletableDeferred<Unit>()
+            role.after = { committed.complete(Unit); awaitCancellation() }
+            role.inspect = { request ->
+                committedObservation(request.copy(createdAt = request.createdAt.plusNanos(1)), h.stored(request.creation.messageID))
+            }
+            usingProducer(h, role) { service ->
+                val intent = service.preparePendingChannelMessage("original", origin)
+                val receipt = PendingMessageCreation()
+                val call = backgroundScope.async(intent + receipt) {
+                    service.createPendingChannelMessage("original", 0u, RADIO)
+                }
+                committed.await()
+                call.cancelAndJoin()
+                assertFailsWith<CancellationException> { call.await() }
+                assertEquals(PendingMessageCreation.State.UNKNOWN, receipt.snapshot.state)
+                assertEquals(intent.creation.messageID, receipt.snapshot.message?.id)
+                assertEquals(role.requests.single(), role.inspections.single())
+                assertTrue(h.diagnostics.any { it is MessagingDiagnostic.Failure && it.operation.endsWith(".read") })
+                assertEquals(1, h.store.messages.size)
+            }
+        },
         native("channelIntentKnownCommitIsPublishedBeforeReplacementSessionOwnershipCheck") {
             val h = Harness(this); h.start()
             val role = CreationRole(h.store)
@@ -266,7 +334,8 @@ class PendingChannelMessageIntentTest {
         block: suspend (MessageService) -> Unit,
     ) {
         val service = MessageService(h.token, SELF, h.session, h.store, h.signals, h.scope,
-            clock = h.clock, reporter = MessagingIssueReporter { h.diagnostics += it }, channelFailureAuthority = role?.authority)
+            clock = h.clock, reporter = MessagingIssueReporter { h.diagnostics += it }, channelFailureAuthority = role?.authority,
+            channelMessageInspectionAuthority = role?.inspector)
         try { block(service) } finally { service.close() }
     }
 
@@ -278,6 +347,10 @@ private class CreationRole(private val store: RecordingStore) {
     private val lease = object : DirectAckLease {}
     val activations = mutableListOf<SessionToken>()
     val requests = mutableListOf<Request>()
+    val inspections = mutableListOf<Request>()
+    var inspect: (Request) -> ChannelMessageCreationObservation = { request ->
+        ChannelMessageCreationObservation.NotRecorded(EntityKey(request.creation.origin.radioId, request.creation.messageID))
+    }
     var revoked = false
     var reconciled = false
     var rejection: DirectAckRejection? = null
@@ -287,11 +360,40 @@ private class CreationRole(private val store: RecordingStore) {
     var after: suspend () -> Unit = {}
     var onRevoke: () -> Unit = {}
 
+    val inspector: ChannelMessageInspectionAuthority = object : ChannelMessageInspectionAuthority {
+        override suspend fun inspectChannelMessageOrigin(key: EntityKey): ChannelMessageOriginObservation =
+            error("Unexpected inspectChannelMessageOrigin")
+
+        override suspend fun inspectChannelMessageCreation(
+            creation: ChannelMessageCreation,
+            timestamp: UInt,
+            createdAt: Instant,
+        ): ChannelMessageCreationObservation {
+            val request = Request(creation, timestamp, createdAt)
+            inspections += request
+            return inspect(request)
+        }
+    }
+
     val authority: ChannelFailureAuthority = object : ChannelFailureAuthority {
         override suspend fun activateChannelFailureSession(token: SessionToken, requestId: UUID): DirectAckActivationResult {
             activations += token
             return DirectAckActivationResult.Activated(lease)
         }
+
+        private fun committedObservation(
+            request: CreationRole.Request,
+            canonical: MessageDTO?,
+        ): ChannelMessageCreationObservation.Committed = ChannelMessageCreationObservation.Committed(
+            ChannelMessageCreationInspectionReceipt(
+                request.creation, request.timestamp, request.createdAt,
+                ChannelMessageInspectionReceipt(
+                    EntityKey(request.creation.origin.radioId, request.creation.messageID), request.creation.origin,
+                    if (canonical == null) ChannelMessageStoredState.MISSING else ChannelMessageStoredState.ORIGINAL,
+                    ChannelMessageOriginCurrentness.UNVERIFIED, canonical,
+                ),
+            ),
+        )
 
         override suspend fun createOrReconcileChannelMessage(
             lease: DirectAckLease,

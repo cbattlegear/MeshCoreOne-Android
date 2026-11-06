@@ -52,6 +52,8 @@ class MessageService(
     reporter: MessagingIssueReporter = LoggingMessagingIssueReporter,
     private val newID: () -> UUID = UUID::randomUUID,
     private val channelFailureAuthority: ChannelFailureAuthority? = dataStore as? ChannelFailureAuthority,
+    private val channelMessageInspectionAuthority: ChannelMessageInspectionAuthority? =
+        dataStore as? ChannelMessageInspectionAuthority,
 ) : MessagingSendPort {
     init { require(localPublicKey.size == ProtocolLimits.PUBLIC_KEY_SIZE) }
     private val ownership = MessagingOwnership(token, scope, signals, reporter)
@@ -988,6 +990,54 @@ class MessageService(
         ) throw channelCreationFailure("canonical message does not match the original intent")
     }
 
+    private suspend fun reconcilePendingChannelCreation(
+        intent: PendingChannelMessageIntent,
+        receipt: PendingMessageCreation,
+        failure: Exception,
+    ) = withContext(NonCancellable) {
+        val inspector = channelMessageInspectionAuthority
+        if (inspector == null) {
+            receipt.settled(PendingMessageCreation.State.UNKNOWN)
+            return@withContext
+        }
+        try {
+            when (val result = inspector.inspectChannelMessageCreation(intent.creation, intent.timestamp, intent.createdAt)) {
+                is ChannelMessageCreationObservation.Committed -> {
+                    val proof = result.receipt
+                    val observation = proof.observation
+                    if (proof.creation != intent.creation || proof.timestamp != intent.timestamp ||
+                        proof.createdAt != intent.createdAt || observation.key != key(intent.creation.messageID) ||
+                        observation.origin != intent.creation.origin
+                    ) throw channelCreationFailure("creation inspection does not match the original intent")
+                    val canonical = observation.canonicalMessage
+                    if (canonical == null) {
+                        if (observation.storedState == ChannelMessageStoredState.ORIGINAL) {
+                            throw channelCreationFailure("original creation inspection has no canonical row")
+                        }
+                        receipt.committedUnavailable()
+                    } else {
+                        if (observation.storedState != ChannelMessageStoredState.ORIGINAL) {
+                            throw channelCreationFailure("creation inspection payload is not the original row")
+                        }
+                        requireChannelCreationMessage(intent, canonical)
+                        if (!receipt.committed(canonical)) {
+                            throw channelCreationFailure("creation inspection identity changed")
+                        }
+                    }
+                }
+                is ChannelMessageCreationObservation.Conflict,
+                is ChannelMessageCreationObservation.NotRecorded,
+                is ChannelMessageCreationObservation.Rejected -> receipt.settled(PendingMessageCreation.State.UNKNOWN)
+            }
+        } catch (readFailure: Exception) {
+            if (receipt.snapshot.state == PendingMessageCreation.State.WRITING) {
+                receipt.settled(PendingMessageCreation.State.UNKNOWN)
+            }
+            remember("pendingChannelCreation.${intent.creation.messageID}.read", readFailure)
+            if (failure !== readFailure) failure.addSuppressed(readFailure)
+        }
+    }
+
     private suspend fun savePendingChannelCreation(intent: PendingChannelMessageIntent): MessageDTO {
         val authority = channelFailureAuthority ?: throw channelCreationFailure("capability unavailable")
         val lease = pendingChannelLease()
@@ -1004,19 +1054,14 @@ class MessageService(
             val committed = when (result) {
                 is ChannelMessageCreationResult.Created -> result.receipt
                 is ChannelMessageCreationResult.Reconciled -> result.receipt
-                is ChannelMessageCreationResult.Rejected -> {
-                    receipt?.settled(PendingMessageCreation.State.UNKNOWN)
-                    throw channelCreationFailure(result.reason.name)
-                }
+                is ChannelMessageCreationResult.Rejected -> throw channelCreationFailure(result.reason.name)
             }
             if (committed.origin != creation.origin) throw channelCreationFailure("canonical origin changed")
             requireChannelCreationMessage(intent, committed.envelope)
             committed.envelope
         } catch (failure: Exception) {
             if (receipt?.snapshot?.state == PendingMessageCreation.State.WRITING) {
-                // Generic capture inspection does not bind the creation's origin and argument digest.
-                // Replaying the insert here could create a row after the caller cancelled.
-                receipt.settled(PendingMessageCreation.State.UNKNOWN)
+                reconcilePendingChannelCreation(intent, receipt, failure)
             }
             if (failure !is CancellationException) remember("pendingChannelCreation.${creation.messageID}", failure)
             throw failure

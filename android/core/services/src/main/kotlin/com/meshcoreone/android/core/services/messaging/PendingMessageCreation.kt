@@ -10,12 +10,14 @@ import kotlin.coroutines.CoroutineContext
  * This observes row creation only: COMMITTED does not mean enqueued, transmitted or delivered.
  * NOT_COMMITTED requires a store result serialized against the original insert; an absent readback
  * alone is UNKNOWN. Reconcile UNKNOWN by identity, never by blindly recreating from the text.
+ * COMMITTED_UNAVAILABLE proves the original creation, but has no safe current row to enqueue.
+ * Its message is the original proposal for identity only, as with WRITING/UNKNOWN, not a stored DTO.
  * The receipt is process memory, not a durable operation journal.
  */
 class PendingMessageCreation : AbstractCoroutineContextElement(Key) {
     companion object Key : CoroutineContext.Key<PendingMessageCreation>
 
-    enum class State { NOT_STARTED, WRITING, COMMITTED, NOT_COMMITTED, UNKNOWN }
+    enum class State { NOT_STARTED, WRITING, COMMITTED, COMMITTED_UNAVAILABLE, NOT_COMMITTED, UNKNOWN }
 
     data class Snapshot(val state: State, val message: MessageDTO?)
 
@@ -39,6 +41,12 @@ class PendingMessageCreation : AbstractCoroutineContextElement(Key) {
         }
         snapshot = Snapshot(State.COMMITTED, message)
         return true
+    }
+
+    @Synchronized
+    internal fun committedUnavailable() {
+        check(snapshot.state == State.WRITING)
+        snapshot = Snapshot(State.COMMITTED_UNAVAILABLE, checkNotNull(snapshot.message))
     }
 
     @Synchronized

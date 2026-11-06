@@ -309,14 +309,28 @@ class ChatListActionsTest {
     }
 
     @Test
-    fun `pending navigation requests are consumed once`() = scenario {
+    fun `pending navigation requests are acknowledged without user navigation`() = scenario {
         val rig = Rig(this)
         val alice = contact("Alice")
+        val channel = channel("Channel")
+        val room = room("Room")
         rig.deps.navigation.pendingChatContact.value = alice
+        rig.deps.navigation.pendingChannel.value = channel
+        rig.deps.navigation.pendingRoomSession.value = room
         rig.actions.handlePendingNavigation()
+        rig.actions.handlePendingChannelNavigation()
+        rig.actions.handlePendingRoomNavigation()
         rig.actions.handlePendingNavigation()
-        assertEquals(listOf<ChatRoute>(ChatRoute.Direct(alice)), rig.navigated)
+        rig.actions.handlePendingChannelNavigation()
+        rig.actions.handlePendingRoomNavigation()
+        assertTrue(rig.navigated.isEmpty())
+        assertEquals(
+            listOf(ChatRoute.Direct(alice), ChatRoute.Channel(channel), ChatRoute.Room(room)),
+            rig.deps.navigation.acknowledgedRoutes,
+        )
         assertNull(rig.deps.navigation.pendingChatContact.value)
+        assertNull(rig.deps.navigation.pendingChannel.value)
+        assertNull(rig.deps.navigation.pendingRoomSession.value)
     }
 
     @Test
@@ -328,6 +342,27 @@ class ChatListActionsTest {
         assertEquals(lounge.id, rig.holder.state.value.roomToAuthenticate?.id)
         rig.actions.open(ChatRoute.Room(room("Open", isConnected = true)))
         assertEquals(1, rig.navigated.size)
+    }
+
+    @Test
+    fun `room taps and pending requests reach the current authentication owner synchronously`() = scenario {
+        val rig = Rig(this)
+        val lounge = room("Lounge", isConnected = false)
+        val requests = mutableListOf<com.meshcoreone.android.core.model.RemoteNodeSessionDTO>()
+        val actions = ChatListActions(
+            rig.holder, rig.deps, scope, { rig.navigated += it }, { rig.cleared += it },
+            requestRoomAuthentication = {
+                assertNull(rig.deps.navigation.pendingRoomAuthentication.value)
+                requests += it
+            },
+        )
+        actions.open(ChatRoute.Room(lounge))
+        assertEquals(listOf(lounge), requests)
+        assertTrue(rig.navigated.isEmpty())
+        rig.deps.navigation.pendingRoomAuthentication.value = lounge
+        actions.consumePendingRoomAuthentication()
+        assertEquals(listOf(lounge, lounge), requests)
+        assertNull(rig.holder.state.value.roomToAuthenticate)
     }
 
     @Test

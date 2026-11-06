@@ -2,6 +2,13 @@
 <!-- AndroidOnly: WP-401 Explicit, non-exported interaction receiver; notification permission remains owned upstream. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
+        <activity
+            android:name="com.meshcoreone.android.platform.notifications.messaging.NotificationOpenActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.NoDisplay" />
         <receiver
             android:name="com.meshcoreone.android.platform.notifications.messaging.NotificationActionReceiver"
             android:exported="false" />

@@ -480,6 +480,54 @@ class SdkFamilyTest {
                 with self.assertRaises(PortError):
                     check_module_tests(self.repo, compiled)
 
+    def test_activity_shadow_fixture_requires_both_configured_sdk_executions(self):
+        self.notifications()
+        relative = "src/test/kotlin/com/meshcoreone/android/platform/notifications/messaging/ActivityShadowTest.kt"
+        self.source("platform/notifications", relative, """
+package com.meshcoreone.android.platform.notifications.messaging
+import android.app.Activity
+import kotlin.Suppress
+import org.junit.Before
+import org.junit.Test
+import org.robolectric.annotation.Config
+import org.robolectric.annotation.Implements
+import org.robolectric.annotation.Implementation
+import org.robolectric.annotation.RealObject
+import org.robolectric.shadows.ShadowActivity
+@Config(sdk = [31, 37])
+class ActivityShadowTest {
+    @Before @Suppress("DEPRECATION") fun setUp() {}
+    @Test fun launch() {}
+    private fun request() = NotificationRequest(payload = Payload())
+    @Implements(Activity::class)
+    class LaunchShadow : ShadowActivity() {
+        @RealObject private lateinit var activity: Activity
+        @Implementation fun startActivity(intent: String) {}
+    }
+}
+""")
+        self.command("add", "--all")
+        self.command("commit", "--quiet", "-m", "Activity shadow SDK family")
+        compiled = self.compiled_notification_sources()
+        classname = "com.meshcoreone.android.platform.notifications.messaging.ActivityShadowTest"
+        base = (classname, "launch")
+        sdk31 = (classname, "launch[31]")
+        required = set(NOTIFICATION_CASES)
+
+        notification_report(self.repo, required | {base, sdk31})
+        self.assertEqual(check_module_tests(self.repo, compiled)["platform/notifications"]["passed"], 8)
+
+        for identities in (
+            required | {base},
+            required | {sdk31},
+            required | {base, sdk31, (classname, "launch[37]")},
+            list(required | {base, sdk31}) + [sdk31],
+        ):
+            with self.subTest(identities=identities):
+                notification_report(self.repo, identities)
+                with self.assertRaises(PortError):
+                    check_module_tests(self.repo, compiled)
+
     def test_remapped_sdk_method_override_and_unsupported_configuration(self):
         self.notifications()
         relative = NOTIFICATION_ROOT + "/SdkFamilyTest.kt"

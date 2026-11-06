@@ -112,6 +112,21 @@ data class NodesConnectionSnapshot(
  * disconnected.
  */
 interface NodesSession {
+    /** Capture before suspending RF work; production verifies the exact graph identity. */
+    fun captureSessionValidity(): () -> Boolean {
+        val device = connectedDevice()
+        return { device != null && connectedDevice()?.id == device.id && connectionState() == DeviceConnectionState.READY }
+    }
+    /** Capture the owner of a pending contact link, including the offline cached-contact case. */
+    fun captureContactNavigationValidity(generation: Long): () -> Boolean {
+        val radio = currentRadioId()
+        val device = connectedDevice()
+        val live = captureSessionValidity()
+        return {
+            if (device == null) connectedDevice() == null && currentRadioId() == radio else live()
+        }
+    }
+
     /** Static sessions emit once; mutable live adapters must emit on radio or graph replacement. */
     fun connectionSnapshots(): Flow<NodesConnectionSnapshot> =
         flowOf(NodesConnectionSnapshot(currentRadioId(), connectionIdentity(), connectedDevice(), connectionState()))

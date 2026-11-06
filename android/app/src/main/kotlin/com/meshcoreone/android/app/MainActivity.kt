@@ -11,21 +11,22 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.collectAsState
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import com.meshcoreone.android.app.container.AppContainer
 import com.meshcoreone.android.app.container.AppConnectionRecoveryDialogs
 import com.meshcoreone.android.app.container.AppConnectionStatus
 import com.meshcoreone.android.app.container.createToolsFeatureDependencies
 import com.meshcoreone.android.app.container.createToolsDiagnosticsDependencies
-import com.meshcoreone.android.app.deeplinks.AppDeepLinkRouter
-import com.meshcoreone.android.app.deeplinks.ContainerDeepLinkEnvironment
 import com.meshcoreone.android.app.deeplinks.DeepLinkRouteOutcome
 import com.meshcoreone.android.app.deeplinks.PendingExternalRoute
+import com.meshcoreone.android.app.navigation.GuardedExternalLinkRouter
 import com.meshcoreone.android.app.navigation.NativeNavigationShell
 import com.meshcoreone.android.app.navigation.AppShortcutContent
 import com.meshcoreone.android.app.navigation.NavigationCoordinator
@@ -38,10 +39,13 @@ import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.designsystem.ThemeServiceHost
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import com.meshcoreone.android.feature.tools.trace.AndroidRecentHopsStorage
@@ -57,7 +61,7 @@ class NavigationHostViewModel : ViewModel() {
     private var deepLinksBound = false
     private var initialViewIntentSubmitted = false
     private var deliverySequence = 0L
-    private var router: AppDeepLinkRouter? = null
+    private var router: GuardedExternalLinkRouter? = null
     val pendingExternalRoute = PendingExternalRoute { uri ->
         router?.routeExternal(uri) ?: DeepLinkRouteOutcome.Rejected
     }
@@ -66,7 +70,7 @@ class NavigationHostViewModel : ViewModel() {
         if (deepLinksBound) return
         container.navigation.attachHostState(navigation.state.value)
         navigation = container.navigation
-        router = AppDeepLinkRouter(ContainerDeepLinkEnvironment(container, navigation))
+        router = GuardedExternalLinkRouter(container, navigation)
         deepLinksBound = true
         viewModelScope.launch { pendingExternalRoute.markReady() }
     }
@@ -83,9 +87,46 @@ class NavigationHostViewModel : ViewModel() {
         submitViewIntent("new-$deliverySequence", intent)
     }
 
+    internal fun retryContactLink(deliveryId: String, attempt: Long) {
+        viewModelScope.launch { pendingExternalRoute.retry(deliveryId, attempt) }
+    }
+
+    internal fun cancelContactLink(deliveryId: String, attempt: Long) {
+        viewModelScope.launch { pendingExternalRoute.cancel(deliveryId, attempt) }
+    }
+
     private fun submitViewIntent(id: String, intent: Intent) {
         val uri = intent.dataString ?: return
         viewModelScope.launch { pendingExternalRoute.submit(PendingExternalRoute.Delivery(id, uri)) }
+    }
+}
+
+@Composable
+internal fun ExternalContactLinkFailure(host: NavigationHostViewModel) {
+    val failure by host.pendingExternalRoute.lookupFailure.collectAsStateWithLifecycle()
+    val current = failure ?: return
+    key(current.deliveryId, current.attempt) {
+        val cancel = { host.cancelContactLink(current.deliveryId, current.attempt) }
+        AlertDialog(
+            modifier = Modifier.testTag("external-contact-link-failure"),
+            onDismissRequest = cancel,
+            title = {
+                Text(stringResource(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_nodekind_contact))
+            },
+            text = { Text(stringResource(AppLocalizableStrings.commonErrorFailedToLoad)) },
+            confirmButton = {
+                TextButton(
+                    onClick = { host.retryContactLink(current.deliveryId, current.attempt) },
+                    modifier = Modifier.testTag("external-contact-link-retry"),
+                ) { Text(stringResource(AppLocalizableStrings.commonTryAgain)) }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = cancel,
+                    modifier = Modifier.testTag("external-contact-link-cancel"),
+                ) { Text(stringResource(AppLocalizableStrings.commonCancel)) }
+            },
+        )
     }
 }
 
@@ -165,6 +206,7 @@ open class MainActivity : ComponentActivity() {
                         )
                     }
                     answer.container?.let { AppConnectionRecoveryDialogs(it.appState) }
+                    ExternalContactLinkFailure(host)
                 }
             }
             val themeService = resolved?.container?.themeService

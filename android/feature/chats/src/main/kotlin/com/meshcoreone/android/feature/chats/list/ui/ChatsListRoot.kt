@@ -50,6 +50,7 @@ fun ChatsListRoot(
     failureText: @Composable (Throwable) -> UiText,
     modifier: Modifier = Modifier,
     avatarCache: AvatarImageCache? = null,
+    consumePendingRoomAuthentication: Boolean = true,
 ) {
     val scope = rememberCoroutineScope()
     val holder = remember(dependencies) { ChatListStateHolder(dependencies, scope) }
@@ -57,9 +58,11 @@ fun ChatsListRoot(
     val currentSelection by rememberUpdatedState(selectedRoute)
     val currentOpen by rememberUpdatedState(onOpenChat)
     val currentClear by rememberUpdatedState(onClearSelection)
+    val currentRoomAuthentication by rememberUpdatedState(onRoomAuthenticationRequested)
     val actions = remember(holder) {
         ChatListActions(holder, dependencies, scope, navigate = { currentOpen(it) },
-            clearNavigationIfActive = { if (currentSelection == it) currentClear() })
+            clearNavigationIfActive = { if (currentSelection == it) currentClear() },
+            requestRoomAuthentication = { currentRoomAuthentication(it) })
     }
     val state by holder.state.collectAsState()
     val connection by dependencies.connectionState.collectAsState()
@@ -70,7 +73,7 @@ fun ChatsListRoot(
 
     LaunchedEffect(holder) {
         holder.start()
-        actions.consumePendingRoomAuthentication()
+        if (consumePendingRoomAuthentication) actions.consumePendingRoomAuthentication()
         holder.requestConversationReload()?.join()
         if (actions.shouldAnnounceOfflineState()) view.announceForAccessibility(offlineAnnouncement)
         actions.handlePendingNavigation()
@@ -84,7 +87,9 @@ fun ChatsListRoot(
     LaunchedEffect(pendingContact) { actions.handlePendingNavigation() }
     LaunchedEffect(pendingChannel) { actions.handlePendingChannelNavigation() }
     LaunchedEffect(pendingRoom) { actions.handlePendingRoomNavigation() }
-    LaunchedEffect(pendingAuth) { actions.consumePendingRoomAuthentication() }
+    LaunchedEffect(pendingAuth, consumePendingRoomAuthentication) {
+        if (consumePendingRoomAuthentication) actions.consumePendingRoomAuthentication()
+    }
     LaunchedEffect(state.roomToAuthenticate) {
         state.roomToAuthenticate?.let { onRoomAuthenticationRequested(it); holder.showRoomAuthentication(null) }
     }

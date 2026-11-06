@@ -7,9 +7,14 @@
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.app.navigation.ChannelLinkRequest
+import com.meshcoreone.android.app.navigation.ChatSelection
+import com.meshcoreone.android.app.navigation.ContactLinkLookupResolution
 import com.meshcoreone.android.app.navigation.ContactLinkRequest
+import com.meshcoreone.android.app.navigation.ContactLinkResolvedCompletion
+import com.meshcoreone.android.app.navigation.ChatContactMount
 import com.meshcoreone.android.app.navigation.HashtagJoinRequest
 import com.meshcoreone.android.app.state.MessageEvent
+import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.core.contracts.domain.ChannelQuery
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
@@ -67,6 +72,32 @@ import kotlinx.coroutines.launch
 import java.time.ZoneId
 
 class AppChatsFeature internal constructor(private val container: AppContainer) {
+    internal fun registerContactMount(mount: ChatContactMount) = container.registerChatContactMount(mount)
+    internal fun sealContactMount(mount: ChatContactMount) = container.sealChatContactMount(mount)
+    internal fun acceptContactOffers() = container.acceptChatContactOffers()
+
+    internal fun linksForMount(mount: ChatContactMount): ChatLinkEnvironment {
+        val underlying = list.links
+        return object : ChatLinkEnvironment by underlying {
+            override fun captureContactLinkContext(publicKey: Bytes, publications: ContactLinkPublications) =
+                container.captureContactLinkContext(publicKey, publications, mount)
+
+            override fun completeResolvedContactLookup(
+                context: ContactLinkContext, target: ContactLinkResolvedTarget, link: ContactLinkResult,
+                existing: ContactDTO?, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
+            ): ContactLinkTargetCompletion {
+                cancellation.ensureActive()
+                if (target !is ContactLinkLookupResolution.Current) {
+                    return ContactLinkTargetCompletion.Completed(ContactLinkCompletion.StaleContext)
+                }
+                return container.offerChatContact(
+                    mount, context, target, ContactLinkRequest(link.name, link.publicKey, link.contactType),
+                    existing, publications, cancellation,
+                )
+            }
+        }
+    }
+
     private data class PushedFloodScope(
         val session: SessionToken,
         val preference: ChannelFloodScope,
@@ -188,13 +219,26 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             override fun isChannelReaction(text: String) = ReactionParser.parse(text) != null
         }
         override val navigation = object : ChatListNavigation {
-            override val pendingChatContact = navigationFlow { it.pendingChatContact }
-            override val pendingChannel = navigationFlow { it.pendingChannel }
-            override val pendingRoomSession = navigationFlow { it.pendingRoomSession }
-            override val pendingRoomAuthentication = navigationFlow { it.pendingRoomAuthentication }
-            override fun clearPendingChatContact() = container.navigation.clearPendingNavigation()
-            override fun clearPendingChannel() = container.navigation.clearPendingChannelNavigation()
-            override fun clearPendingRoomSession() = container.navigation.clearPendingRoomNavigation()
+            override val pendingChatContact = navigationFlow { state ->
+                state.pendingChatContact?.takeIf {
+                    state.selectedTab == AppTab.CHATS && state.chatsSelectedRoute == ChatSelection.Direct(it)
+                }
+            }
+            override val pendingChannel = navigationFlow { state ->
+                state.pendingChannel?.takeIf {
+                    state.selectedTab == AppTab.CHATS && state.chatsSelectedRoute == ChatSelection.Channel(it)
+                }
+            }
+            override val pendingRoomSession = navigationFlow { state ->
+                state.pendingRoomSession?.takeIf {
+                    state.selectedTab == AppTab.CHATS && state.chatsSelectedRoute == ChatSelection.Room(it)
+                }
+            }
+            override val pendingRoomAuthentication = navigationFlow { state ->
+                state.pendingRoomAuthentication?.takeIf { state.selectedTab == AppTab.CHATS }
+            }
+            override fun acknowledgePendingRoute(route: ChatRoute) =
+                container.navigation.acknowledgePendingChatRoute(route)
             override fun clearPendingRoomAuthentication() = container.navigation.clearPendingRoomAuthentication()
         }
         override val links = object : ChatLinkEnvironment {
@@ -202,7 +246,39 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 get() = container.navigation.state.value.selectedTab
                 set(value) = container.navigation.selectTab(value)
             override val currentRadioId get() = app.currentRadioId
+            override val contactLinkGeneration get() = container.navigation.currentState.generation
+            override fun captureContactLinkSession(generation: Long) = container.captureContactLinkSession(generation)
             override val connectedDevicePublicKey get() = app.connectedDevice?.publicKey
+            override fun captureContactLinkContext(publicKey: Bytes, publications: ContactLinkPublications) =
+                container.captureContactLinkContext(publicKey, publications)
+            override fun resolveContactLinkContext(context: ContactLinkContext, publicKey: Bytes) =
+                when (val resolution = container.resolveContactLinkContext(context, publicKey)) {
+                    ContactLinkLookupResolution.Stale -> ContactLinkTargetResolution.Stale
+                    is ContactLinkLookupResolution.Current -> ContactLinkTargetResolution.Current(resolution)
+                }
+            override fun completeResolvedContactLookup(
+                context: ContactLinkContext, target: ContactLinkResolvedTarget, link: ContactLinkResult,
+                existing: ContactDTO?, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
+            ): ContactLinkTargetCompletion {
+                cancellation.ensureActive()
+                if (target !is ContactLinkLookupResolution.Current) {
+                    return ContactLinkTargetCompletion.Completed(ContactLinkCompletion.StaleContext)
+                }
+                return when (val completion = container.completeResolvedContactLookup(
+                    context, target, ContactLinkRequest(link.name, link.publicKey, link.contactType), existing,
+                    selectChats = false, publications = publications, cancellation = cancellation,
+                )) {
+                    ContactLinkResolvedCompletion.TargetChanged -> ContactLinkTargetCompletion.TargetChanged
+                    is ContactLinkResolvedCompletion.Completed -> ContactLinkTargetCompletion.Completed(completion.outcome)
+                }
+            }
+            override fun completeContactLookup(
+                context: ContactLinkContext, link: ContactLinkResult, existing: ContactDTO?,
+                publications: ContactLinkPublications,
+            ) = container.completeContactLookup(
+                context, ContactLinkRequest(link.name, link.publicKey, link.contactType), existing,
+                selectChats = false, publications = publications,
+            )
             override val parser = MeshCoreLinkParser
             override fun navigateToMap(latitude: Double, longitude: Double) =
                 container.navigation.navigateToMap(latitude, longitude)
@@ -210,7 +286,16 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 container.navigation.navigateToContactDetail(contact)
             override fun navigateToChannel(channel: ChannelDTO) = container.navigation.navigateToChannel(channel)
             override fun stageContactLink(link: ContactLinkResult) =
-                container.navigation.stageContactLink(ContactLinkRequest(link.name, link.publicKey, link.contactType))
+                container.navigation.stageContactLink(
+                    ContactLinkRequest(link.name, link.publicKey, link.contactType), app.currentRadioId,
+                )
+            override fun completeContactLookup(
+                link: ContactLinkResult, existing: ContactDTO?, radioId: RadioId?, generation: Long,
+                isCurrentSession: () -> Boolean,
+            ) = container.navigation.completeContactLookup(
+                ContactLinkRequest(link.name, link.publicKey, link.contactType), existing,
+                radioId, generation, app.currentRadioId, isCurrentSession,
+            )
             override fun stageChannelLink(link: ChannelLinkResult) =
                 container.navigation.stageChannelLink(ChannelLinkRequest(
                     link.name, link.secret, link.regionScope,
@@ -582,17 +667,12 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                     is TimelineConversation.Channel -> null
                 }
             override suspend fun clearUnread(conversation: TimelineConversation) {
+                // A mounted read is not a durable OPEN receipt, so retain content taps for retry.
                 when (conversation) {
-                    is TimelineConversation.Direct -> {
+                    is TimelineConversation.Direct ->
                         store.clearUnreadCount(EntityKey(radio, conversation.contact.id))
-                        container.sessions.current?.takeIf { it.token.radioId == radio }?.notificationService
-                            ?.removeDeliveredNotifications(conversation.contact.id)
-                    }
-                    is TimelineConversation.Channel -> {
+                    is TimelineConversation.Channel ->
                         store.clearChannelUnreadCount(radio, conversation.channel.index)
-                        container.sessions.current?.takeIf { it.token.radioId == radio }?.notificationService
-                            ?.removeDeliveredNotifications(conversation.channel.index, radio)
-                    }
                 }
                 container.sessions.current?.notificationService?.updateBadgeCount()
                 app.refreshConversations()
@@ -710,7 +790,33 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             }
         }
 
-    fun room(room: RemoteNodeSessionDTO): RoomConversationDependencies = object : RoomConversationDependencies {
+    internal fun captureNavigationSession(token: com.meshcoreone.android.core.contracts.domain.SessionToken?): () -> Boolean {
+        val initiatingSession = token?.let { expected -> container.sessions.current?.takeIf { it.token == expected } }
+        return { initiatingSession != null && container.isCurrentSession(initiatingSession) }
+    }
+
+    internal fun roomForAuthentication(
+        room: RemoteNodeSessionDTO,
+        token: com.meshcoreone.android.core.contracts.domain.SessionToken?,
+        isCurrentSession: () -> Boolean,
+    ): RoomConversationDependencies {
+        val initiatingSession = token?.let { expected -> container.sessions.current?.takeIf { it.token == expected } }
+        return room(room) {
+            if (initiatingSession == null || initiatingSession.token.radioId != room.radioId || !isCurrentSession() ||
+                session(room.radioId) !== initiatingSession
+            ) {
+                throw MessageServiceException(MessageServiceError.NotConnected)
+            }
+            initiatingSession
+        }
+    }
+
+    fun room(room: RemoteNodeSessionDTO): RoomConversationDependencies = room(room) { session(room.radioId) }
+
+    private fun room(
+        room: RemoteNodeSessionDTO,
+        joinSession: () -> RadioSessionContainer,
+    ): RoomConversationDependencies = object : RoomConversationDependencies {
         private fun roomKey() = EntityKey(room.radioId, room.id)
         override val keepAlive: Flow<RoomSessionKeepAlive?> = changes.onStart { emit(Unit) }
             .map {
@@ -736,7 +842,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         }
         override val service = object : RoomConversationService {
             override suspend fun join(contact: ContactDTO, password: String?, rememberPassword: Boolean) =
-                session(room.radioId).roomServerService.joinRoom(
+                joinSession().roomServerService.joinRoom(
                     room.radioId, contact, password, rememberPassword, contact.outPathLength,
                 )
             override suspend fun reconnect(session: RemoteNodeSessionDTO) =

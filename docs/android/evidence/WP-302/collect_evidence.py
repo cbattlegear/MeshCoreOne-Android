@@ -32,9 +32,65 @@ APP = ROOT / "android" / "app"
 OUT = APP / "build" / "reports" / "wp302"
 NAV = Path("kotlin/com/meshcoreone/android/app/navigation")
 TEST_METHOD = re.compile(r"@Test\s+fun\s+(?:`([^`]+)`|(\w+))")
-SPECIAL_NAMES = {
-    "ChatViewModel.navigateToMap forwards the coordinate to the navigation sink": "chatConsumerForwardsMapCoordinateToNavigationSink",
-    "Line of Sight and Trace Path collapse the sidebar; other tools keep it": "lineOfSightAndTracePathCollapseSidebarOtherToolsKeepIt",
+MANDATORY_NATIVE_SUITES = {
+    "NavigationActivityTest.kt": "com.meshcoreone.android.app.navigation.NavigationActivityTest",
+    "NavigationComposeTest.kt": "com.meshcoreone.android.app.navigation.NavigationComposeTest",
+    "NavigationFlowIntegrationTest.kt": "com.meshcoreone.android.app.container.NavigationFlowIntegrationTest",
+    "NavigationStateTest.kt": "com.meshcoreone.android.app.navigation.NavigationStateTest",
+    "OriginalNavigationTest.kt": "com.meshcoreone.android.app.navigation.cases.OriginalNavigationTest",
+}
+# The one-to-one native method renames in e9f0febc7e53b09adb00ac56928e7073366023f6.
+SOURCE_CASE_METHODS = {
+    "NavigationCoordinatorNotificationTests::DM notification tap navigates to chat with contact()": "dmNotificationTapNavigatesToChatWithContact",
+    "NavigationCoordinatorNotificationTests::New contact notification with manualAddContacts navigates to discovery()": "newContactNotificationWithManualAddContactsNavigatesToDiscovery",
+    "NavigationCoordinatorNotificationTests::New contact notification without manualAddContacts navigates to contact detail()": "newContactNotificationWithoutManualAddContactsNavigatesToContactDetail",
+    "NavigationCoordinatorNotificationTests::Channel notification tap navigates to channel()": "channelNotificationTapNavigatesToChannel",
+    "NavigationCoordinatorNotificationTests::Reaction notification on DM navigates to chat with scrollToMessageID()": "reactionNotificationOnDmNavigatesToChatWithScrollToMessageId",
+    "NavigationCoordinatorNotificationTests::Reaction notification on channel navigates to channel with scrollToMessageID()": "reactionNotificationOnChannelNavigatesToChannelWithScrollToMessageId",
+    "NavigationCoordinatorMapTests::navigateToMap sets pendingMapFocus and selects the map tab()": "navigateToMapSetsPendingMapFocusAndSelectsTheMapTab",
+    "NavigationCoordinatorMapTests::ChatViewModel.navigateToMap forwards the coordinate to the navigation sink()": "chatConsumerForwardsMapCoordinateToNavigationSink",
+    "NavigationCoordinatorMapTests::clearPendingMapFocus resets the pending focus()": "clearPendingMapFocusResetsThePendingFocus",
+    "NavigationCoordinatorSettingsTests::navigateToSetting sets selectedSetting and selects the settings tab()": "navigateToSettingSetsSelectedSettingAndSelectsTheSettingsTab",
+    "NavigationCoordinatorPendingLinkTests::pendingContactLink starts nil and clears via helper()": "pendingContactLinkStartsNilAndClearsViaHelper",
+    "NavigationCoordinatorPendingLinkTests::pendingChannelLink starts nil and clears via helper()": "pendingChannelLinkStartsNilAndClearsViaHelper",
+    "NavigationCoordinatorPendingLinkTests::pendingHashtag starts nil and clears via helper()": "pendingHashtagStartsNilAndClearsViaHelper",
+    "NavigationCoordinatorPendingLinkTests::clearPendingLinks clears the hoisted Nodes selected contact()": "clearPendingLinksClearsTheHoistedNodesSelectedContact",
+    "NavigationCoordinatorPendingLinkTests::clearPendingLinks clears the hoisted Nodes discovery flag()": "clearPendingLinksClearsTheHoistedNodesDiscoveryFlag",
+    "NavigationCoordinatorPendingLinkTests::clearPendingLinks clears every staged per-radio field at once()": "clearPendingLinksClearsEveryStagedPerRadioFieldAtOnce",
+    "NavigationCoordinatorPendingLinkTests::clearPerRadioSelection clears the hoisted Chats route()": "clearPerRadioSelectionClearsTheHoistedChatsRoute",
+    "NavigationCoordinatorPendingLinkTests::clearPerRadioSelection clears a radio-requiring tool()": "clearPerRadioSelectionClearsARadioRequiringTool",
+    "NavigationCoordinatorPendingLinkTests::clearPerRadioSelection preserves the offline Line of Sight tool()": "clearPerRadioSelectionPreservesTheOfflineLineOfSightTool",
+    "NavigationCoordinatorPendingLinkTests::clearPerRadioSelection clears a per-device settings page()": "clearPerRadioSelectionClearsAPerDeviceSettingsPage",
+    "NavigationCoordinatorPendingLinkTests::clearPerRadioSelection preserves a device-independent settings page()": "clearPerRadioSelectionPreservesADeviceIndependentSettingsPage",
+    "NavigationCoordinatorPendingLinkTests::language settings page is device-independent()": "languageSettingsPageIsDeviceIndependent",
+    "NavigationStateTests::Default navigation state is tab 0 with no pending navigation()": "defaultNavigationStateIsTabZeroWithNoPendingNavigation",
+    "NavigationStateTests::navigateToChat sets contact, route, and tab()": "navigateToChatSetsContactRouteAndTab",
+    "NavigationStateTests::navigateToChat with scrollToMessageID sets message ID()": "navigateToChatWithScrollToMessageIdSetsMessageId",
+    "NavigationStateTests::navigateToChat switches to Chats tab from another tab()": "navigateToChatSwitchesToChatsTabFromAnotherTab",
+    "NavigationStateTests::navigateToRoom sets session, route, and tab()": "navigateToRoomSetsSessionRouteAndTab",
+    "NavigationStateTests::navigateToChannel sets channel, route, and tab()": "navigateToChannelSetsChannelRouteAndTab",
+    "NavigationStateTests::navigateToChannel with scrollToMessageID sets message ID()": "navigateToChannelWithScrollToMessageIdSetsMessageId",
+    "NavigationStateTests::navigateToDiscovery sets pending flag and contacts tab()": "navigateToDiscoverySetsPendingFlagAndContactsTab",
+    "NavigationStateTests::navigateToDiscovery does not hide tab bar()": "navigateToDiscoveryDoesNotHideTabBar",
+    "NavigationStateTests::navigateToContacts switches to contacts tab()": "navigateToContactsSwitchesToContactsTab",
+    "NavigationStateTests::navigateToContactDetail sets contact and contacts tab()": "navigateToContactDetailSetsContactAndContactsTab",
+    "NavigationStateTests::clearPendingNavigation clears chat contact()": "clearPendingNavigationClearsChatContact",
+    "NavigationStateTests::clearPendingRoomNavigation clears room session()": "clearPendingRoomNavigationClearsRoomSession",
+    "NavigationStateTests::clearPendingRoomAuthentication clears room auth session()": "clearPendingRoomAuthenticationClearsRoomAuthSession",
+    "NavigationStateTests::clearPendingChannelNavigation clears channel()": "clearPendingChannelNavigationClearsChannel",
+    "NavigationStateTests::clearPendingDiscoveryNavigation clears discovery flag()": "clearPendingDiscoveryNavigationClearsDiscoveryFlag",
+    "NavigationStateTests::clearPendingScrollToMessage clears message ID()": "clearPendingScrollToMessageClearsMessageId",
+    "NavigationStateTests::clearPendingContactDetailNavigation clears contact detail()": "clearPendingContactDetailNavigationClearsContactDetail",
+    "NavigationStateTests::navigateToChat from contacts tab hides tab bar and switches tab()": "navigateToChatFromContactsTabHidesTabBarAndSwitchesTab",
+    "NavigationStateTests::Multiple navigation calls overwrite pending state()": "multipleNavigationCallsOverwritePendingState",
+    "NavigationStateTests::Device menu tip donation is pending by default when false()": "deviceMenuTipDonationIsPendingByDefaultWhenFalse",
+    "SidebarNavigationLayoutTests::Section sidebar is narrow enough that 11-inch portrait tiles all three columns()": "sectionSidebarIsNarrowEnoughThatElevenInchPortraitTilesAllThreeColumns",
+    "SidebarNavigationLayoutTests::iPad mini portrait intentionally collapses rather than tiling()": "iPadMiniPortraitIntentionallyCollapsesRatherThanTiling",
+    "SidebarNavigationLayoutTests::Sidebar width is in icon-only range, not a full sidebar()": "sidebarWidthIsInIconOnlyRangeNotAFullSidebar",
+    "SidebarNavigationLayoutTests::A sidebar-collapsing tool collapses the sidebar even when the container is wide()": "aSidebarCollapsingToolCollapsesTheSidebarEvenWhenTheContainerIsWide",
+    "SidebarNavigationLayoutTests::A wide container tiles the sidebar when no sidebar-collapsing tool is open()": "aWideContainerTilesTheSidebarWhenNoSidebarCollapsingToolIsOpen",
+    "SidebarNavigationLayoutTests::A narrow container collapses to the section's hidden shape()": "aNarrowContainerCollapsesToTheSectionsHiddenShape",
+    "SidebarNavigationLayoutTests::Line of Sight and Trace Path collapse the sidebar; other tools keep it()": "lineOfSightAndTracePathCollapseSidebarOtherToolsKeepIt",
 }
 
 
@@ -88,12 +144,14 @@ def inventory():
                 originals[case["id"]] = {"source_path": entry["path"], **case}
     if len(originals) != 50:
         fail("all fifty original families are mandatory")
+    if set(SOURCE_CASE_METHODS) != set(originals) or len(set(SOURCE_CASE_METHODS.values())) != len(originals):
+        fail("original family method mapping is missing, extra or non-bijective")
     shared = APP / "src/androidTest" / NAV / "cases/OriginalNavigationCases.kt"
     names = [a or b for a, b in TEST_METHOD.findall(shared.read_text(encoding="utf8"))]
     mapped = {}
     for case in originals:
         original_name = case.split("::", 1)[1].removesuffix("()")
-        native = SPECIAL_NAMES.get(original_name, original_name)
+        native = SOURCE_CASE_METHODS[case]
         if names.count(native) != 1:
             fail("missing/duplicate original assertion body: " + case)
         mapped[case] = {
@@ -104,19 +162,40 @@ def inventory():
     if set(names) != {value["method"] for value in mapped.values()}:
         fail("original bodies do not match the full catalog")
     expected = {(value["class"], value["method"], sdk) for value in mapped.values() for sdk in ("31", "37")}
-    for path in (APP / "src/test" / NAV).glob("*Test.kt"):
+    seen_suites = set()
+    for path in sorted((APP / "src/test" / NAV).glob("*Test.kt")):
         content = path.read_text(encoding="utf8")
+        references = re.findall(r"^// PortedFrom: ([^@\r\n]+)@", content, re.M)
+        if not (path.name in MANDATORY_NATIVE_SUITES
+                or re.search(r"^// AndroidOnly: WP-302\b", content, re.M)
+                or set(references) & inputs.keys()):
+            continue
         cls = re.search(r"^class (\w+)", content, re.M)
         package = re.search(r"^package ([\w.]+)", content, re.M)
         if cls is None or package is None:
             fail("malformed native class: " + str(path))
-        sdks = ("31", "37") if "@Config(sdk = [31, 37]" in content else ("jvm",)
-        for a, b in TEST_METHOD.findall(content):
+        class_name = package[1] + "." + cls[1]
+        if path.name in MANDATORY_NATIVE_SUITES:
+            if class_name != MANDATORY_NATIVE_SUITES[path.name]:
+                fail("mandatory native suite identity changed: " + path.name)
+            seen_suites.add(path.name)
+        if "emitNavigationExecutionBinding(" not in content:
+            fail("missing native execution binding: " + path.name)
+        config = re.search(r"@Config\s*\(\s*sdk\s*=\s*\[([^\]]+)\]", content)
+        sdks = tuple(item.strip() for item in config[1].split(",")) if config else ("jvm",)
+        if sdks not in (("31", "37"), ("jvm",)):
+            fail("unsupported native SDK inventory: " + path.name)
+        methods = TEST_METHOD.findall(content)
+        if not methods and path.name != "OriginalNavigationTest.kt":
+            fail("missing native assertions: " + path.name)
+        for a, b in methods:
             for sdk in sdks:
-                identity = (package[1] + "." + cls[1], a or b, sdk)
+                identity = (class_name, a or b, sdk)
                 if identity in expected:
                     fail("duplicate declared native assertion")
                 expected.add(identity)
+    if seen_suites != MANDATORY_NATIVE_SUITES.keys():
+        fail("missing mandatory native suites: " + repr(sorted(MANDATORY_NATIVE_SUITES.keys() - seen_suites)))
     if len(expected) <= 100:
         fail("missing native adaptation/assertion suites")
     return manifest.sha256, inputs, originals, mapped, expected
@@ -165,28 +244,50 @@ def verify_binding(binding):
         fail("stale/altered compiled-input binding")
 
 
+def report_identity(class_name, raw_name, expected):
+    name = method_name(raw_name)
+    sdks = {sdk for cls, method, sdk in expected if cls == class_name and method == name}
+    suffix = re.search(r"\[(31|37)\]$", raw_name.removesuffix("()"))
+    if suffix:
+        sdk = suffix[1]
+    elif sdks == {"31", "37"}:
+        sdk = "37"
+    elif sdks == {"jvm"}:
+        sdk = "jvm"
+    else:
+        fail("unknown or ambiguous native test identity: " + repr((class_name, raw_name)))
+    identity = (class_name, name, sdk)
+    if identity not in expected:
+        fail("unknown native test identity: " + repr(identity))
+    return identity
+
+
 def native_reports(directory, binding, expected):
     counts = suite_counts(directory, 1)
-    reports, nodes, executed, renders = [], {}, {}, {}
-    prefix = "com.meshcoreone.android.app.navigation."
+    reports, nodes, executed, renders = [], set(), set(), {}
+    classes = {cls for cls, _, _ in expected}
     for path in sorted(directory.glob("TEST-*.xml")):
         root = read_xml(path)
         reports.append({"name": path.name, "bytes": path.stat().st_size, "sha256": digest(path.read_bytes())})
         for case in root.iter("testcase"):
-            cls, name = case.get("classname", ""), method_name(case.get("name", ""))
-            if cls.startswith(prefix):
-                identity = (cls, name)
-                nodes[identity] = nodes.get(identity, 0) + 1
+            cls, name = case.get("classname", ""), case.get("name", "")
+            if cls in classes:
+                identity = report_identity(cls, name, expected)
+                if identity in nodes:
+                    fail("duplicate native XML assertion: " + repr(identity))
+                nodes.add(identity)
         for output in root.iter("system-out"):
             for line in (output.text or "").splitlines():
                 if line.startswith("WP302_EXECUTION|"):
                     parts = line.split("|")
                     if len(parts) != 8 or parts[1:5] != [binding[key] for key in ("nonce", "head", "tree", "inputs_sha256")]:
                         fail("malformed/stale per-test execution binding")
-                    identity = (parts[5], method_name(parts[6]), parts[7])
+                    identity = report_identity(parts[5], parts[6], expected)
+                    if identity[2] != parts[7]:
+                        fail("native SDK label and execution binding disagree")
                     if identity not in expected or identity in executed:
                         fail("unknown/duplicate actual native assertion: " + repr(identity))
-                    executed[identity] = True
+                    executed.add(identity)
                 elif line.startswith("WP302_RENDER|"):
                     parts = line.split("|")
                     if len(parts) != 6 or parts[1] in renders or not re.fullmatch(r"[a-z0-9-]+", parts[1]):
@@ -198,13 +299,9 @@ def native_reports(directory, binding, expected):
                     if digest(data) != checksum or native_png_shape(data) != (width, height):
                         fail("native image bytes/dimensions/hash disagree")
                     renders[name] = {"width": width, "height": height, "sha256": checksum, "bytes": len(data), "data": data}
-    if set(executed) != expected:
-        fail("missing current assertions: " + repr(sorted(expected - executed.keys())))
-    expected_nodes = {}
-    for cls, name, _ in expected:
-        identity = (cls, name)
-        expected_nodes[identity] = expected_nodes.get(identity, 0) + 1
-    if nodes != expected_nodes:
+    if executed != expected:
+        fail("missing current assertions: " + repr(sorted(expected - executed)))
+    if nodes != expected:
         fail("XML testcase nodes and bound executions disagree")
     states = {"width-" + str(width) for width in (360, 599, 600, 744, 779, 780, 834, 1080)} | {
         "tabs-selected-settings", "resize-expanded-draft", "resize-compact-draft", "collapse-tracepath",

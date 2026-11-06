@@ -57,6 +57,7 @@ internal fun AppSettingsContent(
     feature: AppSettingsFeature, destination: NavigationDestination, coordinator: NavigationCoordinator,
     nodeDocuments: NodeConfigDocuments? = null,
 ) {
+    val presented = presentedNavigation(coordinator)
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val container = feature.container
@@ -113,7 +114,7 @@ internal fun AppSettingsContent(
     val transport = if (!snapshot.state.isConnected) null
         else container.currentTransport
     val page = (destination as? NavigationDestination.Setting)?.selection?.let { Page.valueOf(it.name) }
-    val done = { coordinator.back(); Unit }
+    val done = { coordinator.back(presented); Unit }
     val error by feature.failure.collectAsState()
     if (error != null) AlertDialog(onDismissRequest = { feature.failure.value = null },
         text = { Text(uiString(UiErrorMapper().message(requireNotNull(error)))) },

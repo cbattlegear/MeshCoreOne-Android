@@ -144,6 +144,161 @@ class ChannelReactionTargetServiceTest {
         assertSame(original, cache.lookupChannelTargets(radio, 3u, "Alice", parsed.messageHash).single().channelTarget)
     }
 
+    @Test fun mixedCategoriesShareTheOriginalFiveCandidateLimitWithoutResurrectingPrunedBindings() {
+        val radio = RadioId(UUID.randomUUID())
+        val cache = MessageLRUCache(clock = CacheClock())
+        val targets = List(6) { capture(radio) }
+        val hash = ReactionParser.generateMessageHash("Hello", 100u)
+        targets.forEachIndexed { index, target ->
+            if (index % 2 == 0) cache.indexChannelTarget(target, "Alice")
+            else cache.index(target.message.id, 3u, "Alice", "Hello", 100u)
+        }
+        assertEquals(targets.drop(1).map { it.message.id }, cache.lookupChannelCandidates(
+            radio, 3u, "Alice", hash,
+        ).map { it.messageID })
+        assertFalse(cache.lookupChannelTargets(radio, 3u, "Alice", hash).any {
+            it.channelTarget?.target === targets.first().target
+        })
+        cache.evictChannelTarget(targets[2])
+        cache.evictChannelTarget(targets[4])
+        assertEquals(listOf(targets[1], targets[3], targets[5]).map { it.message.id },
+            cache.lookupChannelCandidates(radio, 3u, "Alice", hash).map { it.messageID })
+    }
+
+    @Test fun pruningAShadowedOriginalRetiresBothCategoriesInsteadOfRestoringOldAuthority() {
+        val radio = RadioId(UUID.randomUUID())
+        val cache = MessageLRUCache(clock = CacheClock())
+        val original = capture(radio)
+        val hash = ReactionParser.generateMessageHash("Hello", 100u)
+        cache.indexChannelTarget(original, "Alice")
+        cache.index(original.message.id, 3u, "Alice", "Hello", 100u)
+        val later = List(5) { capture(radio) }
+        later.forEach { cache.indexChannelTarget(it, "Alice") }
+        assertTrue(cache.lookup(3u, "Alice", hash).isEmpty())
+        assertEquals(later.map { it.message.id }, cache.lookupChannelCandidates(
+            radio, 3u, "Alice", hash,
+        ).map { it.messageID })
+        later.forEach { cache.evictChannelTarget(it) }
+        assertTrue(cache.lookupChannelTargets(radio, 3u, "Alice", hash).isEmpty())
+        assertTrue(cache.lookupChannelCandidates(radio, 3u, "Alice", hash).isEmpty())
+        assertIs<ChannelReactionCacheLookup.Miss>(ReactionService(cache).findChannelTarget(
+            ParsedReaction("X", "Alice", hash), 3u, radio,
+        ))
+    }
+
+    @Test fun mixedSameIdReindexMovesToTheEndBeforeFiveCandidatePruningAndEqualClockSelection() {
+        val radio = RadioId(UUID.randomUUID())
+        val cache = MessageLRUCache(clock = CacheClock())
+        val targets = List(6) { capture(radio) }
+        val hash = ReactionParser.generateMessageHash("Hello", 100u)
+        targets.take(5).forEach { cache.indexChannelTarget(it, "Alice") }
+        cache.index(targets[0].message.id, 3u, "Alice", "Hello", 100u)
+        assertEquals(listOf(1, 2, 3, 4, 0).map { targets[it].message.id },
+            cache.lookupChannelCandidates(radio, 3u, "Alice", hash).map { it.messageID })
+        cache.indexChannelTarget(targets[5], "Alice")
+        assertEquals(listOf(2, 3, 4, 0, 5).map { targets[it].message.id },
+            cache.lookupChannelCandidates(radio, 3u, "Alice", hash).map { it.messageID })
+        assertSame(targets[2], assertIs<ChannelReactionCacheLookup.Bound>(
+            ReactionService(cache).findChannelTarget(ParsedReaction("X", "Alice", hash), 3u, radio),
+        ).captured)
+        cache.evictChannelTarget(targets[2])
+        cache.evictChannelTarget(targets[3])
+        cache.evictChannelTarget(targets[4])
+        assertEquals(targets[0].message.id, assertIs<ChannelReactionCacheLookup.Unbound>(
+            ReactionService(cache).findChannelTarget(ParsedReaction("X", "Alice", hash), 3u, radio),
+        ).messageID)
+    }
+
+    @Test fun mixedCategoriesConsumeOneOfTheOriginalFiveHundredKeysAndEvictTogetherAtFiveHundredOne() {
+        val radio = RadioId(UUID.randomUUID())
+        val cache = MessageLRUCache(clock = CacheClock())
+        val target = capture(radio)
+        val unboundId = UUID.randomUUID()
+        val hash = ReactionParser.generateMessageHash("Hello", 100u)
+        cache.indexChannelTarget(target, "Alice")
+        cache.index(unboundId, 3u, "Alice", "Hello", 100u)
+        repeat(499) { cache.index(UUID.randomUUID(), 3u, "Other$it", "Hello", 100u) }
+        assertEquals(listOf(target.message.id, unboundId), cache.lookupChannelCandidates(
+            radio, 3u, "Alice", hash,
+        ).map { it.messageID })
+        cache.index(UUID.randomUUID(), 3u, "Key501", "Hello", 100u)
+        assertTrue(cache.lookup(3u, "Alice", hash).isEmpty())
+        assertTrue(cache.lookupChannelTargets(radio, 3u, "Alice", hash).isEmpty())
+        assertTrue(cache.lookupChannelCandidates(radio, 3u, "Alice", hash).isEmpty())
+        assertEquals(1, cache.lookup(3u, "Other0", hash).size)
+    }
+
+    @Test fun legacyReindexRefreshesTheWholeMixedKeysEvictionAgeButBoundSuccessorDoesNot() {
+        val radio = RadioId(UUID.randomUUID())
+        val cache = MessageLRUCache(capacity = 2, clock = CacheClock())
+        val first = capture(radio)
+        val second = capture(radio)
+        val hash = ReactionParser.generateMessageHash("Hello", 100u)
+        cache.indexChannelTarget(first, "First")
+        cache.indexChannelTarget(second, "Second")
+        cache.index(first.message.id, 3u, "First", "Hello", 100u)
+        cache.index(UUID.randomUUID(), 3u, "Third", "Hello", 100u)
+        assertTrue(cache.lookupChannelTargets(radio, 3u, "Second", hash).isEmpty())
+        assertSame(first, cache.lookupChannelTargets(radio, 3u, "First", hash).single().channelTarget)
+        val successor = CapturedChannelReactionTarget(CacheMarker(), first.message.copy(reactionSummary = "X:1"))
+        assertTrue(cache.advanceChannelTarget(first, successor))
+        cache.index(UUID.randomUUID(), 3u, "Fourth", "Hello", 100u)
+        assertTrue(cache.lookupChannelCandidates(radio, 3u, "First", hash).isEmpty())
+        assertTrue(cache.lookupChannelTargets(radio, 3u, "First", hash).isEmpty())
+        assertTrue(cache.lookup(3u, "First", hash).isEmpty())
+        assertEquals(1, cache.lookup(3u, "Third", hash).size)
+    }
+
+    @Test fun retiringOneBoundKeyDoesNotDropAnotherBoundKeysEvictionTracking() {
+        val radio = RadioId(UUID.randomUUID())
+        val cache = MessageLRUCache(capacity = 2, clock = CacheClock())
+        val first = capture(radio)
+        val second = capture(radio)
+        val hash = ReactionParser.generateMessageHash("Hello", 100u)
+        cache.indexChannelTarget(first, "First")
+        cache.indexChannelTarget(second, "Second")
+        cache.evictChannelTarget(first)
+        cache.index(UUID.randomUUID(), 3u, "Third", "Hello", 100u)
+        cache.index(UUID.randomUUID(), 3u, "Fourth", "Hello", 100u)
+        assertTrue(cache.lookupChannelTargets(radio, 3u, "Second", hash).isEmpty())
+        assertEquals(1, cache.lookup(3u, "Third", hash).size)
+        assertEquals(1, cache.lookup(3u, "Fourth", hash).size)
+    }
+
+    @Test fun mixedCacheClearRetiresBothCategoriesWithoutAffectingRadioFilteringOrDmIndependence() {
+        val radio = RadioId(UUID.randomUUID())
+        val foreign = RadioId(UUID.randomUUID())
+        val cache = MessageLRUCache(capacity = 1, clock = CacheClock())
+        val original = capture(radio)
+        val foreignTarget = capture(foreign)
+        val unboundId = UUID.randomUUID()
+        val contact = UUID.randomUUID()
+        val dmId = UUID.randomUUID()
+        val hash = ReactionParser.generateMessageHash("Hello", 100u)
+        cache.indexChannelTarget(original, "Alice")
+        cache.indexChannelTarget(foreignTarget, "Alice")
+        cache.index(unboundId, 3u, "Alice", "Hello", 100u)
+        assertEquals(listOf(original.message.id, unboundId), cache.lookupChannelCandidates(
+            radio, 3u, "Alice", hash,
+        ).map { it.messageID })
+        assertEquals(listOf(foreignTarget.message.id, unboundId), cache.lookupChannelCandidates(
+            foreign, 3u, "Alice", hash,
+        ).map { it.messageID })
+        cache.indexDM(dmId, contact, "Hello", 100u)
+        cache.index(UUID.randomUUID(), 3u, "Other", "Hello", 100u)
+        assertTrue(cache.lookupChannelCandidates(radio, 3u, "Alice", hash).isEmpty())
+        assertTrue(cache.lookupChannelCandidates(foreign, 3u, "Alice", hash).isEmpty())
+        assertEquals(dmId, cache.lookupDM(contact, hash).single().messageID)
+        cache.indexChannelTarget(original, "Alice")
+        cache.index(unboundId, 3u, "Alice", "Hello", 100u)
+        cache.clear()
+        assertTrue(cache.lookup(3u, "Alice", hash).isEmpty())
+        assertTrue(cache.lookupChannelTargets(radio, 3u, "Alice", hash).isEmpty())
+        assertTrue(cache.lookupDM(contact, hash).isEmpty())
+        cache.indexChannelTarget(foreignTarget, "Alice")
+        assertTrue(cache.lookupChannelCandidates(radio, 3u, "Alice", hash).isEmpty())
+    }
+
     @Test fun parkedUnboundOriginalNeverBecomesLegacyEligibleAfterAnotherArrival() {
         val radio = RadioId(UUID.randomUUID())
         val service = ReactionService()

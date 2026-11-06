@@ -17,6 +17,8 @@
     "Ordinary failures return Failed(cause,mutationUncertain) and log the explicit error; cancellation propagates. A thrown atomic write parks its original target group as UNKNOWN. Unbound-original/no-authority entries are parked and excluded from both legacy and protected matching.",
     "Ten cache and native-parking controls supplement the six original queue controls, including mixed bound/unbound distinct-clock and equal-clock ordering and same-ID reindex selection. Cache markers are test-only and do not certify storage issuance or validation.",
     "Mixed lookup selects from the actual combined candidate history before distinguishing Bound from Unbound, using indexedAt and original arrival ordinals for first-equal-clock behavior; a newer no-authority candidate cannot silently redirect to an older bound collision.",
+    "Bound and legacy representations now share the original channel/sender/hash key eviction order and five-distinct-ID pruning history. Pruning or key eviction removes both categories together, so retired old bindings cannot resurface. Original bound authority may remain stored behind a newer no-authority index of the same selected ID, but never wins selection or refreshes recency through a successor write. Radio eligibility is still checked before selection; the session-wide cache budget and independent DM budget are retained.",
+    "Seven additional mixed-cache controls cover actual default five-candidate and 500-key/501st-key boundaries, permanent retirement of shadowed authority, same-ID reindex/tie ordering, whole-key recency, exact-predecessor retirement tracking, radio filtering, clear and independent DM retention. They are authored only, not executed parity evidence.",
     "Non-native v1/v3 failed selections retain their exact original target, ReactionDTO, format and typed Stale/Rejected/Unknown outcome in a separate parked-only queue. They never enter native parsing, hash matching or automatic retry. At 100 retained entries, typed Overflow returns the exact unretained object and preserves existing items rather than silently displacing selected work.",
     "Actual App offset and anchored reads use original atomic captured windows and pass exact DTO-reference receipts into preparation. Missing receipts fail explicitly without key/equality recapture; neutral reads have no replay side effects. PRIME delegates the same receipt-aware hook.",
     "Protected App preparation adopts the complete actual committed snapshot, not a UUID-only summary copy. Unknown sender skips only that message, foreign-radio pending entries stay queued, and actual pending receivedAt/hash/rawText survive persistence.",
@@ -32,7 +34,7 @@
     "These consumers and cache controls do not establish atomic Room safety without the actual storage producer and executed guarded App/Sync tests.",
     "Existing HistoryReactionReplayFailureTest channel fault hooks target the old split persistence operations. Guarded atomic-equivalence mapping is explicitly unfinished; those assertions are not weakened or claimed as new guarded-path acceptance. Its direct controls and legacy helper source remain unchanged.",
     "The legacy two-argument prepareTimelineMessages helper is retained for existing compatibility controls. Every actual channel timeline and PRIME consumer supplies the original receipt map; a missing receipt on those paths never falls back to this legacy helper.",
-    "Mixed-cache collision and protected-key arrival controls are authored, not proof of complete legacy-transition capacity/eviction parity; broader original-order/capacity cases remain required before acceptance."
+    "The mixed-cache pruning and whole-key eviction implementation and seven additional original-limit controls are uncompiled and unexecuted. Source review and actual hosted discovery/execution with the existing MessageLRUCacheTest cases remain required; no cache parity acceptance is claimed."
   ],
   "actual_trace": {
     "indexer": "RadioSessionContainer.kt:216-217 passes ID/channel/sender/text/timestamp to ReactionService.indexMessage and discards returned pending matches.",
@@ -55,6 +57,7 @@
     "product_tests_executed": 0,
     "queue_methods_authored": 6,
     "cache_and_native_parking_methods_authored": 10,
+    "mixed_cache_capacity_methods_authored": 7,
     "parked_mco_methods_authored": 2,
     "app_methods_authored": 15,
     "paging_methods_authored": 8,

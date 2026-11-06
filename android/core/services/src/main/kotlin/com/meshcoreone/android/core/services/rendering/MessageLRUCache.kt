@@ -52,9 +52,7 @@ internal class MessageLRUCache(
         synchronized(lock) {
             val candidate = MessageCandidate(messageID, text, timestamp, clock.instant(), indexOrder = nextChannelIndexOrder)
             nextChannelIndexOrder = Math.incrementExact(nextChannelIndexOrder)
-            val (newOrder, evicted) = touched(order, key)
-            order = newOrder
-            cache = withCandidate(evicted?.let { cache - it } ?: cache, key, candidate)
+            indexChannelCandidate(key, candidate)
         }
     }
 
@@ -76,9 +74,7 @@ internal class MessageLRUCache(
                 message.id, message.text, message.reactionTimestamp, clock.instant(), captured, nextChannelIndexOrder,
             )
             nextChannelIndexOrder = Math.incrementExact(nextChannelIndexOrder)
-            val (newOrder, evicted) = touched(order, key)
-            order = newOrder
-            cache = withCandidate(evicted?.let { cache - it } ?: cache, key, candidate)
+            indexChannelCandidate(key, candidate)
         }
     }
 
@@ -132,8 +128,28 @@ internal class MessageLRUCache(
             cache = cache.mapValues { (_, candidates) ->
                 candidates.filterNot { it.channelTarget?.target === predecessor.target }
             }.filterValues { it.isNotEmpty() }
-            order = order.filter { it in cache }
+            order = order.filter { group -> cache.keys.any { it.copy(radioId = null) == group } }
         }
+    }
+
+    private fun indexChannelCandidate(key: MessageCacheKey, candidate: MessageCandidate) {
+        val group = key.copy(radioId = null)
+        val (newOrder, evicted) = touched(order, group)
+        order = newOrder
+        val retained = if (evicted == null) cache else cache.filterKeys { it.copy(radioId = null) != evicted }
+        val indexed = retained + (key to (retained[key].orEmpty().filter { it.messageID != candidate.messageID } + candidate))
+        val selectedIds = indexed.entries.asSequence()
+            .filter { it.key.copy(radioId = null) == group }
+            .flatMap { it.value.asSequence() }
+            .sortedByDescending { it.indexOrder }
+            .distinctBy { it.messageID }
+            .take(maxCandidatesPerKey)
+            .map { it.messageID }
+            .toHashSet()
+        cache = indexed.mapValues { (candidateKey, candidates) ->
+            if (candidateKey.copy(radioId = null) == group) candidates.filter { it.messageID in selectedIds }
+            else candidates
+        }.filterValues { it.isNotEmpty() }
     }
 
     /** Indexes a DM message for later lookup. */

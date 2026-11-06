@@ -71,16 +71,23 @@ class RoomPersistenceStore private constructor(
         val restored = candidates.singleOrNull()
         val saved = current?.toDTO()
         val imported = restored?.toDTO()
+        val preferences = listOfNotNull(saved, imported, dto)
+        // Recovery tuples and OCV pairs must come from one snapshot, including its null fields.
+        val preRepeat = preferences.firstOrNull {
+            it.preRepeatFrequency != null || it.preRepeatBandwidth != null ||
+                it.preRepeatSpreadingFactor != null || it.preRepeatCodingRate != null
+        } ?: dto
+        val ocv = preferences.firstOrNull { it.ocvPreset != null || it.customOCVArrayString != null } ?: dto
         val merged = dto.copy(
             defaultFloodScopeName = saved?.defaultFloodScopeName ?: imported?.defaultFloodScopeName ?: dto.defaultFloodScopeName,
-            preRepeatFrequency = saved?.preRepeatFrequency ?: imported?.preRepeatFrequency ?: dto.preRepeatFrequency,
-            preRepeatBandwidth = saved?.preRepeatBandwidth ?: imported?.preRepeatBandwidth ?: dto.preRepeatBandwidth,
-            preRepeatSpreadingFactor = saved?.preRepeatSpreadingFactor ?: imported?.preRepeatSpreadingFactor ?: dto.preRepeatSpreadingFactor,
-            preRepeatCodingRate = saved?.preRepeatCodingRate ?: imported?.preRepeatCodingRate ?: dto.preRepeatCodingRate,
+            preRepeatFrequency = preRepeat.preRepeatFrequency,
+            preRepeatBandwidth = preRepeat.preRepeatBandwidth,
+            preRepeatSpreadingFactor = preRepeat.preRepeatSpreadingFactor,
+            preRepeatCodingRate = preRepeat.preRepeatCodingRate,
             lastContactSync = maxOf(dto.lastContactSync, saved?.lastContactSync ?: 0u, imported?.lastContactSync ?: 0u),
-            ocvPreset = saved?.ocvPreset ?: imported?.ocvPreset ?: dto.ocvPreset,
+            ocvPreset = ocv.ocvPreset,
             appliedRadioPresetID = saved?.appliedRadioPresetID ?: imported?.appliedRadioPresetID ?: dto.appliedRadioPresetID,
-            customOCVArrayString = saved?.customOCVArrayString ?: imported?.customOCVArrayString ?: dto.customOCVArrayString,
+            customOCVArrayString = ocv.customOCVArrayString,
             knownRegions = (saved?.knownRegions.orEmpty() + imported?.knownRegions.orEmpty() + dto.knownRegions).distinct().snapshot(),
         )
         database.devices().upsert(merged.toEntity())

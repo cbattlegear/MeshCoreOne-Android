@@ -8,6 +8,7 @@ import com.meshcoreone.android.core.model.SnapshotList
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlinx.coroutines.test.runTest
@@ -103,6 +104,28 @@ class SimulatorDeviceReconciliationTest : RepositoryTest() {
         assertEquals(canonical, store.fetchDevice(canonical.id))
         assertEquals(foreign, store.fetchDevice(foreign.id))
         assertEquals(2, store.fetchDevices().size)
+    }
+
+    @Test fun partialRecoveryAndOcvSnapshotsAreNotCompletedWithAnotherRowsValues() = runTest(scheduler) {
+        val current = canonical.copy(preRepeatFrequency = 915_000u, ocvPreset = "custom")
+        val imported = canonical.copy(
+            id = UUID.randomUUID(),
+            isActive = false,
+            preRepeatBandwidth = 125_000u,
+            preRepeatSpreadingFactor = 7u,
+            preRepeatCodingRate = 8u,
+            customOCVArrayString = "[4200,4100,4000]",
+        )
+        store.saveDevice(current)
+        store.saveDevice(imported)
+
+        store.saveSimulatorDevice(canonical)
+
+        val actual = assertNotNull(store.fetchDevice(canonical.id))
+        assertEquals(current, actual)
+        assertFalse(actual.hasPreRepeatSettings)
+        assertNull(actual.customOCVArrayString)
+        assertEquals(1, store.fetchDevices().size)
     }
 
     @Test fun multipleRestoredCandidatesFailWithoutSelectingOrMutatingAnyRow() = runTest(scheduler) {

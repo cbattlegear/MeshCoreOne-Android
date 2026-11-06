@@ -5,6 +5,8 @@ package com.meshcoreone.android.core.data.repository
 import android.database.sqlite.SQLiteException
 import android.util.Log
 import androidx.room.withTransaction
+import com.meshcoreone.android.core.contracts.domain.ChannelIdentityMutex
+import com.meshcoreone.android.core.contracts.domain.ChannelIdentityWriteScope
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
@@ -74,6 +76,20 @@ internal class RoomRepositoryContext(
     parentScope: CoroutineScope,
     val reporter: RepositoryIssueReporter,
 ) {
+    val channelIdentity = ChannelIdentityMutex.PROCESS
+
+    suspend fun <T> channelWrite(
+        operation: String,
+        scope: ChannelIdentityWriteScope? = null,
+        flushBeforeRollback: Boolean = false,
+        block: suspend RepositoryTransaction.() -> T,
+    ): T = if (scope == null) {
+        channelIdentity.withChannelIdentityRestore { write(operation, flushBeforeRollback, block) }
+    } else {
+        channelIdentity.requireChannelOperationScope(scope)
+        scope.withChannelIdentityMutation { write(operation, flushBeforeRollback, block) }
+    }
+
     private val mutex = Mutex()
     private val flushOwner = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + flushOwner)
@@ -145,12 +161,14 @@ internal class RoomRepositoryContext(
     internal suspend fun <T> restoreBackup(
         afterCommit: () -> Unit,
         block: suspend RepositoryTransaction.() -> T,
-    ): T = access("importBackupDatabase", writing = true) {
-        mutex.withLock {
-            ensureOpen()
-            flushRxLocked()
-            val transaction = RepositoryTransaction(database, clock, pendingRx)
-            committedTransaction(afterCommit, returnCommittedOnCancellation = true) { transaction.block() }
+    ): T = channelIdentity.withChannelIdentityRestore {
+        access("importBackupDatabase", writing = true) {
+            mutex.withLock {
+                ensureOpen()
+                flushRxLocked()
+                val transaction = RepositoryTransaction(database, clock, pendingRx)
+                committedTransaction(afterCommit, returnCommittedOnCancellation = true) { transaction.block() }
+            }
         }
     }
 

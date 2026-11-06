@@ -88,6 +88,11 @@ interface ContactPersisting {
     suspend fun fetchContactPublicKeys(radioId: RadioId): SnapshotSet<Bytes>
 }
 
+// Read-only Android epoch; this value does not authorize dispatch or reconciliation.
+interface ChannelOccupantAuthority {
+    suspend fun fetchChannelOccupantEpoch(radioId: RadioId, channelIndex: UByte): String?
+}
+
 interface ChannelPersisting {
     suspend fun fetchChannels(radioId: RadioId): SnapshotList<ChannelDTO>
     suspend fun fetchChannel(radioId: RadioId, index: UByte): ChannelDTO?

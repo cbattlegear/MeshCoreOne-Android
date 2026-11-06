@@ -110,12 +110,12 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
             RadioId(ghost.radioId)
         }
 
-    override suspend fun deleteDeviceData(id: UUID) = context.write("deleteDeviceData") {
+    override suspend fun deleteDeviceData(id: UUID) = context.channelWrite("deleteDeviceData") {
         deleteAllDeviceData(id)
         save()
     }
 
-    override suspend fun deleteDeviceAndData(id: UUID) = context.write("deleteDeviceAndData") {
+    override suspend fun deleteDeviceAndData(id: UUID) = context.channelWrite("deleteDeviceAndData") {
         deleteAllDeviceData(id)
         database.devices().delete(id)
         save()

@@ -164,7 +164,7 @@ open class MainActivity : ComponentActivity() {
                             },
                         )
                     }
-                    answer.container?.let { AppConnectionRecoveryDialogs(it.appState) }
+                    answer.container?.let { AppConnectionRecoveryDialogs(it) }
                 }
             }
             val themeService = resolved?.container?.themeService

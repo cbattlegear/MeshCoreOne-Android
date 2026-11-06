@@ -90,7 +90,8 @@ class AndroidOnboardingPermissionPort(
     override val snapshot: StateFlow<OnboardingPermissionSnapshot> = mutable.asStateFlow()
 
     private fun read() = OnboardingPermissionMapping.map(
-        facts.snapshot(), facts.locationGranted(), requests.asSet(bluetoothConnectionOnly), scanFallback, bluetoothConnectionOnly,
+        facts.snapshot(), facts.locationGranted(), requests.asSet(bluetoothConnectionOnly || !scanFallback),
+        scanFallback, bluetoothConnectionOnly,
     )
 
     override fun refresh() {

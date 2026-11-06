@@ -211,7 +211,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
                         AppSettingsContent(feature, navigation.activeStack.last().destination, h.container.navigation)
                     }
                     SystemPairingSetupHost(h.appState)
-                    if (includeConnectionRecovery) AppConnectionRecoveryDialogs(h.appState)
+                    if (includeConnectionRecovery) AppConnectionRecoveryDialogs(h.container)
                 }
             }
         }
@@ -417,9 +417,9 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
                         }
                     }
                 }
-                compose.onNodeWithText(compose.activity.getString(O.welcomeGetStarted)).performScrollTo().performClick()
+                compose.onNodeWithText(compose.activity.getString(O.welcomeGetStarted)).assertIsDisplayed().performClick()
                 compose.onNode(hasText(compose.activity.getString(O.permissionsContinue)) and hasClickAction())
-                    .performScrollTo().performClick()
+                    .assertIsDisplayed().performClick()
             } else {
                 mount(h, feature, includeConnectionRecovery = true)
             }
@@ -683,6 +683,50 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
     @Test @Config(sdk = [37])
     fun setupDeniedConnectCancellationKeepsAllAssociationsAfterRecovery() = runTest {
         setupPermissionControl(grant = false, cancel = true)
+    }
+
+    private suspend fun TestScope.companionConnectDenialControl(setup: Boolean) {
+        val facts = FakePermissionFacts(sdk = 31)
+        withSettings(permissionFacts = facts, controlledBluetoothDialog = true) { h, feature ->
+            val id = if (setup) UUID.randomUUID().also { h.pairing.registered[it] = "Denied setup" }
+                else saved(h).id
+            val label = if (setup) "Denied setup" else requireNotNull(store.fetchDevice(id)).nodeName
+            val before = h.links.links.size
+            mount(h, feature)
+            open(h)
+            clickSelectionRow(label)
+            h.eventuallyMounted("companion selection requests CONNECT") {
+                feature.selectionRequestedPermission.value == OnboardingPermissionKind.BLUETOOTH
+            }
+            permissionResult(facts, granted = false, permissions = setOf(ConnectivityPermission.BLUETOOTH_CONNECT))
+            permissionSettingsButton().assertIsDisplayed()
+            compose.onNodeWithText(compose.activity.getString(L.commonCancel)).performClick()
+            assertEquals(
+                com.meshcoreone.android.feature.onboarding.PermissionStatus.DENIED,
+                requireNotNull(h.container.onboarding).permissions.snapshot.value.bluetooth,
+            )
+            open(h)
+            clickSelectionRow(compose.activity.getString(S.deviceSelectionScanBluetooth))
+            h.eventuallyMounted("companion scan preserves CONNECT denial recovery") {
+                feature.selectionAction.value == AppSettingsFeature.SelectionAction.Scan && feature.selectionPermissionDenied.value
+            }
+            permissionSettingsButton().assertIsDisplayed()
+            assertNull(feature.selectionRequestedPermission.value)
+            assertEquals(1, requireNotNull(permissionDialog).launches)
+            assertEquals(before, h.links.links.size)
+            assertEquals(0, h.pairing.removeCalls)
+            assertNull(h.appState.connectionUI.pendingSystemPairingSetup)
+            compose.onNodeWithText(compose.activity.getString(L.commonCancel)).performClick()
+            assertNull(feature.selectionAction.value)
+        }
+    }
+
+    @Test fun companionSavedConnectDenialRemainsDeniedForPairingInsteadOfRequestingAgain() = runTest {
+        companionConnectDenialControl(setup = false)
+    }
+
+    @Test fun companionSetupConnectDenialRemainsDeniedForPairingInsteadOfRequestingAgain() = runTest {
+        companionConnectDenialControl(setup = true)
     }
 
     @Test fun fallbackScanPreviouslyDeniedBluetoothOffersRecoveryWithoutRequestingOrScanningAgain() = runTest {
@@ -2119,7 +2163,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         }
     }
 
-    @Test fun removeAndRetryDirectScanRequestsPermissionAndReportsScannerFailure() = runTest {
+    private suspend fun TestScope.removeAndRetryScanFailureControl(switchAway: Boolean) {
         val facts = FakePermissionFacts(
             sdk = 31, granted = setOf(ConnectivityPermission.BLUETOOTH_CONNECT),
         )
@@ -2137,11 +2181,19 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             override fun stopScan() { stops++ }
         })
         withSettings(permissionFacts = facts, pairingService = service, scans = scans) { h, feature ->
+            requireNotNull(h.container.onboarding).flags.setBoolean(
+                com.meshcoreone.android.feature.onboarding.OnboardingState.KEY_HAS_COMPLETED, true,
+            )
             val device = saved(h)
             h.links.configureRadio = { it.connectFailure = BleTransportException(BleError.AuthenticationFailed) }
             mount(h, feature, includeConnectionRecovery = true)
             open(h)
             compose.onNodeWithText(device.nodeName).performClick()
+            if (switchAway) {
+                compose.runOnUiThread { h.container.navigation.selectTab(AppTab.CHATS) }
+                compose.waitForIdle()
+                assertEquals(AppTab.CHATS, h.container.navigation.state.value.selectedTab)
+            }
             h.eventually("saved authentication failure before guided retry", virtualBudgetMillis = 3_000, virtualStepMillis = 10) {
                 compose.waitForIdle()
                 h.appState.connectionUI.showingConnectionFailedAlert &&
@@ -2149,6 +2201,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             }
 
             compose.onNodeWithText(compose.activity.getString(L.alertConnectionFailedRemoveAndRetry)).performClick()
+            assertEquals(AppTab.SETTINGS, h.container.navigation.state.value.selectedTab)
             h.eventuallyMounted("direct retry requests scan permission while pairing is active") {
                 feature.selectionRequestedPermission.value == OnboardingPermissionKind.BLUETOOTH &&
                     service.isPresenting.value
@@ -2175,6 +2228,14 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             assertNull(feature.failure.value)
             compose.onAllNodes(isDialog()).assertCountEquals(0)
         }
+    }
+
+    @Test fun removeAndRetryDirectScanRequestsPermissionAndReportsScannerFailure() = runTest {
+        removeAndRetryScanFailureControl(switchAway = false)
+    }
+
+    @Test fun savedFailureAfterLeavingSettingsRoutesRemoveAndRetryBackToItsPickerHost() = runTest {
+        removeAndRetryScanFailureControl(switchAway = true)
     }
 
     @Test fun savedOtherAppFailureUsesTheDistinctWarningWithoutForgetting() = runTest {

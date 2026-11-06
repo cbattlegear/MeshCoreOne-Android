@@ -323,6 +323,20 @@ class SimulatorRecoveryCopyCapabilityTests(unittest.TestCase):
                 with self.subTest(content=content, validate=validate):
                     self.assertEqual(outcome(CapabilityEngine, validate), outcome(previous, validate))
 
+    def test_bomless_utf16_and_encoded_entity_declarations_are_rejected(self):
+        for encoding in ("utf-16-le", "utf-16-be"):
+            for entities in (False, True):
+                base, candidate, blobs = self.fixture()
+                content = self.xml(dict.fromkeys(KEYS, "Structural fixture")).decode()
+                if entities:
+                    content = (
+                        '<!DOCTYPE resources [<!ENTITY expanded "Expanded fixture">]>'
+                        + content.replace("Structural fixture", "&expanded;")
+                    )
+                blobs[candidate[PATHS[3]]] = content.encode(encoding)
+                with self.subTest(encoding=encoding, entities=entities), self.assertRaises(PortError):
+                    self.validate(base, candidate, blobs)
+
     def test_unrelated_notices_and_invalid_base_cannot_be_changed(self):
         for marker in (b"<!-- Copyright notice -->", b"<?localization preserve?>"):
             for position in ("before", "inside", "after"):
@@ -450,6 +464,17 @@ class SimulatorRecoveryCopyCapabilityTests(unittest.TestCase):
                 invalid = commit(candidate, {PATHS[3]: content})
                 with self.subTest(encoding=encoding), self.assertRaises(PortError):
                     stage_review(repo, "WP-217", fixture_base, invalid, path_operations=operations)
+            for encoding in ("utf-16-le", "utf-16-be"):
+                for entities in (False, True):
+                    content = self.xml(dict.fromkeys(KEYS, "Structural fixture")).decode()
+                    if entities:
+                        content = (
+                            '<!DOCTYPE resources [<!ENTITY expanded "Expanded fixture">]>'
+                            + content.replace("Structural fixture", "&expanded;")
+                        )
+                    invalid = commit(candidate, {PATHS[3]: content.encode(encoding)})
+                    with self.subTest(encoding=encoding, entities=entities), self.assertRaises(PortError):
+                        stage_review(repo, "WP-217", fixture_base, invalid, path_operations=operations)
 
     def test_obligations_do_not_claim_translation_or_runtime_acceptance(self):
         text = " ".join(self.rule["invariants"] + self.rule["validation"])

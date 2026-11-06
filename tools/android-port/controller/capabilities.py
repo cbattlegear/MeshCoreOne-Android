@@ -240,6 +240,8 @@ class CapabilityEngine:
             if "<!DOCTYPE" in text.upper() or "<!ENTITY" in text.upper():
                 raise PortError(f"{label} resource cannot contain DTD or entity declarations")
             if strict_utf8:
+                if "\x00" in text:
+                    raise PortError(f"{label} resource cannot contain embedded NULs or UTF-16 bytes")
                 try:
                     document = minidom.parseString(data)
                 except (LookupError, ValueError) as error:

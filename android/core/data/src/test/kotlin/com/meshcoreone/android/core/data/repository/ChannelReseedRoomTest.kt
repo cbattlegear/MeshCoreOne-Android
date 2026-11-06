@@ -1,13 +1,17 @@
 // AndroidOnly: WP-209 Current-main backup UUID remapping and idempotent same-slot DTO replay for issue 601.
 package com.meshcoreone.android.core.data.repository
 
+import androidx.room.withTransaction
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.data.backup.BackupRoomTest
+import com.meshcoreone.android.core.data.backup.BackupImportHooks
 import com.meshcoreone.android.core.data.backup.device as backupDevice
 import com.meshcoreone.android.core.data.backup.envelope as backupEnvelope
 import com.meshcoreone.android.core.database.toEntity
+import com.meshcoreone.android.core.model.AppBackupError
+import com.meshcoreone.android.core.model.AppBackupException
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.MessageStatus
@@ -16,6 +20,7 @@ import com.meshcoreone.android.core.model.PendingSendKind
 import com.meshcoreone.android.core.model.NotificationLevel
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
+import java.io.IOException
 import java.util.UUID
 import kotlin.test.*
 import kotlinx.coroutines.test.runTest
@@ -44,6 +49,10 @@ class ChannelReseedRoomTest : BackupRoomTest() {
         val imported = store.fetchChannels(RADIO_A).single()
         assertNotEquals(seed.id, imported.id)
         assertEquals(customized.copy(id = imported.id), imported)
+        val importedAuthority = assertNotNull(db.channelOccupantAuthorities().forSlot(RADIO_A.value, 2L))
+        assertFalse(importedAuthority.isResolved)
+        assertNull(importedAuthority.boundRowId)
+        assertNull(store.fetchChannelOccupantEpoch(RADIO_A, 2u))
         val sent = message(contactID = null, channelIndex = 2u)
         val incoming = message(contactID = null, channelIndex = 2u, direction = MessageDirection.INCOMING)
         val unsent = message(contactID = null, channelIndex = 2u, status = MessageStatus.FAILED)
@@ -53,6 +62,8 @@ class ChannelReseedRoomTest : BackupRoomTest() {
         repeat(3) {
             store.saveChannel(seed)
             assertEquals(imported, store.fetchChannels(RADIO_A).single())
+            assertEquals(importedAuthority, db.channelOccupantAuthorities().forSlot(RADIO_A.value, 2L))
+            assertNull(store.fetchChannelOccupantEpoch(RADIO_A, 2u))
             assertNull(store.fetchChannel(EntityKey(RADIO_A, seed.id)))
             for (row in listOf(sent, incoming, unsent)) {
                 assertEquals(row, store.fetchMessage(EntityKey(RADIO_A, row.id)))
@@ -173,5 +184,52 @@ class ChannelReseedRoomTest : BackupRoomTest() {
         assertEquals(updated, store.fetchChannel(EntityKey(RADIO_A, current.id)))
         assertEquals(text, store.fetchMessage(EntityKey(RADIO_A, text.id)))
         assertEquals(listOf(queued), store.fetchPendingSendsForMessage(EntityKey(RADIO_A, text.id)).toList())
+    }
+
+    @Test
+    fun realBackupImportRollsBackStorageEpochOnFailureAndInvalidatesItOnCommit() = runTest {
+        val local = seedChannel().copy(name = "local custom", isFavorite = true, unreadCount = 4)
+        store.saveDevice(backupDevice(radio = RADIO_A))
+        store.saveChannel(local)
+        // Explicit DAO fixture tests storage/restore only, not a live lifecycle authority issuer.
+        val resolved = db.withTransaction {
+            val initial = assertNotNull(db.channelOccupantAuthorities().forSlot(RADIO_A.value, 2L))
+            assertEquals(1, db.channelOccupantAuthorities().resolveCurrent(
+                RADIO_A.value, 2L, initial.epoch, local.id, local.secret,
+            ))
+            assertNotNull(db.channelOccupantAuthorities().forSlot(RADIO_A.value, 2L))
+        }
+        val text = message(contactID = null, channelIndex = 2u, status = MessageStatus.FAILED)
+        val queued = queuedChannel(text)
+        store.saveMessage(text)
+        store.upsertPendingSend(queued)
+        val value = backupEnvelope(
+            devices = listOf(backupDevice(radio = RADIO_A)),
+            channels = listOf(local.copy(id = UUID.randomUUID(), name = "imported metadata")),
+        )
+        val faulted = newService(BackupImportHooks(beforeCommit = { throw IOException("injected epoch rollback") }))
+        val failure = assertFailsWith<AppBackupException> { faulted.importBackup(value, store) }
+        assertIs<AppBackupError.ImportFailed>(failure.error)
+        assertEquals(local, store.fetchChannel(EntityKey(RADIO_A, local.id)))
+        assertEquals(resolved, db.channelOccupantAuthorities().forSlot(RADIO_A.value, 2L))
+        assertEquals(resolved.epoch, store.fetchChannelOccupantEpoch(RADIO_A, 2u))
+        assertEquals(text, store.fetchMessage(EntityKey(RADIO_A, text.id)))
+        assertEquals(listOf(queued), store.fetchPendingSendsForMessage(EntityKey(RADIO_A, text.id)).toList())
+
+        service.importBackup(value, store)
+        val invalidated = assertNotNull(db.channelOccupantAuthorities().forSlot(RADIO_A.value, 2L))
+        assertNotEquals(resolved.epoch, invalidated.epoch)
+        assertFalse(invalidated.isResolved)
+        assertNull(invalidated.boundRowId)
+        assertNull(store.fetchChannelOccupantEpoch(RADIO_A, 2u))
+        assertEquals(text, store.fetchMessage(EntityKey(RADIO_A, text.id)))
+        assertEquals(listOf(queued), store.fetchPendingSendsForMessage(EntityKey(RADIO_A, text.id)).toList())
+        val imported = store.fetchChannels(RADIO_A).single()
+        repeat(3) {
+            store.saveChannel(seedChannel())
+            assertEquals(imported, store.fetchChannels(RADIO_A).single())
+            assertEquals(invalidated, db.channelOccupantAuthorities().forSlot(RADIO_A.value, 2L))
+            assertNull(store.fetchChannelOccupantEpoch(RADIO_A, 2u))
+        }
     }
 }

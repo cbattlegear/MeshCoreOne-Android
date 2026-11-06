@@ -80,6 +80,15 @@ before their mutation. Restore invalidates every epoch in its existing Room
 transaction before import writes, preserving rollback and original post-commit
 semantics.
 
+The accepted reseed controls retain every original assertion. The actual
+empty-store import now also checks the persisted unresolved/null-binding record
+and exact epoch preservation across three fixed-DTO replays. An additional
+actual `AppBackupService.importBackup` control starts from an explicit resolved
+DAO storage fixture, injects a pre-commit failure and checks complete row/epoch,
+failed-message and pending-text preservation, then commits the same import and
+checks durable invalidation and three subsequent no-op replays. This remains
+storage/import evidence, not a live positive-authority issuer.
+
 ## Preservation and pending composition
 
 The #603 missing-ID matching-slot fallback remains a true no-op preserving the

@@ -557,8 +557,13 @@ class ReactionService internal constructor(
         }
     }
 
-    /** Strict admission never turns missing origin, selected or uncertain work into legacy matching. */
+    /** Original guard-off history entrypoint; protected work must use explicit guarded admission. */
     fun requeuePendingReaction(pending: PendingReaction) {
+        requeueLegacyPendingReaction(pending)
+    }
+
+    /** Strict admission never turns missing origin, selected or uncertain work into legacy matching. */
+    fun requeueGuardedPendingReaction(pending: PendingReaction) {
         val terminal = when {
             pending.mutationUncertain -> NativeChannelReactionFailure.Unknown(
                 IllegalStateException("Original channel mutation outcome unknown; original exception unavailable"),
@@ -599,16 +604,7 @@ class ReactionService internal constructor(
         }
         val key = PendingReactionKey.of(pending.channelIndex, pending.parsed.targetSender, pending.parsed.messageHash)
         synchronized(lock) {
-            if (pendingReactions.count >= MAX_PENDING_REACTIONS) {
-                val work = ParkedNativeChannelReaction(pending, NativeChannelReactionFailure.CapacityExceeded)
-                throw ChannelReactionRetentionException(
-                    ChannelReactionUnretainedWork.Native(SnapshotList.of(work)),
-                    IllegalStateException("Never-targeted native reaction admission is full"),
-                )
-            }
-            pendingReactions = pendingReactions.enqueue(
-                key, pending, MAX_PENDING_REACTIONS, pending.queueKeyOrder, pending.queueEntryOrder,
-            )
+            pendingReactions = admitNeverTargetedPending(pendingReactions, key, pending)
         }
     }
 
@@ -748,6 +744,24 @@ class ReactionService internal constructor(
         private fun List<MessageCandidate>.mostRecentlyIndexed(): MessageCandidate? =
             fold(null as MessageCandidate?) { best, candidate -> if (best == null || candidate.indexedAt > best.indexedAt) candidate else best }
     }
+}
+
+/** Capacity mechanism only; callers must establish guarded eligibility before admission. */
+internal fun <K> admitNeverTargetedPending(
+    queue: PendingQueue<K, PendingReaction>,
+    key: K,
+    pending: PendingReaction,
+): PendingQueue<K, PendingReaction> {
+    if (queue.count >= ReactionService.MAX_PENDING_REACTIONS) {
+        val work = ParkedNativeChannelReaction(pending, NativeChannelReactionFailure.CapacityExceeded)
+        throw ChannelReactionRetentionException(
+            ChannelReactionUnretainedWork.Native(SnapshotList.of(work)),
+            IllegalStateException("Never-targeted native reaction admission is full"),
+        )
+    }
+    return queue.enqueue(
+        key, pending, ReactionService.MAX_PENDING_REACTIONS, pending.queueKeyOrder, pending.queueEntryOrder,
+    )
 }
 
 /**

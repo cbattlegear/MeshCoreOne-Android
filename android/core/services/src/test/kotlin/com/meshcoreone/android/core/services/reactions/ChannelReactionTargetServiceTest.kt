@@ -323,7 +323,7 @@ class ChannelReactionTargetServiceTest {
         val radio = RadioId(UUID.randomUUID())
         val service = ReactionService()
         val parsed = ParsedReaction("X", "Alice", ReactionParser.generateMessageHash("Hello", 100u))
-        service.requeuePendingReaction(PendingReaction(
+        service.requeueGuardedPendingReaction(PendingReaction(
             parsed, 3u, "Bob", "original", radio, Instant.EPOCH, originalAuthorityUnavailable = true,
         ))
         assertTrue(service.indexMessage(UUID.randomUUID(), 3u, "Alice", "Hello", 100u).isEmpty())
@@ -537,7 +537,7 @@ class ChannelReactionTargetServiceTest {
         val ordinary = service.indexMessage(target.message.id, 3u, "Alice", "Hello", 100u)
         assertEquals((1..100).map { "Ordinary $it" }, ordinary.map { it.senderNodeName })
         assertEquals(100 to 0, service.pendingCounts)
-        val failedRequeue = runCatching { service.requeuePendingReaction(all.last().pending) }.exceptionOrNull()
+        val failedRequeue = runCatching { service.requeueGuardedPendingReaction(all.last().pending) }.exceptionOrNull()
         val envelope = assertIs<ChannelReactionRetentionException>(failedRequeue)
         assertSame(all.last().pending, assertIs<ChannelReactionUnretainedWork.Native>(envelope.work).work.single().pending)
         service.clearPendingReactions()
@@ -580,7 +580,7 @@ class ChannelReactionTargetServiceTest {
         }
     }
 
-    @Test fun neverTargetedAdmissionPreservesExistingHundredAndReturnsExactUnretainedArrivalOrdinals() {
+    @Test fun queueCapacityOnlyPreservesExistingHundredAndReturnsExactUnretainedArrivalOrdinals() {
         val radio = RadioId(UUID.randomUUID())
         val service = ReactionService()
         val raw = service.buildReactionText("X", "Alice", "Hello", 100u)
@@ -591,19 +591,31 @@ class ChannelReactionTargetServiceTest {
                 queueKeyOrder = 7, queueEntryOrder = index.toLong(),
             )
         }
-        arrivals.take(100).forEach(service::requeuePendingReaction)
+        // Inert payloads exercise capacity, not authenticated guarded admission.
+        val key = "inert-capacity-key"
+        var queue = PendingQueue.empty<String, PendingReaction>()
+        arrivals.take(100).forEach { queue = admitNeverTargetedPending(queue, key, it) }
         val overflow = assertIs<ChannelReactionRetentionException>(
-            runCatching { service.requeuePendingReaction(arrivals.last()) }.exceptionOrNull(),
+            runCatching { admitNeverTargetedPending(queue, key, arrivals.last()) }.exceptionOrNull(),
         )
         val work = assertIs<ChannelReactionUnretainedWork.Native>(overflow.work).work.single()
         assertSame(arrivals.last(), work.pending)
         assertIs<NativeChannelReactionFailure.CapacityExceeded>(work.failure)
         assertNull(work.pending.boundTarget)
         assertEquals(100L, work.pending.queueEntryOrder)
-        assertEquals(100 to 0, service.pendingCounts)
-        val original = service.indexMessage(UUID.randomUUID(), 3u, "Alice", "Hello", 100u)
+        assertEquals(100, queue.count)
+        queue.valuesInOrder().zip(arrivals.take(100)).forEach { (actual, expected) ->
+            assertSame(expected, actual)
+        }
+        val (remaining, drained) = queue.take(key) { value, keyOrder, entryOrder ->
+            assertEquals(7L, keyOrder)
+            assertEquals(value.queueEntryOrder, entryOrder)
+            value
+        }
+        val original = requireNotNull(drained)
         assertEquals(arrivals.take(100), original)
-        assertEquals(0 to 0, service.pendingCounts)
+        original.zip(arrivals.take(100)).forEach { (actual, expected) -> assertSame(expected, actual) }
+        assertEquals(0, remaining.count)
     }
 
     @Test fun missingLegacyOccurrenceIsTerminalWithoutTargetSelectionOrMetadataReconstruction() {
@@ -614,7 +626,7 @@ class ChannelReactionTargetServiceTest {
             requireNotNull(ReactionParser.parse(raw)), 3u, "Bob", raw, radio, Instant.EPOCH,
             queueKeyOrder = 7, queueEntryOrder = 11,
         )
-        service.requeuePendingReaction(pending)
+        service.requeueGuardedPendingReaction(pending)
         val retained = service.retainedNativeChannelReactionFailures(radio).single()
         assertSame(pending, retained.pending)
         assertNull(retained.pending.reactionOccurrence)
@@ -637,7 +649,7 @@ class ChannelReactionTargetServiceTest {
                 queueKeyOrder = 5, queueEntryOrder = index.toLong(), reactionOccurrence = occurrence,
             )
         }
-        pending.forEach(service::requeuePendingReaction)
+        pending.forEach(service::requeueGuardedPendingReaction)
         assertTrue(service.indexMessage(UUID.randomUUID(), 3u, "Alice", "Hello", 100u).isEmpty())
         val retained = service.retainedNativeChannelReactionFailures(radio)
         pending.forEachIndexed { index, original ->
@@ -658,9 +670,9 @@ class ChannelReactionTargetServiceTest {
                 queueKeyOrder = 3, queueEntryOrder = index.toLong(), reactionOccurrence = unproven(radio, raw),
             )
         }
-        pending.take(100).forEach(service::requeuePendingReaction)
+        pending.take(100).forEach(service::requeueGuardedPendingReaction)
         val overflow = assertIs<ChannelReactionRetentionException>(
-            runCatching { service.requeuePendingReaction(pending.last()) }.exceptionOrNull(),
+            runCatching { service.requeueGuardedPendingReaction(pending.last()) }.exceptionOrNull(),
         )
         val exact = assertIs<ChannelReactionUnretainedWork.Native>(overflow.work).work.single()
         assertSame(pending.last(), exact.pending)
@@ -709,7 +721,7 @@ class ChannelReactionTargetServiceTest {
         }
         assertEquals(0 to 0, service.pendingCounts)
         assertTrue(service.indexMessage(UUID.randomUUID(), 3u, "Alice", "Hello", 100u).isEmpty())
-        service.requeuePendingReaction(original)
+        service.requeueGuardedPendingReaction(original)
         assertSame(original, service.retainedNativeChannelReactionFailures(radio).single().pending)
         assertEquals(ChannelReactionUnprovenReason.LEGACY_OR_RESTORED, assertIs<NativeChannelReactionFailure.Unproven>(
             service.retainedNativeChannelReactionFailures(radio).single().failure,

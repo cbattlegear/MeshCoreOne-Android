@@ -15,6 +15,7 @@ import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.contracts.domain.MessageWindow
 import java.time.Instant
+import java.time.ZoneId
 import java.time.ZoneOffset
 import java.util.UUID
 import kotlin.test.assertEquals
@@ -199,6 +200,75 @@ class ChatViewModelTest {
         assertTrue(viewModel.state.value.messages.none { it.id == old.id })
         assertEquals(ChatViewModel.PAGE_SIZE + 2, viewModel.state.value.totalFetchedCount)
         assertFalse(viewModel.state.value.hasMoreMessages)
+    }
+
+    @Test
+    fun `older preparation cannot overwrite a newer concurrent rendered snapshot`() = runBlocking {
+        val contact = contact()
+        val all = List(ChatViewModel.PAGE_SIZE + 1) { message(contact, it) }
+        val old = all[20]
+        val current = old.copy(text = "new concurrent occupant", status = MessageStatus.SENT)
+        val stalePrepared = old.copy(reactionSummary = "X:1")
+        val state = StandaloneTimelineStateStore(ChatTimelineState())
+        var intervene = false
+        val data = FakeData(all)
+        val viewModel = viewModel(contact, data = data, stateStore = state, prepare = { messages ->
+            if (intervene) {
+                state.update { value ->
+                    value.copy(messages = value.messages.map { if (it.id == old.id) current else it })
+                }
+                messages.map { if (it.id == old.id) stalePrepared else it }
+            } else messages
+        })
+        viewModel.open()
+        data.scriptedPages.addLast(listOf(all.first(), old))
+        intervene = true
+
+        viewModel.loadOlder()
+
+        assertSame(current, viewModel.state.value.messages.single { it.id == old.id })
+        assertNull(viewModel.state.value.messages.single { it.id == old.id }.reactionSummary)
+    }
+
+    @Test
+    fun `older preparation cannot resurrect a row removed from the current window`() = runBlocking {
+        val contact = contact()
+        val all = List(ChatViewModel.PAGE_SIZE + 1) { message(contact, it) }
+        val old = all[20]
+        val state = StandaloneTimelineStateStore(ChatTimelineState())
+        var intervene = false
+        val data = FakeData(all)
+        val viewModel = viewModel(contact, data = data, stateStore = state, prepare = { messages ->
+            if (intervene) state.update { value -> value.copy(messages = value.messages.filterNot { it.id == old.id }) }
+            messages
+        })
+        viewModel.open()
+        data.scriptedPages.addLast(listOf(all.first(), old.copy(reactionSummary = "X:1")))
+        intervene = true
+
+        viewModel.loadOlder()
+
+        assertTrue(viewModel.state.value.messages.none { it.id == old.id })
+        assertTrue(viewModel.state.value.messages.any { it.id == all.first().id })
+    }
+
+    @Test
+    fun `legitimate overlapping replay adopts the complete updated snapshot when current row is unchanged`() = runBlocking {
+        val contact = contact()
+        val all = List(ChatViewModel.PAGE_SIZE + 1) { message(contact, it) }
+        val old = all[20]
+        val replayed = old.copy(reactionSummary = "X:1")
+        val data = FakeData(all)
+        val viewModel = viewModel(contact, data = data)
+        viewModel.open()
+        data.scriptedPages.addLast(listOf(all.first(), replayed))
+
+        viewModel.loadOlder()
+
+        assertSame(replayed, viewModel.state.value.messages.single { it.id == old.id })
+        assertEquals(old.text, viewModel.state.value.messages.single { it.id == old.id }.text)
+        assertEquals("X:1", viewModel.state.value.messages.single { it.id == old.id }.reactionSummary)
+        assertEquals(ChatViewModel.PAGE_SIZE + 1, viewModel.state.value.messages.size)
     }
 
     @Test
@@ -621,9 +691,10 @@ class ChatViewModelTest {
         drafts: MemoryDrafts = MemoryDrafts(),
         hidden: (MessageDTO) -> Boolean = { false },
         prepare: suspend (List<MessageDTO>) -> List<MessageDTO> = { it },
+        stateStore: TimelineStateStore? = null,
     ) = ChatViewModel(
         TimelineConversation.Direct(contact),
-        Dependencies(data, retry, drafts, events, hidden, prepare),
+        Dependencies(data, retry, drafts, events, hidden, prepare, stateStore),
         scope,
         ZoneOffset.UTC,
     )
@@ -635,9 +706,12 @@ class ChatViewModelTest {
         override val events: MutableSharedFlow<TimelineEvent>,
         private val hidden: (MessageDTO) -> Boolean = { false },
         private val prepare: suspend (List<MessageDTO>) -> List<MessageDTO> = { it },
+        private val stateStore: TimelineStateStore? = null,
     ) : ChatTimelineDependencies {
         override fun isHiddenOutgoingReaction(message: MessageDTO) = hidden(message)
         override suspend fun prepareMessages(messages: List<MessageDTO>) = prepare(messages)
+        override fun bindTimeline(owner: Any, scope: CoroutineScope, zoneId: ZoneId, initial: ChatTimelineState) =
+            stateStore ?: StandaloneTimelineStateStore(initial)
     }
 
     private class MemoryDrafts : TimelineDraftStore {

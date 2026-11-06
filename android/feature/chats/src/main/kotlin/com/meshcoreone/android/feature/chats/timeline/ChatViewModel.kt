@@ -194,22 +194,24 @@ class ChatViewModel(
                 }
                 val fetched = dependencies.data.fetchMessages(conversation, PAGE_SIZE + 1, before.totalFetchedCount)
                 val page = fetched.takeLast(PAGE_SIZE)
-                val existingIds = before.messages.asSequence().map(MessageDTO::id).toHashSet()
+                val beforeById = before.messages.associateBy { it.id }
                 val prepared = dependencies.prepareMessages(page)
-                val older = prepared.filterNot { it.id in existingIds }
                 // Offset shifts can return a replacement row; retain its complete actual snapshot.
                 val actualById = prepared.associateBy { it.id }
-                val retained = before.messages.map { message ->
-                    actualById[message.id] ?: message
-                }
-                val merged = normalize(visible(older + retained))
-                mutableState.update {
-                    it.copy(
+                mutableState.update { current ->
+                    val currentIds = current.messages.mapTo(HashSet()) { it.id }
+                    val older = prepared.filterNot { it.id in beforeById || it.id in currentIds }
+                    val retained = current.messages.map { message ->
+                        // This is a presentation CAS, never a persisted-incarnation grant.
+                        if (message === beforeById[message.id]) actualById[message.id] ?: message else message
+                    }
+                    val merged = normalize(visible(older + retained))
+                    current.copy(
                         messages = merged,
                         rows = buildTimelineRows(merged, unreadAnchorId, zoneId),
                         isLoadingOlder = false,
                         hasMoreMessages = fetched.size > PAGE_SIZE,
-                        totalFetchedCount = before.totalFetchedCount + page.size,
+                        totalFetchedCount = current.totalFetchedCount + page.size,
                     )
                 }
             }

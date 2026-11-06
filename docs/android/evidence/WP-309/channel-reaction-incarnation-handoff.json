@@ -9,7 +9,8 @@
     "Existing take delegates to the same operation with an always-true predicate, preserving original all-entry drain behavior.",
     "Six focused queue controls cover foreign-radio retention, no-match stability, original-priority restoration around new arrivals, unchanged eviction age, actual PendingReaction wire/radio/receivedAt retention and unchanged legacy full-drain behavior.",
     "Overlapping older-page rows adopt the complete actual prepared snapshot instead of copying its summary onto an old same-ID rendered DTO; the UUID is used only for display reconciliation, not mutation authority.",
-    "Three focused paging controls preserve the actual replacement snapshot, the prepared successor snapshot, scroll/offset/unread behavior and removal of a replacement that becomes a hidden outgoing reaction."
+    "Six focused paging controls preserve the actual replacement snapshot, the prepared successor snapshot, scroll/offset/unread behavior, removal of a replacement that becomes a hidden outgoing reaction, concurrent newer rendered state, concurrent deletion and legitimate unchanged-row replay.",
+    "Paging reconciles against the current window using exact original rendered-object identity only as a presentation compare-and-set. This prevents a suspended preparation from overwriting a newer rendered object or resurrecting a removed overlapping row; it never grants storage mutation authority."
   ],
   "not_implemented_or_accepted": [
     "No frozen canonical reaction mutation contract is imported by this partial source.",
@@ -36,7 +37,7 @@
   "verification": {
     "product_tests_executed": 0,
     "queue_methods_authored": 6,
-    "paging_methods_authored": 3,
+    "paging_methods_authored": 6,
     "compiled": false,
     "device_or_radio_execution": false,
     "local_gradle_or_ci_dispatch": false,

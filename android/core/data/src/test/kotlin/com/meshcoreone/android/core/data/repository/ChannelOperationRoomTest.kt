@@ -117,4 +117,26 @@ class ChannelOperationRoomTest : RepositoryTest() {
         store.saveChannel(row.copy(name = "subsequent write"))
         assertEquals(row.copy(name = "subsequent write"), store.fetchChannel(entity(id = row.id)))
     }
+
+    @Test fun deviceIdentityErasureCannotOvertakeAnOwnedChannelOperation() = runTest {
+        val device = device()
+        store.saveDevice(device)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val held = launch {
+            repository().withChannelOperation { _, _ ->
+                entered.complete(Unit)
+                release.await()
+            }
+        }
+        entered.await()
+        val deleting = launch { store.deleteDevice(device.id) }
+        runCurrent()
+        assertFalse(deleting.isCompleted)
+        assertEquals(device, store.fetchDevice(device.id))
+        release.complete(Unit)
+        held.join()
+        deleting.join()
+        assertNull(store.fetchDevice(device.id))
+    }
 }

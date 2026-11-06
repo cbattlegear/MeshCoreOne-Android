@@ -48,10 +48,13 @@ admission is separate token/reference accounting; real lifecycle/lease checks
 remain mandatory before any internal authoritative reconciliation. Ordinary
 `saveChannel(info)` does not implicitly grant a live lease or wire provenance.
 
-Four new actual-Room controls cover scoped metadata persistence, rejection of
+Five new actual-Room controls cover scoped metadata persistence, rejection of
 ordinary/scoped reentry, foreign/escaped scope refusal, another repository
 handle and restore waiting behind a held operation, and cancelled queued
-writes. Their existing data assertions do not substitute for epoch/restore
+writes and device identity erasure waiting behind the owned operation. Device
+creation, deletion, ghost demotion and radio-identity reconciliation participate
+as well as explicit data erasure; metadata-only device updates keep their
+existing transaction behavior. Their data assertions do not substitute for epoch/restore
 proof controls, which await the database producer.
 
 ## Preservation and pending composition

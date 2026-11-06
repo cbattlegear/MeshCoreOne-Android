@@ -31,7 +31,7 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
         database.devices().active().firstOrNull()?.toDTO()
     }
 
-    override suspend fun saveDevice(dto: DeviceDTO) = context.write("saveDevice") {
+    override suspend fun saveDevice(dto: DeviceDTO) = context.channelWrite("saveDevice") {
         val existing = database.devices().byId(dto.id)
         database.devices().upsert(existing?.applying(dto) ?: dto.toEntity())
         save()
@@ -78,13 +78,13 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
             save()
         }
 
-    override suspend fun deleteDevice(id: UUID) = context.write("deleteDevice") {
+    override suspend fun deleteDevice(id: UUID) = context.channelWrite("deleteDevice") {
         database.devices().delete(id)
         save()
     }
 
-    override suspend fun demoteDeviceToGhost(id: UUID) = context.write("demoteDeviceToGhost") {
-        val row = database.devices().byId(id) ?: return@write
+    override suspend fun demoteDeviceToGhost(id: UUID) = context.channelWrite("demoteDeviceToGhost") {
+        val row = database.devices().byId(id) ?: return@channelWrite
         database.devices().delete(id)
         database.devices().upsert(row.copy(
             id = UUID.randomUUID(), isActive = false, connectionMethods = SnapshotList.empty(),
@@ -93,11 +93,11 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
     }
 
     override suspend fun reconcileGhostIdentity(currentDeviceID: UUID, newPublicKey: Bytes): RadioId? =
-        context.write("reconcileGhostIdentity") {
+        context.channelWrite("reconcileGhostIdentity") {
             val ghost = database.devices().forPublicKey(newPublicKey)
-                .firstOrNull { it.id != currentDeviceID && !it.isActive } ?: return@write null
-            if (ghost.connectionMethods.any { it.isBluetooth }) return@write null
-            val current = database.devices().byId(currentDeviceID) ?: return@write null
+                .firstOrNull { it.id != currentDeviceID && !it.isActive } ?: return@channelWrite null
+            if (ghost.connectionMethods.any { it.isBluetooth }) return@channelWrite null
+            val current = database.devices().byId(currentDeviceID) ?: return@channelWrite null
             val methods = current.connectionMethods.toMutableList()
             for (method in ghost.connectionMethods) {
                 if (!method.isBluetooth && methods.none { it.id == method.id }) methods += method

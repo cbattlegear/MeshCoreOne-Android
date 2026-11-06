@@ -26,6 +26,22 @@ import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class SettingsPathHashPersistenceTest {
+    @Test fun missingSubscriberRejectsDirectPresetBeforeRadioOrMetadataWrites() = runTest {
+        val fixture = settingsFixture()
+        var metadata = false
+        try {
+            val write = request {
+                fixture.settings.applyRadioPresetVerified(RadioPresets.all.first()) { metadata = true }
+            }
+            runCurrent()
+            val failure = kotlin.test.assertFailsWith<SettingsServiceException> { write.await() }
+            assertEquals(SettingsServiceError.NotConnected, failure.error)
+            assertFalse(metadata)
+            assertEquals(1, fixture.radio.sent.size)
+            assertFalse(fixture.settings.pathHashModeNeedsRecovery)
+        } finally { fixture.close() }
+    }
+
     @Test fun replacingSubscriberFailsPresetFenceBeforeRadioOrMetadataWrites() = runTest {
         val fixture = settingsFixture()
         val subscription = fixture.settings.events()

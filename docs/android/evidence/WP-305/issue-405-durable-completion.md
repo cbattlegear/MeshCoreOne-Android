@@ -843,3 +843,10 @@ On this successor's source, same-host `ci.py preflight --local --state <existing
 This is readiness/source evidence only, not Kotlin compilation, test discovery or execution.
 The shared Gradle execution hold, held canonical dependency, independent composition review and
 publication/activation/dispatch holds remain unchanged.
+
+Additional unexecuted fence controls cover an absent Settings subscriber refusing the direct preset
+before radio or metadata writes, and the editor queue waiting for an earlier held conditional save.
+The editor control cancels one queued fence, proves the following fence still waits, checks that
+neither fence adds a save, then exercises stale-origin refusal and current-origin acceptance.
+That isolated editor control uses the existing guard-off test access; it does not substitute for
+the actual manager/adapter/Room generation controls or establish standalone-main dependency closure.

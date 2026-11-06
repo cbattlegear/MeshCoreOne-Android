@@ -19,6 +19,7 @@ import com.meshcoreone.android.core.protocol.model.AutoAddConfig
 import java.util.UUID
 import java.io.IOException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import org.junit.Test
@@ -29,6 +30,50 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class SessionBoundDeviceEditTest {
+    @Test fun deviceFenceWaitsForEarlierEditAndRejectsRetiredOriginWithoutSaving() = runtimeScenario {
+        val access = Access()
+        val before = access.device!!
+        devices.saveDevice(before)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        var saves = 0
+        devices.beforeConditionalSave = {
+            saves++
+            entered.complete(Unit)
+            release.await()
+        }
+        val editor = ConnectedDeviceEditor(access, devices, contacts, { null }, PRESET_MATCHER, scenario.scope, { clock.instant })
+        val original = access.token!!
+        val earlier = scenario.scope.async { editor.updatePathHashMode(2u, original) }
+        try {
+            entered.await()
+            val cancelledFence = scenario.scope.async(start = CoroutineStart.UNDISPATCHED) {
+                editor.awaitDeviceEdits(original)
+            }
+            assertFalse(cancelledFence.isCompleted)
+            cancelledFence.cancelAndJoin()
+            val fence = scenario.scope.async(start = CoroutineStart.UNDISPATCHED) {
+                editor.awaitDeviceEdits(original)
+            }
+            assertFalse(fence.isCompleted, "Cancelling a queued fence cannot bypass the earlier edit")
+            assertEquals(1, saves)
+            assertEquals(before, devices.rows[before.id])
+            release.complete(Unit)
+            assertTrue(earlier.await())
+            assertTrue(fence.await())
+            assertEquals(1, saves, "A fence only drains; it never creates another device save")
+            access.token = original.copy(generation = Generation(2))
+            assertFalse(editor.awaitDeviceEdits(original))
+            assertTrue(editor.awaitDeviceEdits(access.token!!))
+            assertEquals(1, saves)
+            assertEquals(access.device, devices.rows[before.id])
+        } finally {
+            release.complete(Unit)
+            earlier.cancelAndJoin()
+            devices.beforeConditionalSave = {}
+        }
+    }
+
     private enum class EventEdit { DEVICE, AUTO_ADD, REPEAT, SCOPE, HASH }
 
     private suspend fun apply(editor: ConnectedDeviceEditor, event: EventEdit, token: SessionToken): Boolean =

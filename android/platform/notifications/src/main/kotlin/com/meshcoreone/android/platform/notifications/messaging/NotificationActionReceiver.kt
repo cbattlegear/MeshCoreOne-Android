@@ -579,7 +579,7 @@ internal object NotificationActionDispatcher {
             }
         }
         if (!accepted) {
-            logger.warning("Notification action queue is full; action retained by neither app nor platform")
+            logger.warning("Notification action queue is full; action was not enqueued")
             return EnqueueResult.REJECTED_CAPACITY
         }
         retry()

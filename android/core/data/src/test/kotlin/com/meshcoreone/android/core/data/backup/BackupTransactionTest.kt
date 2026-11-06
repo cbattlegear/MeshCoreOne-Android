@@ -27,7 +27,7 @@ class BackupTransactionTest : BackupRoomTest() {
     @Test fun committedDeviceImportInvalidatesADeviceTicketWhenTheCanonicalRowIsUnchanged() = runBlocking {
         val canonical = device(publicKey = key(0x31), id = id(101))
         store.saveDevice(canonical)
-        val ticket = assertNotNull(store.fetchDeviceWriteSnapshot(canonical.id))
+        val ticket = store.fetchDeviceWriteSnapshot(canonical.id)!!
         val restored = device(publicKey = key(0x32), id = id(102))
 
         val result = service.importBackup(envelope(devices = listOf(restored)), store)
@@ -41,12 +41,12 @@ class BackupTransactionTest : BackupRoomTest() {
     @Test fun noOpDeviceImportPreservesAValidDeviceTicket() = runBlocking {
         val existing = device(publicKey = key(0x41), id = id(111))
         store.saveDevice(existing)
-        val ticket = assertNotNull(store.fetchDeviceWriteSnapshot(existing.id))
+        val ticket = store.fetchDeviceWriteSnapshot(existing.id)!!
 
         val result = service.importBackup(envelope(devices = listOf(existing)), store)
 
         assertEquals(0L, result.count(BackupModelKind.DEVICES).inserted)
-        val current = assertNotNull(store.fetchDeviceWriteSnapshot(existing.id))
+        val current = store.fetchDeviceWriteSnapshot(existing.id)!!
         assertEquals(ticket.revision, current.revision)
         assertEquals(ticket.authorityRevision, current.authorityRevision)
         assertTrue(store.saveDeviceIfUnchanged(ticket.device.copy(nodeName = "Current edit"), ticket))
@@ -56,7 +56,7 @@ class BackupTransactionTest : BackupRoomTest() {
     @Test fun rolledBackDeviceImportPreservesAValidDeviceTicket() = runBlocking {
         val canonical = device(publicKey = key(0x51), id = id(121))
         store.saveDevice(canonical)
-        val ticket = assertNotNull(store.fetchDeviceWriteSnapshot(canonical.id))
+        val ticket = store.fetchDeviceWriteSnapshot(canonical.id)!!
         val restored = device(publicKey = key(0x52), id = id(122))
         val failing = newService(BackupImportHooks(beforeCommit = { throw IOException("injected commit failure") }))
 

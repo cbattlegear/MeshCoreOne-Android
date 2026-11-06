@@ -144,6 +144,43 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(steps[0]["with"]["persist-credentials"], "false")
         self.assertNotIn("secrets.", text)
 
+    def test_room_schema3_diagnostic_preserves_build_and_collects_only_actual_production_bytes(self):
+        workflow, text = self.read("android-ci.yml")
+        steps = workflow["jobs"]["build"]["steps"]
+        condition = (
+            "${{ always() && github.event_name == 'workflow_dispatch' && "
+            "github.ref == 'refs/heads/diagnostic/wp202-schema3-08eeb7a68cfa-diag1' }}"
+        )
+        index, upload = next(
+            (i, step) for i, step in enumerate(steps)
+            if step.get("name") == "Collect generated Room v3 schema for WP-202 diagnostic"
+        )
+        self.assertGreater(index, next(i for i, step in enumerate(steps) if step.get("id") == "gradle"))
+        self.assertEqual(upload, {
+            "name": "Collect generated Room v3 schema for WP-202 diagnostic",
+            "if": condition,
+            "uses": "actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f",
+            "with": {
+                "name": "room-schema-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}",
+                "path": "android/core/database/schemas/com.meshcoreone.android.core.database.MeshCoreDatabase/3.json",
+                "if-no-files-found": "error",
+                "retention-days": "1",
+            },
+        })
+        graph = steps[index - 1]
+        self.assertEqual(graph["name"], "Expose actual WP-202 resolved dependency graph")
+        self.assertEqual(graph["if"], condition)
+        self.assertIn("dependency-graphs.tsv", graph["run"])
+        self.assertIn("throw 'Actual dependency graph is missing'", graph["run"])
+        self.assertIn("throw 'Actual dependency graph is empty'", graph["run"])
+        self.assertIn('WP202_DEPENDENCY_GRAPH_SOURCE=$env:GITHUB_SHA', graph["run"])
+        self.assertIn("Get-Content -LiteralPath $graph", graph["run"])
+        self.assertNotIn("gradlew", graph["run"])
+        self.assertEqual(workflow["permissions"], {"contents": "read"})
+        self.assertEqual(steps[0]["with"]["persist-credentials"], "false")
+        self.assertNotIn("secrets.", text)
+        validate_candidate(workflow, text)
+
     def test_controller_runs_installed_runtime_regressions_with_positive_discovery(self):
         workflow, _ = self.read("android-ci.yml")
         runner = next(step for step in workflow["jobs"]["controller"]["steps"]

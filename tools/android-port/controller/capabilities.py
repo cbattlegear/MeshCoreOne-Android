@@ -205,17 +205,17 @@ class CapabilityEngine:
                 if base_tree.get(path) != candidate_tree[path] and path not in simulator_resources:
                     raise PortError("Simulator preference recovery requires an operation for each changed locale")
                 structure, values = CapabilityEngine._bounded_copy_resource(
-                    read_blob(candidate_tree[path]), keys, "Simulator preference recovery"
+                    read_blob(candidate_tree[path]), keys, "Simulator preference recovery", strict_utf8=True
                 )
                 if set(values) != set(keys):
                     raise PortError("Simulator preference recovery requires all twenty keys in every locale")
                 messages[path] = {
-                    key: CapabilityEngine._android_copy_comparison(value)
+                    key: CapabilityEngine._simulator_copy_comparison(value)
                     for key, value in values.items()
                 }
                 if path in base_tree:
                     original_structure, original = CapabilityEngine._bounded_copy_resource(
-                        read_blob(base_tree[path]), keys, "Simulator preference recovery"
+                        read_blob(base_tree[path]), keys, "Simulator preference recovery", strict_utf8=True
                     )
                     if set(original) != set(keys):
                         raise PortError("Simulator preference recovery base must contain all twenty keys")
@@ -234,12 +234,20 @@ class CapabilityEngine:
         )
 
     @staticmethod
-    def _bounded_copy_resource(data: bytes, keys, label: str):
+    def _bounded_copy_resource(data: bytes, keys, label: str, *, strict_utf8=False):
         try:
             text = data.decode("utf-8")
             if "<!DOCTYPE" in text.upper() or "<!ENTITY" in text.upper():
                 raise PortError(f"{label} resource cannot contain DTD or entity declarations")
-            document = minidom.parseString(text)
+            if strict_utf8:
+                try:
+                    document = minidom.parseString(data)
+                except (LookupError, ValueError) as error:
+                    raise PortError(f"{label} resource requires a UTF-8 XML declaration") from error
+                if document.encoding is not None and document.encoding.casefold() not in ("utf-8", "utf8"):
+                    raise PortError(f"{label} resource requires a UTF-8 XML declaration")
+            else:
+                document = minidom.parseString(text)
         except (UnicodeError, ExpatError) as error:
             raise PortError(f"{label} resource requires valid UTF-8 XML") from error
 
@@ -283,6 +291,22 @@ class CapabilityEngine:
                     tuple(entry(child) for child in children))
 
         return entry(document), values
+
+    @staticmethod
+    def _simulator_copy_comparison(message: str):
+        if message.lstrip().startswith(("@", "?")):
+            raise PortError("Simulator preference recovery requires authored copy, not Android references")
+        quoted, index = False, 0
+        while index < len(message):
+            char = message[index]
+            if char == "\\":
+                index += 1
+            elif char == '"':
+                quoted = not quoted
+            elif char == "'" and not quoted:
+                raise PortError("Simulator preference recovery apostrophes must be escaped or double-quoted")
+            index += 1
+        return CapabilityEngine._android_copy_comparison(message).casefold()
 
     @staticmethod
     def _android_copy_comparison(message: str):

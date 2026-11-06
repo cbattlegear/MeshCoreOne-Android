@@ -222,7 +222,7 @@ class SimulatorRecoveryCopyCapabilityTests(unittest.TestCase):
                     self.validate(base, candidate, blobs)
         for disguised in (
             " New fixture 0 ", "\nNew   fixture\t0\n", '"New fixture 0"',
-            r"New\nfixture\t0", r"\u004eew fixture 0",
+            r"New\nfixture\t0", r"\u004eew fixture 0", "NEW FIXTURE 0",
         ):
             base, candidate, blobs = self.fixture()
             values = dict.fromkeys(KEYS, "New fixture 11")
@@ -230,6 +230,98 @@ class SimulatorRecoveryCopyCapabilityTests(unittest.TestCase):
             blobs[candidate[PATHS[-1]]] = self.xml(values)
             with self.subTest(disguised=disguised), self.assertRaisesRegex(PortError, "English fallback"):
                 self.validate(base, candidate, blobs)
+
+    def test_android_references_and_apostrophes_are_rejected_after_xml_decoding(self):
+        for path in PATHS:
+            for key in KEYS:
+                for value in ("@string/l10n_app_localizable_tabs_chats", "@null",
+                              "?attr/colorOnSurface", "Choix d'utilisateur"):
+                    base, candidate, blobs = self.fixture()
+                    values = dict.fromkeys(KEYS, f"Structural {PATHS.index(path)}")
+                    values[key] = value
+                    blobs[candidate[path]] = self.xml(values)
+                    with self.subTest(path=path, key=key, value=value), self.assertRaises(PortError):
+                        self.validate(base, candidate, blobs)
+        for value in (" @string/alias ", "\n?android:attr/textColor", "@empty",
+                      "Choix d&apos;utilisateur", "texte &quot;interieur&quot; d&apos;utilisateur",
+                      r"Choix d\\'utilisateur"):
+            base, candidate, blobs = self.fixture()
+            values = dict.fromkeys(KEYS, "French fixture")
+            values[KEYS[0]] = value
+            blobs[candidate[PATHS[3]]] = self.xml(values).replace(b"&amp;", b"&")
+            with self.subTest(value=value), self.assertRaises(PortError):
+                self.validate(base, candidate, blobs)
+        for value in (r"\@literal", r"\?literal", r"Choix d\'utilisateur",
+                      '"Choix d\'utilisateur"', r'Choix \"interieur\" d\'utilisateur'):
+            base, candidate, blobs = self.fixture()
+            values = dict.fromkeys(KEYS, "French fixture")
+            values[KEYS[0]] = value
+            blobs[candidate[PATHS[3]]] = self.xml(values)
+            with self.subTest(value=value):
+                self.validate(base, candidate, blobs)
+        self.assertEqual(CapabilityEngine._android_copy_comparison("Choix d'utilisateur"),
+                         "Choix d'utilisateur")
+
+    def test_actual_utf8_bytes_and_declaration_must_agree(self):
+        for declaration in (
+            b'<?xml version="1.0" encoding="UTF-16"?>',
+            b'<?xml version="1.0" encoding="ISO-8859-1"?>',
+            b'<?xml version="1.0" encoding="unknown-encoding"?>',
+        ):
+            base, candidate, blobs = self.fixture()
+            path = PATHS[3]
+            blobs[candidate[path]] = declaration + self.xml(dict.fromkeys(KEYS, "caf\u00e9"))
+            with self.subTest(declaration=declaration), self.assertRaises(PortError):
+                self.validate(base, candidate, blobs)
+        for declaration in (b"", b'<?xml version="1.0" encoding="UTF-8"?>',
+                            b'<?xml version="1.0" encoding="utf-8"?>'):
+            base, candidate, blobs = self.fixture()
+            for path in PATHS:
+                blobs[candidate[path]] = declaration + blobs[candidate[path]]
+            with self.subTest(declaration=declaration):
+                self.validate(base, candidate, blobs)
+        base, candidate, blobs = self.fixture()
+        blobs[base[PATHS[0]]] = (
+            b'<?xml version="1.0" encoding="ISO-8859-1"?>' + blobs[base[PATHS[0]]]
+        )
+        with self.assertRaises(PortError):
+            self.validate(base, candidate, blobs)
+
+    def test_notification_parser_and_immutable_validation_keep_actual_predecessor_behavior(self):
+        source = subprocess.check_output(
+            ["git", "-C", str(REPO), "show", f"{BASE}:tools/android-port/controller/capabilities.py"],
+            text=True,
+        )
+        namespace = {"__name__": "controller.capabilities", "__package__": "controller"}
+        exec(compile(source, "immutable-predecessor-capabilities", "exec"), namespace)
+        previous = namespace["CapabilityEngine"]
+        rule = next(item for item in self.policy["reservation_policy"]["capabilities"]
+                    if item["id"] == "reviewed-support-notification-enrollment-copy")
+        path, op = rule["path_rules"][0], rule["operations"][0]
+        valid = self.xml(dict.fromkeys(rule["keys"], "Fixture"))
+        for content in (
+            valid, valid.replace(b">Fixture<", b">Choix d'utilisateur<"),
+            valid.replace(b">Fixture<", b">@string/alias<"),
+            valid.replace(b">Fixture<", b">@null<"),
+            valid.replace(b">Fixture<", b">?attr/colorOnSurface<"),
+            b'<?xml version="1.0" encoding="UTF-16"?>' + valid,
+            b'<?xml version="1.0" encoding="ISO-8859-1"?>' + valid,
+            b"<!-- Preserve notice -->" + valid,
+            valid.replace(b">Fixture<", b"> <"), b"<resources/>", b"\xff", b"<resources>",
+        ):
+            def outcome(engine, validate=False):
+                try:
+                    if validate:
+                        return engine.validate_support_changes(
+                            {path: op}, {}, {path: "candidate"}, read_blob=lambda blob: content,
+                        )
+                    return engine._notification_enrollment_resource(content)
+                except PortError as error:
+                    return type(error), str(error)
+
+            for validate in (False, True):
+                with self.subTest(content=content, validate=validate):
+                    self.assertEqual(outcome(CapabilityEngine, validate), outcome(previous, validate))
 
     def test_unrelated_notices_and_invalid_base_cannot_be_changed(self):
         for marker in (b"<!-- Copyright notice -->", b"<?localization preserve?>"):
@@ -342,6 +434,22 @@ class SimulatorRecoveryCopyCapabilityTests(unittest.TestCase):
             with self.assertRaisesRegex(PortError, "every changed path"):
                 stage_review(repo, "WP-217", fixture_base, candidate,
                              path_operations={PATHS[0]: OPERATION})
+            for value in ("@string/l10n_app_localizable_tabs_chats", "@null",
+                          "?attr/colorOnSurface", "Choix d'utilisateur", "Choix d&apos;utilisateur"):
+                values = dict.fromkeys(KEYS, "French fixture")
+                values[KEYS[0]] = value
+                content = self.xml(values).replace(b"&amp;", b"&")
+                invalid = commit(candidate, {PATHS[3]: content})
+                with self.subTest(value=value), self.assertRaises(PortError):
+                    stage_review(repo, "WP-217", fixture_base, invalid, path_operations=operations)
+            for encoding in ("UTF-16", "ISO-8859-1"):
+                content = (
+                    f'<?xml version="1.0" encoding="{encoding}"?>'.encode()
+                    + self.xml(dict.fromkeys(KEYS, "caf\u00e9"))
+                )
+                invalid = commit(candidate, {PATHS[3]: content})
+                with self.subTest(encoding=encoding), self.assertRaises(PortError):
+                    stage_review(repo, "WP-217", fixture_base, invalid, path_operations=operations)
 
     def test_obligations_do_not_claim_translation_or_runtime_acceptance(self):
         text = " ".join(self.rule["invariants"] + self.rule["validation"])

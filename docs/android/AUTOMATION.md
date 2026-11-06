@@ -239,8 +239,12 @@ generated catalogs or Swift source-map entries; existing catalogs remain unchang
 Immutable base/candidate validation rejects locale/file/key deletion, extra or duplicate
 keys, malformed or empty strings and changes to unrelated notices. Each changed locale
 requires the named operation. Each non-English key is compared to its English counterpart
-after Android escape, quote and whitespace normalization; identical fallback is rejected,
+after Android escape, quote, whitespace and case normalization; identical fallback is rejected,
 with no blanket identical-text exception. Consumer and test admissions remain separate.
+Simulator inputs are parsed from their actual UTF-8 bytes and must have an absent or UTF-8
+encoding declaration. Unescaped Android resource/theme/null references and unescaped apostrophes
+outside Android double quotes are rejected; escaped literal prefixes and quoted/escaped
+apostrophes remain valid. These extra syntax guards do not change the earlier copy rules.
 Genuine translations, including pt-PT for `values-pt`, and actual resource/Compose assertions
 for all twelve locales remain necessary; structural checks or string inequality cannot
 establish translation quality. Trusted landing, legitimate assignment, ordinary admission

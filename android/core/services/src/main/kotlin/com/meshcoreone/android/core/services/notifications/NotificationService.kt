@@ -9,6 +9,7 @@ import com.meshcoreone.android.core.contracts.domain.NotificationPostResult
 import com.meshcoreone.android.core.contracts.domain.NotificationPreferencesPort
 import com.meshcoreone.android.core.contracts.domain.NotificationStringProvider
 import com.meshcoreone.android.core.contracts.domain.UnreadCounts
+import com.meshcoreone.android.core.contracts.notifications.DeliveredNotification
 import com.meshcoreone.android.core.contracts.notifications.NotificationAuthorizationStatus
 import com.meshcoreone.android.core.contracts.notifications.NotificationCategory
 import com.meshcoreone.android.core.contracts.notifications.NotificationDeliveryPort
@@ -38,6 +39,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex

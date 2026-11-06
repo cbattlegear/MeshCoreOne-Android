@@ -53,7 +53,11 @@ class NodesLocationIntegrationTest : RoomProcessTest() {
     fun deniedRealAdapterKeepsMountedLastHeardFallbackWithoutPromptOrFixRequest() =
         verifyMountedColdCache(granted = false)
 
-    private fun verifyMountedColdCache(granted: Boolean) = runTest {
+    @Test
+    fun resumedMountedListRefreshesAnExistingFixWhileRetainingItsOrderUntilTheNewCallback() =
+        verifyMountedColdCache(granted = true, resume = true)
+
+    private fun verifyMountedColdCache(granted: Boolean, resume: Boolean = false) = runTest {
         val application = RuntimeEnvironment.getApplication()
         val manager = application.getSystemService(LocationManager::class.java)
         shadowOf(manager).setProviderEnabled(LocationManager.FUSED_PROVIDER, true)
@@ -122,6 +126,26 @@ class NodesLocationIntegrationTest : RoomProcessTest() {
                 shadowOf(Looper.getMainLooper()).idle()
                 assertOrder("Alpha", "Zulu")
                 assertEquals(Coordinate(10.0, 10.0), adapter.currentLocation?.let { Coordinate(it.latitude, it.longitude) })
+                if (resume) {
+                    host.pause().stop()
+                    shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(11))
+                    host.start().resume().visible()
+                    host.windowFocusChanged(true)
+                    compose.waitUntil(5_000) {
+                        h.settle(1)
+                        shadowOf(manager).getLocationUpdateListeners(LocationManager.FUSED_PROVIDER).size == 1
+                    }
+                    assertEquals(Coordinate(10.0, 10.0), adapter.currentLocation?.let { Coordinate(it.latitude, it.longitude) })
+                    assertOrder("Alpha", "Zulu")
+                    shadowOf(manager).simulateLocation(Location(LocationManager.FUSED_PROVIDER).apply {
+                        latitude = 20.0
+                        longitude = 20.0
+                        elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
+                    })
+                    shadowOf(Looper.getMainLooper()).idle()
+                    assertOrder("Zulu", "Alpha")
+                    assertEquals(Coordinate(20.0, 20.0), adapter.currentLocation?.let { Coordinate(it.latitude, it.longitude) })
+                }
             } else {
                 assertTrue(shadowOf(manager).getLocationUpdateListeners(LocationManager.FUSED_PROVIDER).isEmpty())
                 assertOrder("Zulu", "Alpha")

@@ -300,6 +300,46 @@ class LocationManagerLocationProducingTest {
     }
 
     @Test
+    fun resumedForegroundCollectionRefreshesCachedFixAndRetainsItThroughBoundedTimeoutWithoutPrompting() = runTest {
+        shadowOf(locationManager).setProviderEnabled(LocationManager.FUSED_PROVIDER, true)
+        shadowOf(context as android.app.Application).grantPermissions(android.Manifest.permission.ACCESS_COARSE_LOCATION)
+        var prompts = 0
+        LocationManagerLocationProducing(context, LocationPermissionRequesting { prompts++ }).use { adapter ->
+            val first = launch { adapter.foregroundLocations().collect() }
+            testScheduler.runCurrent()
+            shadowOf(locationManager).simulateLocation(fix(10.0, 10.0))
+            testScheduler.runCurrent()
+            assertEquals(GeoCoordinate(10.0, 10.0), adapter.currentLocation)
+            first.cancel()
+            first.join()
+            shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(11))
+            val observed = mutableListOf<GeoCoordinate?>()
+            val resumed = launch { adapter.foregroundLocations().collect { observed += it } }
+            testScheduler.runCurrent()
+            assertEquals(GeoCoordinate(10.0, 10.0), observed.last())
+            assertEquals(1, shadowOf(locationManager).getLocationUpdateListeners(LocationManager.FUSED_PROVIDER).size,
+                "A resumed authorized list must refresh even when the process cache already has a fix")
+            shadowOf(locationManager).simulateLocation(fix(20.0, 20.0))
+            testScheduler.runCurrent()
+            assertEquals(GeoCoordinate(20.0, 20.0), observed.last())
+            resumed.cancel()
+            resumed.join()
+            shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(11))
+            val timedOut = launch { adapter.foregroundLocations().collect { observed += it } }
+            testScheduler.runCurrent()
+            assertEquals(1, shadowOf(locationManager).getLocationUpdateListeners(LocationManager.FUSED_PROVIDER).size)
+            testScheduler.advanceTimeBy(10_001)
+            testScheduler.runCurrent()
+            assertTrue(shadowOf(locationManager).getLocationUpdateListeners(LocationManager.FUSED_PROVIDER).isEmpty())
+            assertEquals(GeoCoordinate(20.0, 20.0), observed.last())
+            assertEquals(GeoCoordinate(20.0, 20.0), adapter.currentLocation)
+            assertEquals(0, prompts)
+            timedOut.cancel()
+            timedOut.join()
+        }
+    }
+
+    @Test
     fun sharedCacheIsInitiallyAbsentAndPublishesEachOwnedFixBeforeResumption() = runTest {
         shadowOf(locationManager).setProviderEnabled(LocationManager.FUSED_PROVIDER, true)
         shadowOf(context as android.app.Application).grantPermissions(android.Manifest.permission.ACCESS_COARSE_LOCATION)

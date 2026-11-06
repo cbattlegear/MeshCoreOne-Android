@@ -10,13 +10,14 @@ phone fix, otherwise the currently connected device's coordinates. The actual
 `MC1/Views/Contacts/ContactListActions.swift` and `DiscoveryView.swift` pass that
 location to sorting and use Last Heard when Distance is selected without a fix.
 Discovery observes coordinate changes rather than allocating location identity.
-`ContactsSidebarContent.swift` requests a one-shot only when already authorized.
+`ContactsSidebarContent.swift:153-155` requests an authorized one-shot on mount,
+including when an earlier phone fix is cached.
 `MC1/Services/LocationService.swift` produces one-shot fixes, not continuous GPS.
 
 The existing Android LocationManager adapter now exposes those successful
 one-shot results as an observable, permission-filtered flow. A resumed collection
-with granted permission and an empty cache acquires one bounded foreground fix
-(10 seconds). It never invokes a permission requester or adds continuous tracking.
+with granted permission refreshes one bounded foreground fix (10 seconds),
+retaining any cache. It never invokes a permission requester or adds continuous tracking.
 An overlapping list observes the exact existing request's completion without
 owning it. If that acquiring list leaves and cancels its request, the remaining
 observer follows the current request and may acquire a replacement within its
@@ -76,6 +77,9 @@ Core navigation, list loading and radio commands remain independent of location.
   bounded test thread, delivers its callback before cleanup can claim the
   monitor, and requires the remaining list's replacement callback. This is a
   deliberate race control, not a sleep-based ordering assumption.
+  `resumedForegroundCollectionRefreshesCachedFixAndRetainsItThroughBoundedTimeoutWithoutPrompting`
+  verifies actual adapter recollection on API31/37 with a cached fix, fresh
+  callback publication, cache retention through the unchanged timeout and no prompt.
 - `NodesLocationIntegrationTest.actualNodesAdapterPrefersAuthorizedPhoneThenLiveRadioAndWithdrawsDisconnectedFallback`
   exercises the actual AppContainer nodes dependency, live radio-coordinate
   updates, phone precedence, unavailable phone fallback and disconnect withdrawal.
@@ -84,6 +88,10 @@ Core navigation, list loading and radio commands remain independent of location.
   a pending platform one-shot and callback-to-visible-distance-order transition
   without another feature requesting a fix. Its denied control verifies Last
   Heard, no prompt and no pending platform fix.
+  `resumedMountedListRefreshesAnExistingFixWhileRetainingItsOrderUntilTheNewCallback`
+  pauses/stops and resumes the actual mounted host after a successful fix,
+  requires another real platform request while preserving cached location and
+  row order, then requires the new callback to reverse distance order.
 - `ShortcutAdvertLocationTest.listFirstForegroundFixCannotStarveExplicitPhoneAdvertOrCancelItsTakeover`
   starts the real cold list fix before the real PHONE pre-advert path, requires
   explicit takeover, rejects another explicit request and the old callback,
@@ -123,3 +131,6 @@ The `4415934` run `42131884693` passed, including the actual mounted cold/denied
 controls, list-first advert, bounded handoffs, real cache and explicit-owner
 controls. It remains predecessor evidence only: the callback/cancellation-race
 successor requires its own exact-head hosted results and independent review.
+The `7243d95` run `42134558417` also passed. Its outcome is historical evidence
+for callback/cancellation arbitration, not acceptance of the subsequent
+populated-cache resume refresh and its new mounted and adapter controls.

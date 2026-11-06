@@ -59,13 +59,13 @@ class LocationManagerLocationProducing(
     override val authorizationStatus: StateFlow<LocationAuthorizationStatus> = mutableStatus.asStateFlow()
     val currentLocation: GeoCoordinate? get() = synchronized(lock) { lastCoordinate }
 
-    /** A resumed list may acquire one missing authorized fix, never tracking or prompting. */
+    /** A resumed list refreshes one authorized fix, keeping its cache and never tracking or prompting. */
     fun foregroundLocations() = flow {
         refreshAuthorization()
         coroutineScope {
             launch {
                 authorizationStatus.collectLatest { status ->
-                    if (isAuthorized(status) && synchronized(lock) { !closed && lastCoordinate == null }) {
+                    if (isAuthorized(status) && synchronized(lock) { !closed }) {
                         try {
                             if (withTimeoutOrNull(10_000L) { acquireForegroundFix() } == null) {
                                 Log.w("NodesLocation", "Foreground location fix timed out; proximity unavailable")

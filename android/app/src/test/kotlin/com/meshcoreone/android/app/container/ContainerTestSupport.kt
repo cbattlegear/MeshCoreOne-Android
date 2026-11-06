@@ -29,12 +29,17 @@ import com.meshcoreone.android.core.contracts.notifications.NotificationCategory
 import com.meshcoreone.android.core.contracts.notifications.NotificationDeliveryPort
 import com.meshcoreone.android.core.contracts.domain.NotificationPostResult
 import com.meshcoreone.android.core.contracts.notifications.NotificationRequest
+import com.meshcoreone.android.core.contracts.notifications.NotificationPostPermit
+import com.meshcoreone.android.core.contracts.notifications.NotificationPostAdmission
+import com.meshcoreone.android.core.contracts.notifications.NotificationPostAttempt
+import com.meshcoreone.android.core.contracts.notifications.SnapshotRemovalOutcome
 import com.meshcoreone.android.core.contracts.domain.NotificationId
 import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.model.DevicePlatform
 import com.meshcoreone.android.core.model.NotificationPreferences
 import com.meshcoreone.android.core.model.SnapshotList
+import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.model.TransportType
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.DeviceCapabilities
@@ -279,15 +284,50 @@ internal object NoScanGateway : BleScanGateway {
 internal class RecordingDelivery(
     private val authorization: NotificationAuthorizationStatus = NotificationAuthorizationStatus.DENIED,
 ) : NotificationDeliveryPort {
-    val posted = mutableListOf<NotificationRequest>()
+    val posted = java.util.concurrent.CopyOnWriteArrayList<NotificationRequest>()
+    var beforePermitPost: suspend (NotificationRequest) -> Unit = {}
+    var duringPermitPost: (NotificationRequest) -> Unit = {}
+    var legacyPostCalls = 0
+    var legacyRemoveCalls = 0
+    var legacyBadgeCalls = 0
+    var permitRemoveCalls = 0
+    var permitBadgeCalls = 0
     var badge: Long = 0
     override suspend fun authorizationStatus(): NotificationAuthorizationStatus = authorization
     override suspend fun requestAuthorization(): Boolean = authorization == NotificationAuthorizationStatus.AUTHORIZED
     override suspend fun registerCategories(categories: SnapshotList<NotificationCategoryDefinition>) = Unit
-    override suspend fun post(request: NotificationRequest): NotificationPostResult { posted += request; return NotificationPostResult.Posted }
-    override suspend fun setBadgeCount(count: Long) { badge = count }
+    override suspend fun post(request: NotificationRequest): NotificationPostResult {
+        legacyPostCalls++
+        posted += request
+        return NotificationPostResult.Posted
+    }
+    override suspend fun post(
+        request: NotificationRequest,
+        permit: NotificationPostPermit,
+    ): NotificationPostAdmission<NotificationPostAttempt> {
+        beforePermitPost(request)
+        return permit.runIfActive {
+            duringPermitPost(request)
+            posted += request
+            NotificationPostAttempt.Posted(request.id)
+        }
+    }
+    override suspend fun setBadgeCount(count: Long) { legacyBadgeCalls++; badge = count }
+    override suspend fun setBadgeCount(
+        count: Long,
+        permit: NotificationPostPermit,
+    ): NotificationPostAdmission<Unit> =
+        permit.runIfActive { permitBadgeCalls++; badge = count }
     override suspend fun deliveredNotifications(): SnapshotList<DeliveredNotification> = SnapshotList.empty()
-    override suspend fun removeDelivered(ids: SnapshotList<NotificationId>) = Unit
+    override suspend fun removeDelivered(ids: SnapshotList<NotificationId>) { legacyRemoveCalls++ }
+    override suspend fun removeDeliveredSnapshot(
+        selected: SnapshotList<DeliveredNotification>,
+        permit: NotificationPostPermit,
+    ): NotificationPostAdmission<SnapshotList<SnapshotRemovalOutcome>> =
+        permit.runIfActive {
+            permitRemoveCalls++
+            selected.map { SnapshotRemovalOutcome.REMOVED }.snapshot()
+        }
 }
 
 internal class FixedNotificationPreferences : NotificationPreferencesPort {

@@ -4,6 +4,7 @@
 package com.meshcoreone.android.core.runtime
 
 import com.meshcoreone.android.core.contracts.domain.*
+import com.meshcoreone.android.core.contracts.notifications.NotificationPostPermit
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
@@ -15,6 +16,7 @@ import com.meshcoreone.android.core.protocol.session.SessionCorrelationException
 import com.meshcoreone.android.core.protocol.session.SessionDiagnostic
 import java.time.Instant
 import java.util.UUID
+import java.util.concurrent.CompletableFuture
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.time.Duration
@@ -24,6 +26,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.future.await
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -64,11 +67,14 @@ class ConnectionManager(
         val revision: Long,
         context: CoroutineContext,
         parent: Job,
+        val priorNotificationPosts: CompletableFuture<Void>,
     ) {
         val lock = Any()
         val physicalOwner = UUID.randomUUID()
         val job = SupervisorJob(parent)
         val scope = CoroutineScope(context + job)
+        val notificationPostPermit = NotificationPostPermit()
+        var notificationRetirement: CompletableFuture<Unit>? = null
         var link: RuntimeLink? = null
         var ownsPhysical = false
         var callbacks: AutoCloseable? = null
@@ -92,6 +98,7 @@ class ConnectionManager(
     }
 
     private val lock = Any()
+    private var retiredNotificationPosts: CompletableFuture<Void> = CompletableFuture.allOf()
     private val processJob = SupervisorJob(context[Job])
     private val processScope = CoroutineScope(context + processJob)
     private val cleanupJob = SupervisorJob()
@@ -590,7 +597,9 @@ class ConnectionManager(
             ConnectionTarget.Simulator -> error("Simulator uses its own connection lifecycle")
         }
         val device = DeviceDTO.fromConnection(deviceId, radioId, info, capabilities, autoAdd, prior, methods, clock.instant)
-        val ownership = FactoryOwnership(token)
+        owner.priorNotificationPosts.thenApply { Unit }.await()
+        requireCurrent(owner)
+        val ownership = FactoryOwnership(token, owner.notificationPostPermit)
         // Publish the ownership under the same lock closeGeneration takes: either teardown already ended this
         // generation (requireCurrent throws before the factory allocates anything) or it sees and closes it.
         synchronized(lock) { requireCurrent(owner); owner.device = device; owner.ownership = ownership }
@@ -686,7 +695,9 @@ class ConnectionManager(
         }
         if (device.publicKey.size != ProtocolLimits.PUBLIC_KEY_SIZE) throw ConnectionError.InvalidIdentity()
         val token = SessionToken(processEpoch, Generation(owner.number), device.radioId)
-        val ownership = FactoryOwnership(token)
+        owner.priorNotificationPosts.thenApply { Unit }.await()
+        requireCurrent(owner)
+        val ownership = FactoryOwnership(token, owner.notificationPostPermit)
         synchronized(lock) {
             requireCurrent(owner)
             owner.token = token
@@ -863,6 +874,7 @@ class ConnectionManager(
     override suspend fun teardownSessionForReconnect() {
         val old = synchronized(lock) {
             active?.also {
+                retireNotificationPostsLocked(it)
                 active = null
                 retained = it
                 deviceValue = null
@@ -967,6 +979,7 @@ class ConnectionManager(
         val owner = synchronized(lock) {
             if (connectionIntent.wantsConnection) rebuildFailures++
             (active ?: retained).also {
+                it?.let(::retireNotificationPostsLocked)
                 active = null
                 retained = it
                 deviceValue = null
@@ -1214,7 +1227,11 @@ class ConnectionManager(
 
     private fun startShutdown(cause: Throwable?, except: Job? = null): Deferred<TeardownReport> = synchronized(lock) {
         shutdown ?: cleanupScope.async(start = CoroutineStart.LAZY) {
-            synchronized(lock) { closed = true; revision++ }
+            synchronized(lock) {
+                closed = true
+                revision++
+                listOfNotNull(active, retained).distinct().forEach(::retireNotificationPostsLocked)
+            }
             reconnectionCoordinator.close()
             stopReconnectionWatchdog()
             stopWiFiReconnection()
@@ -1239,8 +1256,9 @@ class ConnectionManager(
 
     private fun newGeneration(target: ConnectionTarget, claimedRevision: Long): RadioGeneration = synchronized(lock) {
         requireRevision(claimedRevision)
+        listOfNotNull(active, retained).distinct().forEach(::retireNotificationPostsLocked)
         nextGeneration = Math.incrementExact(nextGeneration)
-        RadioGeneration(nextGeneration, target, claimedRevision, context, processJob).also {
+        RadioGeneration(nextGeneration, target, claimedRevision, context, processJob, retiredNotificationPosts).also {
             active = it
             it.operation = pending
         }
@@ -1249,11 +1267,20 @@ class ConnectionManager(
     private suspend fun <T> withOperation(reentrant: Boolean, action: suspend () -> T): T =
         if (reentrant) action() else operations.withLock { action() }
 
+    private fun retireNotificationPostsLocked(owner: RadioGeneration): CompletableFuture<Unit> {
+        owner.notificationRetirement?.let { return it }
+        return owner.notificationPostPermit.close().also {
+            owner.notificationRetirement = it
+            retiredNotificationPosts = CompletableFuture.allOf(retiredNotificationPosts, it)
+        }
+    }
+
     private suspend fun closeGeneration(
         owner: RadioGeneration, disconnectPhysical: Boolean, primary: Throwable? = null,
         publishDisconnected: Boolean = true,
     ): TeardownReport {
-        synchronized(lock) {
+        val notificationDrain = synchronized(lock) {
+            val drained = retireNotificationPostsLocked(owner)
             owner.correlationAccounting?.cancel()
             if (primary != null && provenForeignAdmission(primary, owner)) {
                 owner.link?.let { PhysicalOwnership.release(it.transport, owner.physicalOwner) }
@@ -1269,7 +1296,9 @@ class ConnectionManager(
                     publishLocked(DeviceConnectionState.DISCONNECTED, ConnectionState.Disconnected, null, values.value.issue)
                 }
             }
+            drained
         }
+        withContext(NonCancellable) { notificationDrain.thenApply { Unit }.await() }
         val serviceWork = synchronized(owner.lock) {
             owner.servicesClosed ?: cleanupScope.async(start = CoroutineStart.LAZY) {
                 val issues = mutableListOf<TeardownIssue>()
@@ -1341,7 +1370,10 @@ class ConnectionManager(
 
     private fun detachOwnersLocked(state: DeviceConnectionState, intent: ConnectionIntent = values.value.intent): List<RadioGeneration> {
         val owners = listOfNotNull(active, retained).distinct()
-        owners.forEach { it.correlationAccounting?.cancel() }
+        owners.forEach {
+            retireNotificationPostsLocked(it)
+            it.correlationAccounting?.cancel()
+        }
         active = null
         retained = null
         deviceValue = null
@@ -1398,6 +1430,7 @@ class ConnectionManager(
             if (!isRelevant(owner) || owner.lossHandled || disconnectPhysical && !isCurrent(owner)) null
             else {
                 val before = values.value
+                retireNotificationPostsLocked(owner)
                 owner.lossHandled = true
                 owner.correlationAccounting?.cancel()
                 if (disconnectPhysical) owner.physicalEnding = true

@@ -127,6 +127,7 @@ internal class ContainerHarness(
     preferencesOverride: ProcessConnectionPreferences? = null,
     simulatorSeedStore: com.meshcoreone.android.core.services.simulator.SimulatorSeedStore = RoomSimulatorSeedStore(store),
     onSessionCreated: (RadioSessionContainer) -> Unit = {},
+    platformDeliveryOverride: com.meshcoreone.android.core.contracts.notifications.NotificationDeliveryPort? = null,
 ) {
     val scheduler: TestCoroutineScheduler = test.testScheduler
     val links = HarnessLinks(identity)
@@ -164,7 +165,7 @@ internal class ContainerHarness(
             scans = newScans(),
             linkFactory = links,
             simulatorSeedStore = simulatorSeedStore,
-            notificationDelivery = delivery,
+            notificationDelivery = platformDeliveryOverride ?: delivery,
             notificationPreferences = FixedNotificationPreferences(),
             contactPreferences = MemoryFlags(),
             draftStore = draftStore,

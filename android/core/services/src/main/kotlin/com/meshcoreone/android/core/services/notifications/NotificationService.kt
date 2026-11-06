@@ -111,6 +111,7 @@ class NotificationService(
     private val unreadCounting: NotificationUnreadCounting,
     private val scope: CoroutineScope,
     private val clock: NotificationClock = SystemNotificationClock,
+    private val ownerPostPermit: NotificationPostPermit? = null,
 ) {
     internal val logger: Logger = Logger.getLogger("com.mc1.Notifications")
     private val lock = Any()
@@ -522,6 +523,10 @@ class NotificationService(
      * propagate to the caller; badge-delivery failures remain logged and contained.
      */
     suspend fun updateBadgeCount() {
+        ownerPostPermit?.let {
+            updateBadgeCount(it)
+            return
+        }
         val superseded = AtomicBoolean(false)
         val failure = AtomicReference<Exception?>()
         val task = scope.launch(start = CoroutineStart.LAZY) {
@@ -556,9 +561,9 @@ class NotificationService(
     suspend fun updateBadgeCount(permit: NotificationPostPermit): NotificationPostAdmission<Unit> {
         if (!permit.isActive) return NotificationPostAdmission.Revoked
         contained("badgeDebounce", Unit) { clock.sleep(BADGE_DEBOUNCE) }
-        ensureActive()
+        currentCoroutineContext().ensureActive()
         return badgeUpdateMutex.withLock {
-            ensureActive()
+            currentCoroutineContext().ensureActive()
             if (!permit.isActive) return@withLock NotificationPostAdmission.Revoked
             performBadgeUpdate(permit)
         }
@@ -589,7 +594,7 @@ class NotificationService(
         if (prefs.badgeEnabled && prefs.contactMessagesEnabled) total += counts.contacts
         if (prefs.badgeEnabled && prefs.channelMessagesEnabled) total += counts.channels
         if (prefs.badgeEnabled && prefs.roomMessagesEnabled) total += counts.rooms
-        ensureActive()
+        currentCoroutineContext().ensureActive()
         return when (delivery.setBadgeCount(total, permit)) {
             is NotificationPostAdmission.Admitted -> {
                 badgeCount = total
@@ -603,6 +608,12 @@ class NotificationService(
 
     /** Removes the delivered notification for [messageID]. */
     suspend fun removeDeliveredNotification(messageID: UUID) {
+        ownerPostPermit?.let { permit ->
+            removeOwnedSnapshot(permit) { notification, keys ->
+                notification.id == NotificationId(messageID.canonicalString()) && keys.belongsToRadio()
+            }
+            return
+        }
         removeIds(listOf(NotificationId(messageID.canonicalString())))
     }
 
@@ -629,7 +640,10 @@ class NotificationService(
         }
         val delivered = delivery.deliveredNotifications()
         val selected = delivered.filter { notification ->
-            notification.payload?.let { PayloadKeys.of(it).contact?.id in contactIds } == true
+            notification.payload?.let {
+                val contact = PayloadKeys.of(it).contact
+                contact != null && contact.radioId == radioId && contact.id in contactIds
+            } == true
         }.snapshot()
         if (selected.isEmpty()) {
             return permit.runIfActive { SnapshotList(emptyList()) }
@@ -646,10 +660,39 @@ class NotificationService(
         removeDeliveredMatching { it.session?.id == sessionID }
 
     private suspend fun removeDeliveredMatching(predicate: (PayloadKeys) -> Boolean) {
+        ownerPostPermit?.let { permit ->
+            removeOwnedSnapshot(permit) { _, keys -> keys.belongsToRadio() && predicate(keys) }
+            return
+        }
         val delivered = contained("deliveredNotifications", null) { delivery.deliveredNotifications() } ?: return
         val ids = delivered.filter { notification -> notification.payload?.let { predicate(PayloadKeys.of(it)) } == true }
             .map { it.id }
         if (ids.isNotEmpty()) removeIds(ids)
+    }
+
+    private fun PayloadKeys.belongsToRadio(): Boolean =
+        contact?.radioId == radioId || session?.radioId == radioId || channelRadioId == radioId
+
+    private suspend fun removeOwnedSnapshot(
+        permit: NotificationPostPermit,
+        select: (DeliveredNotification, PayloadKeys) -> Boolean,
+    ) {
+        if (!permit.isActive) return
+        contained("removeDeliveredSnapshot", Unit) {
+            val selected = delivery.deliveredNotifications().filter { notification ->
+                notification.payload?.let { select(notification, PayloadKeys.of(it)) } == true
+            }.snapshot()
+            if (selected.isNotEmpty()) {
+                when (val admission = delivery.removeDeliveredSnapshot(selected, permit)) {
+                    NotificationPostAdmission.Revoked -> logger.fine("Notification cleanup owner retired")
+                    is NotificationPostAdmission.Admitted -> {
+                        if (SnapshotRemovalOutcome.UNKNOWN_IDENTITY in admission.value) {
+                            logger.warning("Notification cleanup retained posts with unknown identity")
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private suspend fun removeIds(ids: List<NotificationId>) {
@@ -677,6 +720,14 @@ class NotificationService(
      * viewing is not shown (Swift returns no presentation options for it).
      */
     private suspend fun deliver(request: NotificationRequest) {
+        ownerPostPermit?.let { permit ->
+            if (!permit.isActive) return
+            when (val outcome = deliver(request, permit)) {
+                is ReactionNotificationOutcome.Posted, is ReactionNotificationOutcome.Suppressed -> Unit
+                else -> logger.warning("Notification post did not establish delivery: $outcome")
+            }
+            return
+        }
         val foreground = contained("isInForeground", false) { appState.isInForeground() }
         if (foreground && !shouldPresentWhileForeground(request.payload)) return
         when (val result = contained<NotificationPostResult?>("post", null) { delivery.post(request) }) {

@@ -190,7 +190,7 @@ class NotificationActionHandler(
      * Started writes finish before cancellation can hide their return. Only all returned writes are
      * committed; partial or uncertain writes retain a process-local no-replay receipt.
      */
-    private suspend inline fun markRead(
+    private suspend fun markRead(
         operation: String,
         messageID: UUID,
         writes: suspend (NotificationReadReceipt) -> Unit,

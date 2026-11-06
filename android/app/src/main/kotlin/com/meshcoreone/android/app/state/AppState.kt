@@ -376,7 +376,8 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
     }
 
     override suspend fun handleReactionNotification(messageId: UUID) {
-        services?.notificationActionHandler?.handleReactionNotification(messageId)
+        val owner = services ?: return
+        owner.notificationActionHandler.handleReactionNotification(messageId, owner.notificationPostPermit)
     }
 
     /** Bumps observer versions after a store-direct backup import so mounted tabs reload. */
@@ -510,7 +511,9 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
         wireSyncDataEvents(session)
         wireSettingsEventStream(session)
         wireDeviceUpdateCallbacks(session)
-        messageEventDispatcher.wire(session.subscribeMessageEvents())
+        messageEventDispatcher.wire(session.subscribeMessageEvents(), session.notificationPostPermit) { messageId, permit ->
+            session.notificationActionHandler.handleReactionNotification(messageId, permit)
+        }
         wirePacketCallbacks(session)
         session.channelService.setSlotOccupantChangedHandler { radioId, indices -> handleChannelSlotOccupantChanged(radioId, indices) }
 

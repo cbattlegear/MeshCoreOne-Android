@@ -271,7 +271,6 @@ class AndroidMessagingNotificationDelivery(
                 }
             }
         }.snapshot()
-    }
 
     fun retryPendingActions() {
         NotificationActionDispatcher.retry()

@@ -2,11 +2,13 @@
 package com.meshcoreone.android.app.state
 
 import com.meshcoreone.android.core.contracts.domain.MessageStatusEvent
+import com.meshcoreone.android.core.contracts.notifications.NotificationPostPermit
 import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.services.remote.RemoteNodeEvent
 import com.meshcoreone.android.core.services.remote.RoomServerEvent
 import com.meshcoreone.android.core.services.sync.SyncDataEvent
 import java.util.UUID
+import java.util.concurrent.CompletableFuture
 import java.util.logging.Level
 import java.util.logging.Logger
 import kotlinx.coroutines.CancellationException
@@ -15,6 +17,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.future.await
 import kotlinx.coroutines.launch
 
 /** App-level reactions the dispatcher triggers (Swift `AppState` weak reference). */
@@ -39,47 +42,75 @@ class MessageEventDispatcher(
 ) {
     private val logger: Logger = Logger.getLogger("com.mc1.MessageEventDispatcher")
     private val lock = Any()
-    private var statusSubscription: AutoCloseable? = null
+    private class Wiring(
+        val permit: NotificationPostPermit,
+        val job: Job,
+        val subscription: AutoCloseable,
+        val precedingEffects: CompletableFuture<Void>,
+    )
+    private var wiring: Wiring? = null
+    private var retiredEffects: CompletableFuture<Void> = CompletableFuture.allOf()
 
     // Every consumer is a child of one group job, so the count below sees any collector that outlived a re-wire.
     private val group = SupervisorJob(scope.coroutineContext[Job])
-    private val consumers = CoroutineScope(scope.coroutineContext + group)
 
     /** Live consumer jobs, including any that a re-wire failed to cancel (test visibility for duplicate collectors). */
-    val activeJobCount: Int get() = group.children.count { it.isActive }
+    val activeJobCount: Int get() = group.children.sumOf { frame -> frame.children.count { it.isActive } }
 
-    fun wire(sources: MessageEventSources) {
-        cancelAll()
-        consume("syncData", sources.dataEvents, ::handleDataEvent)
-        consume("heardRepeats", sources.heardRepeats) { event ->
+    fun wire(
+        sources: MessageEventSources,
+        ownerPermit: NotificationPostPermit = NotificationPostPermit(),
+        onReaction: suspend (UUID, NotificationPostPermit) -> Unit = { id, _ -> host.handleReactionNotification(id) },
+    ) {
+        val (previous, frame) = synchronized(lock) {
+            val previous = retireWiringLocked()
+            val frame = Wiring(ownerPermit.childPermit(), SupervisorJob(group), sources.messageStatus, retiredEffects)
+            wiring = frame
+            previous to frame
+        }
+        cancelWiring(previous)
+        consume(frame, "syncData", sources.dataEvents) { event ->
+            handleDataEvent(event) { id ->
+                frame.precedingEffects.thenApply { Unit }.await()
+                onReaction(id, frame.permit)
+            }
+        }
+        consume(frame, "heardRepeats", sources.heardRepeats) { event ->
             stream.send(MessageEvent.HeardRepeatRecorded(event.messageID, event.count))
         }
-        consume("regionUpdates", sources.regionUpdates) { ids ->
+        consume(frame, "regionUpdates", sources.regionUpdates) { ids ->
             if (ids.isNotEmpty()) stream.send(MessageEvent.MessagesRegionUpdated(ids.toList()))
         }
-        consume("remoteNode", sources.remoteNode) { event ->
+        consume(frame, "remoteNode", sources.remoteNode) { event ->
             when (event) {
                 is RemoteNodeEvent.SessionStateChanged -> host.handleSessionStateChange()
             }
         }
-        consume("roomServer", sources.roomServer, ::handleRoomServerEvent)
-        consume("messageStatus", sources.messageStatus.events) { event -> handleStatusEvent(event.event) }
-        synchronized(lock) { statusSubscription = sources.messageStatus }
+        consume(frame, "roomServer", sources.roomServer, ::handleRoomServerEvent)
+        consume(frame, "messageStatus", sources.messageStatus.events) { event -> handleStatusEvent(event.event) }
     }
 
     /** Cancels every stream-consuming job; called before re-wiring and from the disconnect teardown. */
     fun cancelAll() {
-        val subscription = synchronized(lock) { statusSubscription.also { statusSubscription = null } }
-        group.children.forEach(Job::cancel)
+        cancelWiring(synchronized(lock) { retireWiringLocked() })
+    }
+
+    private fun retireWiringLocked(): Wiring? = wiring?.also {
+        retiredEffects = CompletableFuture.allOf(retiredEffects, it.permit.close())
+        wiring = null
+    }
+
+    private fun cancelWiring(frame: Wiring?) {
+        frame?.job?.cancel()
         try {
-            subscription?.close()
+            frame?.subscription?.close()
         } catch (failure: Exception) {
             logger.log(Level.WARNING, "message status subscription close failed: ${failure.message}")
         }
     }
 
-    private fun <T> consume(label: String, source: Flow<T>, handle: suspend (T) -> Unit) {
-        consumers.launch(start = CoroutineStart.UNDISPATCHED) {
+    private fun <T> consume(frame: Wiring, label: String, source: Flow<T>, handle: suspend (T) -> Unit) {
+        CoroutineScope(scope.coroutineContext + frame.job).launch(start = CoroutineStart.UNDISPATCHED) {
             try {
                 source.collect { value ->
                     try {
@@ -99,7 +130,7 @@ class MessageEventDispatcher(
         }
     }
 
-    private suspend fun handleDataEvent(event: SyncDataEvent) {
+    private suspend fun handleDataEvent(event: SyncDataEvent, onReaction: suspend (UUID) -> Unit) {
         when (event) {
             is SyncDataEvent.DirectMessageReceived -> {
                 stream.send(MessageEvent.DirectMessageReceived(event.message, event.contact))
@@ -114,7 +145,7 @@ class MessageEventDispatcher(
                 stream.send(MessageEvent.RoomMessageReceived(event.message, event.message.sessionID))
             is SyncDataEvent.ReactionReceived -> {
                 stream.send(MessageEvent.ReactionReceived(event.messageID, event.summary))
-                host.handleReactionNotification(event.messageID)
+                onReaction(event.messageID)
             }
             SyncDataEvent.ContactsChanged, SyncDataEvent.ConversationsChanged -> Unit
         }

@@ -6,6 +6,7 @@ import com.meshcoreone.android.core.contracts.domain.MonitoringOptions
 import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.contracts.domain.TeardownIssue
 import com.meshcoreone.android.core.contracts.domain.TeardownReport
+import com.meshcoreone.android.core.contracts.notifications.NotificationPostPermit
 import com.meshcoreone.android.core.model.snapshot
 import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.CancellationException
@@ -19,8 +20,12 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.future.await
 
-class FactoryOwnership(val token: SessionToken) {
+class FactoryOwnership(
+    val token: SessionToken,
+    val notificationPostPermit: NotificationPostPermit = NotificationPostPermit(),
+) {
     private data class Child(val stage: LifecycleStage, val close: suspend () -> Unit)
     private val lock = Any()
     private val children = mutableListOf<Child>()
@@ -53,11 +58,13 @@ class FactoryOwnership(val token: SessionToken) {
 
     internal suspend fun close(): TeardownReport {
         val (receipt, claimed) = synchronized(lock) {
+            notificationPostPermit.close()
             closing?.let { it to false } ?: CompletableDeferred<TeardownReport>().also { closing = it }.let { it to true }
         }
         if (!claimed) return withContext(NonCancellable) { receipt.await() }
         val issues = mutableListOf<TeardownIssue>()
         withContext(NonCancellable) {
+            notificationPostPermit.close().await()
             val (services, allocated) = synchronized(lock) {
                 registered to children.asReversed().toList().also { children.clear() }
             }

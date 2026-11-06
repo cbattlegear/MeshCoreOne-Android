@@ -14,6 +14,8 @@ import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.contracts.domain.TeardownIssue
 import com.meshcoreone.android.core.contracts.domain.TeardownReport
 import com.meshcoreone.android.core.contracts.domain.UnreadCounts
+import com.meshcoreone.android.core.contracts.notifications.NotificationPostPermit
+import kotlinx.coroutines.future.await
 import com.meshcoreone.android.core.contracts.domain.DebugLogRetention
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.TransportType
@@ -105,6 +107,7 @@ class RadioSessionContainer private constructor(
     private val ownership: FactoryOwnership,
     reactionPersistenceMutex: Mutex,
 ) : RuntimeServices, AppSession {
+    override val notificationPostPermit: NotificationPostPermit get() = ownership.notificationPostPermit
     override val transportType: TransportType get() = inputs.transportType
     private val logger: Logger = Logger.getLogger("com.mc1.RadioSessionContainer")
     private val lock = Any()
@@ -165,6 +168,7 @@ class RadioSessionContainer private constructor(
             }
         },
         scope,
+        ownerPostPermit = notificationPostPermit,
     )
     override val remoteNodeService = RemoteNodeService(
         session.asRemoteNodeSessionPort(), remoteNodeStore(dataStore, dataStore),
@@ -477,6 +481,7 @@ class RadioSessionContainer private constructor(
 
     override suspend fun tearDown(): TeardownReport {
         val (receipt, claimed) = synchronized(lock) {
+            notificationPostPermit.close()
             teardown?.let { it to false } ?: CompletableDeferred<TeardownReport>().also {
                 teardown = it
                 closed = true
@@ -492,6 +497,7 @@ class RadioSessionContainer private constructor(
             }
         }
         withContext(NonCancellable) {
+            notificationPostPermit.close().await()
             step(LifecycleStage.STOP_SERVICES) { resetSyncState() }
             // Stop the monitors before clearing handlers so the event tasks that read them are cancelled first.
             step(LifecycleStage.STOP_SERVICES) { stopEventMonitoring() }

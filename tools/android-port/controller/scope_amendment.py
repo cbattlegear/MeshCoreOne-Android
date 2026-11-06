@@ -158,6 +158,44 @@ SIMULATOR_PREFERENCE_RECOVERY_COPY_CAPABILITY = {
 }
 
 
+NOTIFICATION_ACTION_RECOVERY_COPY_CAPABILITY = {
+    "id": "reviewed-support-notification-action-recovery-copy",
+    "work_packages": ["WP-215"],
+    "path_rules": ["android/platform/notifications/src/main/res/values/notification_action_recovery.xml"],
+    "operations": ["add-or-update-notification-action-recovery-copy"],
+    "keys": [
+        "notification_action_recovery_title",
+        "notification_action_recovery_rejected_reply",
+        "notification_action_recovery_rejected_mark_read",
+        "notification_action_recovery_saved",
+        "notification_action_recovery_memory_only",
+        "notification_action_recovery_not_retained",
+        "notification_action_recovery_storage_unavailable",
+        "notification_action_recovery_copy_failed",
+        "notification_action_recovery_discard_failed",
+        "notification_action_recovery_launch_failed",
+        "notification_action_recovery_original_target",
+    ],
+    "invariants": [
+        "only-WP215-one-explicit-platform-notifications-resource-eleven-approved-keys-no-unrelated-resource-or-generated-catalog-edits",
+        "immutable-UTF8-XML-all-keys-nonempty-no-deletion-extra-keys-or-unrelated-notice-changes",
+        "AndroidOnly-WP215-source-marker-is-traceability-not-product-or-translation-acceptance",
+        "original-target-exactly-one-percent-1-dollar-s-placeholder-other-ten-no-placeholders",
+        "rejected-intake-not-accepted-or-delivery-uncertain-durable-process-only-and-not-retained-remain-distinct",
+        "original-target-copy-never-authorizes-replay-or-current-slot-sampling-consumer-and-test-rights-separate",
+        "trusted-main-landing-legitimate-assignment-path-operation-admission-resolved-overlap-no-new-lease-or-historical-owner-reattestation",
+        "preserve-pinned-db14559b39d32322b06477c6ae676112f583db50-publication-Gradle-dispatch-activation-and-held-source-gates",
+    ],
+    "validation": [
+        "exact-WP215-path-operation-key-positive-and-other-WP-sibling-locale-traversal-operation-denials",
+        "immutable-reader-malformed-duplicate-empty-extra-missing-key-deletion-notice-and-placeholder-regressions",
+        "actual-UTF8-bytes-and-declaration-validation-no-candidate-policy-self-admission",
+        "complete-predecessor-policy-object-raw-bytes-projection-and-existing-admissions-unchanged",
+        "English-source-only-not-translation-quality-Android-resource-compilation-recovery-flow-or-WP215-acceptance",
+    ],
+}
+
+
 def routine_support_predecessor(policy):
     """Project reviewed additive capability extensions back to the historical policy."""
     if not isinstance(policy, dict):
@@ -190,6 +228,11 @@ def routine_support_predecessor(policy):
             and rule != SIMULATOR_PREFERENCE_RECOVERY_COPY_CAPABILITY
         ):
             raise PortError("Simulator preference recovery copy changed outside the exact reviewed amendment")
+        if (
+            rule["id"] == NOTIFICATION_ACTION_RECOVERY_COPY_CAPABILITY["id"]
+            and rule != NOTIFICATION_ACTION_RECOVERY_COPY_CAPABILITY
+        ):
+            raise PortError("Notification action recovery copy changed outside the exact reviewed amendment")
         if set(rule) not in (
             {"id", "path_rules", "operations", "invariants", "validation"},
             {"id", "path_rules", "operations", "invariants", "validation", "work_packages"},
@@ -217,6 +260,7 @@ def routine_support_predecessor(policy):
                 item["id"]: item["keys"] for item in (
                     NOTIFICATION_ENROLLMENT_COPY_CAPABILITY,
                     SIMULATOR_PREFERENCE_RECOVERY_COPY_CAPABILITY,
+                    NOTIFICATION_ACTION_RECOVERY_COPY_CAPABILITY,
                 )
             }
             if rule["id"] not in keyed_rules or rule["keys"] != keyed_rules[rule["id"]]:

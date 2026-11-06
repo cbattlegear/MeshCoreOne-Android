@@ -169,6 +169,10 @@ sealed interface IncomingPathHarvestResult {
  * lookup. Require heardRepeats == 0 for this new-row/no-issuer role. Any nonzero
  * count, including negative input, requires Rejected(CONFLICT) BEFORE DML with no receipt; never
  * sanitize or certify a caller-preseeded repeat count. The public request constructor is unchanged.
+ * In the SAME original-save transaction, reject ANY current repeat row matching radioId and the
+ * logical new message UUID with Rejected(CONFLICT), BEFORE ANY DML and no receipt. Include rows
+ * whose nullable parent is absent: match logical messageID, not only a parent foreign key.
+ * Do not adopt, mutate or delete those rows. This no-issuer role has no authorized repeat writes.
  * Save actual row and privately bind exact stored incarnation/reaction-identity revision/original
  * save in SAME TX; return actual DTO/receipt for a newly inserted row, including committed
  * Unproven. A later loss of that return does not permit receipt recapture by ID or a second save.
@@ -183,8 +187,13 @@ sealed interface IncomingPathHarvestResult {
  * original-save snapshot. Do this BEFORE candidate-level issues or empty completion. Any mismatch
  * requires row-level Blocked(Stale), retaining the EXACT request with ZERO DML and no successor.
  * Preserve benign read flags and unrelated local metadata; do not compare the whole DTO.
+ * In that SAME harvest transaction, also check current repeat rows by radioId/logical messageID,
+ * including nullable-parent orphans, BEFORE candidate-level issues or empty completion. ANY such
+ * row requires row-level Blocked(Stale), exact request, ZERO DML and no successor; never adopt,
+ * mutate or delete it. The original successful save established an empty current-repeat baseline.
  * This is only current-state comparison: NOT ABA/same-value write-history detection, protection
- * from subsequent generic writes, receive-origin proof, or a fence for repeat-table-only writes.
+ * from subsequent generic writes, a later UI/event fence, or receive-origin proof. The repeat-row
+ * check detects current rows only, NOT an insert/delete ABA or historical repeat activity.
  * No future positive RX write may silently waive this baseline; it needs separately authenticated
  * mutation and explicit same-TX successor semantics.
  *

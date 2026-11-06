@@ -155,6 +155,24 @@ class MessageHarvestAuthorityTest {
     }
 
     @Test
+    fun repeatContaminationRefusalsNeitherAdoptRowsNorDiscardTheOriginalBatchShape() {
+        val save = ChannelMessageRowSaveRequest(message, occurrence)
+        val rejected = RowBoundChannelIngress(
+            ChannelReactionIngressResult.Rejected(ChannelReactionRejection.CONFLICT), null,
+        )
+        assertSame(message, save.message)
+        assertNull(rejected.savedRow)
+        val harvest = IncomingPathHarvestRequest(row, emptyList<OriginalRxCandidate>().snapshot())
+        val blocked = IncomingPathHarvestResult.Blocked(
+            harvest, listOf(IncomingPathHarvestIssue(null, IncomingPathHarvestIssueReason.Stale)).snapshot(),
+        )
+        assertSame(harvest, blocked.request)
+        assertSame(row, blocked.request.savedRow)
+        assertEquals(IncomingPathHarvestIssueReason.Stale, blocked.issues.single().reason)
+        assertNull(blocked.issues.single().ordinal)
+    }
+
+    @Test
     fun stableEarlierRxCandidatesRetainTheirOwnExactEntriesWithoutProof() {
         val first = candidate(10, -5)
         val second = candidate(11, -5)

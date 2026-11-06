@@ -3,8 +3,8 @@
 Assignment:
 `assignment:fc9361f4-ec03-4739-994b-ddb9b4e4cec9:call_0jpIzLm0tBYXoigYAOa1QKuO`.
 This bounded inactive semantic successor has the sole parent
-`d2ee04ea47607cfe7acb2f79f9684a463aacc220`,
-tree `dd13a722d1f13ecc9178ec2c063a86102bdc4a18`. The original c8f, 8fd and d2ee commits
+`10db89a73b7fa46e8f5c843a59eb2b6384d6ab6d`,
+tree `12c9a99601499b0b7ee3b10dcda6b4a26a669395`. The original c8f, 8fd, d2ee and 10db commits
 remain immutable. Their approved reaction dependency remains
 `67ec8bffe3d1eb66e1c896b9fbdebf7fc790b136`. Only the existing contract, its
 shape controls and this evidence change; no cache-selection4c405, shared derivation
@@ -72,6 +72,14 @@ remains unchanged and retains exact input; storage performs explicit rejection,
 not silent sanitization. Zero is permitted by this requirement, not proof of
 origin or a promise to accept other invalid input.
 
+The separately approved current-repeat restriction checks radio + logical new
+message UUID in the SAME original-save transaction. Any current repeat row requires
+Rejected(CONFLICT) before ANY DML and no receipt, including orphan rows with a null
+parent foreign key. Logical messageID, not parent linkage, controls this lookup.
+Never adopt, mutate or delete those rows. The current no-issuer role has no
+authorized repeat writes; successful original save establishes an empty current-
+repeat baseline.
+
 A second independent gap was reported by 12e/f805: a consumer content-key lookup
 outside the save transaction cannot exclude another distinct-UUID/same-key insert
 before save. No cross-context single-ingress invariant was established. Under the
@@ -115,6 +123,10 @@ precede save; equal timestamps retain input order. In one write TX:
    Any mismatch requires row-level Blocked(Stale), exact original request, ZERO DML
    and no successor. Benign read flags and unrelated local metadata remain permitted;
    this is not whole-DTO equality.
+   Also require no current repeat rows for radio/logical messageID in that SAME
+   transaction, including nullable-parent orphans, before candidate-level issues or
+   empty completion. Any such row requires the same row-level Blocked(Stale), exact
+   request, ZERO DML and no successor, without adopting, mutating or deleting it.
 2. Authenticate EACH original candidate and its same-origin association; verify
    GROUP_TEXT/SUCCESS decoded sender/body/slot/original reactionTimestamp
    (senderTimestamp when corrected, not corrected stored timestamp) and canonical
@@ -142,8 +154,10 @@ path/route/region/count fields. Legacy path/count writes can therefore leave tha
 revision unchanged, and the previous empty-harvest snapshot could return those
 unproven current values. The coordinator approved the explicit snapshot check
 above. It is current-state drift detection only: not ABA or same-value write-history
-detection, not a fence against later generic writes, not receive-origin proof, and
-not by itself protection from repeat-table-only writes. No trigger/schema mutation
+detection, not a fence against later generic writes, and not receive-origin proof.
+The separately approved repeat-row check detects currently present rows only;
+it does not detect insert/delete ABA or historical repeat activity, and it does not
+fence later generic/UI/event operations. No trigger/schema mutation
 or generic/OFF change is introduced. Future positive enrichment needs separately
 authenticated writes and explicit same-transaction successor semantics; it cannot
 silently disable or reset this baseline.
@@ -172,11 +186,12 @@ admit `wp-owned/modify`; directly related contracts test admits
 `reviewed-support-test/add-or-update-related-test`. No policy/authorization/
 reservation edit or executed validator receipt is claimed.
 
-Ten authored shape controls cover exact original wire/save fields, rejecting
+Eleven authored shape controls cover exact original wire/save fields, rejecting
 pre-enrichment, committed Unproven/unsupported Existing value shape, existing-key
 CONFLICT with no receipt, distinct-ID/content-key collision refusal shape without
 row adoption, row-level Stale retaining the exact batch without observed-row
-substitution, each original earlier/equal-time RX snapshot, blocked
+substitution, repeat-contamination refusal shapes without row adoption, each
+original earlier/equal-time RX snapshot, blocked
 exact custody and issue bounds. Existing value assertions are retained solely for
 compatibility shape, not producer acceptance. The new conflict shape test is not
 a fake authority, an existing-row lookup or proof of zero database writes.
@@ -195,12 +210,17 @@ controls cannot establish actual SQL behavior or state-transition coverage.
 Initial-count shape coverage retains negative, zero and positive input without
 constructor sanitization; actual before-DML rejection and valid zero insertion
 remain storage-owned controls, not simulated authority assertions.
+Repeat-table controls must use actual current rows, including nullable-parent
+orphans, same logical UUID on another radio, save/harvest refusal precedence,
+unchanged count/identity and unchanged repeat rows. Actual generic repeat upsert
+can leave message count/identity unchanged; App actions read repeats by
+radio/messageID. These consumers are not changed or fenced by this contract.
 Service consumers must retain Existing/Rejected as
 non-redrivable unresolved custody, not notify/index an observed row as the incoming
 occurrence. No runtime composition, full contract implementation, positive issuer
 or active feature/device acceptance is supplied by this correction.
 
-Publication checks cover exact sole d2ee parent, only these three changed paths,
+Publication checks cover exact sole 10db parent, only these three changed paths,
 ASCII/LF and no changes to other originals. Local execution hold
 `local-check:f516a7e271f444dd9cb2efcc8b995a16` remains; no local Gradle/controller/
 readiness recovery or new session/worktree. No schema allocation, producer/

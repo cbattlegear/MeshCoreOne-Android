@@ -365,6 +365,64 @@ class ChannelReactionTargetServiceTest {
         assertEquals(0 to 0, service.pendingCounts)
     }
 
+    @Test fun unselectedFormatsPreserveOriginalInputNamesTimesCausesAndOrderOutsideAllNativeMatching() {
+        val radio = RadioId(UUID.randomUUID())
+        val foreign = RadioId(UUID.randomUUID())
+        val service = ReactionService()
+        val wire = service.buildReactionText("X", "Alice", "Hello", 100u)
+        val all = UnselectedChannelReactionFormat.entries.mapIndexed { index, format ->
+            UnselectedChannelReaction(
+                rawText = wire, channelIndex = 3u, radioId = radio, senderNodeName = "Sender $index",
+                localNodeName = if (index == 1) null else "Self $index",
+                receivedAt = Instant.EPOCH.minusSeconds(index.toLong()), format = format,
+                failure = if (index == 2) kotlinx.coroutines.CancellationException("Original selection cancelled")
+                    else IllegalStateException("Original selection failed $index"),
+            )
+        }
+        all.forEach { assertIs<UnselectedChannelReactionParkResult.Retained>(service.parkUnselectedChannelReaction(it)) }
+        val retained = service.retainedUnselectedChannelReactionFailures(radio)
+        all.forEachIndexed { index, work ->
+            assertSame(work, retained[index])
+            assertSame(work.failure, retained[index].failure)
+        }
+        assertTrue(service.retainedUnselectedChannelReactionFailures(foreign).isEmpty())
+        assertTrue(service.indexMessage(UUID.randomUUID(), 3u, "Alice", "Hello", 100u).isEmpty())
+        assertTrue(service.indexDMMessage(UUID.randomUUID(), UUID.randomUUID(), "Hello", 100u).isEmpty())
+        assertTrue(service.retainedChannelReactionFailures(radio).isEmpty())
+        assertEquals(3 to 0, service.pendingCounts)
+        assertEquals(all, service.retainedUnselectedChannelReactionFailures(radio))
+    }
+
+    @Test fun unselectedOverflowReturnsTheExactFailedOrCancelledInputWithoutDisplacingRetainedWork() {
+        val radio = RadioId(UUID.randomUUID())
+        val service = ReactionService()
+        val first = UnselectedChannelReaction(
+            rawText = "original raw input", channelIndex = 3u, radioId = radio,
+            senderNodeName = "Bob", localNodeName = "Self", receivedAt = Instant.EPOCH,
+            format = UnselectedChannelReactionFormat.NATIVE, failure = IllegalStateException("Selection unavailable"),
+        )
+        val retained = List(100) { first.copy(rawText = "original $it") }
+        retained.forEach {
+            assertIs<UnselectedChannelReactionParkResult.Retained>(service.parkUnselectedChannelReaction(it))
+        }
+        val cancelled = first.copy(failure = kotlinx.coroutines.CancellationException("Original cancellation"))
+        for (unretained in listOf(first, cancelled)) {
+            val overflow = assertIs<UnselectedChannelReactionParkResult.Overflow>(
+                service.parkUnselectedChannelReaction(unretained),
+            )
+            assertSame(unretained, overflow.unretained)
+            assertSame(unretained.failure, overflow.unretained.failure)
+            val actual = service.retainedUnselectedChannelReactionFailures(radio)
+            retained.forEachIndexed { index, work -> assertSame(work, actual[index]) }
+            assertEquals(100 to 0, service.pendingCounts)
+        }
+        service.clearPendingReactions()
+        assertTrue(service.retainedUnselectedChannelReactionFailures(radio).isEmpty())
+        assertEquals(0 to 0, service.pendingCounts)
+        assertIs<UnselectedChannelReactionParkResult.Retained>(service.parkUnselectedChannelReaction(cancelled))
+        assertSame(cancelled, service.retainedUnselectedChannelReactionFailures(radio).single())
+    }
+
     private data class Entry(
         val radio: Int,
         val sender: String,

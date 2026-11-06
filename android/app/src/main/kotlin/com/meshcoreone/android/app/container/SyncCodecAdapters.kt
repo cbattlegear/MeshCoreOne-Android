@@ -21,6 +21,7 @@ import com.meshcoreone.android.core.services.reactions.ChannelReactionCacheLooku
 import com.meshcoreone.android.core.services.reactions.ChannelReactionReplayResult
 import com.meshcoreone.android.core.services.reactions.PendingReaction
 import com.meshcoreone.android.core.services.reactions.ParkedChannelReaction
+import com.meshcoreone.android.core.services.reactions.UnselectedChannelReaction
 import com.meshcoreone.android.core.services.remote.CLIResponse
 import com.meshcoreone.android.core.services.rendering.MentionUtilities
 import com.meshcoreone.android.core.services.sync.SyncCLIEchoParsing
@@ -102,6 +103,9 @@ internal class SyncReactionAdapter(
         reactions.requeuePendingReaction(pending)
 
     override suspend fun parkChannelReaction(work: ParkedChannelReaction) = reactions.parkChannelReaction(work)
+
+    override suspend fun parkUnselectedChannelReaction(work: UnselectedChannelReaction) =
+        reactions.parkUnselectedChannelReaction(work)
 
     override suspend fun indexDMMessage(id: UUID, contactID: UUID, text: String, timestamp: UInt): List<SyncPendingDMReaction> =
         reactions.indexDMMessage(id, contactID, text, timestamp).map {

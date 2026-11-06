@@ -81,6 +81,25 @@ sealed interface ChannelReactionParkResult {
     data class Overflow(val unretained: ParkedChannelReaction) : ChannelReactionParkResult
 }
 
+enum class UnselectedChannelReactionFormat { NATIVE, MCO_V1, MCO_V3 }
+
+/** Failed original selection input: diagnostic custody only, never automatic matching or redrive. */
+data class UnselectedChannelReaction(
+    val rawText: String,
+    val channelIndex: UByte,
+    val radioId: RadioId,
+    val senderNodeName: String,
+    val localNodeName: String?,
+    val receivedAt: Instant,
+    val format: UnselectedChannelReactionFormat,
+    val failure: Exception,
+)
+
+sealed interface UnselectedChannelReactionParkResult {
+    data object Retained : UnselectedChannelReactionParkResult
+    data class Overflow(val unretained: UnselectedChannelReaction) : UnselectedChannelReactionParkResult
+}
+
 /** A DM reaction waiting for its target message to be indexed. */
 data class PendingDMReaction(
     val parsed: ParsedDMReaction,
@@ -122,6 +141,7 @@ class ReactionService internal constructor(
     private var pendingReactions = PendingQueue.empty<PendingReactionKey, PendingReaction>()
     private var pendingDMReactions = PendingQueue.empty<PendingDMReactionKey, PendingDMReaction>()
     private var parkedChannelReactions = PendingQueue.empty<Unit, ParkedChannelReaction>()
+    private var unselectedChannelReactions = PendingQueue.empty<Unit, UnselectedChannelReaction>()
 
     /** [targetSender] is canonical (NFC) because Swift hashes `String` keys by canonical equivalence. */
     private data class PendingReactionKey(val channelIndex: UByte, val targetSender: String, val messageHash: String) {
@@ -312,6 +332,26 @@ class ReactionService internal constructor(
     fun retainedChannelReactionFailures(radioId: RadioId): List<ParkedChannelReaction> =
         synchronized(lock) { parkedChannelReactions.valuesInOrder().filter { it.reaction.radioId == radioId } }
 
+    fun parkUnselectedChannelReaction(work: UnselectedChannelReaction): UnselectedChannelReactionParkResult {
+        val result = synchronized(lock) {
+            if (unselectedChannelReactions.count >= MAX_PENDING_REACTIONS) {
+                UnselectedChannelReactionParkResult.Overflow(work)
+            } else {
+                unselectedChannelReactions = unselectedChannelReactions.enqueue(Unit, work, MAX_PENDING_REACTIONS)
+                UnselectedChannelReactionParkResult.Retained
+            }
+        }
+        if (result is UnselectedChannelReactionParkResult.Overflow) {
+            logger.severe("Unselected channel reaction failure queue is full; exact input returned as typed unretained overflow")
+        } else {
+            logger.warning("Original ${work.format} channel reaction selection failed; input retained without redrive authority")
+        }
+        return result
+    }
+
+    fun retainedUnselectedChannelReactionFailures(radioId: RadioId): List<UnselectedChannelReaction> =
+        synchronized(lock) { unselectedChannelReactions.valuesInOrder().filter { it.radioId == radioId } }
+
     /** Builds channel reaction wire text: `@[sender]emoji` then newline and hash. */
     fun buildReactionText(emoji: String, targetSender: String, targetText: String, targetTimestamp: UInt): String =
         "@[$targetSender]$emoji\n${ReactionParser.generateMessageHash(targetText, targetTimestamp)}"
@@ -355,10 +395,12 @@ class ReactionService internal constructor(
     /** Clears all pending reactions (call on disconnect). */
     internal fun clearPendingReactions() {
         val cleared = synchronized(lock) {
-            val count = pendingReactions.count + pendingDMReactions.count + parkedChannelReactions.count
+            val count = pendingReactions.count + pendingDMReactions.count +
+                parkedChannelReactions.count + unselectedChannelReactions.count
             pendingReactions = pendingReactions.cleared()
             pendingDMReactions = pendingDMReactions.cleared()
             parkedChannelReactions = parkedChannelReactions.cleared()
+            unselectedChannelReactions = unselectedChannelReactions.cleared()
             count
         }
         if (cleared > 0) logger.fine { "Cleared $cleared pending reaction(s)" }
@@ -468,7 +510,7 @@ class ReactionService internal constructor(
 
     /** Test-visible total of queued reactions (channel, DM). */
     internal val pendingCounts: Pair<Int, Int> get() = synchronized(lock) {
-        (pendingReactions.count + parkedChannelReactions.count) to pendingDMReactions.count
+        (pendingReactions.count + parkedChannelReactions.count + unselectedChannelReactions.count) to pendingDMReactions.count
     }
 
     internal companion object {

@@ -418,7 +418,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
                     }
                 }
                 compose.onNodeWithText(compose.activity.getString(O.welcomeGetStarted)).assertIsDisplayed().performClick()
-                compose.onNode(hasText(compose.activity.getString(O.permissionsContinue)) and hasClickAction())
+                compose.onAllNodes(hasText(compose.activity.getString(O.permissionsContinue)) and hasClickAction()).onLast()
                     .assertIsDisplayed().performClick()
             } else {
                 mount(h, feature, includeConnectionRecovery = true)

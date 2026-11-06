@@ -18,6 +18,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -288,7 +289,10 @@ open class MainActivity : ComponentActivity() {
 }
 
 @Composable
-internal fun NotificationActionRecoveryDialog(blockedByOtherDialog: Boolean = false) {
+internal fun NotificationActionRecoveryDialog(
+    blockedByOtherDialog: Boolean = false,
+    onDispositionStarted: () -> Unit = {},
+) {
     val context = LocalContext.current
     val sequence by NotificationActionRecovery.changes.collectAsState()
     var dismissedSequence by remember { mutableStateOf<Long?>(null) }
@@ -305,14 +309,20 @@ internal fun NotificationActionRecoveryDialog(blockedByOtherDialog: Boolean = fa
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<Int?>(null) }
     val scope = rememberCoroutineScope()
-    if (blockedByOtherDialog) return
-    if (item == null && recovery.storageFailure == null &&
+    val empty = item == null && recovery.storageFailure == null &&
         !recovery.notRetained && !recovery.manualOpenRequired && error == null && !busy
-    ) return
-    if (dismissedSequence == sequence) return
-    if (!recovery.recordsAvailable &&
+    val hidden = blockedByOtherDialog || empty || dismissedSequence == sequence ||
+        (!recovery.recordsAvailable &&
         dismissedUnavailable == (recovery.version to recovery.readCompleted)
-    ) return
+        )
+    val displayedAction by rememberUpdatedState(
+        Triple(item?.entry?.id, recovery.version, !hidden),
+    )
+    if (hidden) return
+    val canAct = {
+        !busy && displayedAction == Triple(item?.entry?.id, recovery.version, true) &&
+            NotificationActionRecovery.changes.value == recovery.version
+    }
     val close = {
         if (!busy) {
             error = null
@@ -378,9 +388,10 @@ internal fun NotificationActionRecoveryDialog(blockedByOtherDialog: Boolean = fa
                     TextButton(
                         enabled = !busy,
                         onClick = action@ {
-                            if (busy) return@action
+                            if (!canAct()) return@action
                             busy = true
                             error = null
+                            onDispositionStarted()
                             scope.launch {
                                 try {
                                     if (!copyRejectedNotificationText(context, text)) {
@@ -404,9 +415,10 @@ internal fun NotificationActionRecoveryDialog(blockedByOtherDialog: Boolean = fa
                     TextButton(
                         enabled = !busy,
                         onClick = action@ {
-                            if (busy) return@action
+                            if (!canAct()) return@action
                             busy = true
                             error = null
+                            onDispositionStarted()
                             scope.launch {
                                 try {
                                     val failure = withContext(Dispatchers.IO) {

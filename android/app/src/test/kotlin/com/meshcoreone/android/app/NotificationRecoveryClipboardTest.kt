@@ -35,6 +35,7 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -62,6 +63,7 @@ class NotificationRecoveryClipboardTest {
     private var mounted = false
     private var closed = false
     private val otherDialog = mutableStateOf(false)
+    private val dispositionStarts = AtomicInteger()
 
     @Before
     fun prepare() {
@@ -633,16 +635,88 @@ class NotificationRecoveryClipboardTest {
             compose.onNodeWithText(text(AppLocalizableStrings.commonCancel)).assertIsNotEnabled()
             // Invoke the retained enabled semantics callback again while real IO is still gated.
             compose.runOnUiThread { assertTrue(oldClick()) }
+            assertEquals(1, dispositionStarts.get())
         } finally {
             release.countDown()
         }
         awaitText("untouched next record")
         awaitCompletedRead()
         compose.waitForIdle()
+        assertEquals(1, dispositionStarts.get())
         assertEquals(version + 1, NotificationActionRecovery.changes.value)
         assertEquals(listOf(remaining.id), entries().map { it.id })
         compose.onNodeWithText(text(NotificationStrings.string.notification_action_recovery_discard_failed))
             .assertDoesNotExist()
+    }
+
+    @Test
+    fun settledOldCopyCallbackCannotActOnTheNextDisplayedRecord() {
+        staleSettledCallbackIsRejected(copy = true)
+    }
+
+    @Test
+    fun settledOldDeleteCallbackCannotActOnTheNextDisplayedRecord() {
+        staleSettledCallbackIsRejected(copy = false)
+    }
+
+    private fun staleSettledCallbackIsRejected(copy: Boolean) {
+        save(49, "old disposed text")
+        val next = save(50, "currently displayed text")
+        mount()
+        awaitText("old disposed text")
+        val oldClick = requireNotNull(
+            compose.onNodeWithText(text(
+                if (copy) AppChatsStrings.chatsMessageActionCopy else AppChatsStrings.chatsMessageActionDelete,
+            )).fetchSemanticsNode().config[SemanticsActions.OnClick].action,
+        )
+        compose.runOnUiThread { assertTrue(oldClick()) }
+        awaitText("currently displayed text")
+        compose.waitForIdle()
+        val clipboard = requireNotNull(context.getSystemService(ClipboardManager::class.java))
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("", "new clipboard custody"))
+        compose.runOnUiThread { assertTrue(oldClick()) }
+        assertEquals(1, dispositionStarts.get())
+        assertEquals("new clipboard custody", clipboard.primaryClip!!.getItemAt(0).text.toString())
+        assertEquals(listOf(next.id), entries().map { it.id })
+        compose.onNodeWithText(text(NotificationStrings.string.notification_action_recovery_discard_failed))
+            .assertDoesNotExist()
+    }
+
+    @Test
+    fun retainedIdleCallbacksCannotActWhileCompetingDialogHidesRecovery() {
+        val original = save(51, "hidden original")
+        mount()
+        awaitText("hidden original")
+        val callbacks = listOf(AppChatsStrings.chatsMessageActionCopy, AppChatsStrings.chatsMessageActionDelete).map {
+            requireNotNull(compose.onNodeWithText(text(it))
+                .fetchSemanticsNode().config[SemanticsActions.OnClick].action)
+        }
+        val clipboard = requireNotNull(context.getSystemService(ClipboardManager::class.java))
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("", "keep clipboard"))
+        compose.runOnIdle { otherDialog.value = true }
+        compose.onNodeWithText(text(NotificationStrings.string.notification_action_recovery_title))
+            .assertDoesNotExist()
+        compose.runOnUiThread { callbacks.forEach { assertTrue(it()) } }
+        assertEquals(0, dispositionStarts.get())
+        assertEquals("keep clipboard", clipboard.primaryClip!!.getItemAt(0).text.toString())
+        assertEquals(original.id, entries().single().id)
+    }
+
+    @Test
+    fun changedGenerationRejectsOldCallbacksBeforeRecomposition() {
+        val original = save(52, "revision-bound original")
+        mount()
+        awaitText("revision-bound original")
+        val callbacks = listOf(AppChatsStrings.chatsMessageActionCopy, AppChatsStrings.chatsMessageActionDelete).map {
+            requireNotNull(compose.onNodeWithText(text(it))
+                .fetchSemanticsNode().config[SemanticsActions.OnClick].action)
+        }
+        compose.runOnUiThread {
+            NotificationActionRecovery.handoffNotRetained()
+            callbacks.forEach { assertTrue(it()) }
+        }
+        assertEquals(0, dispositionStarts.get())
+        assertEquals(original.id, entries().single().id)
     }
 
     private fun awaitCompletedRead() {
@@ -658,7 +732,10 @@ class NotificationRecoveryClipboardTest {
         activity.get().setContent {
             CompositionLocalProvider(LocalContext provides context) {
                 MeshCoreTheme(motionScale = 0f) {
-                    NotificationActionRecoveryDialog(blockedByOtherDialog = otherDialog.value)
+                    NotificationActionRecoveryDialog(
+                        blockedByOtherDialog = otherDialog.value,
+                        onDispositionStarted = { dispositionStarts.incrementAndGet() },
+                    )
                 }
             }
         }

@@ -112,6 +112,11 @@ state and scope are established, so it hides recovery without cancelling an
 already running disposition. Both action callbacks also recheck the current busy
 state before launch; disabled presentation alone is not duplicate admission
 protection against a retained enabled callback.
+Admission also checks the latest mounted visible item/revision and the live
+custody revision before any clipboard access or IO launch. A retained callback
+for an already disposed item, a hidden surface, or a revision changed before
+recomposition is rejected. An internal synchronous admission observer lets
+mounted controls count launches without waiting speculatively for duplicate IO.
 
 Recovery does not start an activity from the reply/mark-read broadcast: Android 12
 prohibits notification trampolines, and background-launch denial need not throw.
@@ -226,7 +231,7 @@ byte/oversize rejection, and deadline completion without cancellation, premature
 budget release or double finish. These are authored controls, not evidence that
 the Android receiver deadline has been exercised on a device.
 
-`NotificationRecoveryClipboardTest.kt` contains 24 authored App methods covering
+`NotificationRecoveryClipboardTest.kt` contains 28 authored App methods covering
 the actual clipboard and mounted dialog: exact sensitive copy, inaccessible
 clipboard, cancel/host destruction, single-record copy/discard, failed
 copy/discard, the process-only warning, deferral behind another dialog and the
@@ -255,6 +260,11 @@ execution claim is made. Three additional mounted declarations cover a
 competing-dialog hide/unhide during gated failed Delete (busy remains set and
 the later failure is shown), plus same-event and retained-callback duplicate
 Copy/Delete invocation while real IO is gated.
+Four further controls cover settled stale Copy/Delete after the next item appears,
+idle retained callbacks during competing-dialog deferral, and a live revision
+change in the same event before recomposition. Synchronous admission counts also
+strengthen the duplicate-in-flight controls; a rejected callback must not launch
+an operation at all, independent of IO scheduling.
 
 **Zero methods have been executed for this draft.** These counts come from static
 source inspection, not runner discovery. A fresh store instance is not an
@@ -278,6 +288,8 @@ The operation-state follow-up adds one App declaration, for 29 receiver and
 21 App controls; none have executed.
 The deferral/admission follow-up adds three App declarations, for 29 receiver and
 24 App controls; none have executed.
+The stale-visible-action follow-up adds four App declarations, for 29 receiver
+and 28 App controls; none have executed.
 
 Actual allowed static checks:
 

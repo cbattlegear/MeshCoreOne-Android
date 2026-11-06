@@ -173,7 +173,7 @@ class ReactionOwnerIntegrationTest : RoomProcessTest() {
             owner.syncCoordinator.dataEventBroadcaster.yield(SyncDataEvent.ReactionReceived(old.id, "+1"))
             h.eventually("old wiring reached final adapter") { entered.isCompleted }
             h.appState.wireServicesIfConnected()
-            assertTrue(owner.notificationPostPermit.isActive, "UI rewire must not retire the graph")
+            assertTrue("UI rewire must not retire the graph", owner.notificationPostPermit.isActive)
             release.complete(Unit)
             h.settle()
             val fresh = seedReaction(h, owner)

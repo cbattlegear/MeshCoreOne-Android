@@ -33,7 +33,8 @@ class MeshCoreSession private constructor(
     private val randomTag: () -> UInt,
     onDiagnostic: (SessionDiagnostic) -> Unit,
     offlinePlaceholder: Boolean,
-) : MeshCoreSessionProtocol, ConfigurationSessionOps, AdvertisingSessionOps, DiagnosticsSessionOps, RemoteAccessSessionOps {
+) : MeshCoreSessionProtocol, ConfigurationSessionOps, AdvertisingSessionOps, DiagnosticsSessionOps, RemoteAccessSessionOps,
+    CriticalSessionEventStreaming {
     constructor(
         transport: MeshTransport,
         configuration: SessionConfiguration = SessionConfiguration.DEFAULT,
@@ -59,19 +60,20 @@ class MeshCoreSession private constructor(
     internal val core = SessionCore(transport, configuration, clock, coroutineContext, onDiagnostic, offlinePlaceholder)
 
     override val connectionState: Flow<ConnectionState> get() = core.connectionStates()
-    override val currentSelfInfo: SelfInfo? get() = synchronized(core.lock) { core.active?.selfInfo }
-    val deviceTime: Instant? get() = synchronized(core.lock) { core.active?.deviceTime }
-    val currentDeviceCapabilities: DeviceCapabilities? get() = synchronized(core.lock) { core.active?.capabilities }
-    val cachedContacts: List<MeshContact> get() = synchronized(core.lock) { core.active?.contacts?.cachedContacts ?: EventList(emptyList()) }
-    val cachedPendingContacts: List<MeshContact> get() = synchronized(core.lock) { core.active?.contacts?.cachedPendingContacts ?: EventList(emptyList()) }
-    val isContactsDirty: Boolean get() = synchronized(core.lock) { core.active?.contacts?.needsRefresh ?: true }
-    val lastContactFetchProgress: ContactStreamProgress? get() = synchronized(core.lock) { core.active?.contactProgress }
+    override val currentSelfInfo: SelfInfo? get() = core.withLock { core.active?.selfInfo }
+    val deviceTime: Instant? get() = core.withLock { core.active?.deviceTime }
+    val currentDeviceCapabilities: DeviceCapabilities? get() = core.withLock { core.active?.capabilities }
+    val cachedContacts: List<MeshContact> get() = core.withLock { core.active?.contacts?.cachedContacts ?: EventList(emptyList()) }
+    val cachedPendingContacts: List<MeshContact> get() = core.withLock { core.active?.contacts?.cachedPendingContacts ?: EventList(emptyList()) }
+    val isContactsDirty: Boolean get() = core.withLock { core.active?.contacts?.needsRefresh ?: true }
+    val lastContactFetchProgress: ContactStreamProgress? get() = core.withLock { core.active?.contactProgress }
 
     suspend fun start(reconnectingAttempt: Long? = null, disconnectTransportOnFailure: Boolean = true) =
         core.start(reconnectingAttempt, disconnectTransportOnFailure)
     suspend fun stop(disconnectTransport: Boolean = true) = core.stop(disconnectTransport)
     override fun events(): Flow<MeshEvent> = core.eventsTracked().stream
     override fun events(filter: EventFilter): Flow<MeshEvent> = core.eventsTracked(filter).stream
+    override fun criticalEvents(kind: CriticalEventKind): CriticalEventSubscription = core.criticalEvents(kind)
     fun eventsTracked(): EventSubscription = core.eventsTracked()
     fun finishEvents(id: UUID) = core.finishEvents(id)
     override suspend fun waitForEvent(filter: EventFilter, timeout: Double?): MeshEvent? =
@@ -127,7 +129,7 @@ class MeshCoreSession private constructor(
     suspend fun setAdvertisementLocationPolicy(policy: UByte) = mutateOtherParams { it.copy(advertisementLocationPolicy = policy) }
 
     private suspend fun mutateOtherParams(transform: (OtherParamsConfig) -> OtherParamsConfig) = core.exchange {
-        val info = synchronized(core.lock) { generation.selfInfo } ?: query(
+        val info = core.withLock { generation.selfInfo } ?: query(
             PacketBuilder.appStart(core.configuration.clientIdentifier), "selfInfo",
         ) { (it as? MeshEvent.SelfInfo)?.info }
         val config = transform(OtherParamsConfig(info))
@@ -155,7 +157,7 @@ class MeshCoreSession private constructor(
     }
     override suspend fun setCustomVar(key: String, value: String) = simple(PacketBuilder.setCustomVar(key, value))
     override suspend fun getSelfTelemetry(): TelemetryResponse = core.exchange {
-        val prefix = synchronized(core.lock) { generation.selfInfo?.publicKey?.prefix(6) }
+        val prefix = core.withLock { generation.selfInfo?.publicKey?.prefix(6) }
         query(PacketBuilder.getSelfTelemetry(), "selfTelemetry") {
             (it as? MeshEvent.TelemetryResponse)?.response?.takeIf { response -> prefix == null || response.publicKeyPrefix == prefix }
         }
@@ -184,12 +186,12 @@ class MeshCoreSession private constructor(
     }
 
     fun getContactByName(name: String, exactMatch: Boolean = false): MeshContact? =
-        synchronized(core.lock) { core.active?.contacts?.getByName(name, exactMatch) }
-    fun getContactByKeyPrefix(prefix: String): MeshContact? = synchronized(core.lock) { core.active?.contacts?.getByKeyPrefix(prefix) }
-    fun getContactByKeyPrefix(prefix: Bytes): MeshContact? = synchronized(core.lock) { core.active?.contacts?.getByKeyPrefix(prefix) }
-    fun popPendingContact(publicKey: String): MeshContact? = synchronized(core.lock) { core.active?.contacts?.popPending(publicKey) }
-    fun flushPendingContacts() = synchronized(core.lock) { core.active?.contacts?.flushPending(); Unit }
-    fun setAutoUpdateContacts(enabled: Boolean) = synchronized(core.lock) { core.generation().contacts.setAutoUpdate(enabled) }
+        core.withLock { core.active?.contacts?.getByName(name, exactMatch) }
+    fun getContactByKeyPrefix(prefix: String): MeshContact? = core.withLock { core.active?.contacts?.getByKeyPrefix(prefix) }
+    fun getContactByKeyPrefix(prefix: Bytes): MeshContact? = core.withLock { core.active?.contacts?.getByKeyPrefix(prefix) }
+    fun popPendingContact(publicKey: String): MeshContact? = core.withLock { core.active?.contacts?.popPending(publicKey) }
+    fun flushPendingContacts() = core.withLock { core.active?.contacts?.flushPending(); Unit }
+    fun setAutoUpdateContacts(enabled: Boolean) = core.withLock { core.generation().contacts.setAutoUpdate(enabled) }
     suspend fun ensureContacts(force: Boolean = false): List<MeshContact> {
         val contacts = core.generation().contacts
         return if (force || contacts.needsRefresh || contacts.isEmpty) getContacts(contacts.contactsLastModified) else contacts.cachedContacts

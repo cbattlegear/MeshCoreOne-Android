@@ -52,7 +52,7 @@ internal suspend fun SessionCore.fetchContacts(since: Instant?): ContactFetchRes
     var fetchCompleted = false
     val invalidation = generation.contacts.invalidationGeneration
     val incrementalBaseline = since != null && generation.contacts.hasBaseline(since)
-    fun snapshot(completed: Boolean) = synchronized(core.lock) {
+    fun snapshot(completed: Boolean) = core.withLock {
         generation.contactProgress = ContactStreamProgress(generation.number, total, contacts.size.toLong(), modified, completed)
     }
     snapshot(false)

@@ -24,6 +24,11 @@ interface SessionEventStreaming {
     suspend fun waitForEvent(filter: EventFilter, timeout: Double? = null): MeshEvent?
 }
 
+/** Optional nonactivated bounded custody; terminal uncertainty is not a lossless/replay guarantee. */
+interface CriticalSessionEventStreaming {
+    fun criticalEvents(kind: CriticalEventKind): CriticalEventSubscription
+}
+
 interface MessagingSessionOps {
     val currentSelfInfo: SelfInfo?
     suspend fun sendMessage(

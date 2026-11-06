@@ -65,7 +65,7 @@ internal suspend fun SessionCore.sendMessageWithRetry(
                 }
                 if (acknowledged) return@exchange info
             } finally {
-                expected?.let { synchronized(core.lock) { generation.retiredAckCodes += it } }
+                expected?.let { core.withLock { generation.retiredAckCodes += it } }
                 core.unregister(generation, acknowledgements)
             }
             attempts += 1

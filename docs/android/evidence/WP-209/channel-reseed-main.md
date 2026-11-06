@@ -112,6 +112,16 @@ The matching fallback's early transaction return also avoids triggering future
 identity/epoch invalidation on a redundant identical write. Existing context
 transaction ownership is retained, and no staged RX save is requested.
 
+The independent WP-217 App delta
+`11aa115491aeca28b46dfc1584d8456f4ecccc53` adds two further mounted cases:
+restored changed secret and restored disabled state, each with a missing fixed
+seed UUID and customized metadata/history. Both require localized InvalidData,
+disconnected state and retained data/offline boundaries, followed by fixture-only
+secret/enable reconciliation and successful retry with the imported UUID and
+metadata retained. Only this test-file delta is composed, not its parent history.
+There are now seven new Room methods and four new App methods relative to main;
+all remain uncompiled/unexecuted on this local successor.
+
 The baseline main run
 [42139516955](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42139516955)
 had a separate observed `ChatMapPreviewTest` failure. It is neither evidence for

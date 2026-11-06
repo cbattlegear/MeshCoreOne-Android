@@ -198,6 +198,7 @@ class CapabilityEngine:
             paths, keys = rule["path_rules"], rule["keys"]
             if simulator_resources - set(paths) or read_blob is None:
                 raise PortError("Simulator preference recovery requires exact paths and an immutable blob reader")
+            messages = {}
             for path in paths:
                 if path not in candidate_tree:
                     raise PortError("Simulator preference recovery cannot delete or omit a supported locale")
@@ -208,8 +209,10 @@ class CapabilityEngine:
                 )
                 if set(values) != set(keys):
                     raise PortError("Simulator preference recovery requires all twenty keys in every locale")
-                for value in values.values():
-                    CapabilityEngine._android_copy_comparison(value)
+                messages[path] = {
+                    key: CapabilityEngine._android_copy_comparison(value)
+                    for key, value in values.items()
+                }
                 if path in base_tree:
                     original_structure, original = CapabilityEngine._bounded_copy_resource(
                         read_blob(base_tree[path]), keys, "Simulator preference recovery"
@@ -218,6 +221,9 @@ class CapabilityEngine:
                         raise PortError("Simulator preference recovery base must contain all twenty keys")
                     if structure != original_structure:
                         raise PortError("Simulator preference recovery cannot change unrelated resource content")
+            for path in paths[1:]:
+                if any(messages[path][key] == messages[paths[0]][key] for key in keys):
+                    raise PortError("Simulator preference recovery requires localized copy, not English fallback")
 
     @staticmethod
     def _notification_enrollment_resource(data: bytes):

@@ -148,7 +148,7 @@ SIMULATOR_PREFERENCE_RECOVERY_COPY_CAPABILITY = {
     ],
     "validation": [
         "exact-WP217-operation-twelve-path-twenty-key positives-and-wrong-WP-operation-path-traversal-denials",
-        "immutable-XML-missing-deleted-locale-key-extra-duplicate-malformed-empty-content-and-unrelated-change-regressions",
+        "immutable-XML-missing-deleted-locale-key-extra-duplicate-malformed-empty-content-unrelated-change-and-normalized-English-fallback-regressions",
         "complete-predecessor-policy-object-and-raw-Git-blob-unchanged-including-existing-admission-and-protected-gates",
         "actual-controller-staging-supplies-immutable-blob-reader-and-trusted-base-policy-not-candidate-self-admission",
         "future-exact-candidate-resource-and-mounted-Compose-assertions-for-all-twelve-locales-with-positive-hosted-discovery",

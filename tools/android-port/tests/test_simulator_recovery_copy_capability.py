@@ -211,6 +211,26 @@ class SimulatorRecoveryCopyCapabilityTests(unittest.TestCase):
             with self.subTest(xml=xml), self.assertRaises(PortError):
                 self.validate(base, candidate, blobs)
 
+    def test_every_non_english_key_rejects_normalized_english_fallback(self):
+        for index, path in enumerate(PATHS[1:], 1):
+            for key in KEYS:
+                base, candidate, blobs = self.fixture()
+                values = dict.fromkeys(KEYS, f"New fixture {index}")
+                values[key] = "New fixture 0"
+                blobs[candidate[path]] = self.xml(values)
+                with self.subTest(path=path, key=key), self.assertRaisesRegex(PortError, "English fallback"):
+                    self.validate(base, candidate, blobs)
+        for disguised in (
+            " New fixture 0 ", "\nNew   fixture\t0\n", '"New fixture 0"',
+            r"New\nfixture\t0", r"\u004eew fixture 0",
+        ):
+            base, candidate, blobs = self.fixture()
+            values = dict.fromkeys(KEYS, "New fixture 11")
+            values[KEYS[-1]] = disguised
+            blobs[candidate[PATHS[-1]]] = self.xml(values)
+            with self.subTest(disguised=disguised), self.assertRaisesRegex(PortError, "English fallback"):
+                self.validate(base, candidate, blobs)
+
     def test_unrelated_notices_and_invalid_base_cannot_be_changed(self):
         for marker in (b"<!-- Copyright notice -->", b"<?localization preserve?>"):
             for position in ("before", "inside", "after"):
@@ -301,7 +321,8 @@ class SimulatorRecoveryCopyCapabilityTests(unittest.TestCase):
 
             policy_path = "docs/android/automation-policy.json"
             proposed = (REPO / policy_path).read_bytes()
-            resources = {path: self.xml(dict.fromkeys(KEYS, "Structural fixture")) for path in PATHS}
+            resources = {path: self.xml(dict.fromkeys(KEYS, f"Structural fixture {index}"))
+                         for index, path in enumerate(PATHS)}
             operations = dict.fromkeys(PATHS, OPERATION)
             untrusted_candidate = commit(BASE, {policy_path: proposed, **resources})
             with self.assertRaisesRegex(PortError, "no trusted path\\+operation rule"):

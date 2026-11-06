@@ -238,7 +238,9 @@ pl, pt, ru, uk and b+zh+Hans). Every locale must contain exactly the twenty appr
 generated catalogs or Swift source-map entries; existing catalogs remain unchanged.
 Immutable base/candidate validation rejects locale/file/key deletion, extra or duplicate
 keys, malformed or empty strings and changes to unrelated notices. Each changed locale
-requires the named operation. Consumer and test admissions remain separate.
+requires the named operation. Each non-English key is compared to its English counterpart
+after Android escape, quote and whitespace normalization; identical fallback is rejected,
+with no blanket identical-text exception. Consumer and test admissions remain separate.
 Genuine translations, including pt-PT for `values-pt`, and actual resource/Compose assertions
 for all twelve locales remain necessary; structural checks or string inequality cannot
 establish translation quality. Trusted landing, legitimate assignment, ordinary admission

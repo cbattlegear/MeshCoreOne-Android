@@ -500,6 +500,8 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
             }
             return
         }
+        val revision = synchronized(lock) { settingsEventsRevision }
+        if (!isCurrentWiring(session, revision)) return
 
         // The link is up, so drop any pairing-failure alert latched while backgrounded.
         connectionUI.clearPairingFailure()
@@ -514,12 +516,13 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
 
         syncCoordinator = session.syncCoordinator
         deps.platform.onSessionWired(session, connectedDevice)
+        if (!isCurrentWiring(session, revision)) return
 
         wireSyncDataEvents(session)
-        wireSettingsEventStream(session)
+        if (!wireSettingsEventStream(session, revision) || !isCurrentWiring(session, revision)) return
         wireDeviceUpdateCallbacks(session)
         messageEventDispatcher.wire(session.subscribeMessageEvents())
-        wirePacketCallbacks(session)
+        wirePacketCallbacks(session, revision)
         session.channelService.setSlotOccupantChangedHandler { radioId, indices -> handleChannelSlotOccupantChanged(radioId, indices) }
 
         // Bump only when the container actually changed: connect fires onConnectionReady and then an explicit rewire.
@@ -535,8 +538,10 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
             deps.platform.onSessionChanged()
         }
 
+        if (!isCurrentWiring(session, revision)) return
         session.notificationService.updateBadgeCount()
-        configureNotificationHandlers(session)
+        if (!isCurrentWiring(session, revision)) return
+        configureNotificationHandlers(session, revision)
         if (session.transportType == TransportType.SIMULATOR) {
             batteryMonitor.stop()
             batteryMonitor.deviceBattery = null
@@ -558,19 +563,22 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
         })
     }
 
-    private suspend fun wireSettingsEventStream(session: AppSession) {
+    private fun isCurrentWiring(session: AppSession, revision: Long): Boolean =
+        synchronized(lock) { services === session && settingsEventsRevision == revision }
+
+    private suspend fun wireSettingsEventStream(session: AppSession, revision: Long): Boolean {
         settingsEventsWiring.lock()
-        try {
-            installSettingsEventStream(session)
+        return try {
+            installSettingsEventStream(session, revision)
         } finally {
             settingsEventsWiring.unlock()
         }
     }
 
-    private fun installSettingsEventStream(session: AppSession) {
-        val revision = synchronized(lock) {
-            if (services !== session || (settingsEventsSession === session && settingsEventsJob?.isActive == true)) return
-            settingsEventsRevision
+    private fun installSettingsEventStream(session: AppSession, revision: Long): Boolean {
+        synchronized(lock) {
+            if (services !== session || settingsEventsRevision != revision) return false
+            if (settingsEventsSession === session && settingsEventsJob?.isActive == true) return true
         }
         val subscription = session.settingsService.events()
         val next = sessionScope.launch(start = CoroutineStart.UNDISPATCHED) {
@@ -614,7 +622,7 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
         try {
             onSettingsEventsSubscriptionForTesting?.invoke()
             val previous = synchronized(lock) {
-                if (settingsEventsRevision != revision || services !== session) return
+                if (settingsEventsRevision != revision || services !== session) return false
                 settingsEventsJob.also {
                     settingsEventsJob = next
                     settingsEventsSession = session
@@ -622,6 +630,7 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
                 }
             }
             previous?.cancel()
+            return true
         } finally {
             if (!installed) {
                 subscription.close()
@@ -673,21 +682,29 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
     }
 
     /** Every received RF packet refreshes platform freshness and may trigger an overdue battery read. */
-    private fun wirePacketCallbacks(session: AppSession) {
+    private fun wirePacketCallbacks(session: AppSession, revision: Long) {
         val entries = session.rxLogService.entryStream()
         replaceJob({ rxLogEventsJob }, { rxLogEventsJob = it }, sessionScope.launch(start = CoroutineStart.UNDISPATCHED) {
             entries.collect {
+                if (!isCurrentWiring(session, revision)) return@collect
                 deps.platform.onPacketReceived()
-                if (session.transportType != TransportType.SIMULATOR && deps.platform.hasActiveConnectionActivity()) {
-                    batteryMonitor.fetchBatteryIfOverdue(services?.batteryServices, connectedDevice)
+                if (isCurrentWiring(session, revision) && session.transportType != TransportType.SIMULATOR &&
+                    deps.platform.hasActiveConnectionActivity()) {
+                    batteryMonitor.fetchBatteryIfOverdue(session.batteryServices, connectedDevice)
                 }
             }
         })
-        batteryMonitor.onBatteryChanged = { battery -> scope.launch { deps.platform.onBatteryChanged(battery) } }
+        batteryMonitor.onBatteryChanged = { battery -> scope.launch {
+            if (isCurrentWiring(session, revision)) deps.platform.onBatteryChanged(battery)
+        } }
         val device = connectedDevice
         if (device != null) {
             scope.launch {
-                deps.platform.onConnectionReady(device, batteryMonitor.activeBatteryOcvArray(device), totalUnreadCount(session))
+                if (!isCurrentWiring(session, revision)) return@launch
+                val unread = totalUnreadCount(session)
+                if (isCurrentWiring(session, revision)) {
+                    deps.platform.onConnectionReady(device, batteryMonitor.activeBatteryOcvArray(device), unread)
+                }
             }
         }
     }
@@ -698,12 +715,12 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
     }
 
     /** Configures notification interaction handlers once services are available (installed on every wire, idempotent). */
-    private fun configureNotificationHandlers(session: AppSession) {
-        deps.platform.configureNotificationNavigation(session) { connectedDevice }
+    private fun configureNotificationHandlers(session: AppSession, revision: Long) {
+        deps.platform.configureNotificationNavigation(session) { connectedDevice.takeIf { isCurrentWiring(session, revision) } }
         val handler = session.notificationActionHandler
         handler.configure(
-            isConnectionReady = { connectionState == DeviceConnectionState.READY },
-            localNodeName = { connectedDevice?.nodeName },
+            isConnectionReady = { isCurrentWiring(session, revision) && connectionState == DeviceConnectionState.READY },
+            localNodeName = { connectedDevice?.nodeName?.takeIf { isCurrentWiring(session, revision) } },
         )
         val notifications = session.notificationService
         notifications.onQuickReply = { contact, text -> handler.handleQuickReply(contact, text) }

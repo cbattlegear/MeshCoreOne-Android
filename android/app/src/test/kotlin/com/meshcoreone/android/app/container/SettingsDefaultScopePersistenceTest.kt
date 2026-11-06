@@ -70,7 +70,8 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
                 advanced.onTxPowerTextChanged("10")
                 advanced.apply(token)
                 h.eventually("accepted one-kHz readback is acknowledged through Room") {
-                    advanced.state.value.showSuccess && !advanced.state.value.isApplying
+                    advanced.state.value.showSuccess && !advanced.state.value.isApplying &&
+                        advanced.state.value.device == h.manager.connectedDevice
                 }
                 assertTrue(failures.isEmpty())
                 assertEquals(867_999u, store.fetchDevice(before.id)?.frequency)
@@ -889,6 +890,101 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
 
     @Test fun teardownDuringSettingsInstallationCannotReviveTheRetiredCollector() = runTest {
         assertConcurrentSettingsWiring(retireDuringInstallation = true)
+    }
+
+    @Test fun waitingOldSessionWiringCannotRebindConsumersAfterARealReplacement() = runTest {
+        val configured = java.util.Collections.synchronizedList(
+            mutableListOf<com.meshcoreone.android.core.contracts.domain.SessionToken>(),
+        )
+        val readyDevices = java.util.Collections.synchronizedList(mutableListOf<java.util.UUID>())
+        val platform = object : com.meshcoreone.android.app.state.AppStatePlatform {
+            override fun configureNotificationNavigation(
+                session: com.meshcoreone.android.app.state.AppSession, connectedDevice: () -> DeviceDTO?,
+            ) { configured += session.token }
+            override suspend fun onConnectionReady(device: DeviceDTO, ocvArray: List<Long>, unreadCount: Int) {
+                readyDevices += device.id
+            }
+        }
+        withSettings(platform = platform) { h, _, _, _ ->
+            val old = assertNotNull(h.sessions.current)
+            val messageJobs = h.appState.messageEventDispatcher.activeJobCount
+            val installed = java.util.concurrent.CountDownLatch(1)
+            val finishInstallation = java.util.concurrent.CountDownLatch(1)
+            val subscriptions = java.util.concurrent.atomic.AtomicInteger()
+            h.appState.tearDownAppStateSessionState()
+            h.appState.onSettingsEventsSubscriptionForTesting = {
+                if (subscriptions.incrementAndGet() == 1) {
+                    installed.countDown()
+                    assertTrue(finishInstallation.await(10, java.util.concurrent.TimeUnit.SECONDS))
+                }
+            }
+            try {
+                val installing = backgroundScope.async(kotlinx.coroutines.Dispatchers.Default) {
+                    h.appState.wireServicesIfConnected()
+                }
+                h.eventually("old installer is held after subscription creation") { installed.count == 0L }
+                val waiting = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) {
+                    h.appState.wireServicesIfConnected()
+                }
+                assertFalse(waiting.isCompleted)
+                h.manager.disconnect()
+                val notificationStart = configured.size
+                val readyStart = readyDevices.size
+                val replacement = backgroundScope.async { h.manager.connect(h.target()) }
+                h.eventually("replacement graph is current before releasing the old installer") {
+                    h.sessions.current?.let { it !== old } == true
+                }
+                val current = assertNotNull(h.sessions.current)
+                finishInstallation.countDown()
+                h.eventually("replacement wiring and both old callers settle") {
+                    installing.isCompleted && waiting.isCompleted && replacement.isCompleted &&
+                        h.appState.canRunSettingsStartupReads
+                }
+                installing.await()
+                waiting.await()
+                replacement.await()
+                h.settle()
+                val device = assertNotNull(h.manager.connectedDevice)
+                assertEquals(current.token, h.appState.sessionTokenForServicesVersion(h.appState.servicesVersion.value))
+                assertTrue(configured.drop(notificationStart).isNotEmpty())
+                assertTrue(configured.drop(notificationStart).all { it == current.token }, "No old-session notification rebind")
+                assertTrue(readyDevices.drop(readyStart).isNotEmpty())
+                assertTrue(readyDevices.drop(readyStart).all { it == device.id }, "No retired ready callback")
+                assertEquals(4, h.appState.activeSessionJobCount)
+                assertEquals(messageJobs, h.appState.messageEventDispatcher.activeJobCount)
+                assertTrue(h.appState.batteryMonitor.isRefreshLoopActive)
+                assertTrue(h.appState.hasSettingsEventsJob)
+            } finally {
+                h.appState.onSettingsEventsSubscriptionForTesting = null
+                finishInstallation.countDown()
+            }
+        }
+    }
+
+    @Test fun disconnectDuringBadgeAwaitCannotReinstallNotificationsOrBatteryMonitoring() = runTest {
+        val configured = mutableListOf<com.meshcoreone.android.core.contracts.domain.SessionToken>()
+        val platform = object : com.meshcoreone.android.app.state.AppStatePlatform {
+            override fun configureNotificationNavigation(
+                session: com.meshcoreone.android.app.state.AppSession, connectedDevice: () -> DeviceDTO?,
+            ) { configured += session.token }
+        }
+        withSettings(platform = platform) { h, _, _, _ ->
+            val notifications = configured.size
+            val wiring = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) {
+                h.appState.wireServicesIfConnected()
+            }
+            assertFalse(wiring.isCompleted, "The real badge debounce suspends this continuation")
+            h.manager.disconnect()
+            h.eventually("retired badge waiter settles") { wiring.isCompleted }
+            wiring.await()
+            h.settle()
+            assertEquals(notifications, configured.size)
+            assertEquals(0, h.appState.activeSessionJobCount)
+            assertEquals(0, h.appState.messageEventDispatcher.activeJobCount)
+            assertFalse(h.appState.batteryMonitor.isBootstrapActive)
+            assertFalse(h.appState.batteryMonitor.isRefreshLoopActive)
+            assertFalse(h.appState.hasSettingsEventsJob)
+        }
     }
 
     private suspend fun TestScope.assertConcurrentSettingsWiring(retireDuringInstallation: Boolean) {
@@ -1741,9 +1837,10 @@ class SettingsDefaultScopePersistenceTest : RoomProcessTest() {
         actionScope: CoroutineScope? = null,
         exposeDependencies: (SettingsFeatureDependencies) -> Unit = {},
         firmwareVersion: UByte = 11u,
+        platform: com.meshcoreone.android.app.state.AppStatePlatform = com.meshcoreone.android.app.state.AppStatePlatform.NONE,
         action: suspend (ContainerHarness, DefaultFloodScopeStateHolder, MutableList<Throwable>, ScopeRadio) -> Unit,
     ) {
-        val h = ContainerHarness(this, store, persistenceOverride = persistence)
+        val h = ContainerHarness(this, store, persistenceOverride = persistence, platform = platform)
         val radio = ScopeRadio().also { it.firmwareVersion = firmwareVersion }
         var holder: DefaultFloodScopeStateHolder? = null
         try {

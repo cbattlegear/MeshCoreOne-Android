@@ -3,7 +3,6 @@ package com.meshcoreone.android.core.services.messaging
 
 import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.model.*
-import java.lang.reflect.Proxy
 import java.time.Instant
 import java.util.UUID
 import kotlin.test.*
@@ -228,25 +227,28 @@ class PendingChannelMessageIntentTest {
         block: suspend (MessageService) -> Unit,
     ) {
         val service = MessageService(h.token, SELF, h.session, h.store, h.signals, h.scope,
-            clock = h.clock, reporter = MessagingIssueReporter { h.diagnostics += it }, channelFailureAuthority = role)
+            clock = h.clock, reporter = MessagingIssueReporter { h.diagnostics += it }, channelFailureAuthority = role?.authority)
         try { block(service) } finally { service.close() }
     }
 
-    private data class Request(val creation: ChannelMessageCreation, val timestamp: UInt, val createdAt: Instant)
+}
 
-    private class CreationRole(private val store: RecordingStore) : ChannelFailureAuthority by rejectingRole() {
-        private val lease = object : DirectAckLease {}
-        val activations = mutableListOf<SessionToken>()
-        val requests = mutableListOf<Request>()
-        var revoked = false
-        var reconciled = false
-        var rejection: DirectAckRejection? = null
-        var returnedOrigin: ChannelHistoryScope? = null
-        var canonical: (MessageDTO) -> MessageDTO = { it }
-        var before: suspend () -> Unit = {}
-        var after: suspend () -> Unit = {}
-        var onRevoke: () -> Unit = {}
+private class CreationRole(private val store: RecordingStore) {
+    data class Request(val creation: ChannelMessageCreation, val timestamp: UInt, val createdAt: Instant)
 
+    private val lease = object : DirectAckLease {}
+    val activations = mutableListOf<SessionToken>()
+    val requests = mutableListOf<Request>()
+    var revoked = false
+    var reconciled = false
+    var rejection: DirectAckRejection? = null
+    var returnedOrigin: ChannelHistoryScope? = null
+    var canonical: (MessageDTO) -> MessageDTO = { it }
+    var before: suspend () -> Unit = {}
+    var after: suspend () -> Unit = {}
+    var onRevoke: () -> Unit = {}
+
+    val authority: ChannelFailureAuthority = object : ChannelFailureAuthority {
         override suspend fun activateChannelFailureSession(token: SessionToken, requestId: UUID): DirectAckActivationResult {
             activations += token
             return DirectAckActivationResult.Activated(lease)
@@ -258,7 +260,7 @@ class PendingChannelMessageIntentTest {
             timestamp: UInt,
             createdAt: Instant,
         ): ChannelMessageCreationResult {
-            assertSame(this.lease, lease)
+            assertSame(this@CreationRole.lease, lease)
             requests += Request(creation, timestamp, createdAt)
             before()
             rejection?.let { return ChannelMessageCreationResult.Rejected(it) }
@@ -274,18 +276,40 @@ class PendingChannelMessageIntentTest {
         }
 
         override suspend fun revokeChannelFailureSession(lease: DirectAckLease): DirectAckRevocationResult {
-            assertSame(this.lease, lease)
+            assertSame(this@CreationRole.lease, lease)
             onRevoke()
             revoked = true
             return DirectAckRevocationResult.Revoked
         }
-    }
 
-    private companion object {
-        fun rejectingRole(): ChannelFailureAuthority = ChannelFailureAuthority::class.java.cast(
-            Proxy.newProxyInstance(ChannelFailureAuthority::class.java.classLoader, arrayOf(ChannelFailureAuthority::class.java)) {
-                    _, method, _ -> error("Unexpected channel producer operation: ${method.name}")
-            },
-        )
+        override suspend fun createChannelFailureAttempt(
+            lease: DirectAckLease,
+            creationRequestId: UUID,
+            message: MessageDTO,
+        ): ChannelFailureCaptureResult = error("Unexpected createChannelFailureAttempt")
+
+        override suspend fun prepareChannelFailureAttempt(
+            lease: DirectAckLease,
+            prepareRequestId: UUID,
+            key: EntityKey,
+            pendingSendId: UUID?,
+            resendTimestamp: UInt?,
+        ): ChannelFailureCaptureResult = error("Unexpected prepareChannelFailureAttempt")
+
+        override suspend fun remapChannelFailureAttempt(
+            attempt: ChannelFailureAttempt,
+            requestId: UUID,
+        ): ChannelFailureRemapResult = error("Unexpected remapChannelFailureAttempt")
+
+        override suspend fun recordChannelFailure(
+            attempt: ChannelFailureAttempt,
+            requestId: UUID,
+            cleanup: ChannelFailureCleanup,
+        ): ChannelFailureResult = error("Unexpected recordChannelFailure")
+
+        override suspend fun inspectChannelFailureAttempt(
+            lease: DirectAckLease,
+            captureRequestId: UUID,
+        ): ChannelFailureObservation = error("Unexpected inspectChannelFailureAttempt")
     }
 }

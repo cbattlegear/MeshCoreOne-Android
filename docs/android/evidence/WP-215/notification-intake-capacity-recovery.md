@@ -2,11 +2,13 @@
 
 ## Status and identity
 
-**BLOCKED / NOT BUILD- OR TEST-VERIFIED.** This is an independently admitted source
-draft, not a feature-completion, dispatch, device-durability or acceptance receipt.
-The resource prerequisite has now landed and its eleven English keys are present
-after fresh trusted admission. Resource resolution is no longer a known missing
-input; compilation and hosted test execution remain unperformed.
+**Source design and authoring history, not a CI-result bundle.** The resource
+prerequisite has landed and its eleven English keys are present after fresh
+trusted admission. Authoring-time statements below about unexecuted controls
+describe those original source snapshots, not the current hosted result. Current
+exact-candidate compilation, discovered method identities and outcomes are
+authoritative only in the original [PR #621 hosted checks](https://github.com/cbattlegear/MeshCoreOne-Android/pull/621/checks).
+No product/device or whole-WP acceptance follows from those automated checks.
 
 - Repository: `cbattlegear/MeshCoreOne-Android`.
 - WP: `WP-215`, bounded pre-admission reply/mark-read capacity recovery for #514.
@@ -47,6 +49,11 @@ bytes rather than normalized by a text encoder. SQLite page growth is capped at
 Both SQLite opening paths install a non-destructive corruption handler rather
 than Android's default handler, which can delete the corrupt database. A corrupt
 file is a typed unavailable-storage result, not an empty replacement store.
+An interrupted first schema transaction can leave an empty version-zero file.
+Both preliminary read and write openings retry initialization only when a
+transaction observes version zero with no `sqlite_master` objects at all.
+Unknown/populated schemas and nonzero unsupported versions remain failures and
+are preserved, never reset or migrated implicitly.
 
 If durable storage is full or unavailable, a separate process-memory fallback
 holds at most 32 records and 1 MiB, with the same per-record limit and no eviction.
@@ -208,6 +215,13 @@ validator. No policy was authored in this lane. English-only authored copy does
 not count as reviewed translations or complete-locale UI acceptance.
 
 ## Authored controls, not execution evidence
+
+The inventory history below predates hosted execution. The later interrupted
+bootstrap repair adds three receiver controls (32 receiver and 28 App
+declarations): actual schema rollback then reopen/retain, empty version-zero
+read/reopen, and populated unknown version-zero preservation. Use the original
+exact-head hosted log linked above for actual discovery and execution, not these
+source counts.
 
 `NotificationActionReceiverCapacityTest.kt` contains 29 authored methods using the
 real receiver, RemoteInput, dispatcher and private SQLite adapter. They cover

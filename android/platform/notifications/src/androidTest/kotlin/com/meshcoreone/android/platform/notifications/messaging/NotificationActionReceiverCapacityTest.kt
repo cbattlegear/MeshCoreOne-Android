@@ -340,6 +340,75 @@ class NotificationActionReceiverCapacityTest {
     }
 
     @Test
+    fun rolledBackBootstrapCanInitializeThroughPreliminaryReadAndRetainAfterReopen() {
+        val file = File(context.noBackupFilesDir, "notification-action-recovery.sqlite")
+        SQLiteDatabase.openOrCreateDatabase(file, null).use {
+            it.beginTransaction()
+            try {
+                it.execSQL("CREATE TABLE drafts (id TEXT)")
+                it.version = 1
+                // Simulate interruption before the schema transaction commits.
+            } finally {
+                it.endTransaction()
+            }
+            assertEquals(0, it.version)
+            it.rawQuery("SELECT COUNT(*) FROM sqlite_master", null).use { row ->
+                assertTrue(row.moveToFirst())
+                assertEquals(0, row.getInt(0))
+            }
+        }
+        val original = response(95, NotificationAction.REPLY, " \tbootstrap retry original\n ")
+        val result = NotificationActionRecoveryStore(context).retain(original)
+        assertTrue(result is NotificationRecoveryWrite.Stored)
+        assertEquals(original, entries().single().response)
+        SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY).use {
+            assertEquals(1, it.version)
+        }
+    }
+
+    @Test
+    fun emptyVersionZeroReadRetriesBootstrapWithoutInventingAnOriginal() {
+        val file = File(context.noBackupFilesDir, "notification-action-recovery.sqlite")
+        SQLiteDatabase.openOrCreateDatabase(file, null).use { assertEquals(0, it.version) }
+        val loaded = NotificationActionRecoveryStore(context).read() as NotificationRecoveryRead.Ready
+        assertTrue(loaded.entries.isEmpty())
+        assertTrue(entries().isEmpty())
+        SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY).use {
+            assertEquals(1, it.version)
+        }
+    }
+
+    @Test
+    fun versionZeroWithUnknownSchemaIsPreservedRatherThanInitialized() {
+        val file = File(context.noBackupFilesDir, "notification-action-recovery.sqlite")
+        SQLiteDatabase.openOrCreateDatabase(file, null).use {
+            it.execSQL("CREATE TABLE preserved (value INTEGER NOT NULL)")
+            it.execSQL("INSERT INTO preserved VALUES (23)")
+            assertEquals(0, it.version)
+        }
+        val store = NotificationActionRecoveryStore(context)
+        assertEquals(
+            NotificationRecoveryFailure.INVALID_RECORD,
+            (store.read() as NotificationRecoveryRead.Failed).reason,
+        )
+        assertEquals(
+            NotificationRecoveryFailure.INVALID_RECORD,
+            (store.retain(response(96, NotificationAction.MARK_READ)) as NotificationRecoveryWrite.Failed).reason,
+        )
+        SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY).use {
+            assertEquals(0, it.version)
+            it.rawQuery("SELECT value FROM preserved", null).use { row ->
+                assertTrue(row.moveToFirst())
+                assertEquals(23, row.getInt(0))
+            }
+            it.rawQuery("SELECT COUNT(*) FROM sqlite_master WHERE name = 'drafts'", null).use { row ->
+                assertTrue(row.moveToFirst())
+                assertEquals(0, row.getInt(0))
+            }
+        }
+    }
+
+    @Test
     fun explicitDispositionDeletesOnlyTheChosenDraftAndAStaleIdFails() {
         val store = NotificationActionRecoveryStore(context)
         val first = (store.retain(response(1, NotificationAction.REPLY, "first")) as NotificationRecoveryWrite.Stored).entry

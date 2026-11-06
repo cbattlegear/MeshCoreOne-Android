@@ -358,9 +358,12 @@ class NotificationActionRecoveryStore(private val context: Context) {
             SQLiteDatabase.openOrCreateDatabase(file.path, null, preserveCorruption)
         }
         try {
-            if (!existed) {
+            if (database.version == 0) {
                 database.beginTransaction()
                 try {
+                    database.rawQuery("SELECT COUNT(*) FROM sqlite_master", null).use {
+                        if (!it.moveToFirst() || it.getLong(0) != 0L) throw InvalidRecoveryRecord()
+                    }
                     database.execSQL(
                         "CREATE TABLE drafts (sequence INTEGER PRIMARY KEY AUTOINCREMENT, " +
                             "id TEXT NOT NULL UNIQUE, payload TEXT NOT NULL, action TEXT NOT NULL, " +

@@ -180,6 +180,26 @@ class PendingChannelMessageIntentTest {
                 assertEquals(origin, role.requests.single().creation.origin)
             }
         },
+        native("channelIntentKnownCommitSurvivesCancellationOfTheWaitingCaller") {
+            val h = Harness(this); h.start()
+            val role = CreationRole(h.store)
+            usingProducer(h, role) { service ->
+                val intent = service.preparePendingChannelMessage("original", origin)
+                val receipt = PendingMessageCreation()
+                lateinit var call: Deferred<MessageDTO>
+                role.after = { call.cancel() }
+                call = backgroundScope.async(intent + receipt) {
+                    service.createPendingChannelMessage("original", 0u, RADIO)
+                }
+                assertFailsWith<CancellationException> { call.await() }
+                assertEquals(PendingMessageCreation.State.COMMITTED, receipt.snapshot.state)
+                assertEquals(intent.creation.messageID, receipt.snapshot.message?.id)
+                assertEquals(h.store.messages.values.single(), receipt.snapshot.message)
+                assertEquals(1, role.requests.size)
+                assertEquals(origin, role.requests.single().creation.origin)
+                assertTrue(h.sends(com.meshcoreone.android.core.protocol.model.CommandCode.SEND_CHANNEL_MESSAGE).isEmpty())
+            }
+        },
         native("channelIntentRejectionIsExplicitAndDoesNotSaveOrCertifyRollback") {
             val h = Harness(this); h.start()
             val role = CreationRole(h.store)

@@ -483,6 +483,47 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
         }
     }
 
+    @Test fun queuedRegionRemovalUsesFreshGenerationBoundDefaultScopeBaseline() = runTest {
+        val paused = PausedStore(store)
+        val h = ContainerHarness(this, store, persistenceOverride = paused)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val clearCalls = AtomicInteger()
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            val before = assertNotNull(h.manager.connectedDevice)
+            store.addDeviceKnownRegion(before.radioId, "US915")
+            store.saveDevice(before.copy(defaultFloodScopeName = "US915"))
+            val initial = assertNotNull(store.fetchDevice(before.id))
+            h.container.deviceEditor.updateDevice(initial)
+            val editor = ConnectedDeviceEditor(
+                h.container.deviceAccess, paused, paused, { null },
+                RadioPresetMatcher { _, _, _, _ -> emptySet() },
+                this, { Instant.EPOCH },
+                onKnownRegionsChanged = h.container::knownRegionsChanged,
+                clearDefaultFloodScope = { clearCalls.incrementAndGet() },
+            )
+            paused.beforeSave = { entered.complete(Unit); release.await() }
+            val defaultScopeUpdate = assertNotNull(editor.updateDefaultFloodScopeName("EU868"))
+            entered.await()
+            val regionRemoval = assertNotNull(editor.removeKnownRegion("US915"))
+
+            release.complete(Unit)
+            defaultScopeUpdate.join()
+            regionRemoval.join()
+
+            val actual = assertNotNull(store.fetchDevice(before.id))
+            assertEquals("EU868", actual.defaultFloodScopeName)
+            assertEquals(emptyList<String>(), actual.knownRegions)
+            assertEquals(0, clearCalls.get(), "The queued removal checks the fresh token-bound scope")
+            assertEquals(actual, h.manager.connectedDevice)
+        } finally {
+            release.complete(Unit)
+            h.container.close()
+        }
+    }
+
     @Test fun explicitlyGuardOffEditorKeepsLegacyUnboundPersistence() = runTest {
         val paused = PausedStore(store)
         val h = ContainerHarness(this, store, persistenceOverride = paused)

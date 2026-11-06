@@ -141,7 +141,13 @@ class ConnectedDeviceEditor(
         transform: (DeviceDTO) -> DeviceDTO,
         capturedDevice: DeviceDTO? = null,
     ): Boolean {
-        val original = capturedDevice ?: if (expectedToken == null) access.connectedDevice else access.currentDevice(expectedToken)
+        val original = if (capturedDevice != null && expectedToken != null) {
+            val current = access.currentDevice(expectedToken) ?: return false
+            if (current.id != capturedDevice.id || current.radioId != capturedDevice.radioId) return false
+            current
+        } else {
+            capturedDevice ?: if (expectedToken == null) access.connectedDevice else access.currentDevice(expectedToken)
+        }
         original ?: return false
         fun current(): Boolean {
             val live = if (expectedToken == null) access.connectedDevice else access.currentDevice(expectedToken)
@@ -291,7 +297,13 @@ class ConnectedDeviceEditor(
         capturedDevice: DeviceDTO?,
         clearRadio: Boolean,
     ): Boolean {
-        val original = capturedDevice ?: if (expectedToken == null) access.connectedDevice else access.currentDevice(expectedToken)
+        val original = if (capturedDevice != null && expectedToken != null) {
+            val current = access.currentDevice(expectedToken) ?: return false
+            if (current.id != capturedDevice.id || current.radioId != capturedDevice.radioId) return false
+            current
+        } else {
+            capturedDevice ?: if (expectedToken == null) access.connectedDevice else access.currentDevice(expectedToken)
+        }
         original ?: return false
         if (remove) devices.removeDeviceKnownRegion(original.radioId, region)
         else devices.addDeviceKnownRegion(original.radioId, region)

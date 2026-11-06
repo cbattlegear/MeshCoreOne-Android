@@ -14,6 +14,11 @@ import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.database.RxLogEntryEntity
 import com.meshcoreone.android.core.model.RadioId
 import java.time.Clock
+import kotlin.coroutines.AbstractCoroutineContextElement
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.startCoroutine
+import kotlin.coroutines.suspendCoroutine
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -39,6 +44,41 @@ fun interface RepositoryIssueReporter {
 object AndroidRepositoryIssueReporter : RepositoryIssueReporter {
     override fun report(operation: String, failure: PersistenceStoreException) {
         Log.e("PersistenceStore", "$operation: ${failure.error.javaClass.simpleName}")
+    }
+}
+
+/**
+ * Same-process participating repository exclusion, not database or occupant identity proof.
+ * Order: occupant fence, this lane, context mutex, Room. Dispatch callbacks may read, but not write.
+ */
+internal object RepositoryMutationGuard {
+    private val lane = Mutex()
+    private object Active : AbstractCoroutineContextElement(Key) {
+        object Key : CoroutineContext.Key<Active>
+    }
+
+    suspend fun <T> withDispatch(block: suspend () -> T): T = exclusive(block)
+
+    suspend fun <T> withMutation(block: suspend () -> T): T = exclusive(block)
+
+    private suspend fun <T> exclusive(block: suspend () -> T): T {
+        if (currentCoroutineContext()[Active.Key] != null) {
+            throw PersistenceStoreException(
+                PersistenceStoreError.SaveFailed("Repository mutation lane reentry"),
+                IllegalStateException("A guarded callback cannot enter another dispatch or repository writer"),
+            )
+        }
+        return lane.withLock {
+            currentCoroutineContext().ensureActive()
+            // Install only a rejection marker, preserving the Job and post-commit cancellation result.
+            // withContext would create a child Job and change committed restore's return semantics.
+            suspendCoroutine { continuation ->
+                block.startCoroutine(object : Continuation<T> {
+                    override val context = continuation.context + Active
+                    override fun resumeWith(result: Result<T>) = continuation.resumeWith(result)
+                })
+            }
+        }
     }
 }
 
@@ -312,7 +352,7 @@ internal class RoomRepositoryContext(
     }
 
     private suspend fun <T> access(operation: String, writing: Boolean, block: suspend () -> T): T = try {
-        block()
+        if (writing) RepositoryMutationGuard.withMutation(block) else block()
     } catch (cause: CancellationException) {
         throw cause
     } catch (cause: DatabaseValueException) {

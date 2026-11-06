@@ -678,7 +678,7 @@ class ConnectionManager(
             work.start()
             work.await()
             synchronized(lock) {
-                (active ?: retained)?.takeIf { it.operation === work }?.let {
+                (active ?: retained?.takeIf { it.restorationRoute })?.takeIf { it.operation === work }?.let {
                     if (!hasLiveEstablishmentLocked(it)) {
                         throw CancellationException("Revoked shared connection completion")
                     }
@@ -713,7 +713,7 @@ class ConnectionManager(
             try {
                 val abortedOwner = synchronized(lock) {
                     if (ownsSubmissionLocked(submission)) {
-                        (active ?: retained)?.takeIf {
+                        (active ?: retained?.takeIf { it.restorationRoute })?.takeIf {
                             it.revision == submission.revision && it.operation === submission.work
                         }?.let {
                             if (!submission.work.isCancelled && it.establishmentCompleted &&
@@ -1999,10 +1999,11 @@ class ConnectionManager(
                 it.target == target && it.revision == expectedRevision
             }
             if (existing != null) {
-                if (!isRelevant(existing) || existing.channelOperationsRetired) {
+                // A closed ordinary generation is still the reusable platform route; only restoration routes are revocable.
+                if (existing.restorationRoute && (!isRelevant(existing) || existing.channelOperationsRetired)) {
                     throw CancellationException("Retired restoration route")
                 }
-                if (initiatingJob != null && !existing.establishmentSettled) {
+                if (initiatingJob != null && !existing.establishmentSettled && !existing.channelOperationsRetired) {
                     if (existing.initiatingJob != null && existing.initiatingJob !== initiatingJob) {
                         throw CancellationException("Restoration already has an initiating operation")
                     }

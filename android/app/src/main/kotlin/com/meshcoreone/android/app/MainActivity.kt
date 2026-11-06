@@ -1,6 +1,6 @@
 // PortedFrom: MC1/ContentView.swift@db14559b39d32322b06477c6ae676112f583db50
 // Native adaptation: Edge-to-edge Activity and retained screen navigation; no process/radio graph assembly.
-// AndroidOnly: WP-215 Explicit copy/discard of rejected notification actions; never automatic replay.
+// Native adaptation: WP-215 explicit copy/discard of rejected notification actions; never automatic replay.
 package com.meshcoreone.android.app
 
 import android.content.Intent

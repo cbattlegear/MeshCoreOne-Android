@@ -13,6 +13,7 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import com.meshcoreone.android.core.contracts.notifications.NotificationAction
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
@@ -32,6 +33,7 @@ import java.util.UUID
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -360,6 +362,7 @@ class NotificationRecoveryClipboardTest {
         assertTrue(unread.storageFailure != null)
         mount()
         awaitText(text(NotificationStrings.string.notification_action_recovery_storage_unavailable))
+        awaitCompletedRead()
         compose.onNodeWithText(text(AppLocalizableStrings.commonCancel)).performClick()
         compose.waitForIdle()
         val afterCancel = NotificationActionRecovery.statusSnapshot()
@@ -370,6 +373,130 @@ class NotificationRecoveryClipboardTest {
             .assertDoesNotExist()
         context = available
         assertEquals(original.id, entries().single().id)
+    }
+
+    @Test
+    fun dismissedPendingReadCannotHideSameVersionFailedReadProcessCopy() {
+        val available = context
+        val blocked = File(folder.root, "memory-fallback").apply { writeText("not a directory") }
+        val failing = object : ContextWrapper(context) {
+            override fun getNoBackupFilesDir(): File = blocked
+        }
+        val original = " \tprocess original must become visible\n "
+        assertEquals(
+            NotificationRecoveryRetention.PROCESS_ONLY,
+            NotificationActionRecovery.retain(failing, response(43, original)),
+        )
+        NotificationActionRecovery.requireManualOpen()
+        val version = NotificationActionRecovery.changes.value
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        context = object : ContextWrapper(failing) {
+            override fun getApplicationContext(): Context = this
+            override fun getNoBackupFilesDir(): File {
+                entered.countDown()
+                check(release.await(10, TimeUnit.SECONDS))
+                return super.getNoBackupFilesDir()
+            }
+        }
+        try {
+            mount()
+            compose.waitUntil(5_000) { entered.count == 0L }
+            compose.onNodeWithTag("notification-recovery-read-pending").assertExists()
+            compose.onNodeWithText(original).assertDoesNotExist()
+            compose.onNodeWithText(text(AppLocalizableStrings.commonCancel)).performClick()
+            assertEquals(version, NotificationActionRecovery.changes.value)
+            compose.onNodeWithText(text(NotificationStrings.string.notification_action_recovery_title))
+                .assertDoesNotExist()
+        } finally {
+            release.countDown()
+        }
+        awaitText(original)
+        awaitCompletedRead()
+        assertEquals(version, NotificationActionRecovery.changes.value)
+        compose.onNodeWithText(text(AppChatsStrings.chatsMessageActionCopy)).assertIsDisplayed()
+        assertTrue(NotificationActionRecovery.statusSnapshot().manualOpenRequired)
+        compose.onNodeWithText(text(AppLocalizableStrings.commonCancel)).performClick()
+        assertTrue(NotificationActionRecovery.statusSnapshot().manualOpenRequired)
+        context = available
+        assertEquals(original, NotificationActionRecovery.load(failing).items.single().entry.response.userText)
+    }
+
+    @Test
+    fun completedStorageFailureDoesNotInventARejectedActionOnOrdinaryStartup() {
+        val available = context
+        context = object : ContextWrapper(context) {
+            override fun getApplicationContext(): Context = this
+            override fun getNoBackupFilesDir(): File = throw SecurityException("synthetic read denial")
+        }
+        try {
+            mount()
+            awaitCompletedRead()
+            awaitText(text(NotificationStrings.string.notification_action_recovery_storage_unavailable))
+            compose.onNodeWithText("Notification action not accepted").assertDoesNotExist()
+            assertEquals("Notification action recovery", text(NotificationStrings.string.notification_action_recovery_title))
+            assertFalse(NotificationActionRecovery.statusSnapshot().manualOpenRequired)
+            assertFalse(NotificationActionRecovery.statusSnapshot().notRetained)
+        } finally {
+            context = available
+        }
+    }
+
+    @Test
+    fun completingOlderDeleteCannotHideANewerUnseenLoss() {
+        dispositionDoesNotHideNewLoss(copy = false)
+    }
+
+    @Test
+    fun completingOlderCopyCannotHideANewerUnseenLoss() {
+        dispositionDoesNotHideNewLoss(copy = true)
+    }
+
+    private fun dispositionDoesNotHideNewLoss(copy: Boolean) {
+        val original = save(44, "dispose only this original")
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val gated = AtomicBoolean()
+        context = object : ContextWrapper(context) {
+            override fun getApplicationContext(): Context = this
+            override fun getNoBackupFilesDir(): File {
+                if (gated.get()) {
+                    entered.countDown()
+                    check(release.await(10, TimeUnit.SECONDS))
+                }
+                return super.getNoBackupFilesDir()
+            }
+        }
+        mount()
+        awaitText("dispose only this original")
+        val observed = NotificationActionRecovery.changes.value
+        gated.set(true)
+        try {
+            compose.onNodeWithText(text(
+                if (copy) AppChatsStrings.chatsMessageActionCopy else AppChatsStrings.chatsMessageActionDelete,
+            )).performClick()
+            compose.waitUntil(5_000) { entered.count == 0L }
+            compose.runOnUiThread { NotificationActionRecovery.handoffNotRetained() }
+            awaitText(text(NotificationStrings.string.notification_action_recovery_not_retained))
+        } finally {
+            release.countDown()
+        }
+        compose.waitUntil(5_000) { NotificationActionRecovery.changes.value >= observed + 2 }
+        awaitCompletedRead()
+        awaitText(text(NotificationStrings.string.notification_action_recovery_not_retained))
+        assertTrue(NotificationActionRecovery.load(context).notRetained)
+        assertFalse(entries().any { it.id == original.id })
+        if (copy) {
+            val clipboard = requireNotNull(context.getSystemService(ClipboardManager::class.java))
+            assertEquals("dispose only this original", clipboard.primaryClip!!.getItemAt(0).text.toString())
+        }
+    }
+
+    private fun awaitCompletedRead() {
+        compose.waitUntil(5_000) {
+            compose.onAllNodes(androidx.compose.ui.test.hasTestTag("notification-recovery-read-complete"))
+                .fetchSemanticsNodes().isNotEmpty()
+        }
     }
 
     private fun mount() {

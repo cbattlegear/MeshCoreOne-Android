@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- AndroidOnly: WP-215 Explicit recovery of notification actions rejected before dispatcher admission. -->
 <resources>
-    <string name="notification_action_recovery_title">Notification action not accepted</string>
+    <string name="notification_action_recovery_title">Notification action recovery</string>
     <string name="notification_action_recovery_rejected_reply">This reply attempt did not enter the action queue. Copy the original text, check the intended conversation yourself, and send it from that conversation if needed. Nothing here sends or retries a reply automatically.</string>
     <string name="notification_action_recovery_rejected_mark_read">This mark-as-read attempt did not enter the action queue. Check the original conversation yourself if you still want to mark it as read. Nothing here performs or retries that action.</string>
     <string name="notification_action_recovery_saved">The original action was saved privately on this device. Open MeshCore One yourself to recover it. Only confirmed copy or explicit Delete can remove the chosen record. Closing this dialog keeps it.</string>

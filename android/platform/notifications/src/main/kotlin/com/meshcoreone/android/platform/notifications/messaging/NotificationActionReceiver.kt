@@ -428,6 +428,7 @@ class NotificationRecoverySnapshot(
     val notRetained: Boolean,
     val manualOpenRequired: Boolean,
     val recordsAvailable: Boolean = true,
+    val readCompleted: Boolean = true,
 )
 
 enum class NotificationRecoveryRetention { DURABLE, PROCESS_ONLY, NOT_RETAINED }
@@ -448,7 +449,8 @@ object NotificationActionRecovery {
     /** Status only: an empty item list here never asserts that storage contains no drafts. */
     fun statusSnapshot(): NotificationRecoverySnapshot = synchronized(statusLock) {
         NotificationRecoverySnapshot(
-            updates.value, emptyList(), null, lost, manualOpenRequired, recordsAvailable = false,
+            updates.value, emptyList(), null, lost, manualOpenRequired,
+            recordsAvailable = false, readCompleted = false,
         )
     }
 

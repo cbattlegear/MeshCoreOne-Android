@@ -81,18 +81,27 @@ Native receiver timing and process-kill evidence remain separate gates.
 
 The foreground host also reads a status-only snapshot without the custody/storage
 lock while a complete read is pending. `recordsAvailable = false` is explicitly
-not an empty-record result: no copy/discard controls are exposed, and the localized
-storage notice describes unavailable/busy records and an unconfirmed pending
+not an empty-record result. The status-only pending surface has no items or
+copy/discard controls; a completed failed read can expose known process-memory
+items and their explicit copy/discard controls without claiming disk completeness.
+The localized storage notice describes unavailable/busy records and an unconfirmed pending
 save. A generation change cannot hide newly published loss/manual-open warnings
 behind a blocked database read. Closing this incomplete surface hides only that
 observed unavailable generation locally; it acknowledges no flags or unseen
 records, and a later complete snapshot can display the actual originals.
+Pending and completed-failed read surfaces have distinct dismissal identities at
+the same generation, so closing the former cannot hide newly discovered
+process-memory text in the latter. The generic recovery title does not assert
+that a rejected action exists merely because a signal-free storage read failed.
 Per-host reads are serialized with a cancellable mutex to avoid accumulating
 blocked IO readers on each status update.
 An initial pending read with no actual custody/failure signal shows no warning
 dialog. A failed storage read remains `recordsAvailable = false`, even if
 process-memory items are available; dismissing it cannot acknowledge unknown
 durable records or clear loss/manual-open flags.
+Successful Copy/Delete does not assign a dismissal generation at all: disposal's
+own refresh drives the next snapshot. An older operation cannot hide a concurrent
+loss warning by reading the latest collected generation after its IO resumes.
 
 Recovery does not start an activity from the reply/mark-read broadcast: Android 12
 prohibits notification trampolines, and background-launch denial need not throw.
@@ -207,7 +216,7 @@ byte/oversize rejection, and deadline completion without cancellation, premature
 budget release or double finish. These are authored controls, not evidence that
 the Android receiver deadline has been exercised on a device.
 
-`NotificationRecoveryClipboardTest.kt` contains 16 authored App methods covering
+`NotificationRecoveryClipboardTest.kt` contains 20 authored App methods covering
 the actual clipboard and mounted dialog: exact sensitive copy, inaccessible
 clipboard, cancel/host destruction, single-record copy/discard, failed
 copy/discard, the process-only warning, deferral behind another dialog and the
@@ -219,6 +228,11 @@ dialog callback, requires no disposition/acknowledgment, and then releases stora
 to require both actual originals.
 Two further mounted controls require no warning during a signal-free gated
 initial read and no flag acknowledgment after a failed storage read.
+Four later controls cover same-generation pending-cancel/failed-read process-copy
+visibility, an honest signal-free completed-failure title, and blocked Copy and
+Delete with a newly published loss before completion. Read-state test tags ensure
+the failed-read acknowledgment control waits for the mounted completed read,
+rather than accidentally cancelling its indistinguishable pending predecessor.
 
 **Zero methods have been executed for this draft.** These counts come from static
 source inspection, not runner discovery. A fresh store instance is not an
@@ -236,6 +250,8 @@ The independent-status follow-up adds one mounted App declaration, for 29 receiv
 and 14 App controls; none have executed.
 The startup/failed-read follow-up adds two App declarations, for 29 receiver and
 16 App controls; none have executed.
+The same-generation/disposition follow-up adds four App declarations, for 29
+receiver and 20 App controls; none have executed.
 
 Actual allowed static checks:
 

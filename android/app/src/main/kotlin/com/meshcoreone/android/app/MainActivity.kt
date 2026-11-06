@@ -67,6 +67,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import androidx.compose.ui.platform.testTag
 import com.meshcoreone.android.platform.notifications.messaging.NotificationActionRecovery
 import com.meshcoreone.android.platform.notifications.messaging.NotificationRecoverySnapshot
 import com.meshcoreone.android.platform.notifications.R as NotificationStrings
@@ -292,7 +293,7 @@ internal fun NotificationActionRecoveryDialog(blockedByOtherDialog: Boolean = fa
     val context = LocalContext.current
     val sequence by NotificationActionRecovery.changes.collectAsState()
     var dismissedSequence by remember { mutableStateOf<Long?>(null) }
-    var dismissedUnavailableSequence by remember { mutableStateOf<Long?>(null) }
+    var dismissedUnavailable by remember { mutableStateOf<Pair<Long, Boolean>?>(null) }
     val reader = remember { Mutex() }
     val snapshot by produceState<NotificationRecoverySnapshot?>(null, sequence) {
         value = reader.withLock {
@@ -305,7 +306,9 @@ internal fun NotificationActionRecoveryDialog(blockedByOtherDialog: Boolean = fa
         !recovery.notRetained && !recovery.manualOpenRequired
     ) return
     if (dismissedSequence == sequence) return
-    if (!recovery.recordsAvailable && dismissedUnavailableSequence == recovery.version) return
+    if (!recovery.recordsAvailable &&
+        dismissedUnavailable == (recovery.version to recovery.readCompleted)
+    ) return
     var busy by remember(item?.entry?.id) { mutableStateOf(false) }
     var error by remember(item?.entry?.id) { mutableStateOf<Int?>(null) }
     val scope = rememberCoroutineScope()
@@ -313,7 +316,7 @@ internal fun NotificationActionRecoveryDialog(blockedByOtherDialog: Boolean = fa
         if (!busy) {
             if (!recovery.recordsAvailable) {
                 // Closing an incomplete read must not acknowledge unseen records or status.
-                dismissedUnavailableSequence = recovery.version
+                dismissedUnavailable = recovery.version to recovery.readCompleted
             } else {
                 NotificationActionRecovery.acknowledgeFailure(recovery.version)?.let { acknowledgedVersion ->
                     dismissedSequence = acknowledgedVersion
@@ -326,7 +329,12 @@ internal fun NotificationActionRecoveryDialog(blockedByOtherDialog: Boolean = fa
         onDismissRequest = close,
         title = { Text(stringResource(NotificationStrings.string.notification_action_recovery_title)) },
         text = {
-            Column(Modifier.verticalScroll(rememberScrollState())) {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()).testTag(
+                    if (recovery.readCompleted) "notification-recovery-read-complete"
+                    else "notification-recovery-read-pending",
+                ),
+            ) {
                 if (recovery.notRetained) Text(stringResource(NotificationStrings.string.notification_action_recovery_not_retained))
                 if (!recovery.recordsAvailable || recovery.storageFailure != null) {
                     Text(stringResource(NotificationStrings.string.notification_action_recovery_storage_unavailable))
@@ -377,8 +385,9 @@ internal fun NotificationActionRecoveryDialog(blockedByOtherDialog: Boolean = fa
                                         val failure = withContext(Dispatchers.IO) {
                                             NotificationActionRecovery.dispose(context.applicationContext, item)
                                         }
-                                        if (failure == null) dismissedSequence = sequence
-                                        else error = NotificationStrings.string.notification_action_recovery_discard_failed
+                                        if (failure != null) {
+                                            error = NotificationStrings.string.notification_action_recovery_discard_failed
+                                        }
                                     }
                                 } finally {
                                     busy = false
@@ -397,8 +406,9 @@ internal fun NotificationActionRecoveryDialog(blockedByOtherDialog: Boolean = fa
                                     val failure = withContext(Dispatchers.IO) {
                                         NotificationActionRecovery.dispose(context.applicationContext, item)
                                     }
-                                    if (failure == null) dismissedSequence = sequence
-                                    else error = NotificationStrings.string.notification_action_recovery_discard_failed
+                                    if (failure != null) {
+                                        error = NotificationStrings.string.notification_action_recovery_discard_failed
+                                    }
                                 } finally {
                                     busy = false
                                 }

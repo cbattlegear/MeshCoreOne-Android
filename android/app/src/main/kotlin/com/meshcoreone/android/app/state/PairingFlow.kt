@@ -72,11 +72,17 @@ class PairingFlow(
         } catch (cancelled: CancellationException) {
             withContext(NonCancellable) {
                 started.job.cancelAndJoin()
-                if (started.stateGeneration != null && hasNoNewerStateOwner(started.stateGeneration)) {
-                    setupConfirmationJob?.cancelAndJoin()
-                    foregroundRetryJob?.cancelAndJoin()
-                    foregroundPairingJob?.cancelAndJoin()
-                    cancelSystemPairingSetup()
+                val generation = started.stateGeneration
+                val cleanupJobs = synchronized(pairingStateLock) {
+                    if (generation != null && nextPairingStateGeneration == generation) {
+                        listOfNotNull(setupConfirmationJob, foregroundRetryJob, foregroundPairingJob)
+                    } else null
+                }
+                if (cleanupJobs != null) {
+                    cleanupJobs.forEach { it.cancelAndJoin() }
+                    synchronized(pairingStateLock) {
+                        if (nextPairingStateGeneration == generation) cancelSystemPairingSetup()
+                    }
                 }
             }
             throw cancelled
@@ -129,26 +135,23 @@ class PairingFlow(
                 }
             } finally {
                 discoveryGeneration?.let { discoveryLifecycle?.end(it) }
-                synchronized(pairingStateLock) {
-                    if (activePairingStateGeneration == stateGeneration) {
-                        if (ui.pendingSystemPairingSetup == null && ui.queuedSystemPairingSetup == null &&
-                            !ui.shouldCompleteFreshPairingOnForeground
-                        ) {
-                            connection.isPairingFlowActive = false
-                        }
-                        ui.isBusy = false
-                        activePairingStateGeneration = null
+            }
+        }
+        job.invokeOnCompletion {
+            synchronized(pairingStateLock) {
+                if (activePairingStateGeneration == stateGeneration) {
+                    if (ui.pendingSystemPairingSetup == null && ui.queuedSystemPairingSetup == null &&
+                        !ui.shouldCompleteFreshPairingOnForeground
+                    ) {
+                        connection.isPairingFlowActive = false
                     }
+                    ui.isBusy = false
+                    activePairingStateGeneration = null
                 }
             }
         }
         return DeviceScanStart(job, stateGeneration)
     }
-
-    private fun hasNoNewerStateOwner(generation: Long): Boolean =
-        synchronized(pairingStateLock) {
-            activePairingStateGeneration == null || activePairingStateGeneration == generation
-        }
 
     /** Device-selection sheet left the hierarchy: start a queued scan or present the queued setup prompt. */
     fun handleDeviceSelectionSheetDismissed() {

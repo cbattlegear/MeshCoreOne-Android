@@ -111,7 +111,10 @@ class ScanFallbackPort(
                         true
                     }
                 }
-                if (shouldReport) throw failure
+                if (shouldReport) {
+                    resolveFailure(attempt, failure)
+                    throw failure
+                }
             }
             scanJob.join()
         } finally {
@@ -273,10 +276,11 @@ class ScanFallbackPort(
     }
 
     private fun resolveFailure(attempt: DiscoveryAttempt, failure: Throwable) {
-        if (activeAttempt !== attempt || !attempt.active || attempt.discoveryJob?.isActive == false) return
-        attempt.active = false
-        activeAttempt = null
-        service.fail(failure)
+        val jobs = synchronized(selectionLock) {
+            if (activeAttempt !== attempt || !attempt.active || attempt.discoveryJob?.isActive == false) null
+            else retireAttempt(attempt).also { service.fail(failure) }
+        } ?: return
+        cancel(jobs)
     }
 
     private suspend fun rollbackEndpoint(

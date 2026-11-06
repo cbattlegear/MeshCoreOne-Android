@@ -297,6 +297,8 @@ private fun AppSelectionPlatform(feature: AppSettingsFeature) {
     val denied by feature.selectionPermissionDenied.collectAsState()
     val requestedPermission by feature.selectionRequestedPermission.collectAsState()
     val scanBlocker by feature.selectionScanBlocker.collectAsState()
+    val fallback = platform.pairing.scanFallback
+    val requested by (fallback?.isRequested ?: remember { MutableStateFlow(false) }).collectAsState()
     val activity = LocalActivity.current
     DisposableEffect(feature, activity) {
         onDispose {
@@ -309,6 +311,9 @@ private fun AppSelectionPlatform(feature: AppSettingsFeature) {
     val connectionRequester = platform.rememberConnectionPermissionRequester(feature::selectionPermissionResult)
     val scanRequester = platform.rememberPermissionRequester(feature::selectionPermissionResult)
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { feature.refreshSelectionPermission() }
+    LaunchedEffect(requested) {
+        if (requested) feature.refreshSelectionPermission()
+    }
     LaunchedEffect(action, denied, requestedPermission) {
         feature.beginSelectionPermissionRequest()?.let { kind ->
             if (action == AppSettingsFeature.SelectionAction.Scan) scanRequester(kind) else connectionRequester(kind)
@@ -342,8 +347,6 @@ private fun AppSelectionPlatform(feature: AppSettingsFeature) {
             TextButton(onClick = feature::cancelSelectionPermission) { Text(stringResource(L.commonCancel)) }
         },
     )
-    val fallback = platform.pairing.scanFallback
-    val requested by (fallback?.isRequested ?: remember { MutableStateFlow(false) }).collectAsState()
     val permissions by platform.permissions.snapshot.collectAsState()
     if (fallback != null && requested) {
         ModalBottomSheet(fallback::cancel, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
@@ -352,7 +355,6 @@ private fun AppSelectionPlatform(feature: AppSettingsFeature) {
                 if (ready) fallback.discoveries().catch { failure ->
                     if (failure is CancellationException) throw failure
                     feature.report("Could not scan for a radio", failure)
-                    feature.cancelSelectionScan()
                 } else flowOf(emptyList())
             }.collectAsState(emptyList())
             DeviceScannerSheetContent(discoveries, permissions, feature::selectSelectionScanDevice, fallback::cancel)

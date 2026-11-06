@@ -193,7 +193,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         }
     }
 
-    private fun mount(h: ContainerHarness, feature: AppSettingsFeature) {
+    private fun mount(h: ContainerHarness, feature: AppSettingsFeature, includeConnectionRecovery: Boolean = false) {
         compose.runOnUiThread {
             h.container.navigation.selectTab(AppTab.SETTINGS)
             compose.activity.setContent {
@@ -203,6 +203,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
                         AppSettingsContent(feature, navigation.activeStack.last().destination, h.container.navigation)
                     }
                     SystemPairingSetupHost(h.appState)
+                    if (includeConnectionRecovery) AppConnectionRecoveryDialogs(h.appState)
                 }
             }
         }
@@ -244,6 +245,11 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
     private fun selectionTitle() =
         compose.onNode(hasText(compose.activity.getString(S.deviceSelectionTitle)) and !hasClickAction())
 
+    private fun clickSelectionRow(label: String) {
+        compose.onNodeWithTag("device-selection-list").performScrollToNode(hasText(label))
+        compose.onNodeWithText(label).assertIsDisplayed().performClick()
+    }
+
     private fun permissionSettingsButton() = compose.onNode(
         hasText(compose.activity.getString(O.permissionsOpenSettings)) and hasClickAction() and hasAnyAncestor(isDialog()),
     )
@@ -281,7 +287,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
 
     private fun openManualWifi(h: ContainerHarness) {
         open(h)
-        compose.onNodeWithText(compose.activity.getString(S.deviceSelectionConnectViaWifi)).performClick()
+        clickSelectionRow(compose.activity.getString(S.deviceSelectionConnectViaWifi))
         compose.onNode(hasSetTextAction() and hasText(compose.activity.getString(O.wifiConnectionIpAddressPlaceholder)))
             .performScrollTo().performTextReplacement("manual-radio.local")
         compose.onNode(hasSetTextAction() and hasText(compose.activity.getString(O.wifiConnectionPortPlaceholder)))
@@ -333,7 +339,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         withSettings(permissionFacts = facts, pairingService = service, scans = scans, openSettings = { openedSettings++ }) { h, feature ->
             mount(h, feature)
             open(h)
-            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            clickSelectionRow(compose.activity.getString(S.deviceSelectionScanBluetooth))
             compose.waitForIdle()
             h.settle()
             assertEquals(0, starts)
@@ -374,7 +380,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         bluetoothPermissionControl(grant = false)
     }
 
-    private suspend fun TestScope.fallbackScanFailureControl(startup: Boolean) {
+    private suspend fun TestScope.fallbackScanFailureControl(startup: Boolean, direct: Boolean = false) {
         val service = BluetoothScanPairingService()
         val failure = IllegalStateException(if (startup) "Scanner could not start" else "Scanner callback failed")
         var failScan: ((Throwable) -> Unit)? = null
@@ -390,8 +396,11 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         })
         withSettings(pairingService = service, scans = scans) { h, feature ->
             mount(h, feature)
-            open(h)
-            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            val directJob = if (direct) h.appState.startDeviceScan() else {
+                open(h)
+                clickSelectionRow(compose.activity.getString(S.deviceSelectionScanBluetooth))
+                null
+            }
             if (!startup) {
                 h.eventuallyMounted("fallback scanner callback installed") { failScan != null }
                 requireNotNull(failScan)(failure)
@@ -401,7 +410,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             }
             h.eventuallyMounted("scanner error cancels pairing and scan") {
                 !service.isPresenting.value && !h.container.connectionPort.isPairingFlowActive &&
-                    feature.selectionScanJob?.isCompleted == true
+                    (directJob ?: feature.selectionScanJob)?.isCompleted == true
             }
             assertEquals(1, starts)
             assertEquals(if (startup) 0 else 1, stops)
@@ -419,6 +428,10 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
 
     @Test fun fallbackScannerCallbackFailureCancelsPairingAndPresentsSettingsError() = runTest {
         fallbackScanFailureControl(startup = false)
+    }
+
+    @Test fun publicScanStartupFailureResolvesItsPairingAndPresentsSettingsError() = runTest {
+        fallbackScanFailureControl(startup = true, direct = true)
     }
 
     private suspend fun TestScope.savedBlePermissionControl(grant: Boolean, cancel: Boolean = false, scanAfter: Boolean = false) {
@@ -471,7 +484,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
                 h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
                 h.settle()
                 open(h)
-                compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+                clickSelectionRow(compose.activity.getString(S.deviceSelectionScanBluetooth))
                 compose.waitForIdle()
                 h.settle()
                 h.eventuallyMounted("SCAN action advances after a CONNECT-only grant") {
@@ -535,7 +548,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             h.pairing.registered[other] = "Other setup"
             mount(h, feature)
             open(h)
-            compose.onNodeWithText("Selected setup").performClick()
+            clickSelectionRow("Selected setup")
             compose.waitForIdle()
             h.settle()
             assertNull(h.appState.connectionUI.pendingSystemPairingSetup)
@@ -608,7 +621,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             mount(h, feature)
             val beforeRequest = shadowOf(compose.activity).lastRequestedPermission
             open(h)
-            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            clickSelectionRow(compose.activity.getString(S.deviceSelectionScanBluetooth))
             compose.waitForIdle()
             h.settle()
             compose.onNodeWithText(compose.activity.getString(O.deviceScannerBluetoothUnauthorizedTitle)).assertIsDisplayed()
@@ -639,7 +652,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             mount(h, feature)
             val beforeRequest = shadowOf(compose.activity).lastRequestedPermission
             open(h)
-            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            clickSelectionRow(compose.activity.getString(S.deviceSelectionScanBluetooth))
             compose.waitForIdle()
             h.settle()
             compose.onNodeWithText(compose.activity.getString(O.deviceScannerBluetoothOffTitle)).assertIsDisplayed()
@@ -674,7 +687,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         withSettings(permissionFacts = facts, pairingService = service, scans = scans) { h, feature ->
             mount(h, feature)
             open(h)
-            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            clickSelectionRow(compose.activity.getString(S.deviceSelectionScanBluetooth))
             compose.waitForIdle()
             h.eventuallyMounted("initial authorized scan") { starts == 1 }
             facts.granted = emptySet()
@@ -712,7 +725,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         withSettings(pairingService = service, scans = scans) { h, feature ->
             mount(h, feature)
             open(h)
-            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            clickSelectionRow(compose.activity.getString(S.deviceSelectionScanBluetooth))
             compose.waitForIdle()
             h.eventuallyMounted("picker visible before tab transition") { service.isPresenting.value && starts == 1 }
             compose.runOnUiThread { h.container.navigation.selectTab(AppTab.CHATS) }
@@ -741,7 +754,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         withSettings(pairingService = service, scans = scans) { h, feature ->
             mount(h, feature)
             open(h)
-            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            clickSelectionRow(compose.activity.getString(S.deviceSelectionScanBluetooth))
             compose.waitForIdle()
             assertNull(feature.selectionAction.value)
             assertFalse(service.isPresenting.value)
@@ -775,7 +788,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             try {
                 mount(h, feature)
                 open(h)
-                compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+                clickSelectionRow(compose.activity.getString(S.deviceSelectionScanBluetooth))
                 compose.waitForIdle()
                 h.eventuallyMounted("first scan awaiting discovery") { service.isPresenting.value && starts == 1 }
                 val oldJob = requireNotNull(feature.selectionScanJob)
@@ -799,7 +812,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
                 compose.runOnUiThread { h.container.navigation.selectTab(AppTab.SETTINGS) }
                 compose.waitForIdle()
                 open(h)
-                compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+                clickSelectionRow(compose.activity.getString(S.deviceSelectionScanBluetooth))
                 compose.waitForIdle()
                 h.settle()
                 val nextJob = requireNotNull(feature.selectionScanJob)
@@ -862,7 +875,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             h.links.configureRadio = { it.connectGate = gate }
             mount(h, feature)
             open(h)
-            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            clickSelectionRow(compose.activity.getString(S.deviceSelectionScanBluetooth))
             compose.waitForIdle()
             h.eventually("chosen radio rendered") { compose.onAllNodesWithText("Chosen radio").fetchSemanticsNodes().size == 1 }
             compose.onNodeWithText("Chosen radio").performClick()
@@ -895,7 +908,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         withSettings(pairingService = service, scans = scans) { h, feature ->
             mount(h, feature)
             open(h)
-            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            clickSelectionRow(compose.activity.getString(S.deviceSelectionScanBluetooth))
             compose.waitForIdle()
             h.eventuallyMounted("picker pending before recreation") { service.isPresenting.value && starts == 1 }
             compose.activityRule.scenario.recreate()
@@ -927,7 +940,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         withSettings(permissionFacts = facts, pairingService = service, scans = scans) { h, feature ->
             mount(h, feature)
             open(h)
-            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            clickSelectionRow(compose.activity.getString(S.deviceSelectionScanBluetooth))
             compose.waitForIdle()
             val request = requireNotNull(shadowOf(compose.activity).lastRequestedPermission)
             assertArrayEquals(bluetoothPermissions.map { it.manifestName }.sorted().toTypedArray(), request.requestedPermissions)
@@ -971,7 +984,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         withSettings(pairingService = service, scans = scans) { h, feature ->
             mount(h, feature)
             open(h)
-            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            clickSelectionRow(compose.activity.getString(S.deviceSelectionScanBluetooth))
             compose.waitForIdle()
             h.eventually("fallback picker requested") { service.isPresenting.value }
             compose.onNodeWithText(compose.activity.getString(O.deviceScannerTitle)).assertIsDisplayed()
@@ -1003,7 +1016,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             assertNull(endpoints.endpoint(id))
             mount(h, feature)
             open(h)
-            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            clickSelectionRow(compose.activity.getString(S.deviceSelectionScanBluetooth))
             compose.waitForIdle()
             h.eventually("fallback discovery rendered") {
                 compose.onAllNodesWithText("Fallback radio").fetchSemanticsNodes().size == 1
@@ -1048,7 +1061,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         withSettings(pairingService = service, scans = scans, knownEndpoints = endpoints, systemLinks = systemLinks) { h, feature ->
             mount(h, feature)
             open(h)
-            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            clickSelectionRow(compose.activity.getString(S.deviceSelectionScanBluetooth))
             compose.waitForIdle()
             h.eventually("selected radio discovery rendered") {
                 compose.onAllNodesWithText("Selected radio").fetchSemanticsNodes().size == 1
@@ -1083,7 +1096,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         withSettings(pairingService = service, scans = scans) { h, feature ->
             mount(h, feature)
             open(h)
-            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            clickSelectionRow(compose.activity.getString(S.deviceSelectionScanBluetooth))
             compose.waitForIdle()
             h.eventually("first Settings collector starts fallback scan") { starts == 1 }
 
@@ -1126,7 +1139,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         withSettings(pairingService = service, scans = scans, knownEndpoints = endpoints) { h, feature ->
             mount(h, feature)
             open(h)
-            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            clickSelectionRow(compose.activity.getString(S.deviceSelectionScanBluetooth))
             h.eventuallyMounted("first discovery is selectable") {
                 compose.onAllNodesWithText("First radio").fetchSemanticsNodes().size == 1
             }
@@ -1140,7 +1153,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
                     stops == 1 && feature.selectionScanJob?.isCompleted == true
             }
             open(h)
-            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            clickSelectionRow(compose.activity.getString(S.deviceSelectionScanBluetooth))
             h.eventuallyMounted("replacement discovery is active") {
                 service.isPresenting.value &&
                     compose.onAllNodesWithText("Replacement radio").fetchSemanticsNodes().size == 1
@@ -1184,7 +1197,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         withSettings(pairingService = service, scans = scans, knownEndpoints = endpoints) { h, feature ->
             mount(h, feature)
             open(h)
-            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            clickSelectionRow(compose.activity.getString(S.deviceSelectionScanBluetooth))
             h.eventuallyMounted("first discovery is selectable") {
                 compose.onAllNodesWithText("First radio").fetchSemanticsNodes().size == 1
             }
@@ -1201,7 +1214,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             assertNull(endpoints.endpoint(firstId))
 
             open(h)
-            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            clickSelectionRow(compose.activity.getString(S.deviceSelectionScanBluetooth))
             h.eventuallyMounted("replacement discovery is active") {
                 service.isPresenting.value &&
                     compose.onAllNodesWithText("Replacement radio").fetchSemanticsNodes().size == 1
@@ -1351,6 +1364,82 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         assertEquals(1, port.pickerCalls)
     }
 
+    @Test fun cancellingQueuedScanReleasesItsStateBeforeTheNextScan() = runTest {
+        val port = FakeConnectionPort()
+        val state = appStateOf(backgroundScope, port)
+        val queued = state.startDeviceScan()
+        assertTrue(state.connectionUI.isBusy)
+        assertTrue(port.isPairingFlowActive)
+        queued.cancelAndJoin()
+        assertEquals(0, port.pickerCalls)
+        assertFalse(state.connectionUI.isBusy)
+        assertFalse(port.isPairingFlowActive)
+
+        state.startDeviceScan().join()
+        assertEquals(1, port.pickerCalls)
+        assertFalse(state.connectionUI.isBusy)
+        assertFalse(port.isPairingFlowActive)
+    }
+
+    @Test fun oldAwaiterCleanupCannotClearNewPairingAfterHeldRetryCancellation() = runTest {
+        val port = FakeConnectionPort()
+        val ui = com.meshcoreone.android.app.state.ConnectionUiState(backgroundScope)
+        val retrySleeping = CompletableDeferred<Unit>()
+        val cleanupStarted = CompletableDeferred<Unit>()
+        val releaseCleanup = CompletableDeferred<Unit>()
+        val replacementStarted = CompletableDeferred<Unit>()
+        val releaseReplacement = CompletableDeferred<Unit>()
+        val clock = object : com.meshcoreone.android.core.runtime.DeadlineClock {
+            override suspend fun sleep(duration: kotlin.time.Duration) {
+                retrySleeping.complete(Unit)
+                try {
+                    awaitCancellation()
+                } finally {
+                    withContext(NonCancellable) {
+                        cleanupStarted.complete(Unit)
+                        releaseCleanup.await()
+                    }
+                }
+            }
+        }
+        port.beforePicker = {
+            if (port.pickerCalls == 1) throw DevicePairingError.PickerUnavailable()
+            replacementStarted.complete(Unit)
+            releaseReplacement.await()
+        }
+        val flow = com.meshcoreone.android.app.state.PairingFlow(
+            connection = port, ui = ui, scope = backgroundScope, clock = clock,
+            wireServices = {}, disconnect = {},
+        )
+        val first = async { flow.startDeviceScanAndAwait() }
+        runCurrent()
+        retrySleeping.await()
+        assertTrue(ui.shouldCompleteFreshPairingOnForeground)
+        first.cancel()
+        runCurrent()
+        cleanupStarted.await()
+        assertFalse(first.isCompleted)
+
+        // The user dismisses the old deferred flow while its retry cancellation is still unwinding.
+        flow.cancelSystemPairingSetup()
+        val replacement = flow.startDeviceScan()
+        runCurrent()
+        replacementStarted.await()
+        assertTrue(ui.isBusy)
+        assertTrue(port.isPairingFlowActive)
+        releaseCleanup.complete(Unit)
+        first.join()
+        assertTrue(replacement.isActive)
+        assertTrue(ui.isBusy)
+        assertTrue(port.isPairingFlowActive)
+        assertEquals(2, port.pickerCalls)
+
+        releaseReplacement.complete(Unit)
+        replacement.join()
+        assertFalse(ui.isBusy)
+        assertFalse(port.isPairingFlowActive)
+    }
+
     @Test fun disposingSettingsHostCancelsHeldFallbackSelectionAndRollsBackItsEndpoint() = runTest {
         val service = BluetoothScanPairingService()
         val address = "C2:00:00:00:00:03"
@@ -1366,7 +1455,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         withSettings(pairingService = service, scans = scans, knownEndpoints = endpoints) { h, feature ->
             mount(h, feature)
             open(h)
-            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            clickSelectionRow(compose.activity.getString(S.deviceSelectionScanBluetooth))
             h.eventuallyMounted("held discovery is selectable") {
                 compose.onAllNodesWithText("Held radio").fetchSemanticsNodes().size == 1
             }
@@ -1669,7 +1758,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
                 .performScrollTo().performClick()
             compose.onNodeWithTag("list-detail").assertIsDisplayed()
             open(h)
-            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            clickSelectionRow(compose.activity.getString(S.deviceSelectionScanBluetooth))
             h.eventuallyMounted("two panes share one fallback collector") { starts == 1 && service.isPresenting.value }
             assertEquals(1, compose.onAllNodesWithText(compose.activity.getString(O.deviceScannerTitle)).fetchSemanticsNodes().size)
             compose.runOnUiThread { h.container.navigation.back() }
@@ -1720,7 +1809,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         withSettings(permissionFacts = facts, pairingService = service, scans = scans) { h, feature ->
             mountNavigationShell(h, feature)
             open(h)
-            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            clickSelectionRow(compose.activity.getString(S.deviceSelectionScanBluetooth))
             compose.waitForIdle()
             assertEquals(OnboardingPermissionKind.BLUETOOTH, feature.selectionRequestedPermission.value)
             compose.onNodeWithTag("tab:CHATS").performClick()
@@ -1739,7 +1828,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             assertFalse(service.isPresenting.value)
             assertEquals(0, starts)
             open(h)
-            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            clickSelectionRow(compose.activity.getString(S.deviceSelectionScanBluetooth))
             compose.waitForIdle()
             h.eventuallyMounted("only the user's new scan action starts a picker") { service.isPresenting.value && starts == 1 }
             compose.onNodeWithText(compose.activity.getString(L.commonCancel)).performClick()
@@ -1911,6 +2000,58 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         }
     }
 
+    @Test fun removeAndRetryDirectScanRequestsPermissionAndReportsScannerFailure() = runTest {
+        val facts = FakePermissionFacts(
+            sdk = 31, granted = setOf(ConnectivityPermission.BLUETOOTH_CONNECT),
+        )
+        val service = BluetoothScanPairingService()
+        val failure = IllegalStateException("Retry scanner callback failed")
+        var failScan: ((Throwable) -> Unit)? = null
+        var starts = 0
+        var stops = 0
+        val scans = BleScanCoordinator(object : BleScanGateway {
+            override fun startScan(onDevice: (DiscoveredDevice) -> Unit, onFailure: (Throwable) -> Unit) {
+                assertTrue(facts.granted.containsAll(bluetoothPermissions))
+                starts++
+                failScan = onFailure
+            }
+            override fun stopScan() { stops++ }
+        })
+        withSettings(permissionFacts = facts, pairingService = service, scans = scans) { h, feature ->
+            val device = saved(h)
+            h.links.configureRadio = { it.connectFailure = BleTransportException(BleError.AuthenticationFailed) }
+            mount(h, feature, includeConnectionRecovery = true)
+            open(h)
+            compose.onNodeWithText(device.nodeName).performClick()
+            h.eventually("saved authentication failure before guided retry", virtualBudgetMillis = 3_000, virtualStepMillis = 10) {
+                compose.waitForIdle()
+                h.appState.connectionUI.showingConnectionFailedAlert &&
+                    h.appState.connectionUI.failedPairingDeviceId == device.id
+            }
+
+            compose.onNodeWithText(compose.activity.getString(L.alertConnectionFailedRemoveAndRetry)).performClick()
+            h.eventuallyMounted("direct retry requests scan permission while pairing is active") {
+                feature.selectionRequestedPermission.value == OnboardingPermissionKind.BLUETOOTH &&
+                    service.isPresenting.value
+            }
+            assertNull(store.fetchDevice(device.id))
+            assertTrue(h.container.connectionPort.isPairingFlowActive)
+            assertEquals(0, starts)
+
+            permissionResult(facts, granted = true, permissions = bluetoothPermissions)
+            h.eventuallyMounted("permission-gated retry starts its scanner") { starts == 1 && failScan != null }
+            requireNotNull(failScan)(failure)
+            h.eventuallyMounted("retry scanner failure resolves the direct pairing and reaches Settings") {
+                feature.failure.value === failure && !service.isPresenting.value &&
+                    !h.container.connectionPort.isPairingFlowActive
+            }
+            assertEquals(1, starts)
+            assertEquals(1, stops)
+            assertFalse(scans.isScanning)
+            assertNull(store.fetchDevice(device.id))
+        }
+    }
+
     @Test fun savedOtherAppFailureUsesTheDistinctWarningWithoutForgetting() = runTest {
         withSettings { h, feature ->
             val device = saved(h)
@@ -1983,7 +2124,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             mount(h, feature)
             open(h)
             compose.onNodeWithText(compose.activity.getString(S.deviceSelectionNoPairedDevices)).assertIsDisplayed()
-            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionScanBluetooth)).performClick()
+            clickSelectionRow(compose.activity.getString(S.deviceSelectionScanBluetooth))
             compose.waitForIdle()
             h.eventually("scan picker completed once") { pickerCalls == 1 && !h.container.connectionPort.isPairingFlowActive }
             selectionTitle().assertDoesNotExist()
@@ -2013,7 +2154,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
         withSettings { h, feature ->
             mount(h, feature)
             open(h)
-            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionConnectViaWifi)).performClick()
+            clickSelectionRow(compose.activity.getString(S.deviceSelectionConnectViaWifi))
             compose.waitForIdle()
             selectionTitle().assertDoesNotExist()
             compose.onNodeWithText(compose.activity.getString(O.wifiConnectionTitle)).assertIsDisplayed()
@@ -2031,7 +2172,7 @@ class DeviceSelectionRegistrationTest : RoomProcessTest() {
             h.links.configureRadio = { it.connectGate = gate }
             mount(h, feature)
             open(h)
-            compose.onNodeWithText(compose.activity.getString(S.deviceSelectionConnectViaWifi)).performClick()
+            clickSelectionRow(compose.activity.getString(S.deviceSelectionConnectViaWifi))
             compose.onNode(hasSetTextAction() and hasText(compose.activity.getString(O.wifiConnectionIpAddressPlaceholder)))
                 .performScrollTo().performTextReplacement("manual-radio.local")
             compose.onNode(hasSetTextAction() and hasText(compose.activity.getString(O.wifiConnectionPortPlaceholder)))

@@ -190,7 +190,7 @@ class AppSettingsFeature private constructor(
             platform.connectionPermissions.snapshot.value else permissions.snapshot.value
         val scanBlocker = selectionScanGate.blockerFor(snapshot)
         selectionScanBlocker.value = scanBlocker
-        if (selectionAction.value == null && selectionScanOwned &&
+        if (selectionAction.value == null &&
             platform.pairing.scanFallback?.isRequested?.value == true && scanBlocker != PairingBlocker.NONE) {
             selectionAction.value = SelectionAction.Scan
         }
@@ -283,7 +283,10 @@ class AppSettingsFeature private constructor(
     internal fun cancelSelectionPermission() {
         val scan = selectionAction.value == SelectionAction.Scan
         clearSelectionPermission()
-        if (scan) cancelSelectionScan()
+        if (scan) {
+            cancelSelectionScan()
+            container.onboarding?.pairing?.scanFallback?.cancel()
+        }
     }
 
     private fun clearSelectionPermission() {

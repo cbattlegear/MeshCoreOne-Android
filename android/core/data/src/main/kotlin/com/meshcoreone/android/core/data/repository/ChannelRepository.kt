@@ -35,7 +35,11 @@ internal class ChannelRepository(
         }
 
     override suspend fun saveChannel(dto: ChannelDTO) = context.write("saveChannel") {
-        val existing = database.channels().byId(dto.radioId.value, dto.id)
+        val identified = database.channels().byId(dto.radioId.value, dto.id)
+        val occupants = database.channels().forIndex(dto.radioId.value, identified?.index ?: dto.index.toLong())
+        if (occupants.size > 1) throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+        // Backup import assigns fresh UUIDs; replayed seed DTOs reconcile the unique current slot.
+        val existing = identified ?: occupants.singleOrNull()
         database.channels().upsert(existing?.applying(dto) ?: dto.toEntity())
         save()
     }

@@ -3,9 +3,9 @@
 Assignment:
 `assignment:fc9361f4-ec03-4739-994b-ddb9b4e4cec9:call_0jpIzLm0tBYXoigYAOa1QKuO`.
 This bounded inactive semantic successor has the sole parent
-`c8f50a99d711a0c091a65ad0b46088b9789733ae`,
-tree `54cafbe51e836d0cc5252e43c1601907d80dcd6b`. The original c8f commit remains
-immutable. Its approved reaction dependency remains
+`8fd424010eb4fbcc4ea1d9f14504ceffef248006`,
+tree `dd93172f3bbd381d154ab44d6ec1bec3aac15b4b`. The original c8f and 8fd commits
+remain immutable. Their approved reaction dependency remains
 `67ec8bffe3d1eb66e1c896b9fbdebf7fc790b136`. Only the existing contract, its
 shape controls and this evidence change; no cache-selection4c405, shared derivation
 e6f, held consumer ancestry or production storage implementation is imported.
@@ -63,6 +63,19 @@ introduced here. The old upsert expectation is not retained as an acceptance
 requirement for this role. Generic/OFF behavior remains unchanged.
 Commit-before-throw may lose a new-insert return; no journal, safe redrive or
 recovered receipt is promised.
+
+A second independent gap was reported by 12e/f805: a consumer content-key lookup
+outside the save transaction cannot exclude another distinct-UUID/same-key insert
+before save. No cross-context single-ingress invariant was established. Under the
+coordinator-approved extension, authenticate the canonical derived deduplication
+key, then check ANY same-radio/key row in the SAME save transaction as the UUID
+check and insert. A collision, including a different UUID, requires
+Rejected(CONFLICT) before ANY DML and no receipt. Never equate matching content
+with original RX provenance, adopt the observed row, or recapture its lineage.
+This is transaction-local conservative refusal, NOT global uniqueness: the
+existing index is nonunique, and unrelated later generic writes are not fenced
+by this rule. Transaction/serialization errors propagate without guessed success,
+implicit retry, or inferred receipt. No new unique index or schema is introduced.
 
 Pre-save content correlation/current-key decoding is not proof: the prior
 consumer copied RX path/route/region before save. The new save request explicitly
@@ -134,9 +147,10 @@ admit `wp-owned/modify`; directly related contracts test admits
 `reviewed-support-test/add-or-update-related-test`. No policy/authorization/
 reservation edit or executed validator receipt is claimed.
 
-Seven authored shape controls cover exact original wire/save fields, rejecting
+Eight authored shape controls cover exact original wire/save fields, rejecting
 pre-enrichment, committed Unproven/unsupported Existing value shape, existing-key
-CONFLICT with no receipt, each original earlier/equal-time RX snapshot, blocked
+CONFLICT with no receipt, distinct-ID/content-key collision refusal shape without
+row adoption, each original earlier/equal-time RX snapshot, blocked
 exact custody and issue bounds. Existing value assertions are retained solely for
 compatibility shape, not producer acceptance. The new conflict shape test is not
 a fake authority, an existing-row lookup or proof of zero database writes.
@@ -145,12 +159,16 @@ Proven issuer or positive RX/Room evidence. No compiler/test run occurred.
 All existing67ec tests/assertions and operation058 source remain untouched.
 
 Storage owns actual different-wire and identical-DTO existing-key zero-DML controls
-with row/identity preservation. Service consumers must retain Existing/Rejected as
+with row/identity preservation, plus same-transaction distinct-ID/content-key
+collision controls, radio isolation, and deterministic competing-context insertion
+where the actual harness permits. Source shape controls do not establish SQLite
+writer/snapshot behavior, global uniqueness, or exclusion of later generic DML.
+Service consumers must retain Existing/Rejected as
 non-redrivable unresolved custody, not notify/index an observed row as the incoming
 occurrence. No runtime composition, full contract implementation, positive issuer
 or active feature/device acceptance is supplied by this correction.
 
-Publication checks cover exact sole c8f parent, only these three changed paths,
+Publication checks cover exact sole 8fd parent, only these three changed paths,
 ASCII/LF and no changes to other originals. Local execution hold
 `local-check:f516a7e271f444dd9cb2efcc8b995a16` remains; no local Gradle/controller/
 readiness recovery or new session/worktree. No schema allocation, producer/

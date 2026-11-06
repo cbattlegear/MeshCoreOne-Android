@@ -157,6 +157,13 @@ sealed interface IncomingPathHarvestResult {
  * Existing remains an unsupported result shape until separately reviewed genuine expected-
  * incarnation authority is admitted; neither its public value constructor nor this marker API
  * supplies such authority. Generic/OFF persistence behavior remains unchanged.
+ * After authenticating the canonical derived deduplication key, check for ANY existing row with
+ * that same radio/key in this SAME save transaction, including a different UUID. Such a collision
+ * also requires Rejected(CONFLICT) BEFORE ANY DML and no receipt. An earlier consumer lookup is
+ * insufficient. Never equate matching content with origin, adopt the observed row, or recapture its
+ * receipt. The current content-key index is nonunique: this transaction-local refusal is NOT global
+ * uniqueness or protection from unrelated later generic writes. Transaction/serialization failures
+ * propagate without a guessed success, retry, or reconstructed outcome.
  * Authenticate DTO derivation under original decoding/time-correction rules. RX-derived enrichment
  * is deferred: reject already enriched input before DML, never certify fields copied by a current-key
  * lookup. Save actual row and privately bind exact stored incarnation/reaction-identity revision/

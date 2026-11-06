@@ -107,6 +107,23 @@ class MessageHarvestAuthorityTest {
     }
 
     @Test
+    fun contentCollisionConflictRetainsDistinctRequestRatherThanAdoptingAnotherRow() {
+        val incoming = message.copy(id = UUID(0, 99), deduplicationKey = "same-content-key")
+        val observed = message.copy(deduplicationKey = incoming.deduplicationKey)
+        val request = ChannelMessageRowSaveRequest(incoming, occurrence)
+        val result = RowBoundChannelIngress(
+            ChannelReactionIngressResult.Rejected(ChannelReactionRejection.CONFLICT), null,
+        )
+        assertEquals(observed.deduplicationKey, request.message.deduplicationKey)
+        assertEquals(UUID(0, 99), request.message.id)
+        assertEquals(UUID(0, 5), observed.id)
+        assertSame(incoming, request.message)
+        assertSame(occurrence, request.occurrence)
+        assertNull(result.savedRow)
+        assertFailsWith<IllegalArgumentException> { result.copy(savedRow = row) }
+    }
+
+    @Test
     fun stableEarlierRxCandidatesRetainTheirOwnExactEntriesWithoutProof() {
         val first = candidate(10, -5)
         val second = candidate(11, -5)

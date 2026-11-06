@@ -58,8 +58,19 @@ Source checks performed:
 Six methods are source-authored, not six executed tests. Kotlin compilation and
 JUnit execution have not occurred. The retained local execution owner
 `local-check:f516a7e271f444dd9cb2efcc8b995a16` is unchanged and was not executed
-through or bypassed. Exact-head hosted execution, WP-217's real simulator App
-control composition and independent review remain required.
+through or bypassed. Exact-head hosted execution and independent review remain
+required.
+
+WP-217's sole `SimulatorOnboardingIntegrationTest.kt` delta from
+`d668a031565554243abd2b01281195fb86b0bfcb` is also composed without importing
+its parent history. Its added
+`freshStoreBackupImportPreservesChannelRowsAcrossSimulatorReconnects` method
+uses actual `AppBackupService` empty-Room import, four real fixed seed DTOs,
+retained user text and three actual onboarding/simulator reconnects. It checks
+unique slots, retained imported UUIDs/history, foreign-radio isolation, the
+existing seed-family assertions and no physical-radio/HTTP calls. All previous
+App assertions remain unchanged. This seventh added method is likewise
+unexecuted; clean patch application is not compilation or product evidence.
 
 The baseline main run
 [42139516955](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42139516955)

@@ -65,6 +65,7 @@ class SettingsPathHashRecreationTest : RoomProcessTest() {
                 radio.firmwareVersion = 10u
                 radio.respond = { command ->
                     when (command[0].toInt()) {
+                        0x1f -> listOf(Bytes.of(0x12, command[1].toInt()) + Bytes(ByteArray(48)))
                         0x3d -> { mode = command[2].toInt(); listOf(Bytes.of(0)) }
                         0x16 -> listOf(
                             Bytes.of(13, 10, 50, 8) + le32(0) + Bytes.utf8("01 Jan 2025").paddedOrTruncated(12) +

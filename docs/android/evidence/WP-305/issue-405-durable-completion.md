@@ -611,3 +611,19 @@ admitted write/callback is held. Inspection of the rest of `RxRegionConsumerTest
 disconnect/replacement waiting synchronously on a held leased editor operation: its mounted
 replacement follows completed joins, and its overlapping notification control uses the separate
 non-persisting direct DTO replacement API. No production semantics were changed for these tests.
+
+### Foreground Settings startup fixture correction
+
+WP-302 identified a source-derived explanation for all eight historical Settings startup cancellations:
+the fixtures advertise eight channels and start foreground before connecting, so the real foreground
+sync queries channels. Their custom radios handled path-hash/device-info commands only; the fallback
+GET_CHANNEL response was NOT_FOUND, which the serial channel query intentionally does not match.
+The resulting timeout can trigger correlation-uncertain recovery and retire the generation during
+initial sync. The historical log contains only the superseded-generation exception, not the
+correlation event, so this explanation is not an executed diagnosis.
+
+Both `SettingsPathHashPersistenceTest` and `SettingsPathHashRecreationTest` now return the existing
+`ActiveLinkChannelSyncTest` valid unconfigured-channel frame for `0x1f`:
+`Bytes.of(0x12, command[1].toInt()) + Bytes(ByteArray(48))`. Foreground sync, readiness, Room/live,
+failure/retry and recreation assertions are unchanged; no production protocol behavior was changed.
+The repaired fixtures require an actual exact-candidate hosted rerun before claiming resolution.

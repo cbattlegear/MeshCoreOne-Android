@@ -785,11 +785,11 @@ class ChannelOperationLeaseTest {
                 var duplicate: Job? = null
                 try {
                     hydrating.await()
-                    assertEquals(DeviceConnectionState.CONNECTING, manager.connectionState)
+                    check(manager.connectionState == DeviceConnectionState.CONNECTING) { "state=${manager.connectionState}" }
                     duplicate = test.backgroundScope.launch { manager.connect(platform.target) }
                     test.runCurrent()
-                    assertFalse(duplicate.isCompleted)
-                    assertEquals(1, services.size)
+                    check(!duplicate.isCompleted) { "dup completed early" }
+                    check(services.size == 1) { "services=${services.size}" }
                     holdOwner = true
                     if (succeed) {
                         release.complete(Unit)
@@ -833,8 +833,8 @@ class ChannelOperationLeaseTest {
                     release.complete(Unit)
                 }
                 if (!succeed) {
-                    assertNull(manager.captureDeviceWrite())
-                    assertEquals(DeviceConnectionState.DISCONNECTED, manager.connectionState)
+                    check(manager.captureDeviceWrite() == null) { "capture after cleanup" }
+                    check(manager.connectionState == DeviceConnectionState.DISCONNECTED) { "final state=${manager.connectionState}" }
                 }
             }
         },

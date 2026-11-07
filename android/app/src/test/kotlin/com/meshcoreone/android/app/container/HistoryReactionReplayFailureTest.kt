@@ -2,10 +2,12 @@
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.DeviceEditPersisting
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.MessageDTO
@@ -127,7 +129,7 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         var fail = false
-        val persistence = object : PersistenceStoreProtocol by store {
+        val persistence = object : PersistenceStoreProtocol by store, DeviceEditPersisting by store {
             override suspend fun reactionExists(message: EntityKey, senderName: String, emoji: String): Boolean {
                 if (fail) {
                     fail = false
@@ -256,7 +258,7 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
         var checks = 0
         var saves = 0
         var fetched = false
-        val persistence = object : PersistenceStoreProtocol by store {
+        val persistence = object : PersistenceStoreProtocol by store, DeviceEditPersisting by store {
             override suspend fun reactionExists(message: EntityKey, senderName: String, emoji: String): Boolean {
                 val exists = store.reactionExists(message, senderName, emoji)
                 val ordinal = synchronized(checkLock) {
@@ -422,7 +424,7 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
         val duplicateChecked = CompletableDeferred<Unit>()
         val liveSaveStarted = CompletableDeferred<Unit>()
         var fetches = 0
-        val persistence = object : PersistenceStoreProtocol by store {
+        val persistence = object : PersistenceStoreProtocol by store, DeviceEditPersisting by store {
             override suspend fun fetchReactions(message: EntityKey, limit: Long): SnapshotList<ReactionDTO> {
                 val first = ++fetches == 1
                 val result = store.fetchReactions(message, limit)
@@ -606,7 +608,9 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
     }
 
     /** All unselected operations delegate to the production Room store, including the actual writes. */
-    private class FaultStore(private val actual: PersistenceStoreProtocol) : PersistenceStoreProtocol by actual {
+    private class FaultStore(private val actual: RoomPersistenceStore) :
+        PersistenceStoreProtocol by actual,
+        DeviceEditPersisting by actual {
         private var selected: Fault? = null
         private var occurrence = 0
         private var calls = 0

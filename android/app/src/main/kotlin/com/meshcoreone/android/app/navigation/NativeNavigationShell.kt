@@ -149,6 +149,23 @@ fun NativeNavigationShell(
 ) {
     require(unreadCount >= 0) { "Unread count must be nonnegative" }
     val state by coordinator.state.collectAsStateWithLifecycle()
+    val onboardingRouteActive = state.activeStack.lastOrNull()?.destination ==
+        NavigationDestination.Auxiliary(FeatureId.ONBOARDING)
+    val onboardingFlow = if (onboardingRouteActive) onboarding?.retainedFlowCoordinator() else null
+    val presetState = onboardingFlow?.preset?.state?.collectAsStateWithLifecycle()?.value
+    val completingWithoutDevice = onboardingFlow?.isCompletingWithoutDevice
+        ?.collectAsStateWithLifecycle()?.value ?: false
+    val completed = onboardingFlow?.onboarding?.hasCompletedOnboardingFlow
+        ?.collectAsStateWithLifecycle()?.value ?: false
+    val canNavigateFromCurrentRoute = !onboardingRouteActive ||
+        (!completed && !completingWithoutDevice && presetState?.isApplying != true &&
+            onboardingFlow?.canLeaveCurrentFlow() != false)
+    val canNavigateFromCurrentRouteNow by rememberUpdatedState {
+        val activeRouteIsOnboarding = coordinator.state.value.activeStack.lastOrNull()?.destination ==
+            NavigationDestination.Auxiliary(FeatureId.ONBOARDING)
+        !activeRouteIsOnboarding ||
+            onboarding?.retainedFlowCoordinator()?.canLeaveCurrentFlow() != false
+    }
     val holders = AppTab.entries.associateWith { rememberSaveableStateHolder() }
     val owners = state.stacks.flatMap { (tab, stack) -> stack.map { it.id to tab } }.toMap()
     val liveContentKeys by rememberUpdatedState(owners.keys.map { "entry-$it" }.toSet())
@@ -219,7 +236,8 @@ fun NativeNavigationShell(
                 NavigationSuiteItem(
                     navigationSuiteType = type,
                     selected = state.selectedTab == tab,
-                    onClick = { coordinator.selectTab(tab) },
+                    onClick = { if (canNavigateFromCurrentRouteNow()) coordinator.selectTab(tab) },
+                    enabled = canNavigateFromCurrentRoute,
                     modifier = Modifier
                         .heightIn(min = if (useRail) 72.dp else 80.dp * fontScale)
                         .testTag("tab:${tab.name}")
@@ -276,7 +294,8 @@ fun NativeNavigationShell(
                             navigationIcon = {
                                 if (state.canGoBack) {
                                     IconButton(
-                                        onClick = { coordinator.back() },
+                                        onClick = { if (canNavigateFromCurrentRouteNow()) coordinator.back() },
+                                        enabled = canNavigateFromCurrentRoute,
                                         modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("navigation-back"),
                                     ) {
                                         Icon(painterResource(R.drawable.ic_back), stringResource(Strings.string.scaffold_back))
@@ -286,12 +305,22 @@ fun NativeNavigationShell(
                             actions = {
                                 if (state.selectedTab == AppTab.NODES) {
                                     androidx.compose.material3.TextButton(
-                                        { coordinator.navigate(FeatureRoute(FeatureId.REMOTE_NODES)) },
-                                        Modifier.heightIn(min = 48.dp).testTag("open-remote-nodes"),
+                                        onClick = {
+                                            if (canNavigateFromCurrentRouteNow()) {
+                                                coordinator.navigate(FeatureRoute(FeatureId.REMOTE_NODES))
+                                            }
+                                        },
+                                        enabled = canNavigateFromCurrentRoute,
+                                        modifier = Modifier.heightIn(min = 48.dp).testTag("open-remote-nodes"),
                                     ) { Text(stringResource(com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings.remoteNodesAuthManagement)) }
                                 }
                                 IconButton(
-                                    onClick = { coordinator.navigate(FeatureRoute(FeatureId.ONBOARDING)) },
+                                    onClick = {
+                                        if (canNavigateFromCurrentRouteNow()) {
+                                            coordinator.navigate(FeatureRoute(FeatureId.ONBOARDING))
+                                        }
+                                    },
+                                    enabled = canNavigateFromCurrentRoute,
                                     modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("open-radio-setup"),
                                 ) {
                                     Icon(MeshSymbol.RADIO.vector, stringResource(Strings.string.scaffold_onboarding_title))
@@ -318,7 +347,7 @@ fun NativeNavigationShell(
                     modifier = Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding),
                     entryDecorators = listOf(decorator),
                     sceneStrategies = listOf(strategy),
-                    onBack = { coordinator.back() },
+                    onBack = { if (canNavigateFromCurrentRouteNow()) coordinator.back() },
                     transitionSpec = {
                         androidx.compose.animation.fadeIn(
                             androidx.compose.animation.core.tween(if (motionScale == 0f) 0 else 180),
@@ -508,8 +537,7 @@ private fun ExistingFeatureContent(
             else SettingsEntry(route, navigate)
         FeatureId.ONBOARDING -> OnboardingEntry(
             route,
-            // Leaving the auxiliary setup route pops it before moving on (completion targets the Chats root).
-            { target -> coordinator.back(); navigate(target) },
+            { target -> completeOnboardingNavigationIfCurrent(coordinator, target, navigate) },
             onboarding,
         )
         FeatureId.REMOTE_NODES -> RemoteNodesEntry(route, navigate, remoteNodes, cliContent = { session, send, enabled ->
@@ -528,5 +556,18 @@ private fun ExistingFeatureContent(
             coordinator.back()
             coordinator.navigateToRoom(it)
         })
+    }
+}
+
+internal fun completeOnboardingNavigationIfCurrent(
+    coordinator: NavigationCoordinator,
+    target: FeatureRoute,
+    navigate: (FeatureRoute) -> Unit,
+) {
+    val activeRouteIsOnboarding = coordinator.state.value.activeStack.lastOrNull()?.destination ==
+        NavigationDestination.Auxiliary(FeatureId.ONBOARDING)
+    if (activeRouteIsOnboarding) {
+        coordinator.back()
+        navigate(target)
     }
 }

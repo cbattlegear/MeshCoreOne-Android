@@ -14,6 +14,7 @@ import com.meshcoreone.android.core.connectivity.device.ConnectedDeviceAccess
 import com.meshcoreone.android.core.connectivity.device.ConnectedDeviceEditor
 import com.meshcoreone.android.core.connectivity.device.RadioPresetMatcher
 import com.meshcoreone.android.core.contracts.domain.ConnectedDeviceEdit
+import com.meshcoreone.android.core.contracts.domain.DeviceEditPersisting
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
@@ -30,6 +31,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 import kotlin.test.*
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -190,10 +192,10 @@ class RxRegionConsumerTest : RoomProcessTest() {
         } finally { f.harness.container.close() }
     }
 
-    @Test fun delayedOldPersistenceCannotRouteItsRegionsIntoAReplacementOfTheSameRadio() = runTest {
+    @Test fun delayedOldPersistenceDrainsBeforeSameRadioReplacementLoadsCommittedRegions() = runTest {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
-        val held = object : PersistenceStoreProtocol by store {
+        val held = object : PersistenceStoreProtocol by store, DeviceEditPersisting by store {
             override suspend fun addDeviceKnownRegion(radioId: RadioId, region: String) {
                 entered.complete(Unit)
                 release.await()
@@ -208,8 +210,18 @@ class RxRegionConsumerTest : RoomProcessTest() {
             val id = assertNotNull(f.harness.manager.connectedDevice).id
             val edit = assertNotNull(f.harness.container.deviceEditor.addKnownRegion("Germany"))
             f.harness.eventually("old region persistence suspended") { entered.isCompleted }
-            f.harness.manager.disconnect()
-            f.harness.manager.connect(f.harness.target(id))
+            val replacementInstall = async {
+                f.harness.manager.disconnect()
+                f.harness.manager.connect(f.harness.target(id))
+            }
+            f.harness.eventually("old generation logically detached") {
+                f.harness.manager.connectedDevice == null
+            }
+            assertFalse(replacementInstall.isCompleted, "Replacement waits for the admitted region write")
+            assertTrue(f.harness.sessions.current === old, "G2 cannot install while G1's write is held")
+            release.complete(Unit)
+            edit.join()
+            replacementInstall.await()
             f.harness.eventually("replacement handlers ready") {
                 f.harness.sessions.current?.let { it !== old && it.messagePollingService.hasMessageHandlersWired } == true
             }
@@ -218,43 +230,59 @@ class RxRegionConsumerTest : RoomProcessTest() {
             assertNotEquals(old.token, replacement.token)
             assertTrue(old.isTornDown)
             f.live = replacement
-            release.complete(Unit)
-            edit.join()
             assertEquals(listOf("Germany"), assertNotNull(store.fetchDevice(f.radio)).knownRegions)
-            assertTrue(assertNotNull(f.harness.manager.connectedDevice).knownRegions.isEmpty())
+            assertEquals(listOf("Germany"), assertNotNull(f.harness.manager.connectedDevice).knownRegions)
             val packet = f.packet(Bytes.of(1, 2, 3, 4), region = "Germany")
-            assertNull(f.ingest(packet).regionScope, "old edit must not retarget replacement service's cache")
+            assertEquals("Germany", f.ingest(packet).regionScope, "Replacement loads the committed region from Room")
         } finally {
             release.complete(Unit)
             f.harness.container.close()
         }
     }
 
-    @Test fun reconnectBetweenAcceptedEditAndRegistryLookupRejectsTheOriginalGeneration() = runTest {
+    @Test fun retirementBetweenAcceptedEditAndRegistryLookupDrainsBeforeSameRadioReplacement() = runTest {
         val f = RxIngestionFixture(this, store)
         val accepted = CompletableDeferred<SessionToken>()
+        val acceptedEdit = CompletableDeferred<ConnectedDeviceEdit>()
         val resumeCallback = CountDownLatch(1)
         try {
             f.connect()
             val old = f.live
             val id = assertNotNull(f.harness.manager.connectedDevice).id
             val access = object : ConnectedDeviceAccess by f.harness.container.deviceAccess {
-                override fun replaceConnectedDevice(device: DeviceDTO): ConnectedDeviceEdit? {
-                    val edit = f.harness.container.deviceAccess.replaceConnectedDevice(device)
+                override fun transformConnectedDevice(
+                    expectedToken: SessionToken?,
+                    transform: (DeviceDTO) -> DeviceDTO,
+                ): ConnectedDeviceEdit? {
+                    val edit = f.harness.container.deviceAccess.transformConnectedDevice(expectedToken, transform)
                     accepted.complete(assertNotNull(edit).token)
+                    acceptedEdit.complete(edit)
                     check(resumeCallback.await(10, TimeUnit.SECONDS)) { "Accepted-edit callback was not released" }
                     return edit
                 }
             }
             val editor = ConnectedDeviceEditor(
                 access, store, store, { null }, RadioPresetMatcher { _, _, _, _ -> emptySet() },
-                backgroundScope, { EPOCH }, onKnownRegionsChanged = f.harness.container::knownRegionsChanged,
+                CoroutineScope(backgroundScope.coroutineContext + Dispatchers.Default), { EPOCH },
+                onKnownRegionsChanged = f.harness.container::knownRegionsChanged,
             )
             val edit = async(Dispatchers.Default) { editor.addKnownRegion("Germany") }
             f.harness.eventually("DTO accepted before callback lookup") { accepted.isCompleted }
             assertEquals(old.token, accepted.await())
-            f.harness.manager.disconnect()
-            f.harness.manager.connect(f.harness.target(id))
+            assertEquals(listOf("Germany"), assertNotNull(store.fetchDevice(f.radio)).knownRegions)
+            val replacementInstall = async {
+                f.harness.manager.disconnect()
+                store.removeDeviceKnownRegion(f.radio, "Germany")
+                f.harness.manager.connect(f.harness.target(id))
+            }
+            f.harness.eventually("accepted edit generation logically detached") {
+                f.harness.manager.connectedDevice == null
+            }
+            assertFalse(replacementInstall.isCompleted, "Replacement waits for the accepted edit's callback")
+            assertTrue(f.harness.sessions.current === old, "G2 cannot install while G1's callback is held")
+            resumeCallback.countDown()
+            assertNotNull(edit.await()).join()
+            replacementInstall.await()
             f.harness.eventually("same-radio replacement handlers ready") {
                 f.harness.sessions.current?.let {
                     it !== old && it.messagePollingService.hasMessageHandlersWired
@@ -265,9 +293,9 @@ class RxRegionConsumerTest : RoomProcessTest() {
             assertNotEquals(old.token, f.live.token)
             // A live packet also establishes that the replacement's initial cache load has finished.
             f.ingest(f.packet(Bytes.of(1, 2, 3, 4)))
-            resumeCallback.countDown()
-            assertNotNull(edit.await()).join()
-            assertEquals(listOf("Germany"), assertNotNull(store.fetchDevice(f.radio)).knownRegions)
+            f.harness.container.knownRegionsChanged(acceptedEdit.await(), listOf("Germany"))
+            f.harness.settle()
+            assertTrue(assertNotNull(store.fetchDevice(f.radio)).knownRegions.isEmpty())
             assertTrue(assertNotNull(f.harness.manager.connectedDevice).knownRegions.isEmpty())
             assertNull(f.ingest(f.packet(Bytes.of(5, 6, 7, 8), region = "Germany")).regionScope)
         } finally {

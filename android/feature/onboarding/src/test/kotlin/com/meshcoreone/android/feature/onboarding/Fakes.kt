@@ -19,25 +19,44 @@ class FakePairing(var outcome: OnboardingConnectOutcome = OnboardingConnectOutco
     override var hasLastConnectedDevice = false
     override val scanFallback: OnboardingScanFallbackPort? = null
     var pairCalls = 0
+    var retryCalls = 0
     var retried: UUID? = null
     var cleared = 0
+    var clearCalls = 0
+    var beforeClear: suspend () -> Unit = {}
     var throwOnPair: Throwable? = null
+    var beforeRetry: suspend () -> Unit = {}
     override suspend fun pairNewDevice(): OnboardingConnectOutcome {
         pairCalls += 1
         throwOnPair?.let { throw it }
         return outcome
     }
-    override suspend fun retryConnection(deviceId: UUID): OnboardingConnectOutcome { retried = deviceId; return outcome }
-    override suspend fun clearStalePairings() { cleared += 1 }
+    override suspend fun retryConnection(deviceId: UUID): OnboardingConnectOutcome {
+        retryCalls += 1
+        retried = deviceId
+        beforeRetry()
+        return outcome
+    }
+    override suspend fun clearStalePairings() {
+        clearCalls += 1
+        beforeClear()
+        cleared += 1
+    }
 }
 
 class FakeDemo(var outcome: OnboardingConnectOutcome = OnboardingConnectOutcome.Connected) : OnboardingDemoPort {
     override val isEnabled = MutableStateFlow(false)
     var unlocked = 0
     var beforeUnlock: suspend () -> Unit = {}
+    var connectCalls = 0
+    var beforeConnect: suspend () -> Unit = {}
     override fun unlock() { unlocked += 1; isEnabled.value = true }
     override suspend fun unlockAndAwait() { beforeUnlock(); unlock() }
-    override suspend fun connectDemo(): OnboardingConnectOutcome = outcome
+    override suspend fun connectDemo(): OnboardingConnectOutcome {
+        connectCalls += 1
+        beforeConnect()
+        return outcome
+    }
 }
 
 class FakeWiFi(var outcome: OnboardingConnectOutcome = OnboardingConnectOutcome.Connected) : OnboardingWiFiPort {
@@ -72,6 +91,8 @@ class FakeRegion(var detected: RegionSelection? = null, presets: Map<String?, Li
 
 class FakePresets(var outcome: OnboardingPresetOutcome = OnboardingPresetOutcome.Applied) : OnboardingPresetPort {
     override val canApply = MutableStateFlow(true)
+    var target: OnboardingPresetTarget? = null
     val applied = mutableListOf<String>()
+    override fun currentTarget() = target
     override suspend fun apply(presetId: String): OnboardingPresetOutcome { applied += presetId; return outcome }
 }

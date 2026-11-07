@@ -17,6 +17,7 @@ import com.meshcoreone.android.core.connectivity.device.RemoveUnfavoritedResult
 import com.meshcoreone.android.core.connectivity.pairing.SystemPairedAccessory
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.RegionSelection
@@ -44,6 +45,9 @@ internal class FakeConnectionPort : AppConnectionPort {
     override val shouldDeferOpportunisticReconnect: Boolean get() = isPairingFlowActive
     override var isPairingFlowActive: Boolean = false
     val calls: MutableList<String> = Collections.synchronizedList(mutableListOf())
+    var presetToken: SessionToken? = null
+    val presetTokens: MutableList<SessionToken> = Collections.synchronizedList(mutableListOf())
+    var beforePresetUpdate: () -> Unit = {}
 
     // Pairing registry model.
     val paired = mutableListOf<SystemPairedAccessory>()
@@ -91,10 +95,25 @@ internal class FakeConnectionPort : AppConnectionPort {
         return RemoveUnfavoritedResult(0, 0)
     }
     override fun updateDevice(info: SelfInfo, appliedRadioPresetId: String?) { calls += "updateDeviceInfo" }
+    override suspend fun updateDevice(info: SelfInfo, appliedRadioPresetId: String?, expectedToken: SessionToken): Boolean {
+        presetTokens += expectedToken
+        beforePresetUpdate()
+        if (presetToken != expectedToken) return false
+        calls += "updateDeviceInfo"
+        return true
+    }
     override fun updateDevice(device: DeviceDTO) { calls += "updateDevice" }
+    override fun updateOCVSettings(device: DeviceDTO, expectedToken: SessionToken) { calls += "updateDevice" }
     override fun updateAutoAddConfig(config: AutoAddConfig) { calls += "autoAdd" }
     override fun updateClientRepeat(enabled: Boolean) { calls += "clientRepeat:$enabled" }
     override fun updatePathHashMode(mode: UByte) { calls += "pathHash:$mode" }
+    override suspend fun updatePathHashMode(mode: UByte, expectedToken: SessionToken): Boolean {
+        presetTokens += expectedToken
+        beforePresetUpdate()
+        if (presetToken != expectedToken) return false
+        calls += "pathHash:$mode"
+        return true
+    }
     override fun updateDefaultFloodScopeName(name: String?) { calls += "floodScope:$name" }
     override fun setAllowedRepeatFreqRanges(ranges: SnapshotList<FrequencyRange>) { calls += "repeatRanges" }
 }

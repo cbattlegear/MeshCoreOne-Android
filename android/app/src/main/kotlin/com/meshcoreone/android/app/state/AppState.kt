@@ -7,6 +7,8 @@ import com.meshcoreone.android.app.navigation.ChatSelection
 import com.meshcoreone.android.app.navigation.NavigationCoordinator
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
+import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import com.meshcoreone.android.core.model.ChatConversationID
 import com.meshcoreone.android.core.model.ContactDTO
@@ -556,7 +558,21 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
             try {
                 subscription.events.collect { wrapped ->
                     when (val event = wrapped.event) {
-                        is SettingsEvent.DeviceUpdated -> connection.updateDevice(event.info, event.appliedRadioPresetID)
+                        is SettingsEvent.PersistenceBarrier -> {
+                            persistSessionDeviceEdit("settings write barrier", event.persistence) {
+                                connection.awaitDeviceEdits(wrapped.token)
+                            }
+                        }
+                        is SettingsEvent.DeviceUpdated -> {
+                            val presetId = event.appliedRadioPresetID
+                            if (presetId == null) {
+                                connection.updateDevice(event.info, null)
+                            } else {
+                                persistSessionDeviceEdit("radio preset") {
+                                    connection.updateDevice(event.info, presetId, wrapped.token)
+                                }
+                            }
+                        }
                         is SettingsEvent.AutoAddConfigUpdated -> {
                             connection.updateAutoAddConfig(event.config)
                             // Clear the storage-full flag when overwrite-oldest is enabled.
@@ -565,7 +581,11 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
                             }
                         }
                         is SettingsEvent.ClientRepeatUpdated -> connection.updateClientRepeat(event.enabled)
-                        is SettingsEvent.PathHashModeUpdated -> connection.updatePathHashMode(event.mode)
+                        is SettingsEvent.PathHashModeUpdated -> {
+                            persistSessionDeviceEdit("path hash", event.persistence) {
+                                connection.updatePathHashMode(event.mode, wrapped.token)
+                            }
+                        }
                         is SettingsEvent.AllowedRepeatFreqUpdated -> connection.setAllowedRepeatFreqRanges(event.ranges)
                         is SettingsEvent.DefaultFloodScopeUpdated -> connection.updateDefaultFloodScopeName(event.name)
                     }
@@ -576,8 +596,29 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
         })
     }
 
+    private suspend fun persistSessionDeviceEdit(
+        operation: String,
+        completion: CompletableDeferred<Unit>? = null,
+        edit: suspend () -> Boolean,
+    ) {
+        try {
+            if (edit()) {
+                completion?.complete(Unit)
+            } else {
+                completion?.completeExceptionally(SettingsServiceException(SettingsServiceError.NotConnected))
+                logger.fine("Ignored $operation update from a retired session")
+            }
+        } catch (cancelled: CancellationException) {
+            completion?.completeExceptionally(cancelled)
+            throw cancelled
+        } catch (failure: Exception) {
+            completion?.completeExceptionally(failure)
+            logger.log(Level.WARNING, "Failed to persist $operation update", failure)
+        }
+    }
+
     private fun wireDeviceUpdateCallbacks(session: AppSession) {
-        session.deviceService.setDeviceUpdateCallback { event -> connection.updateDevice(event.event) }
+        session.deviceService.setDeviceUpdateCallback { event -> connection.updateOCVSettings(event.event, event.token) }
 
         // ConnectionManager nils the session before teardown yields contactDeletedCleanup; capture the notification service.
         val notifications = session.notificationService

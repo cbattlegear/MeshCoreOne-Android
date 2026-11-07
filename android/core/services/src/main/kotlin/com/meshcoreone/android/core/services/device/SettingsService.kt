@@ -21,10 +21,10 @@ import com.meshcoreone.android.core.protocol.event.RadioStats
 import com.meshcoreone.android.core.protocol.model.*
 import com.meshcoreone.android.core.protocol.session.ConfigurationSessionOps
 import java.time.Instant
-import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.logging.Logger
 import kotlin.math.abs
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
@@ -39,20 +39,32 @@ class SettingsService(
     private val eventLock = Any()
     private var subscription: Subscription? = null
     private var eventsFinished = false
+    private var pathHashRevision = 0L
+    private var persistedPathHashRevision = 0L
+    val pathHashModeNeedsRecovery: Boolean
+        get() = synchronized(eventLock) { pathHashRevision != persistedPathHashRevision }
 
     init {
         context.onClose(::finishEvents)
     }
 
     private inner class Subscription : SessionEventSubscription<SettingsEvent> {
-        val id: UUID = UUID.randomUUID()
         val channel = Channel<SessionEvent<SettingsEvent>>(Channel.UNLIMITED)
+        val pendingPersistence = mutableSetOf<CompletableDeferred<Unit>>()
         private val collected = AtomicBoolean(false)
         override val events: Flow<SessionEvent<SettingsEvent>> = flow {
             check(collected.compareAndSet(false, true)) { "A settings subscription permits one consumer" }
             try {
                 for (event in channel) {
                     if (!context.isCurrent) break
+                    val persistence = when (val value = event.event) {
+                        is SettingsEvent.PathHashModeUpdated -> value.persistence
+                        is SettingsEvent.PersistenceBarrier -> value.persistence
+                        else -> null
+                    }
+                    if (persistence != null && synchronized(eventLock) {
+                            subscription !== this@Subscription || persistence.isCancelled
+                        }) continue
                     emit(event)
                 }
             } finally {
@@ -60,31 +72,48 @@ class SettingsService(
             }
         }
         override fun close() {
-            synchronized(eventLock) {
-                if (subscription?.id == id) subscription = null
-                channel.close()
+            val pending = synchronized(eventLock) { detachLocked() }
+            finishClose(pending)
+        }
+        fun detachLocked(): List<CompletableDeferred<Unit>> {
+            if (subscription === this) subscription = null
+            return pendingPersistence.toList().also { pendingPersistence.clear() }
+        }
+        fun finishClose(pending: List<CompletableDeferred<Unit>>) {
+            channel.close()
+            pending.forEach {
+                it.completeExceptionally(SettingsServiceException(SettingsServiceError.NotConnected))
             }
         }
     }
 
-    fun events(): SessionEventSubscription<SettingsEvent> = synchronized(eventLock) {
+    fun events(): SessionEventSubscription<SettingsEvent> {
         val next = Subscription()
-        if (eventsFinished || !context.isCurrent) {
-            next.channel.close()
-        } else {
-            subscription?.channel?.close()
-            if (subscription != null) Logger.getLogger("MeshCore.SettingsService").fine("Replacing settings subscriber")
-            subscription = next
+        var previous: Subscription? = null
+        var pending = emptyList<CompletableDeferred<Unit>>()
+        val accepted = synchronized(eventLock) {
+            if (eventsFinished || !context.isCurrent) false else {
+                previous = subscription
+                pending = previous?.detachLocked().orEmpty()
+                subscription = next
+                true
+            }
         }
-        next
+        // Closing a channel or completion can resume an unconfined caller that subscribes again.
+        if (accepted) {
+            previous?.finishClose(pending)
+            if (previous != null) Logger.getLogger("MeshCore.SettingsService").fine("Replacing settings subscriber")
+        } else next.close()
+        return next
     }
 
     fun finishEvents() {
-        synchronized(eventLock) {
+        val (previous, pending) = synchronized(eventLock) {
             eventsFinished = true
-            subscription?.channel?.close()
-            subscription = null
+            val previous = subscription
+            previous to previous?.detachLocked().orEmpty()
         }
+        previous?.finishClose(pending)
     }
 
     private fun publish(event: SettingsEvent) {
@@ -195,11 +224,52 @@ class SettingsService(
     suspend fun setPathHashMode(mode: UByte) = operation { configuration { setPathHashMode(mode) } }
     suspend fun setPathHashModeVerified(mode: UByte): UByte = operation { writePathHashAndVerify(mode) }
 
-    private suspend fun writePathHashAndVerify(mode: UByte): UByte {
+    /** Normal Settings awaits the event consumer's durable write, outside the radio-operation lock. */
+    suspend fun setPathHashModePersisted(mode: UByte): UByte = context.operation {
+        val completion = CompletableDeferred<Unit>()
+        val owner = synchronized(eventLock) {
+            subscription?.takeUnless { eventsFinished }
+                ?: throw SettingsServiceException(SettingsServiceError.NotConnected)
+        }
+        try {
+            val revision = operation {
+                writePathHashAndVerify(mode, completion, owner)
+                synchronized(eventLock) { pathHashRevision }
+            }
+            completion.await()
+            context.requireCurrent()
+            synchronized(eventLock) {
+                persistedPathHashRevision = maxOf(persistedPathHashRevision, revision)
+            }
+            mode
+        } finally {
+            synchronized(eventLock) { owner.pendingPersistence.remove(completion) }
+            completion.cancel()
+        }
+    }
+
+    private suspend fun writePathHashAndVerify(
+        mode: UByte,
+        completion: CompletableDeferred<Unit>? = null,
+        owner: Subscription? = null,
+    ): UByte {
+        synchronized(eventLock) { pathHashRevision = Math.incrementExact(pathHashRevision) }
         configuration { setPathHashMode(mode) }
         val actual = configuration { queryDevice() }.pathHashMode
         if (actual != mode) verification("pathHashMode=$mode", "pathHashMode=$actual")
-        publish(SettingsEvent.PathHashModeUpdated(mode))
+        if (completion == null) {
+            publish(SettingsEvent.PathHashModeUpdated(mode))
+        } else {
+            context.requireCurrent()
+            synchronized(eventLock) {
+                if (eventsFinished || subscription !== owner) {
+                    throw SettingsServiceException(SettingsServiceError.NotConnected)
+                }
+                val target = checkNotNull(owner)
+                target.pendingPersistence.add(completion)
+                target.channel.trySend(SessionEvent(context.token, SettingsEvent.PathHashModeUpdated(mode, completion))).getOrThrow()
+            }
+        }
         return mode
     }
 
@@ -312,15 +382,69 @@ class SettingsService(
         return actual
     }
 
-    suspend fun applyRadioPresetVerified(preset: RadioPreset): SelfInfo = operation {
+    suspend fun applyRadioPresetVerified(preset: RadioPreset): SelfInfo =
+        applyRadioPresetOrdered(preset, null)
+
+    /**
+     * The callback must durably persist the device and supplied verified hash (null if not written).
+     * It shares radio ordering and must not reenter any service method acquiring the same operation lock.
+     */
+    suspend fun applyRadioPresetVerified(
+        preset: RadioPreset,
+        persist: suspend (SelfInfo, UByte?) -> Unit,
+    ): SelfInfo = applyRadioPresetOrdered(preset, persist)
+
+    private suspend fun applyRadioPresetOrdered(
+        preset: RadioPreset,
+        persist: (suspend (SelfInfo, UByte?) -> Unit)?,
+    ): SelfInfo = operation {
+        if (persist != null) awaitEarlierDeviceEdits()
         val actual = writeRadioAndVerify(
             preset.frequencyKHz, preset.bandwidthHz, preset.spreadingFactor, preset.codingRate, null,
         )
+        var revision: Long? = null
+        var verifiedPathHashMode: UByte? = null
         preset.pathHashMode?.let { mode ->
-            if (configuration { queryDevice() }.supportsPathHashMode) writePathHashAndVerify(mode)
+            if (configuration { queryDevice() }.supportsPathHashMode) {
+                writePathHashAndVerify(mode)
+                verifiedPathHashMode = mode
+                revision = synchronized(eventLock) { pathHashRevision }
+            }
         }
         publish(SettingsEvent.DeviceUpdated(actual, preset.id))
+        if (persist != null) {
+            persist(actual, verifiedPathHashMode)
+            context.requireCurrent()
+            revision?.let { committed ->
+                synchronized(eventLock) {
+                    persistedPathHashRevision = maxOf(persistedPathHashRevision, committed)
+                }
+            }
+        }
         actual
+    }
+
+    /**
+     * The single consumer drains earlier events and its editor queue before acknowledging. It must
+     * not call any service operation: the newer preset owns radio ordering while awaiting this fence.
+     */
+    private suspend fun awaitEarlierDeviceEdits() {
+        context.requireCurrent()
+        val completion = CompletableDeferred<Unit>()
+        val owner = synchronized(eventLock) {
+            val target = subscription?.takeUnless { eventsFinished }
+                ?: throw SettingsServiceException(SettingsServiceError.NotConnected)
+            target.pendingPersistence.add(completion)
+            target.channel.trySend(SessionEvent(context.token, SettingsEvent.PersistenceBarrier(completion))).getOrThrow()
+            target
+        }
+        try {
+            completion.await()
+            context.requireCurrent()
+        } finally {
+            synchronized(eventLock) { owner.pendingPersistence.remove(completion) }
+            completion.cancel()
+        }
     }
 
     suspend fun setTxPowerVerified(power: Byte): SelfInfo = operation {

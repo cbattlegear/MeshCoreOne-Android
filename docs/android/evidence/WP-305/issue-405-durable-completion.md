@@ -881,3 +881,19 @@ must refuse without executing the drain callback or touching a write ticket, sav
 This extends the rejected-admission matrix from 11 to 12 entry points without weakening its
 unchanged Room/live assertions. It is source coverage on the held composed tree, not evidence that
 the requested independent actual-main foundation has been produced.
+
+## Hosted CI repair of PR #532 (head bfe19a4a6)
+
+Merged `origin/main` a6c77661f with the pushed head 121bea509 and 47 previously unpushed local
+commits (backup ref `backup/wp305-local-789f74d`; no force-push). The earlier "unexecuted/held"
+statements above are superseded for the manager-lease commits `49d797ee9`/`34b9a504b`: they were
+executed by hosted CI but still await independent exact-head review. No local Gradle was run and the
+retained execution lock was untouched.
+
+Hosted runs: 42303811078 (compile failure, BackupTransactionTest), 42304683529 (12 failures),
+42309767352 (5), 42312583459 (3), 42313951957 (2), 42315437793 (1), 42317068388 (1),
+42318362635 (all selected scopes passed). Fixes: restoration-route handling in `ConnectionManager.kt`
+(small; potential merge overlap with #495 head 80865c278, unreconciled), observable onboarding
+completion gate, Settings republish on `deviceAccess.changes`, Hash Size option test selection and
+a lease-test precondition (hydrating state is not DISCONNECTED; behavioral assertions unchanged).
+Not verified: physical device/radio, independent review. PR stays draft.

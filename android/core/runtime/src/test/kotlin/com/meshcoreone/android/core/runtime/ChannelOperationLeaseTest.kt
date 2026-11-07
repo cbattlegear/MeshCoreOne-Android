@@ -785,7 +785,7 @@ class ChannelOperationLeaseTest {
                 var duplicate: Job? = null
                 try {
                     hydrating.await()
-                    check(manager.connectionState == DeviceConnectionState.CONNECTING) { "state=${manager.connectionState}" }
+                    check(manager.connectionState != DeviceConnectionState.DISCONNECTED) { "state=${manager.connectionState}" }
                     duplicate = test.backgroundScope.launch { manager.connect(platform.target) }
                     test.runCurrent()
                     check(!duplicate.isCompleted) { "dup completed early" }

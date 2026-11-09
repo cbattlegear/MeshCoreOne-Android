@@ -6026,7 +6026,8 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             assertNotSame(previousActivity, host.get(), "The Activity must actually be recreated")
             mount(h, dependencies)
             h.eventually("old import is cancelled and recreated confirmation loaded an absent row", virtualBudgetMillis = 0) {
-                publicKey in cancelledWrites && emptyLookups.get() >= 2 && confirmationEnabled()
+                compose.waitForIdle()
+                confirmationEnabled() && publicKey in cancelledWrites && emptyLookups.get() >= 2
             }
             compose.onNodeWithTag("contact-link-confirm").assertTextEquals(
                 ApplicationProvider.getApplicationContext<Context>().getString(
@@ -6113,8 +6114,9 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             assertNull(navigation.state.value.pendingContactLink)
             assertTrue(chat.route(uri))
             h.eventually("identical replacement loaded the still-absent row", virtualBudgetMillis = 0) {
-                navigation.state.value.pendingContactLink?.publicKey == publicKey &&
-                    emptyLookups.get() >= 2 && confirmationEnabled()
+                compose.waitForIdle()
+                confirmationEnabled() && navigation.state.value.pendingContactLink?.publicKey == publicKey &&
+                    emptyLookups.get() >= 2
             }
             val replacement = assertNotNull(navigation.state.value.pendingContactLink)
             assertNotEquals(first.deliveryId, replacement.deliveryId)

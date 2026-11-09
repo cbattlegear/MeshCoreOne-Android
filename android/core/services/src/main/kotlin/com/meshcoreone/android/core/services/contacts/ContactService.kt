@@ -319,11 +319,7 @@ class ContactService(
         } catch (error: ContactWriteCompletionFailed) {
             throw error
         } catch (error: Exception) {
-            if (dispatch.definitelyUnsent) {
-                ContactWriteRecovery.abandonDefinitelyUnsent(preferences, radioId, dispatch)
-            } else {
-                requireContactReconciliation(radioId, error, dispatch)
-            }
+            requireContactReconciliation(radioId, error, dispatch)
             throw error
         }
     }

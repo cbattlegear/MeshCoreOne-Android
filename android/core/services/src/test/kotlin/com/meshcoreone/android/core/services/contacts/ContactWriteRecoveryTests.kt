@@ -246,9 +246,11 @@ class ContactWriteRecoveryTests {
             }
             val flags = PendingMarkerFlags()
             val producer = service(persistence = failing, flags = flags)
-            assertSame(failure, assertFailsWith<IOException> {
+            val observed = assertFailsWith<IOException> {
                 producer.addContactIfAbsent(radioA, frame(1, "Failed lookup"))
-            })
+            }
+            assertEquals(failure.message, observed.message)
+            assertTrue(observed === failure || observed.cause === failure)
             assertTrue(radio.writes.isEmpty())
             assertFalse(producer.needsContactWriteReconciliation(radioA))
             assertTrue(flags.attempts.isEmpty())

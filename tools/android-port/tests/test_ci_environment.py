@@ -127,12 +127,19 @@ class EnvironmentTests(unittest.TestCase):
         return output, state, arguments, observe_identity.call_count, preflight_arguments
 
     def test_scaffold_selects_android_test_compilation_without_install_or_execution(self):
+        from controller.module_junit import NOTIFICATION_INSTRUMENTATION_BUILD, NOTIFICATION_INSTRUMENTATION_TASK
+
         expected = [
             "verifyScaffoldTests", "verifyRoomSchema", "validateModuleGraph",
             "runtimeDependencyInventory", "resolveScaffoldDependencies",
             ":app:assembleDebug", ":app:compileDebugAndroidTestKotlin", "lintScaffold",
             ":platform:notifications:testDebugUnitTest",
         ]
+        build_blob = git(
+            REPO, "rev-parse", "HEAD:android/platform/notifications/build.gradle.kts",
+        ).decode().strip()
+        if build_blob == NOTIFICATION_INSTRUMENTATION_BUILD:
+            expected.append(NOTIFICATION_INSTRUMENTATION_TASK)
         for host in ("linux", "windows"):
             for scopes in (None, ["scaffold"], ["scaffold", "protocol"]):
                 with self.subTest(host=host, scopes=scopes), tempfile.TemporaryDirectory() as temporary:

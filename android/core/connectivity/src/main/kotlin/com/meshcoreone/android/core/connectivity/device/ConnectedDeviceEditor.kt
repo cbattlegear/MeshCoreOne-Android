@@ -102,6 +102,8 @@ class ConnectedDeviceEditor(
     private val clearDefaultFloodScope: suspend () -> Unit = {},
 ) {
     private val sessionEdits = Mutex()
+    private val publicationLock = Any()
+    private var ocvRevision = 0L
     val connectedDevice: DeviceDTO? get() = access.connectedDevice
 
     fun updateDevice(info: SelfInfo, appliedRadioPresetID: String?): Job? {
@@ -201,6 +203,7 @@ class ConnectedDeviceEditor(
             return live != null && live.id == original.id && live.radioId == original.radioId
         }
         try {
+            val originalOcvRevision = synchronized(publicationLock) { ocvRevision }
             val saved = devices.editDevice(original.id, isLeaseCurrent ?: ::current) { authoritative ->
                 if (authoritative.radioId != original.radioId || authoritative.isActive != original.isActive) {
                     throw DeviceWriteConflict()
@@ -209,9 +212,11 @@ class ConnectedDeviceEditor(
             } ?: return false
             currentCoroutineContext().ensureActive()
             var published: DeviceDTO? = null
-            val edit = access.transformConnectedDevice(expectedToken) { live ->
-                // A callback may have published unrelated fields while Room was suspended.
-                saved.preservingChanges(original, live).also { published = it }
+            val edit = synchronized(publicationLock) {
+                access.transformConnectedDevice(expectedToken) { live ->
+                    // OCV may return to its original value while Room is suspended.
+                    saved.preservingChanges(original, live, ocvRevision != originalOcvRevision).also { published = it }
+                }
             } ?: return false
             val updated = checkNotNull(published)
             if (edit.previousKnownRegions != updated.knownRegions) {
@@ -231,9 +236,14 @@ class ConnectedDeviceEditor(
     }
 
     fun updateOCVSettings(device: DeviceDTO, expectedToken: SessionToken) {
-        access.transformConnectedDevice(expectedToken) { live ->
-            if (live.id != device.id || live.radioId != device.radioId) live
-            else live.copy(ocvPreset = device.ocvPreset, customOCVArrayString = device.customOCVArrayString)
+        synchronized(publicationLock) {
+            access.transformConnectedDevice(expectedToken) { live ->
+                if (live.id != device.id || live.radioId != device.radioId) live
+                else {
+                    ocvRevision = Math.incrementExact(ocvRevision)
+                    live.copy(ocvPreset = device.ocvPreset, customOCVArrayString = device.customOCVArrayString)
+                }
+            }
         }
     }
 

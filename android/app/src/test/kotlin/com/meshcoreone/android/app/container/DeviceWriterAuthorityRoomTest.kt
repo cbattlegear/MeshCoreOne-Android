@@ -267,6 +267,33 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
         } finally { h.container.close() }
     }
 
+    @Test fun ocvReturningToOriginalValueAfterPresetCommitRetainsLatestRoomAndLiveSettings() = runTest {
+        val paused = PausedStore(store)
+        val h = ContainerHarness(this, store, persistenceOverride = paused)
+        try {
+            h.manager.connect(h.target())
+            h.settle()
+            val service = h.sessions.current!!.deviceService
+            service.updateOCVSettings(h.manager.connectedDevice!!.id, "liIon", "original")
+            val before = assertNotNull(h.manager.connectedDevice)
+            val token = assertNotNull(h.manager.snapshot.value.token)
+            paused.beforeSnapshot = {
+                service.updateOCVSettings(before.id, "liFePO4", "intermediate")
+                assertEquals("liFePO4", h.manager.connectedDevice!!.ocvPreset)
+                paused.afterSave = {
+                    service.updateOCVSettings(before.id, "liIon", "original")
+                    assertEquals(before.ocvPreset, h.manager.connectedDevice!!.ocvPreset)
+                    assertEquals(before.customOCVArrayString, h.manager.connectedDevice!!.customOCVArrayString)
+                }
+            }
+            assertTrue(h.container.deviceEditor.updateDevice(before.info(), "new-preset", token))
+            val expected = before.updating(before.info()).copy(appliedRadioPresetID = "new-preset")
+            assertEquals(expected, store.fetchDevice(before.id))
+            assertEquals(expected, h.manager.connectedDevice,
+                "Two OCV publications must not be mistaken for no publication when values return to A")
+        } finally { h.container.close() }
+    }
+
     @Test fun ordinaryDelayedSaveAndPresetShareTheEntireSuspendingWriteOrder() = runTest {
         val paused = PausedStore(store)
         val h = ContainerHarness(this, store, persistenceOverride = paused)

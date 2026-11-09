@@ -233,6 +233,11 @@ class SettingsService(
         }
         try {
             val revision = operation {
+                synchronized(eventLock) {
+                    if (eventsFinished || subscription !== owner) {
+                        throw SettingsServiceException(SettingsServiceError.NotConnected)
+                    }
+                }
                 writePathHashAndVerify(mode, completion, owner)
                 synchronized(eventLock) { pathHashRevision }
             }

@@ -23,8 +23,8 @@ data class DeviceWriteSnapshot(
 
 class DeviceWriteConflict : IllegalStateException("Device write authority changed")
 
-/** Overlay only changes published since [before], retaining newly committed Room fields otherwise. */
-fun DeviceDTO.preservingChanges(before: DeviceDTO, live: DeviceDTO): DeviceDTO {
+/** Overlay changes published since [before]; OCV callbacks additionally supply revision-based authority. */
+fun DeviceDTO.preservingChanges(before: DeviceDTO, live: DeviceDTO, ocvChanged: Boolean = false): DeviceDTO {
     require(id == before.id && id == live.id && radioId == before.radioId && radioId == live.radioId)
     fun <T> changed(old: T, current: T, saved: T): T = if (old != current) current else saved
     return copy(
@@ -63,9 +63,10 @@ fun DeviceDTO.preservingChanges(before: DeviceDTO, live: DeviceDTO): DeviceDTO {
         lastConnected = changed(before.lastConnected, live.lastConnected, lastConnected),
         lastContactSync = changed(before.lastContactSync, live.lastContactSync, lastContactSync),
         isActive = changed(before.isActive, live.isActive, isActive),
-        ocvPreset = changed(before.ocvPreset, live.ocvPreset, ocvPreset),
+        ocvPreset = if (ocvChanged) live.ocvPreset else changed(before.ocvPreset, live.ocvPreset, ocvPreset),
         appliedRadioPresetID = changed(before.appliedRadioPresetID, live.appliedRadioPresetID, appliedRadioPresetID),
-        customOCVArrayString = changed(before.customOCVArrayString, live.customOCVArrayString, customOCVArrayString),
+        customOCVArrayString = if (ocvChanged) live.customOCVArrayString
+            else changed(before.customOCVArrayString, live.customOCVArrayString, customOCVArrayString),
         connectionMethods = changed(before.connectionMethods, live.connectionMethods, connectionMethods),
         knownRegions = changed(before.knownRegions, live.knownRegions, knownRegions),
     )

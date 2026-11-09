@@ -115,6 +115,13 @@ class OriginalMessageCasesTest {
             assertEquals(9u.toUByte(), assertFailsWith<MeshCoreException.DeviceError> { leader.await() }.code)
             assertEquals(9u.toUByte(), assertFailsWith<MeshCoreException.DeviceError> { follower.await() }.code)
             assertEquals(2, f.transport.sent.size)
+
+            val retry = checkedRequest { f.session.getMessage() }
+            runCurrent()
+            assertEquals(3, f.transport.sent.size)
+            f.transport.receive(raw(0x0a))
+            runCurrent()
+            assertEquals(MessageResult.NoMoreMessages, retry.await())
             f.session.stop()
         },
         original("GetMessageCoalescingTests", "a cancelled coalesced caller does not hang") {
@@ -133,6 +140,86 @@ class OriginalMessageCasesTest {
             runCurrent()
             assertFailsWith<MeshCoreException.Timeout> { leader.await() }
             assertEquals(2, f.transport.sent.size)
+            f.session.stop()
+        },
+        original("GetMessageCoalescingTests", "a completed GET result remains available after its caller is cancelled") {
+            val f = fixture()
+            start(f)
+            val caller = checkedRequest { f.session.getMessage() }
+            runCurrent()
+            caller.cancel()
+            runCurrent()
+            assertFailsWith<CancellationException> { caller.await() }
+
+            f.transport.receive(raw(0x0a))
+            runCurrent()
+            assertEquals(2, f.transport.sent.size)
+
+            val retry = checkedRequest { f.session.getMessage() }
+            runCurrent()
+            assertEquals(MessageResult.NoMoreMessages, retry.await())
+            assertNull(f.session.core.generation().poll)
+            assertEquals(2, f.transport.sent.size)
+            f.session.stop()
+        },
+        original("GetMessageCoalescingTests", "cancellation after poll completion retains the result until return") {
+            val f = fixture()
+            start(f)
+            val caller = checkedRequest { f.session.getMessage() }
+            runCurrent()
+            val poll = assertNotNull(f.session.core.generation().poll)
+            var cancelledAtPollCompletion = false
+            poll.invokeOnCompletion {
+                assertTrue(poll.isCompleted)
+                cancelledAtPollCompletion = true
+                caller.cancel()
+            }
+
+            f.transport.receive(raw(0x0a))
+            runCurrent()
+            assertTrue(cancelledAtPollCompletion)
+            assertTrue(poll.isCompleted)
+            assertFalse(poll.isCancelled)
+            assertFailsWith<CancellationException> { caller.await() }
+            assertEquals(2, f.transport.sent.size)
+
+            val retry = checkedRequest { f.session.getMessage() }
+            runCurrent()
+            assertEquals(MessageResult.NoMoreMessages, retry.await())
+            assertNull(f.session.core.generation().poll)
+            assertEquals(2, f.transport.sent.size)
+            f.session.stop()
+        },
+        original("GetMessageCoalescingTests", "a retired generation's completed poll is not rebound") {
+            val f = fixture()
+            start(f)
+            val caller = checkedRequest { f.session.getMessage() }
+            runCurrent()
+            val retiredGeneration = f.session.core.generation()
+            val retiredPoll = assertNotNull(retiredGeneration.poll)
+            caller.cancel()
+            runCurrent()
+            assertFailsWith<CancellationException> { caller.await() }
+
+            f.transport.receive(raw(0x0a))
+            runCurrent()
+            assertTrue(retiredPoll.isCompleted)
+            assertFalse(retiredPoll.isCancelled)
+            assertSame(retiredPoll, retiredGeneration.poll)
+            f.session.stop()
+            assertSame(retiredPoll, retiredGeneration.poll)
+
+            start(f)
+            val newGeneration = f.session.core.generation()
+            assertNotSame(retiredGeneration, newGeneration)
+            val next = checkedRequest { f.session.getMessage() }
+            runCurrent()
+            assertNotSame(retiredPoll, newGeneration.poll)
+            assertEquals(4, f.transport.sent.size)
+            f.transport.receive(raw(0x0a))
+            runCurrent()
+            assertEquals(MessageResult.NoMoreMessages, next.await())
+            assertSame(retiredPoll, retiredGeneration.poll)
             f.session.stop()
         },
         original("GetMessageSerializationTests", "an unrelated error does not fail an in-flight getMessage") {

@@ -472,21 +472,20 @@ internal class SessionCore(
     suspend fun getMessage(timeout: Double?): MessageResult =
         pollMessage(generation(), timeout).result
 
+    @OptIn(ExperimentalCoroutinesApi::class)
     private suspend fun pollMessage(generation: SessionGeneration, timeout: Double?): PollOutcome {
-        while (true) {
-            val outcome = pollMessageOnce(generation, timeout)
-            val staleEmpty = synchronized(lock) {
-                outcome.result == MessageResult.NoMoreMessages &&
-                    outcome.messageWaitingRevision < generation.messageWaitingRevision
-            }
-            if (!staleEmpty) return outcome
-        }
-    }
-
-    private suspend fun pollMessageOnce(generation: SessionGeneration, timeout: Double?): PollOutcome {
         val (task, messageWaitingRevision) = synchronized(lock) {
             requireCurrent(generation)
-            val existing = generation.poll
+            var existing = generation.poll
+            // Only a new caller may invalidate a historical empty result. Attached waiters
+            // keep their original outcome even when a newer notification arrives.
+            if (existing != null && existing.isCompleted && !existing.isCancelled &&
+                existing.getCompleted() == MessageResult.NoMoreMessages &&
+                checkNotNull(generation.pollMessageWaitingRevision) < generation.messageWaitingRevision) {
+                generation.poll = null
+                generation.pollMessageWaitingRevision = null
+                existing = null
+            }
             if (existing != null) {
                 existing to checkNotNull(generation.pollMessageWaitingRevision)
             } else {

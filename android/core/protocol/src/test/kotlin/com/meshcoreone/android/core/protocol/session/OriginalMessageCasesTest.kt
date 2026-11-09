@@ -10,11 +10,15 @@ import com.meshcoreone.android.core.protocol.config.SessionConfiguration
 import com.meshcoreone.android.core.protocol.event.MeshTransportError
 import com.meshcoreone.android.core.protocol.event.MessageResult
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlin.coroutines.CoroutineContext
 import org.junit.jupiter.api.TestFactory
 import kotlin.test.*
 
@@ -136,6 +140,53 @@ class OriginalMessageCasesTest {
             assertEquals(2, f.transport.sent.size)
             f.session.stop()
         },
+        *listOf(false, true).map { replacementFails ->
+            original("GetMessageCoalescingTests", "delayed coalesced waiter keeps its empty outcome after a replacement ${if (replacementFails) "fails" else "completes"}") {
+                val f = fixture()
+                start(f)
+                val scheduled = StandardTestDispatcher(testScheduler)
+                val held = ArrayDeque<Pair<CoroutineContext, Runnable>>()
+                var hold = false
+                val dispatcher = object : CoroutineDispatcher() {
+                    override fun dispatch(context: CoroutineContext, block: Runnable) {
+                        if (hold) held.addLast(context to block) else scheduled.dispatch(context, block)
+                    }
+                }
+                val leader = checkedRequest { f.session.getMessage() }
+                runCurrent()
+                val follower = backgroundScope.async(dispatcher, start = CoroutineStart.UNDISPATCHED) {
+                    f.session.getMessage()
+                }
+                hold = true
+                f.transport.receive(raw(0x0a))
+                runCurrent()
+                assertEquals(MessageResult.NoMoreMessages, leader.await())
+                assertFalse(follower.isCompleted)
+                assertTrue(held.isNotEmpty())
+
+                f.transport.receive(raw(0x83))
+                runCurrent()
+                val replacement = checkedRequest { f.session.getMessage() }
+                runCurrent()
+                assertEquals(3, f.transport.sent.size)
+                if (replacementFails) f.transport.error(7) else f.transport.receive(raw(0x0a))
+                runCurrent()
+                if (replacementFails) {
+                    assertEquals(7u.toUByte(), assertFailsWith<MeshCoreException.DeviceError> { replacement.await() }.code)
+                } else assertEquals(MessageResult.NoMoreMessages, replacement.await())
+
+                hold = false
+                while (held.isNotEmpty()) {
+                    val (context, block) = held.removeFirst()
+                    scheduled.dispatch(context, block)
+                }
+                runCurrent()
+                assertTrue(follower.isCompleted)
+                assertEquals(MessageResult.NoMoreMessages, follower.await())
+                assertEquals(3, f.transport.sent.size)
+                f.session.stop()
+            }
+        }.toTypedArray(),
         original("GetMessageCoalescingTests", "a coalesced caller is released when the leader times out") {
             val f = fixture()
             start(f)

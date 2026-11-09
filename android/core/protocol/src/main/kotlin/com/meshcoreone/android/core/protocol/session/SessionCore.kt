@@ -66,7 +66,7 @@ internal class SessionGeneration(
     var capabilities: DeviceCapabilities? = null
     var contactProgress: ContactStreamProgress? = null
     var poll: Deferred<MessageResult>? = null
-    // A later queue notification makes an older empty result stale for auto-fetch.
+    // Queue notifications invalidate older empty results even while auto-fetch is stopped.
     var pollMessageWaitingRevision: Long? = null
     var messageWaitingRevision = 0L
     var autoFetching = false
@@ -351,6 +351,8 @@ internal class SessionCore(
             }
             generation.contacts.trackChanges(event)
             when (val received = event) {
+                MeshEvent.MessagesWaiting ->
+                    generation.messageWaitingRevision = Math.incrementExact(generation.messageWaitingRevision)
                 is MeshEvent.CurrentTime -> generation.deviceTime = received.time
                 is MeshEvent.SelfInfo -> generation.selfInfo = received.info
                 is MeshEvent.DeviceInfo -> generation.capabilities = received.info
@@ -471,6 +473,17 @@ internal class SessionCore(
         pollMessage(generation(), timeout).result
 
     private suspend fun pollMessage(generation: SessionGeneration, timeout: Double?): PollOutcome {
+        while (true) {
+            val outcome = pollMessageOnce(generation, timeout)
+            val staleEmpty = synchronized(lock) {
+                outcome.result == MessageResult.NoMoreMessages &&
+                    outcome.messageWaitingRevision < generation.messageWaitingRevision
+            }
+            if (!staleEmpty) return outcome
+        }
+    }
+
+    private suspend fun pollMessageOnce(generation: SessionGeneration, timeout: Double?): PollOutcome {
         val (task, messageWaitingRevision) = synchronized(lock) {
             requireCurrent(generation)
             val existing = generation.poll
@@ -553,7 +566,6 @@ internal class SessionCore(
 
     private fun requestAutoDrain(generation: SessionGeneration): Unit = synchronized(lock) {
         if (!isCurrent(generation) || !generation.autoFetching) return
-        generation.messageWaitingRevision = Math.incrementExact(generation.messageWaitingRevision)
         generation.autoRequested = true
         if (generation.autoDrain != null) return
         val drain = generation.scope.async(start = CoroutineStart.LAZY) {

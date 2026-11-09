@@ -161,6 +161,57 @@ class ReviewInterleavingTest {
             assertEquals(1, delivered)
             p.close(); h.close()
         },
+        native("pausedNotificationMakesManualDrainFetchBeyondRetainedNoMoreMessages") {
+            val h = Harness(this); h.start(); val p = h.poller()
+            val delivered = mutableListOf<String>()
+            p.setContactMessageHandler { wire, _, _ -> delivered += wire.text }
+            p.startAutoFetch(RADIO)
+            h.transport.holdGetReplies = true
+            h.transport.mock.simulateReceive(Bytes.of(ResponseCode.MESSAGES_WAITING.rawValue.toInt()))
+            runCurrent()
+            assertEquals(1, h.sends(CommandCode.GET_MESSAGE).size)
+            p.pauseAutoFetch()
+            h.transport.mock.simulateReceive(Bytes.of(ResponseCode.NO_MORE_MESSAGES.rawValue.toInt()))
+            runCurrent()
+            h.transport.incomingMessages += contactPacket("queued while paused")
+            h.transport.mock.simulateReceive(Bytes.of(ResponseCode.MESSAGES_WAITING.rawValue.toInt()))
+            runCurrent()
+            h.transport.holdGetReplies = false
+            assertEquals(1L, p.pollAllMessages())
+            assertEquals(listOf("queued while paused"), delivered)
+            assertEquals(3, h.sends(CommandCode.GET_MESSAGE).size)
+            p.close(); h.close()
+        },
+        *listOf(false, true).map { channel ->
+            native("retained${if (channel) "LegacyChannel" else "Contact"}BeforeRestartCannotSuppressAnEqualDistinctOccurrence") {
+                val h = Harness(this); h.start(); val p = h.poller()
+                val received = mutableListOf<Any>()
+                if (channel) p.setChannelMessageHandler { wire, _, _ -> received += wire }
+                else p.setContactMessageHandler { wire, _, _ -> received += wire }
+                p.startAutoFetch(RADIO)
+                h.transport.holdGetReplies = true
+                h.transport.mock.simulateReceive(Bytes.of(ResponseCode.MESSAGES_WAITING.rawValue.toInt()))
+                runCurrent()
+                assertEquals(1, h.sends(CommandCode.GET_MESSAGE).size)
+                p.stopMessageEventMonitoring()
+                val packet = if (channel) channelPacket() else contactPacket("same contents")
+                h.transport.mock.simulateReceive(packet)
+                runCurrent()
+                assertTrue(received.isEmpty())
+
+                p.startMessageEventMonitoring()
+                h.transport.holdGetReplies = false
+                assertEquals(1L, p.pollAllMessages())
+                assertEquals(1, received.size)
+                h.transport.mock.simulateReceive(packet)
+                runCurrent()
+                assertEquals(2, received.size)
+                assertEquals(received[0], received[1])
+                assertNotSame(received[0], received[1])
+                assertTrue(p.waitForPendingHandlers(Duration.ZERO))
+                p.close(); h.close()
+            }
+        }.toTypedArray(),
         native("manualOwnershipKeepsNewestPauseAndPreventsResumeFromCompetingOnTheWire") {
             val h = Harness(this); h.start(); var starts = 0
             val actual = h.session

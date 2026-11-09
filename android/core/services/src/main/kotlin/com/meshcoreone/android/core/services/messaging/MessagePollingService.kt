@@ -52,8 +52,7 @@ class MessagePollingService(
     private val parked = ArrayDeque<Delivery>()
     private val observedDuringPoll = ArrayDeque<Delivery>()
     private val liveMessageOccurrences = WeakIdentitySet()
-    private val expectedEchoes = mutableMapOf<MeshEvent, Long>()
-    private val expectedChannelEchoes = mutableMapOf<ChannelMessage, ArrayDeque<Delivery>>()
+    private val expectedEchoOccurrences = WeakIdentitySet()
     private var contactHandler: (suspend (ContactMessage, ContactDTO?, DeliveryContext) -> Unit)? = null
     private var channelHandler: (suspend (ChannelMessage, ChannelDTO?, DeliveryContext) -> Unit)? = null
     private var channelEnvelopeHandler: (suspend (ChannelReceiveEnvelope, ChannelDTO?) -> Unit)? = null
@@ -163,7 +162,7 @@ class MessagePollingService(
         stopAutoLocked()
         val task = synchronized(lock) { monitorActive = false; listener.also { listener = null } }
         task?.cancelAndJoin()
-        synchronized(lock) { expectedEchoes.clear(); expectedChannelEchoes.clear() }
+        synchronized(lock) { expectedEchoOccurrences.clear() }
     }
 
     override suspend fun startAutoFetch(radioId: RadioId) {
@@ -394,28 +393,11 @@ class MessagePollingService(
     }
 
     private fun expectEcho(delivery: Delivery) {
-        val envelope = delivery.channelEnvelope
-        if (envelope == null) {
-            expectedEchoes[delivery.event] = Math.incrementExact(expectedEchoes[delivery.event] ?: 0)
-        } else {
-            expectedChannelEchoes.getOrPut(envelope.message) { ArrayDeque() }.addLast(delivery)
-        }
+        messageOccurrence(delivery.event)?.let(expectedEchoOccurrences::add)
     }
 
-    private fun takeEcho(delivery: Delivery): Boolean {
-        val envelope = delivery.channelEnvelope
-        if (envelope != null) {
-            val echoes = expectedChannelEchoes[envelope.message] ?: return false
-            val index = matchingIndex(echoes, delivery)
-            if (index < 0) return false
-            echoes.removeAt(index)
-            if (echoes.isEmpty()) expectedChannelEchoes.remove(envelope.message)
-            return true
-        }
-        val count = expectedEchoes[delivery.event] ?: return false
-        if (count == 1L) expectedEchoes.remove(delivery.event) else expectedEchoes[delivery.event] = count - 1
-        return true
-    }
+    private fun takeEcho(delivery: Delivery): Boolean =
+        messageOccurrence(delivery.event)?.let(expectedEchoOccurrences::remove) == true
 
     private suspend fun deliverPending() = dispatch.withLock {
         var firstFailure: Exception? = null
@@ -551,7 +533,7 @@ class MessagePollingService(
             for ((task, invocation) in work) joinUnlessConsumerClosing(task, invocation)
             synchronized(lock) {
                 polling = null; listener = null; monitorActive = false
-                expectedEchoes.clear(); expectedChannelEchoes.clear()
+                expectedEchoOccurrences.clear()
                 liveMessageOccurrences.clear()
             }
             clearMessageHandlers()

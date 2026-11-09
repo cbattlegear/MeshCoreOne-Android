@@ -81,6 +81,30 @@ class OriginalMessageCasesTest {
             f.session.stopAutoMessageFetching()
             f.session.stop()
         },
+        original("AutoMessageFetchTests", "a paused notification invalidates a retained empty poll for a manual caller") {
+            val f = fixture()
+            start(f)
+            f.session.startAutoMessageFetching()
+            f.transport.receive(raw(0x83))
+            runCurrent()
+            val poll = assertNotNull(f.session.core.generation().poll)
+            f.session.stopAutoMessageFetching()
+            f.transport.receive(raw(0x0a))
+            runCurrent()
+            assertTrue(poll.isCompleted)
+            assertSame(poll, f.session.core.generation().poll)
+
+            f.transport.receive(raw(0x83))
+            runCurrent()
+            val manual = checkedRequest { f.session.getMessage() }
+            runCurrent()
+            assertEquals(3, f.transport.sent.size)
+            assertFalse(manual.isCompleted)
+            f.transport.receive(raw(0x0a))
+            runCurrent()
+            assertEquals(MessageResult.NoMoreMessages, manual.await())
+            f.session.stop()
+        },
         original("AutoMessageFetchTests", "manual getMessage shares in-flight auto-fetch poll") {
             val f = fixture()
             start(f)

@@ -43,7 +43,9 @@ class AppSettingsFeature private constructor(
     }
     private val deviceValues = mutableMapOf<UUID, DevicePreferenceSnapshot>()
     val failure = MutableStateFlow<Throwable?>(null)
-    private val changes = combine(app.servicesVersion, app.sessionStateChangeCount, container.connectionManager.snapshot) { _, _, _ -> Unit }
+    private val changes = combine(
+        app.servicesVersion, app.sessionStateChangeCount, container.connectionManager.snapshot, container.deviceAccess.changes,
+    ) { _, _, _, _ -> Unit }
     private val device = changes.flatMapLatest {
         val current = app.connectedDevice
         if (current == null) flowOf(null) else storage.devicePreferences.observe(current.id).map { value ->
@@ -220,7 +222,7 @@ class AppSettingsFeature private constructor(
             override suspend fun updateOcvSettings(deviceId: UUID, preset: String, customArray: String?) {
                 live().deviceService.updateOCVSettings(deviceId, preset, customArray)
             }
-            override fun savePreRepeatSettings() { container.deviceEditor.savePreRepeatSettings() }
+            override suspend fun savePreRepeatSettings(deviceId: UUID) = container.deviceEditor.savePreRepeatSettings(deviceId)
             override fun clearPreRepeatSettings() { container.deviceEditor.clearPreRepeatSettings() }
             override fun addKnownRegion(region: String) { container.deviceEditor.addKnownRegion(region) }
             override fun removeKnownRegion(region: String) { container.deviceEditor.removeKnownRegion(region) }
@@ -290,6 +292,7 @@ class AppSettingsFeature private constructor(
 }
 
 private class SettingsRadioAdapter(private val service: SettingsService) : SettingsRadioPort {
+    override val pathHashModeNeedsRecovery get() = service.pathHashModeNeedsRecovery
     override suspend fun getSelfInfo() = service.getSelfInfo()
     override suspend fun setRadioParamsVerified(frequencyKHz: UInt, bandwidthKHz: UInt, spreadingFactor: UByte,
         codingRate: UByte, clientRepeat: Boolean?, appliedRadioPresetID: String?) =
@@ -302,7 +305,7 @@ private class SettingsRadioAdapter(private val service: SettingsService) : Setti
         service.setOtherParamsVerified(device, autoAddContacts, telemetryModes, advertLocationPolicy, multiAcks)
     override suspend fun setAutoAddConfigVerified(config: AutoAddConfig) = service.setAutoAddConfigVerified(config)
     override suspend fun refreshAutoAddConfig() = service.refreshAutoAddConfig()
-    override suspend fun setPathHashModeVerified(mode: UByte) = service.setPathHashModeVerified(mode)
+    override suspend fun setPathHashModeVerified(mode: UByte) = service.setPathHashModePersisted(mode)
     override suspend fun getDeviceGPSState() = service.getDeviceGPSState().let { DeviceGpsState(it.isSupported, it.isEnabled) }
     override suspend fun setDeviceGPSEnabledVerified(enabled: Boolean) =
         service.setDeviceGPSEnabledVerified(enabled).let { DeviceGpsState(it.isSupported, it.isEnabled) }

@@ -153,7 +153,13 @@ internal class RoomRepositoryContext(
             ensureOpen()
             flushRxLocked()
             val transaction = RepositoryTransaction(database, clock, pendingRx)
-            committedTransaction(afterCommit, returnCommittedOnCancellation = true) { transaction.block() }
+            committedTransaction(
+                afterCommit = {
+                    transaction.complete()
+                    afterCommit()
+                },
+                returnCommittedOnCancellation = true,
+            ) { transaction.block() }
         }
     }
 

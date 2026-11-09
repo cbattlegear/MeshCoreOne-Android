@@ -10,6 +10,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.app.container.AppSettingsFeature
+import com.meshcoreone.android.app.container.AppContainer
+import com.meshcoreone.android.app.state.AppSession
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.datastore.KeyGenerationService
 import com.meshcoreone.android.core.model.*
@@ -25,6 +27,27 @@ import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings as S
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collect
+
+internal suspend fun removeSettingsKnownRegion(container: AppContainer, session: AppSession, region: String) {
+    fun requireCurrent() {
+        if (container.sessions.current !== session || !container.appState.canRunSettingsStartupReads) {
+            throw SettingsNotConnectedException()
+        }
+    }
+    requireCurrent()
+    if (container.appState.connectedDevice?.defaultFloodScopeName == region) {
+        session.settingsService.setDefaultFloodScopeVerified(null)
+        requireCurrent()
+    }
+    if (!container.deviceEditor.persistKnownRegionRemoval(region, session.token)) throw SettingsNotConnectedException()
+}
+
+internal suspend fun addSettingsKnownRegion(container: AppContainer, session: AppSession, region: String) {
+    if (container.sessions.current !== session || !container.appState.canRunSettingsStartupReads) {
+        throw SettingsNotConnectedException()
+    }
+    if (!container.deviceEditor.addKnownRegion(region, session.token)) throw SettingsNotConnectedException()
+}
 
 @Composable
 internal fun AppSettingsExternal(feature: AppSettingsFeature, target: SettingsExternalDestination, onDone: () -> Unit) {
@@ -109,17 +132,7 @@ internal fun AppSettingsExternal(feature: AppSettingsFeature, target: SettingsEx
                         TextButton(enabled = !busy, onClick = { run {
                             val current = live()
                             if (current.token != connection.token) throw SettingsNotConnectedException()
-                            if (container.appState.connectedDevice?.defaultFloodScopeName == region) {
-                                current.settingsService.setDefaultFloodScopeVerified(null)
-                                if (live() !== current) throw SettingsNotConnectedException()
-                            }
-                            container.processStore.removeDeviceKnownRegion(current.token.radioId, region)
-                            val updated = requireNotNull(container.processStore.fetchDevice(current.token.radioId))
-                            if (live() !== current) throw SettingsNotConnectedException()
-                            val cleared = updated.takeIf { it.defaultFloodScopeName != region }
-                                ?: updated.copy(defaultFloodScopeName = null)
-                            if (cleared != updated) container.processStore.saveDevice(cleared)
-                            container.deviceEditor.updateDevice(cleared)
+                            removeSettingsKnownRegion(container, current, region)
                         } }) {
                             Text(stringResource(L.commonDelete))
                         }
@@ -129,10 +142,7 @@ internal fun AppSettingsExternal(feature: AppSettingsFeature, target: SettingsEx
                 Button(enabled = name.isNotBlank() && !busy, onClick = { run {
                     val current = live()
                     if (current.token != connection.token) throw SettingsNotConnectedException()
-                    container.processStore.addDeviceKnownRegion(current.token.radioId, name.trim())
-                    val updated = requireNotNull(container.processStore.fetchDevice(current.token.radioId))
-                    if (live() !== current) throw SettingsNotConnectedException()
-                    container.deviceEditor.updateDevice(updated)
+                    addSettingsKnownRegion(container, current, name.trim())
                     name = ""
                 } }) { Text(stringResource(L.commonSave)) }
             }

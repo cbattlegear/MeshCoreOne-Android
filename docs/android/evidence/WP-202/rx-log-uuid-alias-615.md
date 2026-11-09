@@ -2,6 +2,7 @@
 
 Repository: `cbattlegear/MeshCoreOne-Android`.
 Base: `184d855d0cd7a19d6d6f60f51c4c1efd29cead13`.
+Reconciled main: `4a3cbd09adfe010202299a94c97ae8e5a3a1a82d`.
 Swift reference: `db14559b39d32322b06477c6ae676112f583db50`.
 Issue: <https://github.com/cbattlegear/MeshCoreOne-Android/issues/615>.
 Acceptance scope: bounded repairs to `WP-202-behavior` and
@@ -82,10 +83,14 @@ identity ledger, schema allocation or retained-resource lock is changed.
   separately from alias rejection.
 
 These are source controls, **not executed or discovered test evidence**.
-No Gradle, native SQLite/Robolectric, Android, device or hosted test was run.
-The retained local hard-resource owner remains unresolved; GitHub Actions was
-reported in outage by the coordinator. Neither was bypassed and no blind rerun
-was started. Future authorized verification must use the existing declared
+No local Gradle, native SQLite/Robolectric, Android or device test was run.
+The retained local hard-resource owner remains unresolved. After Actions recovered,
+the original exact candidate was dispatched once as run `42678219202`, then
+cancelled when main advanced; that superseded run is not final-candidate evidence.
+The candidate was reconciled with merged #532, preserving device-authority writes,
+the restore transaction completion callback, and the unchanged store facade.
+Final hosted verification is separate and no passing result is claimed here.
+Authorized verification must use the existing declared
 software lane (`ci.py preflight`, `ci.py run --stage scaffold`, `ci.py inspect`)
 with actual nonzero `:core:data` test discovery and exact-candidate results.
 

@@ -63,7 +63,7 @@ internal class TestPreferences : ProcessConnectionPreferences {
     }
 }
 
-internal class TestDevices : DevicePersisting, DeviceEditPersisting {
+internal class TestDevices : DeviceSessionPersisting {
     val rows = linkedMapOf<UUID, DeviceDTO>()
     val calls = mutableListOf<String>()
     var failure: Exception? = null
@@ -84,8 +84,17 @@ internal class TestDevices : DevicePersisting, DeviceEditPersisting {
     override suspend fun fetchDeviceWriteSnapshot(id: UUID): DeviceWriteSnapshot? =
         fetchDevice(id)?.let { DeviceWriteSnapshot(it, revision, authorityRevision) }
     override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+        return saveDeviceIfUnchanged(dto, expected) { true }
+    }
+    override suspend fun saveDeviceIfUnchanged(
+        dto: DeviceDTO,
+        expected: DeviceWriteSnapshot,
+        isCurrent: () -> Boolean,
+    ): Boolean {
         failure?.let { throw it }
-        if (revision != expected.revision || authorityRevision != expected.authorityRevision || rows[dto.id] != expected.device) return false
+        if (!isCurrent() || revision != expected.revision || authorityRevision != expected.authorityRevision ||
+            rows[dto.id] != expected.device
+        ) return false
         calls += "save"
         rows[dto.id] = dto
         revision++
@@ -99,13 +108,47 @@ internal class TestDevices : DevicePersisting, DeviceEditPersisting {
     override suspend fun saveDevice(dto: DeviceDTO) { failure?.let { throw it }; calls += "save"; rows[dto.id] = dto; revision++; authorityRevision++ }
     override suspend fun setActiveDevice(id: UUID) { rows.replaceAll { key, row -> row.copy(isActive = key == id) }; revision++; authorityRevision++ }
     override suspend fun updateDeviceLastContactSync(radioId: RadioId, timestamp: UInt) {
-        val row = checkNotNull(fetchDevice(radioId)); rows[row.id] = row.copy(lastContactSync = timestamp)
+        val row = checkNotNull(fetchDevice(radioId))
+        rows[row.id] = row.copy(lastContactSync = timestamp)
+        revision++
     }
     override suspend fun addDeviceKnownRegion(radioId: RadioId, region: String) {
-        val row = checkNotNull(fetchDevice(radioId)); rows[row.id] = row.copy(knownRegions = (row.knownRegions + region).snapshot())
+        val row = checkNotNull(fetchDevice(radioId))
+        if (region !in row.knownRegions) {
+            rows[row.id] = row.copy(knownRegions = (row.knownRegions + region).snapshot())
+            revision++
+        }
     }
     override suspend fun removeDeviceKnownRegion(radioId: RadioId, region: String) {
-        val row = checkNotNull(fetchDevice(radioId)); rows[row.id] = row.copy(knownRegions = row.knownRegions.filterNot { it == region }.snapshot())
+        val row = checkNotNull(fetchDevice(radioId))
+        rows[row.id] = row.copy(
+            knownRegions = row.knownRegions.filterNot { it == region }.snapshot(),
+            defaultFloodScopeName = row.defaultFloodScopeName.takeUnless { it == region },
+        )
+        revision++
+    }
+    override suspend fun addDeviceKnownRegionIfCurrent(
+        id: UUID, radioId: RadioId, region: String, isCurrent: () -> Boolean,
+    ): Boolean {
+        val row = rows[id] ?: return false
+        if (row.radioId != radioId || !isCurrent()) return false
+        if (region !in row.knownRegions) {
+            rows[id] = row.copy(knownRegions = (row.knownRegions + region).snapshot())
+            revision++
+        }
+        return true
+    }
+    override suspend fun removeDeviceKnownRegionIfCurrent(
+        id: UUID, radioId: RadioId, region: String, isCurrent: () -> Boolean,
+    ): Boolean {
+        val row = rows[id] ?: return false
+        if (row.radioId != radioId || !isCurrent()) return false
+        rows[id] = row.copy(
+            knownRegions = row.knownRegions.filterNot { it == region }.snapshot(),
+            defaultFloodScopeName = row.defaultFloodScopeName.takeUnless { it == region },
+        )
+        revision++
+        return true
     }
     override suspend fun deleteDevice(id: UUID) { calls += "delete"; rows.remove(id) }
     override suspend fun deleteDeviceData(id: UUID) = error("Not a runtime operation")

@@ -8,7 +8,6 @@ import com.meshcoreone.android.app.navigation.removeSettingsKnownRegion
 import com.meshcoreone.android.core.connectivity.device.ConnectedDeviceAccess
 import com.meshcoreone.android.core.connectivity.device.ConnectedDeviceEditor
 import com.meshcoreone.android.core.connectivity.device.RadioPresetMatcher
-import com.meshcoreone.android.core.contracts.domain.DeviceEditPersisting
 import com.meshcoreone.android.core.contracts.domain.DeviceWriteSnapshot
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.SessionToken
@@ -43,7 +42,7 @@ import kotlin.test.assertTrue
 
 class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
     private class PausedStore(private val room: RoomPersistenceStore) :
-        PersistenceStoreProtocol by room, DeviceEditPersisting {
+        PersistenceStoreProtocol by room {
         var beforeSnapshot: suspend () -> Unit = {}
         var beforeSave: suspend () -> Unit = {}
         var afterSave: suspend () -> Unit = {}
@@ -73,6 +72,22 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
             return accepted
         }
 
+        override suspend fun saveDeviceIfUnchanged(
+            dto: DeviceDTO,
+            expected: DeviceWriteSnapshot,
+            isCurrent: () -> Boolean,
+        ): Boolean {
+            val hook = beforeSave
+            beforeSave = {}
+            hook()
+            val accepted = room.saveDeviceIfUnchanged(dto, expected, isCurrent)
+            if (!accepted) rejected++
+            val committed = afterSave
+            afterSave = {}
+            committed()
+            return accepted
+        }
+
         override suspend fun addDeviceKnownRegion(radioId: RadioId, region: String) {
             val hook = beforeAdd
             beforeAdd = {}
@@ -85,6 +100,30 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
             beforeRemove = {}
             hook()
             room.removeDeviceKnownRegion(radioId, region)
+        }
+
+        override suspend fun addDeviceKnownRegionIfCurrent(
+            id: UUID,
+            radioId: RadioId,
+            region: String,
+            isCurrent: () -> Boolean,
+        ): Boolean {
+            val hook = beforeAdd
+            beforeAdd = {}
+            hook()
+            return room.addDeviceKnownRegionIfCurrent(id, radioId, region, isCurrent)
+        }
+
+        override suspend fun removeDeviceKnownRegionIfCurrent(
+            id: UUID,
+            radioId: RadioId,
+            region: String,
+            isCurrent: () -> Boolean,
+        ): Boolean {
+            val hook = beforeRemove
+            beforeRemove = {}
+            hook()
+            return room.removeDeviceKnownRegionIfCurrent(id, radioId, region, isCurrent)
         }
     }
 

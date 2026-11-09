@@ -12,7 +12,6 @@ import androidx.compose.ui.text.AnnotatedString
 import com.meshcoreone.android.core.contracts.FeatureId
 import com.meshcoreone.android.core.contracts.FeatureRoute
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
-import com.meshcoreone.android.core.contracts.domain.DeviceEditPersisting
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -52,7 +51,7 @@ class TraceToolsEntryLifetimeTest : RoomProcessTest() {
         var holdDisconnect = false
         val disconnectEntered = CompletableDeferred<Unit>()
         val releaseDisconnect = CompletableDeferred<Unit>()
-        val heldStore = object : PersistenceStoreProtocol by store, DeviceEditPersisting by store {
+        val heldStore = object : PersistenceStoreProtocol by store {
             override suspend fun fetchConnectedRemoteNodeSessions(radioId: RadioId) =
                 if (holdDisconnect) {
                     holdDisconnect = false

@@ -222,7 +222,7 @@ class AppSettingsFeature private constructor(
             override suspend fun updateOcvSettings(deviceId: UUID, preset: String, customArray: String?) {
                 live().deviceService.updateOCVSettings(deviceId, preset, customArray)
             }
-            override fun savePreRepeatSettings() { container.deviceEditor.savePreRepeatSettings() }
+            override suspend fun savePreRepeatSettings(deviceId: UUID) = container.deviceEditor.savePreRepeatSettings(deviceId)
             override fun clearPreRepeatSettings() { container.deviceEditor.clearPreRepeatSettings() }
             override fun addKnownRegion(region: String) { container.deviceEditor.addKnownRegion(region) }
             override fun removeKnownRegion(region: String) { container.deviceEditor.removeKnownRegion(region) }

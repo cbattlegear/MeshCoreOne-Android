@@ -24,10 +24,12 @@ class FakePairing(var outcome: OnboardingConnectOutcome = OnboardingConnectOutco
     var cleared = 0
     var clearCalls = 0
     var beforeClear: suspend () -> Unit = {}
+    var beforePair: suspend () -> Unit = {}
     var throwOnPair: Throwable? = null
     var beforeRetry: suspend () -> Unit = {}
     override suspend fun pairNewDevice(): OnboardingConnectOutcome {
         pairCalls += 1
+        beforePair()
         throwOnPair?.let { throw it }
         return outcome
     }
@@ -62,7 +64,13 @@ class FakeDemo(var outcome: OnboardingConnectOutcome = OnboardingConnectOutcome.
 class FakeWiFi(var outcome: OnboardingConnectOutcome = OnboardingConnectOutcome.Connected) : OnboardingWiFiPort {
     var lastHost: String? = null
     var lastPort: Int? = null
-    override suspend fun connect(host: String, port: Int): OnboardingConnectOutcome { lastHost = host; lastPort = port; return outcome }
+    var beforeConnect: suspend () -> Unit = {}
+    override suspend fun connect(host: String, port: Int): OnboardingConnectOutcome {
+        lastHost = host
+        lastPort = port
+        beforeConnect()
+        return outcome
+    }
 }
 
 class FakeCatalog(private val presets: Map<String?, List<OnboardingPresetOption>> = emptyMap()) : OnboardingRegionCatalog {

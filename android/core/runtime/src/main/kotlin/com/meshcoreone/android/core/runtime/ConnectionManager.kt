@@ -29,7 +29,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 class ConnectionManager(
-    private val devices: DevicePersisting,
+    private val devices: DeviceSessionPersisting,
     private val rooms: RoomPersisting,
     private val contacts: ContactPersisting,
     private val maintenance: ProcessRuntimeMaintenance,
@@ -901,9 +901,7 @@ class ConnectionManager(
         }
         requireCurrent(owner)
         if (existing == null) {
-            val persistence = devices as? DeviceEditPersisting
-                ?: throw UnsupportedOperationException("Connection initialization requires versioned device persistence")
-            if (!persistence.insertDeviceIfAbsent(device)) throw DeviceWriteConflict()
+            if (!devices.insertDeviceIfAbsent(device)) throw DeviceWriteConflict()
         } else {
             devices.editDevice(deviceId, isCurrent = { isCurrent(owner) }) { latest ->
                 DeviceDTO.fromConnection(deviceId, radioId, info, capabilities, autoAdd, latest, methods, clock.instant)

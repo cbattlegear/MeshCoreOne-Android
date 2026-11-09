@@ -6,7 +6,6 @@ import com.meshcoreone.android.app.container.onboarding.AppStateOnboardingHost
 import com.meshcoreone.android.app.state.PairingFailureKind
 import com.meshcoreone.android.core.ble.BleError
 import com.meshcoreone.android.core.ble.BleTransportException
-import com.meshcoreone.android.core.contracts.domain.DeviceEditPersisting
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
@@ -105,7 +104,7 @@ class SavedDeviceRecoveryIntegrationTest : RoomProcessTest() {
 
     @Test fun failedGhostDemotionAfterRegistryRemovalDoesNotAdvanceTheRecoveryPicker() = runTest {
         var rejectDemotion = false
-        val persistence = object : PersistenceStoreProtocol by store, DeviceEditPersisting by store {
+        val persistence = object : PersistenceStoreProtocol by store {
             override suspend fun demoteDeviceToGhost(id: UUID) {
                 if (rejectDemotion) throw IllegalStateException("ghost demotion failed")
                 store.demoteDeviceToGhost(id)

@@ -22,7 +22,8 @@ import org.junit.jupiter.api.Test
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class DomainContractTest {
     @Test fun repositorySurfaceIsAbstractTypedAndIncludesEveryPersistenceRoleRatherThanSuccessShapedDefaults() {
-        val roles = listOf(DevicePersisting::class.java, ContactPersisting::class.java, ChannelPersisting::class.java,
+        val roles = listOf(DevicePersisting::class.java, DeviceSessionPersisting::class.java,
+            ContactPersisting::class.java, ChannelPersisting::class.java,
             MessagePersisting::class.java, TracePathPersisting::class.java, HeardRepeatPersisting::class.java,
             DebugLogPersisting::class.java, LinkPreviewPersisting::class.java, RxLogPersisting::class.java,
             RoomPersisting::class.java, DiscoveredNodePersisting::class.java, ReactionPersisting::class.java,

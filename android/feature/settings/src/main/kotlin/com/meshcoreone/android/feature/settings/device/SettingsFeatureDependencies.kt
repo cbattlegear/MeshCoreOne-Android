@@ -150,7 +150,7 @@ class PairingCancelledException : Exception("Pairing cancelled")
 /** Persistence-backed device edits the sections trigger (`ConnectionManager`/`DeviceService`). */
 interface DeviceSettingsStorePort {
     suspend fun updateOcvSettings(deviceId: java.util.UUID, preset: String, customArray: String?)
-    fun savePreRepeatSettings()
+    suspend fun savePreRepeatSettings(deviceId: java.util.UUID): Boolean
     fun clearPreRepeatSettings()
     fun addKnownRegion(region: String)
     fun removeKnownRegion(region: String)

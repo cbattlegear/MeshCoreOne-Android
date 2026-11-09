@@ -2,8 +2,7 @@
 // PortedFrom: MC1Services/Sources/MC1Services/Services/PersistenceStore+Devices.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.core.data.repository
 
-import com.meshcoreone.android.core.contracts.domain.DevicePersisting
-import com.meshcoreone.android.core.contracts.domain.DeviceEditPersisting
+import com.meshcoreone.android.core.contracts.domain.DeviceSessionPersisting
 import com.meshcoreone.android.core.contracts.domain.DeviceWriteSnapshot
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
@@ -12,7 +11,7 @@ import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import java.util.UUID
 
-internal class DeviceRepository(private val context: RoomRepositoryContext) : DevicePersisting, DeviceEditPersisting {
+internal class DeviceRepository(private val context: RoomRepositoryContext) : DeviceSessionPersisting {
     private var revision = 0L
     private var authorityRevision = 0L
 
@@ -61,19 +60,38 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
     }
 
     override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean =
-        write("saveDeviceIfUnchanged", changesAuthority = false) {
-            val existing = database.devices().byId(dto.id) ?: return@write false
-            if (revision != expected.revision || authorityRevision != expected.authorityRevision || existing.toDTO() != expected.device ||
-                dto.id != expected.device.id || dto.radioId != expected.device.radioId) return@write false
-            if (dto.isActive != expected.device.isActive || dto.lastConnected != expected.device.lastConnected) return@write false
-            if (dto.publicKey != expected.device.publicKey) {
-                val nextAuthority = Math.incrementExact(authorityRevision)
-                afterCommit { authorityRevision = nextAuthority }
-            }
+        saveDeviceIfUnchanged(dto, expected) { true }
+
+    override suspend fun saveDeviceIfUnchanged(
+        dto: DeviceDTO,
+        expected: DeviceWriteSnapshot,
+        isCurrent: () -> Boolean,
+    ): Boolean = try {
+        context.guardedWrite("saveDeviceIfUnchanged", false, guard = { isCurrent() }) {
+            val existing = database.devices().byId(dto.id) ?: return@guardedWrite false
+            if (
+                revision != expected.revision || authorityRevision != expected.authorityRevision ||
+                existing.toDTO() != expected.device || dto.id != expected.device.id ||
+                dto.radioId != expected.device.radioId
+            ) return@guardedWrite false
+            if (dto.isActive != expected.device.isActive || dto.lastConnected != expected.device.lastConnected) return@guardedWrite false
+            if (!isCurrent()) throw RetiredDeviceWrite()
             database.devices().upsert(existing.applying(dto))
+            if (!isCurrent()) throw RetiredDeviceWrite()
             save()
+            val nextRevision = Math.incrementExact(revision)
+            val nextAuthority = if (dto.publicKey != expected.device.publicKey) Math.incrementExact(authorityRevision) else authorityRevision
+            afterCommit {
+                revision = nextRevision
+                authorityRevision = nextAuthority
+            }
             true
         }
+    } catch (_: RetiredDeviceWrite) {
+        false
+    }
+
+    private class RetiredDeviceWrite : Exception()
 
     override suspend fun fetchDevice(id: UUID): DeviceDTO? = context.read("fetchDeviceById") {
         database.devices().byId(id)?.toDTO()
@@ -142,6 +160,13 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
             }
         }
 
+    override suspend fun addDeviceKnownRegionIfCurrent(
+        id: UUID,
+        radioId: RadioId,
+        region: String,
+        isCurrent: () -> Boolean,
+    ): Boolean = changeKnownRegionIfCurrent(id, radioId, region, remove = false, isCurrent = isCurrent)
+
     override suspend fun removeDeviceKnownRegion(radioId: RadioId, region: String) =
         write("removeDeviceKnownRegion", changesAuthority = false) {
             val row = database.devices().forRadio(radioId.value).firstOrNull()
@@ -157,6 +182,48 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
             }
             save()
         }
+
+    override suspend fun removeDeviceKnownRegionIfCurrent(
+        id: UUID,
+        radioId: RadioId,
+        region: String,
+        isCurrent: () -> Boolean,
+    ): Boolean = changeKnownRegionIfCurrent(id, radioId, region, remove = true, isCurrent = isCurrent)
+
+    private suspend fun changeKnownRegionIfCurrent(
+        id: UUID,
+        radioId: RadioId,
+        region: String,
+        remove: Boolean,
+        isCurrent: () -> Boolean,
+    ): Boolean = try {
+        val operation = if (remove) "removeDeviceKnownRegionIfCurrent" else "addDeviceKnownRegionIfCurrent"
+        context.guardedWrite(operation, false, guard = { isCurrent() }) {
+            val row = database.devices().byId(id) ?: return@guardedWrite false
+            if (row.radioId != radioId.value) return@guardedWrite false
+            if (!remove && region in row.knownRegions) return@guardedWrite true
+            if (remove) {
+                database.devices().upsert(row.copy(
+                    knownRegions = row.knownRegions.filterNot { it == region }.snapshot(),
+                    defaultFloodScopeName = row.defaultFloodScopeName.takeUnless { it == region },
+                ))
+                for (channel in database.channels().forRadio(radioId.value)) {
+                    if (channel.toDTO().floodScope == ChannelFloodScope.Region(region)) {
+                        database.channels().setFloodScope(radioId.value, channel.id, "inherit", null)
+                    }
+                }
+            } else if (region !in row.knownRegions) {
+                database.devices().upsert(row.copy(knownRegions = (row.knownRegions + region).snapshot()))
+            }
+            if (!isCurrent()) throw RetiredDeviceWrite()
+            val nextRevision = Math.incrementExact(revision)
+            afterCommit { revision = nextRevision }
+            save()
+            true
+        }
+    } catch (_: RetiredDeviceWrite) {
+        false
+    }
 
     override suspend fun deleteDevice(id: UUID) = write("deleteDevice") {
         database.devices().delete(id)

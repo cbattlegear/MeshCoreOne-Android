@@ -172,6 +172,67 @@ class DeviceScanCoordinatorTest {
         assertEquals(1, connected)
     }
 
+    @Test fun onboardingResetCancelsAnInFlightPairingJob() = kotlinx.coroutines.runBlocking {
+        val release = CompletableDeferred<Unit>()
+        val cancelled = java.util.concurrent.atomic.AtomicBoolean()
+        val owner = Job()
+        var connected = 0
+        val lifecycle = OnboardingState(InMemoryOnboardingFlagStore())
+        val pairing = FakePairing().apply {
+            beforePair = {
+                try {
+                    release.await()
+                } catch (failure: CancellationException) {
+                    cancelled.set(true)
+                    throw failure
+                }
+            }
+        }
+        try {
+            val c = DeviceScanCoordinator(
+                CoroutineScope(Dispatchers.Unconfined + owner), pairing, FakeDemo(), FakePermissions(granted),
+                lifecycle = lifecycle, onConnected = { connected++ },
+            )
+            c.startPairing()
+            assertTrue(c.state.value.localBusy)
+            lifecycle.resetOnboarding()
+            release.complete(Unit)
+
+            assertTrue(cancelled.get())
+            assertEquals(0, connected)
+            assertFalse(c.state.value.localBusy)
+        } finally {
+            release.complete(Unit)
+            owner.cancel()
+        }
+    }
+
+    @Test fun onboardingResetFencesALatePairingSuccess() = kotlinx.coroutines.runBlocking {
+        val release = CompletableDeferred<Unit>()
+        val owner = Job()
+        var connected = 0
+        val lifecycle = OnboardingState(InMemoryOnboardingFlagStore())
+        val pairing = FakePairing().apply {
+            beforePair = { kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { release.await() } }
+        }
+        try {
+            val c = DeviceScanCoordinator(
+                CoroutineScope(Dispatchers.Unconfined + owner), pairing, FakeDemo(), FakePermissions(granted),
+                lifecycle = lifecycle, onConnected = { connected++ },
+            )
+            c.startPairing()
+            lifecycle.resetOnboarding()
+            release.complete(Unit)
+
+            assertEquals(1, pairing.pairCalls)
+            assertEquals(0, connected)
+            assertFalse(c.state.value.localBusy)
+        } finally {
+            release.complete(Unit)
+            owner.cancel()
+        }
+    }
+
     @Test fun unexpectedExceptionBecomesFailureButCancellationPropagates() {
         val pairing = FakePairing().apply { throwOnPair = IllegalStateException("boom") }
         val c = coordinator(pairing)
@@ -228,6 +289,69 @@ class WiFiConnectionCoordinatorTest {
 
     @Test fun emptyAddressCannotConnect() {
         assertFalse(WiFiConnectionCoordinator(scope, FakeWiFi()) {}.state.value.canConnect)
+    }
+
+    @Test fun onboardingResetCancelsAnInFlightWiFiJob() = kotlinx.coroutines.runBlocking {
+        val release = CompletableDeferred<Unit>()
+        val cancelled = java.util.concurrent.atomic.AtomicBoolean()
+        val owner = Job()
+        var connected = 0
+        val lifecycle = OnboardingState(InMemoryOnboardingFlagStore())
+        val wifi = FakeWiFi().apply {
+            beforeConnect = {
+                try {
+                    release.await()
+                } catch (failure: CancellationException) {
+                    cancelled.set(true)
+                    throw failure
+                }
+            }
+
+            @Test fun onboardingResetFencesALateWiFiSuccess() = kotlinx.coroutines.runBlocking {
+                val release = CompletableDeferred<Unit>()
+                val owner = Job()
+                var connected = 0
+                val lifecycle = OnboardingState(InMemoryOnboardingFlagStore())
+                val wifi = FakeWiFi().apply {
+                    beforeConnect = { kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) { release.await() } }
+                }
+                try {
+                    val c = WiFiConnectionCoordinator(
+                        CoroutineScope(Dispatchers.Unconfined + owner), wifi,
+                        lifecycle = lifecycle, onConnected = { connected++ },
+                    )
+                    c.setAddress("192.0.2.10")
+                    c.connect()
+                    lifecycle.resetOnboarding()
+                    release.complete(Unit)
+
+                    assertEquals("192.0.2.10", wifi.lastHost)
+                    assertEquals(0, connected)
+                    assertFalse(c.state.value.isConnecting)
+                } finally {
+                    release.complete(Unit)
+                    owner.cancel()
+                }
+            }
+        }
+        try {
+            val c = WiFiConnectionCoordinator(
+                CoroutineScope(Dispatchers.Unconfined + owner), wifi,
+                lifecycle = lifecycle, onConnected = { connected++ },
+            )
+            c.setAddress("192.0.2.10")
+            c.connect()
+            assertTrue(c.state.value.isConnecting)
+            lifecycle.resetOnboarding()
+            release.complete(Unit)
+
+            assertTrue(cancelled.get())
+            assertEquals(0, connected)
+            assertFalse(c.state.value.isConnecting)
+        } finally {
+            release.complete(Unit)
+            owner.cancel()
+        }
     }
 }
 

@@ -4,6 +4,9 @@ package com.meshcoreone.android.core.data.repository
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.database.toEntity
+import com.meshcoreone.android.core.model.ChannelDTO
+import com.meshcoreone.android.core.model.ChannelFloodScope
+import com.meshcoreone.android.core.model.snapshot
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -13,6 +16,8 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -105,6 +110,74 @@ class DeviceRepositoryAuthorityWriteTest : RepositoryTest() {
             ),
         )
         assertEquals(canonical.copy(nodeName = "Fresh edit"), repository.fetchDevice(canonical.id))
+    }
+
+    @Test fun retiredConditionalSaveWaitedBehindRepositoryWriterDoesNotChangeRoomWithoutRowRevision() = runTest(scheduler) {
+        val original = device().copy(pathHashMode = 0u)
+        repository.saveDevice(original)
+        val ticket = assertNotNull(repository.fetchDeviceWriteSnapshot(original.id))
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val writer = async {
+            authorityContext.write("hold-device-writer") {
+                entered.complete(Unit)
+                release.await()
+            }
+        }
+        val current = java.util.concurrent.atomic.AtomicBoolean(true)
+        try {
+            entered.await()
+            val edit = async {
+                repository.saveDeviceIfUnchanged(ticket.device.copy(pathHashMode = 2u), ticket) { current.get() }
+            }
+            testScheduler.runCurrent()
+            current.set(false)
+            release.complete(Unit)
+            writer.await()
+            assertFalse(edit.await())
+            assertEquals(original, repository.fetchDevice(original.id))
+        } finally {
+            release.complete(Unit)
+            writer.cancel()
+        }
+    }
+
+    @Test fun retiredSameRadioRegionRemovalWaitedBehindRepositoryWriterLeavesRoomScopesIntact() = runTest(scheduler) {
+        val original = device().copy(
+            knownRegions = listOf("US915", "EU868").snapshot(),
+            defaultFloodScopeName = "US915",
+        )
+        repository.saveDevice(original)
+        val regional = ChannelDTO(radioId = original.radioId, index = 1u, name = "Scoped")
+            .withFloodScope(ChannelFloodScope.Region("US915"))
+        store.saveChannel(regional)
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val writer = async {
+            authorityContext.write("hold-device-writer") {
+                entered.complete(Unit)
+                release.await()
+            }
+        }
+        val current = java.util.concurrent.atomic.AtomicBoolean(true)
+        try {
+            entered.await()
+            val edit = async {
+                repository.removeDeviceKnownRegionIfCurrent(
+                    original.id, original.radioId, "US915",
+                ) { current.get() }
+            }
+            testScheduler.runCurrent()
+            current.set(false)
+            release.complete(Unit)
+            writer.await()
+            assertFalse(edit.await())
+            assertEquals(original, repository.fetchDevice(original.id))
+            assertEquals(ChannelFloodScope.Region("US915"), store.fetchChannels(original.radioId).single().floodScope)
+        } finally {
+            release.complete(Unit)
+            writer.cancel()
+        }
     }
 
     @Test fun committedAuthorityWriteInvalidatesTicketBeforeFailingAfterCommitCallback() = runTest(scheduler) {

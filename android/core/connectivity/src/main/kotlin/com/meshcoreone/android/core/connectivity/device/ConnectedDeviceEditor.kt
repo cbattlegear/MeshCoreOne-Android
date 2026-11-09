@@ -5,7 +5,7 @@ import com.meshcoreone.android.core.connectivity.ConnectivityDiagnostics
 import com.meshcoreone.android.core.connectivity.ConnectivityError
 import com.meshcoreone.android.core.contracts.domain.ConnectedDeviceEdit
 import com.meshcoreone.android.core.contracts.domain.ContactPersisting
-import com.meshcoreone.android.core.contracts.domain.DevicePersisting
+import com.meshcoreone.android.core.contracts.domain.DeviceSessionPersisting
 import com.meshcoreone.android.core.contracts.domain.DeviceWriteConflict
 import com.meshcoreone.android.core.contracts.domain.editDevice
 import com.meshcoreone.android.core.contracts.domain.preservingChanges
@@ -85,7 +85,7 @@ data class RemoveUnfavoritedResult(val removed: Int, val total: Int)
  */
 class ConnectedDeviceEditor(
     private val access: ConnectedDeviceAccess,
-    private val devices: DevicePersisting,
+    private val devices: DeviceSessionPersisting,
     private val contacts: ContactPersisting,
     private val contactRemoval: () -> ContactRemovalPort?,
     private val presets: RadioPresetMatcher,
@@ -234,6 +234,24 @@ class ConnectedDeviceEditor(
 
     fun savePreRepeatSettings(): Job? = edit("preRepeat") { it.savingPreRepeatSettings() }
 
+    suspend fun savePreRepeatSettings(deviceId: UUID): Boolean {
+        if (!access.requiresGenerationDeviceWriteLease) {
+            return sessionEdits.withLock {
+                val device = access.connectedDevice?.takeIf { it.id == deviceId } ?: return@withLock false
+                persistEdit("preRepeat", access.connectedDeviceToken, { it.savingPreRepeatSettings() }, device)
+            }
+        }
+        val (token, device) = access.captureDeviceWrite() ?: return false
+        if (device.id != deviceId) return false
+        return sessionEdits.withLock {
+            access.withDeviceWrite(token, device.id) {
+                val current = access.currentDevice(token) ?: return@withDeviceWrite false
+                if (current.id != deviceId || current.radioId != device.radioId) return@withDeviceWrite false
+                persistEdit("preRepeat", token, { it.savingPreRepeatSettings() }, current)
+            } ?: false
+        }
+    }
+
     fun clearPreRepeatSettings(): Job? = edit("clearPreRepeat") { it.clearingPreRepeatSettings() }
 
     fun addKnownRegion(region: String): Job? {
@@ -330,9 +348,18 @@ class ConnectedDeviceEditor(
             capturedDevice ?: if (expectedToken == null) access.connectedDevice else access.currentDevice(expectedToken)
         }
         original ?: return false
-        if (remove) devices.removeDeviceKnownRegion(original.radioId, region)
-        else devices.addDeviceKnownRegion(original.radioId, region)
+        val isCurrent = {
+            val live = if (expectedToken == null) access.connectedDevice else access.currentDevice(expectedToken)
+            live != null && live.id == original.id && live.radioId == original.radioId
+        }
+        val persisted = if (remove) {
+            devices.removeDeviceKnownRegionIfCurrent(original.id, original.radioId, region, isCurrent)
+        } else {
+            devices.addDeviceKnownRegionIfCurrent(original.id, original.radioId, region, isCurrent)
+        }
+        if (!persisted || !isCurrent()) return false
         if (clearRadio && original.defaultFloodScopeName == region) clearDefaultFloodScope()
+        if (!isCurrent()) return false
         var published: DeviceDTO? = null
         val edit = access.transformConnectedDevice(expectedToken) { live ->
             if (live.id != original.id || live.radioId != original.radioId) live

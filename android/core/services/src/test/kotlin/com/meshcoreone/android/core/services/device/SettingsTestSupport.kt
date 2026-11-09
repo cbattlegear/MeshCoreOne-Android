@@ -217,9 +217,16 @@ internal class DeviceRows : DevicePersisting, DeviceEditPersisting {
     override suspend fun fetchDeviceWriteSnapshot(id: UUID): DeviceWriteSnapshot? =
         fetchDevice(id)?.let { DeviceWriteSnapshot(it, revision) }
     override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+        return saveDeviceIfUnchanged(dto, expected) { true }
+    }
+    override suspend fun saveDeviceIfUnchanged(
+        dto: DeviceDTO,
+        expected: DeviceWriteSnapshot,
+        isCurrent: () -> Boolean,
+    ): Boolean {
         beforeSave()
         saveFailure?.let { throw it }
-        if (revision != expected.revision || rows[dto.id] != expected.device) return false
+        if (!isCurrent() || revision != expected.revision || rows[dto.id] != expected.device) return false
         rows[dto.id] = dto
         revision++
         return true

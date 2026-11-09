@@ -4,7 +4,6 @@ package com.meshcoreone.android.app.container
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.app.container.onboarding.AppStateRadioConfigurator
-import com.meshcoreone.android.core.contracts.domain.DeviceEditPersisting
 import com.meshcoreone.android.core.contracts.domain.DeviceWriteSnapshot
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
@@ -56,12 +55,14 @@ class SettingsPathHashPersistenceTest : RoomProcessTest() {
     private suspend fun TestScope.capabilityMismatch(cachedSupported: Boolean, failHashSave: Boolean) {
         val ui = HeldSettingsDispatcher(StandardTestDispatcher(testScheduler))
         val firmware = AtomicInteger(10)
-        val persistence = object : PersistenceStoreProtocol by store, DeviceEditPersisting by store {
-            override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun saveDeviceIfUnchanged(
+                dto: DeviceDTO, expected: DeviceWriteSnapshot, isCurrent: () -> Boolean,
+            ): Boolean {
                 if (failHashSave && dto.pathHashMode == 2u.toUByte()) {
                     throw IllegalStateException("verified hash metadata rejected")
                 }
-                return store.saveDeviceIfUnchanged(dto, expected)
+                return store.saveDeviceIfUnchanged(dto, expected, isCurrent)
             }
         }
         withSettings(
@@ -129,10 +130,12 @@ class SettingsPathHashPersistenceTest : RoomProcessTest() {
         val release = CompletableDeferred<Unit>()
         val terminal = CompletableDeferred<Unit>()
         var armed = false
-        val held = object : PersistenceStoreProtocol by store, DeviceEditPersisting by store {
-            override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+        val held = object : PersistenceStoreProtocol by store {
+            override suspend fun saveDeviceIfUnchanged(
+                dto: DeviceDTO, expected: DeviceWriteSnapshot, isCurrent: () -> Boolean,
+            ): Boolean {
                 if (!armed || dto.appliedRadioPresetID != "mixed-preset") {
-                    return store.saveDeviceIfUnchanged(dto, expected)
+                    return store.saveDeviceIfUnchanged(dto, expected, isCurrent)
                 }
                 armed = false
                 entered.complete(Unit)
@@ -140,7 +143,7 @@ class SettingsPathHashPersistenceTest : RoomProcessTest() {
                     release.await()
                     try {
                         if (outcome == "failure") throw IllegalStateException("preset metadata rejected")
-                        store.saveDeviceIfUnchanged(dto, expected)
+                        store.saveDeviceIfUnchanged(dto, expected, isCurrent)
                     } finally { terminal.complete(Unit) }
                 }
             }
@@ -201,14 +204,16 @@ class SettingsPathHashPersistenceTest : RoomProcessTest() {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         var armed = false
-        val held = object : PersistenceStoreProtocol by store, DeviceEditPersisting by store {
-            override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+        val held = object : PersistenceStoreProtocol by store {
+            override suspend fun saveDeviceIfUnchanged(
+                dto: DeviceDTO, expected: DeviceWriteSnapshot, isCurrent: () -> Boolean,
+            ): Boolean {
                 if (armed && dto.pathHashMode == 1u.toUByte()) {
                     armed = false
                     entered.complete(Unit)
                     release.await()
                 }
-                return store.saveDeviceIfUnchanged(dto, expected)
+                return store.saveDeviceIfUnchanged(dto, expected, isCurrent)
             }
         }
         try {
@@ -262,10 +267,12 @@ class SettingsPathHashPersistenceTest : RoomProcessTest() {
     private suspend fun TestScope.queuedSettingsBeforePreset(cancelEarlier: Boolean) {
         val ui = HeldSettingsDispatcher(StandardTestDispatcher(testScheduler))
         var saves = 0
-        val observed = object : PersistenceStoreProtocol by store, DeviceEditPersisting by store {
-            override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+        val observed = object : PersistenceStoreProtocol by store {
+            override suspend fun saveDeviceIfUnchanged(
+                dto: DeviceDTO, expected: DeviceWriteSnapshot, isCurrent: () -> Boolean,
+            ): Boolean {
                 saves++
-                return store.saveDeviceIfUnchanged(dto, expected)
+                return store.saveDeviceIfUnchanged(dto, expected, isCurrent)
             }
         }
         withSettings(
@@ -353,17 +360,19 @@ class SettingsPathHashPersistenceTest : RoomProcessTest() {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         var armed = false
-        val held = object : PersistenceStoreProtocol by store, DeviceEditPersisting by store {
-            override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+        val held = object : PersistenceStoreProtocol by store {
+            override suspend fun saveDeviceIfUnchanged(
+                dto: DeviceDTO, expected: DeviceWriteSnapshot, isCurrent: () -> Boolean,
+            ): Boolean {
                 if (armed && dto.appliedRadioPresetID == "retired-preset") {
                     armed = false
                     entered.complete(Unit)
                     return withContext(NonCancellable) {
                         release.await()
-                        store.saveDeviceIfUnchanged(dto, expected)
+                        store.saveDeviceIfUnchanged(dto, expected, isCurrent)
                     }
                 }
-                return store.saveDeviceIfUnchanged(dto, expected)
+                return store.saveDeviceIfUnchanged(dto, expected, isCurrent)
             }
         }
         try {
@@ -437,18 +446,20 @@ class SettingsPathHashPersistenceTest : RoomProcessTest() {
     @Test fun contactWatermarkBetweenTicketAndSaveIsMergedWithoutLosingUnrelatedFields() = runTest {
         var armed = false
         var conflicts = 0
-        val interleaving = object : PersistenceStoreProtocol by store, DeviceEditPersisting by store {
+        val interleaving = object : PersistenceStoreProtocol by store {
             override suspend fun fetchDeviceWriteSnapshot(id: java.util.UUID) = store.fetchDeviceWriteSnapshot(id)
-            override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+            override suspend fun saveDeviceIfUnchanged(
+                dto: DeviceDTO, expected: DeviceWriteSnapshot, isCurrent: () -> Boolean,
+            ): Boolean {
                 if (armed && dto.pathHashMode == 2u.toUByte()) {
                     armed = false
                     store.updateDeviceLastContactSync(dto.radioId, 9876u)
-                    val saved = store.saveDeviceIfUnchanged(dto, expected)
+                    val saved = store.saveDeviceIfUnchanged(dto, expected, isCurrent)
                     assertFalse(saved, "The real Room watermark write must invalidate the original ticket")
                     conflicts++
                     return saved
                 }
-                return store.saveDeviceIfUnchanged(dto, expected)
+                return store.saveDeviceIfUnchanged(dto, expected, isCurrent)
             }
         }
         withSettings(interleaving) { h, holder, failures, _ ->
@@ -480,14 +491,16 @@ class SettingsPathHashPersistenceTest : RoomProcessTest() {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         var armed = false
-        val held = object : PersistenceStoreProtocol by store, DeviceEditPersisting by store {
+        val held = object : PersistenceStoreProtocol by store {
             override suspend fun fetchDeviceWriteSnapshot(id: java.util.UUID) = store.fetchDeviceWriteSnapshot(id)
-            override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+            override suspend fun saveDeviceIfUnchanged(
+                dto: DeviceDTO, expected: DeviceWriteSnapshot, isCurrent: () -> Boolean,
+            ): Boolean {
                 if (armed && dto.pathHashMode == 2u.toUByte()) {
                     entered.complete(Unit)
                     release.await()
                 }
-                return store.saveDeviceIfUnchanged(dto, expected)
+                return store.saveDeviceIfUnchanged(dto, expected, isCurrent)
             }
         }
         try {
@@ -587,16 +600,18 @@ class SettingsPathHashPersistenceTest : RoomProcessTest() {
         val release = CompletableDeferred<Unit>()
         var armed = false
         val commits = mutableListOf<UByte>()
-        val held = object : PersistenceStoreProtocol by store, DeviceEditPersisting by store {
-            override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+        val held = object : PersistenceStoreProtocol by store {
+            override suspend fun saveDeviceIfUnchanged(
+                dto: DeviceDTO, expected: DeviceWriteSnapshot, isCurrent: () -> Boolean,
+            ): Boolean {
                 val saved = if (armed && dto.pathHashMode == 2u.toUByte()) {
                     armed = false
                     entered.complete(Unit)
                     withContext(NonCancellable) {
                         release.await()
-                        store.saveDeviceIfUnchanged(dto, expected)
+                        store.saveDeviceIfUnchanged(dto, expected, isCurrent)
                     }
-                } else store.saveDeviceIfUnchanged(dto, expected)
+                } else store.saveDeviceIfUnchanged(dto, expected, isCurrent)
                 if (saved) commits += dto.pathHashMode
                 return saved
             }

@@ -75,14 +75,13 @@ fun DeviceDTO.preservingChanges(before: DeviceDTO, live: DeviceDTO): DeviceDTO {
  * Rebase an intended-field edit on the matching persisted value, never on a previously read live DTO.
  * Full replacements/activation invalidate authority; targeted concurrent edits may be retried.
  */
-suspend fun DevicePersisting.editDevice(
+private suspend fun editDeviceWith(
+    persistence: DeviceEditPersisting,
     id: UUID,
     isCurrent: () -> Boolean = { true },
     onSaveFailure: (PersistenceStoreException) -> Nothing = { throw it },
     transform: (DeviceDTO) -> DeviceDTO,
 ): DeviceDTO? {
-    val persistence = this as? DeviceEditPersisting
-        ?: throw UnsupportedOperationException("Device edits require versioned device persistence")
     var authority: Long? = null
     repeat(16) {
         currentCoroutineContext().ensureActive()
@@ -95,13 +94,31 @@ suspend fun DevicePersisting.editDevice(
         require(updated.id == snapshot.device.id && updated.radioId == snapshot.device.radioId)
         require(updated.isActive == snapshot.device.isActive && updated.lastConnected == snapshot.device.lastConnected)
         val committed = try {
-            persistence.saveDeviceIfUnchanged(updated, snapshot)
+            persistence.saveDeviceIfUnchanged(updated, snapshot, isCurrent)
         } catch (failure: PersistenceStoreException) {
             onSaveFailure(failure)
         }
         if (committed) return updated
     }
     throw DeviceWriteConflict()
+}
+
+suspend fun DeviceSessionPersisting.editDevice(
+    id: UUID,
+    isCurrent: () -> Boolean = { true },
+    onSaveFailure: (PersistenceStoreException) -> Nothing = { throw it },
+    transform: (DeviceDTO) -> DeviceDTO,
+): DeviceDTO? = editDeviceWith(this, id, isCurrent, onSaveFailure, transform)
+
+suspend fun DevicePersisting.editDevice(
+    id: UUID,
+    isCurrent: () -> Boolean = { true },
+    onSaveFailure: (PersistenceStoreException) -> Nothing = { throw it },
+    transform: (DeviceDTO) -> DeviceDTO,
+): DeviceDTO? {
+    val persistence = this as? DeviceEditPersisting
+        ?: throw UnsupportedOperationException("Device edits require versioned device persistence")
+    return editDeviceWith(persistence, id, isCurrent, onSaveFailure, transform)
 }
 
 interface DeviceEditPersisting {
@@ -111,6 +128,35 @@ interface DeviceEditPersisting {
     suspend fun activateDeviceIfCurrent(id: UUID, isCurrent: () -> Boolean): Boolean
     suspend fun fetchDeviceWriteSnapshot(id: UUID): DeviceWriteSnapshot?
     suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean
+    /** Implementations must recheck [isCurrent] at their conditional-save commit boundary. */
+    suspend fun saveDeviceIfUnchanged(
+        dto: DeviceDTO,
+        expected: DeviceWriteSnapshot,
+        isCurrent: () -> Boolean,
+    ): Boolean
+}
+
+/** Persistence required by a live connection: ordinary device data plus transactional write authority. */
+interface DeviceSessionPersisting : DevicePersisting, DeviceEditPersisting {
+    override suspend fun saveDeviceIfUnchanged(
+        dto: DeviceDTO,
+        expected: DeviceWriteSnapshot,
+        isCurrent: () -> Boolean,
+    ): Boolean
+
+    suspend fun addDeviceKnownRegionIfCurrent(
+        id: UUID,
+        radioId: RadioId,
+        region: String,
+        isCurrent: () -> Boolean,
+    ): Boolean
+
+    suspend fun removeDeviceKnownRegionIfCurrent(
+        id: UUID,
+        radioId: RadioId,
+        region: String,
+        isCurrent: () -> Boolean,
+    ): Boolean
 }
 
 suspend fun DevicePersisting.activateDeviceIfCurrent(id: UUID, isCurrent: () -> Boolean): Boolean =

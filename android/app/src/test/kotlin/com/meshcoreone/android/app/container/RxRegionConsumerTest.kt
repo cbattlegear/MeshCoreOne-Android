@@ -14,7 +14,6 @@ import com.meshcoreone.android.core.connectivity.device.ConnectedDeviceAccess
 import com.meshcoreone.android.core.connectivity.device.ConnectedDeviceEditor
 import com.meshcoreone.android.core.connectivity.device.RadioPresetMatcher
 import com.meshcoreone.android.core.contracts.domain.ConnectedDeviceEdit
-import com.meshcoreone.android.core.contracts.domain.DeviceEditPersisting
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
@@ -195,11 +194,16 @@ class RxRegionConsumerTest : RoomProcessTest() {
     @Test fun delayedOldPersistenceDrainsBeforeSameRadioReplacementLoadsCommittedRegions() = runTest {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
-        val held = object : PersistenceStoreProtocol by store, DeviceEditPersisting by store {
-            override suspend fun addDeviceKnownRegion(radioId: RadioId, region: String) {
+        val held = object : PersistenceStoreProtocol by store {
+            override suspend fun addDeviceKnownRegionIfCurrent(
+                id: UUID,
+                radioId: RadioId,
+                region: String,
+                isCurrent: () -> Boolean,
+            ): Boolean {
                 entered.complete(Unit)
                 release.await()
-                store.addDeviceKnownRegion(radioId, region)
+                return store.addDeviceKnownRegionIfCurrent(id, radioId, region, isCurrent)
             }
 
         }

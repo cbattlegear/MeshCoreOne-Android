@@ -13,7 +13,6 @@ import com.meshcoreone.android.app.container.RoomProcessTest
 import com.meshcoreone.android.app.navigation.AppSettingsContent
 import com.meshcoreone.android.app.navigation.SettingsDetail
 import com.meshcoreone.android.core.contracts.AppTab
-import com.meshcoreone.android.core.contracts.domain.DeviceEditPersisting
 import com.meshcoreone.android.core.contracts.domain.ContactSaveResult
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
@@ -47,7 +46,7 @@ class NodeConfigMountedPartialImportTest : RoomProcessTest() {
         val firstKey = requireNotNull(Bytes.parseHex("cd".repeat(32)))
         val secondKey = requireNotNull(Bytes.parseHex("ef".repeat(32)))
         val failSecondSave = AtomicBoolean(true)
-        val persistence = object : PersistenceStoreProtocol by store, DeviceEditPersisting by store {
+        val persistence = object : PersistenceStoreProtocol by store {
             override suspend fun saveContact(radioId: RadioId, frame: ContactFrame): ContactSaveResult {
                 if (frame.publicKey == secondKey && failSecondSave.get()) throw IllegalStateException("local save failed")
                 return store.saveContact(radioId, frame)

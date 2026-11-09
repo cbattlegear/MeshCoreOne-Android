@@ -62,7 +62,7 @@ internal class FakePreferences : ProcessConnectionPreferences {
 }
 
 /** Repository double with core:data's ghost-demotion semantics (new surrogate id, inactive, no methods). */
-internal class FakeDevices : DevicePersisting, DeviceEditPersisting {
+internal class FakeDevices : DeviceSessionPersisting {
     val rows = linkedMapOf<UUID, DeviceDTO>()
     val contacts = mutableListOf<ContactDTO>()
     val messages = mutableListOf<MessageDTO>()
@@ -92,9 +92,18 @@ internal class FakeDevices : DevicePersisting, DeviceEditPersisting {
     override suspend fun fetchDeviceWriteSnapshot(id: UUID): DeviceWriteSnapshot? =
         rows[id]?.let { DeviceWriteSnapshot(it, deviceRevision, authorityRevision) }
     override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean {
+        return saveDeviceIfUnchanged(dto, expected) { true }
+    }
+    override suspend fun saveDeviceIfUnchanged(
+        dto: DeviceDTO,
+        expected: DeviceWriteSnapshot,
+        isCurrent: () -> Boolean,
+    ): Boolean {
         beforeConditionalSave()
         conditionalSaveFailure?.let { throw it }
-        if (deviceRevision != expected.revision || authorityRevision != expected.authorityRevision || rows[dto.id] != expected.device) return false
+        if (!isCurrent() || deviceRevision != expected.revision || authorityRevision != expected.authorityRevision ||
+            rows[dto.id] != expected.device
+        ) return false
         calls += "save"
         rows[dto.id] = dto
         deviceRevision++
@@ -120,6 +129,37 @@ internal class FakeDevices : DevicePersisting, DeviceEditPersisting {
             defaultFloodScopeName = row.defaultFloodScopeName.takeUnless { it == region },
         )
         deviceRevision++
+    }
+    override suspend fun addDeviceKnownRegionIfCurrent(
+        id: UUID,
+        radioId: RadioId,
+        region: String,
+        isCurrent: () -> Boolean,
+    ): Boolean {
+        val row = rows[id] ?: return false
+        if (row.radioId != radioId || !isCurrent()) return false
+        if (region !in row.knownRegions) {
+            calls += "addRegion:$region"
+            rows[id] = row.copy(knownRegions = (row.knownRegions + region).distinct().snapshot())
+            deviceRevision++
+        }
+        return true
+    }
+    override suspend fun removeDeviceKnownRegionIfCurrent(
+        id: UUID,
+        radioId: RadioId,
+        region: String,
+        isCurrent: () -> Boolean,
+    ): Boolean {
+        val row = rows[id] ?: return false
+        if (row.radioId != radioId || !isCurrent()) return false
+        calls += "removeRegion:$region"
+        rows[id] = row.copy(
+            knownRegions = row.knownRegions.filterNot { it == region }.snapshot(),
+            defaultFloodScopeName = row.defaultFloodScopeName.takeUnless { it == region },
+        )
+        deviceRevision++
+        return true
     }
     override suspend fun deleteDeviceData(id: UUID) { calls += "deleteData" }
     override suspend fun deleteDevice(id: UUID) { calls += "delete"; rows.remove(id) }

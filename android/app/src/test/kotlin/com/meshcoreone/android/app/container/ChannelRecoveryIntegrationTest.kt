@@ -4,7 +4,6 @@ package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
-import com.meshcoreone.android.core.contracts.domain.DeviceEditPersisting
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.ConnectionMethod
@@ -193,7 +192,7 @@ class ChannelRecoveryIntegrationTest : RoomProcessTest() {
         lateinit var oldMissing: ChannelDTO
         lateinit var connecting: kotlinx.coroutines.Deferred<Unit>
         private var commits = 0
-        private val persistence = object : PersistenceStoreProtocol by store, DeviceEditPersisting by store {
+        private val persistence = object : PersistenceStoreProtocol by store {
             override suspend fun batchSaveChannels(
                 radioId: RadioId, configured: SnapshotList<ChannelInfo>,
                 unconfiguredIndices: SnapshotList<UByte>, pruneBeyond: UByte?,

@@ -105,6 +105,36 @@ class RadioPresetStateHolderTest {
     }
 
     @Test
+    fun `failed repeat snapshot prevents radio change and leaves repeat mode recoverable`() {
+        started()
+        store.preRepeatError = IllegalStateException("snapshot persistence failed")
+        holder.onRepeatToggled(true)
+        holder.confirmEnableRepeatMode()
+        scheduler.runCurrent()
+
+        assertEquals(listOf("savePreRepeat"), store.calls)
+        assertEquals(listOf("getSelfInfo"), service.calls)
+        assertFalse(state.isRepeatEnabled || state.isApplyingRepeat || gate.inFlight.value)
+        assertEquals("us-915", state.selectedPresetId)
+        assertTrue(state.errorMessage != null)
+    }
+
+    @Test
+    fun `retired device repeat snapshot prevents radio change`() {
+        started()
+        store.preRepeatResult = false
+        holder.onRepeatToggled(true)
+        holder.confirmEnableRepeatMode()
+        scheduler.runCurrent()
+
+        assertEquals(listOf("savePreRepeat"), store.calls)
+        assertEquals(listOf("getSelfInfo"), service.calls)
+        assertFalse(state.isRepeatEnabled || state.isApplyingRepeat || gate.inFlight.value)
+        assertEquals("us-915", state.selectedPresetId)
+        assertTrue(state.errorMessage != null)
+    }
+
+    @Test
     fun `cancelling the repeat confirmation changes nothing`() {
         started()
         holder.onRepeatToggled(true)

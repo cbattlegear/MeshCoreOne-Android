@@ -1193,6 +1193,7 @@ class OnboardingFlowCoordinatorTest {
                 val publication = checkNotNull(flow.onboarding.completionPublication.value)
                 assertEquals(OnboardingCompletionProducer.NoDevice(null), publication.producer)
                 assertNotNull(publication.attemptId)
+                Unit
             } finally { owner.cancel(); dispatcher.drain() }
         }
 

@@ -473,22 +473,27 @@ internal class SessionCore(
     private suspend fun pollMessage(generation: SessionGeneration, timeout: Double?): PollOutcome {
         val (task, messageWaitingRevision) = synchronized(lock) {
             requireCurrent(generation)
-            val task = generation.poll ?: generation.scope.async(start = CoroutineStart.LAZY) {
-                exchange(generation) {
-                    match(PacketBuilder.getMessage(), "message", timeout = timeout, acceptsErrors = true) { event ->
-                        when (event) {
-                            is MeshEvent.ContactMessageReceived -> ResponseDisposition.Success(MessageResult.ContactMessage(event.message))
-                            is MeshEvent.ChannelMessageReceived -> ResponseDisposition.Success(MessageResult.ChannelMessage(event.message))
-                            is MeshEvent.ChannelDataReceived -> ResponseDisposition.Success(MessageResult.ChannelDatagram(event.datagram))
-                            MeshEvent.NoMoreMessages -> ResponseDisposition.Success(MessageResult.NoMoreMessages)
-                            is MeshEvent.Error -> ResponseDisposition.Failure(MeshCoreException.DeviceError(event.code ?: 0u))
-                            else -> ResponseDisposition.Ignore
+            val existing = generation.poll
+            if (existing != null) {
+                existing to checkNotNull(generation.pollMessageWaitingRevision)
+            } else {
+                val messageWaitingRevision = generation.messageWaitingRevision
+                val poll = generation.scope.async(start = CoroutineStart.LAZY) {
+                    exchange(generation) {
+                        match(PacketBuilder.getMessage(), "message", timeout = timeout, acceptsErrors = true) { event ->
+                            when (event) {
+                                is MeshEvent.ContactMessageReceived -> ResponseDisposition.Success(MessageResult.ContactMessage(event.message))
+                                is MeshEvent.ChannelMessageReceived -> ResponseDisposition.Success(MessageResult.ChannelMessage(event.message))
+                                is MeshEvent.ChannelDataReceived -> ResponseDisposition.Success(MessageResult.ChannelDatagram(event.datagram))
+                                MeshEvent.NoMoreMessages -> ResponseDisposition.Success(MessageResult.NoMoreMessages)
+                                is MeshEvent.Error -> ResponseDisposition.Failure(MeshCoreException.DeviceError(event.code ?: 0u))
+                                else -> ResponseDisposition.Ignore
+                            }
                         }
                     }
                 }
-            }.also { poll ->
                 generation.poll = poll
-                generation.pollMessageWaitingRevision = generation.messageWaitingRevision
+                generation.pollMessageWaitingRevision = messageWaitingRevision
                 poll.invokeOnCompletion { cause ->
                     if (cause != null) synchronized(lock) {
                         if (generation.poll === poll) {
@@ -498,8 +503,8 @@ internal class SessionCore(
                     }
                 }
                 poll.start()
+                poll to messageWaitingRevision
             }
-            task to checkNotNull(generation.pollMessageWaitingRevision)
         }
         try {
             val result = task.await()

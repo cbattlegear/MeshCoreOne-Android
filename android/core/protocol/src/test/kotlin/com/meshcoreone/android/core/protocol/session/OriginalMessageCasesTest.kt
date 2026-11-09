@@ -7,8 +7,10 @@ package com.meshcoreone.android.core.protocol.session
 
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
+import com.meshcoreone.android.core.protocol.event.MeshTransportError
 import com.meshcoreone.android.core.protocol.event.MessageResult
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.advanceTimeBy
@@ -247,6 +249,18 @@ class OriginalMessageCasesTest {
             assertEquals(MessageResult.NoMoreMessages, next.await())
             assertSame(retiredPoll, retiredGeneration.poll)
             f.session.stop()
+        },
+        original("GetMessageCoalescingTests", "an inline poll failure preserves its transport error") {
+            val session = MeshCoreSession.offlinePlaceholder(
+                SessionRadioTransport(),
+                clock = SchedulerClock(testScheduler),
+                coroutineContext = Dispatchers.Unconfined,
+            )
+            try {
+                assertFailsWith<MeshTransportError.NotConnected> { session.getMessage() }
+            } finally {
+                session.stop()
+            }
         },
         original("GetMessageSerializationTests", "an unrelated error does not fail an in-flight getMessage") {
             val f = fixture()

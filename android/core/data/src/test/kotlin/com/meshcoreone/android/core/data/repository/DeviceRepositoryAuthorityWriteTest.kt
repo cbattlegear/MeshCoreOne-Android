@@ -25,7 +25,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Before
@@ -140,9 +139,9 @@ class DeviceRepositoryAuthorityWriteTest : RepositoryTest() {
             }
             current.set(false)
             release.complete(Unit)
-            withTimeout(5_000) { writer.await() }
+            writer.await()
             testScheduler.advanceUntilIdle()
-            assertFalse(withTimeout(5_000) { edit.await() })
+            assertFalse(edit.await())
             assertEquals(original, repository.fetchDevice(original.id))
         } finally {
             release.complete(Unit)
@@ -178,9 +177,9 @@ class DeviceRepositoryAuthorityWriteTest : RepositoryTest() {
             }
             current.set(false)
             release.complete(Unit)
-            withTimeout(5_000) { writer.await() }
+            writer.await()
             testScheduler.advanceUntilIdle()
-            assertFalse(withTimeout(5_000) { edit.await() })
+            assertFalse(edit.await())
             assertEquals(original, repository.fetchDevice(original.id))
             assertEquals(ChannelFloodScope.Region("US915"), store.fetchChannels(original.radioId).single().floodScope)
         } finally {

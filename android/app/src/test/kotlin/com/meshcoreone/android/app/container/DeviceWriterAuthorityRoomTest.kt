@@ -723,6 +723,16 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
             val token = assertNotNull(h.manager.snapshot.value.token)
             val rejectedAdmission = object : ConnectedDeviceAccess by h.container.deviceAccess {
                 override val requiresGenerationDeviceWriteLease: Boolean get() = true
+                override suspend fun <T : Any> withDeviceWrite(
+                    token: SessionToken,
+                    deviceId: UUID,
+                    block: suspend () -> T,
+                ): T? {
+                    assertEquals(before.id, deviceId)
+                    assertEquals(h.manager.snapshot.value.token, token)
+                    admissions++
+                    return null
+                }
                 override suspend fun <T : Any> withDeviceWriteLease(
                     token: SessionToken,
                     deviceId: UUID,

@@ -720,6 +720,10 @@ class OnboardingFlowCoordinatorTest {
         val resettingThread = java.util.concurrent.atomic.AtomicReference<Thread>()
         var targetReads = 0
         val applied = mutableListOf<String>()
+        val target = OnboardingPresetTarget(
+            UUID.fromString("00000000-0000-0000-0000-000000000001"), 1,
+            UUID.fromString("00000000-0000-0000-0000-000000000002"),
+        )
         val port = object : OnboardingPresetPort {
             override val canApply = kotlinx.coroutines.flow.MutableStateFlow(true)
             override fun currentTarget(): OnboardingPresetTarget? {
@@ -727,7 +731,7 @@ class OnboardingFlowCoordinatorTest {
                     entered.countDown()
                     check(release.await(5, java.util.concurrent.TimeUnit.SECONDS))
                 }
-                return null
+                return target
             }
             override suspend fun apply(presetId: String): OnboardingPresetOutcome {
                 applied += presetId

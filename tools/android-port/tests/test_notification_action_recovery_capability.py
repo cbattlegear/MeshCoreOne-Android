@@ -14,13 +14,13 @@ from controller.capabilities import CapabilityEngine
 from controller.errors import PortError
 from controller.scope_amendment import (
     NOTIFICATION_ACTION_RECOVERY_COPY_CAPABILITY,
+    ONBOARDING_PRESET_FIXTURE_CAPABILITY,
     routine_support_predecessor,
 )
 
 
 BASE = "5f4d9b92b2eb30d02f001567ef7e4f1dd6e80f66"
 MAIN = "5f4d9b92b2eb30d02f001567ef7e4f1dd6e80f66"
-NOTIFICATION_POLICY_BASE = "2be1194f31dfdb2e1d90f988f5975ee7c179fe8e"
 PATH = "android/platform/notifications/src/main/res/values/notification_action_recovery.xml"
 OPERATION = "add-or-update-notification-action-recovery-copy"
 KEYS = ["notification_action_recovery_" + suffix for suffix in (
@@ -95,12 +95,10 @@ class NotificationActionRecoveryCapabilityTests(unittest.TestCase):
             ["git", "-C", str(REPO), "show", f"{BASE}:docs/android/automation-policy.json"]
         )
         original = json.loads(original_raw)
-        # Keep the entire original raw/object inverse; later additive rules have their own inverse tests.
-        raw = subprocess.check_output([
-            "git", "-C", str(REPO), "show",
-            f"{NOTIFICATION_POLICY_BASE}:docs/android/automation-policy.json",
-        ]).decode("utf-8")
+        raw = (REPO / "docs/android/automation-policy.json").read_text(encoding="utf-8")
         current = json.loads(raw)
+        self.assertEqual(current["reservation_policy"]["capabilities"].pop(),
+                         ONBOARDING_PRESET_FIXTURE_CAPABILITY)
         self.assertEqual(current["reservation_policy"]["capabilities"].pop(), self.rule)
         self.assertEqual(current, original)
         self.assertEqual(routine_support_predecessor(json.loads(raw)), routine_support_predecessor(original))

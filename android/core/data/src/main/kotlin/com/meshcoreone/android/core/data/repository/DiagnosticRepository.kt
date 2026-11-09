@@ -145,7 +145,7 @@ internal class DiagnosticRepository(private val context: RoomRepositoryContext) 
         requireCanonicalRxKeys(radioId)
         database.rxLogs().clearRadio(radioId.value)
         pendingRx.entries.removeAll { it.key.radioId == radioId }
-        afterCommit { context.setRxCount(radioId, 0) }
+        afterCommit { context.completeRxRetention(radioId) }
         save()
     }
 
@@ -160,7 +160,7 @@ internal class DiagnosticRepository(private val context: RoomRepositoryContext) 
                 pendingRx.remove(EntityKey(radioId, row.id))
                 database.rxLogs().delete(radioId.value, row.id)
             }
-            afterCommit { context.setRxCount(radioId, keepCount) }
+            afterCommit { context.completeRxRetention(radioId) }
             save()
         }
 
@@ -187,6 +187,7 @@ internal class DiagnosticRepository(private val context: RoomRepositoryContext) 
                 val row = byId[update.id] ?: continue
                 updateRx(row.copy(regionScope = update.regionScope, regionScopeMatches = update.regionScopeMatches))
             }
+            requireCanonicalRxKeys(radioId)
             save()
         }
     }
@@ -201,6 +202,7 @@ internal class DiagnosticRepository(private val context: RoomRepositoryContext) 
                 updateRx(changed)
                 byId[update.id] = changed
             }
+            requireCanonicalRxKeys(radioId)
             save()
         }
 

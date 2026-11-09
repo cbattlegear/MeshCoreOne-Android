@@ -65,9 +65,7 @@ internal class RepositoryTransaction(
 
     suspend fun updateRx(row: RxLogEntryEntity) {
         val key = EntityKey(RadioId(row.radioId), row.id)
-        requireCanonicalRxKeys(key.radioId)
         if (key in pendingRx) pendingRx[key] = row else database.rxLogs().upsert(row)
-        requireCanonicalRxKeys(key.radioId)
     }
 }
 
@@ -81,7 +79,7 @@ internal class RoomRepositoryContext(
     private val flushOwner = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + flushOwner)
     private val pendingRx = LinkedHashMap<EntityKey, RxLogEntryEntity>()
-    private val rxCounts = LinkedHashMap<RadioId, Long>()
+    private val rxRetentionRadios = LinkedHashSet<RadioId>()
     private var rxInsertsSinceFlush = 0L
     private var flushTask: Job? = null
     private val closedSignal = CompletableDeferred<Unit>()
@@ -167,15 +165,11 @@ internal class RoomRepositoryContext(
         mutex.withLock {
             ensureOpen()
             val radio = RadioId(row.radioId)
-            val nextCount = database.withTransaction {
-                // Re-read under the DB transaction: another context may have changed disk rows,
-                // and a repeated ordinary save replaces one pending identity rather than adding one.
-                val rows = RepositoryTransaction(database, clock, pendingRx).rxRows(radio)
-                val count = rows.size.toLong()
-                if (rows.any { it.id == row.id }) count else checkedIncrement(count)
+            database.withTransaction {
+                RepositoryTransaction(database, clock, pendingRx).requireCanonicalRxKeys(radio)
             }
             val nextDirty = checkedIncrement(rxInsertsSinceFlush)
-            rxCounts[radio] = nextCount
+            rxRetentionRadios += radio
             pendingRx[EntityKey(radio, row.id)] = row
             rxInsertsSinceFlush = nextDirty
             if (rxInsertsSinceFlush >= RxLogRetention.BATCH_SIZE) flushRxLocked() else scheduleFlush()
@@ -201,8 +195,7 @@ internal class RoomRepositoryContext(
         }
     }
 
-    fun forgetRxCount(radioId: RadioId) { rxCounts.remove(radioId) }
-    fun setRxCount(radioId: RadioId, count: Long) { rxCounts[radioId] = count }
+    fun completeRxRetention(radioId: RadioId) { rxRetentionRadios.remove(radioId) }
 
     fun <Row, Value : Any> observe(
         operation: String,
@@ -254,28 +247,24 @@ internal class RoomRepositoryContext(
         val caller = currentCoroutineContext()[Job]
         if (flushTask != caller) flushTask?.cancel()
         flushTask = null
-        val pruned = LinkedHashMap<RadioId, Long>()
         val nextSaveCount = checkedIncrement(rxInitiatedSaveCount)
         committedTransaction(
             afterCommit = {
                 pendingRx.clear()
                 rxInsertsSinceFlush = 0
                 rxInitiatedSaveCount = nextSaveCount
-                rxCounts.putAll(pruned)
+                rxRetentionRadios.clear()
             },
         ) {
             val transaction = RepositoryTransaction(database, clock, pendingRx)
-            for (radio in rxCounts.keys) transaction.requireCanonicalRxKeys(radio)
+            for (radio in rxRetentionRadios) transaction.requireCanonicalRxKeys(radio)
             transaction.persistPendingRx()
-            for (radio in rxCounts.keys) {
+            for (radio in rxRetentionRadios) {
                 val count = database.rxLogs().count(radio.value)
                 if (count > checkedAdd(RxLogRetention.KEEP_COUNT, RxLogRetention.PRUNE_THRESHOLD)) {
                     for (row in database.rxLogs().oldest(radio.value, count - RxLogRetention.KEEP_COUNT)) {
                         database.rxLogs().delete(radio.value, row.id)
                     }
-                    pruned[radio] = RxLogRetention.KEEP_COUNT
-                } else {
-                    pruned[radio] = count
                 }
                 transaction.requireCanonicalRxKeys(radio)
             }

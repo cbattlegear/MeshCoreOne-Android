@@ -400,4 +400,56 @@ class RxLogUuidAliasRoomTest : RepositoryTest() {
             database.close()
         }
     }
+
+    @Test fun completedRadioWithLaterAliasCannotBlockHealthyRadioFlushOrClose() = runTest {
+        val original = entry()
+        store.saveRxLogEntry(original)
+        store.flushPendingRxLogEntries()
+        seedPhysical(db, original.copy(channelName = "idle alias"), idText = entryId.canonicalString().lowercase())
+        val idleRows = snapshot()
+        try {
+            val healthy = rx(RADIO_B)
+            store.saveRxLogEntry(healthy)
+            store.flushPendingRxLogEntries()
+            assertEquals(healthy.id, store.fetchRxLogEntries(RADIO_B).single().id)
+            store.close()
+            assertEquals(idleRows, snapshot().filter { it[0] != RADIO_B.canonicalString })
+        } finally {
+            removeAliasFixtures()
+        }
+    }
+
+    @Test fun incidentalFlushStillOwesRetentionUntilRxFlushCompletes() = runTest {
+        db.rxLogs().upsert((0 until 1100).map { index ->
+            rx(radio, timestamp = index.toUInt(), receivedAt = AT.plusNanos(index.toLong())).toEntity()
+        })
+        val newest = entry().copy(receivedAt = AT.plusNanos(1100))
+        store.saveRxLogEntry(newest)
+        store.saveChannel(ChannelDTO(radioId = RADIO_B, index = 1u, name = "incidental flush"))
+        assertEquals(1101L, db.rxLogs().count(radio.value))
+        store.flushPendingRxLogEntries()
+        assertEquals(1000L, db.rxLogs().count(radio.value))
+        assertEquals(newest.id, store.fetchRxLogEntries(radio).first().id)
+        assertEquals(101u, store.fetchRxLogEntries(radio, 1200).last().senderTimestamp)
+    }
+
+    @Test fun enrichmentBatchFinalCheckRollsBackTriggerIntroducedAlias() = runTest {
+        val original = entry()
+        db.rxLogs().insert(original.toEntity())
+        val before = snapshot()
+        db.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER alias_after_enrich AFTER UPDATE OF regionScope ON rx_log_entries " +
+                "BEGIN UPDATE rx_log_entries SET id = LOWER(id) WHERE rowid = NEW.rowid; END",
+        )
+        try {
+            assertAliasFailure(assertFailsWith {
+                store.batchUpdateRxLogRegion(radio, SnapshotList.of(
+                    com.meshcoreone.android.core.contracts.domain.RxLogRegionUpdate(entryId, "changed", SnapshotList.empty()),
+                ))
+            })
+            assertEquals(before, snapshot())
+        } finally {
+            db.openHelper.writableDatabase.execSQL("DROP TRIGGER alias_after_enrich")
+        }
+    }
 }

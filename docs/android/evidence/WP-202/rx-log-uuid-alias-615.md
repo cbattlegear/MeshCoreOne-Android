@@ -37,20 +37,24 @@ user-data repair or new recovery UI is implemented here.
   aliases excluded by the ordinary canonical radio predicate.
 - Recheck all pending radio partitions in the actual flush/write transaction,
   before upsert and after it (including trigger-introduced aliases). Automatic
-  retention validates its affected cached radio partitions before pruning and
+  retention validates only radio partitions with outstanding RX retention work before pruning and
   after each radio's work. Independent contexts cannot substitute their own
   stale count or a process-local admission check for this database boundary.
-- Save admission recomputes its logical count from the validated persisted and
-  pending union. Repeated canonical saves still use the existing last-pending
+- Save admission validates raw keys without loading historical payloads. The
+  stale count cache is replaced by a set of radios with outstanding retention
+  work; retention queries the actual database count inside its transaction.
+  Incidental flushes retain this work until retention completes, while completed
+  radios cannot block unrelated later batches. Repeated canonical saves use last-pending
   upsert semantics, count one identity, and retain the twenty-save-call batch
   boundary. The one-second timer, retention threshold (>1100 then keep 1000),
   transaction ownership, commit/cancellation protocol and reporter are unchanged.
 - Only the existing real after-commit callback clears the original pending
-  batch, publishes retention counts and increments the RX-initiated-save count.
+  batch, clears completed retention work and increments the RX-initiated-save count.
   Rejection, rollback or precommit cancellation retains the batch. A failed
   timer reports once and does not spin. A failed close leaves the store open.
   Generic writes that incidentally flush pending RX entries roll back their
-  own changes if the RX guard rejects.
+  own changes if the RX guard rejects. Enrichment checks once before a batch
+  (via rxRows) and once after, not per updated row.
 
 This is not a universal SQL constraint: direct DAO/raw external writers may
 still introduce noncanonical spellings. Repository operations detect them when
@@ -81,13 +85,18 @@ identity ledger, schema allocation or retained-resource lock is changed.
   writer commits an alias after the first queued its row; flush revalidation
   refuses and preserves both payloads. Normal canonical behavior is checked
   separately from alias rejection.
+- Completed-radio isolation, retention after incidental flush, and final-batch
+  enrichment validation that rolls back a trigger-introduced alias.
 
-All twelve controls were positively discovered and passed in hosted run
+The original twelve controls were positively discovered and passed in hosted run
 <https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42683034340>
 at exact candidate `6ec2b5fdf675a4476b5a5c98b016acd893f95fb6`:
 `:core:data:testDebugUnitTest` discovered/passed 645/645, failed/skipped 0/0.
 The workflow's declared preflight, scaffold run and inspect all passed.
-Independent focused source reviews found no significant findings.
+Independent focused source reviews found no significant findings. Subsequent
+server review identified stale-radio blocking and avoidable full-row/per-row
+scans; these were corrected with outstanding-work tracking and batch validation.
+Three added controls require fresh final-head hosted evidence.
 No local Gradle, native SQLite/Robolectric, Android or device test was run.
 The retained local hard-resource owner remains unresolved. After Actions recovered,
 the original exact candidate was dispatched once as run `42678219202`, then

@@ -1,7 +1,13 @@
 // PortedFrom: MC1/State/OnboardingState.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.feature.onboarding
 
+import com.meshcoreone.android.core.contracts.domain.Generation
 import com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt
+import com.meshcoreone.android.core.contracts.domain.ProcessEpoch
+import com.meshcoreone.android.core.contracts.domain.RadioId
+import com.meshcoreone.android.core.contracts.domain.SessionToken
+import java.util.UUID
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -10,7 +16,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 
 enum class OnboardingStep(val rawValue: String) {
@@ -23,9 +28,17 @@ sealed interface OnboardingCompletionReceipt {
     data object Restored : OnboardingCompletionReceipt
 }
 
+sealed interface OnboardingCompletionProducer {
+    data class Preset(val originalToken: SessionToken) : OnboardingCompletionProducer
+    data object NoDevice : OnboardingCompletionProducer
+}
+
 class OnboardingCompletionPublication internal constructor(
     val receipt: OnboardingCompletionReceipt,
     val revision: Long,
+    /** Null is not evidence of NoDevice; it covers restored or unattributed preset completions. */
+    val producer: OnboardingCompletionProducer?,
+    val attemptId: UUID?,
 )
 
 /** A finalizer may have committed; reconcile its original ID or acknowledge an explicit reset before replacing it. */
@@ -104,7 +117,10 @@ class OnboardingState(private val store: OnboardingFlagStore) {
     private val unsettled = MutableStateFlow(false)
     val unsettledCompletionFlow: StateFlow<Boolean> = unsettled.asStateFlow()
     private data class UncertainCompletion(
-        val attempt: OnboardingCompletionAttempt, val receipt: OnboardingCompletionReceipt, val revision: Long,
+        val attempt: OnboardingCompletionAttempt,
+        val receipt: OnboardingCompletionReceipt,
+        val revision: Long,
+        val producer: OnboardingCompletionProducer,
     )
     private var uncertain: UncertainCompletion? = null
     private var reconcilingAttempt: OnboardingCompletionAttempt? = null
@@ -124,7 +140,9 @@ class OnboardingState(private val store: OnboardingFlagStore) {
     private val completed = MutableStateFlow(store.getBoolean(KEY_HAS_COMPLETED))
     private val path = MutableStateFlow<List<OnboardingStep>>(emptyList())
     private val publication = MutableStateFlow(
-        if (completed.value) OnboardingCompletionPublication(OnboardingCompletionReceipt.Restored, completionRevision) else null,
+        if (completed.value) {
+            OnboardingCompletionPublication(OnboardingCompletionReceipt.Restored, completionRevision, null, null)
+        } else null,
     )
     val completionReceipt: OnboardingCompletionReceipt? get() = publication.value?.receipt
     val hasUnsettledCompletion: Boolean get() = unsettled.value
@@ -144,7 +162,7 @@ class OnboardingState(private val store: OnboardingFlagStore) {
                 invalidateCompletion()
                 store.setBoolean(KEY_HAS_COMPLETED, value)
                 publication.value = if (value) {
-                    OnboardingCompletionPublication(OnboardingCompletionReceipt.Restored, completionRevision)
+                    OnboardingCompletionPublication(OnboardingCompletionReceipt.Restored, completionRevision, null, null)
                 } else null
                 completed.value = value
                 resetRequired = false
@@ -175,6 +193,7 @@ class OnboardingState(private val store: OnboardingFlagStore) {
         seal: (OnboardingCompletionAttempt) -> Boolean,
     ) {
         val attempt = OnboardingCompletionAttempt()
+        val producer = producerFor(receipt)
         var published = false
         val revision = synchronized(completionLock) {
             check(!retired) { "Onboarding flow was retired" }
@@ -202,13 +221,14 @@ class OnboardingState(private val store: OnboardingFlagStore) {
                     if (pendingAttempt === attempt) {
                         if (unknown) {
                             resetRequired = true
-                            uncertain = UncertainCompletion(attempt, receipt, revision)
+                            uncertain = UncertainCompletion(attempt, receipt, revision, producer)
                         } else pendingAttempt = null
                         if (result.isSuccess) {
                             completed.value = true
                             if (completionRevision == revision && !retired && !resetRequired) {
                                 published = true
-                                publication.value = OnboardingCompletionPublication(receipt, revision)
+                                publication.value =
+                                    OnboardingCompletionPublication(receipt, revision, producer, attempt.id)
                             }
                         }
                         refreshReconciliationReady()
@@ -274,7 +294,9 @@ class OnboardingState(private val store: OnboardingFlagStore) {
                         resolved = committed
                         if (committed) {
                             completed.value = true
-                            publication.value = OnboardingCompletionPublication(original.receipt, original.revision)
+                            publication.value = OnboardingCompletionPublication(
+                                original.receipt, original.revision, original.producer, original.attempt.id,
+                            )
                         }
                         setSettlingAttempt(null)
                     }
@@ -311,6 +333,21 @@ class OnboardingState(private val store: OnboardingFlagStore) {
         !retired && !resetRequired && settlingResets == 0 && settlingAttempt == null && uncertain == null &&
             value.revision == completionRevision && publication.value === value && completed.value &&
             store.getBoolean(KEY_HAS_COMPLETED)
+
+    private fun producerFor(receipt: OnboardingCompletionReceipt): OnboardingCompletionProducer =
+        when (receipt) {
+            is OnboardingCompletionReceipt.Preset -> {
+                val target = requireNotNull(receipt.target) {
+                    "Preset completion requires its original radio session"
+                }
+                OnboardingCompletionProducer.Preset(
+                    SessionToken(ProcessEpoch(target.epoch), Generation(target.generation), RadioId(target.radioId)),
+                )
+            }
+            OnboardingCompletionReceipt.WithoutDevice -> OnboardingCompletionProducer.NoDevice
+            OnboardingCompletionReceipt.Restored ->
+                throw IllegalArgumentException("Restored completion cannot start a new onboarding attempt")
+        }
 
     private fun nextCompletionRevision(): Long {
         completionRevision = Math.incrementExact(completionRevision)

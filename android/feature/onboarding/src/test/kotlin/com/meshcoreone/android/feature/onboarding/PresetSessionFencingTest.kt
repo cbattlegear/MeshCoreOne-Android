@@ -1,29 +1,37 @@
 // AndroidOnly: WP-305 Fence asynchronous preset results and completion publication to their initiating target.
 package com.meshcoreone.android.feature.onboarding
 
+import com.meshcoreone.android.core.contracts.domain.Generation
+import com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt
+import com.meshcoreone.android.core.contracts.domain.ProcessEpoch
+import com.meshcoreone.android.core.contracts.domain.RadioId
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings as O
 import com.meshcoreone.android.core.ui.UiText
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.CoroutineStart
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.take
-import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 import org.junit.After
 import org.junit.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertTrue
+import kotlin.test.assertFailsWith
+import kotlin.test.assertNotEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertSame
-import kotlin.test.assertFailsWith
+import kotlin.test.assertTrue
 
 class PresetSessionFencingTest {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
@@ -131,10 +139,135 @@ class PresetSessionFencingTest {
         assertNull(fresh.completionReceipt)
         fresh.completeOnboarding()
         assertEquals(OnboardingCompletionReceipt.WithoutDevice, fresh.completionReceipt)
+        val noDevicePublication = checkNotNull(fresh.completionPublication.value)
+        assertEquals(OnboardingCompletionProducer.NoDevice, noDevicePublication.producer)
+        assertNotNull(noDevicePublication.attemptId)
+
         val restored = OnboardingState(InMemoryOnboardingFlagStore(mapOf(OnboardingState.KEY_HAS_COMPLETED to true)))
         assertEquals(OnboardingCompletionReceipt.Restored, restored.completionReceipt)
+        assertNull(restored.completionPublication.value?.producer)
+        assertNull(restored.completionPublication.value?.attemptId)
+
         val missingTarget = OnboardingCompletionReceipt.Preset(option.id, null)
         assertFalse(missingTarget == fresh.completionReceipt)
+        val unattributed = OnboardingState(InMemoryOnboardingFlagStore())
+        assertFailsWith<IllegalArgumentException> {
+            unattributed.completeOnboardingWithReceipt(missingTarget, {}) { it.trySeal() }
+        }
+        assertFalse(unattributed.hasCompletedOnboarding)
+        assertNull(unattributed.completionPublication.value)
+        assertFailsWith<IllegalArgumentException> {
+            unattributed.completeOnboardingWithReceipt(OnboardingCompletionReceipt.Restored, {}) { it.trySeal() }
+        }
+    }
+
+    @Test fun retainedPublicationKeepsOriginalSessionAndRejectsRetiredAttempt() = runBlocking {
+        fun token(target: OnboardingPresetTarget) =
+            SessionToken(ProcessEpoch(target.epoch), Generation(target.generation), RadioId(target.radioId))
+
+        val state = OnboardingState(InMemoryOnboardingFlagStore())
+        val original = OnboardingCompletionReceipt.Preset(option.id, first)
+        state.completeOnboardingWithReceipt(original, {}) { it.trySeal() }
+        val publication = checkNotNull(state.completionPublication.value)
+        val originalSession = token(first)
+        assertEquals(OnboardingCompletionProducer.Preset(originalSession), publication.producer)
+        val originalAttemptId = checkNotNull(publication.attemptId)
+
+        val recreatedDelivery = state.completionPublication.value
+        assertSame(publication, recreatedDelivery)
+        val successorSession = token(first.copy(generation = 2))
+        assertNotEquals(OnboardingCompletionProducer.Preset(successorSession), publication.producer)
+
+        state.resetOnboarding()
+        var staleNavigationCommits = 0
+        assertFalse(state.commitCompletion(publication) { staleNavigationCommits++; true })
+        assertEquals(0, staleNavigationCommits)
+
+        state.completeOnboardingWithReceipt(
+            OnboardingCompletionReceipt.Preset(option.id, first.copy(generation = 2)), {},
+        ) { it.trySeal() }
+        val successorPublication = checkNotNull(state.completionPublication.value)
+        assertEquals(OnboardingCompletionProducer.Preset(successorSession), successorPublication.producer)
+        assertNotEquals(originalAttemptId, successorPublication.attemptId)
+        assertFalse(state.commitCompletion(publication) { staleNavigationCommits++; true })
+        assertEquals(0, staleNavigationCommits)
+    }
+
+    @Test fun cancelledCompletionDoesNotPublishProducerOrAttempt() = runBlocking {
+        val flags = object : OnboardingFlagStore {
+            override fun getBoolean(key: String) = false
+            override fun setBoolean(key: String, value: Boolean) = Unit
+            override suspend fun persistBoolean(
+                key: String,
+                value: Boolean,
+                requireCurrent: () -> Unit,
+                seal: (OnboardingCompletionAttempt) -> Boolean,
+                attempt: OnboardingCompletionAttempt,
+            ) {
+                throw CancellationException("completion cancelled before persistence")
+            }
+        }
+        val state = OnboardingState(flags)
+
+        assertFailsWith<CancellationException> {
+            state.completeOnboardingWithReceipt(
+                OnboardingCompletionReceipt.Preset(option.id, first), {},
+            ) { it.trySeal() }
+        }
+
+        assertFalse(state.hasCompletedOnboarding)
+        assertNull(state.completionPublication.value)
+        assertFalse(state.hasUnsettledCompletion)
+    }
+
+    @Test fun readbackReconcilesTheOriginalProducerAndAttempt() = runBlocking {
+        class UnknownResult : IllegalStateException(), OnboardingCompletionOutcomeUnknown
+
+        var storedValue = false
+        var originalAttemptId: UUID? = null
+        val flags = object : OnboardingFlagStore {
+            override fun getBoolean(key: String) = storedValue
+            override fun setBoolean(key: String, value: Boolean) { storedValue = value }
+            override suspend fun persistBoolean(
+                key: String,
+                value: Boolean,
+                requireCurrent: () -> Unit,
+                seal: (OnboardingCompletionAttempt) -> Boolean,
+                attempt: OnboardingCompletionAttempt,
+            ) {
+                requireCurrent()
+                check(seal(attempt))
+                originalAttemptId = attempt.id
+                storedValue = value
+                throw UnknownResult()
+            }
+            override suspend fun reconcileCompletion(
+                attempt: OnboardingCompletionAttempt,
+                requireCurrent: () -> Unit,
+                onFinished: (Result<Boolean>) -> Unit,
+            ) {
+                requireCurrent()
+                onFinished(Result.success(storedValue))
+            }
+        }
+        val state = OnboardingState(flags)
+        val receipt = OnboardingCompletionReceipt.Preset(option.id, first)
+
+        assertFailsWith<UnknownResult> {
+            state.completeOnboardingWithReceipt(receipt, {}) { it.trySeal() }
+        }
+        assertTrue(state.canReconcileCompletion())
+        assertTrue(state.reconcileCompletion())
+
+        val publication = checkNotNull(state.completionPublication.value)
+        assertEquals(receipt, publication.receipt)
+        assertEquals(
+            OnboardingCompletionProducer.Preset(
+                SessionToken(ProcessEpoch(first.epoch), Generation(first.generation), RadioId(first.radioId)),
+            ),
+            publication.producer,
+        )
+        assertEquals(originalAttemptId, publication.attemptId)
     }
 
     @Test fun disconnectedApplyCannotCompleteAndConnectedRetryAppliesAgain() {

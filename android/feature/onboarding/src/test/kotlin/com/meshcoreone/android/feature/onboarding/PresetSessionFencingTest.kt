@@ -159,6 +159,7 @@ class PresetSessionFencingTest {
         assertFailsWith<IllegalArgumentException> {
             unattributed.completeOnboardingWithReceipt(OnboardingCompletionReceipt.Restored, {}) { it.trySeal() }
         }
+        Unit
     }
 
     @Test fun retainedPublicationKeepsOriginalSessionAndRejectsRetiredAttempt() = runBlocking {

@@ -57,6 +57,7 @@ internal class RepositoryTransaction(
     fun complete() { committed.forEach { it() } }
 
     suspend fun rxRows(radioId: RadioId): List<RxLogEntryEntity> {
+        requireCanonicalRxKeys(radioId)
         val rows = database.rxLogs().newest(radioId.value, -1).associateByTo(LinkedHashMap()) { it.id }
         for ((key, row) in pendingRx) if (key.radioId == radioId) rows[row.id] = row
         return rows.values.toList()
@@ -64,7 +65,9 @@ internal class RepositoryTransaction(
 
     suspend fun updateRx(row: RxLogEntryEntity) {
         val key = EntityKey(RadioId(row.radioId), row.id)
+        requireCanonicalRxKeys(key.radioId)
         if (key in pendingRx) pendingRx[key] = row else database.rxLogs().upsert(row)
+        requireCanonicalRxKeys(key.radioId)
     }
 }
 
@@ -110,7 +113,7 @@ internal class RoomRepositoryContext(
                 },
             ) {
                 val value = transaction.block()
-                if (transaction.saves) database.rxLogs().upsert(transaction.pendingRx.values.toList())
+                if (transaction.saves) transaction.persistPendingRx()
                 value
             }
         }
@@ -136,7 +139,7 @@ internal class RoomRepositoryContext(
             ) {
                 if (!transaction.guard()) return@committedTransaction unchanged
                 val value = transaction.block()
-                if (transaction.saves) database.rxLogs().upsert(transaction.pendingRx.values.toList())
+                if (transaction.saves) transaction.persistPendingRx()
                 value
             }
         }
@@ -158,10 +161,13 @@ internal class RoomRepositoryContext(
         mutex.withLock {
             ensureOpen()
             val radio = RadioId(row.radioId)
-            val count = rxCounts[radio] ?: database.withTransaction {
-                RepositoryTransaction(database, clock, pendingRx).rxRows(radio).size.toLong()
+            val nextCount = database.withTransaction {
+                // Re-read under the DB transaction: another context may have changed disk rows,
+                // and a repeated ordinary save replaces one pending identity rather than adding one.
+                val rows = RepositoryTransaction(database, clock, pendingRx).rxRows(radio)
+                val count = rows.size.toLong()
+                if (rows.any { it.id == row.id }) count else checkedIncrement(count)
             }
-            val nextCount = checkedIncrement(count)
             val nextDirty = checkedIncrement(rxInsertsSinceFlush)
             rxCounts[radio] = nextCount
             pendingRx[EntityKey(radio, row.id)] = row
@@ -252,7 +258,9 @@ internal class RoomRepositoryContext(
                 rxCounts.putAll(pruned)
             },
         ) {
-            database.rxLogs().upsert(pendingRx.values.toList())
+            val transaction = RepositoryTransaction(database, clock, pendingRx)
+            for (radio in rxCounts.keys) transaction.requireCanonicalRxKeys(radio)
+            transaction.persistPendingRx()
             for (radio in rxCounts.keys) {
                 val count = database.rxLogs().count(radio.value)
                 if (count > checkedAdd(RxLogRetention.KEEP_COUNT, RxLogRetention.PRUNE_THRESHOLD)) {
@@ -263,6 +271,7 @@ internal class RoomRepositoryContext(
                 } else {
                     pruned[radio] = count
                 }
+                transaction.requireCanonicalRxKeys(radio)
             }
         }
     }

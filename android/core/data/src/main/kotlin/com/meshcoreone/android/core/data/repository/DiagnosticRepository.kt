@@ -142,6 +142,7 @@ internal class DiagnosticRepository(private val context: RoomRepositoryContext) 
     }
 
     override suspend fun clearRxLogEntries(radioId: RadioId) = context.write("clearRxLogEntries") {
+        requireCanonicalRxKeys(radioId)
         database.rxLogs().clearRadio(radioId.value)
         pendingRx.entries.removeAll { it.key.radioId == radioId }
         afterCommit { context.setRxCount(radioId, 0) }

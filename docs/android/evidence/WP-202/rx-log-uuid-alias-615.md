@@ -2,7 +2,7 @@
 
 Repository: `cbattlegear/MeshCoreOne-Android`.
 Base: `184d855d0cd7a19d6d6f60f51c4c1efd29cead13`.
-Reconciled main: `4a3cbd09adfe010202299a94c97ae8e5a3a1a82d`.
+Reconciled main: `551677c67e3d3ced281e2586f7c080fa3d2ca18f`.
 Swift reference: `db14559b39d32322b06477c6ae676112f583db50`.
 Issue: <https://github.com/cbattlegear/MeshCoreOne-Android/issues/615>.
 Acceptance scope: bounded repairs to `WP-202-behavior` and
@@ -82,14 +82,22 @@ identity ledger, schema allocation or retained-resource lock is changed.
   refuses and preserves both payloads. Normal canonical behavior is checked
   separately from alias rejection.
 
-These are source controls, **not executed or discovered test evidence**.
+All twelve controls were positively discovered and passed in hosted run
+<https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42683034340>
+at exact candidate `6ec2b5fdf675a4476b5a5c98b016acd893f95fb6`:
+`:core:data:testDebugUnitTest` discovered/passed 645/645, failed/skipped 0/0.
+The workflow's declared preflight, scaffold run and inspect all passed.
+Independent focused source reviews found no significant findings.
 No local Gradle, native SQLite/Robolectric, Android or device test was run.
 The retained local hard-resource owner remains unresolved. After Actions recovered,
 the original exact candidate was dispatched once as run `42678219202`, then
 cancelled when main advanced; that superseded run is not final-candidate evidence.
 The candidate was reconciled with merged #532, preserving device-authority writes,
 the restore transaction completion callback, and the unchanged store facade.
-Final hosted verification is separate and no passing result is claimed here.
+The reconciled head additionally preserves merged #579 notification work
+unchanged. Its final hosted verification is separate: the earlier passing result
+does not transfer to the changed head. The PR's exact-head checks and hosted log
+are authoritative; no second CI-result bundle is committed or retained.
 Authorized verification must use the existing declared
 software lane (`ci.py preflight`, `ci.py run --stage scaffold`, `ci.py inspect`)
 with actual nonzero `:core:data` test discovery and exact-candidate results.

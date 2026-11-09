@@ -196,6 +196,33 @@ NOTIFICATION_ACTION_RECOVERY_COPY_CAPABILITY = {
 }
 
 
+ONBOARDING_PRESET_FIXTURE_CAPABILITY = {
+    "id": "reviewed-support-onboarding-preset-fixture",
+    "work_packages": ["WP-305"],
+    "path_rules": [
+        "android/ui-tests/src/test/kotlin/com/meshcoreone/android/uitests/OnboardingRegionPresetComposeTest.kt",
+    ],
+    "operations": ["add-or-update-related-test"],
+    "invariants": [
+        "only-WP305-exact-existing-onboarding-region-preset-Compose-regression-fixture-no-ui-test-wildcards",
+        "direct-PR625-producer-receipt-contract-repair-ready-radio-currentTarget-not-unrelated-test-work",
+        "retain-WP502-primary-provenance-and-fcebfd013494e364676626564975553e6d607af3-one-path-six-line-handoff",
+        "preserve-all-existing-assertions-test-cases-null-target-controls-and-apply-completion-persistence-behavior-no-test-deletion",
+        "preserve-pinned-db14559b39d32322b06477c6ae676112f583db50-no-production-build-resource-or-manifest-authority",
+        "trusted-main-landing-and-fresh-legitimate-same-owner-admission-resolved-overlap-before-product-edit",
+        "immutable-authorization-historical-receipts-no-impersonation-release-recreate-runtime-or-private-ledger-edits",
+        "held-nine-file-draft-PR495-no-merge-old-capability-branch-and-retained-Gradle-native-execution-lock-unchanged",
+    ],
+    "validation": [
+        "exact-WP305-path-operation-positive-other-WP-neighbor-production-operation-and-traversal-denials",
+        "complete-predecessor-policy-object-and-raw-Git-blob-unchanged-including-notification-rule-and-protected-gates",
+        "immutable-staging-rejects-candidate-self-admission-and-test-deletion-preserves-WP502-primary-owner",
+        "future-exact-PR625-candidate-hosted-onboarding-App-and-ui-tests-nonzero-discovery-no-weakened-assertions",
+        "policy-fixtures-are-not-Android-compilation-Compose-execution-or-feature-acceptance-no-new-merge-gate",
+    ],
+}
+
+
 def routine_support_predecessor(policy):
     """Project reviewed additive capability extensions back to the historical policy."""
     if not isinstance(policy, dict):
@@ -233,6 +260,11 @@ def routine_support_predecessor(policy):
             and rule != NOTIFICATION_ACTION_RECOVERY_COPY_CAPABILITY
         ):
             raise PortError("Notification action recovery copy changed outside the exact reviewed amendment")
+        if (
+            rule["id"] == ONBOARDING_PRESET_FIXTURE_CAPABILITY["id"]
+            and rule != ONBOARDING_PRESET_FIXTURE_CAPABILITY
+        ):
+            raise PortError("Onboarding preset fixture changed outside the exact reviewed amendment")
         if set(rule) not in (
             {"id", "path_rules", "operations", "invariants", "validation"},
             {"id", "path_rules", "operations", "invariants", "validation", "work_packages"},

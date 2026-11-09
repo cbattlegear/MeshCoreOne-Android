@@ -15,6 +15,7 @@ from controller.capabilities import CapabilityEngine
 from controller.errors import PortError
 from controller.scope_amendment import (
     SIMULATOR_PREFERENCE_RECOVERY_COPY_CAPABILITY,
+    ONBOARDING_PRESET_FIXTURE_CAPABILITY,
     routine_support_predecessor,
 )
 
@@ -96,6 +97,8 @@ class SimulatorRecoveryCopyCapabilityTests(unittest.TestCase):
         raw = (REPO / "docs/android/automation-policy.json").read_text(encoding="utf-8")
         full_current = json.loads(raw)
         current = copy.deepcopy(full_current)
+        self.assertEqual(current["reservation_policy"]["capabilities"].pop(),
+                         ONBOARDING_PRESET_FIXTURE_CAPABILITY)
         action = current["reservation_policy"]["capabilities"].pop()
         self.assertEqual(action["id"], "reviewed-support-notification-action-recovery-copy")
         self.assertEqual(current["reservation_policy"]["capabilities"].pop(), self.rule)
@@ -144,7 +147,8 @@ class SimulatorRecoveryCopyCapabilityTests(unittest.TestCase):
             if mode == "duplicate":
                 rules.append(copy.deepcopy(self.rule))
             else:
-                rules.insert(0, rules.pop())
+                index = next(i for i, rule in enumerate(rules) if rule["id"] == self.rule["id"])
+                rules.insert(0, rules.pop(index))
             with self.subTest(mode=mode), self.assertRaises(PortError):
                 routine_support_predecessor(changed)
 

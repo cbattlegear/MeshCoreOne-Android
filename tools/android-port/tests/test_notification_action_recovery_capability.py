@@ -14,6 +14,7 @@ from controller.capabilities import CapabilityEngine
 from controller.errors import PortError
 from controller.scope_amendment import (
     NOTIFICATION_ACTION_RECOVERY_COPY_CAPABILITY,
+    ONBOARDING_PRESET_FIXTURE_CAPABILITY,
     routine_support_predecessor,
 )
 
@@ -61,7 +62,8 @@ class NotificationActionRecoveryCapabilityTests(unittest.TestCase):
         self.assertEqual(self.rule["operations"], [OPERATION])
         self.assertEqual(self.rule["work_packages"], ["WP-215"])
         self.assertEqual(self.rule["keys"], KEYS)
-        self.assertEqual(self.policy["reservation_policy"]["capabilities"][-1], self.rule)
+        self.assertEqual(next(rule for rule in self.policy["reservation_policy"]["capabilities"]
+                              if rule["id"] == self.rule["id"]), self.rule)
         self.assertEqual(self.engine.admit("WP-215", [], PATH, OPERATION).capability_id, self.rule["id"])
         trusted = json.loads(subprocess.check_output(
             ["git", "-C", str(REPO), "show", f"{MAIN}:docs/android/automation-policy.json"]
@@ -95,6 +97,8 @@ class NotificationActionRecoveryCapabilityTests(unittest.TestCase):
         original = json.loads(original_raw)
         raw = (REPO / "docs/android/automation-policy.json").read_text(encoding="utf-8")
         current = json.loads(raw)
+        self.assertEqual(current["reservation_policy"]["capabilities"].pop(),
+                         ONBOARDING_PRESET_FIXTURE_CAPABILITY)
         self.assertEqual(current["reservation_policy"]["capabilities"].pop(), self.rule)
         self.assertEqual(current, original)
         self.assertEqual(routine_support_predecessor(json.loads(raw)), routine_support_predecessor(original))
@@ -120,7 +124,9 @@ class NotificationActionRecoveryCapabilityTests(unittest.TestCase):
                              ("work_packages", ["WP-215", "WP-401"]), ("keys", KEYS[:-1]),
                              ("invariants", self.rule["invariants"][:-1]), ("validation", [])):
             changed = copy.deepcopy(self.policy)
-            changed["reservation_policy"]["capabilities"][-1][field] = value
+            selected = next(rule for rule in changed["reservation_policy"]["capabilities"]
+                            if rule["id"] == self.rule["id"])
+            selected[field] = value
             with self.subTest(field=field), self.assertRaises(PortError):
                 routine_support_predecessor(changed)
         for duplicate in (True, False):
@@ -129,7 +135,8 @@ class NotificationActionRecoveryCapabilityTests(unittest.TestCase):
             if duplicate:
                 rules.append(copy.deepcopy(self.rule))
             else:
-                rules.insert(0, rules.pop())
+                index = next(i for i, rule in enumerate(rules) if rule["id"] == self.rule["id"])
+                rules.insert(0, rules.pop(index))
             with self.assertRaises(PortError):
                 routine_support_predecessor(changed)
 

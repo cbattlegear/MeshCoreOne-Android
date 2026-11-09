@@ -11,6 +11,7 @@ from controller.capabilities import CapabilityEngine
 from controller.errors import PortError
 from controller.scope_amendment import (
     CONTACT_IMPORT_LOCALIZATION_CAPABILITY,
+    ONBOARDING_PRESET_FIXTURE_CAPABILITY,
     completion_policy_predecessor, routine_support_predecessor,
 )
 
@@ -104,6 +105,8 @@ class ContactImportLocalizationCapabilityTests(unittest.TestCase):
         full_current = json.loads((REPO / "docs/android/automation-policy.json").read_text(encoding="utf-8"))
         untouched = copy.deepcopy(full_current)
         current = copy.deepcopy(full_current)
+        self.assertEqual(current["reservation_policy"]["capabilities"].pop(),
+                         ONBOARDING_PRESET_FIXTURE_CAPABILITY)
         action = current["reservation_policy"]["capabilities"].pop()
         self.assertEqual(action["id"], "reviewed-support-notification-action-recovery-copy")
         simulator = current["reservation_policy"]["capabilities"].pop()
@@ -151,7 +154,8 @@ class ContactImportLocalizationCapabilityTests(unittest.TestCase):
             if mode == "duplicate":
                 rules.append(copy.deepcopy(self.rule))
             else:
-                rules.insert(0, rules.pop())
+                index = next(i for i, rule in enumerate(rules) if rule["id"] == self.rule["id"])
+                rules.insert(0, rules.pop(index))
             with self.subTest(mode=mode), self.assertRaises(PortError):
                 routine_support_predecessor(changed)
 

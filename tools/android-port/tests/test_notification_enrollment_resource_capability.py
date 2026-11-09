@@ -11,6 +11,7 @@ from controller.capabilities import CapabilityEngine
 from controller.errors import PortError
 from controller.scope_amendment import (
     NOTIFICATION_ENROLLMENT_COPY_CAPABILITY,
+    ONBOARDING_PRESET_FIXTURE_CAPABILITY,
     routine_support_predecessor,
 )
 
@@ -95,6 +96,8 @@ class NotificationEnrollmentResourceCapabilityTests(unittest.TestCase):
             ["git", "-C", str(REPO), "show", f"{BASE}:docs/android/automation-policy.json"],
         ))
         current = json.loads((REPO / "docs/android/automation-policy.json").read_text(encoding="utf-8"))
+        self.assertEqual(current["reservation_policy"]["capabilities"].pop(),
+                         ONBOARDING_PRESET_FIXTURE_CAPABILITY)
         action = current["reservation_policy"]["capabilities"].pop()
         self.assertEqual(action["id"], "reviewed-support-notification-action-recovery-copy")
         extension = current["reservation_policy"]["capabilities"].pop()
@@ -135,7 +138,8 @@ class NotificationEnrollmentResourceCapabilityTests(unittest.TestCase):
             if mode == "duplicate":
                 rules.append(copy.deepcopy(self.rule))
             else:
-                rules.insert(0, rules.pop())
+                index = next(i for i, rule in enumerate(rules) if rule["id"] == self.rule["id"])
+                rules.insert(0, rules.pop(index))
             with self.subTest(mode=mode), self.assertRaises(PortError):
                 routine_support_predecessor(changed)
 

@@ -53,6 +53,32 @@ class OriginalMessageCasesTest {
             assertEquals(0, f.session.core.generation().pending.size)
             f.session.stop()
         },
+        original("AutoMessageFetchTests", "a newer messagesWaiting notification invalidates a retained empty poll") {
+            val f = fixture()
+            start(f)
+            val caller = checkedRequest { f.session.getMessage() }
+            runCurrent()
+            val poll = assertNotNull(f.session.core.generation().poll)
+            caller.cancel()
+            runCurrent()
+            assertFailsWith<CancellationException> { caller.await() }
+
+            f.transport.receive(raw(0x0a))
+            runCurrent()
+            assertTrue(poll.isCompleted)
+            assertSame(poll, f.session.core.generation().poll)
+
+            f.session.startAutoMessageFetching()
+            f.transport.receive(raw(0x83))
+            runCurrent()
+            assertEquals(3, f.transport.sent.size)
+
+            f.transport.receive(raw(0x0a))
+            runCurrent()
+            assertEquals(3, f.transport.sent.size)
+            f.session.stopAutoMessageFetching()
+            f.session.stop()
+        },
         original("AutoMessageFetchTests", "manual getMessage shares in-flight auto-fetch poll") {
             val f = fixture()
             start(f)

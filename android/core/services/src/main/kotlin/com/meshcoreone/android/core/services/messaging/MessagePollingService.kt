@@ -10,6 +10,8 @@ import com.meshcoreone.android.core.protocol.session.MeshCoreSessionProtocol
 import com.meshcoreone.android.core.protocol.session.SessionClock
 import com.meshcoreone.android.core.protocol.session.SystemSessionClock
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
+import java.lang.ref.ReferenceQueue
+import java.lang.ref.WeakReference
 import java.time.Duration
 import java.util.UUID
 import kotlin.coroutines.AbstractCoroutineContextElement
@@ -49,6 +51,7 @@ class MessagePollingService(
     private val pending = ArrayDeque<Delivery>()
     private val parked = ArrayDeque<Delivery>()
     private val observedDuringPoll = ArrayDeque<Delivery>()
+    private val liveMessageOccurrences = WeakIdentitySet()
     private val expectedEchoes = mutableMapOf<MeshEvent, Long>()
     private val expectedChannelEchoes = mutableMapOf<ChannelMessage, ArrayDeque<Delivery>>()
     private var contactHandler: (suspend (ContactMessage, ContactDTO?, DeliveryContext) -> Unit)? = null
@@ -136,6 +139,7 @@ class MessagePollingService(
                         observedDuringPoll.addLast(delivery)
                         true
                     } else {
+                        messageOccurrence(event)?.let(liveMessageOccurrences::add)
                         pending.addLast(delivery)
                         false
                     }
@@ -289,6 +293,12 @@ class MessagePollingService(
                         (deliveryFailure ?: residualFailure)?.let { throw it }
                         return count
                     }
+                }
+                if (synchronized(lock) {
+                    messageOccurrence(event)?.let(liveMessageOccurrences::remove) == true
+                }) {
+                    count = Math.incrementExact(count)
+                    continue
                 }
                 synchronized(lock) {
                     var delivery = newDelivery(event, DeliveryContext.InitialSync(anchor))
@@ -542,12 +552,58 @@ class MessagePollingService(
             synchronized(lock) {
                 polling = null; listener = null; monitorActive = false
                 expectedEchoes.clear(); expectedChannelEchoes.clear()
+                liveMessageOccurrences.clear()
             }
             clearMessageHandlers()
             ownership.job.cancel()
             if (work.none { it.second?.closing?.isCompleted == true }) ownership.job.join()
             closeReport().also { receipt.complete(it) }
         }
+    }
+}
+
+private fun messageOccurrence(event: MeshEvent): Any? = when (event) {
+    is MeshEvent.ContactMessageReceived -> event.message
+    is MeshEvent.ChannelMessageReceived -> event.message
+    else -> null
+}
+
+// Weak identity keys preserve exact occurrences without retaining equal messages or their payloads.
+private class WeakIdentitySet {
+    private val queue = ReferenceQueue<Any>()
+    private val values = HashSet<WeakIdentityReference>()
+
+    fun add(value: Any) {
+        discardCollected()
+        values.add(WeakIdentityReference(value, queue))
+    }
+
+    fun remove(value: Any): Boolean {
+        discardCollected()
+        return values.remove(WeakIdentityReference(value))
+    }
+
+    fun clear() {
+        values.clear()
+        while (queue.poll() != null) Unit
+    }
+
+    private fun discardCollected() {
+        while (true) {
+            val collected = queue.poll() as? WeakIdentityReference ?: return
+            values.remove(collected)
+        }
+    }
+
+    private class WeakIdentityReference(value: Any, queue: ReferenceQueue<Any>? = null) :
+        WeakReference<Any>(value, queue) {
+        private val identityHash = System.identityHashCode(value)
+
+        override fun hashCode(): Int = identityHash
+
+        override fun equals(other: Any?): Boolean =
+            this === other || other is WeakIdentityReference &&
+                get()?.let { it === other.get() } == true
     }
 }
 

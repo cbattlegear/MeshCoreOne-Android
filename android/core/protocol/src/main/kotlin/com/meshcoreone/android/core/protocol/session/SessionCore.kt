@@ -66,6 +66,9 @@ internal class SessionGeneration(
     var capabilities: DeviceCapabilities? = null
     var contactProgress: ContactStreamProgress? = null
     var poll: Deferred<MessageResult>? = null
+    // A later queue notification makes an older empty result stale for auto-fetch.
+    var pollMessageWaitingRevision: Long? = null
+    var messageWaitingRevision = 0L
     var autoFetching = false
     var autoRequested = false
     var autoSubscription: EventSubscription? = null
@@ -74,6 +77,8 @@ internal class SessionGeneration(
     var contactRefreshRequested = false
     var contactRefresh: Deferred<Unit>? = null
 }
+
+private data class PollOutcome(val result: MessageResult, val messageWaitingRevision: Long)
 
 internal class SessionCore(
     val transport: MeshTransport,
@@ -462,11 +467,13 @@ internal class SessionCore(
         }
     }
 
-    suspend fun getMessage(timeout: Double?): MessageResult {
-        val generation = generation()
-        val task = synchronized(lock) {
+    suspend fun getMessage(timeout: Double?): MessageResult =
+        pollMessage(generation(), timeout).result
+
+    private suspend fun pollMessage(generation: SessionGeneration, timeout: Double?): PollOutcome {
+        val (task, messageWaitingRevision) = synchronized(lock) {
             requireCurrent(generation)
-            generation.poll ?: generation.scope.async(start = CoroutineStart.LAZY) {
+            val task = generation.poll ?: generation.scope.async(start = CoroutineStart.LAZY) {
                 exchange(generation) {
                     match(PacketBuilder.getMessage(), "message", timeout = timeout, acceptsErrors = true) { event ->
                         when (event) {
@@ -481,16 +488,28 @@ internal class SessionCore(
                 }
             }.also { poll ->
                 generation.poll = poll
+                generation.pollMessageWaitingRevision = generation.messageWaitingRevision
                 poll.invokeOnCompletion { cause ->
-                    if (cause != null) synchronized(lock) { if (generation.poll === poll) generation.poll = null }
+                    if (cause != null) synchronized(lock) {
+                        if (generation.poll === poll) {
+                            generation.poll = null
+                            generation.pollMessageWaitingRevision = null
+                        }
+                    }
                 }
                 poll.start()
             }
+            task to checkNotNull(generation.pollMessageWaitingRevision)
         }
         try {
             val result = task.await()
-            synchronized(lock) { if (generation.poll === task) generation.poll = null }
-            return result
+            synchronized(lock) {
+                if (generation.poll === task) {
+                    generation.poll = null
+                    generation.pollMessageWaitingRevision = null
+                }
+            }
+            return PollOutcome(result, messageWaitingRevision)
         } catch (cancelled: CancellationException) {
             if (currentCoroutineContext().isActive) generation.failure?.let { throw it }
             throw cancelled
@@ -529,13 +548,24 @@ internal class SessionCore(
 
     private fun requestAutoDrain(generation: SessionGeneration): Unit = synchronized(lock) {
         if (!isCurrent(generation) || !generation.autoFetching) return
+        generation.messageWaitingRevision = Math.incrementExact(generation.messageWaitingRevision)
         generation.autoRequested = true
         if (generation.autoDrain != null) return
         val drain = generation.scope.async(start = CoroutineStart.LAZY) {
             while (synchronized(lock) { isCurrent(generation) && generation.autoFetching && generation.autoRequested }) {
                 synchronized(lock) { generation.autoRequested = false }
                 while (synchronized(lock) { isCurrent(generation) && generation.autoFetching }) {
-                    if (getMessage(null) == MessageResult.NoMoreMessages) break
+                    val poll = pollMessage(generation, null)
+                    if (poll.result == MessageResult.NoMoreMessages) {
+                        val staleEmptyPoll = synchronized(lock) {
+                            if (poll.messageWaitingRevision < generation.messageWaitingRevision) {
+                                generation.autoRequested = false
+                                true
+                            } else false
+                        }
+                        if (!staleEmptyPoll) break
+                        continue
+                    }
                     clock.sleepFor(kotlin.time.Duration.parse("100ms"))
                 }
             }

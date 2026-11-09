@@ -115,6 +115,52 @@ class ReviewInterleavingTest {
             assertEquals(listOf<DeliveryContext>(DeliveryContext.Live), contexts); assertTrue(p.waitForPendingHandlers(Duration.ZERO))
             p.close(); h.close()
         },
+        native("pausedAutoFetchDoesNotReplayAContactAlreadyOwnedByTheLiveDelivery") {
+            val h = Harness(this); h.start(); val p = h.poller()
+            var delivered = 0
+            p.setContactMessageHandler { _, _, _ -> delivered++ }
+            p.startAutoFetch(RADIO)
+            h.transport.holdGetReplies = true
+            h.transport.mock.simulateReceive(Bytes.of(ResponseCode.MESSAGES_WAITING.rawValue.toInt()))
+            runCurrent()
+            assertEquals(1, h.sends(CommandCode.GET_MESSAGE).size)
+
+            p.pauseAutoFetch()
+            h.transport.mock.simulateReceive(contactPacket("retained contact"))
+            runCurrent()
+            assertEquals(1, delivered)
+
+            h.transport.holdGetReplies = false
+            val polling = backgroundScope.async { p.pollAllMessages() }
+            runCurrent()
+            assertEquals(1L, polling.await())
+            assertEquals(2, h.sends(CommandCode.GET_MESSAGE).size)
+            assertEquals(1, delivered)
+            p.close(); h.close()
+        },
+        native("pausedAutoFetchDoesNotReplayAChannelAlreadyOwnedByTheLiveDelivery") {
+            val h = Harness(this); h.start(); val p = h.poller()
+            var delivered = 0
+            p.setChannelMessageHandler { _, _, _ -> delivered++ }
+            p.startAutoFetch(RADIO)
+            h.transport.holdGetReplies = true
+            h.transport.mock.simulateReceive(Bytes.of(ResponseCode.MESSAGES_WAITING.rawValue.toInt()))
+            runCurrent()
+            assertEquals(1, h.sends(CommandCode.GET_MESSAGE).size)
+
+            p.pauseAutoFetch()
+            h.transport.mock.simulateReceive(channelPacket())
+            runCurrent()
+            assertEquals(1, delivered)
+
+            h.transport.holdGetReplies = false
+            val polling = backgroundScope.async { p.pollAllMessages() }
+            runCurrent()
+            assertEquals(1L, polling.await())
+            assertEquals(2, h.sends(CommandCode.GET_MESSAGE).size)
+            assertEquals(1, delivered)
+            p.close(); h.close()
+        },
         native("manualOwnershipKeepsNewestPauseAndPreventsResumeFromCompetingOnTheWire") {
             val h = Harness(this); h.start(); var starts = 0
             val actual = h.session
@@ -172,4 +218,8 @@ class ReviewInterleavingTest {
     )
     private fun contactPacket(text: String): Bytes = ByteWriter().appendUInt8(ResponseCode.CONTACT_MESSAGE_RECEIVED.rawValue)
         .append(TARGET.prefix(6)).appendUInt8(0u).appendUInt8(0u).appendUInt32LE(42u).append(Bytes.utf8(text)).toBytes()
+
+    private fun channelPacket(): Bytes = ByteWriter().appendUInt8(ResponseCode.CHANNEL_MESSAGE_RECEIVED.rawValue)
+        .appendUInt8(0u).appendUInt8(0u).appendUInt8(0u).appendUInt32LE(42u)
+        .append(Bytes.utf8("Alice: body")).toBytes()
 }

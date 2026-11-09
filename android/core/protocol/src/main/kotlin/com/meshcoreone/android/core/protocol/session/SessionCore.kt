@@ -481,12 +481,16 @@ internal class SessionCore(
                 }
             }.also { poll ->
                 generation.poll = poll
-                poll.invokeOnCompletion { synchronized(lock) { if (generation.poll === poll) generation.poll = null } }
+                poll.invokeOnCompletion { cause ->
+                    if (cause != null) synchronized(lock) { if (generation.poll === poll) generation.poll = null }
+                }
                 poll.start()
             }
         }
         try {
-            return task.await()
+            val result = task.await()
+            synchronized(lock) { if (generation.poll === task) generation.poll = null }
+            return result
         } catch (cancelled: CancellationException) {
             if (currentCoroutineContext().isActive) generation.failure?.let { throw it }
             throw cancelled

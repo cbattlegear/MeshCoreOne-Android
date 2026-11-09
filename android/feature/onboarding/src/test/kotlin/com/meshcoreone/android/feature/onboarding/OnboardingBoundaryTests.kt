@@ -946,7 +946,7 @@ class OnboardingFlowCoordinatorTest {
                 enteredPersistence.await()
                 presets.target = originalTarget.copy(generation = originalTarget.generation + 1)
                 releasePersistence.complete(Unit)
-                assertTrue(flow.completionError.value)
+                assertTrue(flow.hasCompletionError.value)
 
                 flow.retryCompletion()
 

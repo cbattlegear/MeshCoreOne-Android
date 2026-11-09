@@ -144,6 +144,8 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
         val job = onboarding.withLifecycle {
             if (!canCompleteWithoutDevice()) return@withLifecycle null
             val generation = onboarding.lifecycleGeneration.value
+            val targetAtAttempt = deps.presets.currentTarget()
+            val sessionAtAttempt = targetAtAttempt?.toSessionToken()
             completing = true
             completingWithoutDevice.value = true
             scope.launch(start = CoroutineStart.LAZY) {
@@ -153,9 +155,18 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
                             "Onboarding completion was not committed; retry is now available"
                         }
                     } else {
-                        onboarding.completeOnboarding {
-                            check(onboarding.lifecycleGeneration.value == generation) { "Onboarding attempt was retired" }
-                        }
+                        onboarding.completeOnboardingWithSeal(
+                            requireCurrent = {
+                                check(onboarding.lifecycleGeneration.value == generation) {
+                                    "Onboarding attempt was retired"
+                                }
+                            },
+                            seal = { attempt ->
+                                targetAtAttempt?.let { deps.presets.sealCompletion(it, attempt) }
+                                    ?: attempt.trySeal()
+                            },
+                            sessionAtAttempt = sessionAtAttempt,
+                        )
                     }
                     onboarding.withLifecycle {
                         if (onboarding.lifecycleGeneration.value == generation) {

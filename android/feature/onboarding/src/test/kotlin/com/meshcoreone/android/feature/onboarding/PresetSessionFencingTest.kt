@@ -140,7 +140,7 @@ class PresetSessionFencingTest {
         fresh.completeOnboarding()
         assertEquals(OnboardingCompletionReceipt.WithoutDevice, fresh.completionReceipt)
         val noDevicePublication = checkNotNull(fresh.completionPublication.value)
-        assertEquals(OnboardingCompletionProducer.NoDevice, noDevicePublication.producer)
+        assertEquals(OnboardingCompletionProducer.NoDevice(null), noDevicePublication.producer)
         assertNotNull(noDevicePublication.attemptId)
 
         val restored = OnboardingState(InMemoryOnboardingFlagStore(mapOf(OnboardingState.KEY_HAS_COMPLETED to true)))

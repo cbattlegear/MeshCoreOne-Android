@@ -30,7 +30,7 @@ sealed interface OnboardingCompletionReceipt {
 
 sealed interface OnboardingCompletionProducer {
     data class Preset(val originalToken: SessionToken) : OnboardingCompletionProducer
-    data object NoDevice : OnboardingCompletionProducer
+    data class NoDevice(val sessionAtAttempt: SessionToken?) : OnboardingCompletionProducer
 }
 
 class OnboardingCompletionPublication internal constructor(
@@ -40,6 +40,9 @@ class OnboardingCompletionPublication internal constructor(
     val producer: OnboardingCompletionProducer?,
     val attemptId: UUID?,
 )
+
+internal fun OnboardingPresetTarget.toSessionToken(): SessionToken =
+    SessionToken(ProcessEpoch(epoch), Generation(generation), RadioId(radioId))
 
 /** A finalizer may have committed; reconcile its original ID or acknowledge an explicit reset before replacing it. */
 interface OnboardingCompletionOutcomeUnknown
@@ -179,21 +182,27 @@ class OnboardingState(private val store: OnboardingFlagStore) {
         return true
     }
 
-    suspend fun completeOnboarding(requireCurrent: () -> Unit = {}) =
-        completeOnboardingWithSeal(requireCurrent) { it.trySeal() }
+    suspend fun completeOnboarding(
+        requireCurrent: () -> Unit = {},
+        sessionAtAttempt: SessionToken? = null,
+    ) = completeOnboardingWithSeal(requireCurrent, { it.trySeal() }, sessionAtAttempt)
 
     suspend fun completeOnboardingWithSeal(
         requireCurrent: () -> Unit,
         seal: (OnboardingCompletionAttempt) -> Boolean,
-    ) = completeOnboardingWithReceipt(OnboardingCompletionReceipt.WithoutDevice, requireCurrent, seal)
+        sessionAtAttempt: SessionToken? = null,
+    ) = completeOnboardingWithReceipt(
+        OnboardingCompletionReceipt.WithoutDevice, requireCurrent, seal, sessionAtAttempt,
+    )
 
     suspend fun completeOnboardingWithReceipt(
         receipt: OnboardingCompletionReceipt,
         requireCurrent: () -> Unit,
         seal: (OnboardingCompletionAttempt) -> Boolean,
+        sessionAtAttempt: SessionToken? = null,
     ) {
         val attempt = OnboardingCompletionAttempt()
-        val producer = producerFor(receipt)
+        val producer = producerFor(receipt, sessionAtAttempt)
         var published = false
         val revision = synchronized(completionLock) {
             check(!retired) { "Onboarding flow was retired" }
@@ -334,17 +343,19 @@ class OnboardingState(private val store: OnboardingFlagStore) {
             value.revision == completionRevision && publication.value === value && completed.value &&
             store.getBoolean(KEY_HAS_COMPLETED)
 
-    private fun producerFor(receipt: OnboardingCompletionReceipt): OnboardingCompletionProducer =
+    private fun producerFor(
+        receipt: OnboardingCompletionReceipt,
+        sessionAtAttempt: SessionToken?,
+    ): OnboardingCompletionProducer =
         when (receipt) {
             is OnboardingCompletionReceipt.Preset -> {
+                check(sessionAtAttempt == null) { "Preset producer derives from its receipt target" }
                 val target = requireNotNull(receipt.target) {
                     "Preset completion requires its original radio session"
                 }
-                OnboardingCompletionProducer.Preset(
-                    SessionToken(ProcessEpoch(target.epoch), Generation(target.generation), RadioId(target.radioId)),
-                )
+                OnboardingCompletionProducer.Preset(target.toSessionToken())
             }
-            OnboardingCompletionReceipt.WithoutDevice -> OnboardingCompletionProducer.NoDevice
+            OnboardingCompletionReceipt.WithoutDevice -> OnboardingCompletionProducer.NoDevice(sessionAtAttempt)
             OnboardingCompletionReceipt.Restored ->
                 throw IllegalArgumentException("Restored completion cannot start a new onboarding attempt")
         }

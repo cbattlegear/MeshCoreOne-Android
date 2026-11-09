@@ -1,6 +1,7 @@
 // AndroidOnly: WP-305 Boundary behavior for cancel/denial/adapter-off/manual-region/no-internet recovery and demo onboarding.
 package com.meshcoreone.android.feature.onboarding
 
+import com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt
 import com.meshcoreone.android.core.model.RegionSelection
 import com.meshcoreone.android.core.ui.UiText
 import java.util.UUID
@@ -854,6 +855,112 @@ class OnboardingFlowCoordinatorTest {
                 assertTrue(flow.onboarding.hasCompletedOnboarding)
                 assertTrue(flags.getBoolean(OnboardingState.KEY_HAS_COMPLETED))
             } finally { owner.cancel(); dispatcher.drain() }
+        }
+
+    @Test fun noDeviceConfirmationAfterReadyPublishesTheAdmittingSession() =
+        kotlinx.coroutines.runBlocking {
+            val owner = Job()
+            try {
+                val presets = FakePresets()
+                val target = checkNotNull(presets.target)
+                val pairing = FakePairing().apply {
+                    connection.value = OnboardingConnectionSnapshot(isReady = true)
+                }
+                val flow = OnboardingFlowCoordinator(
+                    CoroutineScope(Dispatchers.Unconfined + owner), Deps(presets = presets, pairing = pairing),
+                )
+
+                flow.confirmNoDevice()
+
+                val publication = checkNotNull(flow.onboarding.completionPublication.value)
+                assertEquals(OnboardingCompletionProducer.NoDevice(target.toSessionToken()), publication.producer)
+                assertNotNull(publication.attemptId)
+                assertTrue(flow.onboarding.hasCompletedOnboarding)
+            } finally { owner.cancel()             }
+        }
+
+    @Test fun noDeviceAttemptWithoutSessionDoesNotAdoptALaterBinding() =
+        kotlinx.coroutines.runBlocking {
+            val dispatcher = QueuedDispatcher()
+            val owner = Job()
+            try {
+                val presets = FakePresets().apply { target = null }
+                val flow = OnboardingFlowCoordinator(CoroutineScope(dispatcher + owner), Deps(presets = presets))
+
+                flow.confirmNoDevice()
+                presets.target = FakePresets().target
+                dispatcher.drain()
+
+                val publication = checkNotNull(flow.onboarding.completionPublication.value)
+                assertEquals(OnboardingCompletionProducer.NoDevice(null), publication.producer)
+                assertNotNull(publication.attemptId)
+            } finally { owner.cancel(); dispatcher.drain() }
+        }
+
+    @Test fun noDeviceReplacementDuringPersistenceRetainsOriginalProducerAndAttemptOnReadback() =
+        kotlinx.coroutines.runBlocking {
+            class UnknownWrite : IllegalStateException(), OnboardingCompletionOutcomeUnknown
+
+            var stored = false
+            var originalAttemptId: UUID? = null
+            val enteredPersistence = CompletableDeferred<Unit>()
+            val releasePersistence = CompletableDeferred<Unit>()
+            val flags = object : OnboardingFlagStore {
+                override fun getBoolean(key: String) = stored
+                override fun setBoolean(key: String, value: Boolean) { stored = value }
+
+                override suspend fun persistBoolean(
+                    key: String,
+                    value: Boolean,
+                    requireCurrent: () -> Unit,
+                    seal: (OnboardingCompletionAttempt) -> Boolean,
+                    attempt: OnboardingCompletionAttempt,
+                ) {
+                    requireCurrent()
+                    check(seal(attempt))
+                    originalAttemptId = attempt.id
+                    enteredPersistence.complete(Unit)
+                    releasePersistence.await()
+                    stored = value
+                    throw UnknownWrite()
+                }
+
+                override suspend fun reconcileCompletion(
+                    attempt: OnboardingCompletionAttempt,
+                    requireCurrent: () -> Unit,
+                    onFinished: (Result<Boolean>) -> Unit,
+                ) {
+                    requireCurrent()
+                    assertEquals(originalAttemptId, attempt.id)
+                    onFinished(Result.success(stored))
+                }
+            }
+            val owner = Job()
+            val presets = FakePresets()
+            val originalTarget = checkNotNull(presets.target)
+            val flow = OnboardingFlowCoordinator(
+                CoroutineScope(Dispatchers.Unconfined + owner), Deps(flags = flags, presets = presets),
+            )
+            try {
+                flow.confirmNoDevice()
+                enteredPersistence.await()
+                presets.target = originalTarget.copy(generation = originalTarget.generation + 1)
+                releasePersistence.complete(Unit)
+                assertTrue(flow.completionError.value)
+
+                flow.retryCompletion()
+
+                val publication = checkNotNull(flow.onboarding.completionPublication.value)
+                assertEquals(
+                    OnboardingCompletionProducer.NoDevice(originalTarget.toSessionToken()),
+                    publication.producer,
+                )
+                assertEquals(originalAttemptId, publication.attemptId)
+                assertTrue(flow.onboarding.hasCompletedOnboarding)
+            } finally {
+                releasePersistence.complete(Unit)
+                owner.cancel()
+            }
         }
 
     @Test fun preResetWiFiAndPairingSuccessCannotAdvanceOrClearANewerConnection() = kotlinx.coroutines.runBlocking {

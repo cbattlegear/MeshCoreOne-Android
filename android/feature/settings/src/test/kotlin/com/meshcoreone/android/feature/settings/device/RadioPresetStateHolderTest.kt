@@ -135,6 +135,43 @@ class RadioPresetStateHolderTest {
     }
 
     @Test
+    fun `device switch after repeat snapshot does not leave repeat enabled on successor`() {
+        val original = device(id = java.util.UUID(0, 100), frequency = 915_000u, clientRepeat = false)
+        val successor = device(id = java.util.UUID(0, 101), frequency = 868_000u, clientRepeat = false)
+        val switchedConnection = FakeConnection(original)
+        val switchedService = FakeSettingsPort()
+        val switchedCatalog = FakeCatalog()
+        val switchedStore = FakeStore()
+        val switchedGate = RadioWriteGate()
+        var switchOnServiceLookup = false
+        val switchedHolder = RadioPresetStateHolder(
+            scheduler.environment(), switchedConnection, regions, switchedCatalog,
+            {
+                if (switchOnServiceLookup) {
+                    switchOnServiceLookup = false
+                    switchedConnection.deviceFlow.value = successor
+                }
+                switchedService
+            },
+            switchedStore, switchedGate,
+        )
+        switchedHolder.start()
+        scheduler.runCurrent()
+
+        switchOnServiceLookup = true
+        switchedHolder.onRepeatToggled(true)
+        switchedHolder.confirmEnableRepeatMode()
+        scheduler.runCurrent()
+
+        assertEquals(successor.id, switchedConnection.connectedDevice.value?.id)
+        assertEquals(listOf("savePreRepeat"), switchedStore.calls)
+        assertEquals(listOf("getSelfInfo"), switchedService.calls)
+        assertFalse(switchedHolder.state.value.isRepeatEnabled)
+        assertFalse(switchedHolder.state.value.isApplyingRepeat || switchedGate.inFlight.value)
+        assertEquals("eu-868", switchedHolder.state.value.selectedPresetId)
+    }
+
+    @Test
     fun `cancelling the repeat confirmation changes nothing`() {
         started()
         holder.onRepeatToggled(true)

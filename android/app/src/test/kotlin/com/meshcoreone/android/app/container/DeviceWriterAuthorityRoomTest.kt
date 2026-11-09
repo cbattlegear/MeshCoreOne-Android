@@ -314,16 +314,16 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
             val oldToken = assertNotNull(h.manager.snapshot.value.token)
             val managerAccess = h.container.deviceAccess
             val delayedAdmission = object : ConnectedDeviceAccess by managerAccess {
-                override suspend fun <T : Any> withDeviceWrite(
+                override suspend fun <T : Any> withDeviceWriteLease(
                     token: SessionToken,
                     deviceId: UUID,
-                    block: suspend () -> T,
+                    block: suspend (() -> Boolean) -> T,
                 ): T? {
                     capturedToken = token
                     capturedDeviceId = deviceId
                     admissionEntered.complete(Unit)
                     releaseAdmission.await()
-                    return managerAccess.withDeviceWrite(token, deviceId, block)
+                    return managerAccess.withDeviceWriteLease(token, deviceId, block)
                 }
             }
             val editor = editorFor(delayedAdmission, paused, this)
@@ -367,16 +367,16 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
             val managerAccess = h.container.deviceAccess
             var admissions = 0
             val delayedAdmission = object : ConnectedDeviceAccess by managerAccess {
-                override suspend fun <T : Any> withDeviceWrite(
+                override suspend fun <T : Any> withDeviceWriteLease(
                     token: SessionToken,
                     deviceId: UUID,
-                    block: suspend () -> T,
+                    block: suspend (() -> Boolean) -> T,
                 ): T? {
                     assertEquals(oldToken, token)
                     assertEquals(before.id, deviceId)
                     if (++admissions == 4) admissionEntered.complete(Unit)
                     releaseAdmission.await()
-                    return managerAccess.withDeviceWrite(token, deviceId, block)
+                    return managerAccess.withDeviceWriteLease(token, deviceId, block)
                 }
             }
             // Separate producers let all four capture G1 before any lease is admitted.
@@ -651,10 +651,10 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
             val guardOffAccess = object : ConnectedDeviceAccess by managerAccess {
                 override val requiresGenerationDeviceWriteLease: Boolean get() = false
                 override val connectedDeviceToken: SessionToken? get() = null
-                override suspend fun <T : Any> withDeviceWrite(
+                override suspend fun <T : Any> withDeviceWriteLease(
                     token: SessionToken,
                     deviceId: UUID,
-                    block: suspend () -> T,
+                    block: suspend (() -> Boolean) -> T,
                 ): T? = error("The explicit legacy path must not request a generation lease")
             }
             val editor = editorFor(guardOffAccess, paused, this)
@@ -684,10 +684,10 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
             val unavailableCapture = object : ConnectedDeviceAccess by managerAccess {
                 override val requiresGenerationDeviceWriteLease: Boolean get() = true
                 override fun captureDeviceWrite(): Pair<SessionToken, DeviceDTO>? = null
-                override suspend fun <T : Any> withDeviceWrite(
+                override suspend fun <T : Any> withDeviceWriteLease(
                     token: SessionToken,
                     deviceId: UUID,
-                    block: suspend () -> T,
+                    block: suspend (() -> Boolean) -> T,
                 ): T? = error("A missing guarded capture must be refused before lease admission")
             }
             val editor = editorFor(unavailableCapture, paused, this)
@@ -723,10 +723,10 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
             val token = assertNotNull(h.manager.snapshot.value.token)
             val rejectedAdmission = object : ConnectedDeviceAccess by h.container.deviceAccess {
                 override val requiresGenerationDeviceWriteLease: Boolean get() = true
-                override suspend fun <T : Any> withDeviceWrite(
+                override suspend fun <T : Any> withDeviceWriteLease(
                     token: SessionToken,
                     deviceId: UUID,
-                    block: suspend () -> T,
+                    block: suspend (() -> Boolean) -> T,
                 ): T? {
                     assertEquals(before.id, deviceId)
                     assertEquals(h.manager.snapshot.value.token, token)

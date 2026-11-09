@@ -166,6 +166,11 @@ class ManagerDeviceAccess(private val manager: ConnectionManager) : ConnectedDev
         deviceId: UUID,
         block: suspend () -> T,
     ): T? = manager.withDeviceWrite(token, deviceId, block)
+    override suspend fun <T : Any> withDeviceWriteLease(
+        token: SessionToken,
+        deviceId: UUID,
+        block: suspend (isLeaseCurrent: () -> Boolean) -> T,
+    ): T? = manager.withDeviceWriteLease(token, deviceId, block)
     override fun currentDevice(expectedToken: SessionToken): DeviceDTO? = manager.currentDevice(expectedToken)
     override fun transformConnectedDevice(
         expectedToken: SessionToken?,

@@ -17,8 +17,15 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Before
@@ -118,7 +125,8 @@ class DeviceRepositoryAuthorityWriteTest : RepositoryTest() {
         val ticket = assertNotNull(repository.fetchDeviceWriteSnapshot(original.id))
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
-        val writer = async {
+        val operations = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val writer = operations.async {
             authorityContext.write("hold-device-writer") {
                 entered.complete(Unit)
                 release.await()
@@ -127,18 +135,18 @@ class DeviceRepositoryAuthorityWriteTest : RepositoryTest() {
         val current = java.util.concurrent.atomic.AtomicBoolean(true)
         try {
             entered.await()
-            val edit = async {
+            val edit = async(start = CoroutineStart.UNDISPATCHED) {
                 repository.saveDeviceIfUnchanged(ticket.device.copy(pathHashMode = 2u), ticket) { current.get() }
             }
-            testScheduler.runCurrent()
             current.set(false)
             release.complete(Unit)
-            writer.await()
-            assertFalse(edit.await())
+            withTimeout(5_000) { writer.await() }
+            testScheduler.advanceUntilIdle()
+            assertFalse(withTimeout(5_000) { edit.await() })
             assertEquals(original, repository.fetchDevice(original.id))
         } finally {
             release.complete(Unit)
-            writer.cancel()
+            operations.coroutineContext[Job]?.cancelAndJoin()
         }
     }
 
@@ -153,7 +161,8 @@ class DeviceRepositoryAuthorityWriteTest : RepositoryTest() {
         store.saveChannel(regional)
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
-        val writer = async {
+        val operations = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val writer = operations.async {
             authorityContext.write("hold-device-writer") {
                 entered.complete(Unit)
                 release.await()
@@ -162,21 +171,21 @@ class DeviceRepositoryAuthorityWriteTest : RepositoryTest() {
         val current = java.util.concurrent.atomic.AtomicBoolean(true)
         try {
             entered.await()
-            val edit = async {
+            val edit = async(start = CoroutineStart.UNDISPATCHED) {
                 repository.removeDeviceKnownRegionIfCurrent(
                     original.id, original.radioId, "US915",
                 ) { current.get() }
             }
-            testScheduler.runCurrent()
             current.set(false)
             release.complete(Unit)
-            writer.await()
-            assertFalse(edit.await())
+            withTimeout(5_000) { writer.await() }
+            testScheduler.advanceUntilIdle()
+            assertFalse(withTimeout(5_000) { edit.await() })
             assertEquals(original, repository.fetchDevice(original.id))
             assertEquals(ChannelFloodScope.Region("US915"), store.fetchChannels(original.radioId).single().floodScope)
         } finally {
             release.complete(Unit)
-            writer.cancel()
+            operations.coroutineContext[Job]?.cancelAndJoin()
         }
     }
 

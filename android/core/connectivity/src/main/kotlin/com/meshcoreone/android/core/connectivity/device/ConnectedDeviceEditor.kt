@@ -45,6 +45,12 @@ interface ConnectedDeviceAccess {
         deviceId: UUID,
         block: suspend () -> T,
     ): T? = null
+    /** The returned predicate remains valid for this admitted write until its drain is released. */
+    suspend fun <T : Any> withDeviceWriteLease(
+        token: SessionToken,
+        deviceId: UUID,
+        block: suspend (isLeaseCurrent: () -> Boolean) -> T,
+    ): T? = null
     fun currentDevice(expectedToken: SessionToken): DeviceDTO? =
         throw UnsupportedOperationException("Session-bound connected-device reads are not supported")
     fun transformConnectedDevice(
@@ -154,8 +160,8 @@ class ConnectedDeviceEditor(
         val (token, device) = access.captureDeviceWrite() ?: return false
         if (token != expectedToken) return false
         return sessionEdits.withLock {
-            access.withDeviceWrite(token, device.id) {
-                persistEdit(operation, token, transform, device)
+            access.withDeviceWriteLease(token, device.id) { isLeaseCurrent ->
+                persistEdit(operation, token, transform, device, isLeaseCurrent)
             } ?: false
         }
     }
@@ -165,8 +171,12 @@ class ConnectedDeviceEditor(
         expectedToken: SessionToken?,
         transform: (DeviceDTO) -> DeviceDTO,
         capturedDevice: DeviceDTO? = null,
+        isLeaseCurrent: (() -> Boolean)? = null,
     ): Boolean {
-        val original = if (capturedDevice != null && expectedToken != null) {
+        val original = if (isLeaseCurrent != null && expectedToken != null) {
+            if (!isLeaseCurrent()) return false
+            capturedDevice ?: return false
+        } else if (capturedDevice != null && expectedToken != null) {
             val current = access.currentDevice(expectedToken) ?: return false
             if (current.id != capturedDevice.id || current.radioId != capturedDevice.radioId) return false
             current
@@ -179,7 +189,7 @@ class ConnectedDeviceEditor(
             return live != null && live.id == original.id && live.radioId == original.radioId
         }
         try {
-            val saved = devices.editDevice(original.id, ::current) { authoritative ->
+            val saved = devices.editDevice(original.id, isLeaseCurrent ?: ::current) { authoritative ->
                 if (authoritative.radioId != original.radioId || authoritative.isActive != original.isActive) {
                     throw DeviceWriteConflict()
                 }
@@ -244,10 +254,9 @@ class ConnectedDeviceEditor(
         val (token, device) = access.captureDeviceWrite() ?: return false
         if (device.id != deviceId) return false
         return sessionEdits.withLock {
-            access.withDeviceWrite(token, device.id) {
-                val current = access.currentDevice(token) ?: return@withDeviceWrite false
-                if (current.id != deviceId || current.radioId != device.radioId) return@withDeviceWrite false
-                persistEdit("preRepeat", token, { it.savingPreRepeatSettings() }, current)
+            access.withDeviceWriteLease(token, device.id) { isLeaseCurrent ->
+                if (!isLeaseCurrent()) return@withDeviceWriteLease false
+                persistEdit("preRepeat", token, { it.savingPreRepeatSettings() }, device, isLeaseCurrent)
             } ?: false
         }
     }
@@ -310,8 +319,8 @@ class ConnectedDeviceEditor(
         val (token, device) = access.captureDeviceWrite() ?: return false
         if (token != expectedToken) return false
         return sessionEdits.withLock {
-            access.withDeviceWrite(token, device.id) {
-                changeKnownRegionLocked(region, remove, token, device, false)
+            access.withDeviceWriteLease(token, device.id) { isLeaseCurrent ->
+                changeKnownRegionLocked(region, remove, token, device, false, isLeaseCurrent)
             } ?: false
         }
     }
@@ -326,8 +335,8 @@ class ConnectedDeviceEditor(
         if (access.requiresGenerationDeviceWriteLease) {
             val token = expectedToken ?: return@withLock false
             val device = capturedDevice ?: return@withLock false
-            return@withLock access.withDeviceWrite(token, device.id) {
-                changeKnownRegionLocked(region, remove, token, device, clearRadio)
+            return@withLock access.withDeviceWriteLease(token, device.id) { isLeaseCurrent ->
+                changeKnownRegionLocked(region, remove, token, device, clearRadio, isLeaseCurrent)
             } ?: false
         }
         changeKnownRegionLocked(region, remove, expectedToken, capturedDevice, clearRadio)
@@ -339,8 +348,12 @@ class ConnectedDeviceEditor(
         expectedToken: SessionToken?,
         capturedDevice: DeviceDTO?,
         clearRadio: Boolean,
+        isLeaseCurrent: (() -> Boolean)? = null,
     ): Boolean {
-        val original = if (capturedDevice != null && expectedToken != null) {
+        val original = if (isLeaseCurrent != null && expectedToken != null) {
+            if (!isLeaseCurrent()) return false
+            capturedDevice ?: return false
+        } else if (capturedDevice != null && expectedToken != null) {
             val current = access.currentDevice(expectedToken) ?: return false
             if (current.id != capturedDevice.id || current.radioId != capturedDevice.radioId) return false
             current
@@ -352,10 +365,11 @@ class ConnectedDeviceEditor(
             val live = if (expectedToken == null) access.connectedDevice else access.currentDevice(expectedToken)
             live != null && live.id == original.id && live.radioId == original.radioId
         }
+        val persistenceGuard = isLeaseCurrent ?: isCurrent
         val persisted = if (remove) {
-            devices.removeDeviceKnownRegionIfCurrent(original.id, original.radioId, region, isCurrent)
+            devices.removeDeviceKnownRegionIfCurrent(original.id, original.radioId, region, persistenceGuard)
         } else {
-            devices.addDeviceKnownRegionIfCurrent(original.id, original.radioId, region, isCurrent)
+            devices.addDeviceKnownRegionIfCurrent(original.id, original.radioId, region, persistenceGuard)
         }
         if (!persisted || !isCurrent()) return false
         if (clearRadio && original.defaultFloodScopeName == region) clearDefaultFloodScope()
@@ -430,8 +444,8 @@ class ConnectedDeviceEditor(
             return scope.launch(start = CoroutineStart.UNDISPATCHED) {
                 report(operation) {
                     sessionEdits.withLock {
-                        access.withDeviceWrite(token, device.id) {
-                            persistEdit(operation, token, transform, device)
+                        access.withDeviceWriteLease(token, device.id) { isLeaseCurrent ->
+                            persistEdit(operation, token, transform, device, isLeaseCurrent)
                         }
                     }
                 }

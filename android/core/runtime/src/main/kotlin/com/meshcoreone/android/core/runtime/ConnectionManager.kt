@@ -66,6 +66,8 @@ class ConnectionManager(
     private class DeviceWriteContext(
         val manager: ConnectionManager,
         val generation: RadioGeneration,
+        val token: SessionToken,
+        val deviceId: UUID,
     ) : AbstractCoroutineContextElement(Key) {
         companion object Key : CoroutineContext.Key<DeviceWriteContext>
         @Volatile var active = true
@@ -189,7 +191,17 @@ class ConnectionManager(
      * Orders a captured generation's awaited device edit before retirement completes. A null result
      * refuses stale admission; an admitted callback retains its drain until terminal commit/rollback.
      */
-    suspend fun <T : Any> withDeviceWrite(token: SessionToken, deviceId: UUID, block: suspend () -> T): T? {
+    suspend fun <T : Any> withDeviceWrite(
+        token: SessionToken,
+        deviceId: UUID,
+        block: suspend () -> T,
+    ): T? = withDeviceWriteLease(token, deviceId) { block() }
+
+    suspend fun <T : Any> withDeviceWriteLease(
+        token: SessionToken,
+        deviceId: UUID,
+        block: suspend (isLeaseCurrent: () -> Boolean) -> T,
+    ): T? {
         val caller = currentCoroutineContext()
         caller.ensureActive()
         check(caller[DeviceWriteContext]?.active != true &&
@@ -204,10 +216,16 @@ class ConnectionManager(
                 values.value.token != token || !values.value.state.isConnected) {
                 return null
             }
-            DeviceWriteContext(this, owner).also { deviceWrites += it }
+            DeviceWriteContext(this, owner, token, deviceId).also { deviceWrites += it }
         }
         try {
-            return withContext(marker) { block() }
+            val isLeaseCurrent = {
+                synchronized(lock) {
+                    marker.active && marker in deviceWrites &&
+                        marker.token == token && marker.deviceId == deviceId
+                }
+            }
+            return withContext(marker) { block(isLeaseCurrent) }
         } finally {
             val drained = synchronized(lock) {
                 marker.active = false

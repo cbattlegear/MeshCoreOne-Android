@@ -1001,6 +1001,20 @@ manifest projections remain unchanged. Admission uses only the merged trusted
 base: a candidate rule cannot authorize its own edits before review and merge,
 and receipts remain bound to the exact policy revision.
 
+The exact `reviewed-support-onboarding-preset-fixture` exception admits WP-305's
+`add-or-update-related-test` operation only for
+`android/ui-tests/src/test/kotlin/com/meshcoreone/android/uitests/OnboardingRegionPresetComposeTest.kt`.
+It supports the directly related #625 producer/receipt regression, preserving
+WP-502 primary provenance and its six-line fixture handoff from
+`fcebfd013494e364676626564975553e6d607af3`. It does not extend the generic
+app/core/feature/platform rule, admit neighboring UI tests or weaken assertions.
+After trusted-main landing, the assigned WP-305 owner must rerun the actual
+`reserve.py admit --wp WP-305 --path <exact-path-above> --operation add-or-update-related-test`
+and use supported same-owner scope evolution where applicable. Advisory transfer
+alone is not destination admission. No runtime deployment or ledger rewrite is
+needed. Candidate-only admission remains refused; the retained local
+Gradle/native execution lock, held drafts and #495 no-merge hold remain unchanged.
+
 ### Shared software verification and legacy schema-4 reviews
 
 The obsolete WP-000 bootstrap-only verification placeholder alone does not prevent

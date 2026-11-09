@@ -20,6 +20,7 @@ from controller.scope_amendment import (
 
 BASE = "5f4d9b92b2eb30d02f001567ef7e4f1dd6e80f66"
 MAIN = "5f4d9b92b2eb30d02f001567ef7e4f1dd6e80f66"
+NOTIFICATION_POLICY_BASE = "2be1194f31dfdb2e1d90f988f5975ee7c179fe8e"
 PATH = "android/platform/notifications/src/main/res/values/notification_action_recovery.xml"
 OPERATION = "add-or-update-notification-action-recovery-copy"
 KEYS = ["notification_action_recovery_" + suffix for suffix in (
@@ -61,7 +62,8 @@ class NotificationActionRecoveryCapabilityTests(unittest.TestCase):
         self.assertEqual(self.rule["operations"], [OPERATION])
         self.assertEqual(self.rule["work_packages"], ["WP-215"])
         self.assertEqual(self.rule["keys"], KEYS)
-        self.assertEqual(self.policy["reservation_policy"]["capabilities"][-1], self.rule)
+        self.assertEqual(next(rule for rule in self.policy["reservation_policy"]["capabilities"]
+                              if rule["id"] == self.rule["id"]), self.rule)
         self.assertEqual(self.engine.admit("WP-215", [], PATH, OPERATION).capability_id, self.rule["id"])
         trusted = json.loads(subprocess.check_output(
             ["git", "-C", str(REPO), "show", f"{MAIN}:docs/android/automation-policy.json"]
@@ -93,7 +95,11 @@ class NotificationActionRecoveryCapabilityTests(unittest.TestCase):
             ["git", "-C", str(REPO), "show", f"{BASE}:docs/android/automation-policy.json"]
         )
         original = json.loads(original_raw)
-        raw = (REPO / "docs/android/automation-policy.json").read_text(encoding="utf-8")
+        # Keep the entire original raw/object inverse; later additive rules have their own inverse tests.
+        raw = subprocess.check_output([
+            "git", "-C", str(REPO), "show",
+            f"{NOTIFICATION_POLICY_BASE}:docs/android/automation-policy.json",
+        ]).decode("utf-8")
         current = json.loads(raw)
         self.assertEqual(current["reservation_policy"]["capabilities"].pop(), self.rule)
         self.assertEqual(current, original)
@@ -120,7 +126,9 @@ class NotificationActionRecoveryCapabilityTests(unittest.TestCase):
                              ("work_packages", ["WP-215", "WP-401"]), ("keys", KEYS[:-1]),
                              ("invariants", self.rule["invariants"][:-1]), ("validation", [])):
             changed = copy.deepcopy(self.policy)
-            changed["reservation_policy"]["capabilities"][-1][field] = value
+            selected = next(rule for rule in changed["reservation_policy"]["capabilities"]
+                            if rule["id"] == self.rule["id"])
+            selected[field] = value
             with self.subTest(field=field), self.assertRaises(PortError):
                 routine_support_predecessor(changed)
         for duplicate in (True, False):
@@ -129,7 +137,8 @@ class NotificationActionRecoveryCapabilityTests(unittest.TestCase):
             if duplicate:
                 rules.append(copy.deepcopy(self.rule))
             else:
-                rules.insert(0, rules.pop())
+                index = next(i for i, rule in enumerate(rules) if rule["id"] == self.rule["id"])
+                rules.insert(0, rules.pop(index))
             with self.assertRaises(PortError):
                 routine_support_predecessor(changed)
 

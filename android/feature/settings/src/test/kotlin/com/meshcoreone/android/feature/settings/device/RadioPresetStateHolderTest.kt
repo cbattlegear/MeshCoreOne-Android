@@ -105,6 +105,50 @@ class RadioPresetStateHolderTest {
     }
 
     @Test
+    fun `retrying failed repeat radio write retains repeat intent after toggle reconciliation`() {
+        started()
+        service.failNext("setRadioParamsVerified", SettingsServiceException(SettingsServiceError.SendFailed))
+        holder.onRepeatToggled(true)
+        holder.confirmEnableRepeatMode()
+        scheduler.runCurrent()
+
+        assertTrue(holder.retryAlertState.value.isPresented)
+        assertFalse(state.isRepeatEnabled || state.isApplyingRepeat || gate.inFlight.value)
+        assertEquals("us-915", state.selectedPresetId)
+        holder.retry.retry()
+        scheduler.runCurrent()
+
+        assertEquals(listOf("getSelfInfo",
+            "setRadioParamsVerified(911000,250000,10,5,true,null)",
+            "setRadioParamsVerified(911000,250000,10,5,true,null)"), service.calls)
+        assertEquals(listOf("savePreRepeat"), store.calls, "Retry must retain the original restore snapshot")
+        assertTrue(state.isRepeatEnabled)
+        assertEquals("rep-2", state.selectedPresetId)
+        assertFalse(holder.retryAlertState.value.isPresented || state.isApplying || gate.inFlight.value)
+    }
+
+    @Test
+    fun `retrying failed repeat radio write cannot enable a successor device`() {
+        started()
+        service.failNext("setRadioParamsVerified", SettingsServiceException(SettingsServiceError.SendFailed))
+        holder.onRepeatToggled(true)
+        holder.confirmEnableRepeatMode()
+        scheduler.runCurrent()
+        assertTrue(holder.retryAlertState.value.isPresented)
+
+        connection.deviceFlow.value = device(id = java.util.UUID(0, 101), frequency = 868_000u, clientRepeat = false)
+        scheduler.runCurrent()
+        holder.retry.retry()
+        scheduler.runCurrent()
+
+        assertEquals(listOf("getSelfInfo", "setRadioParamsVerified(911000,250000,10,5,true,null)", "getSelfInfo"),
+            service.calls)
+        assertEquals(listOf("savePreRepeat"), store.calls)
+        assertFalse(state.isRepeatEnabled || state.isApplying || gate.inFlight.value)
+        assertEquals("eu-868", state.selectedPresetId)
+    }
+
+    @Test
     fun `failed repeat snapshot prevents radio change and leaves repeat mode recoverable`() {
         started()
         store.preRepeatError = IllegalStateException("snapshot persistence failed")

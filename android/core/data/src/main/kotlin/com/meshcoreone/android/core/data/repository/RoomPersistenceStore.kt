@@ -28,7 +28,10 @@ class RoomPersistenceStore private constructor(
     private val messages: MessageRepository = MessageRepository(context, pending),
     private val diagnostics: DiagnosticRepository = DiagnosticRepository(context),
     private val metadata: MetadataRepository = MetadataRepository(context),
+    private val directAcks: DirectAckRepository = DirectAckRepository(context),
 ) : PersistenceStoreProtocol,
+    DirectAckAuthority by directAcks,
+    DirectPendingCompletionAuthority by directAcks,
     DevicePersisting by devices, ContactPersisting by contacts, ChannelPersisting by channels,
     MessagePersisting by messages, HeardRepeatPersisting by messages, ReactionPersisting by messages,
     FailedSendPersisting by messages, RoomPersisting by rooms, DiscoveredNodePersisting by discovered,
@@ -102,7 +105,12 @@ class RoomPersistenceStore private constructor(
     internal suspend fun <T> withBackupRestore(
         afterCommit: () -> Unit = {},
         block: suspend (MeshCoreDatabase, Clock) -> T,
-    ): T = context.restoreBackup(afterCommit) { block(database, clock) }
+    ): T = context.restoreBackup(afterCommit) {
+        database.directAcks().invalidateRestore()
+        database.directAcks().invalidatePendingRestore()
+        database.directAcks().invalidateIntentRestore()
+        block(database, clock)
+    }
 
     fun observeContacts(radioId: RadioId): Flow<SnapshotList<ContactDTO>> =
         context.observe("observeContacts", context.database.contacts().observe(radioId.value)) {

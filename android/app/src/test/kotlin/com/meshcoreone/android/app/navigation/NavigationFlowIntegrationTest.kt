@@ -65,9 +65,14 @@ import com.meshcoreone.android.core.protocol.command.PacketBuilder
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.core.protocol.model.DeviceCapabilities
+import com.meshcoreone.android.core.protocol.model.MeshContact
+import com.meshcoreone.android.core.protocol.parser.Parsers
+import com.meshcoreone.android.core.protocol.session.ContactSessionOps
+import com.meshcoreone.android.core.protocol.session.ContactWriteDispatch
 import com.meshcoreone.android.core.protocol.session.MeshCoreSession
 import com.meshcoreone.android.core.runtime.*
 import com.meshcoreone.android.core.services.sync.SyncDataEvent
+import com.meshcoreone.android.core.services.contacts.ContactService
 import com.meshcoreone.android.core.services.contacts.ContactServiceError
 import com.meshcoreone.android.core.services.contacts.ContactWriteRecoveryState
 import com.meshcoreone.android.core.ui.UiText
@@ -5989,6 +5994,86 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             assertEquals(existing.id, n.state.value.pendingContactDetail?.id)
             assertTrue(h.links.radios.all { it.sent.none { frame -> frame[0].toInt() == 0x09 } })
         } finally { unmount(); h.container.close() }
+    }
+
+    @Test fun equalTimestampUpdateQueuedBehindCancelledImportPersistsInRealRoom() = runTest {
+        val publicKey = key(30)
+        val initialRead = CompletableDeferred<ContactDTO?>()
+        val observedStore = object : PersistenceStoreProtocol by store {
+            override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? =
+                store.fetchContact(radioId, publicKey).also { initialRead.complete(it) }
+        }
+        val h = ContainerHarness(this, store)
+        h.links.configureRadio = { radio ->
+            radio.respond = { frame -> if (frame[0].toInt() == 0x09) emptyList() else null }
+        }
+        try {
+            connect(h)
+            val radioId = assertNotNull(h.appState.currentRadioId)
+            val session = assertNotNull(h.sessions.current).publicationSession
+            val updateQueued = CompletableDeferred<Unit>()
+            val observedSession = object : ContactSessionOps by session {
+                override suspend fun addContact(
+                    contact: MeshContact,
+                    dispatch: ContactWriteDispatch,
+                    onCommitted: suspend () -> Unit,
+                ) {
+                    updateQueued.complete(Unit)
+                    session.addContact(contact, dispatch, onCommitted)
+                }
+            }
+            val flags = MemoryFlags()
+            val service = ContactService(session, store, store, null, null, flags)
+            val updater = ContactService(observedSession, observedStore, observedStore, null, null, flags)
+            val firmware = h.links.radios.last()
+            val importedFrame = ContactFrame(
+                publicKey, ContactType.REPEATER, 0u, PacketBuilder.FLOOD_PATH_SENTINEL, Bytes.EMPTY,
+                "Imported", 0u, 0.0, 0.0, 42u,
+            )
+            val imported = backgroundScope.async { service.addContactIfAbsent(radioId, importedFrame) }
+            h.eventually("link import reaches the radio", virtualBudgetMillis = 100) {
+                firmware.sent.count { it[0].toInt() == 0x09 } == 1
+            }
+            val update = backgroundScope.async {
+                try {
+                    updater.addOrUpdateContact(radioId, importedFrame.copy(name = "Intentional"))
+                    null
+                } catch (failure: Exception) {
+                    failure
+                }
+            }
+            h.eventually("queued update reads the absent Room row", virtualBudgetMillis = 0) {
+                initialRead.isCompleted && updateQueued.isCompleted
+            }
+            assertNull(initialRead.await())
+            assertFalse(update.isCompleted)
+            assertEquals(1, firmware.sent.count { it[0].toInt() == 0x09 })
+            imported.cancelAndJoin()
+            assertTrue(service.needsContactWriteReconciliation(radioId))
+
+            val first = firmware.sent.last { it[0].toInt() == 0x09 }
+            firmware.knownContacts += Bytes.of(3) + first.slice(1, 144) + le32(42)
+            firmware.push(Bytes.of(0))
+            h.eventually("late ACK persists before the queued update", virtualBudgetMillis = 100) {
+                firmware.sent.count { it[0].toInt() == 0x09 } == 2
+            }
+            assertEquals("Imported", store.fetchContact(radioId, publicKey)?.name)
+            assertFalse(service.needsContactWriteReconciliation(radioId))
+            val second = firmware.sent.last { it[0].toInt() == 0x09 }
+            assertEquals("Intentional", assertNotNull(Parsers.parseContactData(second.slice(1, 144) + le32(42))).advertisedName)
+            firmware.knownContacts.clear()
+            firmware.knownContacts += Bytes.of(3) + second.slice(1, 144) + le32(42)
+            firmware.push(Bytes.of(0))
+            h.eventually("intentional update commits in Room", virtualBudgetMillis = 100) { update.isCompleted }
+            assertNull(update.await())
+            val saved = assertNotNull(store.fetchContact(radioId, publicKey))
+            assertEquals("Intentional", saved.name)
+            assertEquals(42u, saved.lastModified)
+            assertEquals(2, firmware.sent.count { it[0].toInt() == 0x09 })
+            assertFalse(service.needsContactWriteReconciliation(radioId))
+        } finally {
+            h.container.close()
+        }
     }
 
     @Test fun recreatedConfirmationDoesNotRepeatAnAcceptedImportWhenRefreshIsDelayed() = runTest {

@@ -144,13 +144,19 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
         val job = onboarding.withLifecycle {
             if (!canCompleteWithoutDevice()) return@withLifecycle null
             val generation = onboarding.lifecycleGeneration.value
-            val targetAtAttempt = deps.presets.currentTarget()
+            val reconciling = onboarding.canReconcileCompletion()
+            val targetAtAttempt = if (reconciling) null else deps.presets.currentTarget()
+            if (
+                onboarding.lifecycleGeneration.value != generation ||
+                !canCompleteWithoutDevice() ||
+                onboarding.canReconcileCompletion() != reconciling
+            ) return@withLifecycle null
             val sessionAtAttempt = targetAtAttempt?.toSessionToken()
             completing = true
             completingWithoutDevice.value = true
             scope.launch(start = CoroutineStart.LAZY) {
                 try {
-                    if (onboarding.canReconcileCompletion()) {
+                    if (reconciling) {
                         check(onboarding.reconcileCompletion(generation)) {
                             "Onboarding completion was not committed; retry is now available"
                         }

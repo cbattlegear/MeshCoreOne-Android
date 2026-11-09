@@ -879,6 +879,53 @@ class OnboardingFlowCoordinatorTest {
             } finally { owner.cancel()             }
         }
 
+    @Test fun reentrantResetDuringNoDeviceTargetCaptureDoesNotStrandCompletionAdmission() =
+        kotlinx.coroutines.runBlocking {
+            val owner = Job()
+            val flags = InMemoryOnboardingFlagStore()
+            lateinit var flow: OnboardingFlowCoordinator
+            var resetOnTargetCapture = true
+            val target = OnboardingPresetTarget(
+                UUID.fromString("00000000-0000-0000-0000-000000000001"),
+                1,
+                UUID.fromString("00000000-0000-0000-0000-000000000002"),
+            )
+            val presets = object : OnboardingPresetPort {
+                override val canApply = kotlinx.coroutines.flow.MutableStateFlow(true)
+                override fun currentTarget(): OnboardingPresetTarget? {
+                    if (resetOnTargetCapture) {
+                        resetOnTargetCapture = false
+                        kotlinx.coroutines.runBlocking { flow.onboarding.resetOnboarding() }
+                    }
+                    return target
+                }
+                override suspend fun apply(presetId: String): OnboardingPresetOutcome {
+                    return OnboardingPresetOutcome.Applied
+                }
+            }
+            try {
+                flow = OnboardingFlowCoordinator(
+                    CoroutineScope(Dispatchers.Unconfined + owner), Deps(flags = flags, presets = presets),
+                )
+
+                flow.confirmNoDevice()
+
+                assertFalse(flow.isCompletingWithoutDevice.value)
+                assertTrue(flow.canCompleteWithoutDevice())
+                assertFalse(flags.getBoolean(OnboardingState.KEY_HAS_COMPLETED))
+                assertNull(flow.onboarding.completionPublication.value)
+
+                flow.confirmNoDevice()
+
+                assertTrue(flow.onboarding.hasCompletedOnboarding)
+                assertEquals(
+                    OnboardingCompletionProducer.NoDevice(target.toSessionToken()),
+                    flow.onboarding.completionPublication.value?.producer,
+                )
+                assertFalse(flow.isCompletingWithoutDevice.value)
+            } finally { owner.cancel() }
+        }
+
     @Test fun noDeviceAttemptWithoutSessionDoesNotAdoptALaterBinding() =
         kotlinx.coroutines.runBlocking {
             val dispatcher = QueuedDispatcher()

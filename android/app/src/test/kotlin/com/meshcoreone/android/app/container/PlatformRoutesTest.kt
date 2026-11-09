@@ -4,6 +4,7 @@ package com.meshcoreone.android.app.container
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.connectivity.pairing.BluetoothEndpoint
+import com.meshcoreone.android.core.connectivity.pairing.DeviceEndpointIdentity
 import com.meshcoreone.android.core.connectivity.permissions.ConnectivityPermission
 import com.meshcoreone.android.core.connectivity.permissions.PermissionSnapshot
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
@@ -105,6 +106,23 @@ class DurableStoresTest {
         assertEquals(without, SharedPreferencesKnownEndpoints(context).endpoint(id))
         store.forget(id)
         assertNull(SharedPreferencesKnownEndpoints(context).endpoint(id))
+    }
+
+    @Test fun rotatingScanEndpointIsResolvableInProcessButNotPersisted() = runBlocking<Unit> {
+        val id = UUID.randomUUID()
+        val endpoint = BluetoothEndpoint(id, "4A:00:00:00:00:01", null)
+        val store = SharedPreferencesKnownEndpoints(context)
+        store.remember(endpoint, DeviceEndpointIdentity.stability(endpoint.address, bonded = false))
+        assertEquals(endpoint, store.endpoint(id))
+        assertNull(SharedPreferencesKnownEndpoints(context).endpoint(id))
+    }
+
+    @Test fun bondedPrivateEndpointIsPersistedAsStable() = runBlocking<Unit> {
+        val id = UUID.randomUUID()
+        val endpoint = BluetoothEndpoint(id, "4A:00:00:00:00:02", null)
+        val store = SharedPreferencesKnownEndpoints(context)
+        store.remember(endpoint, DeviceEndpointIdentity.stability(endpoint.address, bonded = true))
+        assertEquals(endpoint, SharedPreferencesKnownEndpoints(context).endpoint(id))
     }
 
     @Test fun draftsAndContactFlagsPersistAcrossInstances() {

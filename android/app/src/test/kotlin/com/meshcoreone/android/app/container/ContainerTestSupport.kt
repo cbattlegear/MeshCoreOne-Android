@@ -301,11 +301,13 @@ internal class FixedNotificationPreferences : NotificationPreferencesPort {
 }
 
 internal fun newConnectivity(
-    pairing: HarnessPairingService = HarnessPairingService(),
+    pairing: com.meshcoreone.android.core.connectivity.pairing.DevicePairingService = HarnessPairingService(),
     currentLink: () -> com.meshcoreone.android.core.connectivity.ble.BleLinkSnapshot? = { null },
     onForeground: (Boolean) -> Unit = {},
+    systemLinks: SystemLinkProbe = NoSystemLinks,
+    knownEndpoints: KnownEndpointStore = SyntheticEndpoints(),
 ): ConnectivityPlatform = ConnectivityPlatform(
-    pairing, BleLinkInspector(NoSystemLinks, currentLink) { BluetoothAvailability.Ready }, SyntheticEndpoints(),
+    pairing, BleLinkInspector(systemLinks, currentLink) { BluetoothAvailability.Ready }, knownEndpoints,
     SystemLinkAdopter { false }, onForegroundChanged = onForeground,
 )
 

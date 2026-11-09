@@ -54,10 +54,11 @@ object DeviceEndpointIdentity {
     }
 }
 
-/** Process-owned memory of endpoints selected through the scan fallback (no system registry exists). */
+/** Endpoint handles selected through scan fallback; stores keep rotating private addresses process-local. */
 interface KnownEndpointStore {
     suspend fun endpoint(deviceId: UUID): BluetoothEndpoint?
     suspend fun remember(endpoint: BluetoothEndpoint)
+    suspend fun remember(endpoint: BluetoothEndpoint, stability: EndpointStability) = remember(endpoint)
     suspend fun forget(deviceId: UUID)
 }
 

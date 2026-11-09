@@ -17,6 +17,7 @@ import com.meshcoreone.android.core.connectivity.pairing.BluetoothScanPairingSer
 import com.meshcoreone.android.core.connectivity.pairing.CompanionPairingService
 import com.meshcoreone.android.core.connectivity.pairing.CompanionSetupService
 import com.meshcoreone.android.core.connectivity.pairing.DevicePairingService
+import com.meshcoreone.android.core.connectivity.pairing.EndpointStability
 import com.meshcoreone.android.core.connectivity.bond.BondingCoordinator
 import com.meshcoreone.android.core.connectivity.bond.PlatformBondInspector
 import com.meshcoreone.android.core.connectivity.permissions.AndroidPermissionState
@@ -213,6 +214,7 @@ object AndroidAppContainerFactory {
             locationReporter = locationProducing,
             scans = scanCoordinator,
             openAppSettings = appSettingsOpener(application),
+            isBondedAddress = { bondGateway.bondState(it) == com.meshcoreone.android.core.ble.BondState.Bonded },
             regionResources = { AppLanguages.attach(application).resources },
         )
         val chatSendQueueProgress = ChatSendQueueProgress()
@@ -231,9 +233,14 @@ object AndroidAppContainerFactory {
                 hostEnvironment = environment,
                 logSink = productionSyncLogSink(),
                 ensureBonded = { deviceId ->
-                    connectivity.endpointFor(deviceId)?.address?.let { address ->
-                        addresses[deviceId] = address
-                        bonding.ensureBonded(address)
+                    connectivity.endpointFor(deviceId)?.let { endpoint ->
+                        addresses[deviceId] = endpoint.address
+                        bonding.ensureBonded(endpoint.address)
+                        if (pairing is BluetoothScanPairingService &&
+                            bondGateway.bondState(endpoint.address) == com.meshcoreone.android.core.ble.BondState.Bonded
+                        ) {
+                            endpoints.remember(endpoint, EndpointStability.Stable)
+                        }
                     }
                 },
                 bonds = PlatformBondInspector(android.os.Build.VERSION.SDK_INT, bondGateway) { addresses[it] },

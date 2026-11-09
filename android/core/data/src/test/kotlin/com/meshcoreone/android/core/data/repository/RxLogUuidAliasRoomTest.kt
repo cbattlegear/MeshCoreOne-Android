@@ -318,9 +318,12 @@ class RxLogUuidAliasRoomTest : RepositoryTest() {
                     throw cancellation
                 }
             }
-            assertSame(cancellation, thrown)
-            assertTrue(snapshot().isEmpty())
-            assertEquals(1, repository.read("pendingAfterCancellation") { rxRows(radio).size })
+            // Coroutine stack-trace recovery may copy the exception, retaining the original as cause.
+            assertTrue(generateSequence<Throwable>(thrown) { it.cause }.any { it === cancellation },
+                "The propagated cancellation must retain the actual original cause")
+            assertTrue(snapshot().isEmpty(), "Cancelled staged RX inserts must roll back")
+            assertEquals(1, repository.read("pendingAfterCancellation") { rxRows(radio).size },
+                "Cancellation must retain the original pending batch")
             repository.flushRx()
             assertEquals(1L, db.rxLogs().count(radio.value))
         } finally {

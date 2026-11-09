@@ -4,8 +4,8 @@ package com.meshcoreone.android.feature.onboarding
 import com.meshcoreone.android.core.contracts.domain.Generation
 import com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt
 import com.meshcoreone.android.core.contracts.domain.ProcessEpoch
-import com.meshcoreone.android.core.contracts.domain.RadioId
 import com.meshcoreone.android.core.contracts.domain.SessionToken
+import com.meshcoreone.android.core.model.RadioId
 import java.util.UUID
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext

@@ -4,9 +4,9 @@ package com.meshcoreone.android.feature.onboarding
 import com.meshcoreone.android.core.contracts.domain.Generation
 import com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt
 import com.meshcoreone.android.core.contracts.domain.ProcessEpoch
-import com.meshcoreone.android.core.contracts.domain.RadioId
 import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings as O
+import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.ui.UiText
 import java.util.UUID
 import kotlinx.coroutines.CancellationException

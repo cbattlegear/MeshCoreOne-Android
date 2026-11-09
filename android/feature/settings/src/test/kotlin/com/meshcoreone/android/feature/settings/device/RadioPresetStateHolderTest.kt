@@ -165,7 +165,7 @@ class RadioPresetStateHolderTest {
 
         assertEquals(successor.id, switchedConnection.connectedDevice.value?.id)
         assertEquals(listOf("savePreRepeat"), switchedStore.calls)
-        assertEquals(listOf("getSelfInfo"), switchedService.calls)
+        assertEquals(listOf("getSelfInfo", "getSelfInfo"), switchedService.calls)
         assertFalse(switchedHolder.state.value.isRepeatEnabled)
         assertFalse(switchedHolder.state.value.isApplyingRepeat || switchedGate.inFlight.value)
         assertEquals("eu-868", switchedHolder.state.value.selectedPresetId)

@@ -182,24 +182,33 @@ class OnboardingState(private val store: OnboardingFlagStore) {
         return true
     }
 
-    suspend fun completeOnboarding(
-        requireCurrent: () -> Unit = {},
-        sessionAtAttempt: SessionToken? = null,
-    ) = completeOnboardingWithSeal(requireCurrent, { it.trySeal() }, sessionAtAttempt)
+    suspend fun completeOnboarding(requireCurrent: () -> Unit = {}) =
+        completeOnboardingWithSeal(requireCurrent) { it.trySeal() }
 
     suspend fun completeOnboardingWithSeal(
         requireCurrent: () -> Unit,
         seal: (OnboardingCompletionAttempt) -> Boolean,
-        sessionAtAttempt: SessionToken? = null,
+    ) = completeOnboardingWithSeal(null, requireCurrent, seal)
+
+    suspend fun completeOnboardingWithSeal(
+        sessionAtAttempt: SessionToken?,
+        requireCurrent: () -> Unit,
+        seal: (OnboardingCompletionAttempt) -> Boolean,
     ) = completeOnboardingWithReceipt(
-        OnboardingCompletionReceipt.WithoutDevice, requireCurrent, seal, sessionAtAttempt,
+        OnboardingCompletionReceipt.WithoutDevice, sessionAtAttempt, requireCurrent, seal,
     )
 
     suspend fun completeOnboardingWithReceipt(
         receipt: OnboardingCompletionReceipt,
         requireCurrent: () -> Unit,
         seal: (OnboardingCompletionAttempt) -> Boolean,
-        sessionAtAttempt: SessionToken? = null,
+    ) = completeOnboardingWithReceipt(receipt, null, requireCurrent, seal)
+
+    suspend fun completeOnboardingWithReceipt(
+        receipt: OnboardingCompletionReceipt,
+        sessionAtAttempt: SessionToken?,
+        requireCurrent: () -> Unit,
+        seal: (OnboardingCompletionAttempt) -> Boolean,
     ) {
         val attempt = OnboardingCompletionAttempt()
         val producer = producerFor(receipt, sessionAtAttempt)

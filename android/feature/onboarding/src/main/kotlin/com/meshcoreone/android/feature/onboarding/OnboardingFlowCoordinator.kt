@@ -156,6 +156,7 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
                         }
                     } else {
                         onboarding.completeOnboardingWithSeal(
+                            sessionAtAttempt = sessionAtAttempt,
                             requireCurrent = {
                                 check(onboarding.lifecycleGeneration.value == generation) {
                                     "Onboarding attempt was retired"
@@ -165,7 +166,6 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
                                 targetAtAttempt?.let { deps.presets.sealCompletion(it, attempt) }
                                     ?: attempt.trySeal()
                             },
-                            sessionAtAttempt = sessionAtAttempt,
                         )
                     }
                     onboarding.withLifecycle {

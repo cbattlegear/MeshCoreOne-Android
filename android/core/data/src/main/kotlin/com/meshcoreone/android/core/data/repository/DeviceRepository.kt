@@ -271,6 +271,7 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
     private suspend fun RepositoryTransaction.deleteAllDeviceData(id: UUID) {
         val device = database.devices().byId(id) ?: return
         val radioId = RadioId(device.radioId)
+        requireCanonicalRxKeys(radioId)
         database.reactions().clearRadio(radioId.value)
         val sessions = database.sessions().forRadio(radioId.value)
         for (session in sessions) {
@@ -281,7 +282,7 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
         database.blockedSenders().clearRadio(radioId.value)
         database.rxLogs().clearRadio(radioId.value)
         pendingRx.entries.removeAll { it.key.radioId == radioId }
-        afterCommit { context.forgetRxCount(radioId) }
+        afterCommit { context.completeRxRetention(radioId) }
         database.discoveredNodes().clearRadio(radioId.value)
         database.contacts().clearRadio(radioId.value)
         val messages = database.messages().backupPageWithoutPreviewBlobs(radioId.value, Long.MAX_VALUE, 0)

@@ -187,26 +187,122 @@ class CapabilityEngine:
                         raise PortError("Notification enrollment copy cannot delete an existing string key")
                     if original_structure != candidate_structure:
                         raise PortError("Notification enrollment copy cannot change unrelated resource content")
+        action_resources = {
+            path for path, operation in path_operations.items()
+            if operation == "add-or-update-notification-action-recovery-copy"
+        }
+        if action_resources:
+            from .scope_amendment import NOTIFICATION_ACTION_RECOVERY_COPY_CAPABILITY
+
+            rule = NOTIFICATION_ACTION_RECOVERY_COPY_CAPABILITY
+            path = rule["path_rules"][0]
+            if action_resources != {path} or read_blob is None:
+                raise PortError("Notification action recovery requires its exact path and immutable blob reader")
+            if path not in candidate_tree:
+                raise PortError("Notification action recovery cannot delete its resource")
+            raw = read_blob(candidate_tree[path])
+            structure, values = CapabilityEngine._bounded_copy_resource(
+                raw, rule["keys"], "Notification action recovery", strict_utf8=True
+            )
+            if set(values) != set(rule["keys"]):
+                raise PortError("Notification action recovery requires exactly eleven approved keys")
+            if re.search(rb"<!--\s*AndroidOnly: WP-215 [^<>]+-->", raw) is None:
+                raise PortError("Notification action recovery requires its WP-215 source marker")
+            for key, value in values.items():
+                decoded = CapabilityEngine._authored_android_copy(value, "Notification action recovery")
+                target = key == "notification_action_recovery_original_target"
+                placeholders, index = 0, 0
+                while index < len(decoded):
+                    if decoded[index] != "%":
+                        index += 1
+                    elif decoded.startswith("%%", index):
+                        index += 2
+                    elif target and decoded.startswith("%1$s", index):
+                        placeholders += 1
+                        index += 4
+                    else:
+                        raise PortError("Notification action recovery contains an unsupported placeholder")
+                if target and placeholders != 1:
+                    raise PortError("Notification action recovery target requires exactly one %1$s")
+            if path in base_tree:
+                original_structure, original = CapabilityEngine._bounded_copy_resource(
+                    read_blob(base_tree[path]), rule["keys"], "Notification action recovery", strict_utf8=True
+                )
+                if not set(original).issubset(values) or original_structure != structure:
+                    raise PortError("Notification action recovery cannot change unrelated content or delete keys")
+        simulator_resources = {
+            path for path, operation in path_operations.items()
+            if operation == "add-or-update-simulator-preference-recovery-copy"
+        }
+        if simulator_resources:
+            from .scope_amendment import SIMULATOR_PREFERENCE_RECOVERY_COPY_CAPABILITY
+
+            rule = SIMULATOR_PREFERENCE_RECOVERY_COPY_CAPABILITY
+            paths, keys = rule["path_rules"], rule["keys"]
+            if simulator_resources - set(paths) or read_blob is None:
+                raise PortError("Simulator preference recovery requires exact paths and an immutable blob reader")
+            messages = {}
+            for path in paths:
+                if path not in candidate_tree:
+                    raise PortError("Simulator preference recovery cannot delete or omit a supported locale")
+                if base_tree.get(path) != candidate_tree[path] and path not in simulator_resources:
+                    raise PortError("Simulator preference recovery requires an operation for each changed locale")
+                structure, values = CapabilityEngine._bounded_copy_resource(
+                    read_blob(candidate_tree[path]), keys, "Simulator preference recovery", strict_utf8=True
+                )
+                if set(values) != set(keys):
+                    raise PortError("Simulator preference recovery requires all twenty keys in every locale")
+                messages[path] = {
+                    key: CapabilityEngine._simulator_copy_comparison(value)
+                    for key, value in values.items()
+                }
+                if path in base_tree:
+                    original_structure, original = CapabilityEngine._bounded_copy_resource(
+                        read_blob(base_tree[path]), keys, "Simulator preference recovery", strict_utf8=True
+                    )
+                    if set(original) != set(keys):
+                        raise PortError("Simulator preference recovery base must contain all twenty keys")
+                    if structure != original_structure:
+                        raise PortError("Simulator preference recovery cannot change unrelated resource content")
+            for path in paths[1:]:
+                if any(messages[path][key] == messages[paths[0]][key] for key in keys):
+                    raise PortError("Simulator preference recovery requires localized copy, not English fallback")
 
     @staticmethod
     def _notification_enrollment_resource(data: bytes):
         from .scope_amendment import NOTIFICATION_ENROLLMENT_COPY_CAPABILITY
 
+        return CapabilityEngine._bounded_copy_resource(
+            data, NOTIFICATION_ENROLLMENT_COPY_CAPABILITY["keys"], "Notification enrollment"
+        )
+
+    @staticmethod
+    def _bounded_copy_resource(data: bytes, keys, label: str, *, strict_utf8=False):
         try:
             text = data.decode("utf-8")
             if "<!DOCTYPE" in text.upper() or "<!ENTITY" in text.upper():
-                raise PortError("Notification enrollment resource cannot contain DTD or entity declarations")
-            document = minidom.parseString(text)
+                raise PortError(f"{label} resource cannot contain DTD or entity declarations")
+            if strict_utf8:
+                if "\x00" in text:
+                    raise PortError(f"{label} resource cannot contain embedded NULs or UTF-16 bytes")
+                try:
+                    document = minidom.parseString(data)
+                except (LookupError, ValueError) as error:
+                    raise PortError(f"{label} resource requires a UTF-8 XML declaration") from error
+                if document.encoding is not None and document.encoding.casefold() not in ("utf-8", "utf8"):
+                    raise PortError(f"{label} resource requires a UTF-8 XML declaration")
+            else:
+                document = minidom.parseString(text)
         except (UnicodeError, ExpatError) as error:
-            raise PortError("Notification enrollment resource requires valid UTF-8 XML") from error
+            raise PortError(f"{label} resource requires valid UTF-8 XML") from error
 
         root = document.documentElement
         if (
             root.tagName != "resources" or root.attributes.length
             or any(child.nodeType == Node.TEXT_NODE and child.data.strip() for child in root.childNodes)
         ):
-            raise PortError("Notification enrollment resource requires a plain resources root")
-        allowed = set(NOTIFICATION_ENROLLMENT_COPY_CAPABILITY["keys"])
+            raise PortError(f"{label} resource requires a plain resources root")
+        allowed = set(keys)
         values = {}
         selected = []
         for child in root.childNodes:
@@ -215,15 +311,15 @@ class CapabilityEngine:
             if child.nodeType in (Node.COMMENT_NODE, Node.PROCESSING_INSTRUCTION_NODE):
                 continue
             if child.nodeType != Node.ELEMENT_NODE or child.tagName != "string":
-                raise PortError("Notification enrollment resource may contain only approved string entries")
+                raise PortError(f"{label} resource may contain only approved string entries")
             key = child.getAttribute("name")
             if key not in allowed or key in values or dict(child.attributes.items()) != {"name": key}:
-                raise PortError("Notification enrollment resource contains an unknown or duplicate string key")
+                raise PortError(f"{label} resource contains an unknown or duplicate string key")
             if any(value.nodeType != Node.TEXT_NODE for value in child.childNodes):
-                raise PortError("Notification enrollment strings must be plain text")
+                raise PortError(f"{label} strings must be plain text")
             value = "".join(node.data for node in child.childNodes)
             if not value.strip():
-                raise PortError("Notification enrollment strings must be nonempty")
+                raise PortError(f"{label} strings must be nonempty")
             values[key] = value
             selected.append(child)
 
@@ -240,6 +336,26 @@ class CapabilityEngine:
                     tuple(entry(child) for child in children))
 
         return entry(document), values
+
+    @staticmethod
+    def _simulator_copy_comparison(message: str):
+        return CapabilityEngine._authored_android_copy(message, "Simulator preference recovery").casefold()
+
+    @staticmethod
+    def _authored_android_copy(message: str, label: str):
+        if message.lstrip().startswith(("@", "?")):
+            raise PortError(f"{label} requires authored copy, not Android references")
+        quoted, index = False, 0
+        while index < len(message):
+            char = message[index]
+            if char == "\\":
+                index += 1
+            elif char == '"':
+                quoted = not quoted
+            elif char == "'" and not quoted:
+                raise PortError(f"{label} apostrophes must be escaped or double-quoted")
+            index += 1
+        return CapabilityEngine._android_copy_comparison(message)
 
     @staticmethod
     def _android_copy_comparison(message: str):

@@ -5,6 +5,8 @@ package com.meshcoreone.android.app.container
 import android.Manifest
 import android.app.NotificationManager
 import android.content.ComponentName
+import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.os.Build
 import android.view.KeyEvent
@@ -13,11 +15,13 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
@@ -25,6 +29,7 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
+import com.meshcoreone.android.app.AppRootRecoveryDialogs
 import com.meshcoreone.android.app.deeplinks.AppDeepLinkRouter
 import com.meshcoreone.android.app.deeplinks.AppDeepLinkEnvironment
 import com.meshcoreone.android.app.deeplinks.ContainerDeepLinkEnvironment
@@ -86,7 +91,11 @@ import com.meshcoreone.android.feature.nodes.deps.NodesContactService
 import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
 import com.meshcoreone.android.feature.nodes.deps.NodesSession
 import com.meshcoreone.android.platform.notifications.messaging.AndroidMessagingNotificationDelivery
+import com.meshcoreone.android.platform.notifications.messaging.NotificationActionRecovery
+import com.meshcoreone.android.platform.notifications.messaging.NotificationActionRecoveryStore
 import com.meshcoreone.android.platform.notifications.messaging.NotificationOpenActivity
+import com.meshcoreone.android.platform.notifications.messaging.NotificationRecoveryRead
+import com.meshcoreone.android.platform.notifications.messaging.NotificationRecoveryWrite
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
@@ -117,6 +126,7 @@ import org.junit.After
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import org.junit.rules.TestName
 import org.robolectric.Robolectric
 import org.robolectric.Shadows.shadowOf
@@ -124,6 +134,7 @@ import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowDialog
 import java.lang.management.ManagementFactory
+import java.io.File
 import java.util.UUID
 import java.time.Instant
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -3491,6 +3502,94 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             assertNull(n.state.value.pendingContactLink)
             assertTrue(h.links.radios.all { it.sent.none { frame -> frame[0].toInt() == 0x09 } })
         } finally { deferredChat.cancel(); unmount(); h.container.close() }
+    }
+
+    @Test fun mountedContactConfirmationDefersRejectedNotificationRecoveryWithoutLosingEither() = runTest {
+        val folder = TemporaryFolder()
+        folder.create()
+        val recoveryContext = object : ContextWrapper(host.get()) {
+            override fun getApplicationContext(): Context = this
+            override fun getNoBackupFilesDir(): File = folder.root
+        }
+        val h = ContainerHarness(this, store)
+        try {
+            connect(h)
+            val radio = assertNotNull(h.appState.currentRadioId)
+            val navigation = h.container.navigation
+            NotificationActionRecovery.acknowledgeFailure(NotificationActionRecovery.load(recoveryContext).version)
+            val response = NotificationResponse(
+                NotificationPayload.DirectMessage(EntityKey(radio, UUID.randomUUID()), UUID.randomUUID()),
+                NotificationAction.REPLY,
+                " \trejected original\n ",
+            )
+            val original = (NotificationActionRecoveryStore(recoveryContext).retain(response)
+                as NotificationRecoveryWrite.Stored).entry
+            val router = AppDeepLinkRouter(ContainerDeepLinkEnvironment(h.container, navigation))
+            val pending = PendingExternalRoute(router::routeExternal)
+            val publicKey = key(30)
+            val uri = h.container.nodesFeature.uriCodec.exportContactUri(
+                "Contact awaiting consent", publicKey, ContactType.REPEATER,
+            )
+            pending.markReady()
+            assertEquals(
+                PendingExternalRoute.SubmitOutcome.Routed(DeepLinkRouteOutcome.ConfirmationStaged),
+                pending.submit(PendingExternalRoute.Delivery("recovery-contact", uri)),
+            )
+            val contact = assertNotNull(navigation.currentState.pendingContactLink)
+            assertEquals(radio, contact.targetRadioId)
+            assertEquals(navigation.currentState.generation, contact.generation)
+            assertEquals(publicKey, contact.publicKey)
+            assertEquals(ContactType.REPEATER, contact.type)
+            compose.runOnUiThread {
+                host.get().setContent {
+                    CompositionLocalProvider(LocalContext provides recoveryContext) {
+                        Box(Modifier.width(width.value).height(1000.dp)) {
+                            MeshCoreTheme(motionScale = 0f) {
+                                NativeNavigationShell(
+                                    navigation, chats = h.container.chatsFeature, nodes = h.container.nodesFeature,
+                                )
+                                AppRootRecoveryDialogs(
+                                    navigation = navigation,
+                                    pendingExternalRoute = pending,
+                                    showExternalLinkFailure = true,
+                                    shellVisible = true,
+                                    nodesAvailable = true,
+                                    connectionRecoveryVisible = false,
+                                    onRetryContactLink = { _, _ -> error("No lookup failure is expected") },
+                                    onCancelContactLink = { _, _ -> error("No lookup failure is expected") },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            await(h) { confirmationEnabled() }
+            compose.onNodeWithTag("contact-link-confirmation").assertIsDisplayed()
+            compose.onNodeWithTag("contact-link-name").assertTextEquals("Contact awaiting consent")
+            compose.onNodeWithText(" \trejected original\n ").assertDoesNotExist()
+            assertEquals(
+                original.id,
+                (NotificationActionRecoveryStore(recoveryContext).read() as NotificationRecoveryRead.Ready)
+                    .entries.single().id,
+            )
+            compose.onNodeWithTag("contact-link-cancel").performClick()
+            assertNull(navigation.currentState.pendingContactLink)
+            compose.waitUntil(10_000) {
+                compose.onAllNodesWithText(" \trejected original\n ").fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithText(" \trejected original\n ").assertIsDisplayed()
+            val retained = (NotificationActionRecoveryStore(recoveryContext).read() as NotificationRecoveryRead.Ready)
+                .entries.single()
+            assertEquals(original.id, retained.id)
+            assertEquals(response, retained.response)
+            assertNull(store.fetchContact(radio, publicKey))
+            assertTrue(h.links.radios.all { it.sent.none { frame -> frame[0].toInt() == 0x09 } })
+        } finally {
+            unmount()
+            h.container.close()
+            NotificationActionRecovery.acknowledgeFailure(NotificationActionRecovery.load(recoveryContext).version)
+            folder.delete()
+        }
     }
 
     @Test fun preConnectionContactLookupSurvivesRetryWithinTheFirstConnectionSubmission() = runTest {

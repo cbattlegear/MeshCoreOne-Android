@@ -43,6 +43,7 @@ import com.meshcoreone.android.feature.onboarding.OnboardingFlowCoordinator
 import com.meshcoreone.android.feature.onboarding.OnboardingPresetOption
 import com.meshcoreone.android.feature.onboarding.OnboardingPresetOutcome
 import com.meshcoreone.android.feature.onboarding.OnboardingPresetPort
+import com.meshcoreone.android.feature.onboarding.OnboardingPresetTarget
 import com.meshcoreone.android.feature.onboarding.OnboardingStep
 import com.meshcoreone.android.feature.onboarding.OnboardingState
 import com.meshcoreone.android.feature.onboarding.ui.OnboardingFlow
@@ -74,6 +75,11 @@ import org.robolectric.annotation.Config
 class SettingsRerunNavigationTest {
     @get:Rule val compose = createEmptyComposeRule()
     private lateinit var host: org.robolectric.android.controller.ActivityController<ComponentActivity>
+    private val presetTarget = OnboardingPresetTarget(
+        java.util.UUID.fromString("00000000-0000-0000-0000-000000000001"),
+        1,
+        java.util.UUID.fromString("00000000-0000-0000-0000-000000000002"),
+    )
 
     @Before fun attachHost() {
         val resolver = ApplicationProvider.getApplicationContext<Context>().contentResolver
@@ -153,6 +159,7 @@ class SettingsRerunNavigationTest {
             var applies = 0
             val presets = object : OnboardingPresetPort {
                 override val canApply = MutableStateFlow(true)
+                override fun currentTarget() = presetTarget
                 override suspend fun apply(presetId: String): OnboardingPresetOutcome {
                     applies += 1
                     if (applies == 1) {
@@ -214,6 +221,7 @@ class SettingsRerunNavigationTest {
             var applies = 0
             val presets = object : OnboardingPresetPort {
                 override val canApply = MutableStateFlow(true)
+                override fun currentTarget() = presetTarget
                 override suspend fun apply(presetId: String): OnboardingPresetOutcome {
                     applies += 1
                     return OnboardingPresetOutcome.Applied
@@ -357,6 +365,7 @@ class SettingsRerunNavigationTest {
                 processScope,
                 object : OnboardingPresetPort {
                     override val canApply = MutableStateFlow(true)
+                    override fun currentTarget() = presetTarget
                     override suspend fun apply(presetId: String) = OnboardingPresetOutcome.Applied
                 },
             )
@@ -391,6 +400,7 @@ class SettingsRerunNavigationTest {
             var applies = 0
             val presets = object : OnboardingPresetPort {
                 override val canApply = MutableStateFlow(true)
+                override fun currentTarget() = presetTarget
                 override suspend fun apply(presetId: String): OnboardingPresetOutcome {
                     applies += 1
                     applyStarted.complete(Unit)
@@ -459,6 +469,7 @@ class SettingsRerunNavigationTest {
                 processScope,
                 object : OnboardingPresetPort {
                     override val canApply = MutableStateFlow(true)
+                    override fun currentTarget() = presetTarget
                     override suspend fun apply(presetId: String) = OnboardingPresetOutcome.Applied
                 },
             ).forRerun()
@@ -495,6 +506,7 @@ class SettingsRerunNavigationTest {
                 processScope,
                 object : OnboardingPresetPort {
                     override val canApply = MutableStateFlow(true)
+                    override fun currentTarget() = presetTarget
                     override suspend fun apply(presetId: String) = OnboardingPresetOutcome.Applied
                 },
             ).forRerun()

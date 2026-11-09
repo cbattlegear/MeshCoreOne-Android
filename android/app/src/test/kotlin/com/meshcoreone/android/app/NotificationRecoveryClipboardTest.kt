@@ -4,12 +4,14 @@ package com.meshcoreone.android.app
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.ContextWrapper
+import android.os.Looper
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsEnabled
@@ -37,6 +39,8 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -54,8 +58,10 @@ import com.meshcoreone.android.platform.notifications.R as NotificationStrings
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31], qualifiers = "w400dp-h800dp")
+@OptIn(ExperimentalCoroutinesApi::class, ExperimentalTestApi::class)
 class NotificationRecoveryClipboardTest {
-    @get:Rule val compose = createEmptyComposeRule()
+    // Queue IO-triggered recomposition until the Compose clock drains it on the UI thread.
+    @get:Rule val compose = createEmptyComposeRule(effectContext = StandardTestDispatcher())
     @get:Rule val folder = TemporaryFolder()
     private val activity = Robolectric.buildActivity(ComponentActivity::class.java)
     private lateinit var context: Context
@@ -601,6 +607,21 @@ class NotificationRecoveryClipboardTest {
         duplicateDispositionIsRejected(copy = true)
     }
 
+    @Test
+    fun workerPublishedRecoveryOpensTheActualDialogOnTheMainLooper() {
+        mount()
+        compose.waitForIdle()
+        val retained = CompletableFuture.supplyAsync {
+            assertFalse(Looper.myLooper() == Looper.getMainLooper())
+            NotificationActionRecovery.retain(context, response(53, "worker-published original"))
+        }.get(5, TimeUnit.SECONDS)
+        assertEquals(NotificationRecoveryRetention.DURABLE, retained)
+        awaitText("worker-published original")
+        compose.onNodeWithText(text(AppChatsStrings.chatsMessageActionDelete)).performClick()
+        compose.waitUntil(5_000) { entries().isEmpty() }
+        assertEquals(1, dispositionStarts.get())
+    }
+
     private fun duplicateDispositionIsRejected(copy: Boolean) {
         save(47, "one disposition only")
         // Keep a second record visible after successful removal, so late false errors are observable.
@@ -737,13 +758,19 @@ class NotificationRecoveryClipboardTest {
     private fun mount() {
         check(!mounted)
         mounted = true
-        activity.get().setContent {
-            CompositionLocalProvider(LocalContext provides context) {
-                MeshCoreTheme(motionScale = 0f) {
-                    NotificationActionRecoveryDialog(
-                        blockedByOtherDialog = otherDialog.value,
-                        onDispositionStarted = { dispositionStarts.incrementAndGet() },
-                    )
+        compose.runOnUiThread {
+            activity.get().setContent {
+                assertEquals(Looper.getMainLooper(), Looper.myLooper())
+                CompositionLocalProvider(LocalContext provides context) {
+                    MeshCoreTheme(motionScale = 0f) {
+                        NotificationActionRecoveryDialog(
+                            blockedByOtherDialog = otherDialog.value,
+                            onDispositionStarted = {
+                                assertEquals(Looper.getMainLooper(), Looper.myLooper())
+                                dispositionStarts.incrementAndGet()
+                            },
+                        )
+                    }
                 }
             }
         }

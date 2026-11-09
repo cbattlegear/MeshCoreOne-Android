@@ -99,6 +99,7 @@ class ConnectionManager(
     private val operations = Mutex()
     private val operationIdentity = Any()
     private val activation = Mutex()
+    private val deviceCommitAuthority = Mutex()
     private val bondPersistence = Mutex()
     private val transitions = EventBroadcaster<ConnectionSnapshot>()
     private val values = MutableStateFlow(ConnectionSnapshot(
@@ -134,11 +135,13 @@ class ConnectionManager(
     private val breaker = ConnectionCircuitBreaker(clock)
     private var rebuildFailures = 0
     private var deviceValue: DeviceDTO? = null
+    private var ocvRevision = 0L
     private var repeatRanges: SnapshotList<FrequencyRange> = SnapshotList.empty()
     private var platformValue = DevicePlatform.UNKNOWN
     private var cleanSync: Pair<RadioId, Instant>? = null
     private var attemptedSync: Pair<RadioId, Instant>? = null
     val connectedDevice: DeviceDTO? get() = synchronized(lock) { deviceValue }
+    val ocvPublicationRevision: Long get() = synchronized(lock) { ocvRevision }
     val isSimulatorConnection: Boolean get() = synchronized(lock) {
         pendingTarget == ConnectionTarget.Simulator || (active ?: retained)?.target == ConnectionTarget.Simulator
     }
@@ -303,11 +306,11 @@ class ConnectionManager(
         if (normalized == ConnectionTarget.Simulator && synchronized(lock) {
                 active?.target == normalized && values.value.state.isOperational
             }) return
-        val submission = synchronized(lock) {
+        val submission = mutateDeviceAuthority {
             if (expectedRevision != null && revision != expectedRevision) return
             val duplicate = pending
             if (duplicate != null && !duplicate.isCompleted && !duplicate.isCancelled && pendingTarget == normalized) {
-                return@synchronized Submission(duplicate, null, revision, false, null)
+                return@mutateDeviceAuthority Submission(duplicate, null, revision, false, null)
             }
             revision = Math.incrementExact(revision)
             val claimedRevision = revision
@@ -605,9 +608,26 @@ class ConnectionManager(
             owner.services = OwnedRadioServices(services, ownership, context)
         }
         requireCurrent(owner)
-        devices.saveDevice(device)
+        if (existing == null) {
+            val persistence = devices as? DeviceEditPersisting
+                ?: throw UnsupportedOperationException("Connection initialization requires versioned device persistence")
+            deviceCommitAuthority.withLock {
+                requireCurrent(owner)
+                if (!persistence.insertDeviceIfAbsent(device)) throw DeviceWriteConflict()
+            }
+        } else {
+            devices.editDevice(deviceId, isCurrent = { isCurrent(owner) }, withAuthority = { write ->
+                deviceCommitAuthority.withLock { requireCurrent(owner); write() }
+            }) { latest ->
+                DeviceDTO.fromConnection(deviceId, radioId, info, capabilities, autoAdd, latest, methods, clock.instant)
+                    .copy(isActive = latest.isActive, lastConnected = latest.lastConnected)
+            } ?: throw ConnectionError.DeviceNotFound()
+        }
         requireCurrent(owner)
-        devices.setActiveDevice(device.id)
+        if (!activateDevice(owner, device.id)) {
+            requireCurrent(owner)
+            throw DeviceWriteConflict()
+        }
         requireCurrent(owner)
         val activatedDevice = devices.fetchDevice(device.id) ?: throw ConnectionError.DeviceNotFound()
         requireCurrent(owner)
@@ -709,7 +729,10 @@ class ConnectionManager(
         requireCurrent(owner)
         simulator.seedSimulator()
         requireCurrent(owner)
-        devices.setActiveDevice(device.id)
+        if (!activateDevice(owner, device.id)) {
+            requireCurrent(owner)
+            throw DeviceWriteConflict()
+        }
         requireCurrent(owner)
         val activatedDevice = devices.fetchDevice(device.id) ?: throw ConnectionError.DeviceNotFound()
         requireCurrent(owner)
@@ -799,7 +822,7 @@ class ConnectionManager(
     ): Pair<TeardownReport, Long>? {
         val reentrant = currentCoroutineContext()[RuntimeOperation]?.owner === operationIdentity
         val before = snapshot.value
-        val (cleanup, expectedRevision) = synchronized(lock) {
+        val (cleanup, expectedRevision) = mutateDeviceAuthority {
             if (expectedOwner != null && !ownsIdentityRecovery(expectedOwner)) return null
             revision = Math.incrementExact(revision)
             val expectedRevision = revision
@@ -845,10 +868,40 @@ class ConnectionManager(
         return report to expectedRevision
     }
 
-    override fun setConnectionState(state: DeviceConnectionState) {
+    override suspend fun setConnectionState(state: DeviceConnectionState) {
         publish { copy(state = state, token = if (state == DeviceConnectionState.DISCONNECTED) null else token) }
     }
-    override fun clearConnectedDevice() { synchronized(lock) { deviceValue = null; repeatRanges = SnapshotList.empty() } }
+    override suspend fun clearConnectedDevice() {
+        mutateDeviceAuthority { deviceValue = null; repeatRanges = SnapshotList.empty() }
+    }
+    override fun captureConnectionAuthority(): () -> Boolean {
+        val captured = synchronized(lock) { Triple(revision, active, retained) }
+        val owner = captured.second ?: captured.third
+        return {
+            synchronized(lock) {
+                !closed && revision == captured.first && (active ?: retained) === owner
+            }
+        }
+    }
+
+    override suspend fun transitionConnection(
+        state: DeviceConnectionState,
+        clearDevice: Boolean,
+        isCurrent: () -> Boolean,
+    ): Boolean = mutateDeviceAuthority {
+        if (!isCurrent()) false else {
+            if (clearDevice) { deviceValue = null; repeatRanges = SnapshotList.empty() }
+            publishLocked(state = state, token = if (state == DeviceConnectionState.DISCONNECTED) null else values.value.token)
+            true
+        }
+    }
+
+    suspend fun markDisconnectedIfNotOperational(): Boolean {
+        val current = captureConnectionAuthority()
+        return transitionConnection(DeviceConnectionState.DISCONNECTED, false) {
+            current() && !connectionState.isOperational
+        }
+    }
     override suspend fun notifyAutoReconnectStarted() = observer.onAutoReconnectStarted()
     override suspend fun notifyConnectionLost() {
         observer.onConnectionLost()
@@ -860,9 +913,9 @@ class ConnectionManager(
         return platform.state(owner.target).autoReconnecting
     }
 
-    override suspend fun teardownSessionForReconnect() {
-        val old = synchronized(lock) {
-            active?.also {
+    override suspend fun teardownSessionForReconnect(isCurrent: () -> Boolean) {
+        val old = mutateDeviceAuthority {
+            active?.takeIf { isCurrent() }?.also {
                 active = null
                 retained = it
                 deviceValue = null
@@ -909,7 +962,7 @@ class ConnectionManager(
                 }
                 // WP-107's retained-link receipt is not a new physical generation: close it before reacquisition.
                 if (old != null) closeGeneration(old, disconnectPhysical = true)
-                synchronized(lock) { if (retained === old) retained = null; if (active === old) active = null }
+                mutateDeviceAuthority { if (retained === old) retained = null; if (active === old) active = null }
                 val owner = newGeneration(target, expectedRevision)
                 try {
                     establish(owner, (connectionIntent as? ConnectionIntent.WantsConnection)?.forceFullSync == true, reconnecting = true)
@@ -919,7 +972,7 @@ class ConnectionManager(
                     stopReconnectionWatchdog()
                 } catch (failure: Exception) {
                     closeGeneration(owner, disconnectPhysical = false, primary = failure)
-                    synchronized(lock) { if (active === owner) { active = null; retained = owner } }
+                    mutateDeviceAuthority { if (active === owner) { active = null; retained = owner } }
                     throw failure
                 }
             }
@@ -933,7 +986,7 @@ class ConnectionManager(
     suspend fun disconnectTransport(requireComplete: Boolean) {
         val owner = synchronized(lock) { retained ?: active } ?: return
         val report = (if (requireComplete) revalidateRetainedTeardown(owner) else null) ?: closeGeneration(owner, true)
-        synchronized(lock) { if (retained === owner) retained = null; if (active === owner) active = null }
+        mutateDeviceAuthority { if (retained === owner) retained = null; if (active === owner) active = null }
         if (!report.isComplete) {
             reporter.report(RuntimeDiagnostic.Teardown(report))
             if (requireComplete) {
@@ -964,7 +1017,10 @@ class ConnectionManager(
     override suspend fun handleReconnectionFailure() {
         val expectedCoordinator = reconnectionCoordinator.reconnectGeneration
         val expectedRevision = synchronized(lock) { revision }
-        val owner = synchronized(lock) {
+        val owner = mutateDeviceAuthority {
+            if (closed || revision != expectedRevision ||
+                reconnectionCoordinator.reconnectGeneration != expectedCoordinator
+            ) return
             if (connectionIntent.wantsConnection) rebuildFailures++
             (active ?: retained).also {
                 active = null
@@ -1159,7 +1215,10 @@ class ConnectionManager(
         if (!isCurrent(owner)) return radioId
         if (radioId == null && before.publicKey != info.publicKey) {
             requireCurrent(owner)
-            devices.saveDevice(before.copy(publicKey = info.publicKey))
+            devices.editDevice(before.id, isCurrent = { isCurrent(owner) }, withAuthority = { write ->
+                deviceCommitAuthority.withLock { requireCurrent(owner); write() }
+            }) { it.copy(publicKey = info.publicKey) }
+                ?: throw ConnectionError.DeviceNotFound()
             requireCurrent(owner)
         }
         if (radioId != null || before.publicKey != info.publicKey) {
@@ -1214,7 +1273,7 @@ class ConnectionManager(
 
     private fun startShutdown(cause: Throwable?, except: Job? = null): Deferred<TeardownReport> = synchronized(lock) {
         shutdown ?: cleanupScope.async(start = CoroutineStart.LAZY) {
-            synchronized(lock) { closed = true; revision++ }
+            mutateDeviceAuthority { closed = true; revision++ }
             reconnectionCoordinator.close()
             stopReconnectionWatchdog()
             stopWiFiReconnection()
@@ -1237,7 +1296,7 @@ class ConnectionManager(
         }
     }
 
-    private fun newGeneration(target: ConnectionTarget, claimedRevision: Long): RadioGeneration = synchronized(lock) {
+    private suspend fun newGeneration(target: ConnectionTarget, claimedRevision: Long): RadioGeneration = mutateDeviceAuthority {
         requireRevision(claimedRevision)
         nextGeneration = Math.incrementExact(nextGeneration)
         RadioGeneration(nextGeneration, target, claimedRevision, context, processJob).also {
@@ -1249,11 +1308,33 @@ class ConnectionManager(
     private suspend fun <T> withOperation(reentrant: Boolean, action: suspend () -> T): T =
         if (reentrant) action() else operations.withLock { action() }
 
+    private suspend inline fun <T> mutateDeviceAuthority(action: () -> T): T =
+        deviceCommitAuthority.withLock { synchronized(lock) { action() } }
+
+    private suspend fun activateDevice(owner: RadioGeneration, id: UUID): Boolean =
+        deviceCommitAuthority.withLock {
+            requireCurrent(owner)
+            devices.activateDeviceIfCurrent(id) { isCurrent(owner) }
+        }
+
+    suspend fun withDeviceWriteAuthority(expectedToken: SessionToken?, write: suspend () -> Boolean): Boolean =
+        deviceCommitAuthority.withLock {
+            if (expectedToken != null && currentDevice(expectedToken) == null) false else write()
+        }
+
+    fun updateAllowedRepeatFrequencyRanges(ranges: SnapshotList<FrequencyRange>, expectedToken: SessionToken): Boolean =
+        synchronized(lock) {
+            if (currentDevice(expectedToken) == null) false else {
+                repeatRanges = ranges
+                true
+            }
+        }
+
     private suspend fun closeGeneration(
         owner: RadioGeneration, disconnectPhysical: Boolean, primary: Throwable? = null,
         publishDisconnected: Boolean = true,
     ): TeardownReport {
-        synchronized(lock) {
+        mutateDeviceAuthority {
             owner.correlationAccounting?.cancel()
             if (primary != null && provenForeignAdmission(primary, owner)) {
                 owner.link?.let { PhysicalOwnership.release(it.transport, owner.physicalOwner) }
@@ -1324,7 +1405,7 @@ class ConnectionManager(
         } else TeardownReport(emptyList<TeardownIssue>().snapshot())
         val result = TeardownReport((serviceReport.issues + physicalReport.issues).snapshot())
         if (primary != null) result.issues.forEach { if (it.cause !== primary) primary.addSuppressed(it.cause) }
-        synchronized(lock) {
+        mutateDeviceAuthority {
             if (active === owner && disconnectPhysical) {
                 active = null
                 deviceValue = null
@@ -1335,7 +1416,7 @@ class ConnectionManager(
     }
 
     private suspend fun stopCurrent(disconnectPhysical: Boolean): TeardownReport {
-        val owners = synchronized(lock) { detachOwnersLocked(DeviceConnectionState.DISCONNECTED) }
+        val owners = mutateDeviceAuthority { detachOwnersLocked(DeviceConnectionState.DISCONNECTED) }
         return closeCaptured(owners, disconnectPhysical)
     }
 
@@ -1394,7 +1475,7 @@ class ConnectionManager(
     private suspend fun handleConnectionLoss(
         owner: RadioGeneration, failure: Throwable?, disconnectPhysical: Boolean = false,
     ) {
-        val before = synchronized(lock) {
+        val before = mutateDeviceAuthority {
             if (!isRelevant(owner) || owner.lossHandled || disconnectPhysical && !isCurrent(owner)) null
             else {
                 val before = values.value
@@ -1504,7 +1585,7 @@ class ConnectionManager(
         throw LinkFailure.DeviceConnectedToOtherApp()
     }
 
-    private fun ensureRestorationRoute(target: ConnectionTarget, expectedRevision: Long): RadioGeneration {
+    private suspend fun ensureRestorationRoute(target: ConnectionTarget, expectedRevision: Long): RadioGeneration {
         val existing = synchronized(lock) { (active ?: retained)?.takeIf { it.target == target && it.revision == expectedRevision } }
         if (existing != null) return existing
         val owner = newGeneration(target, expectedRevision)
@@ -1541,9 +1622,9 @@ class ConnectionManager(
         if (old !== except) old?.cancel()
     }
 
-    private fun startWiFiReconnection(target: ConnectionTarget) {
+    private suspend fun startWiFiReconnection(target: ConnectionTarget) {
         if (!connectionIntent.wantsConnection || identityImportPending) return
-        val task = synchronized(lock) {
+        val task = mutateDeviceAuthority {
             if (wifiReconnect?.isActive == true) return
             val previous = lastWiFiReconnect
             if (previous != null && clock.elapsed - previous < ConnectionRetryPolicy.WIFI_RECONNECT_COOLDOWN) {
@@ -1607,6 +1688,49 @@ class ConnectionManager(
     /** Clears the auth-failure latch so the next failure episode for the same device re-presents recovery. */
     fun clearSurfacedAuthenticationFailure() { synchronized(lock) { authFailureDevice = null } }
 
+    /** A suspended producer must supply its originating token, never the token observed on return. */
+    fun sealOnboardingCompletion(expectedToken: SessionToken, attempt: OnboardingCompletionAttempt): Boolean =
+        synchronized(lock) {
+            val owner = active ?: return@synchronized false
+            owner.token == expectedToken && values.value.state.isConnected && isCurrent(owner) && attempt.trySeal()
+        }
+
+    fun replaceConnectedDevice(device: DeviceDTO, expectedToken: SessionToken): ConnectedDeviceEdit? = synchronized(lock) {
+        if (active?.token != expectedToken || !values.value.state.isConnected) return@synchronized null
+        replaceConnectedDevice(device)
+    }
+
+    fun currentDevice(expectedToken: SessionToken): DeviceDTO? = synchronized(lock) {
+        val owner = active ?: return@synchronized null
+        if (owner.token != expectedToken || !values.value.state.isConnected || !isCurrent(owner)) return@synchronized null
+        deviceValue
+    }
+
+    fun captureDeviceWriteView(expectedToken: SessionToken?): ConnectedDeviceWriteView? = synchronized(lock) {
+        val device = if (expectedToken == null) deviceValue else currentDevice(expectedToken)
+        device?.let { ConnectedDeviceWriteView(it, ocvRevision) }
+    }
+
+    fun publishOCVSettings(device: DeviceDTO, expectedToken: SessionToken): ConnectedDeviceEdit? = synchronized(lock) {
+        val live = currentDevice(expectedToken) ?: return@synchronized null
+        if (live.id != device.id || live.radioId != device.radioId) return@synchronized null
+        val unchanged = live.ocvPreset == device.ocvPreset && live.customOCVArrayString == device.customOCVArrayString
+        val nextRevision = Math.incrementExact(ocvRevision)
+        val edit = replaceConnectedDevice(live.copy(
+            ocvPreset = device.ocvPreset, customOCVArrayString = device.customOCVArrayString,
+        )) ?: return@synchronized null
+        if (unchanged) ocvRevision = nextRevision
+        edit
+    }
+
+    fun transformConnectedDevice(
+        expectedToken: SessionToken?,
+        transform: (DeviceDTO) -> DeviceDTO,
+    ): ConnectedDeviceEdit? = synchronized(lock) {
+        val current = if (expectedToken == null) deviceValue else currentDevice(expectedToken)
+        replaceConnectedDevice(transform(current ?: return@synchronized null))
+    }
+
     /** Swift updateDevice(with:) after a device edit, limited to the current generation's radio. */
     fun replaceConnectedDevice(device: DeviceDTO): ConnectedDeviceEdit? = synchronized(lock) {
         val owner = active ?: return@synchronized null
@@ -1614,6 +1738,9 @@ class ConnectionManager(
         if (!isCurrent(owner) || current.id != device.id || current.radioId != device.radioId) return@synchronized null
         val token = owner.token ?: return@synchronized null
         val sequence = Math.incrementExact(owner.deviceEditSequence)
+        if (current.ocvPreset != device.ocvPreset || current.customOCVArrayString != device.customOCVArrayString) {
+            ocvRevision = Math.incrementExact(ocvRevision)
+        }
         owner.deviceEditSequence = sequence
         deviceValue = device
         owner.device = device
@@ -1664,7 +1791,7 @@ class ConnectionManager(
         if (!isRevisionCurrent(expected)) return false
         lastConnection.persistIntent(intent) { isRevisionCurrent(expected) }
         currentCoroutineContext().ensureActive()
-        return synchronized(lock) {
+        return mutateDeviceAuthority {
             if (closed || revision != expected) false
             else {
                 publishLocked(intent = intent)
@@ -1684,11 +1811,11 @@ class ConnectionManager(
      * leaves alone cannot be captured before a racing publication and written back stale.
      * With [expectedRevision], a superseded attempt publishes nothing and returns false.
      */
-    private fun publish(
+    private suspend fun publish(
         expectedRevision: Long? = null,
         change: ConnectionSnapshot.() -> ConnectionSnapshot,
-    ): Boolean = synchronized(lock) {
-        if (expectedRevision != null && (closed || revision != expectedRevision)) return@synchronized false
+    ): Boolean = mutateDeviceAuthority {
+        if (expectedRevision != null && (closed || revision != expectedRevision)) return@mutateDeviceAuthority false
         val next = values.value.change()
         publishLocked(next.state, next.transport, next.token, next.issue)
         true
@@ -1740,7 +1867,7 @@ class ConnectionManager(
     }
     private fun reportIssue(failure: Throwable, stage: LifecycleStage) {
         reporter.report(RuntimeDiagnostic.Failure(stage.name, failure))
-        publish { copy(issue = issueFor(failure, stage)) }
+        synchronized(lock) { publishLocked(issue = issueFor(failure, stage)) }
     }
     private fun staleIdentity(token: SessionToken): RadioId? {
         reporter.report(RuntimeDiagnostic.StaleCallback("identity", token.generation.value))

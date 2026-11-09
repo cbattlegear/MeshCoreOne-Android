@@ -25,6 +25,11 @@ import com.meshcoreone.android.core.connectivity.permissions.AndroidPermissionSt
 import com.meshcoreone.android.core.connectivity.permissions.PermissionSnapshot
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
+import com.meshcoreone.android.core.contracts.domain.Generation
+import com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt
+import com.meshcoreone.android.core.contracts.domain.ProcessEpoch
+import com.meshcoreone.android.core.contracts.domain.SessionToken
+import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.app.content.LocationPermissionResultReporting
 import com.meshcoreone.android.core.services.content.RegionResolver
 import com.meshcoreone.android.core.services.device.RadioPreset
@@ -38,11 +43,14 @@ import com.meshcoreone.android.feature.onboarding.OnboardingPairingPort
 import com.meshcoreone.android.feature.onboarding.OnboardingPermissionKind
 import com.meshcoreone.android.feature.onboarding.OnboardingPermissionPort
 import com.meshcoreone.android.feature.onboarding.OnboardingPresetPort
+import com.meshcoreone.android.feature.onboarding.OnboardingPresetTarget
 import com.meshcoreone.android.feature.onboarding.OnboardingRegionPort
 import com.meshcoreone.android.feature.onboarding.OnboardingWiFiPort
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -122,14 +130,43 @@ class AppStateOnboardingHost(private val container: AppContainer) : OnboardingCo
 
 /** [OnboardingRadioConfigurator] over the live session's settings service and the connected-device editor. */
 class AppStateRadioConfigurator(private val container: AppContainer) : OnboardingRadioConfigurator {
+    override fun sealCompletion(
+        target: OnboardingPresetTarget?,
+        attempt: OnboardingCompletionAttempt,
+    ): Boolean {
+        if (target == null) return false
+        return container.connectionManager.sealOnboardingCompletion(
+            SessionToken(ProcessEpoch(target.epoch), Generation(target.generation), RadioId(target.radioId)),
+            attempt,
+        )
+    }
     override fun connectionStates(): Flow<DeviceConnectionState> =
         container.connectionManager.snapshot.map { it.state }.distinctUntilChanged()
     override val isDemoRadio: Boolean get() = container.connectionManager.isSimulatorConnection
+    override fun currentTarget(): OnboardingPresetTarget? =
+        container.connectionManager.snapshot.value.takeIf { it.state.isConnected }?.token?.let { token ->
+            OnboardingPresetTarget(token.epoch.value, token.generation.value, token.radioId.value)
+        }
 
-    override suspend fun applyPreset(preset: RadioPreset) {
+    override suspend fun applyPreset(preset: RadioPreset) = applyPreset(preset, currentTarget())
+
+    override suspend fun applyPreset(preset: RadioPreset, expectedTarget: OnboardingPresetTarget?) {
         val session = container.appState.services ?: throw SettingsServiceException(SettingsServiceError.NotConnected)
+        val token = session.token
+        if (expectedTarget != OnboardingPresetTarget(token.epoch.value, token.generation.value, token.radioId.value)) {
+            throw SettingsServiceException(SettingsServiceError.NotConnected)
+        }
+        val pathHashMode = preset.pathHashMode.takeIf { container.connectionManager.connectedDevice?.supportsPathHashMode == true }
         val info = session.settingsService.applyRadioPresetVerified(preset)
-        container.connectionPort.updateDevice(info, preset.id)
+        currentCoroutineContext().ensureActive()
+        if (!container.connectionPort.updateDevice(info, preset.id, token)) {
+            throw SettingsServiceException(SettingsServiceError.NotConnected)
+        }
+        pathHashMode?.let { mode ->
+            if (!container.connectionPort.updatePathHashMode(mode, token)) {
+                throw SettingsServiceException(SettingsServiceError.NotConnected)
+            }
+        }
     }
 }
 

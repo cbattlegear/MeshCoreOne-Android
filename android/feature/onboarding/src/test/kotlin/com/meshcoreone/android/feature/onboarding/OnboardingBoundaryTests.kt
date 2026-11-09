@@ -301,7 +301,7 @@ class PresetStepCoordinatorTest {
         null to listOf(OnboardingPresetOption("loc", "Locale", 433.0)),
     )
 
-    private fun coordinator(port: FakePresets, region: FakeRegion = FakeRegion(presets = presets), done: () -> Unit = {}) =
+    private fun coordinator(port: FakePresets, region: FakeRegion = FakeRegion(presets = presets), done: suspend () -> Unit = {}) =
         PresetStepCoordinator(scope, region, port, done)
 
     @Test fun visiblePresetsFollowRegionWithLocaleFallback() {
@@ -327,6 +327,30 @@ class PresetStepCoordinatorTest {
         val c = coordinator(FakePresets(OnboardingPresetOutcome.NoRadioToConfigure), done = { done += 1 })
         c.select("loc"); c.apply()
         assertEquals(1, done)
+    }
+
+    @Test fun completionAcknowledgementKeepsPresetBusyAndRejectsDuplicateApply() {
+        val acknowledged = CompletableDeferred<Unit>()
+        val port = FakePresets()
+        val c = PresetStepCoordinator(scope, FakeRegion(presets = presets), port) { acknowledged.await() }
+        c.select("loc"); c.apply()
+        assertTrue(c.state.value.isApplying)
+        assertEquals(0, c.state.value.commitTick)
+        c.apply()
+        assertEquals(listOf("loc"), port.applied)
+        acknowledged.complete(Unit)
+        assertFalse(c.state.value.isApplying)
+        assertEquals(1, c.state.value.commitTick)
+    }
+
+    @Test fun completionPersistenceFailureRemainsVisibleWithoutSuccessfulPresetTick() {
+        val c = PresetStepCoordinator(scope, FakeRegion(presets = presets), FakePresets()) {
+            throw java.io.IOException("completion unavailable")
+        }
+        c.select("loc"); c.apply()
+        assertEquals(UiText.Verbatim("completion unavailable"), c.state.value.error)
+        assertFalse(c.state.value.isApplying)
+        assertEquals(0, c.state.value.commitTick)
     }
 
     @Test fun notConnectedSurfacesErrorWithoutCompleting() {
@@ -371,7 +395,7 @@ class OnboardingFlowCoordinatorTest {
         override val demo: FakeDemo = FakeDemo(),
         override val region: FakeRegion = FakeRegion(RegionSelection("US", RegionSelection.Source.LOCATION),
             mapOf(null to listOf(OnboardingPresetOption("p", "P", 915.0)))),
-        override val presets: FakePresets = FakePresets(),
+        override val presets: OnboardingPresetPort = FakePresets(),
     ) : OnboardingFeatureDependencies {
         override fun openAppSettings() = Unit
         @androidx.compose.runtime.Composable
@@ -402,6 +426,152 @@ class OnboardingFlowCoordinatorTest {
         assertTrue(flow.onboarding.hasCompletedOnboarding)
         assertEquals(PairSheet.NONE, flow.deviceScan.state.value.sheet)
         assertEquals(OnboardingStep.PAIR, flow.currentStep)
+    }
+
+    @Test fun presetReplacementWhileApplyingCannotCompleteForTheSuccessor() {
+        val first = OnboardingPresetTarget(UUID.randomUUID(), 1, UUID.randomUUID())
+        val release = CompletableDeferred<Unit>()
+        var received: OnboardingPresetTarget? = null
+        val port = object : OnboardingPresetPort {
+            override val canApply = kotlinx.coroutines.flow.MutableStateFlow(true)
+            var target = first
+            override fun currentTarget() = target
+            override suspend fun apply(presetId: String): OnboardingPresetOutcome = error("Use captured target")
+            override suspend fun apply(presetId: String, expectedTarget: OnboardingPresetTarget?): OnboardingPresetOutcome {
+                received = expectedTarget
+                release.await()
+                return OnboardingPresetOutcome.Applied
+            }
+        }
+        val deps = Deps(presets = port)
+        val flow = OnboardingFlowCoordinator(scope, deps)
+        flow.preset.apply("p")
+        assertEquals(first, received)
+        assertTrue(flow.preset.state.value.isApplying)
+        port.target = first.copy(generation = 2)
+        release.complete(Unit)
+        assertFalse(flow.onboarding.hasCompletedOnboarding)
+        assertNull(flow.onboarding.completionReceipt)
+        assertFalse(deps.flags.getBoolean(OnboardingState.KEY_HAS_COMPLETED))
+        assertEquals(0, flow.preset.state.value.commitTick)
+        assertNotNull(flow.preset.state.value.error)
+    }
+
+    @Test fun presetSealRejectsReplacementAfterValidationAndFreshTargetCanComplete() {
+        val first = OnboardingPresetTarget(UUID.randomUUID(), 1, UUID.randomUUID())
+        val received = mutableListOf<OnboardingPresetTarget?>()
+        val port = object : OnboardingPresetPort {
+            override val canApply = kotlinx.coroutines.flow.MutableStateFlow(true)
+            var target = first
+            var replaceAtSeal = true
+            override fun currentTarget() = target
+            override suspend fun apply(presetId: String) = OnboardingPresetOutcome.Applied
+            override fun sealCompletion(
+                target: OnboardingPresetTarget?,
+                attempt: com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt,
+            ): Boolean {
+                received += target
+                if (replaceAtSeal) {
+                    this.target = first.copy(generation = 2)
+                    return false
+                }
+                return target == this.target && attempt.trySeal()
+            }
+        }
+        val deps = Deps(presets = port)
+        val flow = OnboardingFlowCoordinator(scope, deps)
+        flow.preset.apply("p")
+        assertEquals(listOf<OnboardingPresetTarget?>(first), received)
+        assertFalse(flow.onboarding.hasCompletedOnboarding)
+        assertNull(flow.onboarding.completionReceipt)
+        assertFalse(deps.flags.getBoolean(OnboardingState.KEY_HAS_COMPLETED))
+        assertEquals(0, flow.preset.state.value.commitTick)
+        assertNotNull(flow.preset.state.value.error)
+        port.replaceAtSeal = false
+        flow.preset.apply("p")
+        assertTrue(flow.onboarding.hasCompletedOnboarding)
+        assertTrue(deps.flags.getBoolean(OnboardingState.KEY_HAS_COMPLETED))
+        assertEquals(listOf<OnboardingPresetTarget?>(first, port.target), received)
+        assertEquals(OnboardingCompletionReceipt.Preset("p", port.target), flow.onboarding.completionReceipt)
+        assertEquals(1, flow.preset.state.value.commitTick)
+    }
+
+    @Test fun noDeviceWaitsForDurableCompletionAndRejectsDuplicateConfirmation() {
+        val acknowledged = CompletableDeferred<Unit>()
+        val memory = InMemoryOnboardingFlagStore()
+        var writes = 0
+        val flags = object : OnboardingFlagStore {
+            override fun getBoolean(key: String) = memory.getBoolean(key)
+            override fun setBoolean(key: String, value: Boolean) = memory.setBoolean(key, value)
+            override suspend fun persistBoolean(key: String, value: Boolean) {
+                writes++
+                acknowledged.await()
+                memory.setBoolean(key, value)
+            }
+        }
+        val flow = OnboardingFlowCoordinator(scope, Deps(flags = flags))
+        flow.confirmNoDevice()
+        assertFalse(flow.onboarding.hasCompletedOnboarding)
+        assertNull(flow.onboarding.completionReceipt)
+        assertFalse(memory.getBoolean(OnboardingState.KEY_HAS_COMPLETED))
+        flow.confirmNoDevice()
+        assertEquals(1, writes)
+        acknowledged.complete(Unit)
+        assertTrue(flow.onboarding.hasCompletedOnboarding)
+        assertTrue(memory.getBoolean(OnboardingState.KEY_HAS_COMPLETED))
+        assertEquals(OnboardingCompletionReceipt.WithoutDevice, flow.onboarding.completionReceipt)
+    }
+
+    @Test fun noDeviceFailureIsVisibleAndCanRetryWithoutOpeningGate() {
+        val memory = InMemoryOnboardingFlagStore()
+        var fail = true
+        val flags = object : OnboardingFlagStore {
+            override fun getBoolean(key: String) = memory.getBoolean(key)
+            override fun setBoolean(key: String, value: Boolean) = memory.setBoolean(key, value)
+            override suspend fun persistBoolean(key: String, value: Boolean) {
+                if (fail) throw java.io.IOException("completion unavailable")
+                memory.setBoolean(key, value)
+            }
+        }
+        val flow = OnboardingFlowCoordinator(scope, Deps(flags = flags))
+        flow.confirmNoDevice()
+        assertFalse(flow.onboarding.hasCompletedOnboarding)
+        assertNull(flow.onboarding.completionReceipt)
+        assertEquals(UiText.Verbatim("completion unavailable"), flow.deviceScan.state.value.failure)
+        assertEquals(1, flow.deviceScan.state.value.failureTick)
+        flow.deviceScan.dismissFailure()
+        fail = false
+        flow.confirmNoDevice()
+        assertTrue(flow.onboarding.hasCompletedOnboarding)
+    }
+
+    @Test fun flowRetirementRejectsPendingExactAttemptBeforeSeal() {
+        val staged = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val memory = InMemoryOnboardingFlagStore()
+        val flags = object : OnboardingFlagStore by memory {
+            override suspend fun persistBoolean(
+                key: String, value: Boolean, requireCurrent: () -> Unit,
+                seal: (com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt) -> Boolean,
+                attempt: com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt,
+            ) {
+                staged.complete(Unit)
+                release.await()
+                assertFalse(seal(attempt))
+                checkNotNull(attempt.rejection())
+                requireCurrent()
+                error("Retired flow must not persist")
+            }
+        }
+        val flow = OnboardingFlowCoordinator(scope, Deps(flags = flags))
+        flow.confirmNoDevice()
+        assertTrue(staged.isCompleted)
+        flow.retire()
+        release.complete(Unit)
+        assertFalse(flow.onboarding.hasCompletedOnboarding)
+        assertFalse(memory.getBoolean(OnboardingState.KEY_HAS_COMPLETED))
+        assertNull(flow.onboarding.completionReceipt)
+        assertNotNull(flow.deviceScan.state.value.failure)
     }
 
     @Test fun wifiConnectNavigatesToRegionAndClosesSheet() {

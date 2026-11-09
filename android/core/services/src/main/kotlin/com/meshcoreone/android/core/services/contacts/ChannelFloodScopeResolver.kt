@@ -2,6 +2,8 @@
 package com.meshcoreone.android.core.services.contacts
 
 import com.meshcoreone.android.core.model.ChannelFloodScope
+import com.meshcoreone.android.core.model.ProtocolLimits
+import com.meshcoreone.android.core.protocol.bytes.utf8Prefix
 import com.meshcoreone.android.core.protocol.model.FloodScope
 
 /**
@@ -23,7 +25,9 @@ object ChannelFloodScopeResolver {
         supportsUnscopedFloodSend: Boolean,
     ): ResolvedFloodScope = when (channelFloodScope) {
         ChannelFloodScope.Inherit ->
-            if (!deviceDefaultFloodScopeName.isNullOrEmpty()) ResolvedFloodScope.Scope(FloodScope.Region(deviceDefaultFloodScopeName))
+            if (!deviceDefaultFloodScopeName.isNullOrEmpty()) ResolvedFloodScope.Scope(FloodScope.Region(
+                deviceDefaultFloodScopeName.utf8Prefix(ProtocolLimits.MAX_DEFAULT_FLOOD_SCOPE_NAME_BYTES),
+            ))
             else ResolvedFloodScope.Scope(FloodScope.Disabled)
         ChannelFloodScope.AllRegions ->
             if (supportsUnscopedFloodSend) ResolvedFloodScope.Unscoped else ResolvedFloodScope.Scope(FloodScope.Disabled)

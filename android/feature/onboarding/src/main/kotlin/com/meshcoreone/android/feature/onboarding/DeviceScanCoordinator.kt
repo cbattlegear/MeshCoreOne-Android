@@ -58,6 +58,9 @@ class DeviceScanCoordinator(
     fun showSheet(sheet: PairSheet) = mutable.update { it.copy(sheet = sheet) }
     fun dismissSheet() = showSheet(PairSheet.NONE)
     fun dismissFailure() = mutable.update { it.copy(failure = null) }
+    internal fun reportCompletionFailure(message: UiText) = mutable.update {
+        it.copy(failure = message, failureTick = it.failureTick + 1)
+    }
     fun dismissDemoAlert() = mutable.update { it.copy(showDemoAlert = false) }
 
     /** Three taps on the title unlock demo mode (App Store reviewer path, preserved from the original). */

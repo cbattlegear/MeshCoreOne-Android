@@ -26,8 +26,9 @@ class SettingsProtocolSurfaceTest {
             try {
                 val subscription = fixture.settings.events()
                 val write = request { fixture.settings.setRadioParamsVerified(0u, 0u, 5u, 5u) }
-                reply(fixture, 2, hex("0bf0490200581b00000505"), okPacket())
-                reply(fixture, 3, PacketBuilder.appStart("MCore"),
+                reply(fixture, 2, PacketBuilder.deviceQuery(), capabilitiesPacket())
+                reply(fixture, 3, hex("0bf0490200581b00000505"), okPacket())
+                reply(fixture, 4, PacketBuilder.appStart("MCore"),
                     selfPacket(frequency = 150_000u, bandwidth = 7_000u, sf = 5u))
                 val fault = assertIs<SettingsServiceError.VerificationFailed>(
                     assertFailsWith<SettingsServiceException> { write.await() }.error,
@@ -42,14 +43,15 @@ class SettingsProtocolSurfaceTest {
             val fixture = settingsFixture()
             try {
                 val write = request { fixture.settings.setRadioParams(915_000u, 125_000u, 0u, 255u) }
-                reply(fixture, 2, PacketBuilder.setRadio(915.0, 125.0, 0u, 255u),
+                reply(fixture, 2, PacketBuilder.deviceQuery(), capabilitiesPacket())
+                reply(fixture, 3, PacketBuilder.setRadio(915.0, 125.0, 0u, 255u),
                     packet(ResponseCode.ERROR, Bytes.of(6)))
                 val fault = assertFailsWith<SettingsServiceException> { write.await() }
                 assertEquals(6.toUByte(), assertIs<MeshCoreException.DeviceError>(
                     assertIs<SettingsServiceError.SessionError>(fault.error).error,
                 ).code)
                 assertFalse(fault.isRetryable)
-                assertEquals(2, fixture.radio.sent.size)
+                assertEquals(3, fixture.radio.sent.size)
             } finally { fixture.close() }
         },
         nativeAsync("Bluetooth PIN forwards source zero fixed and full-width values without truncation") {
@@ -126,13 +128,14 @@ class SettingsProtocolSurfaceTest {
                 val subscription = fixture.settings.events()
                 val preset = assertNotNull(RadioPresets.all.firstOrNull { it.id == "hu" })
                 val write = request { fixture.settings.applyRadioPreset(preset) }
-                reply(fixture, 2, PacketBuilder.setRadio(869.618, 62.5, 7u, 5u), okPacket())
-                reply(fixture, 3, hex("1603"), capabilitiesPacket())
-                reply(fixture, 4, hex("3d0001"), okPacket())
+                reply(fixture, 2, PacketBuilder.deviceQuery(), capabilitiesPacket())
+                reply(fixture, 3, PacketBuilder.setRadio(869.618, 62.5, 7u, 5u), okPacket())
+                reply(fixture, 4, hex("1603"), capabilitiesPacket())
+                reply(fixture, 5, hex("3d0001"), okPacket())
                 write.await()
                 subscription.close()
-                assertTrue(subscription.events.toList().isEmpty())
-                assertEquals(4, fixture.radio.sent.size)
+                assertEquals(listOf(SettingsEvent.ClientRepeatUpdated(false)), subscription.events.toList().map { it.event })
+                assertEquals(5, fixture.radio.sent.size)
             } finally { fixture.close() }
         },
         nativeAsync("core statistics retain unsigned voltage uptime error and queue units") {

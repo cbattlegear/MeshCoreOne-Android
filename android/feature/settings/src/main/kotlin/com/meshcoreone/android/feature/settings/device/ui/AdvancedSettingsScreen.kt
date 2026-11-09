@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -105,14 +106,21 @@ private fun OfflineMapsSection(navigator: SettingsNavigator) {
 }
 
 @Composable
-private fun FloodScopeSection(holder: DefaultFloodScopeStateHolder, navigator: SettingsNavigator) {
+fun FloodScopeSection(holder: DefaultFloodScopeStateHolder, navigator: SettingsNavigator) {
     val state by holder.state.collectAsState()
+    val displayedToken = state.sessionToken
     SettingsSection(res(AppSettingsStrings.defaultFloodScopeHeader), listOf(res(AppSettingsStrings.defaultFloodScopeFooter))) {
-        val rows = listOf<String?>(null) + state.sortedKnownRegions
-        for (region in rows) {
-            val title = region?.let { UiText.Verbatim(it) } ?: res(AppSettingsStrings.defaultFloodScopeDisabled)
-            val selected = state.currentScope == region
-            ActionRow(title, state.enabled, { holder.select(region) }, detail = if (selected) UiText.Verbatim("✓") else null)
+        val rows = listOf(null to emptyList<String>()) + state.regionGroups.map { it.key to it.value }
+        for ((identity, aliases) in rows) {
+            val title = identity?.let { UiText.Verbatim(it) } ?: res(AppSettingsStrings.defaultFloodScopeDisabled)
+            val isSelected = state.currentScope == identity
+            Column {
+                ActionRow(title, state.enabled, { holder.select(aliases.firstOrNull(), displayedToken) },
+                    detail = if (isSelected) UiText.Verbatim("✓") else null, isSelected = isSelected)
+                aliases.filter { it != identity }.forEach {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
             RowDivider()
         }
         state.discoveryMessageId?.let { Text(stringResource(it), Modifier.padding(vertical = 8.dp)) }

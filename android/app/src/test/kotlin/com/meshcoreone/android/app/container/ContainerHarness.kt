@@ -127,6 +127,7 @@ internal class ContainerHarness(
     preferencesOverride: ProcessConnectionPreferences? = null,
     simulatorSeedStore: com.meshcoreone.android.core.services.simulator.SimulatorSeedStore = RoomSimulatorSeedStore(store),
     onSessionCreated: (RadioSessionContainer) -> Unit = {},
+    platform: com.meshcoreone.android.app.state.AppStatePlatform = com.meshcoreone.android.app.state.AppStatePlatform.NONE,
 ) {
     val scheduler: TestCoroutineScheduler = test.testScheduler
     val links = HarnessLinks(identity)
@@ -191,6 +192,7 @@ internal class ContainerHarness(
             nodesLocations = nodesLocations,
             themeService = themeService,
             regionStore = regionStore,
+            platform = platform,
         ),
     )
     val manager get() = container.connectionManager

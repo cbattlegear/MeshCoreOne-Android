@@ -213,6 +213,16 @@ interface AdvertisingSessionOps {
     suspend fun getContact(publicKey: Bytes): MeshContact?
 }
 
+/** Admission ends at actual send settlement, or when an owned request can no longer send. */
+class RadioWritePermit(private val releaseAction: () -> Unit) {
+    private val claimed = java.util.concurrent.atomic.AtomicBoolean()
+    private val released = java.util.concurrent.atomic.AtomicBoolean()
+
+    internal fun claim() { check(claimed.compareAndSet(false, true)) { "Radio write permits are single-use" } }
+    internal fun release() { if (released.compareAndSet(false, true)) releaseAction() }
+    fun releaseIfUnclaimed() { if (!claimed.get()) release() }
+}
+
 interface ConfigurationSessionOps {
     suspend fun sendAppStart(): SelfInfo
     suspend fun queryDevice(): DeviceCapabilities
@@ -226,7 +236,19 @@ interface ConfigurationSessionOps {
         frequency: Double, bandwidth: Double, spreadingFactor: UByte, codingRate: UByte,
         clientRepeat: Boolean? = null,
     )
+    suspend fun setRadio(
+        frequency: Double, bandwidth: Double, spreadingFactor: UByte, codingRate: UByte,
+        clientRepeat: Boolean?, dispatch: ChannelWriteDispatch,
+    ) {
+        throw UnsupportedOperationException("Radio writes require actual dispatch accounting")
+    }
     suspend fun getRepeatFreq(): List<FrequencyRange>
+    suspend fun setRadio(
+        frequency: Double, bandwidth: Double, spreadingFactor: UByte, codingRate: UByte,
+        clientRepeat: Boolean?, sendPermit: RadioWritePermit,
+    ) {
+        throw UnsupportedOperationException("Radio restore requires actual transport-send settlement")
+    }
     suspend fun setOtherParams(
         manualAddContacts: Boolean, telemetryModeEnvironment: UByte, telemetryModeLocation: UByte,
         telemetryModeBase: UByte, advertisementLocationPolicy: UByte, multiAcks: UByte? = null,

@@ -15,7 +15,12 @@ import com.meshcoreone.android.core.contracts.domain.TeardownIssue
 import com.meshcoreone.android.core.contracts.domain.TeardownReport
 import com.meshcoreone.android.core.contracts.domain.UnreadCounts
 import com.meshcoreone.android.core.contracts.domain.DebugLogRetention
+import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceError
+import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceException
+import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException
+import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.model.ChannelFloodScope
 import com.meshcoreone.android.core.model.TransportType
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.protocol.model.BatteryInfo
@@ -31,6 +36,7 @@ import com.meshcoreone.android.core.runtime.RuntimeServices
 import com.meshcoreone.android.core.runtime.RuntimeSyncResult
 import com.meshcoreone.android.core.services.contacts.AdvertisementService
 import com.meshcoreone.android.core.services.contacts.ChannelService
+import com.meshcoreone.android.core.services.contacts.ChannelFloodScopeResolver
 import com.meshcoreone.android.core.services.contacts.ContactCleanupCoordinator
 import com.meshcoreone.android.core.services.contacts.ContactService
 import com.meshcoreone.android.core.services.contacts.ResolvedFloodScope
@@ -83,6 +89,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.Mutex
@@ -104,6 +112,7 @@ class RadioSessionContainer private constructor(
     private val scope: CoroutineScope,
     private val ownership: FactoryOwnership,
     reactionPersistenceMutex: Mutex,
+    private val retirementMonitor: Any,
 ) : RuntimeServices, AppSession {
     override val transportType: TransportType get() = inputs.transportType
     private val logger: Logger = Logger.getLogger("com.mc1.RadioSessionContainer")
@@ -124,11 +133,18 @@ class RadioSessionContainer private constructor(
 
     internal fun toolEvents(): Flow<MeshEvent> = session.events()
 
-    internal suspend fun applyChannelFloodScope(scope: ResolvedFloodScope) {
+    private var appliedChannelScope: ResolvedFloodScope? = null
+
+    // Both callers enter this generation's Settings scope queue before applying or transmitting.
+    internal suspend fun applyChannelFloodScope(scope: ResolvedFloodScope, force: Boolean = false) {
+        if (!force && appliedChannelScope == scope) return
+        appliedChannelScope = null
         when (scope) {
             ResolvedFloodScope.Unscoped -> session.setFloodScopeUnscoped()
             is ResolvedFloodScope.Scope -> session.setFloodScope(scope.scope)
         }
+        currentCoroutineContext().ensureActive()
+        appliedChannelScope = scope
     }
 
     override val dataStore: PersistenceStoreProtocol = env.store
@@ -183,6 +199,52 @@ class RadioSessionContainer private constructor(
         token, inputs.device.publicKey, session, dataStore, inputs.connection.signals, scope,
         config = env.messageServiceConfig,
         reporter = env.messagingReporter,
+        channelTransmission = { index, transmit ->
+            var transmissionStarted = false
+            var transmissionAccepted = false
+            try {
+                settingsService.withPersistedDefaultFloodScope {
+                    val device = dataStore.fetchDevice(inputs.device.id)
+                        ?: throw MessageServiceException(MessageServiceError.NotConnected)
+                    val channel = dataStore.fetchChannel(radioId, index)
+                        ?: throw MessageServiceException(MessageServiceError.ChannelNotFound)
+                    val snapshot = inputs.connection.signals.snapshot.value
+                    if (snapshot.token != token || !snapshot.state.isConnected ||
+                        device.radioId != radioId || device.publicKey != inputs.device.publicKey
+                    ) throw MessageServiceException(MessageServiceError.NotConnected)
+                    val floodScope = ChannelFloodScopeResolver.resolve(
+                        channel.floodScope, device.defaultFloodScopeName, device.supportsUnscopedFloodSend,
+                    )
+                    if (device.firmwareVersion < 8u && (channel.floodScope is ChannelFloodScope.Region ||
+                            floodScope != ResolvedFloodScope.Scope(com.meshcoreone.android.core.protocol.model.FloodScope.Disabled))) {
+                        throw MessageServiceException(MessageServiceError.SendFailed("Flood scope is not supported by this firmware"))
+                    }
+                    try {
+                        if (device.firmwareVersion >= 8u) applyChannelFloodScope(floodScope, force = true)
+                    } catch (failure: MeshCoreException) {
+                        if (failure !is MeshCoreException.DeviceError) throw failure
+                        // Scope preparation is not a channel write's ERROR 2 or pool-backoff attempt.
+                        throw MessageServiceException(MessageServiceError.SendFailed("Channel scope application failed"), failure)
+                    }
+                    transmissionStarted = true
+                    transmit()
+                    transmissionAccepted = true
+                }
+            } catch (failure: SettingsServiceException) {
+                if (transmissionAccepted && failure.error == SettingsServiceError.NotConnected) {
+                    // The scope context's post-action liveness check cannot revoke a radio acceptance.
+                    Unit
+                } else if (transmissionStarted) {
+                    throw MessageServiceException(MessageServiceError.SendFailed("Channel send outcome is uncertain"), failure)
+                } else if (failure.error == SettingsServiceError.NotConnected) {
+                    throw MessageServiceException(MessageServiceError.NotConnected, failure)
+                } else {
+                    val underlying = (failure.error as? SettingsServiceError.SessionError)?.error
+                    if (underlying != null && underlying !is MeshCoreException.DeviceError) throw underlying
+                    throw MessageServiceException(MessageServiceError.SendFailed("Channel scope reconciliation failed"), failure)
+                }
+            }
+        },
     )
     override val channelService = ChannelService(session, dataStore, ChannelDecryptionAdapter(rxLogService))
     // The settings/device services validate their generation against the published connection snapshot when they
@@ -273,7 +335,9 @@ class RadioSessionContainer private constructor(
     private val isClosed: Boolean get() = synchronized(lock) { closed }
 
     /** Whether teardown has started: a closed container accepts no new monitors or services. */
-    val isTornDown: Boolean get() = isClosed
+    override val isTornDown: Boolean get() = isClosed
+    internal var beforeRetirementForTesting: (() -> Unit)? = null
+    internal var afterRetirementForTesting: (suspend () -> Unit)? = null
 
     /** Live coroutines under this graph's supervisor job (leak accounting: zero after teardown). */
     val liveJobCount: Int get() = containerJob.descendants()
@@ -476,11 +540,14 @@ class RadioSessionContainer private constructor(
     }
 
     override suspend fun tearDown(): TeardownReport {
-        val (receipt, claimed) = synchronized(lock) {
-            teardown?.let { it to false } ?: CompletableDeferred<TeardownReport>().also {
-                teardown = it
-                closed = true
-            }.let { it to true }
+        beforeRetirementForTesting?.invoke()
+        val (receipt, claimed) = synchronized(retirementMonitor) {
+            synchronized(lock) {
+                teardown?.let { it to false } ?: CompletableDeferred<TeardownReport>().also {
+                    teardown = it
+                    closed = true
+                }.let { it to true }
+            }
         }
         if (!claimed) return withContext(NonCancellable) { receipt.await() }
         val issues = mutableListOf<TeardownIssue>()
@@ -492,6 +559,7 @@ class RadioSessionContainer private constructor(
             }
         }
         withContext(NonCancellable) {
+            afterRetirementForTesting?.invoke()
             step(LifecycleStage.STOP_SERVICES) { resetSyncState() }
             // Stop the monitors before clearing handlers so the event tasks that read them are cancelled first.
             step(LifecycleStage.STOP_SERVICES) { stopEventMonitoring() }
@@ -546,13 +614,14 @@ class RadioSessionContainer private constructor(
             ownership: FactoryOwnership,
             env: SessionEnvironment,
             reactionPersistenceMutex: Mutex,
+            retirementMonitor: Any = Any(),
         ): RadioSessionContainer {
             val parent = inputs.connection.scope.coroutineContext[Job]
             val job = SupervisorJob(parent)
             val scope = CoroutineScope(inputs.connection.scope.coroutineContext + job)
             ownership.own(LifecycleStage.STOP_SERVICES) { job.cancelAndJoin() }
             val container = RadioSessionContainer(
-                inputs.connection.token, inputs, env, job, scope, ownership, reactionPersistenceMutex,
+                inputs.connection.token, inputs, env, job, scope, ownership, reactionPersistenceMutex, retirementMonitor,
             )
             ownership.register(container)
             env.onSessionLifecycle.created(container)

@@ -2,6 +2,7 @@
 package com.meshcoreone.android.feature.settings.device
 
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.protocol.command.PacketBuilder
@@ -38,6 +39,7 @@ data class AdvancedRadioState(
     val isApplying: Boolean = false,
     val showSuccess: Boolean = false,
     val errorMessage: UiText? = null,
+    val sessionToken: SessionToken? = null,
 ) {
     /** Repeat Mode pins the frequency, so its field is disabled. */
     val frequencyEditable: Boolean get() = device?.clientRepeat != true
@@ -69,6 +71,7 @@ class AdvancedRadioStateHolder(
     private val failures = SettingsFailureRouter(env, retryAlert)
     private var observing: Job? = null
     private var lastHash: List<Any?>? = null
+    private var appliedTarget: SettingsRadioTarget? = null
     val state: StateFlow<AdvancedRadioState> = mutable.asStateFlow()
     val retryAlertState: StateFlow<RetryAlertState> = retryAlert.state
     val retry: RetryAlertController get() = retryAlert
@@ -78,7 +81,22 @@ class AdvancedRadioStateHolder(
         if (observing != null) return
         observing = env.scope.launch {
             launch { connection.connectionState.collect { s -> mutable.update { it.copy(connectionState = s) } } }
-            connection.connectedDevice.collect { onDevice(it) }
+            connection.deviceObservations.collect { observed ->
+                val target = appliedTarget
+                val current = if (target?.token != null && target.token == observed.sessionToken) {
+                    try {
+                        target.currentDevice(observed.device, observed.sessionToken)
+                    } catch (failure: SettingsNotConnectedException) {
+                        mutable.update { it.copy(errorMessage = env.describe(failure)) }
+                        return@collect
+                    }
+                } else {
+                    appliedTarget = null
+                    observed.device
+                }
+                mutable.update { it.copy(sessionToken = observed.sessionToken) }
+                onDevice(current)
+            }
         }
     }
 
@@ -129,18 +147,34 @@ class AdvancedRadioStateHolder(
         }
     }
 
-    fun apply() {
+    fun apply() = apply(mutable.value.sessionToken)
+
+    fun apply(renderedToken: SessionToken?) {
         if (writeGate.inFlight.value) return
         val current = mutable.value
         val service = settingsService()
-        val request = if (service == null) null else validated(current, connection.connectedDevice.value)
+        val target = try {
+            if (service == null) null else
+                SettingsRadioTarget.capture(renderedToken, current.device, current.sessionToken, service)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            mutable.update { it.copy(errorMessage = env.describe(failure)) }
+            return
+        }
+        val request = target?.let { validated(current, it.device) }
         if (service == null || request == null) {
             mutable.update { it.copy(errorMessage = UiText.Resource(AppSettingsStrings.advancedRadioInvalidInput)) }
             return
         }
+        startApply(requireNotNull(target), request)
+    }
+
+    private fun startApply(target: SettingsRadioTarget, request: Request) {
+        if (writeGate.inFlight.value) return
         mutable.update { it.copy(isApplying = true) }
         writeGate.set(true)
-        env.scope.launch { runApply(service, request) }
+        env.scope.launch { runApply(target, request) }
     }
 
     private class Request(val frequencyKHz: UInt, val bandwidthHz: UInt, val spreadingFactor: UByte, val codingRate: UByte, val power: Byte)
@@ -161,21 +195,39 @@ class AdvancedRadioStateHolder(
         return Request(scaledKHz.toLong().toUInt(), bandwidthHz, spread.toUByte(), code.toUByte(), power.toByte())
     }
 
-    private suspend fun runApply(service: SettingsRadioPort, request: Request) {
+    private suspend fun runApply(target: SettingsRadioTarget, request: Request) {
         try {
-            val device = connection.connectedDevice.value ?: throw SettingsNotConnectedException()
-            // Firmware treats an omitted repeat byte as Repeat Mode off; read both from the radio at this call.
-            val frequencyToSend = if (device.clientRepeat) device.frequency else request.frequencyKHz
-            service.setRadioParamsVerified(
-                frequencyToSend, request.bandwidthHz, request.spreadingFactor, request.codingRate,
+            val service = target.service
+            service.reconcileRadioSettingsIfNeeded()
+            val device = target.currentDevice(mutable.value.device, mutable.value.sessionToken)
+            // Firmware treats an omitted repeat byte as off; read current values only from the captured radio.
+            val captured = target.device
+            val frequencyToSend =
+                if (captured.clientRepeat || device.clientRepeat || request.frequencyKHz == captured.frequency) device.frequency
+                else request.frequencyKHz
+            val bandwidthToSend =
+                if (request.bandwidthHz == RadioOptions.nearestBandwidth(captured.bandwidth)) device.bandwidth
+                else request.bandwidthHz
+            val sfToSend = if (request.spreadingFactor == captured.spreadingFactor) device.spreadingFactor else request.spreadingFactor
+            val crToSend = if (request.codingRate == captured.codingRate) device.codingRate else request.codingRate
+            val powerToSend = if (request.power == captured.txPower) device.txPower else request.power
+            val actualRadio = service.setRadioParamsVerified(
+                frequencyToSend, bandwidthToSend, sfToSend, crToSend,
                 clientRepeat = device.clientRepeat,
+                expectedDevice = device,
             )
-            service.setTxPowerVerified(request.power)
+            target.requireCurrent(mutable.value.device, mutable.value.sessionToken)
+            // RF is committed; retain reconciled power intent if its subsequent write fails.
+            appliedTarget = target
+            reflectAppliedRadio(device.updating(actualRadio), powerToSend)
+            val actualPower = service.setTxPowerVerified(powerToSend)
+            target.requireCurrent(mutable.value.device, mutable.value.sessionToken)
+            reflectAppliedRadio(device.updating(actualPower), powerToSend)
         } catch (cancelled: CancellationException) {
             release()
             throw cancelled
         } catch (error: Exception) {
-            val message = failures.route(error) { apply() }
+            val message = failures.route(error) { startApply(target, request) }
             mutable.update { it.copy(errorMessage = message ?: it.errorMessage) }
             release()
             return
@@ -187,6 +239,20 @@ class AdvancedRadioStateHolder(
             env.clock.sleep(SUCCESS_DISPLAY)
         } finally {
             mutable.update { it.copy(showSuccess = false) }
+        }
+    }
+
+    private fun reflectAppliedRadio(device: DeviceDTO, power: Byte) {
+        mutable.update {
+            it.copy(
+                frequency = device.frequency.toDouble() / 1000.0,
+                frequencyText = formatFrequencyMHz(device.frequency),
+                bandwidth = RadioOptions.nearestBandwidth(device.bandwidth),
+                spreadingFactor = device.spreadingFactor.toInt(),
+                codingRate = device.codingRate.toInt(),
+                txPower = power.toInt(),
+                txPowerText = power.toString(),
+            )
         }
     }
 

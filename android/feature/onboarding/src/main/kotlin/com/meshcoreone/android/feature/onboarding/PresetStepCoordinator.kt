@@ -1,6 +1,7 @@
 // PortedFrom: MC1/Views/Onboarding/PresetStepView.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.feature.onboarding
 
+import com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt
 import com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings as O
 import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings as S
 import com.meshcoreone.android.core.ui.UiText
@@ -26,15 +27,19 @@ data class PresetStepState(
     val commitTick: Int = 0,
 )
 
+internal class OnboardingPresetTargetChangedException : IllegalStateException("Onboarding radio session changed")
+
 class PresetStepCoordinator(
     private val scope: CoroutineScope,
     private val regionPort: OnboardingRegionPort,
     private val presets: OnboardingPresetPort,
-    private val onCompleted: () -> Unit,
+    private val onCompleted: suspend () -> Unit,
 ) {
     private val mutable = MutableStateFlow(PresetStepState())
     val state: StateFlow<PresetStepState> = mutable.asStateFlow()
     private var retryCount = 0
+    private var appliedPresetId: String? = null
+    private var appliedPresetTarget: OnboardingPresetTarget? = null
 
     fun visiblePresets(): List<OnboardingPresetOption> = regionPort.catalog.presets(regionPort.selection.value)
 
@@ -48,26 +53,34 @@ class PresetStepCoordinator(
     fun apply(id: String? = mutable.value.selectedId) {
         val option = visiblePresets().firstOrNull { it.id == id } ?: return
         if (mutable.value.isApplying) return
+        val target = presets.currentTarget()
         mutable.update { it.copy(isApplying = true) }
         scope.launch {
-            val outcome = try {
-                presets.apply(option.id)
+            try {
+                finish(option.id, target, presets.apply(option.id, target))
             } catch (cancel: CancellationException) {
                 mutable.update { it.copy(isApplying = false) }
                 throw cancel
+            } catch (_: OnboardingPresetTargetChangedException) {
+                mutable.update { it.copy(isApplying = false, error = UiText.Resource(O.presetErrorNotConnected)) }
             } catch (failure: Exception) {
-                OnboardingPresetOutcome.Failed(UiText.Verbatim(failure.message.orEmpty()))
+                mutable.update { it.copy(isApplying = false, error = UiText.Verbatim(failure.message.orEmpty())) }
             }
-            finish(option.id, outcome)
         }
     }
 
-    private fun finish(id: String, outcome: OnboardingPresetOutcome) {
+    private suspend fun finish(id: String, target: OnboardingPresetTarget?, outcome: OnboardingPresetOutcome) {
+        if (presets.currentTarget() != target) {
+            mutable.update { it.copy(isApplying = false, error = UiText.Resource(O.presetErrorNotConnected)) }
+            return
+        }
         when (outcome) {
             OnboardingPresetOutcome.Applied, OnboardingPresetOutcome.NoRadioToConfigure -> {
+                appliedPresetId = id
+                appliedPresetTarget = target
+                onCompleted()
                 retryCount = 0
                 mutable.update { it.copy(isApplying = false, retryAlert = null, commitTick = it.commitTick + 1) }
-                onCompleted()
             }
             OnboardingPresetOutcome.NotConnected -> mutable.update {
                 it.copy(isApplying = false, error = UiText.Resource(O.presetErrorNotConnected))
@@ -79,6 +92,25 @@ class PresetStepCoordinator(
             is OnboardingPresetOutcome.Failed -> mutable.update { it.copy(isApplying = false, error = outcome.message) }
         }
     }
+
+    internal fun completionTargetGuard(): () -> Unit {
+        val target = appliedPresetTarget
+        return {
+            if (presets.currentTarget() != target) throw OnboardingPresetTargetChangedException()
+        }
+    }
+
+    internal fun completionSealer(): (OnboardingCompletionAttempt) -> Boolean {
+        val target = appliedPresetTarget
+        return { attempt ->
+            val sealed = presets.sealCompletion(target, attempt)
+            if (!sealed && attempt.rejection() == null) throw OnboardingPresetTargetChangedException()
+            sealed
+        }
+    }
+
+    internal fun completionReceipt(): OnboardingCompletionReceipt.Preset =
+        OnboardingCompletionReceipt.Preset(checkNotNull(appliedPresetId), appliedPresetTarget)
 
     fun retry() {
         val alert = mutable.value.retryAlert ?: return

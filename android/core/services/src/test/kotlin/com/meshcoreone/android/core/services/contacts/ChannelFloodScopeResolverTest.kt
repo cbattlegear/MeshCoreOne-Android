@@ -20,6 +20,20 @@ class ChannelFloodScopeResolverTest {
         ".inherit with empty-string default treats it as no default" to {
             assertEquals(ResolvedFloodScope.Scope(FloodScope.Disabled), resolve(ChannelFloodScope.Inherit, "", true))
         },
+        ".inherit normalizes restored long defaults without splitting multibyte code points" to {
+            for ((raw, normalized) in listOf(
+                "A".repeat(30) + "suffix" to "A".repeat(30),
+                "é".repeat(15) + "suffix" to "é".repeat(15),
+                "A".repeat(29) + "é-tail" to "A".repeat(29),
+            )) {
+                assertEquals(ResolvedFloodScope.Scope(FloodScope.Region(normalized)), resolve(ChannelFloodScope.Inherit, raw, true))
+                assertEquals(
+                    ResolvedFloodScope.Scope(FloodScope.Region(raw)),
+                    resolve(ChannelFloodScope.Region(raw), null, true),
+                    "Explicit raw channel preferences retain their original semantics",
+                )
+            }
+        },
         ".allRegions on firmware v12+ resolves to .unscoped (true override)" to {
             assertEquals(ResolvedFloodScope.Unscoped, resolve(ChannelFloodScope.AllRegions, "Germany", true))
             assertEquals(ResolvedFloodScope.Unscoped, resolve(ChannelFloodScope.AllRegions, null, true))

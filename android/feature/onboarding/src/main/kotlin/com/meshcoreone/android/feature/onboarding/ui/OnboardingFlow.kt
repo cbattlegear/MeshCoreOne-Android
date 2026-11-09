@@ -6,6 +6,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -28,6 +29,7 @@ import kotlinx.coroutines.flow.emptyFlow
 fun OnboardingFlow(dependencies: OnboardingFeatureDependencies, onCompleted: () -> Unit, modifier: Modifier = Modifier) {
     val scope = rememberCoroutineScope()
     val flow = remember(dependencies) { OnboardingFlowCoordinator(scope, dependencies).also { it.restoreStartingPath() } }
+    DisposableEffect(flow) { onDispose { flow.retire() } }
     val requester = dependencies.rememberPermissionRequester { flow.onPermissionResult() }
     val path by flow.onboarding.onboardingPathFlow.collectAsState()
     val completed by flow.onboarding.hasCompletedOnboardingFlow.collectAsState()

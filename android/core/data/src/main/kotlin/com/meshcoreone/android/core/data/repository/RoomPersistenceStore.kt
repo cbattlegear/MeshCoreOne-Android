@@ -29,7 +29,7 @@ class RoomPersistenceStore private constructor(
     private val diagnostics: DiagnosticRepository = DiagnosticRepository(context),
     private val metadata: MetadataRepository = MetadataRepository(context),
 ) : PersistenceStoreProtocol,
-    DevicePersisting by devices, ContactPersisting by contacts, ChannelPersisting by channels,
+    DevicePersisting by devices, DeviceEditPersisting by devices, ContactPersisting by contacts, ChannelPersisting by channels,
     MessagePersisting by messages, HeardRepeatPersisting by messages, ReactionPersisting by messages,
     FailedSendPersisting by messages, RoomPersisting by rooms, DiscoveredNodePersisting by discovered,
     TracePathPersisting by diagnostics, DebugLogPersisting by diagnostics, LinkPreviewPersisting by diagnostics,

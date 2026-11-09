@@ -32,6 +32,7 @@ class RadioSessionContainerFactory(
             inputs, ownership,
             environment.withLifecycle(registry),
             reactionPersistenceMutex,
+            retirementMonitor = registry.ownershipMonitor,
         )
         registry.publish(container)
         return container
@@ -63,7 +64,8 @@ class RadioSessionContainerFactory(
  * late teardown can never clear its successor.
  */
 class SessionRegistry {
-    private val lock = Any()
+    internal val ownershipMonitor = Any()
+    private val lock get() = ownershipMonitor
     private val live = MutableStateFlow<RadioSessionContainer?>(null)
     private val tokens = MutableStateFlow<SessionToken?>(null)
     private var createdCount = 0
@@ -89,11 +91,13 @@ class SessionRegistry {
         tokens.value = container.token
     }
 
-    fun withdraw(container: RadioSessionContainer) = synchronized(lock) {
-        tornDownCount += 1
-        if (live.value === container) {
-            live.value = null
-            tokens.value = null
+    fun withdraw(container: RadioSessionContainer) {
+        synchronized(lock) {
+            tornDownCount += 1
+            if (live.value === container) {
+                live.value = null
+                tokens.value = null
+            }
         }
     }
 }

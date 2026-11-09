@@ -4,6 +4,7 @@ package com.meshcoreone.android.core.connectivity.support
 import com.meshcoreone.android.core.connectivity.device.ConnectedDeviceAccess
 import com.meshcoreone.android.core.connectivity.device.RadioPresetMatcher
 import com.meshcoreone.android.core.contracts.domain.ConnectedDeviceEdit
+import com.meshcoreone.android.core.contracts.domain.ConnectedDeviceWriteView
 import com.meshcoreone.android.core.contracts.domain.Generation
 import com.meshcoreone.android.core.contracts.domain.ProcessEpoch
 import com.meshcoreone.android.core.contracts.domain.SessionToken
@@ -54,10 +55,26 @@ internal fun selfInfo(preset: PresetRow): SelfInfo =
 internal class InMemoryDeviceAccess(initial: DeviceDTO? = null) : ConnectedDeviceAccess {
     private val epoch = ProcessEpoch(UUID.randomUUID())
     private var sequence = 0L
+    override var ocvPublicationRevision = 0L
+        private set
+    override fun captureDeviceWriteView(expectedToken: SessionToken?): ConnectedDeviceWriteView? =
+        (if (expectedToken == null) connectedDevice else currentDevice(expectedToken))
+            ?.let { ConnectedDeviceWriteView(it, ocvPublicationRevision) }
+    override fun publishOCVSettings(device: DeviceDTO, expectedToken: SessionToken): ConnectedDeviceEdit? {
+        val live = connectedDevice ?: return null
+        if (live.id != device.id || live.radioId != device.radioId) return null
+        val revision = ocvPublicationRevision
+        val edit = replaceConnectedDevice(live.copy(ocvPreset = device.ocvPreset, customOCVArrayString = device.customOCVArrayString))
+        if (ocvPublicationRevision == revision) ocvPublicationRevision++
+        return edit
+    }
     override var connectedDevice: DeviceDTO? = initial
         private set
     override fun replaceConnectedDevice(device: DeviceDTO): ConnectedDeviceEdit {
         val previous = connectedDevice ?: device
+        if (previous.ocvPreset != device.ocvPreset || previous.customOCVArrayString != device.customOCVArrayString) {
+            ocvPublicationRevision++
+        }
         connectedDevice = device
         return ConnectedDeviceEdit(SessionToken(epoch, Generation(0), device.radioId), ++sequence, previous.knownRegions)
     }
@@ -66,6 +83,10 @@ internal class InMemoryDeviceAccess(initial: DeviceDTO? = null) : ConnectedDevic
 /** Read-through to the runtime; replacement is the missing runtime seam (coordinator note C-03). */
 internal class RuntimeDeviceAccess(private val manager: ConnectionManager) : ConnectedDeviceAccess {
     override val connectedDevice: DeviceDTO? get() = manager.connectedDevice
+    override val ocvPublicationRevision: Long get() = manager.ocvPublicationRevision
+    override fun captureDeviceWriteView(expectedToken: SessionToken?) = manager.captureDeviceWriteView(expectedToken)
+    override fun publishOCVSettings(device: DeviceDTO, expectedToken: SessionToken) =
+        manager.publishOCVSettings(device, expectedToken)
     override fun replaceConnectedDevice(device: DeviceDTO) =
         throw UnsupportedOperationException("core:runtime exposes no connected-device replacement seam")
 }

@@ -4,6 +4,7 @@ package com.meshcoreone.android.app.state
 import com.meshcoreone.android.core.connectivity.device.RemoveUnfavoritedResult
 import com.meshcoreone.android.core.connectivity.pairing.SystemPairedAccessory
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.RegionSelection
@@ -49,12 +50,26 @@ interface AppConnectionPort {
 
     // Connected-device edits driven by the settings event stream (Swift `connectionManager.update*`).
     fun updateDevice(info: SelfInfo, appliedRadioPresetId: String?)
+    suspend fun updateDevice(info: SelfInfo, appliedRadioPresetId: String?, expectedToken: SessionToken): Boolean =
+        throw UnsupportedOperationException("Session-bound radio preset updates are not supported")
     fun updateDevice(device: DeviceDTO)
+    fun updateOCVSettings(device: DeviceDTO, expectedToken: SessionToken): Unit =
+        throw UnsupportedOperationException("Session-bound OCV publication is not supported")
     fun updateAutoAddConfig(config: AutoAddConfig)
+    suspend fun updateAutoAddConfig(config: AutoAddConfig, expectedToken: SessionToken): Boolean =
+        throw UnsupportedOperationException("Session-bound auto-add updates are not supported")
     fun updateClientRepeat(enabled: Boolean)
+    suspend fun updateClientRepeat(enabled: Boolean, expectedToken: SessionToken): Boolean =
+        throw UnsupportedOperationException("Session-bound client repeat updates are not supported")
     fun updatePathHashMode(mode: UByte)
+    suspend fun updatePathHashMode(mode: UByte, expectedToken: SessionToken): Boolean =
+        throw UnsupportedOperationException("Session-bound path hash updates are not supported")
     fun updateDefaultFloodScopeName(name: String?)
+    suspend fun updateDefaultFloodScopeName(name: String?, expectedToken: SessionToken): Boolean =
+        throw UnsupportedOperationException("Session-bound default scope updates are not supported")
     fun setAllowedRepeatFreqRanges(ranges: SnapshotList<FrequencyRange>)
+    fun setAllowedRepeatFreqRanges(ranges: SnapshotList<FrequencyRange>, expectedToken: SessionToken): Boolean =
+        throw UnsupportedOperationException("Session-bound repeat ranges are not supported")
 }
 
 /** Persists the user's region choice (Swift `BackupUserDefaults.persist/loadRegionSelection`). */

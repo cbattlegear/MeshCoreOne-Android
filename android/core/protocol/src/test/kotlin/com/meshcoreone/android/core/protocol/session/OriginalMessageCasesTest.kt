@@ -140,8 +140,8 @@ class OriginalMessageCasesTest {
             assertEquals(2, f.transport.sent.size)
             f.session.stop()
         },
-        *listOf(false, true).map { replacementFails ->
-            original("GetMessageCoalescingTests", "delayed coalesced waiter keeps its empty outcome after a replacement ${if (replacementFails) "fails" else "completes"}") {
+        original("GetMessageCoalescingTests", "delayed coalesced waiter keeps its empty outcome after a completed or failed replacement") {
+            for (replacementFails in listOf(false, true)) {
                 val f = fixture()
                 start(f)
                 val scheduled = StandardTestDispatcher(testScheduler)
@@ -186,7 +186,7 @@ class OriginalMessageCasesTest {
                 assertEquals(3, f.transport.sent.size)
                 f.session.stop()
             }
-        }.toTypedArray(),
+        },
         original("GetMessageCoalescingTests", "a coalesced caller is released when the leader times out") {
             val f = fixture()
             start(f)

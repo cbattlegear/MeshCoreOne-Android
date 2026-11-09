@@ -234,6 +234,26 @@ class ContactService(
      */
     suspend fun addOrUpdateContact(radioId: RadioId, contact: ContactFrame) {
         val previousFrame = contacts.fetchContact(radioId, contact.publicKey)?.toContactFrame()
+        writeContact(radioId, contact, previousFrame)
+    }
+
+    /** A link import must not replace a contact that another accepted write already persisted. */
+    suspend fun addContactIfAbsent(radioId: RadioId, contact: ContactFrame) {
+        writeContact(radioId, contact, previousFrame = null) {
+            val existing = contacts.fetchContact(radioId, contact.publicKey)
+            check(existing == null || existing.radioId == radioId && existing.publicKey == contact.publicKey) {
+                "Contact lookup returned a mismatched identity"
+            }
+            existing == null
+        }
+    }
+
+    private suspend fun writeContact(
+        radioId: RadioId,
+        contact: ContactFrame,
+        previousFrame: ContactFrame?,
+        shouldDispatch: (suspend () -> Boolean)? = null,
+    ) {
         val dispatch = ContactWriteDispatch(
             beforeDispatchAction = { handle -> ContactWriteRecovery.beforeDispatch(preferences, radioId, handle) },
             onOutcomeChangedAction = { handle ->
@@ -247,7 +267,7 @@ class ContactService(
         )
         ContactWriteRecovery.registerWrite(preferences, radioId, dispatch)
         try {
-            session.addContact(contact.toMeshContact(), dispatch) {
+            val onCommitted: suspend () -> Unit = {
                 withContext(NonCancellable) {
                     try {
                         contacts.saveContactPreservingNewer(radioId, contact, previousFrame)
@@ -265,6 +285,11 @@ class ContactService(
                         throw ContactWriteCompletionFailed(radioId, contact.publicKey, error)
                     }
                 }
+            }
+            if (shouldDispatch == null) {
+                session.addContact(contact.toMeshContact(), dispatch, onCommitted)
+            } else {
+                session.addContactIf(contact.toMeshContact(), dispatch, shouldDispatch, onCommitted)
             }
         } catch (cancelled: CancellationException) {
             when (dispatch.outcome) {
@@ -294,7 +319,11 @@ class ContactService(
         } catch (error: ContactWriteCompletionFailed) {
             throw error
         } catch (error: Exception) {
-            requireContactReconciliation(radioId, error, dispatch)
+            if (dispatch.definitelyUnsent) {
+                ContactWriteRecovery.abandonDefinitelyUnsent(preferences, radioId, dispatch)
+            } else {
+                requireContactReconciliation(radioId, error, dispatch)
+            }
             throw error
         }
     }

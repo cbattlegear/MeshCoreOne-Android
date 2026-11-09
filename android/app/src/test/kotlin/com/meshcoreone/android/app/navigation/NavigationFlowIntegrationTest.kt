@@ -114,8 +114,10 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.runTest
@@ -1093,6 +1095,53 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
     private fun confirmationEnabled(): Boolean {
         val nodes = compose.onAllNodesWithTag("contact-link-confirm").fetchSemanticsNodes()
         return nodes.size == 1 && !nodes.single().config.contains(SemanticsProperties.Disabled)
+    }
+
+    private fun delayedContactRefresh(
+        actual: NodesFeatureDependencies,
+        targetKey: Bytes,
+        refreshGate: CompletableDeferred<Unit>,
+        emptyLookups: AtomicInteger,
+        blockedRefreshes: AtomicInteger,
+        cancelledWrites: ConcurrentLinkedQueue<Bytes>,
+    ): NodesFeatureDependencies {
+        val store = assertNotNull(actual.session.servicesDataStore())
+        val service = assertNotNull(actual.session.contactService())
+        val delayedStore = object : NodesDataStore by store {
+            override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                val found = store.fetchContact(radioId, publicKey)
+                if (publicKey == targetKey && found == null) emptyLookups.incrementAndGet()
+                return found
+            }
+        }
+        val observingService = object : NodesContactService by service {
+            override suspend fun addContactIfAbsent(radioId: RadioId, contact: ContactFrame) {
+                try {
+                    service.addContactIfAbsent(radioId, contact)
+                } catch (cancelled: CancellationException) {
+                    cancelledWrites.add(contact.publicKey)
+                    throw cancelled
+                }
+            }
+        }
+        return NodesFeatureDependencies(
+            object : NodesSession by actual.session {
+                override fun servicesDataStore() = delayedStore
+                override fun contactService() = observingService
+                override fun contactVersions() = flow {
+                    var first = true
+                    actual.session.contactVersions().collect { version ->
+                        if (first) first = false else {
+                            blockedRefreshes.incrementAndGet()
+                            refreshGate.await()
+                        }
+                        emit(version)
+                    }
+                }
+            },
+            actual.uriCodec, actual.timeouts, actual.messages, actual.announcer,
+            actual.preferences, actual.clock, actual.locale,
+        )
     }
 
     private suspend fun assertMountedDirectNotification(h: ContainerHarness, contact: ContactDTO) {
@@ -5511,8 +5560,8 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             val actual = h.container.nodesFeature
             val realService = assertNotNull(actual.session.contactService())
             val delayedService = object : NodesContactService by realService {
-                override suspend fun addOrUpdateContact(radioId: RadioId, contact: ContactFrame) {
-                    realService.addOrUpdateContact(radioId, contact)
+                override suspend fun addContactIfAbsent(radioId: RadioId, contact: ContactFrame) {
+                    realService.addContactIfAbsent(radioId, contact)
                     acknowledged.complete(Unit)
                     releaseAcknowledgement.await()
                 }
@@ -5942,6 +5991,268 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         } finally { unmount(); h.container.close() }
     }
 
+    @Test fun recreatedConfirmationDoesNotRepeatAnAcceptedImportWhenRefreshIsDelayed() = runTest {
+        val h = ContainerHarness(this, store)
+        h.links.configureRadio = { radio ->
+            radio.respond = { frame -> if (frame[0].toInt() == 0x09) emptyList() else null }
+        }
+        val refreshGate = CompletableDeferred<Unit>()
+        val emptyLookups = AtomicInteger()
+        val blockedRefreshes = AtomicInteger()
+        val cancelledWrites = ConcurrentLinkedQueue<Bytes>()
+        try {
+            connect(h)
+            val radio = assertNotNull(h.appState.currentRadioId)
+            val publicKey = key(30)
+            val actual = h.container.nodesFeature
+            val dependencies = delayedContactRefresh(
+                actual, publicKey, refreshGate, emptyLookups, blockedRefreshes, cancelledWrites,
+            )
+            val navigation = h.container.navigation
+            val firmware = h.links.radios.last()
+            mount(h, dependencies)
+            navigation.stageContactLink(ContactLinkRequest("Recreated peer", publicKey, ContactType.REPEATER))
+            val pending = assertNotNull(navigation.state.value.pendingContactLink)
+            await(h) { confirmationEnabled() && emptyLookups.get() >= 1 }
+            compose.onNodeWithTag("contact-link-confirm").performClick()
+            h.eventually("first import reaches the radio", virtualBudgetMillis = 100) {
+                firmware.sent.count { it[0].toInt() == 0x09 } == 1
+            }
+            val previousActivity = host.get()
+            host.windowFocusChanged(false)
+            host.recreate().visible()
+            host.get().actionBar?.hide()
+            host.windowFocusChanged(true)
+            assertNotSame(previousActivity, host.get(), "The Activity must actually be recreated")
+            mount(h, dependencies)
+            h.eventually("old import is cancelled and recreated confirmation loaded an absent row", virtualBudgetMillis = 0) {
+                publicKey in cancelledWrites && emptyLookups.get() >= 2 && confirmationEnabled()
+            }
+            compose.onNodeWithTag("contact-link-confirm").assertTextEquals(
+                ApplicationProvider.getApplicationContext<Context>().getString(
+                    com.meshcoreone.android.core.l10n.generated.AppContactsStrings.contactsAddAdd,
+                ),
+            )
+            assertNull(store.fetchContact(radio, publicKey))
+            assertEquals(pending, navigation.state.value.pendingContactLink)
+            val versionBeforeAck = h.appState.contactsVersion.value
+            firmware.knownContacts += contactFrame(publicKey, "Recreated peer", actual.clock.wallNow.epochSecond)
+            firmware.push(Bytes.of(0))
+            val persisted = backgroundScope.async {
+                var row = store.fetchContact(radio, publicKey)
+                while (row == null) {
+                    delay(1)
+                    row = store.fetchContact(radio, publicKey)
+                }
+                row
+            }
+            val producer = assertNotNull(h.sessions.current).contactService
+            h.eventually("late ACK persists and settles while its UI refresh is held", virtualBudgetMillis = 100) {
+                persisted.isCompleted && producer.contactWriteRecoveryState(radio) is ContactWriteRecoveryState.Clear &&
+                    h.appState.contactsVersion.value > versionBeforeAck && blockedRefreshes.get() > 0
+            }
+            val saved = assertNotNull(persisted.await())
+            assertEquals(pending, navigation.state.value.pendingContactLink)
+            assertNull(navigation.state.value.pendingContactDetail)
+            compose.onNodeWithTag("contact-link-confirm").assertTextEquals(
+                ApplicationProvider.getApplicationContext<Context>().getString(
+                    com.meshcoreone.android.core.l10n.generated.AppContactsStrings.contactsAddAdd,
+                ),
+            )
+            compose.onNodeWithTag("contact-link-confirm").performClick()
+            h.eventually("recreated confirmation opens the accepted row without another write", virtualBudgetMillis = 100) {
+                navigation.state.value.pendingContactLink == null ||
+                    firmware.sent.count { it[0].toInt() == 0x09 } > 1
+            }
+            assertEquals(1, firmware.sent.count { it[0].toInt() == 0x09 })
+            assertNull(navigation.state.value.pendingContactLink)
+            assertEquals(saved.id, navigation.state.value.pendingContactDetail?.id)
+            assertEquals(publicKey, navigation.state.value.pendingContactDetail?.publicKey)
+            assertEquals(ContactType.REPEATER, saved.type)
+        } finally {
+            refreshGate.complete(Unit)
+            unmount()
+            h.container.close()
+        }
+    }
+
+    @Test fun identicalReplacementAfterSettlementDoesNotRepeatTheCancelledImport() = runTest {
+        val h = ContainerHarness(this, store)
+        h.links.configureRadio = { radio ->
+            radio.respond = { frame -> if (frame[0].toInt() == 0x09) emptyList() else null }
+        }
+        val refreshGate = CompletableDeferred<Unit>()
+        val emptyLookups = AtomicInteger()
+        val blockedRefreshes = AtomicInteger()
+        val cancelledWrites = ConcurrentLinkedQueue<Bytes>()
+        try {
+            connect(h)
+            val radio = assertNotNull(h.appState.currentRadioId)
+            val publicKey = key(30)
+            val actual = h.container.nodesFeature
+            val dependencies = delayedContactRefresh(
+                actual, publicKey, refreshGate, emptyLookups, blockedRefreshes, cancelledWrites,
+            )
+            val navigation = h.container.navigation
+            val firmware = h.links.radios.last()
+            val uri = actual.uriCodec.exportContactUri("Identical settled peer", publicKey, ContactType.ROOM)
+            val external = AppDeepLinkRouter(ContainerDeepLinkEnvironment(h.container, navigation))
+            val chat = ChatLinkRouter(h.container.chatsFeature.list.links, backgroundScope)
+            mount(h, dependencies)
+            assertEquals(DeepLinkRouteOutcome.ConfirmationStaged, external.routeExternal(uri))
+            val first = assertNotNull(navigation.state.value.pendingContactLink)
+            await(h) { confirmationEnabled() && emptyLookups.get() >= 1 }
+            compose.onNodeWithTag("contact-link-confirm").performClick()
+            h.eventually("first import reaches the radio", virtualBudgetMillis = 100) {
+                firmware.sent.count { it[0].toInt() == 0x09 } == 1
+            }
+            compose.onNodeWithTag("contact-link-cancel").performClick()
+            h.eventually("first delivery's import is cancelled", virtualBudgetMillis = 0) {
+                publicKey in cancelledWrites
+            }
+            assertNull(navigation.state.value.pendingContactLink)
+            assertTrue(chat.route(uri))
+            h.eventually("identical replacement loaded the still-absent row", virtualBudgetMillis = 0) {
+                navigation.state.value.pendingContactLink?.publicKey == publicKey &&
+                    emptyLookups.get() >= 2 && confirmationEnabled()
+            }
+            val replacement = assertNotNull(navigation.state.value.pendingContactLink)
+            assertNotEquals(first.deliveryId, replacement.deliveryId)
+            assertEquals(first.generation, replacement.generation)
+            assertEquals(radio, replacement.targetRadioId)
+            assertEquals(first.name, replacement.name)
+            assertEquals(first.type, replacement.type)
+            assertNull(store.fetchContact(radio, publicKey))
+            val versionBeforeAck = h.appState.contactsVersion.value
+            firmware.knownContacts += contactFrame(publicKey, first.name, actual.clock.wallNow.epochSecond)
+            firmware.push(Bytes.of(0))
+            val persisted = backgroundScope.async {
+                var row = store.fetchContact(radio, publicKey)
+                while (row == null) {
+                    delay(1)
+                    row = store.fetchContact(radio, publicKey)
+                }
+                row
+            }
+            val producer = assertNotNull(h.sessions.current).contactService
+            h.eventually("the first ACK settles before the replacement is confirmed", virtualBudgetMillis = 100) {
+                persisted.isCompleted && producer.contactWriteRecoveryState(radio) is ContactWriteRecoveryState.Clear &&
+                    h.appState.contactsVersion.value > versionBeforeAck && blockedRefreshes.get() > 0
+            }
+            val saved = assertNotNull(persisted.await())
+            assertFalse(navigation.completeContactLink(first))
+            assertEquals(replacement, navigation.state.value.pendingContactLink)
+            assertNull(navigation.state.value.pendingContactDetail)
+            compose.onNodeWithTag("contact-link-confirm").assertTextEquals(
+                ApplicationProvider.getApplicationContext<Context>().getString(
+                    com.meshcoreone.android.core.l10n.generated.AppContactsStrings.contactsAddAdd,
+                ),
+            )
+            compose.onNodeWithTag("contact-link-confirm").performClick()
+            h.eventually("replacement opens the accepted row without another write", virtualBudgetMillis = 100) {
+                navigation.state.value.pendingContactLink == null ||
+                    firmware.sent.count { it[0].toInt() == 0x09 } > 1
+            }
+            assertEquals(1, firmware.sent.count { it[0].toInt() == 0x09 })
+            assertNull(navigation.state.value.pendingContactLink)
+            assertEquals(saved.id, navigation.state.value.pendingContactDetail?.id)
+            assertEquals(first.name, saved.name)
+            assertEquals(first.type, saved.type)
+        } finally {
+            refreshGate.complete(Unit)
+            unmount()
+            h.container.close()
+        }
+    }
+
+    @Test fun mountedConfirmationRefreshesToViewWhenAnotherContactWriteCommits() = runTest {
+        val h = ContainerHarness(this, store)
+        h.links.configureRadio = { radio ->
+            radio.respond = { frame -> if (frame[0].toInt() == 0x09) listOf(Bytes.of(0)) else null }
+        }
+        try {
+            connect(h)
+            val radio = assertNotNull(h.appState.currentRadioId)
+            val publicKey = key(30)
+            val navigation = h.container.navigation
+            mount(h)
+            navigation.stageContactLink(ContactLinkRequest("Claimed alias", publicKey, ContactType.CHAT))
+            await(h) { confirmationEnabled() }
+            val versionBeforeWrite = h.appState.contactsVersion.value
+            val service = assertNotNull(h.container.nodesFeature.session.contactService())
+            val write = backgroundScope.async {
+                service.addOrUpdateContact(radio, ContactFrame(
+                    publicKey, ContactType.REPEATER, 0u, PacketBuilder.FLOOD_PATH_SENTINEL, Bytes.EMPTY,
+                    "Saved identity", 0u, 0.0, 0.0, 1u,
+                ))
+            }
+            h.eventually("another real contact write completes") {
+                write.isCompleted && h.appState.contactsVersion.value > versionBeforeWrite
+            }
+            write.await()
+            await(h) {
+                confirmationEnabled() && compose.onAllNodesWithTag("contact-link-name").fetchSemanticsNodes()
+                    .singleOrNull()?.config?.getOrNull(SemanticsProperties.Text)
+                    ?.any { it.text == "Saved identity" } == true
+            }
+            val saved = assertNotNull(store.fetchContact(radio, publicKey))
+            compose.onNodeWithTag("contact-link-confirm").assertTextEquals(
+                ApplicationProvider.getApplicationContext<Context>().getString(
+                    com.meshcoreone.android.core.l10n.generated.AppContactsStrings.contactsAddView,
+                ),
+            )
+            compose.onNodeWithTag("contact-link-confirm").performClick()
+            await(h) { navigation.state.value.pendingContactLink == null }
+            assertEquals(saved.id, navigation.state.value.pendingContactDetail?.id)
+            assertEquals(1, h.links.radios.last().sent.count { it[0].toInt() == 0x09 })
+        } finally { unmount(); h.container.close() }
+    }
+
+    @Test fun contactRefreshPreservesAnExistingFailureUntilExplicitRetry() = runTest {
+        val h = ContainerHarness(this, store)
+        h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Saved on retry") }
+        try {
+            connect(h)
+            val actual = h.container.nodesFeature
+            val radio = assertNotNull(h.appState.currentRadioId)
+            val saved = assertNotNull(store.fetchContact(radio, key(20)))
+            val versions = MutableStateFlow(0)
+            var reads = 0
+            val backing = assertNotNull(actual.session.servicesDataStore())
+            val checkingStore = object : NodesDataStore by backing {
+                override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                    if (++reads == 1) throw IllegalStateException("Initial lookup failed")
+                    return backing.fetchContact(radioId, publicKey)
+                }
+            }
+            val dependencies = NodesFeatureDependencies(
+                object : NodesSession by actual.session {
+                    override fun servicesDataStore() = checkingStore
+                    override fun contactVersions() = versions
+                },
+                actual.uriCodec, actual.timeouts, actual.messages, actual.announcer,
+                actual.preferences, actual.clock, actual.locale,
+            )
+            val navigation = h.container.navigation
+            navigation.stageContactLink(ContactLinkRequest("Claim", saved.publicKey, ContactType.CHAT))
+            val holder = ContactLinkConfirmation(dependencies, navigation, assertNotNull(navigation.state.value.pendingContactLink))
+            val observing = backgroundScope.launch { holder.observeContacts() }
+            h.eventually("initial lookup reports failure") { holder.state.value.failure != null && !holder.state.value.loading }
+            val failure = holder.state.value.failure
+            versions.value++
+            h.eventually("contact change refreshes the saved row") {
+                holder.state.value.existing?.id == saved.id && !holder.state.value.loading
+            }
+            assertEquals(failure, holder.state.value.failure)
+            assertFalse(holder.confirm())
+            holder.load()
+            assertNull(holder.state.value.failure)
+            assertTrue(holder.confirm())
+            assertEquals(saved.id, navigation.state.value.pendingContactDetail?.id)
+            observing.cancelAndJoin()
+        } finally { h.container.close() }
+    }
+
     @Test fun cancelledContactImportDoesNotNavigateOrConsumeIdenticalReplacementWhenLateAckPersists() = runTest {
         val h = ContainerHarness(this, store)
         h.links.configureRadio = { radio ->
@@ -5955,9 +6266,9 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             val actual = h.container.nodesFeature
             val service = assertNotNull(actual.session.contactService())
             val observingService = object : NodesContactService by service {
-                override suspend fun addOrUpdateContact(radioId: RadioId, contact: ContactFrame) {
+                override suspend fun addContactIfAbsent(radioId: RadioId, contact: ContactFrame) {
                     try {
-                        service.addOrUpdateContact(radioId, contact)
+                        service.addContactIfAbsent(radioId, contact)
                     } catch (cancelled: CancellationException) {
                         cancelledWrites.add(contact.publicKey)
                         throw cancelled

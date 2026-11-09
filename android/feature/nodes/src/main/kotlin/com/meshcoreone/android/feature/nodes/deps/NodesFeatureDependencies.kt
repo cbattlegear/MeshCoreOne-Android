@@ -57,6 +57,7 @@ interface NodesContactService {
     suspend fun syncContactsForRefresh(radioId: RadioId)
     suspend fun getContact(radioId: RadioId, publicKey: Bytes): ContactDTO?
     suspend fun addOrUpdateContact(radioId: RadioId, contact: ContactFrame)
+    suspend fun addContactIfAbsent(radioId: RadioId, contact: ContactFrame)
     suspend fun removeContact(radioId: RadioId, publicKey: Bytes)
     suspend fun removeLocalContact(contact: EntityKey, publicKey: Bytes)
     suspend fun clearContactMessages(contact: EntityKey)
@@ -130,6 +131,8 @@ interface NodesSession {
     /** Static sessions emit once; mutable live adapters must emit on radio or graph replacement. */
     fun connectionSnapshots(): Flow<NodesConnectionSnapshot> =
         flowOf(NodesConnectionSnapshot(currentRadioId(), connectionIdentity(), connectedDevice(), connectionState()))
+    /** Static sessions emit once; mutable live adapters emit when persisted contacts change. */
+    fun contactVersions(): Flow<Int> = flowOf(0)
     /** Stable identity of the live service graph; changes even when reconnecting the same radio. */
     fun connectionIdentity(): Any? = contactService()
     fun connectionState(): DeviceConnectionState

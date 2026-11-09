@@ -67,6 +67,321 @@ class ContactWriteRecoveryTests {
     private val radioB = RadioId(UUID.fromString("00000000-0000-0000-0000-000000000210"))
 
     @Test
+    fun conditionalImportChecksAfterEarlierCancelledWriteSettlesInsideTheSerializer() = runTest {
+        for (firstWasImport in listOf(false, true)) {
+            withFixture {
+                val flags = PendingMarkerFlags()
+                val firstService = service(flags = flags)
+                var checks = 0
+                val checkingStore = object : ContactPersisting by store {
+                    override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                        checks++
+                        return store.fetchContact(radioId, publicKey)
+                    }
+                }
+                val entered = CompletableDeferred<Unit>()
+                val observedSession = object : ContactSessionOps by session {
+                    override suspend fun addContactIf(
+                        contact: MeshContact,
+                        dispatch: ContactWriteDispatch,
+                        shouldDispatch: suspend () -> Boolean,
+                        onCommitted: suspend () -> Unit,
+                    ) {
+                        entered.complete(Unit)
+                        session.addContactIf(contact, dispatch, shouldDispatch, onCommitted)
+                    }
+                }
+                val replacement = service(connection = observedSession, persistence = checkingStore, flags = flags)
+                val first = async {
+                    if (firstWasImport) firstService.addContactIfAbsent(radioA, frame(1, "First"))
+                    else firstService.addOrUpdateContact(radioA, frame(1, "First"))
+                }
+                runCurrent()
+                assertEquals(1, radio.writes.size)
+                assertNull(store.fetchContact(radioA, contactsKey(1)))
+                val second = async { replacement.addContactIfAbsent(radioA, frame(1, "Replacement")) }
+                runCurrent()
+                assertTrue(entered.isCompleted)
+                assertEquals(0, checks, "The replacement must wait to check until it owns the serializer")
+                assertFalse(second.isCompleted)
+                first.cancelAndJoin()
+                assertTrue(firstService.needsContactWriteReconciliation(radioA))
+                radio.accept()
+                runCurrent()
+                second.await()
+                assertEquals(1, checks)
+                assertEquals(1, radio.writes.size, "A settled accepted write must not be sent again")
+                assertEquals("First", store.fetchContact(radioA, contactsKey(1))?.name)
+                assertFalse(replacement.needsContactWriteReconciliation(radioA))
+            }
+        }
+    }
+
+    @Test
+    fun conditionalImportNoOpDoesNotSuppressAnIntentionalLaterUpdate() = runTest {
+        withFixture {
+            val coordinator = ContactsFakeSyncCoordinator()
+            val producer = service(coordinator = coordinator)
+            val existing = ContactDTO.fromFrame(radioA, frame(1, "Saved"))
+            store.seed(existing)
+            producer.addContactIfAbsent(radioA, frame(1, "Scanned"))
+            assertTrue(radio.writes.isEmpty())
+            assertEquals(existing, store.fetchContact(radioA, contactsKey(1)))
+            assertTrue(coordinator.notifications.isEmpty(), "An unsent no-op is not a committed write")
+
+            val update = async { producer.addOrUpdateContact(radioA, frame(1, "Intentional update", 2u)) }
+            runCurrent()
+            assertEquals(1, radio.writes.size)
+            radio.accept()
+            runCurrent()
+            update.await()
+            assertEquals("Intentional update", store.fetchContact(radioA, contactsKey(1))?.name)
+            assertEquals(listOf("contactsChanged"), coordinator.notifications)
+            assertFalse(producer.needsContactWriteReconciliation(radioA))
+        }
+    }
+
+    @Test
+    fun intentionalUpdateQueuedBehindImportStillWritesItsNewMetadata() = runTest {
+        withFixture {
+            val producer = service()
+            val imported = async { producer.addContactIfAbsent(radioA, frame(1, "Imported", 1u)) }
+            runCurrent()
+            val update = async { producer.addOrUpdateContact(radioA, frame(1, "Updated", 2u)) }
+            runCurrent()
+            assertEquals(1, radio.writes.size)
+            radio.accept()
+            runCurrent()
+            imported.await()
+            assertEquals(2, radio.writes.size)
+            radio.accept()
+            runCurrent()
+            update.await()
+            assertEquals("Updated", store.fetchContact(radioA, contactsKey(1))?.name)
+            assertFalse(producer.needsContactWriteReconciliation(radioA))
+        }
+    }
+
+    @Test
+    fun conditionalImportScopesExistenceToTheActualRadioAndKey() = runTest {
+        withFixture {
+            val producer = service()
+            val otherRadio = ContactDTO.fromFrame(radioB, frame(1, "Other radio"))
+            store.seed(otherRadio)
+            val imported = async { producer.addContactIfAbsent(radioA, frame(1, "This radio")) }
+            runCurrent()
+            assertEquals(1, radio.writes.size)
+            radio.accept()
+            runCurrent()
+            imported.await()
+            assertEquals("This radio", store.fetchContact(radioA, contactsKey(1))?.name)
+            assertEquals(otherRadio, store.fetchContact(radioB, contactsKey(1)))
+        }
+    }
+
+    @Test
+    fun queuedConditionalImportOfADifferentKeyStillDispatches() = runTest {
+        withFixture {
+            val producer = service()
+            val first = async { producer.addContactIfAbsent(radioA, frame(1, "First")) }
+            runCurrent()
+            val second = async { producer.addContactIfAbsent(radioA, frame(2, "Different")) }
+            runCurrent()
+            assertEquals(1, radio.writes.size)
+            radio.accept()
+            runCurrent()
+            first.await()
+            assertEquals(2, radio.writes.size)
+            radio.accept()
+            runCurrent()
+            second.await()
+            assertEquals("First", store.fetchContact(radioA, contactsKey(1))?.name)
+            assertEquals("Different", store.fetchContact(radioA, contactsKey(2))?.name)
+        }
+    }
+
+    @Test
+    fun cancellingAQueuedConditionalImportNeverDispatchesOrMarksRecovery() = runTest {
+        withFixture {
+            val flags = PendingMarkerFlags()
+            val producer = service(flags = flags)
+            var queuedDispatch: ContactWriteDispatch? = null
+            val observedSession = object : ContactSessionOps by session {
+                override suspend fun addContactIf(
+                    contact: MeshContact,
+                    dispatch: ContactWriteDispatch,
+                    shouldDispatch: suspend () -> Boolean,
+                    onCommitted: suspend () -> Unit,
+                ) {
+                    queuedDispatch = dispatch
+                    session.addContactIf(contact, dispatch, shouldDispatch, onCommitted)
+                }
+            }
+            val first = async { producer.addContactIfAbsent(radioA, frame(1, "First")) }
+            runCurrent()
+            val second = async {
+                service(connection = observedSession, flags = flags).addContactIfAbsent(radioA, frame(2, "Cancelled"))
+            }
+            runCurrent()
+            assertNotNull(queuedDispatch)
+            second.cancelAndJoin()
+            assertTrue(assertNotNull(queuedDispatch).definitelyUnsent)
+            assertFalse(producer.needsContactWriteReconciliation(radioA))
+            radio.accept()
+            runCurrent()
+            first.await()
+            assertEquals(1, radio.writes.size)
+            assertEquals("First", store.fetchContact(radioA, contactsKey(1))?.name)
+            assertNull(store.fetchContact(radioA, contactsKey(2)))
+            assertTrue(flags.attempts.isEmpty())
+        }
+    }
+
+    @Test
+    fun conditionalImportLookupFailureOrCancellationIsDefinitelyUnsent() = runTest {
+        withFixture {
+            val failure = IOException("Contact lookup failed")
+            val failing = object : ContactPersisting by store {
+                override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? = throw failure
+            }
+            val flags = PendingMarkerFlags()
+            val producer = service(persistence = failing, flags = flags)
+            assertSame(failure, assertFailsWith<IOException> {
+                producer.addContactIfAbsent(radioA, frame(1, "Failed lookup"))
+            })
+            assertTrue(radio.writes.isEmpty())
+            assertFalse(producer.needsContactWriteReconciliation(radioA))
+            assertTrue(flags.attempts.isEmpty())
+
+            val gate = SuspensionGate()
+            val paused = object : ContactPersisting by store {
+                override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                    gate.pause()
+                    return store.fetchContact(radioId, publicKey)
+                }
+            }
+            val cancelledService = service(persistence = paused, flags = flags)
+            val cancelled = async { cancelledService.addContactIfAbsent(radioA, frame(1, "Cancelled lookup")) }
+            runCurrent()
+            assertTrue(gate.entered.isCompleted)
+            cancelled.cancelAndJoin()
+            gate.release.complete(Unit)
+            runCurrent()
+            assertTrue(radio.writes.isEmpty())
+            assertFalse(cancelledService.needsContactWriteReconciliation(radioA))
+            assertTrue(flags.attempts.isEmpty())
+        }
+    }
+
+    @Test
+    fun conditionalImportRejectsAMismatchedLookupIdentityBeforeSending() = runTest {
+        withFixture {
+            val wrong = ContactDTO.fromFrame(radioB, frame(1, "Other radio"))
+            val mismatched = object : ContactPersisting by store {
+                override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO = wrong
+            }
+            val flags = PendingMarkerFlags()
+            val producer = service(persistence = mismatched, flags = flags)
+            assertFailsWith<IllegalStateException> {
+                producer.addContactIfAbsent(radioA, frame(1, "Expected radio"))
+            }
+            assertTrue(radio.writes.isEmpty())
+            assertFalse(producer.needsContactWriteReconciliation(radioA))
+            assertTrue(flags.attempts.isEmpty())
+        }
+    }
+
+    @Test
+    fun retiringTheSessionDuringConditionalLookupCannotDispatchLater() = runTest {
+        withFixture {
+            val gate = SuspensionGate()
+            val paused = object : ContactPersisting by store {
+                override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                    gate.pause()
+                    return store.fetchContact(radioId, publicKey)
+                }
+            }
+            val flags = PendingMarkerFlags()
+            val producer = service(persistence = paused, flags = flags)
+            val attempt = async {
+                assertFailsWith<ContactServiceError.SessionError> {
+                    producer.addContactIfAbsent(radioA, frame(1, "Retired"))
+                }
+            }
+            runCurrent()
+            assertTrue(gate.entered.isCompleted)
+            session.stop()
+            gate.release.complete(Unit)
+            runCurrent()
+            assertIs<MeshCoreException.ConnectionLost>(attempt.await().error)
+            assertTrue(radio.writes.isEmpty())
+            assertFalse(producer.needsContactWriteReconciliation(radioA))
+            assertTrue(flags.attempts.isEmpty())
+
+            val replacementRadio = radio.replacementView()
+            val replacement = service(newSession(replacementRadio), flags = flags)
+            val imported = async { replacement.addContactIfAbsent(radioA, frame(1, "Replacement")) }
+            runCurrent()
+            assertEquals(1, replacementRadio.writes.size)
+            replacementRadio.accept()
+            runCurrent()
+            imported.await()
+            assertEquals("Replacement", store.fetchContact(radioA, contactsKey(1))?.name)
+        }
+    }
+
+    @Test
+    fun conditionalImportFailsClosedForLegacySessionWithoutAtomicAdmission() = runTest {
+        withFixture {
+            val legacy = ContactsFakeSession()
+            val flags = PendingMarkerFlags()
+            val producer = service(connection = legacy, flags = flags)
+            assertFailsWith<UnsupportedOperationException> {
+                producer.addContactIfAbsent(radioA, frame(1, "Unsupported"))
+            }
+            assertTrue(legacy.addContactInvocations.isEmpty())
+            assertTrue(radio.writes.isEmpty())
+            assertFalse(producer.needsContactWriteReconciliation(radioA))
+            assertTrue(flags.attempts.isEmpty())
+        }
+    }
+
+    @Test
+    fun conditionalImportPreservesAcceptedWriteRecoveryWhenPersistenceFails() = runTest {
+        withFixture {
+            val failure = IOException("Contact save failed")
+            val failing = object : ContactPersisting by store {
+                override suspend fun saveContactPreservingNewer(
+                    radioId: RadioId,
+                    frame: ContactFrame,
+                    expectedFrame: ContactFrame?,
+                ): ContactSaveResult? = throw failure
+            }
+            val flags = PendingMarkerFlags()
+            val producer = service(persistence = failing, flags = flags)
+            val imported = async {
+                assertFailsWith<ContactWriteCompletionFailed> {
+                    producer.addContactIfAbsent(radioA, frame(1, "Accepted"))
+                }
+            }
+            runCurrent()
+            assertEquals(1, radio.writes.size)
+            radio.accept()
+            runCurrent()
+            assertSame(failure, imported.await().cause)
+            assertNull(store.fetchContact(radioA, contactsKey(1)))
+            assertTrue(producer.needsContactWriteReconciliation(radioA))
+            assertEquals(
+                ContactWriteAdmissionBlockReason.RECONCILIATION_REQUIRED,
+                assertFailsWith<ContactWriteAdmissionBlocked> {
+                    producer.addContactIfAbsent(radioA, frame(1, "Must wait"))
+                }.reason,
+            )
+            assertEquals(1, radio.writes.size)
+        }
+    }
+
+    @Test
     fun stoppedDuringPreviousFrameLookupIsUnsentAndReplacementCanProceed() = runTest {
         withFixture {
             val lookup = SuspensionGate()

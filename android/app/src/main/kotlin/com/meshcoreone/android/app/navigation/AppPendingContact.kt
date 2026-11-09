@@ -39,9 +39,11 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 
 internal data class ContactLinkConfirmationState(
@@ -76,7 +78,27 @@ internal class ContactLinkConfirmation(
 
     suspend fun load() {
         if (!operation.tryLock()) return
-        mutableState.update { it.copy(loading = true, failure = null) }
+        try {
+            loadLocked(clearFailure = true)
+        } finally {
+            operation.unlock()
+        }
+    }
+
+    suspend fun observeContacts() {
+        var first = true
+        session.contactVersions().collect {
+            if (first) {
+                first = false
+                load()
+            } else {
+                operation.withLock { loadLocked(clearFailure = false) }
+            }
+        }
+    }
+
+    private suspend fun loadLocked(clearFailure: Boolean) {
+        mutableState.update { it.copy(loading = true, failure = if (clearFailure) null else it.failure) }
         try {
             if (!isCurrent()) return
             val store = session.servicesDataStore() ?: session.offlineDataStore()
@@ -85,7 +107,9 @@ internal class ContactLinkConfirmation(
             check(existing == null || existing.radioId == radio && existing.publicKey == link.publicKey) {
                 "Contact lookup returned a mismatched identity"
             }
-            if (isCurrent()) mutableState.update { it.copy(existing = existing, failure = null) }
+            if (isCurrent()) mutableState.update {
+                it.copy(existing = existing, failure = if (clearFailure) null else it.failure)
+            }
             else if (!isCurrentNavigationSession()) reportDisconnected()
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -93,7 +117,6 @@ internal class ContactLinkConfirmation(
             report(failure)
         } finally {
             mutableState.update { it.copy(loading = false) }
-            operation.unlock()
         }
     }
 
@@ -121,7 +144,7 @@ internal class ContactLinkConfirmation(
         }
         mutableState.update { it.copy(importing = true, failure = null) }
         try {
-            service.addOrUpdateContact(device.radioId, ContactFrame(
+            service.addContactIfAbsent(device.radioId, ContactFrame(
                 publicKey = link.publicKey, type = link.type, flags = 0u,
                 outPathLength = PacketBuilder.FLOOD_PATH_SENTINEL, outPath = Bytes.EMPTY,
                 name = link.name, lastAdvertTimestamp = 0u, latitude = 0.0, longitude = 0.0,
@@ -191,7 +214,7 @@ internal fun AppPendingContact(dependencies: NodesFeatureDependencies, navigatio
             holder.dismiss()
             Unit
         }
-        LaunchedEffect(holder) { holder.load() }
+        LaunchedEffect(holder) { holder.observeContacts() }
         val identity = ContactAddConfirmation(
             ScannedContact(link.name, link.publicKey, link.type), state.existing,
             errorMessage = null, isAdding = state.importing, canScanAgain = false,

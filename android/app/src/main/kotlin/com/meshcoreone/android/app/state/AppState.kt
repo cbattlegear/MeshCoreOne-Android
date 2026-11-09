@@ -559,35 +559,43 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
                 subscription.events.collect { wrapped ->
                     when (val event = wrapped.event) {
                         is SettingsEvent.PersistenceBarrier -> {
-                            persistSessionDeviceEdit("settings write barrier", event.persistence) {
+                            applySessionDeviceEdit("settings write barrier", event.persistence) {
                                 connection.awaitDeviceEdits(wrapped.token)
                             }
                         }
                         is SettingsEvent.DeviceUpdated -> {
                             val presetId = event.appliedRadioPresetID
-                            if (presetId == null) {
-                                connection.updateDevice(event.info, null)
-                            } else {
-                                persistSessionDeviceEdit("radio preset") {
-                                    connection.updateDevice(event.info, presetId, wrapped.token)
-                                }
+                            applySessionDeviceEdit(if (presetId == null) "device settings" else "radio preset") {
+                                connection.updateDevice(event.info, presetId, wrapped.token)
                             }
                         }
                         is SettingsEvent.AutoAddConfigUpdated -> {
-                            connection.updateAutoAddConfig(event.config)
-                            // Clear the storage-full flag when overwrite-oldest is enabled.
-                            if ((event.config.bitmask and AutoAddConfig.OVERWRITE_OLDEST_BIT) != 0.toUByte()) {
-                                connectionUI.isNodeStorageFull = false
+                            applySessionDeviceEdit("auto-add config") {
+                                val updated = connection.updateAutoAddConfig(event.config, wrapped.token)
+                                val overwriteOldest =
+                                    (event.config.bitmask and AutoAddConfig.OVERWRITE_OLDEST_BIT) != 0.toUByte()
+                                if (updated && overwriteOldest) {
+                                    connection.withCurrentSession(wrapped.token) {
+                                        connectionUI.isNodeStorageFull = false
+                                    }
+                                }
+                                updated
                             }
                         }
-                        is SettingsEvent.ClientRepeatUpdated -> connection.updateClientRepeat(event.enabled)
+                        is SettingsEvent.ClientRepeatUpdated -> applySessionDeviceEdit("client repeat") {
+                            connection.updateClientRepeat(event.enabled, wrapped.token)
+                        }
                         is SettingsEvent.PathHashModeUpdated -> {
-                            persistSessionDeviceEdit("path hash", event.persistence) {
+                            applySessionDeviceEdit("path hash", event.persistence) {
                                 connection.updatePathHashMode(event.mode, wrapped.token)
                             }
                         }
-                        is SettingsEvent.AllowedRepeatFreqUpdated -> connection.setAllowedRepeatFreqRanges(event.ranges)
-                        is SettingsEvent.DefaultFloodScopeUpdated -> connection.updateDefaultFloodScopeName(event.name)
+                        is SettingsEvent.AllowedRepeatFreqUpdated -> applySessionDeviceEdit("repeat frequency ranges") {
+                            connection.setAllowedRepeatFreqRanges(event.ranges, wrapped.token)
+                        }
+                        is SettingsEvent.DefaultFloodScopeUpdated -> applySessionDeviceEdit("default flood scope") {
+                            connection.updateDefaultFloodScopeName(event.name, wrapped.token)
+                        }
                     }
                 }
             } finally {
@@ -596,7 +604,7 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
         })
     }
 
-    private suspend fun persistSessionDeviceEdit(
+    private suspend fun applySessionDeviceEdit(
         operation: String,
         completion: CompletableDeferred<Unit>? = null,
         edit: suspend () -> Boolean,
@@ -613,7 +621,7 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
             throw cancelled
         } catch (failure: Exception) {
             completion?.completeExceptionally(failure)
-            logger.log(Level.WARNING, "Failed to persist $operation update", failure)
+            logger.log(Level.WARNING, "Failed to apply $operation update", failure)
         }
     }
 

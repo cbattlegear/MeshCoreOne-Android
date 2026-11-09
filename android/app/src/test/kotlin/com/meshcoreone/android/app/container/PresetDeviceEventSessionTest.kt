@@ -1,4 +1,4 @@
-// AndroidOnly: WP-305 The real settings event collector forwards the originating token for preset updates only.
+// AndroidOnly: WP-305 The real settings event collector keeps every device mutation bound to its originating session.
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.contracts.domain.Generation
@@ -66,8 +66,8 @@ class PresetDeviceEventSessionTest : RoomProcessTest() {
             val port = FakeConnectionPort().also {
                 it.connectionState = h.manager.connectionState
                 it.connectedDevice = h.manager.connectedDevice
-                it.presetToken = token
-                it.beforePresetUpdate = { it.presetToken = replace(token) }
+                it.currentToken = token
+                it.beforeSessionUpdate = { it.currentToken = replace(token) }
             }
             val state = appStateOf(backgroundScope, port, session = { session })
             state.wireServicesIfConnected()
@@ -78,18 +78,18 @@ class PresetDeviceEventSessionTest : RoomProcessTest() {
                 )
                 session.settingsService.applyRadioPresetVerified(preset)
                 val count = if (pathHashSize == null) 1 else 2
-                h.eventually("preset events reach token-bound port") { port.presetTokens.size == count }
-                assertEquals(List(count) { token }, port.presetTokens)
-                assertEquals(if (port.presetToken == token) 1 else 0,
+                h.eventually("preset events reach token-bound port") { port.sessionTokens.size == count }
+                assertEquals(List(count) { token }, port.sessionTokens)
+                assertEquals(if (port.currentToken == token) 1 else 0,
                     port.calls.count { it == "updateDeviceInfo" })
                 if (pathHashSize != null) {
-                    assertEquals(if (port.presetToken == token) 1 else 0, port.calls.count { it == "pathHash:1" })
+                    assertEquals(if (port.currentToken == token) 1 else 0, port.calls.count { it == "pathHash:1" })
                 }
             } finally { state.tearDownAppStateSessionState() }
         } finally { h.container.close() }
     }
 
-    @Test fun nonPresetDeviceEventKeepsItsExistingConsumer() = runTest {
+    @Test fun currentNonPresetDeviceEventCarriesItsOriginalToken() = runTest {
         val h = ContainerHarness(this, store)
         try {
             h.connect()
@@ -97,14 +97,72 @@ class PresetDeviceEventSessionTest : RoomProcessTest() {
             val port = FakeConnectionPort().also {
                 it.connectionState = h.manager.connectionState
                 it.connectedDevice = h.manager.connectedDevice
+                it.currentToken = session.token
             }
             val state = appStateOf(backgroundScope, port, session = { session })
             state.wireServicesIfConnected()
             try {
                 session.settingsService.refreshDeviceInfo()
-                h.eventually("non-preset event reaches existing port") { "updateDeviceInfo" in port.calls }
-                assertTrue(port.presetTokens.isEmpty())
+                h.eventually("non-preset event reaches token-bound port") { port.sessionTokens.size == 1 }
+                assertEquals(listOf(session.token), port.sessionTokens)
                 assertEquals(1, port.calls.count { it == "updateDeviceInfo" })
+            } finally { state.tearDownAppStateSessionState() }
+        } finally { h.container.close() }
+    }
+
+    @Test fun retiredNonPresetDeviceEventCannotUpdateReplacementSession() = runTest {
+        val h = ContainerHarness(this, store)
+        try {
+            h.connect()
+            val session = assertNotNull(h.sessions.current)
+            val port = FakeConnectionPort().also {
+                it.connectionState = h.manager.connectionState
+                it.connectedDevice = h.manager.connectedDevice
+                it.currentToken = session.token
+                it.beforeSessionUpdate = {
+                    it.currentToken = session.token.copy(generation = Generation(session.token.generation.value + 1))
+                }
+            }
+            val state = appStateOf(backgroundScope, port, session = { session })
+            state.wireServicesIfConnected()
+            try {
+                session.settingsService.refreshDeviceInfo()
+                h.eventually("retired non-preset event reaches token guard") { port.sessionTokens.size == 1 }
+                assertEquals(listOf(session.token), port.sessionTokens)
+                assertTrue("updateDeviceInfo" !in port.calls)
+            } finally { state.tearDownAppStateSessionState() }
+        } finally { h.container.close() }
+    }
+
+    @Test fun retiredRepeatEventsCannotUpdateReplacementSession() = runTest {
+        val h = ContainerHarness(this, store)
+        try {
+            h.links.configureRadio = { radio ->
+                radio.respond = { command ->
+                    when (command[0].toInt()) {
+                        0x0b, 0x3d -> listOf(Bytes.of(0))
+                        else -> null
+                    }
+                }
+            }
+            h.connect()
+            val session = assertNotNull(h.sessions.current)
+            val port = FakeConnectionPort().also {
+                it.connectionState = h.manager.connectionState
+                it.connectedDevice = h.manager.connectedDevice
+                it.currentToken = session.token
+                it.beforeSessionUpdate = {
+                    it.currentToken = session.token.copy(generation = Generation(session.token.generation.value + 1))
+                }
+            }
+            val state = appStateOf(backgroundScope, port, session = { session })
+            state.wireServicesIfConnected()
+            try {
+                session.settingsService.setRadioParamsVerified(915_000u, 250_000u, 10u, 5u, clientRepeat = false)
+                h.eventually("repeat and device events reach token guards") { port.sessionTokens.size == 2 }
+                assertEquals(List(2) { session.token }, port.sessionTokens)
+                assertTrue("clientRepeat:false" !in port.calls)
+                assertTrue("updateDeviceInfo" !in port.calls)
             } finally { state.tearDownAppStateSessionState() }
         } finally { h.container.close() }
     }

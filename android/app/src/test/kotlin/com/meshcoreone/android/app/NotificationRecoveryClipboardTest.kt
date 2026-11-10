@@ -9,6 +9,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -16,9 +17,14 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import com.meshcoreone.android.app.deeplinks.DeepLinkRouteOutcome
+import com.meshcoreone.android.app.deeplinks.PendingExternalRoute
+import com.meshcoreone.android.app.navigation.ContactLinkRequest
+import com.meshcoreone.android.app.navigation.NavigationCoordinator
 import com.meshcoreone.android.core.contracts.notifications.NotificationAction
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
@@ -26,6 +32,8 @@ import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.platform.notifications.messaging.NotificationActionRecovery
 import com.meshcoreone.android.platform.notifications.messaging.NotificationActionRecoveryStore
 import com.meshcoreone.android.platform.notifications.messaging.NotificationRecoveryRead
@@ -40,6 +48,8 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -182,6 +192,148 @@ class NotificationRecoveryClipboardTest {
         compose.runOnIdle { otherDialog.value = false }
         awaitText("deferred original")
         assertEquals(entry.id, entries().single().id)
+    }
+
+    @Test
+    fun externalLinkFailureDefersRecoveryAndOldCancelCannotDismissAnIdenticalReplacement() {
+        val original = save(53, " \tunchanged rejected reply\n ")
+        val route = failingContactRoute()
+        val first = PendingExternalRoute.Delivery("first", "meshcore://same-contact")
+        val replacement = PendingExternalRoute.Delivery("replacement", first.uri)
+        runBlocking {
+            route.markReady()
+            assertTrue(route.submit(first) is PendingExternalRoute.SubmitOutcome.RetryableFailure)
+        }
+        val oldFailure = requireNotNull(route.lookupFailure.value)
+        mountRootDialogs(route)
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag("external-contact-link-cancel").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithTag("external-contact-link-failure").assertIsDisplayed()
+        compose.onNodeWithText(text(NotificationStrings.string.notification_action_recovery_title))
+            .assertDoesNotExist()
+        assertEquals(original.id, entries().single().id)
+        val oldCancel = requireNotNull(
+            compose.onNodeWithTag("external-contact-link-cancel")
+                .fetchSemanticsNode().config[SemanticsActions.OnClick].action,
+        )
+        compose.runOnUiThread {
+            runBlocking {
+                assertTrue(route.submit(replacement) is PendingExternalRoute.SubmitOutcome.RetryableFailure)
+            }
+            assertTrue(oldCancel())
+        }
+        compose.waitForIdle()
+        val replacementFailure = requireNotNull(route.lookupFailure.value)
+        assertEquals(replacement.id, replacementFailure.deliveryId)
+        assertTrue(replacementFailure.attempt > oldFailure.attempt)
+        assertEquals(replacement, runBlocking { route.snapshot() })
+        assertEquals(original.response, entries().single().response)
+        compose.onNodeWithTag("external-contact-link-cancel").performClick()
+        awaitText(" \tunchanged rejected reply\n ")
+        assertNull(route.lookupFailure.value)
+        assertNull(runBlocking { route.snapshot() })
+        assertEquals(setOf(first.id, replacement.id), runBlocking { route.consumedDeliveryIds() })
+        assertEquals(original.id, entries().single().id)
+    }
+
+    @Test
+    fun pendingContactDoesNotHideRecoveryWhenShellOrNodeDependenciesAreUnavailable() {
+        val original = save(54, "visible without a contact dialog")
+        val navigation = NavigationCoordinator()
+        val radio = RadioId(UUID(0, 54))
+        navigation.stageContactLink(
+            ContactLinkRequest("pending", Bytes(ByteArray(32) { 54 }), ContactType.REPEATER),
+            radio,
+        )
+        val shellVisible = mutableStateOf(false)
+        val nodesAvailable = mutableStateOf(true)
+        mountRootDialogs(failingContactRoute(), navigation, shellVisible, nodesAvailable)
+        awaitText("visible without a contact dialog")
+        compose.runOnIdle {
+            shellVisible.value = true
+            nodesAvailable.value = false
+        }
+        compose.onNodeWithText("visible without a contact dialog").assertIsDisplayed()
+        assertEquals(radio, navigation.currentState.pendingContactLink?.targetRadioId)
+        assertEquals(original.id, entries().single().id)
+        compose.runOnIdle { nodesAvailable.value = true }
+        compose.onNodeWithText(text(NotificationStrings.string.notification_action_recovery_title))
+            .assertDoesNotExist()
+        compose.runOnIdle { shellVisible.value = false }
+        awaitText("visible without a contact dialog")
+        assertEquals(original.id, entries().single().id)
+    }
+
+    @Test
+    fun hiddenExternalFailureDoesNotStrandRecoveryWhileTheContainerIsUnavailable() {
+        val original = save(56, "available during startup")
+        val route = failingContactRoute()
+        runBlocking {
+            route.markReady()
+            route.submit(PendingExternalRoute.Delivery("startup", "meshcore://contact"))
+        }
+        val showExternal = mutableStateOf(false)
+        mountRootDialogs(route, showExternalLinkFailure = showExternal)
+        awaitText("available during startup")
+        compose.onNodeWithTag("external-contact-link-failure").assertDoesNotExist()
+        compose.runOnIdle { showExternal.value = true }
+        compose.onNodeWithTag("external-contact-link-failure").assertIsDisplayed()
+        compose.onNodeWithText(text(NotificationStrings.string.notification_action_recovery_title))
+            .assertDoesNotExist()
+        compose.runOnIdle { showExternal.value = false }
+        awaitText("available during startup")
+        assertEquals("startup", route.lookupFailure.value?.deliveryId)
+        assertEquals(original.id, entries().single().id)
+    }
+
+    @Test
+    fun linkFailureDuringDeletionPreservesBusyStateAndReportsTheFailureAfterCancellation() {
+        val original = save(55, "retain during contact failure")
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val failOnce = AtomicBoolean()
+        context = object : ContextWrapper(context) {
+            override fun getApplicationContext(): Context = this
+            override fun getNoBackupFilesDir(): File {
+                if (failOnce.compareAndSet(true, false)) {
+                    entered.countDown()
+                    check(release.await(10, TimeUnit.SECONDS))
+                    throw SecurityException("synthetic deferred disposition failure")
+                }
+                return super.getNoBackupFilesDir()
+            }
+        }
+        val route = failingContactRoute()
+        runBlocking { route.markReady() }
+        mountRootDialogs(route)
+        awaitText("retain during contact failure")
+        failOnce.set(true)
+        try {
+            compose.onNodeWithText(text(AppChatsStrings.chatsMessageActionDelete)).performClick()
+            compose.waitUntil(5_000) { entered.count == 0L }
+            runBlocking { route.submit(PendingExternalRoute.Delivery("first", "meshcore://contact")) }
+            compose.waitUntil(5_000) {
+                compose.onAllNodesWithTag("external-contact-link-cancel").fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithText(text(NotificationStrings.string.notification_action_recovery_title))
+                .assertDoesNotExist()
+            compose.onNodeWithTag("external-contact-link-cancel").performClick()
+            awaitText("retain during contact failure")
+            compose.onNodeWithText(text(AppLocalizableStrings.commonCancel)).assertIsNotEnabled()
+            compose.onNodeWithText(text(AppChatsStrings.chatsMessageActionDelete)).assertIsNotEnabled()
+            runBlocking { route.submit(PendingExternalRoute.Delivery("second", "meshcore://contact")) }
+            compose.waitUntil(5_000) {
+                compose.onAllNodesWithTag("external-contact-link-cancel").fetchSemanticsNodes().isNotEmpty()
+            }
+        } finally {
+            release.countDown()
+        }
+        compose.onNodeWithTag("external-contact-link-cancel").performClick()
+        awaitText(text(NotificationStrings.string.notification_action_recovery_discard_failed))
+        awaitText("retain during contact failure")
+        assertEquals(original.id, entries().single().id)
+        assertEquals(1, dispositionStarts.get())
     }
 
     @Test
@@ -771,6 +923,39 @@ class NotificationRecoveryClipboardTest {
                             },
                         )
                     }
+                }
+            }
+        }
+    }
+
+    private fun failingContactRoute() = PendingExternalRoute {
+        DeepLinkRouteOutcome.ContactLookupFailed(IllegalStateException("contact lookup unavailable"))
+    }
+
+    private fun mountRootDialogs(
+        route: PendingExternalRoute,
+        navigation: NavigationCoordinator = NavigationCoordinator(),
+        shellVisible: androidx.compose.runtime.MutableState<Boolean> = mutableStateOf(true),
+        nodesAvailable: androidx.compose.runtime.MutableState<Boolean> = mutableStateOf(true),
+        showExternalLinkFailure: androidx.compose.runtime.MutableState<Boolean> = mutableStateOf(true),
+    ) {
+        check(!mounted)
+        mounted = true
+        activity.get().setContent {
+            CompositionLocalProvider(LocalContext provides context) {
+                MeshCoreTheme(motionScale = 0f) {
+                    val scope = rememberCoroutineScope()
+                    AppRootRecoveryDialogs(
+                        navigation = navigation,
+                        pendingExternalRoute = route,
+                        showExternalLinkFailure = showExternalLinkFailure.value,
+                        shellVisible = shellVisible.value,
+                        nodesAvailable = nodesAvailable.value,
+                        connectionRecoveryVisible = otherDialog.value,
+                        onRetryContactLink = { id, attempt -> scope.launch { route.retry(id, attempt) } },
+                        onCancelContactLink = { id, attempt -> scope.launch { route.cancel(id, attempt) } },
+                        onDispositionStarted = { dispositionStarts.incrementAndGet() },
+                    )
                 }
             }
         }

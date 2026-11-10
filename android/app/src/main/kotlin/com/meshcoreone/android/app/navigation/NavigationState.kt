@@ -7,6 +7,7 @@ package com.meshcoreone.android.app.navigation
 
 import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.core.contracts.FeatureId
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.Coordinate
@@ -76,13 +77,20 @@ sealed interface NavigationDestination {
 }
 
 // Native adaptation: Opaque entry identity; never a public key, DTO or radio ID in saved-state keys.
-data class NavigationEntry(val id: Long, val destination: NavigationDestination)
+data class NavigationEntry(val id: Long, val destination: NavigationDestination, val ownerTab: AppTab)
 
 // PortedFrom: MC1/State/MapFocusRequest.swift@db14559b39d32322b06477c6ae676112f583db50
 data class MapFocusRequest(val latitude: Double, val longitude: Double) {
     val coordinate: Coordinate get() = Coordinate(latitude, longitude)
 }
-data class ContactLinkRequest(val name: String, val publicKey: Bytes, val type: ContactType)
+data class ContactLinkRequest(
+    val name: String,
+    val publicKey: Bytes,
+    val type: ContactType,
+    val targetRadioId: RadioId? = null,
+    val generation: Long = 0,
+    val deliveryId: Long? = null,
+)
 data class ChannelLinkRequest(
     val name: String,
     val secret: Bytes,
@@ -94,6 +102,9 @@ data class HashtagJoinRequest(val id: String)
 data class PendingNotificationRoute(
     val id: Long, val generation: Long?, val request: NotificationNavigationRequest,
 )
+
+// Native adaptation: Bind a reaction anchor to one delivery and mounted navigation entry.
+data class PendingMessageScroll(val deliveryId: Long, val entryId: Long, val messageId: UUID)
 
 // Native adaptation: Material rail replaces the 64-point Apple sidebar; actual window width owns layout.
 object NavigationLayout {
@@ -111,7 +122,7 @@ object NavigationLayout {
 
 private fun initialStacks(): SnapshotMap<AppTab, SnapshotList<NavigationEntry>> =
     AppTab.entries.associateWith { tab ->
-        listOf(NavigationEntry(tab.sourceIndex.toLong(), NavigationDestination.Root(tab))).snapshot()
+        listOf(NavigationEntry(tab.sourceIndex.toLong(), NavigationDestination.Root(tab), tab)).snapshot()
     }.snapshotMap()
 
 data class NavigationState(
@@ -125,13 +136,16 @@ data class NavigationState(
     val pendingChannel: ChannelDTO? = null,
     val pendingRoomSession: RemoteNodeSessionDTO? = null,
     val pendingRoomAuthentication: RemoteNodeSessionDTO? = null,
+    internal val roomAuthenticationDeliveryId: Long? = null,
+    internal val roomAuthenticationGeneration: Long? = null,
+    internal val roomAuthenticationSessionToken: SessionToken? = null,
     val pendingDiscoveryNavigation: Boolean = false,
     val pendingContactDetail: ContactDTO? = null,
     val selectedContact: ContactDTO? = null,
     val nodesShowingDiscovery: Boolean = false,
     val selectedTool: ToolSelection? = null,
     val selectedSetting: SettingsDetail? = null,
-    val pendingScrollToMessageID: UUID? = null,
+    val pendingMessageScroll: PendingMessageScroll? = null,
     val pendingDeviceMenuTipDonation: Boolean = false,
     val pendingMapFocus: MapFocusRequest? = null,
     val pendingContactLink: ContactLinkRequest? = null,
@@ -139,6 +153,9 @@ data class NavigationState(
     val pendingHashtag: HashtagJoinRequest? = null,
     val radioId: RadioId? = null,
     val generation: Long = 0,
+    internal val boundSessionToken: SessionToken? = null,
+    val initialContactLinkGeneration: Long? = null,
+    internal val contactLookupRevision: Long = 0,
     val failure: NavigationFailure? = null,
     val navigationReady: Boolean = false,
     val pendingNotifications: SnapshotList<PendingNotificationRoute> = SnapshotList.empty(),
@@ -146,22 +163,51 @@ data class NavigationState(
     init {
         require(stacks.keys == AppTab.entries.toSet()) { "Every tab needs its own stack" }
         require(stacks.all { (tab, stack) ->
-            stack.isNotEmpty() && stack.first().destination == NavigationDestination.Root(tab)
+            stack.isNotEmpty() && stack.first().destination == NavigationDestination.Root(tab) &&
+                stack.all { it.ownerTab == tab }
         }) { "Every stack must start at its matching root" }
-        val ids = stacks.values.flatten().map { it.id } + pendingNotifications.map { it.id }
+        val ids = stacks.values.flatten().map { it.id } + pendingNotifications.map { it.id } +
+            listOfNotNull(pendingContactLink?.deliveryId, roomAuthenticationDeliveryId, pendingMessageScroll?.deliveryId)
         require(ids.distinct().size == ids.size && ids.all { it >= 0 && it < nextEntryId }) {
             "Entry identities must be unique, nonnegative and below the next identity"
+        }
+        require(pendingMessageScroll == null || stacks.getValue(AppTab.CHATS).any {
+            it.id == pendingMessageScroll.entryId && it.destination is NavigationDestination.Chat
+        }) { "A pending message scroll must belong to a chat entry" }
+        require(
+            roomAuthenticationDeliveryId == null && roomAuthenticationGeneration == null ||
+                roomAuthenticationDeliveryId != null && roomAuthenticationGeneration != null &&
+                pendingRoomAuthentication != null && roomAuthenticationGeneration in 0L..generation,
+        ) { "A room authentication delivery requires a pending room and a valid generation" }
+        require(
+            roomAuthenticationSessionToken == null ||
+                roomAuthenticationDeliveryId != null && pendingRoomAuthentication?.radioId == roomAuthenticationSessionToken.radioId &&
+                roomAuthenticationSessionToken == boundSessionToken,
+        ) { "A room authentication owner must match the pending room and bound session" }
+        require(boundSessionToken == null || boundSessionToken.radioId == radioId) {
+            "The bound session must match the navigation radio"
         }
         require(generation >= 0 && pendingNotifications.all { it.generation == null || it.generation >= 0 }) {
             "Connection generations must be nonnegative"
         }
+        require(contactLookupRevision >= 0) { "Contact lookup revision must be nonnegative" }
+        require(initialContactLinkGeneration == null || initialContactLinkGeneration in 0 until generation) {
+            "Initial contact context must precede its assigned radio generation"
+        }
         require(widthDp.isFinite() && widthDp >= 0f) { "Window width must be finite and nonnegative" }
     }
     val activeStack: SnapshotList<NavigationEntry> get() = stacks.getValue(selectedTab)
+    val pendingScrollToMessageID: UUID? get() = pendingMessageScroll?.messageId
     val isSidebarWide: Boolean get() = NavigationLayout.tilesListDetail(widthDp)
     val isOnValidTabForDeviceMenuTip: Boolean
         get() = selectedTab == AppTab.CHATS || selectedTab == AppTab.NODES || selectedTab == AppTab.MAP
     val canGoBack: Boolean get() = activeStack.size > 1 || selectedTab != AppTab.CHATS
+
+    internal fun pendingMessageScrollFor(entryId: Long?): PendingMessageScroll? =
+        pendingMessageScroll?.takeIf {
+            entryId != null && selectedTab == AppTab.CHATS &&
+                it.entryId == entryId && activeStack.last().id == entryId
+        }
 
     internal fun select(tab: AppTab): NavigationState {
         val next = copy(selectedTab = tab, tabBarVisible = stacks.getValue(tab).size == 1)
@@ -178,7 +224,7 @@ data class NavigationState(
                 (stack.dropLast(1) + stack.last().copy(destination = destination)).snapshot())).snapshotMap(),
             failure = null,
         )
-        val entry = NavigationEntry(base.nextEntryId, destination)
+        val entry = NavigationEntry(base.nextEntryId, destination, tab)
         return base.copy(
             selectedTab = tab,
             stacks = (base.stacks + (tab to (stack + entry).snapshot())).snapshotMap(),
@@ -192,7 +238,13 @@ data class NavigationState(
         val nextStacks = stacks.mapValues { (_, stack) ->
             stack.filterNot { predicate(it.destination) }.snapshot()
         }.snapshotMap()
-        return copy(stacks = nextStacks, tabBarVisible = nextStacks.getValue(selectedTab).size == 1)
+        val scroll = pendingMessageScroll?.takeIf { target ->
+            nextStacks.getValue(AppTab.CHATS).any { it.id == target.entryId }
+        }
+        return copy(
+            stacks = nextStacks, pendingMessageScroll = scroll,
+            tabBarVisible = nextStacks.getValue(selectedTab).size == 1,
+        )
     }
 }
 
@@ -203,6 +255,7 @@ sealed interface NavigationFailure {
     data class WrongTarget(val kind: NavigationTarget) : NavigationFailure
     data class WrongRadio(val expected: RadioId, val actual: RadioId) : NavigationFailure
     data object StaleGeneration : NavigationFailure
+    data class StaleOnboarding(val id: Long) : NavigationFailure
     data class Repository(val cause: com.meshcoreone.android.core.contracts.domain.PersistenceStoreError) : NavigationFailure
     data object UnsupportedNotification : NavigationFailure
     data object InvalidSavedState : NavigationFailure

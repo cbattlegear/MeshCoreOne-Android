@@ -267,6 +267,17 @@ class RoomAccessibilityComposeTest {
         assertTrue("Internal links must not open externally", fixture.external.isEmpty())
     }
 
+    @Test fun contactLinkActionInRoomNavigatesToTheCapturedSavedContact() {
+        val body = "meshcore://contact/add?name=Alice&public_key=${alice.publicKey.hexString}&type=1"
+        val fixture = Fixture(listOf(message(body)))
+        showRoute(fixture)
+
+        invoke("Alice: $body", Chats.chatsMessageActionAddContact(host.get().resources, "Alice"))
+        compose.waitUntil { fixture.navigatedContacts.isNotEmpty() }
+        assertEquals(listOf(alice), fixture.navigatedContacts)
+        assertTrue(fixture.external.isEmpty())
+    }
+
     @Test fun rememberPasswordHasOneLabelledSwitchAndItsToggleReachesTheJoinService() {
         val fixture = Fixture(emptyList(), session.copy(isConnected = false))
         showRoute(fixture)
@@ -285,7 +296,7 @@ class RoomAccessibilityComposeTest {
         compose.onNode(hasSetTextAction()).performTextInput("fixture-password")
         compose.onNodeWithText(text(Rooms.remoteNodesAuthJoinRoom)).performClick()
         compose.waitUntil { fixture.joins.isNotEmpty() }
-        assertEquals(listOf(Triple(alice, "fixture-password", false)), fixture.joins)
+        assertEquals(listOf(Triple(fixture.roomContact, "fixture-password", false)), fixture.joins)
         assertTrue(fixture.holder.state.value.session.isConnected)
     }
 
@@ -415,6 +426,21 @@ class RoomAccessibilityComposeTest {
         compose.waitUntil { fixture.holder.state.value.hasLoadedOnce }
     }
 
+    private data class CapturedRoomContact(
+        val owner: Any,
+        override val radioId: RadioId?,
+        override val selfPublicKey: Bytes?,
+        override val disposition: ContactLinkCaptureDisposition,
+        val publicKey: Bytes,
+        val revision: Long,
+    ) : ContactLinkContext
+
+    private class ResolvedRoomContact(
+        val capture: CapturedRoomContact,
+        override val radioId: RadioId?,
+        override val selfPublicKey: Bytes?,
+    ) : ContactLinkResolvedTarget
+
     private inner class Fixture(
         messages: List<RoomMessageDTO>,
         private val room: RemoteNodeSessionDTO = session,
@@ -422,6 +448,10 @@ class RoomAccessibilityComposeTest {
     ) :
         RoomConversationDependencies, ChatLinkEnvironment {
         var stored = messages
+        val roomContact = ContactDTO(
+            radioId = room.radioId, publicKey = room.publicKey, name = room.name, typeRawValue = 3u,
+            lastHeardTimestamp = null,
+        )
         val retries = mutableListOf<Pair<UUID, UUID>>()
         val joins = mutableListOf<Triple<ContactDTO, String?, Boolean>>()
         val external = mutableListOf<String>()
@@ -433,7 +463,7 @@ class RoomAccessibilityComposeTest {
         override val data = object : RoomConversationDataSource {
             override suspend fun fetchMessages(session: RemoteNodeSessionDTO) = stored
             override suspend fun refreshSession(session: RemoteNodeSessionDTO) = room
-            override suspend fun contactFor(session: RemoteNodeSessionDTO) = alice
+            override suspend fun contactFor(session: RemoteNodeSessionDTO) = roomContact
             override suspend fun markAsRead(session: RemoteNodeSessionDTO) = Unit
             override suspend fun markFailedSendsSeen(session: RemoteNodeSessionDTO) = Unit
         }
@@ -462,7 +492,57 @@ class RoomAccessibilityComposeTest {
         override var selectedTab = AppTab.CHATS
         override val currentRadioId = radio
         override val connectedDevicePublicKey = session.publicKey
+        private var contactRevision = 0L
         override val parser = MeshCoreLinkParser
+        override fun captureContactLinkContext(
+            publicKey: Bytes, publications: ContactLinkPublications,
+        ): ContactLinkContext {
+            val disposition = if (publicKey == connectedDevicePublicKey)
+                ContactLinkCaptureDisposition.IgnoredSelfContact else ContactLinkCaptureDisposition.Lookup
+            if (disposition == ContactLinkCaptureDisposition.Lookup) contactRevision = Math.incrementExact(contactRevision)
+            return CapturedRoomContact(
+                this, currentRadioId, connectedDevicePublicKey, disposition, publicKey, contactRevision,
+            )
+        }
+        override fun resolveContactLinkContext(context: ContactLinkContext, publicKey: Bytes): ContactLinkTargetResolution {
+            val captured = context as? CapturedRoomContact ?: return ContactLinkTargetResolution.Stale
+            if (captured.owner !== this || captured.publicKey != publicKey || captured.radioId != currentRadioId ||
+                captured.selfPublicKey != connectedDevicePublicKey || captured.revision != contactRevision
+            ) return ContactLinkTargetResolution.Stale
+            return ContactLinkTargetResolution.Current(
+                ResolvedRoomContact(captured, captured.radioId, captured.selfPublicKey),
+            )
+        }
+        override fun completeResolvedContactLookup(
+            context: ContactLinkContext, target: ContactLinkResolvedTarget, link: ContactLinkResult,
+            existing: ContactDTO?, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
+        ): ContactLinkTargetCompletion {
+            cancellation.ensureActive()
+            val resolved = target as? ResolvedRoomContact
+                ?: return ContactLinkTargetCompletion.Completed(ContactLinkCompletion.StaleContext)
+            if (resolved.capture !== context || resolved.capture.owner !== this ||
+                resolved.radioId != resolved.capture.radioId || resolved.selfPublicKey != resolved.capture.selfPublicKey
+            ) return ContactLinkTargetCompletion.Completed(ContactLinkCompletion.StaleContext)
+            return ContactLinkTargetCompletion.Completed(completeContactLookup(context, link, existing, publications))
+        }
+        override fun completeContactLookup(
+            context: ContactLinkContext, link: ContactLinkResult, existing: ContactDTO?,
+            publications: ContactLinkPublications,
+        ): ContactLinkCompletion {
+            val captured = context as? CapturedRoomContact ?: return ContactLinkCompletion.StaleContext
+            if (captured.owner !== this || captured.radioId != currentRadioId ||
+                captured.selfPublicKey != connectedDevicePublicKey || captured.revision != contactRevision
+            ) return ContactLinkCompletion.StaleContext
+            if (link.publicKey != captured.publicKey ||
+                existing != null && (existing.radioId != captured.radioId || existing.publicKey != captured.publicKey)
+            ) return ContactLinkCompletion.WrongTarget
+            if (captured.disposition == ContactLinkCaptureDisposition.IgnoredSelfContact)
+                return ContactLinkCompletion.IgnoredSelfContact
+            if (existing == null) stageContactLink(link)
+            navigateToContactDetail(existing)
+            contactRevision = Math.incrementExact(contactRevision)
+            return ContactLinkCompletion.Navigated
+        }
         override fun navigateToMap(latitude: Double, longitude: Double) { maps += latitude to longitude }
         override fun navigateToContactDetail(contact: ContactDTO) { navigatedContacts += contact }
         override fun navigateToChannel(channel: ChannelDTO) = error("Unexpected channel navigation")

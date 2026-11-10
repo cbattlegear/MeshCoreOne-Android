@@ -1,5 +1,6 @@
 // AndroidOnly: WP-303 First-run gate: onboarding until the flag is set, then the shell and the Chats root.
 // AndroidOnly: WP-305 Verify app-owned flow-session lifetimes across Activity recreation and Settings reruns.
+// AndroidOnly: WP-302 Verify retained entry and session authority across completion recovery.
 package com.meshcoreone.android.app.container.onboarding
 
 import android.app.Activity
@@ -36,14 +37,21 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.printToString
 import androidx.core.app.ActivityOptionsCompat
 import com.meshcoreone.android.app.content.LocationPermissionResultReporting
+import com.meshcoreone.android.app.navigation.MountedOnboardingProducer
 import com.meshcoreone.android.app.navigation.NavigationCoordinator
+import com.meshcoreone.android.app.navigation.OnboardingEntryRetention
 import com.meshcoreone.android.core.contracts.AppTab
+import com.meshcoreone.android.core.contracts.domain.Generation
+import com.meshcoreone.android.core.contracts.domain.ProcessEpoch
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
+import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.RegionSelection
 import com.meshcoreone.android.core.services.simulator.DemoModeDefaults
 import com.meshcoreone.android.core.services.simulator.DemoModeManager
 import com.meshcoreone.android.feature.onboarding.OnboardingFlagStore
 import com.meshcoreone.android.feature.onboarding.InMemoryOnboardingFlagStore
+import com.meshcoreone.android.feature.onboarding.OnboardingCompletionPublication
 import com.meshcoreone.android.feature.onboarding.OnboardingPermissionKind
 import com.meshcoreone.android.feature.onboarding.OnboardingPresetOutcome
 import com.meshcoreone.android.feature.onboarding.OnboardingPresetPort
@@ -53,8 +61,13 @@ import com.meshcoreone.android.feature.onboarding.OnboardingState
 import com.meshcoreone.android.feature.onboarding.PermissionStatus
 import com.meshcoreone.android.feature.onboarding.ui.OnboardingFlow
 import com.meshcoreone.android.feature.onboarding.PairSheet
+import java.util.UUID
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -140,8 +153,64 @@ class OnboardingGateTest {
         mapOf(OnboardingState.KEY_HAS_COMPLETED to completed), CoroutineScope(Dispatchers.Unconfined), { _, _ -> },
     )
 
-    private fun showGate(coordinator: NavigationCoordinator, bound: AppOnboarding?) = host.setup().visible().get().setContent {
+    private fun mountGate(coordinator: NavigationCoordinator, bound: AppOnboarding?) = host.get().setContent {
         MeshCoreTheme { OnboardingGate(coordinator, bound) { Box(Modifier.testTag("shell")) { Text("shell") } } }
+    }
+
+    private fun showGate(coordinator: NavigationCoordinator, bound: AppOnboarding?) {
+        host.setup().visible()
+        mountGate(coordinator, bound)
+    }
+
+    private fun NavigationCoordinator.modelOnboardingSessions(live: AtomicReference<SessionToken?>) {
+        installOnboardingSessionCapture { source ->
+            val captured = source.boundSessionToken
+            val accepts: (MountedOnboardingProducer) -> Boolean = { producer ->
+                when (producer) {
+                    MountedOnboardingProducer.NoDevice -> live.get() == captured
+                    is MountedOnboardingProducer.NoDeviceAtSession ->
+                        live.get() == producer.token && (captured == null || captured == producer.token)
+                    is MountedOnboardingProducer.Preset ->
+                        live.get() == producer.token && (captured == null || captured == producer.token)
+                }
+            }
+            accepts
+        }
+    }
+
+    private fun modeledPresets(live: AtomicReference<SessionToken?>) = object : OnboardingPresetPort {
+        override val canApply = MutableStateFlow(false)
+        override fun currentTarget(): OnboardingPresetTarget? = live.get()?.let {
+            OnboardingPresetTarget(it.epoch.value, it.generation.value, it.radioId.value)
+        }
+        override suspend fun apply(presetId: String): OnboardingPresetOutcome =
+            error("A no-device completion must not apply a preset")
+    }
+
+    private class HeldCompletionFlags : OnboardingFlagStore {
+        val completed = MutableStateFlow(false)
+        val entered = CompletableDeferred<Unit>()
+        val allowWrite = CompletableDeferred<Unit>()
+        val flagPublished = CompletableDeferred<Unit>()
+        val finishWrite = CompletableDeferred<Unit>()
+        var writes = 0
+            private set
+
+        override fun getBoolean(key: String) = completed.value
+        override fun setBoolean(key: String, value: Boolean) { completed.value = value }
+
+        override suspend fun persistBoolean(key: String, value: Boolean) {
+            writes++
+            if (value && writes == 1) {
+                entered.complete(Unit)
+                allowWrite.await()
+                completed.value = true
+                flagPublished.complete(Unit)
+                finishWrite.await()
+            } else {
+                completed.value = value
+            }
+        }
     }
 
     private fun showFlow(
@@ -161,6 +230,36 @@ class OnboardingGateTest {
                 flowCoordinator = flowCoordinator,
             )
         }
+    }
+
+    private data class CapturedFirstRunCompletion(
+        val retention: OnboardingEntryRetention,
+        val entry: OnboardingEntryRetention.FirstRunEntry,
+        val publication: OnboardingCompletionPublication,
+        val commit: (() -> Boolean) -> Boolean,
+    )
+
+    private suspend fun captureFirstRunCompletion(
+        navigation: NavigationCoordinator,
+        dependencies: AppOnboarding,
+    ): CapturedFirstRunCompletion {
+        val retention = navigation.onboardingRetention(dependencies)
+        dependencies.observeNavigationEntries(retention)
+        retention.mountFirstRun(navigation.publishedNavigation.value, retention.firstRunDecisionEpoch.value)
+        val entry = checkNotNull(retention.firstRunEntry.value)
+        val publication = AtomicReference<OnboardingCompletionPublication>()
+        val commit = AtomicReference<(() -> Boolean) -> Boolean>()
+        val deliveries = kotlinx.coroutines.channels.Channel<Unit>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+        showFlow(dependencies, flowCoordinator = entry.flow, onPublication = { _, value, callback ->
+            publication.set(value)
+            commit.set(callback)
+            deliveries.trySend(Unit)
+            false
+        })
+        entry.flow.onboarding.completeOnboarding()
+        awaitPublicationDelivery(deliveries)
+        deliveries.close()
+        return CapturedFirstRunCompletion(retention, entry, checkNotNull(publication.get()), checkNotNull(commit.get()))
     }
 
     private fun awaitPublicationDelivery(deliveries: kotlinx.coroutines.channels.Channel<Unit>) {
@@ -1280,16 +1379,656 @@ class OnboardingGateTest {
     }
 
     @Test fun `incomplete onboarding hides the shell and completion reveals it and selects chats`() {
-        val flags = flags(completed = false)
-        val coordinator = NavigationCoordinator().also { it.selectTab(AppTab.SETTINGS) }
-        showGate(coordinator, onboarding(flags))
-        compose.onNodeWithTag("shell").assertDoesNotExist()
-        assertEquals(AppTab.SETTINGS, coordinator.state.value.selectedTab)
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            val flags = WriteBehindOnboardingFlags(emptyMap(), scope, { _, _ -> })
+            val live = AtomicReference<SessionToken?>(null)
+            val coordinator = NavigationCoordinator().also {
+                it.selectTab(AppTab.SETTINGS)
+                it.modelOnboardingSessions(live)
+            }
+            val bound = onboarding(flags, flags.hasCompleted, scope, presets = modeledPresets(live))
+            showGate(coordinator, bound)
+            compose.waitUntil(5_000) { coordinator.onboardingRetention(bound).firstRunEntry.value != null }
+            val flow = checkNotNull(coordinator.onboardingRetention(bound).firstRunEntry.value).flow
+            compose.onNodeWithTag("shell").assertDoesNotExist()
+            assertEquals(AppTab.SETTINGS, coordinator.state.value.selectedTab)
 
-        compose.runOnUiThread { runBlocking { OnboardingState(flags).completeOnboarding() } }
-        compose.waitForIdle()
-        compose.onNodeWithTag("shell").assertIsDisplayed()
-        assertEquals(AppTab.CHATS, coordinator.state.value.selectedTab)
+            compose.runOnUiThread { runBlocking { OnboardingState(flags).completeOnboarding() } }
+            compose.waitForIdle()
+            compose.onNodeWithTag("shell").assertDoesNotExist()
+            assertEquals(AppTab.SETTINGS, coordinator.state.value.selectedTab)
+
+            compose.runOnUiThread { flow.confirmNoDevice() }
+            compose.waitUntil(5_000) { coordinator.state.value.selectedTab == AppTab.CHATS }
+            compose.onNodeWithTag("shell").assertIsDisplayed()
+            assertEquals(AppTab.CHATS, coordinator.state.value.selectedTab)
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test fun `first run retains its entry and first radio binding across Activity recreation`() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val flags = HeldCompletionFlags()
+        try {
+            val live = AtomicReference<SessionToken?>(null)
+            val coordinator = NavigationCoordinator().also {
+                it.selectTab(AppTab.SETTINGS)
+                it.modelOnboardingSessions(live)
+            }
+            val bound = onboarding(flags, flags.completed, scope, presets = modeledPresets(live))
+            showGate(coordinator, bound)
+            val retention = coordinator.onboardingRetention(bound)
+            compose.waitUntil(5_000) { retention.firstRunEntry.value != null }
+            val entry = checkNotNull(retention.firstRunEntry.value)
+            val witness = entry.witness.get()
+            val originalEpoch = retention.firstRunDecisionEpoch.value
+            val originalPresentation = coordinator.publishedNavigation.value
+            val token = SessionToken(ProcessEpoch(UUID(0, 1)), Generation(1), RadioId(UUID(0, 2)))
+            compose.runOnUiThread {
+                live.set(token)
+                assertTrue(coordinator.bindNotificationSession(token.radioId, null, token))
+                entry.flow.confirmNoDevice()
+            }
+            withTimeout(5_000) { flags.entered.await() }
+
+            host.recreate()
+            mountGate(coordinator, bound)
+            compose.waitForIdle()
+            assertSame(entry, retention.firstRunEntry.value)
+            assertSame(witness, entry.witness.get())
+            assertSame(entry.flow, bound.retainedFlowCoordinator())
+
+            flags.allowWrite.complete(Unit)
+            withTimeout(5_000) { flags.flagPublished.await() }
+            compose.waitForIdle()
+            compose.onNodeWithTag("shell").assertDoesNotExist()
+            assertEquals(AppTab.SETTINGS, coordinator.state.value.selectedTab)
+            flags.finishWrite.complete(Unit)
+            compose.waitUntil(5_000) { coordinator.state.value.selectedTab == AppTab.CHATS }
+            compose.onNodeWithTag("shell").assertIsDisplayed()
+            assertEquals(1, flags.writes)
+            assertEquals(token, coordinator.currentState.boundSessionToken)
+            retention.requireFirstRun(originalEpoch)
+            retention.mountFirstRun(originalPresentation, originalEpoch)
+            assertFalse(retention.firstRunPending.value)
+            assertEquals(null, retention.firstRunEntry.value)
+        } finally {
+            flags.allowWrite.complete(Unit)
+            flags.finishWrite.complete(Unit)
+            scope.cancel()
+        }
+    }
+
+    @Test fun `observed reset cannot be bypassed by a raw flag flip before first-run mount`() {
+        val flags = flags(completed = true)
+        val bound = onboarding(flags)
+        val coordinator = NavigationCoordinator().also {
+            it.selectTab(AppTab.MAP)
+            it.modelOnboardingSessions(AtomicReference(null))
+        }
+        val retention = coordinator.onboardingRetention(bound)
+        val epoch = retention.firstRunDecisionEpoch.value
+        flags.setBoolean(OnboardingState.KEY_HAS_COMPLETED, false)
+        retention.requireFirstRun(epoch)
+        flags.setBoolean(OnboardingState.KEY_HAS_COMPLETED, true)
+        showGate(coordinator, bound)
+        compose.waitUntil(5_000) { retention.firstRunEntry.value?.recovery?.value?.failed == true }
+        compose.onNodeWithTag("shell").assertDoesNotExist()
+        compose.onNodeWithTag("onboarding-completion-recovery").assertIsDisplayed()
+        assertEquals(AppTab.MAP, coordinator.state.value.selectedTab)
+    }
+
+    @Test fun `retired failed restart holds the successor until settlement and remains recoverable`() = runBlocking<Unit> {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val resetEntered = CompletableDeferred<Unit>()
+        val releaseReset = CompletableDeferred<Unit>()
+        val permitDelivery = AtomicBoolean(false)
+        var failReset = true
+        val writes = mutableListOf<Boolean>()
+        try {
+            val flags = WriteBehindOnboardingFlags(emptyMap(), scope, { _, value ->
+                writes += value
+                if (!value && failReset) {
+                    resetEntered.complete(Unit)
+                    releaseReset.await()
+                    failReset = false
+                    throw java.io.IOException("onboarding reset failed")
+                }
+            })
+            val live = AtomicReference<SessionToken?>(null)
+            val coordinator = NavigationCoordinator().also {
+                it.selectTab(AppTab.SETTINGS)
+                it.installOnboardingSessionCapture { { permitDelivery.get() } }
+            }
+            val bound = onboarding(flags, flags.hasCompleted, scope, presets = modeledPresets(live))
+            showGate(coordinator, bound)
+            val retention = coordinator.onboardingRetention(bound)
+            compose.waitUntil(5_000) { retention.firstRunEntry.value != null }
+            val first = checkNotNull(retention.firstRunEntry.value)
+            compose.runOnUiThread { first.flow.confirmNoDevice() }
+            compose.waitUntil(5_000) { first.recovery.value.failed }
+            assertTrue(flags.hasCompleted.value)
+
+            compose.runOnUiThread { retention.restart(first) }
+            withTimeout(5_000) { resetEntered.await() }
+            compose.runOnUiThread { bound.onFlowCompletionHandled(first.flow) }
+            assertSame(first.flow, bound.retainedFlowCoordinator())
+            assertFalse(bound.ownsFlowCoordinator(first.flow))
+            assertTrue(first.flow.onboarding.hasUnsettledCompletion)
+            assertEquals(listOf(true, false), writes)
+
+            releaseReset.complete(Unit)
+            compose.waitUntil(5_000) {
+                retention.firstRunEntry.value?.let { it !== first && it.recovery.value.failed } == true
+            }
+            val successor = checkNotNull(retention.firstRunEntry.value)
+            assertNotSame(first.flow, successor.flow)
+            assertFalse(first.flow.onboarding.hasUnsettledCompletion)
+            assertTrue(flags.hasCompleted.value)
+            assertEquals(AppTab.SETTINGS, coordinator.state.value.selectedTab)
+            compose.onNodeWithTag("shell").assertDoesNotExist()
+
+            permitDelivery.set(true)
+            compose.runOnUiThread { retention.restart(successor) }
+            compose.waitUntil(5_000) {
+                !successor.recovery.value.failed && !successor.recovery.value.restarting && !flags.hasCompleted.value
+            }
+            compose.runOnUiThread { successor.flow.confirmNoDevice() }
+            compose.waitUntil(5_000) { coordinator.state.value.selectedTab == AppTab.CHATS }
+            assertEquals(listOf(true, false, false, true), writes)
+            compose.onNodeWithTag("shell").assertIsDisplayed()
+        } finally {
+            releaseReset.complete(Unit)
+            scope.cancel()
+        }
+    }
+
+    @Test fun `retired successful standalone flow does not redeliver restored completion`() {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            val flags = WriteBehindOnboardingFlags(emptyMap(), scope, { _, _ -> })
+            val bound = onboarding(flags, flags.hasCompleted, scope, presets = modeledPresets(AtomicReference(null)))
+            val flow = bound.retainedFlowCoordinator()
+            val revision = bound.flowCoordinatorRevision.value
+            val availability = bound.firstRunAvailabilityRevision.value
+            val deliveries = AtomicInteger()
+            host.setup().visible()
+            host.get().setContent {
+                MeshCoreTheme { OnboardingFlow(bound, onCompleted = { deliveries.incrementAndGet() }) }
+            }
+            compose.runOnUiThread { flow.confirmNoDevice() }
+            compose.waitUntil(5_000) { deliveries.get() == 1 && !bound.ownsFlowCoordinator(flow) }
+            compose.waitForIdle()
+            assertTrue(flags.hasCompleted.value)
+            assertEquals(1, deliveries.get())
+            assertEquals(revision, bound.flowCoordinatorRevision.value)
+            assertEquals(availability + 1, bound.firstRunAvailabilityRevision.value)
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test fun `replacement during persistence requires an explicit new no-device attempt`() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val flags = HeldCompletionFlags()
+        try {
+            val first = SessionToken(ProcessEpoch(UUID(0, 3)), Generation(1), RadioId(UUID(0, 4)))
+            val replacement = first.copy(generation = Generation(2))
+            val live = AtomicReference<SessionToken?>(first)
+            val coordinator = NavigationCoordinator().also {
+                it.selectTab(AppTab.SETTINGS)
+                it.modelOnboardingSessions(live)
+                assertTrue(it.bindNotificationSession(first.radioId, null, first))
+            }
+            val bound = onboarding(flags, flags.completed, scope, presets = modeledPresets(live))
+            showGate(coordinator, bound)
+            val retention = coordinator.onboardingRetention(bound)
+            compose.waitUntil(5_000) { retention.firstRunEntry.value != null }
+            val entry = checkNotNull(retention.firstRunEntry.value)
+            compose.runOnUiThread { entry.flow.confirmNoDevice() }
+            withTimeout(5_000) { flags.entered.await() }
+            compose.runOnUiThread {
+                live.set(replacement)
+                assertTrue(coordinator.bindNotificationSession(replacement.radioId, null, replacement))
+            }
+            flags.allowWrite.complete(Unit)
+            withTimeout(5_000) { flags.flagPublished.await() }
+            flags.finishWrite.complete(Unit)
+            compose.waitUntil(5_000) { entry.recovery.value.failed }
+            compose.onNodeWithTag("shell").assertDoesNotExist()
+            compose.onNodeWithTag("onboarding-completion-recovery").assertIsDisplayed()
+            assertEquals(AppTab.SETTINGS, coordinator.state.value.selectedTab)
+            assertSame(entry, retention.firstRunEntry.value)
+            assertEquals(1, flags.writes)
+
+            compose.onNodeWithTag("onboarding-completion-retry").performClick()
+            compose.waitUntil(5_000) { entry.recovery.value.failed }
+            assertEquals(1, flags.writes)
+            compose.onNodeWithTag("onboarding-completion-restart").performClick()
+            compose.waitUntil(5_000) {
+                !entry.recovery.value.failed && !entry.recovery.value.restarting && !flags.completed.value
+            }
+            assertSame(entry, retention.firstRunEntry.value)
+            compose.runOnUiThread { entry.flow.confirmNoDevice() }
+            compose.waitUntil(5_000) { coordinator.state.value.selectedTab == AppTab.CHATS }
+            compose.onNodeWithTag("shell").assertIsDisplayed()
+            assertEquals(3, flags.writes)
+            assertEquals(replacement, coordinator.currentState.boundSessionToken)
+        } finally {
+            flags.allowWrite.complete(Unit)
+            flags.finishWrite.complete(Unit)
+            scope.cancel()
+        }
+    }
+
+    @Test fun `accepted first-run delivery wins over a concurrently requested restart`() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val releaseDelivery = CountDownLatch(1)
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            host.setup().visible()
+            val resetWrites = AtomicInteger()
+            val flags = WriteBehindOnboardingFlags(emptyMap(), scope, { _, value ->
+                if (!value) resetWrites.incrementAndGet()
+            })
+            val bound = onboarding(flags, flags.hasCompleted, scope)
+            val coordinator = NavigationCoordinator().also {
+                it.selectTab(AppTab.SETTINGS)
+                it.installOnboardingSessionCapture { { true } }
+            }
+            val captured = captureFirstRunCompletion(coordinator, bound)
+            val committed = CountDownLatch(1)
+            val delivery = executor.submit<Boolean> {
+                captured.retention.deliver(captured.entry, captured.entry.flow, captured.publication) { action ->
+                    val result = captured.commit(action)
+                    committed.countDown()
+                    check(releaseDelivery.await(5, TimeUnit.SECONDS))
+                    result
+                }
+            }
+            assertTrue(committed.await(5, TimeUnit.SECONDS))
+            assertEquals(AppTab.CHATS, coordinator.state.value.selectedTab)
+            captured.retention.restart(captured.entry)
+            assertTrue(captured.entry.recovery.value.restarting)
+            assertEquals(0, resetWrites.get())
+            releaseDelivery.countDown()
+
+            assertTrue(delivery.get(5, TimeUnit.SECONDS))
+            assertEquals(0, resetWrites.get())
+            assertTrue(flags.hasCompleted.value)
+            assertFalse(captured.entry.recovery.value.restarting)
+            assertFalse(captured.retention.firstRunPending.value)
+            bound.onFlowCompletionHandled(captured.entry.flow)
+        } finally {
+            releaseDelivery.countDown()
+            executor.shutdownNow()
+            scope.cancel()
+        }
+    }
+
+    @Test fun `restart requested during rejected delivery runs after the original commit returns`() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val releaseDelivery = CountDownLatch(1)
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            host.setup().visible()
+            val resetWrites = AtomicInteger()
+            val flags = WriteBehindOnboardingFlags(emptyMap(), scope, { _, value ->
+                if (!value) resetWrites.incrementAndGet()
+            })
+            val bound = onboarding(flags, flags.hasCompleted, scope)
+            val restartAllowed = AtomicBoolean(false)
+            val coordinator = NavigationCoordinator().also {
+                it.selectTab(AppTab.SETTINGS)
+                it.installOnboardingSessionCapture { { restartAllowed.get() } }
+            }
+            val captured = captureFirstRunCompletion(coordinator, bound)
+            val rejected = CountDownLatch(1)
+            val delivery = executor.submit<Boolean> {
+                captured.retention.deliver(captured.entry, captured.entry.flow, captured.publication) { action ->
+                    val result = captured.commit(action)
+                    rejected.countDown()
+                    check(releaseDelivery.await(5, TimeUnit.SECONDS))
+                    result
+                }
+            }
+            assertTrue(rejected.await(5, TimeUnit.SECONDS))
+            restartAllowed.set(true)
+            captured.retention.restart(captured.entry)
+            assertTrue(captured.entry.recovery.value.restarting)
+            assertEquals(0, resetWrites.get())
+            releaseDelivery.countDown()
+
+            assertFalse(delivery.get(5, TimeUnit.SECONDS))
+            compose.waitUntil(5_000) {
+                resetWrites.get() == 1 && !captured.entry.recovery.value.restarting
+            }
+            assertFalse(flags.hasCompleted.value)
+            assertFalse(captured.entry.recovery.value.failed)
+            assertTrue(captured.entry.flow.onboarding.canStartCompletion())
+            assertTrue(captured.retention.firstRunPending.value)
+            assertEquals(AppTab.SETTINGS, coordinator.state.value.selectedTab)
+        } finally {
+            releaseDelivery.countDown()
+            executor.shutdownNow()
+            scope.cancel()
+        }
+    }
+
+    @Test fun `a pending first-run restart rejects delivery before invoking its commit`() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val resetStarted = CompletableDeferred<Unit>()
+        val releaseReset = CompletableDeferred<Unit>()
+        try {
+            host.setup().visible()
+            val flags = WriteBehindOnboardingFlags(emptyMap(), scope, { _, value ->
+                if (!value) {
+                    resetStarted.complete(Unit)
+                    releaseReset.await()
+                }
+            })
+            val bound = onboarding(flags, flags.hasCompleted, scope)
+            val coordinator = NavigationCoordinator().also {
+                it.selectTab(AppTab.SETTINGS)
+                it.installOnboardingSessionCapture { { true } }
+            }
+            val captured = captureFirstRunCompletion(coordinator, bound)
+            captured.retention.restart(captured.entry)
+            withTimeout(5_000) { resetStarted.await() }
+
+            val commitCalls = AtomicInteger()
+            assertFalse(captured.retention.deliver(captured.entry, captured.entry.flow, captured.publication) {
+                commitCalls.incrementAndGet()
+                false
+            })
+            assertEquals(0, commitCalls.get())
+            assertEquals(AppTab.SETTINGS, coordinator.state.value.selectedTab)
+            releaseReset.complete(Unit)
+            compose.waitUntil(5_000) { !captured.entry.recovery.value.restarting }
+            assertFalse(flags.hasCompleted.value)
+            assertTrue(captured.entry.flow.onboarding.canStartCompletion())
+        } finally {
+            releaseReset.complete(Unit)
+            scope.cancel()
+        }
+    }
+
+    @Test fun `queued restart retains the session at request rather than delivery return`() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val releaseDelivery = CountDownLatch(1)
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            host.setup().visible()
+            val flags = WriteBehindOnboardingFlags(emptyMap(), scope, { _, _ -> })
+            val first = SessionToken(ProcessEpoch(UUID(0, 91)), Generation(1), RadioId(UUID(0, 92)))
+            val second = first.copy(generation = Generation(2))
+            val third = first.copy(generation = Generation(3))
+            val live = AtomicReference<SessionToken?>(first)
+            val coordinator = NavigationCoordinator().also {
+                it.selectTab(AppTab.SETTINGS)
+                it.modelOnboardingSessions(live)
+                assertTrue(it.bindNotificationSession(first.radioId, null, first))
+            }
+            val bound = onboarding(flags, flags.hasCompleted, scope, presets = modeledPresets(live))
+            val captured = captureFirstRunCompletion(coordinator, bound)
+            val originalWitness = captured.entry.witness.get()
+            live.set(second)
+            assertTrue(coordinator.bindNotificationSession(second.radioId, null, second))
+            val rejected = CountDownLatch(1)
+            val delivery = executor.submit<Boolean> {
+                captured.retention.deliver(captured.entry, captured.entry.flow, captured.publication) { action ->
+                    val result = captured.commit(action)
+                    rejected.countDown()
+                    check(releaseDelivery.await(5, TimeUnit.SECONDS))
+                    result
+                }
+            }
+            assertTrue(rejected.await(5, TimeUnit.SECONDS))
+            captured.retention.restart(captured.entry)
+            assertTrue(captured.entry.recovery.value.restarting)
+            live.set(third)
+            assertTrue(coordinator.bindNotificationSession(third.radioId, null, third))
+            releaseDelivery.countDown()
+            assertFalse(delivery.get(5, TimeUnit.SECONDS))
+            compose.waitUntil(5_000) {
+                captured.entry.recovery.value.failed && !captured.entry.recovery.value.restarting
+            }
+            assertSame(originalWitness, captured.entry.witness.get())
+            assertEquals(AppTab.SETTINGS, coordinator.state.value.selectedTab)
+            assertFalse(flags.hasCompleted.value)
+
+            captured.retention.restart(captured.entry)
+            compose.waitUntil(5_000) {
+                !captured.entry.recovery.value.failed && !captured.entry.recovery.value.restarting
+            }
+            showFlow(bound, flowCoordinator = captured.entry.flow, onPublication = { flow, publication, commit ->
+                captured.retention.deliver(captured.entry, flow, publication, commit)
+            })
+            captured.entry.flow.confirmNoDevice()
+            compose.waitUntil(5_000) { coordinator.state.value.selectedTab == AppTab.CHATS }
+            assertEquals(third, coordinator.currentState.boundSessionToken)
+        } finally {
+            releaseDelivery.countDown()
+            executor.shutdownNow()
+            scope.cancel()
+        }
+    }
+
+    @Test fun `restart cannot relabel a new completion admitted before witness installation`() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val resetStarted = CompletableDeferred<Unit>()
+        val releaseReset = CompletableDeferred<Unit>()
+        val releaseBoundary = CountDownLatch(1)
+        val executor = Executors.newSingleThreadExecutor()
+        try {
+            host.setup().visible()
+            val completed = MutableStateFlow(false)
+            val flags = object : OnboardingFlagStore {
+                override fun getBoolean(key: String) = completed.value
+                override fun setBoolean(key: String, value: Boolean) { completed.value = value }
+                override suspend fun persistBoolean(key: String, value: Boolean) {
+                    if (!value) {
+                        resetStarted.complete(Unit)
+                        releaseReset.await()
+                    }
+                    completed.value = value
+                }
+            }
+            val first = SessionToken(ProcessEpoch(UUID(0, 101)), Generation(1), RadioId(UUID(0, 102)))
+            val live = AtomicReference<SessionToken?>(first)
+            val holdBoundary = AtomicBoolean(false)
+            val boundaryEntered = CountDownLatch(1)
+            val boundaryLock = Any()
+            val coordinator = NavigationCoordinator().also {
+                it.selectTab(AppTab.SETTINGS)
+                assertTrue(it.bindNotificationSession(first.radioId, null, first))
+                it.modelOnboardingSessions(live)
+                it.installCommitBoundary { action ->
+                    if (holdBoundary.compareAndSet(true, false)) {
+                        boundaryEntered.countDown()
+                        check(releaseBoundary.await(5, TimeUnit.SECONDS))
+                    }
+                    synchronized(boundaryLock, action)
+                }
+            }
+            val bound = onboarding(flags, completed, scope, presets = modeledPresets(live))
+            val captured = captureFirstRunCompletion(coordinator, bound)
+            val originalWitness = captured.entry.witness.get()
+            val restart = executor.submit { captured.retention.restart(captured.entry) }
+            restart.get(5, TimeUnit.SECONDS)
+            withTimeout(5_000) { resetStarted.await() }
+
+            holdBoundary.set(true)
+            val resetContinuation = executor.submit { releaseReset.complete(Unit) }
+            assertTrue(boundaryEntered.await(5, TimeUnit.SECONDS))
+
+            captured.entry.flow.confirmNoDevice()
+            withTimeout(5_000) { captured.entry.flow.onboarding.hasCompletedOnboardingFlow.first { it } }
+            releaseBoundary.countDown()
+            resetContinuation.get(5, TimeUnit.SECONDS)
+
+            compose.waitUntil(5_000) {
+                captured.entry.recovery.value.failed && !captured.entry.recovery.value.restarting
+            }
+            assertSame(originalWitness, captured.entry.witness.get())
+            assertEquals(AppTab.SETTINGS, coordinator.state.value.selectedTab)
+        } finally {
+            releaseBoundary.countDown()
+            releaseReset.complete(Unit)
+            executor.shutdownNow()
+            scope.cancel()
+        }
+    }
+
+    @Test fun `replacement during restart reset requires another explicit restart`() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val resetStarted = CompletableDeferred<Unit>()
+        val releaseReset = CompletableDeferred<Unit>()
+        try {
+            host.setup().visible()
+            val completed = MutableStateFlow(false)
+            val resets = AtomicInteger()
+            val flags = object : OnboardingFlagStore {
+                override fun getBoolean(key: String) = completed.value
+                override fun setBoolean(key: String, value: Boolean) { completed.value = value }
+                override suspend fun persistBoolean(key: String, value: Boolean) {
+                    if (!value && resets.incrementAndGet() == 1) {
+                        resetStarted.complete(Unit)
+                        releaseReset.await()
+                    }
+                    completed.value = value
+                }
+            }
+            val first = SessionToken(ProcessEpoch(UUID(0, 111)), Generation(1), RadioId(UUID(0, 112)))
+            val replacement = first.copy(generation = Generation(2))
+            val live = AtomicReference<SessionToken?>(first)
+            val coordinator = NavigationCoordinator().also {
+                it.selectTab(AppTab.SETTINGS)
+                it.modelOnboardingSessions(live)
+                assertTrue(it.bindNotificationSession(first.radioId, null, first))
+            }
+            val bound = onboarding(flags, completed, scope, presets = modeledPresets(live))
+            val captured = captureFirstRunCompletion(coordinator, bound)
+            val originalWitness = captured.entry.witness.get()
+
+            captured.retention.restart(captured.entry)
+            withTimeout(5_000) { resetStarted.await() }
+            live.set(replacement)
+            assertTrue(coordinator.bindNotificationSession(replacement.radioId, null, replacement))
+            releaseReset.complete(Unit)
+            compose.waitUntil(5_000) {
+                captured.entry.recovery.value.failed && !captured.entry.recovery.value.restarting
+            }
+            assertSame(originalWitness, captured.entry.witness.get())
+            assertFalse(completed.value)
+            assertEquals(AppTab.SETTINGS, coordinator.state.value.selectedTab)
+
+            captured.retention.restart(captured.entry)
+            compose.waitUntil(5_000) {
+                !captured.entry.recovery.value.failed && !captured.entry.recovery.value.restarting
+            }
+            assertNotSame(originalWitness, captured.entry.witness.get())
+            showFlow(bound, flowCoordinator = captured.entry.flow, onPublication = { flow, publication, commit ->
+                captured.retention.deliver(captured.entry, flow, publication, commit)
+            })
+            captured.entry.flow.confirmNoDevice()
+            compose.waitUntil(5_000) { coordinator.state.value.selectedTab == AppTab.CHATS }
+            assertTrue(completed.value)
+            assertEquals(2, resets.get())
+            assertEquals(replacement, coordinator.currentState.boundSessionToken)
+        } finally {
+            releaseReset.complete(Unit)
+            scope.cancel()
+        }
+    }
+
+    @Test fun `first binding during restart reset retains its original offline authority`() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val resetStarted = CompletableDeferred<Unit>()
+        val releaseReset = CompletableDeferred<Unit>()
+        try {
+            host.setup().visible()
+            val completed = MutableStateFlow(false)
+            val flags = object : OnboardingFlagStore {
+                override fun getBoolean(key: String) = completed.value
+                override fun setBoolean(key: String, value: Boolean) { completed.value = value }
+                override suspend fun persistBoolean(key: String, value: Boolean) {
+                    if (!value) {
+                        resetStarted.complete(Unit)
+                        releaseReset.await()
+                    }
+                    completed.value = value
+                }
+            }
+            val live = AtomicReference<SessionToken?>(null)
+            val first = SessionToken(ProcessEpoch(UUID(0, 121)), Generation(1), RadioId(UUID(0, 122)))
+            val coordinator = NavigationCoordinator().also {
+                it.selectTab(AppTab.SETTINGS)
+                it.installOnboardingSessionCapture { source ->
+                    val initiating = source.boundSessionToken
+                    val accepts: (MountedOnboardingProducer) -> Boolean = { producer ->
+                        val current = live.get()
+                        when (producer) {
+                            MountedOnboardingProducer.NoDevice -> current == initiating
+                            is MountedOnboardingProducer.NoDeviceAtSession ->
+                                current == producer.token && (current == initiating || initiating == null && current == first)
+                            is MountedOnboardingProducer.Preset ->
+                                current == producer.token && (current == initiating || initiating == null && current == first)
+                        }
+                    }
+                    accepts
+                }
+            }
+            val bound = onboarding(flags, completed, scope, presets = modeledPresets(live))
+            val captured = captureFirstRunCompletion(coordinator, bound)
+            captured.retention.restart(captured.entry)
+            withTimeout(5_000) { resetStarted.await() }
+
+            live.set(first)
+            assertTrue(coordinator.bindNotificationSession(first.radioId, null, first))
+            assertFalse(
+                "A null-target completion must not gain authority from the later binding",
+                coordinator.completeFirstRunOnboarding(
+                    captured.entry.witness.get(), MountedOnboardingProducer.NoDevice,
+                ),
+            )
+            releaseReset.complete(Unit)
+            compose.waitUntil(5_000) { !captured.entry.recovery.value.restarting }
+            assertFalse(captured.entry.recovery.value.failed)
+            showFlow(bound, flowCoordinator = captured.entry.flow, onPublication = { flow, publication, commit ->
+                captured.retention.deliver(captured.entry, flow, publication, commit)
+            })
+            captured.entry.flow.confirmNoDevice()
+            compose.waitUntil(5_000) { coordinator.state.value.selectedTab == AppTab.CHATS }
+            assertTrue(completed.value)
+            assertEquals(first, coordinator.currentState.boundSessionToken)
+        } finally {
+            releaseReset.complete(Unit)
+            scope.cancel()
+        }
+    }
+
+    @Test fun `restart on a cancelled owner fails without leaving recovery busy`() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            host.setup().visible()
+            val flags = WriteBehindOnboardingFlags(emptyMap(), scope, { _, _ -> })
+            val bound = onboarding(flags, flags.hasCompleted, scope)
+            val coordinator = NavigationCoordinator().also {
+                it.selectTab(AppTab.SETTINGS)
+                it.installOnboardingSessionCapture { { true } }
+            }
+            val captured = captureFirstRunCompletion(coordinator, bound)
+            scope.cancel()
+            captured.retention.restart(captured.entry)
+            assertTrue(captured.entry.recovery.value.failed)
+            assertFalse(captured.entry.recovery.value.restarting)
+            assertTrue(flags.hasCompleted.value)
+        } finally {
+            scope.cancel()
+        }
     }
 
     @Test fun `already completed install shows the shell at once and leaves navigation alone`() {
@@ -1713,11 +2452,16 @@ class OnboardingGateTest {
                     )),
                 )
             val flags = flags(completed = false)
-            showGate(NavigationCoordinator(), onboarding(flags, state))
+            val live = AtomicReference<SessionToken?>(null)
+            val coordinator = NavigationCoordinator().also { it.modelOnboardingSessions(live) }
+            val bound = onboarding(
+                flags, flags.hasCompleted, scope, pairingState = state, presets = modeledPresets(live),
+            )
+            showGate(coordinator, bound)
             compose.onNodeWithTag("system-pairing-setup").assertIsDisplayed()
             compose.onNodeWithTag("shell").assertDoesNotExist()
-            compose.runOnUiThread { runBlocking { OnboardingState(flags).completeOnboarding() } }
-            compose.waitForIdle()
+            compose.runOnUiThread { bound.retainedFlowCoordinator().confirmNoDevice() }
+            compose.waitUntil(5_000) { !coordinator.onboardingRetention(bound).firstRunPending.value }
             compose.onNodeWithTag("shell").assertExists()
             compose.onNodeWithTag("system-pairing-setup").assertIsDisplayed()
             compose.onNodeWithTag("system-pairing-cancel").performClick()

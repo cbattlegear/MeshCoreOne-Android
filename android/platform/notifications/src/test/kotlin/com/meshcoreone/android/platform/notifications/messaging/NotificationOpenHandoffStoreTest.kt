@@ -26,7 +26,9 @@ import org.robolectric.annotation.Config
 @Config(sdk = [31, 37])
 class NotificationOpenHandoffStoreTest {
     @get:Rule val temporary = TemporaryFolder()
-    private val databaseFile by lazy { File(temporary.root, "notification-open-${UUID.randomUUID()}.db") }
+    private val databaseFile by lazy {
+        File(temporary.root, "notification-open-${UUID.randomUUID()}.db")
+    }
     private val store get() = NotificationOpenHandoffStore(databaseFile)
     private val contact = EntityKey(RadioId(UUID(0, 1)), UUID(0, 2))
     private val direct = NotificationPayload.DirectMessage(contact, UUID(0, 3))

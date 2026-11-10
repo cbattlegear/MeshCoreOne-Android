@@ -57,6 +57,7 @@ interface NodesContactService {
     suspend fun syncContactsForRefresh(radioId: RadioId)
     suspend fun getContact(radioId: RadioId, publicKey: Bytes): ContactDTO?
     suspend fun addOrUpdateContact(radioId: RadioId, contact: ContactFrame)
+    suspend fun addContactIfAbsent(radioId: RadioId, contact: ContactFrame)
     suspend fun removeContact(radioId: RadioId, publicKey: Bytes)
     suspend fun removeLocalContact(contact: EntityKey, publicKey: Bytes)
     suspend fun clearContactMessages(contact: EntityKey)
@@ -112,9 +113,26 @@ data class NodesConnectionSnapshot(
  * disconnected.
  */
 interface NodesSession {
+    /** Capture before suspending RF work; production verifies the exact graph identity. */
+    fun captureSessionValidity(): () -> Boolean {
+        val device = connectedDevice()
+        return { device != null && connectedDevice()?.id == device.id && connectionState() == DeviceConnectionState.READY }
+    }
+    /** Capture the owner of a pending contact link, including the offline cached-contact case. */
+    fun captureContactNavigationValidity(generation: Long): () -> Boolean {
+        val radio = currentRadioId()
+        val device = connectedDevice()
+        val live = captureSessionValidity()
+        return {
+            if (device == null) connectedDevice() == null && currentRadioId() == radio else live()
+        }
+    }
+
     /** Static sessions emit once; mutable live adapters must emit on radio or graph replacement. */
     fun connectionSnapshots(): Flow<NodesConnectionSnapshot> =
         flowOf(NodesConnectionSnapshot(currentRadioId(), connectionIdentity(), connectedDevice(), connectionState()))
+    /** Static sessions emit once; mutable live adapters emit when persisted contacts change. */
+    fun contactVersions(): Flow<Int> = flowOf(0)
     /** Stable identity of the live service graph; changes even when reconnecting the same radio. */
     fun connectionIdentity(): Any? = contactService()
     fun connectionState(): DeviceConnectionState

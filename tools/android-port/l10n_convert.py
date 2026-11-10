@@ -556,9 +556,6 @@ def pinned_inputs(root: Path) -> tuple[dict[str, bytes], list[dict]]:
     manifest = unique_json(host_path(root, manifest_path).read_text(encoding="utf-8"), manifest_path)
     if manifest.get("reference", {}).get("commit") != REFERENCE or manifest["reference"].get("tree_sha") != REFERENCE_TREE:
         fail(manifest_path, "stale/changed reference pin; never silently advance it")
-    wp = [wp for wp in manifest["work_packages"] if wp["id"] == "WP-005"]
-    if len(wp) != 1 or wp[0]["owner"] != "localization-engineer" or wp[0]["depends_on"] != ["WP-003"]:
-        fail(manifest_path, "unexpected WP-005 ownership/prerequisites")
     tree = subprocess.run(["git", "rev-parse", REFERENCE + "^{tree}"], cwd=root, capture_output=True, check=True, text=True).stdout.strip()
     if tree != REFERENCE_TREE:
         fail(REFERENCE, "Git reference tree disagrees with manifest")

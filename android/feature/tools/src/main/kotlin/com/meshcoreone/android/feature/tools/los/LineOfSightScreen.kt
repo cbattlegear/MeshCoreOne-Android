@@ -43,6 +43,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -71,10 +72,12 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.testTag
+import androidx.compose.ui.platform.testTag as modifierTestTag
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
+import com.meshcoreone.android.core.l10n.generated.AppContactsStrings
 import com.meshcoreone.android.core.l10n.generated.AppToolsStrings
 import com.meshcoreone.android.core.maps.MapCamera
 import com.meshcoreone.android.core.maps.MapLibreMapSurface
@@ -82,6 +85,7 @@ import com.meshcoreone.android.core.maps.MapProjectionHandle
 import com.meshcoreone.android.core.maps.MapScreenPoint
 import com.meshcoreone.android.core.maps.MapLibreRuntime
 import com.meshcoreone.android.core.model.Coordinate
+import com.meshcoreone.android.core.model.ContactDTO
 import java.text.NumberFormat
 import java.util.Locale
 import kotlin.math.abs
@@ -91,27 +95,14 @@ import kotlinx.coroutines.flow.collectLatest
 fun LineOfSightEntry(
     dependencies: LineOfSightFeatureDependencies,
     modifier: Modifier = Modifier,
+    preselectedContact: ContactDTO? = null,
 ) {
-    val scope = rememberCoroutineScope()
-    val holder = remember(dependencies) {
-        LineOfSightStateHolder(
-            scope = scope,
-            elevationSource = dependencies.elevationSource,
-            pathAnalyzer = dependencies.pathAnalyzer,
-            analysisContext = dependencies.analysisContext,
-            failureReporter = dependencies.failureReporter,
-        ).also {
-            it.configure(dependencies.contactSource, dependencies.radioId, dependencies.deviceFrequencyKHz())
-        }
-    }
+    val holder = rememberLineOfSightStateHolder(dependencies, preselectedContact)
     val state by holder.state.collectAsStateWithLifecycleCompat()
     val mapPresentation = remember { LineOfSightMapPresentation() }
     var encodedCamera by rememberSaveable { mutableStateOf<String?>(null) }
     val camera = encodedCamera?.let(MapCamera::decode) ?: LineOfSightMapPresentation.WORLD_CAMERA
 
-    DisposableEffect(holder) {
-        onDispose(holder::dispose)
-    }
     LaunchedEffect(holder) {
         holder.loadRepeaters()
         if (encodedCamera == null) {
@@ -136,6 +127,34 @@ fun LineOfSightEntry(
         onCameraChanged = { encodedCamera = it.encode() },
         modifier = modifier,
     )
+}
+
+@Composable
+internal fun rememberLineOfSightStateHolder(
+    dependencies: LineOfSightFeatureDependencies,
+    preselectedContact: ContactDTO?,
+): LineOfSightStateHolder {
+    val scope = rememberCoroutineScope()
+    var preselectionConsumed by rememberSaveable(preselectedContact?.radioId, preselectedContact?.id) {
+        mutableStateOf(false)
+    }
+    val holder = remember(dependencies, preselectedContact?.radioId, preselectedContact?.id) {
+        LineOfSightStateHolder(
+            scope = scope,
+            elevationSource = dependencies.elevationSource,
+            pathAnalyzer = dependencies.pathAnalyzer,
+            analysisContext = dependencies.analysisContext,
+            failureReporter = dependencies.failureReporter,
+            preselectedContact = preselectedContact.takeUnless { preselectionConsumed },
+            onPointAEdited = { preselectionConsumed = true },
+        ).also {
+            it.configure(dependencies.contactSource, dependencies.radioId, dependencies.deviceFrequencyKHz())
+        }
+    }
+    DisposableEffect(holder) {
+        onDispose(holder::dispose)
+    }
+    return holder
 }
 
 @Composable
@@ -245,7 +264,7 @@ private fun LineOfSightMap(
 }
 
 @Composable
-private fun LineOfSightPanel(state: LineOfSightState, holder: LineOfSightStateHolder, modifier: Modifier) {
+internal fun LineOfSightPanel(state: LineOfSightState, holder: LineOfSightStateHolder, modifier: Modifier) {
     Column(
         modifier.verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -293,6 +312,20 @@ private fun PointsSection(state: LineOfSightState, holder: LineOfSightStateHolde
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(stringResource(AppToolsStrings.toolsLineOfSightPoints), style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.weight(1f))
+            val hasClearableState =
+                state.pointA != null || state.pointB != null || state.repeaterPoint != null ||
+                    state.analysisStatus != AnalysisStatus.Idle || state.isAnalyzing || state.elevationFetchFailed
+            if (!state.isRelocating && hasClearableState) {
+                val clearAllDescription = stringResource(AppContactsStrings.contactsDiscoveryClear)
+                TextButton(
+                    onClick = holder::clear,
+                    modifier = Modifier.heightIn(min = 48.dp)
+                        .semantics { contentDescription = clearAllDescription }
+                        .modifierTestTag("los-clear-all"),
+                ) {
+                    Text(stringResource(AppToolsStrings.toolsLineOfSightClear))
+                }
+            }
             if (state.isRelocating) {
                 OutlinedButton(
                     onClick = { holder.setRelocatingPoint(null) },

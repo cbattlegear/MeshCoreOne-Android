@@ -81,7 +81,13 @@ internal fun RemoteNodeAuthenticationDialog(
                     NodeRoutePath.NoRoute -> Text(stringResource(L.remoteNodesAuthNoRouteSet))
                     is NodeRoutePath.Route -> if (!state.useFloodRouting) {
                         Text(remoteText(route.summary))
-                        route.hops.forEach { RemoteValue(it.hex, remoteText(it.name)) }
+                        route.hops.forEachIndexed { index, hop ->
+                            key(index, hop.hex) {
+                                val name = remoteText(hop.name)
+                                RemoteValue(hop.hex, name)
+                                if (hop.possibleMatch) RemoteNodePossibleMatch(name)
+                            }
+                        }
                     }
                 }
                 Text(remoteText(NodeAuthenticationPresentation.pathFooter(holder.hasStoredPath, state.useFloodRouting)))

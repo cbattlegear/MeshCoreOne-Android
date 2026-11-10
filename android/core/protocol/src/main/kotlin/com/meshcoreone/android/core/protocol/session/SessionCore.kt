@@ -66,6 +66,9 @@ internal class SessionGeneration(
     var capabilities: DeviceCapabilities? = null
     var contactProgress: ContactStreamProgress? = null
     var poll: Deferred<MessageResult>? = null
+    // Queue notifications invalidate older empty results even while auto-fetch is stopped.
+    var pollMessageWaitingRevision: Long? = null
+    var messageWaitingRevision = 0L
     var autoFetching = false
     var autoRequested = false
     var autoSubscription: EventSubscription? = null
@@ -74,6 +77,8 @@ internal class SessionGeneration(
     var contactRefreshRequested = false
     var contactRefresh: Deferred<Unit>? = null
 }
+
+private data class PollOutcome(val result: MessageResult, val messageWaitingRevision: Long)
 
 internal class SessionCore(
     val transport: MeshTransport,
@@ -346,6 +351,8 @@ internal class SessionCore(
             }
             generation.contacts.trackChanges(event)
             when (val received = event) {
+                MeshEvent.MessagesWaiting ->
+                    generation.messageWaitingRevision = Math.incrementExact(generation.messageWaitingRevision)
                 is MeshEvent.CurrentTime -> generation.deviceTime = received.time
                 is MeshEvent.SelfInfo -> generation.selfInfo = received.info
                 is MeshEvent.DeviceInfo -> generation.capabilities = received.info
@@ -462,31 +469,64 @@ internal class SessionCore(
         }
     }
 
-    suspend fun getMessage(timeout: Double?): MessageResult {
-        val generation = generation()
-        val task = synchronized(lock) {
+    suspend fun getMessage(timeout: Double?): MessageResult =
+        pollMessage(generation(), timeout).result
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private suspend fun pollMessage(generation: SessionGeneration, timeout: Double?): PollOutcome {
+        val (task, messageWaitingRevision) = synchronized(lock) {
             requireCurrent(generation)
-            generation.poll ?: generation.scope.async(start = CoroutineStart.LAZY) {
-                exchange(generation) {
-                    match(PacketBuilder.getMessage(), "message", timeout = timeout, acceptsErrors = true) { event ->
-                        when (event) {
-                            is MeshEvent.ContactMessageReceived -> ResponseDisposition.Success(MessageResult.ContactMessage(event.message))
-                            is MeshEvent.ChannelMessageReceived -> ResponseDisposition.Success(MessageResult.ChannelMessage(event.message))
-                            is MeshEvent.ChannelDataReceived -> ResponseDisposition.Success(MessageResult.ChannelDatagram(event.datagram))
-                            MeshEvent.NoMoreMessages -> ResponseDisposition.Success(MessageResult.NoMoreMessages)
-                            is MeshEvent.Error -> ResponseDisposition.Failure(MeshCoreException.DeviceError(event.code ?: 0u))
-                            else -> ResponseDisposition.Ignore
+            var existing = generation.poll
+            // Only a new caller may invalidate a historical empty result. Attached waiters
+            // keep their original outcome even when a newer notification arrives.
+            if (existing != null && existing.isCompleted && !existing.isCancelled &&
+                existing.getCompleted() == MessageResult.NoMoreMessages &&
+                checkNotNull(generation.pollMessageWaitingRevision) < generation.messageWaitingRevision) {
+                generation.poll = null
+                generation.pollMessageWaitingRevision = null
+                existing = null
+            }
+            if (existing != null) {
+                existing to checkNotNull(generation.pollMessageWaitingRevision)
+            } else {
+                val messageWaitingRevision = generation.messageWaitingRevision
+                val poll = generation.scope.async(start = CoroutineStart.LAZY) {
+                    exchange(generation) {
+                        match(PacketBuilder.getMessage(), "message", timeout = timeout, acceptsErrors = true) { event ->
+                            when (event) {
+                                is MeshEvent.ContactMessageReceived -> ResponseDisposition.Success(MessageResult.ContactMessage(event.message))
+                                is MeshEvent.ChannelMessageReceived -> ResponseDisposition.Success(MessageResult.ChannelMessage(event.message))
+                                is MeshEvent.ChannelDataReceived -> ResponseDisposition.Success(MessageResult.ChannelDatagram(event.datagram))
+                                MeshEvent.NoMoreMessages -> ResponseDisposition.Success(MessageResult.NoMoreMessages)
+                                is MeshEvent.Error -> ResponseDisposition.Failure(MeshCoreException.DeviceError(event.code ?: 0u))
+                                else -> ResponseDisposition.Ignore
+                            }
                         }
                     }
                 }
-            }.also { poll ->
                 generation.poll = poll
-                poll.invokeOnCompletion { synchronized(lock) { if (generation.poll === poll) generation.poll = null } }
+                generation.pollMessageWaitingRevision = messageWaitingRevision
+                poll.invokeOnCompletion { cause ->
+                    if (cause != null) synchronized(lock) {
+                        if (generation.poll === poll) {
+                            generation.poll = null
+                            generation.pollMessageWaitingRevision = null
+                        }
+                    }
+                }
                 poll.start()
+                poll to messageWaitingRevision
             }
         }
         try {
-            return task.await()
+            val result = task.await()
+            synchronized(lock) {
+                if (generation.poll === task) {
+                    generation.poll = null
+                    generation.pollMessageWaitingRevision = null
+                }
+            }
+            return PollOutcome(result, messageWaitingRevision)
         } catch (cancelled: CancellationException) {
             if (currentCoroutineContext().isActive) generation.failure?.let { throw it }
             throw cancelled
@@ -531,7 +571,17 @@ internal class SessionCore(
             while (synchronized(lock) { isCurrent(generation) && generation.autoFetching && generation.autoRequested }) {
                 synchronized(lock) { generation.autoRequested = false }
                 while (synchronized(lock) { isCurrent(generation) && generation.autoFetching }) {
-                    if (getMessage(null) == MessageResult.NoMoreMessages) break
+                    val poll = pollMessage(generation, null)
+                    if (poll.result == MessageResult.NoMoreMessages) {
+                        val staleEmptyPoll = synchronized(lock) {
+                            if (poll.messageWaitingRevision < generation.messageWaitingRevision) {
+                                generation.autoRequested = false
+                                true
+                            } else false
+                        }
+                        if (!staleEmptyPoll) break
+                        continue
+                    }
                     clock.sleepFor(kotlin.time.Duration.parse("100ms"))
                 }
             }

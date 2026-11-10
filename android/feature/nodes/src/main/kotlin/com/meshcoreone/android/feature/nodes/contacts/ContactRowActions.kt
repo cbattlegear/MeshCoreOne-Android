@@ -55,7 +55,7 @@ object ContactRowActions {
             }
         }
         if (edge != RowActionEdge.TRAILING) {
-            val enabled = isConnected && state.togglingFavoriteId != contact.id
+            val enabled = isConnected && contact.id !in state.togglingFavoriteIds
             result += if (contact.isFavorite) {
                 RowAction(RowActionKind.UNFAVORITE, NodesMessage.res(R.string.l10n_app_contacts_contacts_action_unfavorite), enabled)
             } else {

@@ -1,6 +1,7 @@
 // PortedFrom: MC1/Views/RemoteNodes/Repeaters/RepeaterStatusContent.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/RemoteNodes/Rooms/RoomStatusContent.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/RemoteNodes/SharedNodeStatusViews.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/RemoteNodes/DisappearedNeighborRow.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.feature.remotenodes.ui
 
 import androidx.activity.compose.BackHandler
@@ -10,7 +11,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings as L
@@ -20,6 +26,7 @@ import com.meshcoreone.android.feature.remotenodes.auth.*
 import com.meshcoreone.android.feature.remotenodes.common.RemoteNodesText
 import com.meshcoreone.android.feature.remotenodes.dependencies.RemoteNodesCatalog
 import com.meshcoreone.android.feature.remotenodes.map.*
+import com.meshcoreone.android.feature.remotenodes.resolver.NodeNameMatchKind
 import com.meshcoreone.android.feature.remotenodes.status.*
 import com.meshcoreone.android.feature.remotenodes.telemetry.MeasurementSystem
 import com.meshcoreone.android.feature.remotenodes.telemetry.formattedValue
@@ -42,7 +49,7 @@ internal fun RemoteNodeStatusContent(
     val state by helper.state.collectAsStateWithLifecycle()
     val repeaterState = repeater?.state?.collectAsStateWithLifecycle()?.value
     val scope = rememberCoroutineScope()
-    val locale = Locale.getDefault()
+    val locale = LocalConfiguration.current.locales[0]
     val system = MeasurementSystem.of(locale)
     var map by remember { mutableStateOf<String?>(null) }
     var discoverConfirmation by remember { mutableStateOf(false) }
@@ -57,7 +64,7 @@ internal fun RemoteNodeStatusContent(
             TextButton({ map = null }) { Text(stringResource(L.remoteNodesDone)) }
             if (map == "neighbors" && repeaterState != null) {
                 var filter by remember { mutableStateOf(MapFilterState()) }
-                val plotted = remember(repeaterState.neighbors, catalog, filter) {
+                val plotted = remember(repeaterState.neighbors, catalog, filter, locale) {
                     NeighborSNRMapBuilder.build(
                         session, repeaterState.neighbors, catalog.contacts, catalog.discoveredNodes, null,
                         filter, repeaterState.neighborKeyDisplayByteCount, locale,
@@ -73,7 +80,10 @@ internal fun RemoteNodeStatusContent(
                 )
                 RemoteNodeMapContent(stringResource(L.remoteNodesStatusNeighborsMapTitle), plotted.points, plotted.lines, plotted.region, surface = mapSurface)
                 plotted.unplottable.forEach { item ->
-                    RemoteValue(item.displayName, remoteText(NeighborRows.snrText(item.neighbor.snr, locale)))
+                    key(item.neighbor.publicKeyPrefix) {
+                        RemoteValue(item.displayName, remoteText(NeighborRows.snrText(item.neighbor.snr, locale)))
+                        if (item.matchKind == NodeNameMatchKind.FALLBACK) RemoteNodePossibleMatch(item.displayName)
+                    }
                 }
             } else {
                 val fix = state.currentLocationFix
@@ -128,12 +138,26 @@ internal fun RemoteNodeStatusContent(
                         repeaterState.neighbors, state.previousNeighborSnapshot, state.seenNeighborPrefixes,
                         repeaterState.neighborKeyDisplayByteCount, context,
                     ).forEach { row ->
-                        RemoteValue(remoteText(row.displayName), "${row.keyHex} / ${remoteText(row.snrText)} / ${remoteText(row.lastSeen)}")
-                        if (row.isNew) Text(stringResource(L.remoteNodesHistoryNew))
-                        row.snrDelta?.let { Text(remoteText(it.accessibilityDescription(locale))) }
+                        key(row.neighbor.publicKeyPrefix) {
+                            val name = remoteText(row.displayName)
+                            RemoteValue(name, "${row.keyHex} / ${remoteText(row.snrText)} / ${remoteText(row.lastSeen)}")
+                            if (row.isNew) Text(stringResource(L.remoteNodesHistoryNew))
+                            if (row.matchKind == NodeNameMatchKind.FALLBACK) RemoteNodePossibleMatch(name)
+                            row.snrDelta?.let { Text(remoteText(it.accessibilityDescription(locale))) }
+                        }
                     }
-                    NeighborRows.disappeared(repeaterState.neighbors, state.previousNeighborSnapshot, repeaterState.neighborKeyDisplayByteCount, context).forEach {
-                        RemoteValue(remoteText(it.displayName), stringResource(L.remoteNodesHistoryNotSeen))
+                    NeighborRows.disappeared(repeaterState.neighbors, state.previousNeighborSnapshot, repeaterState.neighborKeyDisplayByteCount, context).forEach { row ->
+                        key(row.entry.publicKeyPrefix) {
+                            val name = remoteText(row.displayName)
+                            Column(Modifier.semantics(mergeDescendants = true) {}) {
+                                Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                                    Text(name, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(remoteText(row.snrText), Modifier.fillMaxWidth(), style = MaterialTheme.typography.bodyLarge)
+                                }
+                                Text(stringResource(L.remoteNodesHistoryNotSeen))
+                                if (row.matchKind == NodeNameMatchKind.FALLBACK) RemoteNodePossibleMatch(name)
+                            }
+                        }
                     }
                     TextButton({ map = "neighbors" }) { Text(stringResource(L.remoteNodesStatusViewOnMap)) }
                     Button({ discoverConfirmation = true }, enabled = ready && !repeaterState.isDiscovering) { Text(remoteText(StatusSections.discoverButtonText(repeaterState))) }
@@ -174,7 +198,13 @@ internal fun RemoteNodeStatusContent(
                     NodeRoutePath.NoRoute -> Text(stringResource(L.remoteNodesAuthNoRouteSet))
                     is NodeRoutePath.Route -> {
                         Text(remoteText(route.summary))
-                        route.hops.forEach { RemoteValue(it.hex, remoteText(it.name)) }
+                        route.hops.forEachIndexed { index, hop ->
+                            key(index, hop.hex) {
+                                val name = remoteText(hop.name)
+                                RemoteValue(hop.hex, name)
+                                if (hop.possibleMatch) RemoteNodePossibleMatch(name)
+                            }
+                        }
                     }
                 }
             }
@@ -201,6 +231,38 @@ internal fun RemoteNodeStatusContent(
 }
 
 @Composable
+internal fun RemoteNodePossibleMatch(name: String) {
+    var showingExplanation by remember(name) { mutableStateOf(false) }
+    val label = stringResource(L.remoteNodesStatusPossibleMatch)
+    val explanation = stringResource(L.remoteNodesStatusPossibleMatchExplanation)
+    TextButton(
+        onClick = { showingExplanation = true },
+        modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics {
+            contentDescription = "$name, $label"
+            stateDescription = explanation
+        },
+    ) {
+        Text(
+            stringResource(L.remoteNodesStatusPossibleMatchTitle),
+            Modifier.fillMaxWidth(),
+            textAlign = TextAlign.Start,
+        )
+    }
+    if (showingExplanation) {
+        AlertDialog(
+            onDismissRequest = { showingExplanation = false },
+            title = { Text(stringResource(L.remoteNodesStatusPossibleMatchTitle)) },
+            text = { Text(explanation, Modifier.verticalScroll(rememberScrollState())) },
+            confirmButton = {
+                TextButton({ showingExplanation = false }, Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)) {
+                    Text(stringResource(L.remoteNodesDone))
+                }
+            },
+        )
+    }
+}
+
+@Composable
 internal fun RemoteTelemetrySection(
     helper: NodeStatusStateHolder,
     ready: Boolean,
@@ -208,7 +270,7 @@ internal fun RemoteTelemetrySection(
     onMap: () -> Unit,
 ) {
     val state by helper.state.collectAsStateWithLifecycle()
-    val locale = Locale.getDefault()
+    val locale = LocalConfiguration.current.locales[0]
     val system = MeasurementSystem.of(locale)
     RemoteSection(
         L.remoteNodesStatusTelemetry, state.telemetryExpanded,

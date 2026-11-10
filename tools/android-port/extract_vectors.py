@@ -8,7 +8,7 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from controller.errors import PortError
+from portlib.errors import PortError
 from oracle.reference import (
     FrozenReference, OracleError, REPO, SOURCE_SHA, exact_fields, json_bytes,
     repo_path, sha256, write_or_check,

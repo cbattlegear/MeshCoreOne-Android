@@ -16,7 +16,7 @@ ROOT = OUT.parents[3]
 ANDROID = ROOT / "android"
 APK = ANDROID / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk"
 sys.path.insert(0, str(ROOT / "tools" / "android-port"))
-from controller.errors import PortError
+from portlib.errors import PortError
 REQUIRED_DOMAINS = {
     "root", "file", "database", "sharedpref", "external",
     "device_root", "device_file", "device_database", "device_sharedpref",
@@ -113,10 +113,10 @@ def inspect():
     }
     require(len(expected_module) == 4 and
             any(row["path"] == "android/app/src/main/assets/licenses/DataStore-Protobuf-BSD-3-Clause.txt" for row in expected_notices),
-            "Actual notice receipt does not match the exact coordinator scope amendment")
+            "Actual notice assets do not match the dependency notices listed in publisher-inputs.json")
     native = []
-    sys.path.insert(0, str(ROOT / "tools" / "android-port"))
-    from controller.apk_alignment import elf_load_alignment, inspect_alignment
+    sys.path.insert(0, str(ANDROID / "scaffold"))
+    from apk_alignment import elf_load_alignment, inspect_alignment
     with zipfile.ZipFile(APK) as archive:
         require(archive.testzip() is None, "Actual APK archive CRC failure")
         files = sorted((assets / "licenses" / "WP-204").glob("*.txt"))
@@ -157,7 +157,7 @@ def inspect():
             {row["apk_path"] for row in native},
             "Actual packaged DataStore ABI set mismatch",
         )
-    alignment = inspect_alignment(APK, Path(sdk), dict(os.environ), windows=os.name == "nt")
+    alignment = inspect_alignment(APK, Path(sdk))
     with APK.open("rb") as stream:
         digest = hashlib.file_digest(stream, "sha256").hexdigest()
     return {

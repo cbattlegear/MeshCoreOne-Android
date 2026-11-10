@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="com.meshcoreone.android.core.testing.TestSupportTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-10-04T03:16:56.394Z" hostname="BATTLEGEAR" time="0.005">
-  <properties/>
-  <testcase name="trackerDoesNotLoseCallsFromConcurrentCallbacks" classname="com.meshcoreone.android.core.testing.TestSupportTest" time="0.003"/>
-  <testcase name="trackerStartsEmptyAndRecordsEveryInvocation" classname="com.meshcoreone.android.core.testing.TestSupportTest" time="0.0"/>
-  <testcase name="mutableBoxCapturesNullableValuesWithoutAnUnsafeCast" classname="com.meshcoreone.android.core.testing.TestSupportTest" time="0.002"/>
-  <system-out><![CDATA[]]></system-out>
-  <system-err><![CDATA[]]></system-err>
-</testsuite>

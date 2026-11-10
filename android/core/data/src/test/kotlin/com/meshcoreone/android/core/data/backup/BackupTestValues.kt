@@ -1,6 +1,5 @@
 // PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/AppBackupEnvelope+Testing.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/ImportResult+Testing.swift@db14559b39d32322b06477c6ae676112f583db50
-// AndroidOnly: WP-308 Reuse isolated database paths for real backup/reopen transactions.
 // Real Room, independent destination lifetimes and process DataStore; no persistence surrogate.
 package com.meshcoreone.android.core.data.backup
 

@@ -1,7 +1,6 @@
 // PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/PersistenceStore+Testing.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/PersistenceStore+TestFetch.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1Services/Tests/MC1ServicesTests/Mocks/MockPersistenceStore.swift@db14559b39d32322b06477c6ae676112f583db50
-// AndroidOnly: WP-308 Short JUnit-owned paths preserve native Windows SQLite reopen coverage.
 // Real Room replaces the source's storage mock; the fixture never implements a production persistence role.
 package com.meshcoreone.android.core.data.repository
 
@@ -89,6 +88,7 @@ class RepositoryClock(var now: Instant = AT) : Clock() {
     override fun withZone(zone: ZoneId): Clock = Clock.fixed(now, zone)
 }
 
+// Native SQLite paths must not include Robolectric's long per-method application directory.
 internal class DatabaseTestContext(base: Context, private val directory: File) : ContextWrapper(base) {
     override fun getApplicationContext(): Context = this
     override fun getDatabasePath(name: String): File =

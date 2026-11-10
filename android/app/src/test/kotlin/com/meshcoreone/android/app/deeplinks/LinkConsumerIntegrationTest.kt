@@ -28,6 +28,7 @@ import com.meshcoreone.android.feature.chats.list.ContactLinkCompletion
 import com.meshcoreone.android.feature.chats.list.ContactLinkCancellation
 import com.meshcoreone.android.feature.chats.list.ContactLinkContext
 import com.meshcoreone.android.feature.chats.list.ContactLinkPublications
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -885,10 +886,10 @@ class LinkConsumerIntegrationTest : RoomProcessTest() {
         val saving = CompletableDeferred<Unit>()
         val publication = CompletableDeferred<Unit>()
         val persistence = object : PersistenceStoreProtocol by store {
-            override suspend fun saveDevice(device: DeviceDTO) {
+            override suspend fun activateDeviceIfCurrent(id: UUID, isCurrent: () -> Boolean): Boolean {
                 saving.complete(Unit)
                 publication.await()
-                store.saveDevice(device)
+                return store.activateDeviceIfCurrent(id, isCurrent)
             }
         }
         val h = ContainerHarness(this, store, persistenceOverride = persistence)

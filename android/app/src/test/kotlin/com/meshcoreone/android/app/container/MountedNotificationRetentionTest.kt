@@ -1,4 +1,5 @@
 // AndroidOnly: WP-302 Retain platform notification retries across mounted conversation reads.
+// AndroidOnly: WP-401 Compose the published retention controls against the existing action callback boundary.
 package com.meshcoreone.android.app.container
 
 import android.Manifest
@@ -90,6 +91,7 @@ class MountedNotificationRetentionTest : RoomProcessTest() {
             val post = notificationRequest(NotificationCategory.ROOM_MESSAGE, payload, message.id.canonicalString())
             postedRequest = post
             val before = fixture.post(post)
+            fixture.assertRetappable(post, before)
 
             val holder = RoomConversationStateHolder(room, fixture.harness.container.chatsFeature.room(room), screenScope)
             holder.start()
@@ -153,6 +155,7 @@ class MountedNotificationRetentionTest : RoomProcessTest() {
             )
             postedRequest = post
             val before = fixture.post(post)
+            fixture.assertRetappable(post, before)
             val mounted = ChatViewModel(conversation, fixture.harness.container.chatsFeature.timeline(conversation), screenScope)
             viewModel = mounted
             mounted.start()
@@ -257,6 +260,8 @@ class MountedNotificationRetentionTest : RoomProcessTest() {
 
         suspend fun assertRetappable(request: NotificationRequest, before: DeliveredNotification) {
             assertEquals(before, delivery.deliveredNotifications().single { it.id == request.id })
+            val expected = NotificationResponse(request.payload, null, null)
+            val previousDeliveries = received.count { it == expected }
             val manager = context.getSystemService(NotificationManager::class.java)
             val posted = manager.activeNotifications.single { it.tag?.endsWith(request.id.value) == true }
             assertNotNull(posted.notification.contentIntent).send()
@@ -266,7 +271,7 @@ class MountedNotificationRetentionTest : RoomProcessTest() {
             try {
                 assertEquals(launcher, shadowOf(controller.get()).nextStartedActivity.component)
                 test.runCurrent()
-                assertEquals(1, received.count { it == NotificationResponse(request.payload, null, null) })
+                assertEquals(previousDeliveries + 1, received.count { it == expected })
                 assertEquals(before, delivery.deliveredNotifications().single { it.id == request.id })
             } finally {
                 controller.destroy()

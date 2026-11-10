@@ -73,10 +73,12 @@ internal class MemoryDraftDefaults : DraftDefaults {
     override fun setStringDictionary(value: Map<String, String>, key: String) { values[key] = value }
 }
 
-internal class RecordingLifecycle : SessionLifecycleListener {
+internal class RecordingLifecycle(
+    private val onCreated: (RadioSessionContainer) -> Unit = {},
+) : SessionLifecycleListener {
     val created = java.util.Collections.synchronizedList(mutableListOf<RadioSessionContainer>())
     val tornDown = java.util.Collections.synchronizedList(mutableListOf<RadioSessionContainer>())
-    override fun created(container: RadioSessionContainer) { created += container }
+    override fun created(container: RadioSessionContainer) { created += container; onCreated(container) }
     override fun tornDown(container: RadioSessionContainer) { tornDown += container }
 }
 
@@ -117,6 +119,7 @@ internal class ContainerHarness(
     onChannelQueryAccounting: ((ChannelQueryAccountingEvent) -> Unit)? = null,
     offlineMaps: com.meshcoreone.android.core.maps.OfflineMapController? = null,
     advertLocation: AppAdvertLocation = defaultAdvertLocation(),
+    nodesLocations: kotlinx.coroutines.flow.Flow<com.meshcoreone.android.core.model.Coordinate?> = kotlinx.coroutines.flow.flowOf(null),
     persistenceOverride: com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol = store,
     themeService: com.meshcoreone.android.core.designsystem.ThemeService? = null,
     observeBleLink: Boolean = false,
@@ -124,6 +127,7 @@ internal class ContainerHarness(
     preferencesOverride: ProcessConnectionPreferences? = null,
     simulatorSeedStore: com.meshcoreone.android.core.services.simulator.SimulatorSeedStore = RoomSimulatorSeedStore(store),
     phoneLocation: () -> com.meshcoreone.android.core.model.Coordinate? = { null },
+    onSessionCreated: (RadioSessionContainer) -> Unit = {},
 ) {
     val scheduler: TestCoroutineScheduler = test.testScheduler
     val links = HarnessLinks(identity)
@@ -131,7 +135,7 @@ internal class ContainerHarness(
     val pairing = HarnessPairingService()
     val foregroundCalls = java.util.Collections.synchronizedList(mutableListOf<Boolean>())
     val preferences = MemoryConnectionPreferences()
-    val lifecycle = RecordingLifecycle()
+    val lifecycle = RecordingLifecycle(onSessionCreated)
     val chatSendQueueProgress = ChatSendQueueProgress()
     val diagnostics = java.util.Collections.synchronizedList(mutableListOf<RuntimeDiagnostic>())
     val messagingDiagnostics = java.util.Collections.synchronizedList(mutableListOf<com.meshcoreone.android.core.contracts.domain.MessagingDiagnostic>())
@@ -186,6 +190,7 @@ internal class ContainerHarness(
             offlineMaps = offlineMaps,
             advertLocation = advertLocation,
             phoneLocation = phoneLocation,
+            nodesLocations = nodesLocations,
             themeService = themeService,
             regionStore = regionStore,
         ),

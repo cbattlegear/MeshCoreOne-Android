@@ -6,6 +6,7 @@ package com.meshcoreone.android.feature.nodes.ui
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,10 +35,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -47,8 +50,11 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStoreOwner
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.l10n.R
+import com.meshcoreone.android.core.l10n.generated.AppToolsStrings
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.maps.GeoPoint
 import com.meshcoreone.android.core.maps.MapAvailability
@@ -66,7 +72,6 @@ import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.feature.nodes.NodesNavigation
 import com.meshcoreone.android.feature.nodes.RemoteNodeAction
 import com.meshcoreone.android.feature.nodes.detail.ContactDetailPresentation
-import com.meshcoreone.android.feature.nodes.detail.ContactDetailStateHolder
 import com.meshcoreone.android.feature.nodes.detail.DetailAction
 import com.meshcoreone.android.feature.nodes.detail.PingResult
 import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
@@ -85,13 +90,22 @@ internal fun ContactDetailScreen(
     navigation: NodesNavigation,
     modifier: Modifier = Modifier,
 ) {
-    val scope = rememberCoroutineScope()
-    val holder = remember(initialContact.id, dependencies) {
-        ContactDetailStateHolder(initialContact, dependencies, scope)
+    val activity = checkNotNull(LocalActivity.current)
+    val entryId = rememberSaveable { UUID.randomUUID().toString() }
+    val retained = remember(activity) {
+        ViewModelProvider(checkNotNull(activity as? ViewModelStoreOwner))[ContactDetailRetainedState::class.java]
     }
+    val detail = remember(activity, entryId, initialContact.id, initialContact.radioId, initialContact.publicKey) {
+        retained.bind(entryId, initialContact, dependencies)
+    }
+    val scope = detail.scope
+    val holder = detail.holder
     val state by holder.state.collectAsStateWithLifecycle()
     val pathState by holder.path.state.collectAsStateWithLifecycle()
     val contact = state.contact
+    val avatarEditor = key(entryId, initialContact.radioId, initialContact.id, initialContact.publicKey) {
+        rememberContactAvatarEditor(detail)
+    }
     var showShare by remember { mutableStateOf(false) }
     var showPathEditor by remember { mutableStateOf(false) }
     var resetPathConfirmation by remember { mutableStateOf(false) }
@@ -102,7 +116,12 @@ internal fun ContactDetailScreen(
     }
 
     LaunchedEffect(holder) { holder.run() }
-    DisposableEffect(holder) { onDispose(holder::onDisappear) }
+    DisposableEffect(entryId, detail, activity) {
+        onDispose {
+            holder.onDisappear()
+            if (!activity.isChangingConfigurations) retained.release(entryId, detail)
+        }
+    }
 
     LazyColumn(
         modifier.fillMaxSize(),
@@ -112,6 +131,7 @@ internal fun ContactDetailScreen(
         item {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(contact.displayName, style = MaterialTheme.typography.headlineMedium, modifier = Modifier.semantics { heading() })
+                avatarEditor()
                 Text(stringResource(contact.type.localizedNameRes()), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(
                     contact.publicKey.uppercaseHexString(" "),
@@ -249,6 +269,12 @@ internal fun ContactDetailScreen(
                             onClick = { navigation.openMap(contact.latitude, contact.longitude) },
                             modifier = Modifier.padding(horizontal = 8.dp),
                         ) { Text(stringResource(C.contactsDetailOpenInMaps)) }
+                        navigation.openLineOfSight?.let { openLineOfSight ->
+                            TextButton(
+                                onClick = { openLineOfSight(contact) },
+                                modifier = Modifier.padding(horizontal = 8.dp).heightIn(min = 48.dp),
+                            ) { Text(stringResource(AppToolsStrings.toolsLineOfSight)) }
+                        }
                     }
                 }
             }
@@ -414,6 +440,7 @@ private fun DetailActionButton(
     Button(
         onClick = onClick,
         enabled = (!needsRadio || radioEnabled) && !(action == DetailAction.PING && state.isPinging) &&
+            !(action == DetailAction.FAVORITE && state.isSavingFavorite) &&
             !(action == DetailAction.SHARE_VIA_ADVERT && state.isSharing),
         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
     ) {

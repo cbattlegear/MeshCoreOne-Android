@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-215 Explicit recovery of notification actions rejected before dispatcher admission. -->
+<resources>
+    <string name="notification_action_recovery_title">Notification action recovery</string>
+    <string name="notification_action_recovery_rejected_reply">This reply attempt did not enter the action queue. Copy the original text, check the intended conversation yourself, and send it from that conversation if needed. Nothing here sends or retries a reply automatically.</string>
+    <string name="notification_action_recovery_rejected_mark_read">This mark-as-read attempt did not enter the action queue. Check the original conversation yourself if you still want to mark it as read. Nothing here performs or retries that action.</string>
+    <string name="notification_action_recovery_saved">The original action was saved privately on this device. Open MeshCore One yourself to recover it. Only confirmed copy or explicit Delete can remove the chosen record. Closing this dialog keeps it.</string>
+    <string name="notification_action_recovery_memory_only">Storage could not save the original action; it is held only in this app process. Open MeshCore One yourself and copy reply text now if possible. Closing this dialog keeps it, but if the app process ends this process-only copy is lost.</string>
+    <string name="notification_action_recovery_not_retained">This action attempt was not accepted, and its original response could not be retained. Do not assume reopening the notification will restore reply text.</string>
+    <string name="notification_action_recovery_storage_unavailable">Recovery records are not available to read yet. Storage may still be busy or unavailable; a pending save is not confirmed. This is not an empty-record result, and no records have been reset or deleted. Close and try opening MeshCore One again when private storage is available.</string>
+    <string name="notification_action_recovery_copy_failed">The exact original text could not be confirmed on the clipboard. The recovery record was not removed.</string>
+    <string name="notification_action_recovery_discard_failed">Removal of this recovery record could not be confirmed. It may still appear here. Copying or deleting a record never sends or retries the action.</string>
+    <string name="notification_action_recovery_launch_failed">Android notification actions cannot open this recovery screen automatically. Open MeshCore One yourself. This does not change whether the response was saved, held only in this process, or not retained.</string>
+    <string name="notification_action_recovery_original_target">Original notification reference: %1$s. A channel number is not proof of the current destination. Verify the intended conversation yourself.</string>
+</resources>

@@ -34,6 +34,7 @@ class PathHashModeStateHolder(
     private val mutable = MutableStateFlow(PathHashModeState())
     private val failures = SettingsFailureRouter(env, retryAlert)
     private var observing: Job? = null
+    private var failedMode: UByte? = null
     val state: StateFlow<PathHashModeState> = mutable.asStateFlow()
     val retryAlertState: StateFlow<RetryAlertState> = retryAlert.state
     val retry: RetryAlertController get() = retryAlert
@@ -56,23 +57,27 @@ class PathHashModeStateHolder(
     fun dismissError() = mutable.update { it.copy(errorMessage = null) }
 
     fun onModeSelected(mode: UByte) {
-        if (mode == mutable.value.selectedMode) return
-        mutable.update { it.copy(selectedMode = mode) }
-        apply(mode)
+        if (mutable.value.isApplying) return
+        val service = settingsService()
+        if (mode == mutable.value.selectedMode && failedMode == null && service?.pathHashModeNeedsRecovery != true) return
+        apply(mode, service)
     }
 
-    private fun apply(mode: UByte) {
-        mutable.update { it.copy(isApplying = true) }
+    private fun apply(mode: UByte, service: SettingsRadioPort? = settingsService()) {
+        if (mutable.value.isApplying) return
+        mutable.update { it.copy(selectedMode = mode, isApplying = true, errorMessage = null) }
         env.scope.launch {
             try {
-                val service = settingsService() ?: throw SettingsNotConnectedException()
-                service.setPathHashModeVerified(mode)
+                (service ?: throw SettingsNotConnectedException()).setPathHashModeVerified(mode)
+                failedMode = null
                 retryAlert.reset()
             } catch (cancelled: CancellationException) {
-                mutable.update { it.copy(isApplying = false) }
+                failedMode = mode
+                mutable.update { it.copy(isApplying = false, selectedMode = it.device?.pathHashMode ?: 0u) }
                 throw cancelled
             } catch (error: Exception) {
-                val message = failures.route(error) { apply(mode) }
+                failedMode = mode
+                val message = failures.route(error) { apply(mode, service) }
                 mutable.update { it.copy(selectedMode = it.device?.pathHashMode ?: 0u, errorMessage = message ?: it.errorMessage) }
             }
             mutable.update { it.copy(isApplying = false) }

@@ -32,8 +32,10 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.onEach
 import org.junit.After
@@ -174,37 +176,44 @@ class BatchTraceCardComposeTest {
         assertTrue(descriptions().contains(C.contactsResultsBatchProgressLabel(host.get().resources, 1, 3)))
 
         harness.respond(sender.sent.single().tag, listOf(node(0xAA, 5.0), node(null, 0.0)), RADIO)
+        val oldTag = sender.sent.single().tag
+        val oldHistory = harness.state.completedResults
         harness.holder.removeRepeater(0)
         harness.holder.addNode(contact(0xBB, name = "New route"))
-        harness.time.advanceBy(500.milliseconds)
-        assertEquals(Bytes.of(0xBB), sender.sent.last().path)
-        harness.respond(sender.sent.last().tag, listOf(node(0xBB, 9.0), node(null, 0.0)), RADIO)
+        harness.respond(oldTag, listOf(node(0xAA, 9.0), node(null, 0.0)), RADIO)
+        harness.time.advanceBy(60.seconds)
 
-        assertTrue(job.isActive)
+        assertTrue(job.isCompleted)
+        assertFalse(harness.state.isRunning)
+        assertEquals(1, sender.sent.size, "Editing must not implicitly send another route")
         assertFalse(harness.state.batchPresentationActive)
-        assertEquals(HopStats(7.0, 5.0, 9.0), harness.state.hopStats(1))
-        assertEquals(2, harness.state.completedResults.size)
+        assertEquals(HopStats(5.0, 5.0, 5.0), harness.state.hopStats(1))
+        assertEquals(oldHistory, harness.state.completedResults)
+        assertNull(harness.state.displayedResult)
         render(harness.state)
-        assertTrue(texts().contains("SNR: 9.0 dB"))
+        assertFalse(texts().any { it.contains("SNR") })
         assertFalse(descriptions().any { it.startsWith("Average signal to noise ratio") })
         assertFalse(descriptions().any { it.startsWith("Average round trip") || it.startsWith("Batch progress") })
 
-        harness.holder.cancelBatchTrace()
-        harness.time.advanceBy(500.milliseconds)
-        assertTrue(job.isCompleted)
-        assertEquals(2, harness.state.completedResults.size)
-        render(harness.state)
-        assertTrue(texts().contains("SNR: 9.0 dB"))
-        assertFalse(descriptions().any { it.startsWith("Average signal to noise ratio") })
-
         val next = harness.start { harness.holder.runBatchTrace() }
+        assertEquals(Bytes.of(0xBB), sender.sent.last().path)
         assertTrue(harness.state.batchPresentationActive)
         assertTrue(harness.state.completedResults.isEmpty())
         render(harness.state)
         assertTrue(descriptions().contains(C.contactsResultsBatchProgressLabel(host.get().resources, 1, 3)))
+        harness.respond(sender.sent.last().tag, listOf(node(0xBB, 9.0), node(null, 0.0)), RADIO)
+        assertEquals(HopStats(9.0, 9.0, 9.0), harness.state.hopStats(1))
+        assertEquals(1, harness.state.completedResults.size)
+        render(harness.state)
+        assertTrue(texts().contains("SNR: 9.0 dB"))
+        assertFalse(texts().contains("SNR: 5.0 dB"))
         harness.holder.cancelBatchTrace()
-        harness.main.runCurrent()
+        harness.time.advanceBy(500.milliseconds)
         assertTrue(next.isCompleted)
+        assertEquals(1, harness.state.completedResults.size)
+        render(harness.state)
+        assertTrue(texts().contains("SNR: 9.0 dB"))
+        assertEquals(2, sender.sent.size)
     }
 
     private fun render(snapshot: TracePathState) {

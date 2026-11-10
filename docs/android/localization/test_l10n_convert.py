@@ -334,7 +334,7 @@ class SourcePipelineTest(unittest.TestCase):
         self.assertEqual(self.summary["generated_keys"], len(default_strings) + len(default_plurals))
 
     def test_generated_headers_pass_the_actual_trusted_traceability_validator(self):
-        from controller.model import load_manifest
+        from portlib.model import load_manifest
         from portmap import port_map
         mapped = {entry["implementation"]: entry for entry in port_map(load_manifest(c.REPOSITORY))}
         for path in self.outputs:

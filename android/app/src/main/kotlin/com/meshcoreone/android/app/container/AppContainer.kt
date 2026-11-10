@@ -41,6 +41,7 @@ import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.contracts.notifications.NotificationDeliveryPort
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.model.Coordinate
 import com.meshcoreone.android.core.maps.OfflineMapController
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
@@ -82,6 +83,8 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -141,6 +144,7 @@ class AppContainerDependencies(
     val onboardingPlatform: com.meshcoreone.android.app.container.onboarding.OnboardingPlatform? = null,
     /** Production pre-advert policy; an unbound composition must not silently skip an enabled refresh. */
     val advertLocation: AppAdvertLocation? = null,
+    val nodesLocations: Flow<Coordinate?> = flowOf(null),
     val offlineMaps: OfflineMapController? = null,
     val phoneLocation: () -> com.meshcoreone.android.core.model.Coordinate? = { null },
     val mapPreferences: com.meshcoreone.android.core.maps.MapPreferenceStore? = null,
@@ -321,6 +325,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
     internal val notificationPreferences get() = dependencies.notificationPreferences
     internal val settingsRegionResolver get() = dependencies.onboardingPlatform?.regionResolver
     internal val advertLocation get() = dependencies.advertLocation
+    internal val nodesLocations get() = dependencies.nodesLocations
     var settingsFeature: AppSettingsFeature? = null
         internal set
     internal val nodesMessages get() = dependencies.nodesMessages
@@ -442,6 +447,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
     /** Process shutdown: closes the runtime (tearing down any live graph), then every process resource. */
     suspend fun close() {
         withContext(NonCancellable) {
+            dependencies.onboardingPlatform?.flags?.shutdown()
             hostBinding?.close()
             appState.shutdown()
             connectionManager.close()

@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="com.meshcoreone.android.core.l10n.RegionalSubdivisionLocalizationTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-10-04T14:42:37.943Z" hostname="BATTLEGEAR" time="0.169">
-  <properties/>
-  <testcase name="everyCatalogSubdivisionKeyResolvesInEveryLocale" classname="com.meshcoreone.android.core.l10n.RegionalSubdivisionLocalizationTest" time="0.146"/>
-  <testcase name="exposedCodeSnapshotsCannotChangeThePrivateCatalog" classname="com.meshcoreone.android.core.l10n.RegionalSubdivisionLocalizationTest" time="0.011"/>
-  <testcase name="unknownSubdivisionRetainsTheOriginalAbsentValueContract" classname="com.meshcoreone.android.core.l10n.RegionalSubdivisionLocalizationTest" time="0.01"/>
-  <system-out><![CDATA[]]></system-out>
-  <system-err><![CDATA[]]></system-err>
-</testsuite>

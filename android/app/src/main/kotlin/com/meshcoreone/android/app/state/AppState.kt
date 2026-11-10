@@ -7,6 +7,8 @@ import com.meshcoreone.android.app.navigation.ChatSelection
 import com.meshcoreone.android.app.navigation.NavigationCoordinator
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceError
+import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceException
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import com.meshcoreone.android.core.model.ChatConversationID
 import com.meshcoreone.android.core.model.ContactDTO
@@ -132,7 +134,8 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
 
     @Volatile var syncCoordinator: SyncCoordinator? = null
         private set
-    private var lastBumpedSession: Any? = null
+    private var lastBumpedSession: AppSession? = null
+    private var servicesOrigin: com.meshcoreone.android.core.contracts.domain.SessionToken? = null
     private var lastConnectedDeviceIdForCli: UUID? = null
     private var chatRegistry: ChatCoordinatorRegistry? = null
     private var prewarmRefresher: ChatPrewarmRefresher? = null
@@ -357,7 +360,17 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
 
     fun bumpContactsVersion() = contactsVersionFlow.update { it + 1 }
 
-    fun bumpServicesVersion() = servicesVersionFlow.update { it + 1 }
+    fun bumpServicesVersion() {
+        synchronized(lock) {
+            servicesOrigin = lastBumpedSession?.takeIf { it === services }?.token
+            servicesVersionFlow.value += 1
+        }
+    }
+
+    fun sessionTokenForServicesVersion(version: Int): com.meshcoreone.android.core.contracts.domain.SessionToken? =
+        synchronized(lock) {
+            servicesOrigin.takeIf { servicesVersionFlow.value == version && lastBumpedSession === services }
+        }
 
     override fun handleSessionStateChange() {
         refreshConversations()
@@ -473,7 +486,12 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
             batteryMonitor.stop()
             batteryMonitor.clearThresholds()
             deps.platform.onConnectionLost()
-            synchronized(lock) { lastBumpedSession = null }
+            synchronized(lock) {
+                if (services == null) {
+                    lastBumpedSession = null
+                    servicesOrigin = null
+                }
+            }
             return
         }
 
@@ -500,10 +518,14 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
 
         // Bump only when the container actually changed: connect fires onConnectionReady and then an explicit rewire.
         val changed = synchronized(lock) {
-            if (lastBumpedSession !== session) { lastBumpedSession = session; true } else false
+            if (services === session && lastBumpedSession !== session) {
+                lastBumpedSession = session
+                servicesOrigin = session.token
+                servicesVersionFlow.value += 1
+                true
+            } else false
         }
         if (changed) {
-            servicesVersionFlow.update { it + 1 }
             deps.platform.onSessionChanged()
         }
 
@@ -536,18 +558,44 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
             try {
                 subscription.events.collect { wrapped ->
                     when (val event = wrapped.event) {
-                        is SettingsEvent.DeviceUpdated -> connection.updateDevice(event.info, event.appliedRadioPresetID)
-                        is SettingsEvent.AutoAddConfigUpdated -> {
-                            connection.updateAutoAddConfig(event.config)
-                            // Clear the storage-full flag when overwrite-oldest is enabled.
-                            if ((event.config.bitmask and AutoAddConfig.OVERWRITE_OLDEST_BIT) != 0.toUByte()) {
-                                connectionUI.isNodeStorageFull = false
+                        is SettingsEvent.PersistenceBarrier -> {
+                            applySessionDeviceEdit("settings write barrier", event.persistence) {
+                                connection.awaitDeviceEdits(wrapped.token)
                             }
                         }
-                        is SettingsEvent.ClientRepeatUpdated -> connection.updateClientRepeat(event.enabled)
-                        is SettingsEvent.PathHashModeUpdated -> connection.updatePathHashMode(event.mode)
-                        is SettingsEvent.AllowedRepeatFreqUpdated -> connection.setAllowedRepeatFreqRanges(event.ranges)
-                        is SettingsEvent.DefaultFloodScopeUpdated -> connection.updateDefaultFloodScopeName(event.name)
+                        is SettingsEvent.DeviceUpdated -> {
+                            val presetId = event.appliedRadioPresetID
+                            applySessionDeviceEdit(if (presetId == null) "device settings" else "radio preset") {
+                                connection.updateDevice(event.info, presetId, wrapped.token)
+                            }
+                        }
+                        is SettingsEvent.AutoAddConfigUpdated -> {
+                            applySessionDeviceEdit("auto-add config") {
+                                val updated = connection.updateAutoAddConfig(event.config, wrapped.token)
+                                val overwriteOldest =
+                                    (event.config.bitmask and AutoAddConfig.OVERWRITE_OLDEST_BIT) != 0.toUByte()
+                                if (updated && overwriteOldest) {
+                                    connection.withCurrentSession(wrapped.token) {
+                                        connectionUI.isNodeStorageFull = false
+                                    }
+                                }
+                                updated
+                            }
+                        }
+                        is SettingsEvent.ClientRepeatUpdated -> applySessionDeviceEdit("client repeat") {
+                            connection.updateClientRepeat(event.enabled, wrapped.token)
+                        }
+                        is SettingsEvent.PathHashModeUpdated -> {
+                            applySessionDeviceEdit("path hash", event.persistence) {
+                                connection.updatePathHashMode(event.mode, wrapped.token)
+                            }
+                        }
+                        is SettingsEvent.AllowedRepeatFreqUpdated -> applySessionDeviceEdit("repeat frequency ranges") {
+                            connection.setAllowedRepeatFreqRanges(event.ranges, wrapped.token)
+                        }
+                        is SettingsEvent.DefaultFloodScopeUpdated -> applySessionDeviceEdit("default flood scope") {
+                            connection.updateDefaultFloodScopeName(event.name, wrapped.token)
+                        }
                     }
                 }
             } finally {
@@ -556,8 +604,29 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
         })
     }
 
+    private suspend fun applySessionDeviceEdit(
+        operation: String,
+        completion: CompletableDeferred<Unit>? = null,
+        edit: suspend () -> Boolean,
+    ) {
+        try {
+            if (edit()) {
+                completion?.complete(Unit)
+            } else {
+                completion?.completeExceptionally(SettingsServiceException(SettingsServiceError.NotConnected))
+                logger.fine("Ignored $operation update from a retired session")
+            }
+        } catch (cancelled: CancellationException) {
+            completion?.completeExceptionally(cancelled)
+            throw cancelled
+        } catch (failure: Exception) {
+            completion?.completeExceptionally(failure)
+            logger.log(Level.WARNING, "Failed to apply $operation update", failure)
+        }
+    }
+
     private fun wireDeviceUpdateCallbacks(session: AppSession) {
-        session.deviceService.setDeviceUpdateCallback { event -> connection.updateDevice(event.event) }
+        session.deviceService.setDeviceUpdateCallback { event -> connection.updateOCVSettings(event.event, event.token) }
 
         // ConnectionManager nils the session before teardown yields contactDeletedCleanup; capture the notification service.
         val notifications = session.notificationService

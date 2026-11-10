@@ -32,6 +32,7 @@ import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.app.content.AndroidGeocoderAdapter
 import com.meshcoreone.android.app.content.LocationManagerLocationProducing
+import kotlinx.coroutines.flow.map
 import com.meshcoreone.android.app.container.onboarding.AndroidOnboardingPermissionFacts
 import com.meshcoreone.android.app.container.onboarding.OnboardingPlatform
 import com.meshcoreone.android.app.container.onboarding.WriteBehindOnboardingFlags
@@ -254,6 +255,9 @@ object AndroidAppContainerFactory {
                     locationProducing::refreshAuthorization,
                     currentLocation = { locationProducing.currentLocation },
                 ),
+                nodesLocations = locationProducing.foregroundLocations().map { coordinate ->
+                    coordinate?.let { com.meshcoreone.android.core.model.Coordinate(it.latitude, it.longitude) }
+                },
                 offlineMaps = offlineMaps,
                 phoneLocation = {
                     locationProducing.currentLocation?.let {

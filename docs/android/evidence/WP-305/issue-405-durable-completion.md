@@ -1,0 +1,899 @@
+# WP-305 issue #405 durable completion follow-up
+
+- **Repository:** `cbattlegear/MeshCoreOne-Android`
+- **Reference:** `db14559b39d32322b06477c6ae676112f583db50`
+- **Base:** `99479711bfdb7c621765f09d671068ca8b8318ce` (`main`)
+- **Reviewed predecessor head:** `b91f5fcbbe2f533093f2eab6e84aa641c0c9a103`
+- **Navigation follow-up:** based on `b91f5fcbbe2f533093f2eab6e84aa641c0c9a103`; the lifecycle-safe
+  busy-control candidate is `3abfd74ebb56b0b6ba2aad98435ac1e35a4a732b`. The retained-flow identity
+  repair is `3a552f5fbfc41b29a9e18b93bc11b65d4f262c5e`; its exact PR successor
+  `d073659d35df83166af2c7a5fa7a814897b55a0c` passed hosted Android CI. Intermediate findings and
+  corrections are recorded below.
+- **Local-only completion-handoff follow-up:** based on published
+  `c277a10ac1fe657e4b48cfa32fdad4ae26298518`; prepared for independent source review before push
+  or hosted CI. The added mounted control has not been executed.
+- **Worktree branch:** `cbattlegear-wp-305-onboarding-recovery`
+- **PR:** [#532](https://github.com/cbattlegear/MeshCoreOne-Android/pull/532) (open draft)
+- **Manifest / policy:** `e81605857f5aa7b893dcd63224fb27a45d7b0f3a` / `b12794157978d6d90ab7508d4e2852fdc2d5e4a4`
+- **Scope:** persist onboarding completion before exposing the completed gate; atomically persist
+  completion and device-menu-tip donation; retain retry after storage failure; constrain claims to
+  the original eligible tabs; protect preset completion from selection, cancellation, and radio
+  replacement races.
+- **Acceptance groups:** `APP-G06` donation/pending/show-once lifecycle and `APP-G08` actual
+  completion preference/readback and resume boundary.
+
+## Changes and regression coverage
+
+- `OnboardingFlagStore` awaits persistence before publishing completion/reset state. The app adapter
+  acknowledges durable writes only after the process preference store confirms them and atomically
+  persists the first-run flag with the pending tip event.
+- Failed preset-completion persistence retains the already-applied preset for a persistence-only
+  retry. A new radio-apply attempt clears that cached success before starting, including when a
+  different preset partially changes the radio and then fails.
+- Cached preset success is bound to the live `SessionToken` epoch, generation, and radio ID.
+  Completion retry rechecks the current target; reconnecting another radio cannot reuse the old
+  radio's success.
+- While no-device completion is committing, confirm/cancel controls are disabled and sheet
+  dismissal/system Back are blocked until the durable write resolves.
+- No-device completion is serialized against active retry/demo/pairing/Wi-Fi work; connection
+  starts and success continuations cannot navigate away while the completion write is held.
+- First-run onboarding retains its flow coordinator on the process scope across Activity recreation.
+  Settings reruns use a separate retained coordinator and in-memory flags, reset after that rerun's
+  completion callback.
+- The shell uses the flow's synchronous busy fence for Settings-rerun tab selection, toolbar Up, and
+  `NavDisplay.onBack`. Its disabled semantics observe `preset.state` and
+  `isCompletingWithoutDevice` through composition-lifecycle collectors, rather than a derived
+  process-scope `stateIn` job. Successful completion still uses its existing programmatic navigation path.
+- The shell re-resolves the retained flow on each current-route composition and its synchronous
+  navigation callback reads the live top route and current coordinator, rather than relying on a
+  remembered route-active Boolean. Rerun completion callbacks are accepted only from the currently
+  owned flow; the shell also refuses a stale completion navigation when onboarding is no longer the
+  active route, so an off-tab completion cannot pop the selected tab's entry.
+- New mounted real-shell regressions hold radio apply and completion persistence separately. They
+  verify toolbar Up, adaptive-rail tab selection, and onboarding's mounted system-Back handler keep
+  the busy rerun mounted; failures remain visible, completion retry does not reapply the preset,
+  and ordinary navigation resumes after successful completion. The held-commit regression asserts
+  the unique completion-error message and retry control are displayed before retry. `NavDisplay.onBack`
+  also uses the same guard. With an active onboarding path, the flow's BackHandler is the reachable
+  system-Back entry and consumes Back before the shell callback; a busy flow cannot normally have an
+  empty path.
+- The identity-schedule regression disposes rerun flow A and pops/reopens setup in one UI-thread
+  transaction, without a Compose idle/frame barrier between the route changes. It asserts onboarding
+  is the active destination before and after while both the navigation entry ID and retained coordinator
+  change, then holds flow B's apply and verifies tab, Up, route-action and system-Back controls stay
+  blocked until completion. A separate mounted test completes stale flow A after B has replaced it and
+  verifies A cannot deliver a completion callback. An off-tab navigation regression verifies an old
+  completion cannot pop the currently selected tab's entry.
+- A repeated-successful-rerun mounted regression uses the real `AppOnboarding.Rerun` and process scope.
+  It captures the actual adapter-job identity baseline after constructing app bindings, then checks
+  after each of two successful reruns that the same adapter jobs remain active, the process scope stays
+  active, and no per-flow sharing job remains.
+- The pending permission kind is now saveable across Activity recreation. A denied location result
+  queued in an `ActivityResultRegistry`, saved/restored into a new registry after recreation, verifies
+  both `DENIED` state and `LocationPermissionResultReporting(false)`.
+- Deterministic regressions cover held completion writes, dismissal/Back attempts, replacement-radio
+  retry, partial preset change followed by failure, selection changes while application is held,
+  held connection/write ordering, rerun isolation, and Activity recreation/retry.
+- The original ten `OnboardingStateTests` IDs remain attributed in `OnboardingStateTests.kt`; the
+  eleventh navigation-default source family remains in WP-302-owned `OriginalNavigationCases.kt`.
+  New cases are additional regression coverage, not original-case credit. No pinned source or source
+  case inventory was changed.
+
+## Local-only completion-before-effect investigation
+
+At published `c277a10ac1fe657e4b48cfa32fdad4ae26298518`, the no-device operation can finish its
+actual preference write, publish `hasCompletedOnboarding`, and clear `completing` before the mounted
+completion effect runs. The synchronous shell guard then permits Up. An immediate setup callback can
+push another entry while `Rerun` still retains the completed flow A; the new host would observe A's
+completed flag. This is a source-derived ordering, not an executed reproduction or a device finding.
+The prior rapid-replacement test explicitly retires A and does not discriminate this interval.
+
+The local candidate treats a completed flow as non-leaveable until its existing host completion
+callback navigates and retires it. The shell observes the existing completed StateFlow with
+composition-lifecycle collection so the enabled presentation has the same fence. The programmatic
+completion path remains ungated; no per-flow process job or entry-provider/identity seam is added.
+Failures still have `hasCompletedOnboarding == false` and retain normal retry/navigation behavior.
+
+The new mounted control pauses the Compose clock, calls the real `confirmNoDevice` operation, and
+checks that completion is published, the write is no longer busy, and A is still owned. In that same
+UI-thread turn it invokes the previously mounted Up/setup/tab callbacks and Activity Back, without
+calling `onFlowCompletionHandled` or inserting a frame. The candidate must retain A's original route,
+entry ID and step until the actual effect runs. After resuming frames, it must navigate to Chats,
+retire A, and allow a fresh entry/coordinator B to advance and leave normally. Against c277's source,
+the callback sequence can pop/reopen and switch tabs before those assertions. That negative control
+has not been executed; no failing or passing Kotlin result is claimed for this candidate.
+
+Source-only checks for the local follow-up:
+
+- Trusted `reserve.py admit` rules passed on default-base
+  `99479711bfdb7c621765f09d671068ca8b8318ce`: shell `modify-related-consumer` ->
+  `reviewed-support-consumer`, coordinator `modify` -> `wp-owned`, and mounted test
+  `add-or-update-related-test` -> `reviewed-support-test`. No foreign reservation was borrowed,
+  evolved or cleared.
+- Documented native Windows `ci.py preflight --local --state $env:ANDROID_CI_STATE --output <fresh absolute directory>`
+  passed using Python 3.12.4 and existing same-host state; it did not run Gradle.
+- `python tools\android-port\controller\validate.py` passed (64 WPs / 1,866 tracked reference files).
+- `python tools\android-port\test_inventory.py --check` passed (468 pinned paths / 5,133 declarations);
+  this checks frozen-source inventory, not discovery or execution of the new Android test.
+- `git diff --check` passed. No local Gradle, hosted CI, device verification or independent review of
+  the local successor has occurred. The shared Gradle execution hold remains unchanged.
+
+## Verification
+
+### Unpublished Wi-Fi recreation follow-up based on d81
+
+The source-derived race is the pairing sheet's composition-owned `LaunchedEffect` calling
+`wifi.reset()` again after Activity recreation. A failed process-owned connect delivered while
+no host is mounted leaves `isConnecting == false`, so the next mount clears its address, port
+and error. If failure arrives after the new effect runs while still connecting, that reset
+does not repeat. Neither ordering was executed for this local candidate.
+
+The local fix resets Wi-Fi state at the intentional `openPairingSheet(WIFI)` transition instead
+of at composition attachment. Reattaching the same retained sheet cannot reset it; closing and
+intentionally reopening a settled sheet still resets it, and `WiFiConnectionCoordinator.reset`
+still preserves in-flight operations. The permission-request effect remains in place. No Wi-Fi
+transport, cancellation, shell or process-scope behavior is changed.
+
+`OnboardingWiFiRecreationTest` authors four cases: failure between old-host destruction and new
+attachment; failure after reattachment while connecting; fresh intentional reopen after failure
+versus in-flight reopen; and connection cancellation with retained input and no success. The two
+recreation cases mount real `OnboardingFlow` using the same process-owned `AppOnboarding` and flow,
+assert fields and error displayed, and retry the same address/port through the mounted control.
+These are authored assertions, not executed Kotlin or physical-device evidence.
+
+Trusted default-base admissions passed for `OnboardingFlow.kt` and `OnboardingFlowCoordinator.kt`
+(`modify` -> `wp-owned`), and the new app test (`add-or-update-related-test` ->
+`reviewed-support-test`). `WiFiConnectionCoordinator.kt` was admitted but did not require an edit.
+Read-only named custody checks found broad advisory scopes, not an actual competing Wi-Fi hunk or
+specific edit hold. The coordinator corrected the earlier inference of a named unpublished code
+producer; no global clearance or reservation transfer is claimed, and no paused producer was
+inspected or awakened. Trusted-main isolated assigned/admitted authoring applies.
+
+Python 3.12.4 Windows preflight passed with existing same-host state and a fresh absolute output;
+`validate.py` passed (64 WPs / 1,866 reference files), `test_inventory.py --check` passed
+(468 pinned paths / 5,133 declarations), and `git diff --check` passed. No local Gradle, new hosted
+CI, negative-parent execution or device test occurred. Publication remains held for independent
+exact-source review; PR #532 stays draft and human/device/execution holds remain unchanged.
+
+| Check | Result |
+|---|---|
+| `python tools\android-port\controller\validate.py` | Passed: 64 WPs / 1,866 tracked reference files; manifest SHA-256 `11120a20d04408b3d21fac09180412df0490cabf1dafb8a3c98fe83e0fad31e4`. |
+| `python tools\android-port\controller\verification_config.py --check` | Passed; trusted manifest overlay/configuration validation only. |
+| `python tools\android-port\controller\workflows.py` | Passed; controller workflow/trust-boundary validation only. |
+| `python tools\android-port\controller\test_runner.py --quiet` | Passed: 874/874 controller fixture tests, 0 failed/errors/skipped; not Android behavior evidence. |
+| `python tools\android-port\portmap.py --repo .` | Exit 0; traceability only, not behavior acceptance. |
+| `python tools\android-port\test_inventory.py --check` | Passed (468 paths / 5,133 declarations); inventory check only, not Kotlin execution. |
+| Trusted admission for `AppOnboarding.kt` (`modify-related-consumer` → `reviewed-support-consumer`) and `OnboardingGateTest.kt` (`add-or-update-related-test` → `reviewed-support-test`) | Passed on the current base; no WP-502-owned mounted-test path was edited. |
+| Trusted admission for `NativeNavigationShell.kt` (`modify-related-consumer` → `reviewed-support-consumer`), `OnboardingFlowCoordinator.kt` (`modify` → `wp-owned`), and new `SettingsRerunNavigationTest.kt` (`add-or-update-related-test` → `reviewed-support-test`) | Passed for this assigned worktree. |
+| Independent read-only review of identity-schedule repair `3a552f5fbfc41b29a9e18b93bc11b65d4f262c5e` | No significant findings; confirmed the A→B replacement and stale-completion regressions and disjointness from WP-302 entry-provider/identity hunks. This is source review only, not hosted CI or acceptance. |
+| `git diff --check` | Passed for the source and evidence diffs. |
+| Local Android/Gradle unit tests or build | Not run for the identity-schedule successor: the shared local Gradle execution reservation remains held without cleanup proof and was not cleared, bypassed, or contended for. |
+| Exact-head hosted run [41630362683](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41630362683) | Passed on `825b6ad9a007203499a088e10102a54ce7b74f3d`; the Settings-rerun mounted suite marker succeeded and its four then-current cases passed. This candidate preceded the lifecycle leak correction. |
+| Independent review of `825b6ad9a007203499a088e10102a54ce7b74f3d` | Run [41630377176](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41630377176) found that eager process-scope `stateIn` retained each discarded rerun coordinator (`4454336766`). Replaced that derived flow with lifecycle-owned Compose observation; this was not acceptance. |
+| Exact-head hosted run [41632599536](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41632599536) | Failed on `057cd5160be8d3e732961cf655e4e5c075ec3c17`: 1 of 1,863 app tests failed because the new lifetime regression incorrectly required an empty process scope despite app adapter collectors. The actual `SettingsRerunNavigationTest` suite marker recorded failure. |
+| Independent review of `057cd5160be8d3e732961cf655e4e5c075ec3c17` | Run [41632615910](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41632615910) confirmed the test-oracle issue (`4454530325`); the regression now captures and compares the live app-adapter job baseline after each successful rerun. |
+| Exact-head hosted run [41635010095](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41635010095) | Passed on `3abfd74ebb56b0b6ba2aad98435ac1e35a4a732b`, base `99479711bfdb7c621765f09d671068ca8b8318ce`: candidate classification, controller/workflow policy, Linux Android build, and `android-ci` passed; the repeated-rerun test was reported passed and `SettingsRerunNavigationTest` ended successfully. Swift codec/backup oracles were skipped. |
+| Copilot review of `3abfd74ebb56b0b6ba2aad98435ac1e35a4a732b` | Workflow run [41635033665](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41635033665) succeeded, but its actual PR review `5752191635` was **COMMENTED — Needs a closer look** and retained navigation thread `4452978212`, noting that its cited run predated the lifecycle changes. A separate `bd` source-only review found no new blocker. This is not a clean approval or acceptance receipt. |
+| Exact-head hosted run [41637952922](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41637952922) | Passed on exact head `8bc05c981f9ac4e0083a1d6ae73fb509bc8c5e59`, base `99479711bfdb7c621765f09d671068ca8b8318ce`: candidate classification, controller/workflow policy, Linux Android build, and `android-ci` passed; `SettingsRerunNavigationTest` emitted a successful suite marker and the build completed successfully. Swift codec/backup oracles were skipped. |
+| Copilot review of `8bc05c981f9ac4e0083a1d6ae73fb509bc8c5e59` | Review run [41637968718](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41637968718) completed with actual PR review `5752453234` **COMMENTED — Needs a closer look**. It identified API 31/37 permission-dialog and device Back/dismissal behavior as unverified. The specific in-app Settings-navigation thread was later answered and resolved in [reply `4454941214`](https://github.com/cbattlegear/MeshCoreOne-Android/pull/532#discussion_r4454941214) based on the mounted controls and exact-head CI; this is not a clean review or acceptance receipt. |
+| Exact-head hosted run [41644349372](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41644349372) | Passed on exact head `d073659d35df83166af2c7a5fa7a814897b55a0c`, base `99479711bfdb7c621765f09d671068ca8b8318ce`: candidate classification, controller/workflow policy, Linux Android build, and `android-ci` passed. `SettingsRerunNavigationTest` emitted a successful suite marker and all 8 JUnit case records passed, including rapid A→B replacement, stale completion, off-tab completion, held apply/commit and existing regressions. Swift codec/backup oracles were skipped. |
+| Exact-head Copilot review of `d073659d35df83166af2c7a5fa7a814897b55a0c` | Actual review [5753080028](https://github.com/cbattlegear/MeshCoreOne-Android/pull/532#pullrequestreview-5753080028) is **COMMENTED — Needs a closer look**, reports no open issues, and retains the concrete API 31/37 device-validation limitation for permission callbacks and native Back/sheet handling. It is not a clean approval or acceptance receipt. |
+| Exact-head hosted run [41615052625](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41615052625) | **Passed** on exact head `b91f5fcbbe2f533093f2eab6e84aa641c0c9a103`, base `99479711bfdb7c621765f09d671068ca8b8318ce`: candidate classification, controller/workflow policy, and Linux Android build passed; selected Python assertions 108/108; localization discovery 25/25; `OnboardingGateTest` emitted 8 JUnit case records and its suite marker succeeded. Swift codec/backup oracles were skipped. |
+| Independent exact-head review | Reviewer `bd348` reviewed `b91f5fcbbe2f533093f2eab6e84aa641c0c9a103` against base `99479711bfdb7c621765f09d671068ca8b8318ce`; no new consequential source finding. The registry/Activity test is not OS-dialog or process-death proof. This is not a merge/acceptance receipt. |
+| Protected navigation thread and acceptance | The Settings-navigation review thread was resolved only for the covered in-app navigation behavior. Physical-device Back, API 31/37 permission dialogs and sheet-dismissal lifecycle remain unverified. No acceptance receipt, merge, or product/native-tip equivalence decision is claimed. |
+
+Historical compiler repair: run [41611347165](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41611347165)
+failed on `c80da6cc44c96c4114eeaf4865142eb7416fb12b`. Its actual Kotlin diagnostics showed
+`DeviceScanCoordinator` call sites binding trailing `onConnected` lambdas to the newly appended
+Boolean gate parameter. Commit `0c833d38ddf17efaa262fd7987be53adb3b62531` reordered that parameter
+and named the positional test-helper callback; its exact-head run
+[41612757746](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41612757746) passed.
+
+## Remaining acceptance and deviations
+
+- The app-level tip claim/display consumer is not connected to the active WP-302 tab-change/navigation
+  host. Persisted donation is available for an eligible host, but no visible display or user-seen
+  claim is asserted.
+- Native tip presentation remains a separate product/UI-equivalence decision. The original
+  1.5-second pre-donation delay is not ported by this persistence follow-up. WP-502's mounted test
+  remains separately owned and is not integrated or executed by this candidate.
+- This permission regression proves saved Activity recreation with a restored registry only; it does
+  not exercise an OS permission dialog or process death.
+- Physical API 31/37 permission-dialog and device Back/sheet-dismissal behavior, radio/BLE/Wi-Fi
+  hardware, native-tip UX review, and full WP-305 acceptance remain unverified. Mounted shell
+  behavior is covered by Robolectric Compose tests, not physical-device evidence.
+
+## Current-main completion-publication handoff
+
+The local producer follow-up is based on current `main` `f6cf1bf73aad361ef3327c4e31a8ff5107272904`.
+It exposes an opaque `OnboardingCompletionPublication` (receipt plus non-reused revision) and a
+synchronous producer guard. The guard checks object identity, revision, completed state, durable
+preference readback and reset/retirement/uncertainty state while holding the producer lock, then
+executes only the navigation commit action before releasing that lock. The mounted regression reuses
+the same completion callback across Activity recreation, rejects an old publication after an equal
+receipt is republished, interposes a concurrent reset while the commit action is held, and rejects
+the publication after reset. This new regression has not been executed.
+
+The publication callback now also receives the exact `OnboardingFlowCoordinator`, and the new
+callback form requires the host to pass the coordinator it pinned when capturing its navigation
+witness. The same pinned coordinator is threaded through `OnboardingEntry` and `OnboardingFlow`;
+the effect still rejects a coordinator no longer owned by the process dependencies. The mounted
+regression asserts callback identity across recreation and after a deliberate owner replacement.
+WP-302 must capture the witness before starting the flow and pass that same coordinator to the
+entry; the producer does not capture or refresh navigation state.
+
+Settings reruns also expose `onFlowCoordinatorEntryRemoved(coordinator)`, a narrow host callback
+for permanent navigation-entry removal only (never Activity/composition disposal). The rerun owner
+retires only the exact current coordinator, rotates to a fresh in-memory flag store and owner
+revision, and retains any unsettled retired coordinator until its settlement completes. The rerun
+uses `InMemoryOnboardingFlagStore`, so its completion write has no disk-backed uncertain outcome;
+the regression instead interposes after sealing, removes the exact entry, mounts a fresh flow, and
+then lets the old attempt settle. The new flow remains incomplete and current, and stale removal is
+idempotent. This regression is not yet executed. The #302 host must call this seam only after actual
+entry removal and outside the manager/registry/graph commit boundary.
+
+Trusted `reserve.py admit` accepted the three onboarding production paths as
+`wp-owned/modify`, the mounted regression as `reviewed-support-test/add-or-update-related-test`,
+this evidence path as `wp-owned/record-evidence`, and the two recovery integration-test fixture
+updates as `reviewed-support-test/add-or-update-related-test`. `git diff --check` passed;
+`python tools/android-port/controller/validate.py` passed (64 WPs / 1,866 tracked reference
+files); `python tools/android-port/test_inventory.py --check` passed (468 pinned paths /
+5,133 declarations). Native Windows `ci.py preflight --local` exited 0 and invoked
+`android/scaffold/check_environment.py`; no Gradle command was run because the shared
+execution reservation remains held. These checks do not execute the new Kotlin regression.
+
+Exact hosted run [42139553314](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42139553314)
+on `32544b2da2220ee03d5b62431d81d625025ca8bd` failed at
+`:app:compileDebugUnitTestKotlin`: adding the new optional `showFlow` parameter after the existing
+receipt handler redirected legacy trailing-lambda test calls to the new callback type. The mounted
+test did not execute. The helper parameters are reordered in the successor; fresh exact-head CI is
+required.
+
+For lock-order review only, paired consumer PR #495 was inspected at exact head
+`9a9b2e0fae9fc9a7aa8b8887270799a4d0781842` against base
+`8eaa4ecd35fb25f32aca5d0d3cd0414e3eaa4bcd`; that candidate is open, unmerged and not current-main
+compatible yet. Its navigation boundary nests ConnectionManager -> SessionRegistry -> current
+RadioSessionContainer, with the coordinator commit inside the boundary. The producer guard therefore
+precedes that chain. The inspected commit path does not acquire the producer lock in reverse; it
+checks the retained completion witness and session through the boundary, and retires only the
+navigation witness on commit. Reset takes/releases the producer lock before preference I/O;
+writer completion callbacks run after releasing the writer queue lock; AppContainer drains the
+onboarding writer before runtime teardown; and flow-retirement callbacks run after the guarded
+navigation callback returns. RadioSessionContainer teardown marks the graph closed under its fence,
+then performs suspending service shutdown outside it. This is a bounded exact-source inspection, not
+an executed concurrency test of #495 or proof of its eventual integration.
+
+No producer/consumer integration, mounted tip display, native-tip equivalence or full WP-305
+acceptance is claimed by this handoff. The local shared Gradle execution reservation remains held;
+local Gradle execution was not attempted.
+
+### Multi-entry Settings-rerun ownership follow-up
+
+After merging current `main` `35abcc1276082995eed216bf28bff04d77e176c8` as
+`35acb964eb6ff1a869da580bf32fa42e22547ba9`, `AppOnboarding` exposes
+`fun createRerunOwner(): OnboardingFeatureDependencies`. Each call creates an independent rerun
+owner, retained coordinator, in-memory flag store, revision and retirement set. The existing
+`forRerun()` remains a legacy single-entry singleton; it is not safe for concurrent navigation
+entries. WP-302 must create one owner for each live in-memory rerun stack entry, regardless of tab
+or entry point, and retain that exact owner by stable entry identity across Activity recreation.
+The first-run gate remains on its durable process-owned flow. The host must retire a rerun owner
+only after permanent entry removal, not on composition disposal or temporary tab hiding.
+
+The new mounted `OnboardingGateTest` case creates two rerun owners, starts and holds A's sealed
+completion, mounts B, recreates the Activity while retaining both owners, then releases A and
+checks the delayed publication is delivered with A's coordinator only. It removes A's entry and
+asserts B remains owned and incomplete. The test is authored but has not run. The existing
+`MainActivity` still calls the legacy `forRerun()`; the active WP-302 host must switch to an
+entry-keyed retained owner for every rerun entry before multi-entry navigation is considered
+integrated. The broader candidate remains unpublished while exact-head run `42141885753` runs
+against the older `fb940ee` head; that run cannot verify this follow-up.
+
+### Same-session preset serialization
+
+Source inspection confirmed the concern: `SettingsService` releases its radio-operation mutex
+when `applyRadioPresetVerified` returns, while `ConnectedDeviceEditor` independently serializes
+Room edits and validates only the session token. Two preset continuations for the same live
+session therefore had no shared authority across radio readback and device-metadata persistence.
+`AppStateRadioConfigurator` now holds one container-owned mutex across verified radio writes,
+token-bound device persistence, and optional path-hash persistence. `AppContainer.onboarding` is
+process-owned and lazy, and every rerun owner delegates to its same preset port, so concurrent
+entries use that same serialization boundary.
+
+`DeviceWriterAuthorityRoomTest.concurrentOnboardingPresetsSerializeRadioAndDeviceMetadata`
+uses the real same-session container, fake protocol radio and Room persistence. It pauses A's
+device write after A's verified radio result, starts B, asserts B cannot write the radio before
+A's metadata commit, then verifies B's radio and device metadata are the final values. This
+interposition is authored, not executed; no source-level race is claimed as an observed failure.
+
+The factory and regression were added in source commit
+`0e6854ecb5aca216ae503008e4a469e533ea19a2`, parent
+`35acb964eb6ff1a869da580bf32fa42e22547ba9`, with current-main merge base
+`35abcc1276082995eed216bf28bff04d77e176c8`. On that candidate, Windows
+`ci.py preflight --local` passed with the existing same-host state and a fresh absolute output
+directory; `controller/validate.py` passed (64 WPs / 1,866 tracked reference files);
+`test_inventory.py --check` passed (468 paths / 5,133 declarations); and `git diff --check`
+passed. The new Kotlin test and other Android tests were not run because the shared Gradle execution
+reservation remains held. The local commit is not pushed; PR #532 still points to `fb940ee`, and
+its active run is not evidence for this candidate.
+
+The shared radio-to-metadata serialization boundary and Room interposition regression are in
+`aa880b22e524907586d876c80459197099893c85`, parent
+`bfc9e4a9f052cf5b83d0d774d21dfd769553b99a`; the merge base remains
+`35abcc1276082995eed216bf28bff04d77e176c8`. Trusted default-base admission passed for
+`AppOnboarding.kt` (`reviewed-support-consumer/modify-related-consumer`) and
+`DeviceWriterAuthorityRoomTest.kt` (`reviewed-support-test/add-or-update-related-test`), and
+`git diff --check` passed before commit. The new interposition test and all other Android tests
+remain unexecuted because the shared Gradle reservation is held. Run `42141885753` is still
+in progress on older head `fb940ee72ab565555db46e54988789fd1756f54c`; it is not evidence for
+this candidate. The `aa880b2` commit is local and unpushed, and PR #532 still points to `fb940ee`.
+
+## Additive follow-up: retry fixture and simulator writer authority
+
+The related `HistoryReactionReplayFailureTest` repair is in commit
+`121bea50975de31f7f10ca4b85185ca13ca7d4e3` (parent
+`a002a8d08807f162536d9291197af42472ef585d`). It restores
+`DeviceEditPersisting by store` on the test's three persistence wrappers while retaining their
+reaction overrides and fault cases; the production versioned-persistence guard remains unchanged.
+The source-reported fixture failure and requested repair are tracked at
+[issue #406 comment](https://github.com/cbattlegear/MeshCoreOne-Android/issues/406#issuecomment-6675594458).
+Trusted `reviewed-support-test` / `add-or-update-related-test` admission passed for
+`HistoryReactionReplayFailureTest.kt`. Exact-head run
+[42153267661](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/42153267661)
+targets `121bea50975de31f7f10ca4b85185ca13ca7d4e3` and failed. Its Android logs report 32 unique
+failing `HistoryReactionReplayFailureTest` cases; the first setup failure is
+`UnsupportedOperationException: Connection initialization requires versioned device persistence`
+at `ConnectionManager.establish:610`. The remaining `FaultStore` wrapper was still typed only as
+`PersistenceStoreProtocol`, hiding the real Room store's `DeviceEditPersisting` capability. The same
+run also failed two mounted `OnboardingGateTest` enabled-state cases with `ComposeTimeoutException`
+in `awaitEnabled`; the log reports queued main-looper runnables after the timeout. The local,
+unexecuted follow-up now types `FaultStore` as `RoomPersistenceStore` and delegates both
+`PersistenceStoreProtocol` and `DeviceEditPersisting`; its bounded Compose wait drains the
+Robolectric main looper before checking enabled semantics. These edits are not covered by run
+`42153267661`. No local Gradle test was run because the shared Gradle execution reservation remains
+held.
+
+The narrow producer-side authority primitive and Room regression controls are in local commit
+`b7f3d81591ced6c7e57e2651177d726c1f886351` (tree
+`3a1b38812f5e7a57a464febf8762fad5d1c1ea26`, parent
+`121bea50975de31f7f10ca4b85185ca13ca7d4e3`). The internal
+`DeviceRepository.writeWithDeviceAuthority` delegates to the existing writer/transaction, so revision
+and authority-revision updates remain post-commit and conditional on `save()`. The new real-Room test
+covers committed ghost-only retirement invalidating a ticket captured beforehand without changing
+the canonical DTO, no-write canonical reseed preserving a fresh valid ticket, and ignored/rolled-back
+retirement preserving rows and ticket authority. Trusted current-main admissions passed for
+`DeviceRepository.kt` (`reviewed-support-consumer` / `modify-related-consumer`) and
+`DeviceRepositoryAuthorityWriteTest.kt` (`reviewed-support-test` / `add-or-update-related-test`);
+the policy blob matches current main `0d10b838a181cd3bd34af1a0200435149dbc6bb0`. `git diff --check`
+and the new test file's whitespace check passed. No Gradle test was run and no push/publication was
+made. These tests exercise the shared writer primitive only, not the actual
+`saveSimulatorDevice` / `resolveSimulatorDevicePreferenceConflict` call sites; those must be
+composed and tested against the exact APIs before claiming stale-ticket coverage. The primitive
+depends on the unmerged WP-305 writer foundation, which current main does not contain.
+
+A read-only source review of the initial test commit found that its ignored-retirement case was
+only a no-write branch and that the test lacked the `DeviceDTO.toEntity` import. Corrected in local
+commit `a0a6a8e4f2f9cd20e44c6783b5014630eab8118c` (tree
+`e2a2f70fcd48f54981876a9ac2007d21d636320f`, parent
+`ce1b4a6fbb30dbf5bf6d55f2b00412808fdbed1e`): the Room test now installs a `RAISE(IGNORE)` delete
+trigger, asserts the DAO reports zero deleted rows, throws a typed `PersistenceStoreException`
+after a staged canonical-row write, and verifies rollback restores both rows and leaves the old
+ticket usable. This is still a primitive-level control, not a call through the two #602 APIs, and
+has not been compiled or executed.
+
+### Follow-up after exact-head run 42153267661
+
+At the time this follow-up was first recorded, the worktree was based on local `HEAD`
+`113b46a39fef60cf389174c3d632ff95675207f1`
+(tree `4c845cf815efcbedb827442bf9d368dbf21874cf`, parent
+`a0a6a8e4f2f9cd20e44c6783b5014630eab8118c`), merge base
+`35abcc1276082995eed216bf28bff04d77e176c8`, against `origin/main`
+`0d10b838a181cd3bd34af1a0200435149dbc6bb0`. The changes below were uncommitted at that point and
+are not part of run `42153267661`.
+
+The exact run emitted 54 unique App test failure markers: 32 `HistoryReactionReplayFailureTest`, 3
+`CliSettingsReadbackTest`, 4 `TraceToolsEntryLifetimeTest`, 1 `RxRegionConsumerTest`, 1
+`NodeConfigMountedPartialImportTest`, 3 `DeviceWriterAuthorityRoomTest`, 7
+`SettingsPathHashPersistenceTest`, 1 `SettingsPathHashRecreationTest`, and 2 mounted
+`OnboardingGateTest`. The local source-only repair addresses the missing `DeviceEditPersisting`
+delegation in the first five wrapper families; CLI now observes only successful conditional device
+writes. The two region controls now seed the corresponding Room rows because `saveDevice` preserves
+stored known regions. The `DeviceWriterAuthorityRoomTest` activation control remains unresolved: its
+hosted failure is `UncompletedCoroutinesError` after one minute. All seven settings-persistence
+failures and the recreation failure occur during the initial `h.manager.connect(...)`, before the
+settings actions. Five persistence cases and the recreation case report
+`CancellationException: Superseded connection generation` at `ConnectionManager.establish:670`
+after `initialSync`; the other two persistence cases report it at
+`syncDeviceTimeIfNeeded:795` and `:787`. Both fixture families call `foreground.activityStarted()`
+immediately before connecting. The log does not establish why the generation retires.
+
+For the two mounted onboarding failures, the run's model/publication assertions passed before the
+mounted enabled-button waits timed out. Source inspection found that the known-uncommitted completion
+callback emitted `unsettled=false` before clearing `pendingAttempt`, while the Compose gates also read
+synchronous retry guards and received no later unsettled-flow emission. The local fix clears the
+attempt guard before publishing settled state and adds a regression that observes the guard at that
+emission. The mounted assertions remain, and the bounded test wait also idles Robolectric's main
+looper as the run reported queued callbacks. These are source-grounded repairs, not an executed fix;
+the model-ordering and test-looper effects remain separately unverified.
+
+The producer-side worktree also stages the shared device authority revision before caller-registered
+post-commit callbacks, so a later callback exception cannot suppress authority invalidation after a
+committed write. Backup imports stage the same authority update when they insert devices; the restore
+transaction applies its device-authority callback before the preference post-commit hook. Added Room
+controls cover insertion invalidating an unchanged canonical-row ticket, no-op import preserving a
+fresh ticket, rollback preserving a valid ticket, and a committed write followed by a throwing
+post-commit callback rejecting a stale ticket. These controls remain primitive-level; no #602
+`saveSimulatorDevice` / `resolveSimulatorDevicePreferenceConflict` caller integration is present.
+
+The separate #495 stale-editor issue remains a bounded cross-boundary acceptance blocker: the
+caller-side binding is now frozen, but cannot provide retirement ordering until the manager producer
+is reviewed and composed. The original session-currency check before suspending Room I/O was
+insufficient; an in-transaction predicate alone does not close the check/commit race. WP-209's first
+frozen manager candidate `3dbcd1b3b4281509cefe0914e432114efa5a0a14` was not accepted after
+WP-302 identified a cancellation/reconnect-authority admission hole. WP-209 supplied corrected
+candidate `4180c56030b33b6dff71de2fa7b00d870323ca19` (tree
+`47ab8dc1de21c4c45c4fad563c7fc86a17bbd4b3`), retaining
+`captureDeviceWrite(): Pair<SessionToken, DeviceDTO>?` and
+`withDeviceWrite(token, deviceId, block): T?`. It binds capture/admission to live establishment
+authority and shares the generation drain through awaited terminal storage outcomes, but WP-302's
+review found two further post-success-marker revocation windows. WP-209 corrected these in
+`2a0e196bf38c4eda0e5ea609d107364cbff2694c` (tree
+`0ab2453cd1a00d9775595d4260543b938d14d71b`); its exact `ConnectionManager.kt` blob is
+`024a9c30aa38ab085ae9e0226ef316d1464b4961`. WP-302 then found a caller-lifetime cancellation
+window in that candidate: a permanently cancelled initiating Job can revoke an already-established
+process-owned generation. WP-209 supplied another corrected source candidate
+`78c011d163c55e1f592ce670ca75eac2c709d485` (tree
+`168e0ab9d77d6cb71e62480e25e4179964fe8f41`), exact manager blob
+`91ba84242605000d27f284cfbbde831f2125edd5`. It moves establishment settlement to terminal
+successful work completion, keeps reconnect-cycle equality after settlement, and adds post-return
+caller-cancellation controls. WP-302's review found another owner/duplicate completion window:
+successful shared work can remain READY but refuse edits when the original caller is cancelled
+before resuming after `work.await`. The latest source-only successor is
+`7dbf35ed7a471a48ef309e194cd201163f007edc` (tree
+`c20c6e96cd8f201a29db1826bf8a109f74f08b69`, exact manager blob
+`79abbf437643593e130d5e24a8a4d2de2305535e`). It moves settlement to the exact successful work
+completion callback registered before waiters and adds controlled CONNECTING duplicate/gated-owner
+and cancelled-work controls. WP-302 has been asked to review this exact candidate; that review is
+pending. WP-302 found that the callback can skip settlement when the initiator is already cancelled,
+leaving successfully completed work and a READY graph installed but permanently unwritable while
+cancellation handling is delayed. A held real work child after the success marker and gated-owner
+dispatcher expose this ordering. WP-209's new source-only candidate is
+`87d6601ebba1cfb29aefee9796f2faefb30dd24d` (tree
+`6529054ddc1b3664f0cf3fb93d61d1e0534781bc`, exact manager blob
+`c9ca20135c54db9780d4405acfd023ffac4c347b`). It safely retires when original cancellation wins
+before settlement despite successful work and prevents a duplicate from returning success for a
+revoked completion; the real work-child/gated-owner/CONNECTING-duplicate control covers the ordering.
+WP-302 rejected `87d`: kotlinx-coroutines 1.10.2 can publish a `Deferred`'s completed state before
+running completion listeners, so `work.await()` may return before settlement. Its live check then
+accepts an unsettled successful graph; cancellation before the delayed callback can leave READY
+permanently unwritable after owner cleanup is unreachable. Exact source anchors were sent to WP-209.
+WP-209's updated source-only successor is
+`fb0eef752f361babf29057f20f63a1008d1a7844` (tree
+`1bfd1a5efd465becb80af31a582f294fdfd9976c`, exact manager blob
+`ca51f7faa664cdd5e8a0fd3d3c02b4d2aae5fef1`). It reportedly settles the exact active operation/work
+synchronously under the manager lock before every successful shared await return, using original
+initiator authority; the completion callback and revoked-success cleanup remain, and a blocked-listener
+fast-path control is authored. Independent review and extraction remain held; no runtime execution is
+claimed. WP-302 found an analogous `work.join()` fast path in `finishFailedSubmission`: a late
+non-cancellation reporter exception can retire a successful still-live graph before its completion
+callback settles it, contradicting existing `RuntimeOwnershipTest` behavior. WP-302 sent exact source
+anchors and a real-monitor regression request to WP-209. A later source-only candidate abbreviated
+`c0dcd30…` reportedly fixes that established-graph reporter ordering, but WP-302 found its failure
+cleanup still closes a successfully completed restoration-only adoption, which intentionally has no
+settlement flag. WP-302 also noted the authored real-monitor test may not start lazy work inside an
+already-active Unconfined event loop and sent both findings to WP-209. The exact full commit/tree/blob,
+corrected successor and independent disposition remained pending until WP-209 supplied
+`66eab2a53fc91fafc481a18d920146639280b886` (tree
+`d6760234be8834914062919402250c06080d69fd`, manager blob
+`e06acf47a75ada777ba6fca4712e726076cf2c0a`, canonical contract blob unchanged at
+`a4cf97a36327721e9df7eb9afffbf12b37511d3c`). The producer reports it addresses successful/live
+establishment settlement on failure paths, preserves successful restoration-only adoption, adds a
+duplicate-adoption→late-diagnostic→registered-reconnect control, and changes the real-monitor test
+caller to UNDISPATCHED. WP-302 found a remaining direct-rebuild child-lifetime gap: rebuild settles
+inline before `initialSync` children of the initiating Job finish, so cancelling that Job while a
+real child is held in cleanup still admits writes. The existing child control only exercises connect.
+WP-302 sent a rebuild variant and operation-owned-scope distinction to WP-209. This is source-only:
+`c0dcd30…` remains unaccepted, and `66eab2a` is not accepted or composed. No Kotlin/Room execution,
+publication or dispatch occurred. The reported corrected successor is
+`bc701e194b715ad21409772810fcdda5640516d3` (tree
+`f5819465e798b69b36d2a05941c4a3a0dfb6a356`, manager blob
+`5a8c160187a02ae92dadb6cd5d34b607859ea128`); the canonical contract and signatures are unchanged.
+The producer reports establishment now owns a structured coroutine scope and binds its exact Job,
+settling only after children are terminal; the held-child cancellation control also exercises real
+rebuild. Independent review is pending, and this successor remains uncomposed and unexecuted.
+WP-302 subsequently found external disconnect/replacement does not cancel that structured rebuild
+scope: a pending `initialSync` child may keep the operations mutex after graph teardown and block
+successors. The producer has the exact anchors and external-retirement control request; `bc701e1`
+remains unaccepted.
+The reported minimal production
+composition is `ConnectionManager.kt` plus canonical `ChannelIdentityMutation.kt`
+(`a4cf97a36327721e9df7eb9afffbf12b37511d3c`); the cumulative WP-209 ancestry and 411d data/runtime
+test graph change are not required for the runtime API.
+
+The bounded caller delta now adds an explicit manager-lease policy to `ConnectedDeviceAccess`,
+atomic capture and manager lease delegation in `ManagerDeviceAccess`, and lease coverage for the
+whole ordinary `persistEdit` retry/Room/publication and direct known-region add/remove operation.
+Guarded capture/admission failure refuses without legacy fallback; explicitly guard-off fakes retain
+the old no-token behavior. The caller never recaptures after suspension. New real-Room paused-store
+controls cover delayed stale same-ID capture rejection, commit and rollback drains on disconnect,
+successor installation drain, direct region-add and region-remove drains, guard-off parity, and
+missing guarded-capture refusal. WP-302 source review found that reusing the captured DTO as the
+post-`sessionEdits` merge baseline could overwrite a queued same-generation update. The caller now
+reads the latest DTO through the original token only after the mutex and lease are acquired, then
+validates its device identity; the direct region path uses the same fresh, token-bound baseline for
+the default-scope decision. The existing real-Room 868→915 queued-edit assertion remains, and a new
+queued default-scope/region assertion verifies it does not clear a scope changed by the earlier edit.
+These controls are authored, not executed. The caller freeze is local commit `fca33e0adbf`; the
+freshness correction and added Room control are local commit `dcb37285c8d` directly after it. Both
+follow WP-305 writer commit `113b46a39fef60cf389174c3d632ff95675207f1` and intentionally reference the
+pending manager API, so they are not yet a compilable composed candidate. The earlier uncommitted
+fixture, onboarding-state and authority-control repairs were subsequently frozen in local commit
+`eff1f33e911`.
+
+The exact producer composition still requires a corrected successor addressing external retirement
+of the rebuild scope, favorable independent review, and the minimal
+canonical `ChannelIdentityMutation.kt` dependency as well as `ConnectionManager.kt`; no cumulative
+WP-209 ancestry is imported. Trusted current-main admissions for the caller files were previously
+verified. On caller head `dcb37285c8d`, `python tools\android-port\controller\validate.py` passed
+(64 WPs / 1,866 tracked reference files), `python tools\android-port\test_inventory.py --check`
+passed (468 paths / 5,133 declarations; inventory only), `python tools\android-port\portmap.py --repo .`
+exited 0 (traceability only), and `git diff --check` passed. No Kotlin compilation,
+Room/Android test or new hosted run occurred because the shared Gradle reservation remains held.
+PR #532 remains draft at pushed head
+`121bea50975de31f7f10ca4b85185ca13ca7d4e3`; the local commits remain unpushed and unpublished.
+
+Documented native-Windows readiness preflight passed with pinned Python 3.12.4 and existing
+same-host state. On local HEAD `3e31e4d4ebd`, the pinned native-Windows Python 3.12.4 run of
+`controller/ci.py preflight --local --state $env:ANDROID_CI_STATE --output <fresh absolute temp dir>`
+reported `result: valid`; `controller/validate.py`, `test_inventory.py --check`,
+`portmap.py --repo .`, and `git diff --check` all exited 0. These are readiness, ownership,
+inventory and traceability checks only. No Kotlin compilation, Room/Android test, local Gradle
+execution or new hosted run was performed; the shared Gradle execution reservation remains held
+without cleanup proof. PR #532 remains draft at pushed head
+`121bea50975de31f7f10ca4b85185ca13ca7d4e3`; no push or PR update was made for this worktree.
+
+### Caller-only source corrections while manager review is held
+
+A direct caller review found `changeKnownRegionLocked` had a block body ending in `true` without an
+explicit return. It now uses `return true`; this is a source-level Kotlin correction, not an observed
+compiler result. Two older Room controls also awaited successor installation before releasing the
+already-admitted write, which conflicts with the newly required retirement drain. They now launch the
+switch concurrently, assert it is held, release the write, and then await installation. The ordinary
+control explicitly checks that the admitted edit committed to the old row without reactivation or
+successor publication. The region consumer control retains its `SettingsNotConnectedException`
+assertion and verifies the old region removal committed. These controls remain unexecuted.
+On this caller-only delta, pinned Python 3.12.4 runs of `controller/validate.py`,
+`test_inventory.py --check` and `portmap.py --repo .`, plus `git diff --check`, all exited 0.
+No Kotlin, Room, Gradle or hosted execution occurred.
+The guard-off parity control now also exercises direct region addition/removal against Room and
+live state. The missing-capture control explicitly covers token-bound path-hash, region-add and
+region-removal entry points as well as ordinary edits; none may request admission or fall back.
+These additional assertions are authored and unexecuted.
+
+The rejected-admission control separately exercises seven ordinary/token-bound edit and region
+entry points with a valid capture but null lease admission. It asserts no write-ticket fetch, device
+save or direct region DAO operation runs, all seven admission requests retain the captured identity,
+and actual Room/live values remain unchanged. This control is authored, not executed.
+
+### Canonical-contract extraction admission
+
+The live remote main remains `0d10b838a181cd3bd34af1a0200435149dbc6bb0`; it contains no
+`ChannelIdentityMutation.kt`. Although the generic support selector lexically matches that path,
+`CapabilityEngine.validate_support_changes` requires `modify-related-consumer` paths to exist in both
+base and candidate. It therefore cannot authorize adding this canonical contract. WP-209 confirmed
+WP-201 is its actual producer, and the published `08e` contract is unmerged/unverified, not a trusted
+merged prerequisite. WP-209 is escalating the new-file producer admission/transfer requirement to the
+coordinator. Extraction remains held on this concrete admission blocker as well as independent review.
+
+WP-209's latest reported review-only manager pin is
+`33334b1ff627f286365133b70a971d744dfc1b19` (tree
+`3356311b59b1cb8385fab061ec66ffd974893676`, manager blob
+`96aacd0e4c3a3d0db9c1a0b310518763d6232815`). It reportedly repairs rebuild reentrant cleanup marker
+loss identified in `06e183d`; exact independent review is pending. No composition or runtime
+acceptance is claimed.
+
+An additional authored actual-Room control holds all four ordinary/token-bound direct-region
+entry points after G1 capture but before admission, installs same-ID G2, then releases admission.
+It asserts both suspend results are false, neither region DAO is invoked, and G2's Room/live state
+is unchanged. Separate editor producers avoid serializing the four captures on one editor mutex;
+each still passes its original G1 token and device ID. This is not executed coverage.
+
+Two existing `RxRegionConsumerTest` schedules are now drain-aware rather than awaiting disconnect
+before releasing their admitted DAO/callback. Each asserts logical detach and incomplete retirement,
+releases the operation, and awaits retirement before reconnecting. The committed-region case now
+requires the successor to load the committed Room region instead of expecting an intentionally stale
+empty cache. The callback case retains empty successor Room/live/cache assertions and explicitly
+replays the actual captured G1 edit into `knownRegionsChanged` after G2 installs, verifying stale-token
+notification rejection. Pinned Python 3.12.4 `controller/validate.py`, `test_inventory.py --check`,
+and `git diff --check` passed; these Kotlin/Room controls remain unexecuted.
+The coordinator's bounded follow-up additionally puts the complete disconnect/reconnect sequence
+in the asynchronous replacement operation and asserts the old service remains installed while the
+admitted write/callback is held. Inspection of the rest of `RxRegionConsumerTest` found no other
+disconnect/replacement waiting synchronously on a held leased editor operation: its mounted
+replacement follows completed joins, and its overlapping notification control uses the separate
+non-persisting direct DTO replacement API. No production semantics were changed for these tests.
+
+### Foreground Settings startup fixture correction
+
+WP-302 identified a source-derived explanation for all eight historical Settings startup cancellations:
+the fixtures advertise eight channels and start foreground before connecting, so the real foreground
+sync queries channels. Their custom radios handled path-hash/device-info commands only; the fallback
+GET_CHANNEL response was NOT_FOUND, which the serial channel query intentionally does not match.
+The resulting timeout can trigger correlation-uncertain recovery and retire the generation during
+initial sync. The historical log contains only the superseded-generation exception, not the
+correlation event, so this explanation is not an executed diagnosis.
+
+Both `SettingsPathHashPersistenceTest` and `SettingsPathHashRecreationTest` now return the existing
+`ActiveLinkChannelSyncTest` valid unconfigured-channel frame for `0x1f`:
+`Bytes.of(0x12, command[1].toInt()) + Bytes(ByteArray(48))`. Foreground sync, readiness, Room/live,
+failure/retry and recreation assertions are unchanged; no production protocol behavior was changed.
+The repaired fixtures require an actual exact-candidate hosted rerun before claiming resolution.
+
+### Source-only manager composition for independent review
+
+The coordinator cleared the exact WP-201 two-file source pair from
+`d24674e5778d2b401bc6866f64a205224c0b5b1e` after its independent producer review.
+Local consumption commit `e3ebcba31728b149fbb04812a9c395d76e3583a2` retains production blob
+`a4cf97a36327721e9df7eb9afffbf12b37511d3c` and test blob
+`6800d1e8d73f1c22b665476d3599c42f93f21a6a` exactly. This uses the genuine WP-201
+create/test admission and explicit source-consumption clearance, not a fictional transferable
+controller receipt or modify-existing admission for a missing file.
+
+After withdrawing the earlier `cb1` clearance because of an additional reported deadlock, the
+coordinator cleared only corrected producer `d29f27f9072be0a38116ab1d0287c36a269d0588`
+(tree `9bc7e56b5b4b1c0fe010eb9bf198c4fcddfb9fbe`, manager blob
+`c4861d1a781b6bf3489630f3b8f8583d013084e4`) and matching runtime controls for source composition.
+WP-302's favorable disposition is narrow source review of the previously reported defects,
+not full manager acceptance or Kotlin execution.
+
+The composition is based on preserved caller `e3ebcba31728b149fbb04812a9c395d76e3583a2`.
+Actual `origin/main` was refreshed to `5f4d9b92b2eb30d02f001567ef7e4f1dd6e80f66`;
+its policy blob is `10bf918158203e444d0a80c79f94497e390af03b` and manifest blob is
+`e81605857f5aa7b893dcd63224fb27a45d7b0f3a`.
+The main advance adds the WP-217 simulator recovery-copy capability and validator changes;
+it does not change the runtime baseline or manifest. No policy changes were imported.
+Trusted `reserve.py admit` returned `reviewed-support-consumer/modify-related-consumer` for
+the existing manager and `reviewed-support-test/add-or-update-related-test` for its controls.
+
+Only the manager delta relative to refreshed main and `ChannelOperationLeaseTest.kt` were
+three-way merged through a disposable alternate Git index before applying the clean result.
+No cumulative producer ancestry, Room fixture, held schema, data implementation or build changes
+were imported. The merge had no textual conflict. The composed manager blob is
+`746a2aec219b0ac758ecf2eb42a5e8242d5f1ab9`; its differences from the exact reviewed producer
+are precisely the retained WP-305 versioned insert/edit/activation, public-key persistence and
+onboarding/token-bound read/publication hunks. These shared-manager overlaps still require full
+independent source review of the composition.
+
+The runtime control blob is exactly `4e5ec78a4dc97847e1e82bca12ab250be603d56a`.
+It declares 37 `nativeCase` controls (source count only, not runner discovery).
+All other producer runtime files equal refreshed main; the caller retains its existing versioned
+`TestDevices` fixture and `RuntimeSeamTest` controls rather than replacing them with older producer
+versions. The only new production contract required by this runtime delta is the already consumed
+canonical identity gate. Runtime classes, protocol types and test helpers otherwise resolve to
+existing runtime dependencies; no additional producer data/schema files are a runtime API prerequisite.
+
+Pinned Python 3.12.4 `controller/validate.py`, `test_inventory.py --check`,
+`portmap.py --repo .`, and the staged `git diff --check` passed on the source composition.
+No compilation, Kotlin/Room execution, hosted rerun, hardware evidence, manager acceptance,
+activation, push or dispatch is claimed. The exact frozen composition must receive full independent
+source review before any later authorized diagnostics; execution and publication holds remain.
+
+### Actual-main integration correction
+
+The preceding source composition `49d797ee9f6cd11cbbfa08f90c9b647599e70025` refreshed
+admissions against main but did not integrate main's tree or ancestry. It therefore differed from
+`5f4d9b92b2eb30d02f001567ef7e4f1dd6e80f66` in 92 paths, including missing or older trusted
+policy/controller files. It is not a latest-main verification candidate.
+
+Under the coordinator's correction assignment, actual `origin/main` was fetched and confirmed at
+`5f4d9b92b2eb30d02f001567ef7e4f1dd6e80f66`, then merged into the preserved `49d797ee`
+candidate without rebasing. Relative to their merge base
+`35abcc1276082995eed216bf28bff04d77e176c8`, main changes 12 paths and the caller changes
+80 paths. These sets are disjoint. The merge has no textual conflict; an exhaustive tree comparison
+confirmed that all 12 main-changed paths match main's blobs and all 80 caller-changed paths retain
+their exact `49d797ee` blobs before this evidence addition. No held producer, schema, build graph
+or cumulative unmerged producer ancestry was added. The merged channel-reseed implementation and
+its controls come from actual main, not a held source candidate.
+
+The seven trusted paths are carried byte-for-byte from main:
+
+| Path | Git blob |
+| --- | --- |
+| `docs/android/AUTOMATION.md` | `8fa6f12910825b496d43c08af4be8bf58b648e75` |
+| `docs/android/automation-policy.json` | `10bf918158203e444d0a80c79f94497e390af03b` |
+| `tools/android-port/controller/capabilities.py` | `6e0529126a04ab86c5b4270c99c0f523dbbeb8c9` |
+| `tools/android-port/controller/scope_amendment.py` | `34cc9452dc61f3421481cce8b7bd5b2b6505db79` |
+| `tools/android-port/tests/test_contact_import_localization_capability.py` | `c98f09ed4e6049053d80728a8531262e64b67810` |
+| `tools/android-port/tests/test_notification_enrollment_resource_capability.py` | `ab21127850fb03158d75db4d880a22bdda705ed0` |
+| `tools/android-port/tests/test_simulator_recovery_copy_capability.py` | `fecf67af6563ea31236fad61eb64e7ac6f7a3b47` |
+
+The composed manager `746a2aec219b0ac758ecf2eb42a5e8242d5f1ab9`, runtime controls
+`4e5ec78a4dc97847e1e82bca12ab250be603d56a`, canonical production
+`a4cf97a36327721e9df7eb9afffbf12b37511d3c` and canonical controls
+`6800d1e8d73f1c22b665476d3599c42f93f21a6a` remain unchanged. The direct comparison to
+actual main contains the preserved 80 caller paths, not the seven trusted paths. Disjoint paths
+do not establish semantic acceptance: the full current-main composition, including the interaction
+with main's simulator reseed work, still requires independent review. No build, Kotlin/Room run,
+activation, push, dispatch or acceptance is authorized or claimed by this correction.
+
+### Mixed onboarding/ordinary Settings ordering successor
+
+Independent source review identified that the private onboarding preset mutex did not serialize
+ordinary Settings. After preset A's verified radio operation returned, its separately awaited device
+and path-hash writes could overwrite a later successful Settings hash B using a fresh valid ticket.
+Generation leases and CAS do not order two valid same-generation operations.
+
+The bounded successor keeps the existing `SettingsService.operationLock` through an awaited metadata
+callback on `applyRadioPresetVerified`. `AppStateRadioConfigurator` performs its same token-bound
+device/hash writes inside that callback. The existing one-argument service entry point delegates with
+an empty callback, preserving its event sequence and return shape. The callback must not reenter any
+service operation that acquires the same non-reentrant lock. Ordinary `setPathHashModePersisted`
+still awaits its event consumer's persistence acknowledgement outside the radio-operation lock.
+No new private mutex is used to order competing Settings writers.
+
+Actual trusted-main admissions passed for `SettingsService.kt`, `AppOnboarding.kt` and the existing
+`SettingsPathHashPersistenceTest.kt`. Current Settings producer session `244fb3ac` confirmed no live
+overlapping operation/preset hunk. Its frozen `c477bde51895b50eb4883924f78444e19e764a6e` /
+`ca65790dd6199fbe3411a062e14e6eb54bf73773` objects remain untouched. That frozen service blob
+`4d12e9cf008df4d36e054bd165308653d05b6961` has additional acknowledged/default-scope/Repeat
+work not imported here. Future composition must transfer only this bounded callback delta and retain
+the producer's `nextRadioRevision()` and other acknowledged behavior, not replace its service with
+this branch's older service baseline.
+
+Five authored real Settings state-holder/adapter, RX consumer, protocol-radio and Room controls cover:
+preset-first with the metadata writer held before commit; admitted metadata failure; caller cancellation
+while admitted metadata is held non-cancellably; Settings-first with its durable ACK held while the
+later preset radio remains allowed; and external generation replacement draining the held writer while
+refusing the old queued Settings operation. Preset-first cases assert no B radio command while A's
+metadata is held, then B's actual committed Room/live/radio value and terminal ACK. The reverse order
+asserts later A wins without holding B's radio lane through its ACK. Replacement checks successor
+installation waits and old commands cannot route into it. These are source controls, not executed tests.
+The helper releases held work before teardown even on assertion failure.
+
+This successor does not repair or accept the independently blocked canonical gate. `632a43188e`
+remains an immutable historical candidate, and full composition source review, Kotlin/Room execution
+and publication remain held.
+
+### Original Settings event token API successor
+
+The separately assigned API repair adds suspend Boolean token-bound auto-add, client-repeat and
+default-flood-scope edits and makes the existing token-bound device-info entry accept a nullable preset.
+It reuses the editor's existing `sessionEdit` boundary: the passed original token is compared to the
+atomic captured manager token before mutex/lease admission, the DTO is reread under that same token
+inside the lease, and Room retries/terminal outcome and live publication remain inside the original
+generation lease. A late A envelope cannot become a newly captured B operation. Missing capture,
+rejected admission and unsupported port implementations fail closed without untokened fallback.
+
+Device-info edits with a null preset use the same preset-matching logic as ordinary device-info edits;
+they do not blindly erase an otherwise matching preset. Existing non-event APIs are retained.
+The nonsuspend token-bound repeat-range setter delegates to a manager mutation under the same
+monitor as its final `currentDevice(expectedToken)` check, then clears the old adapter overlay.
+The manager lifecycle, canonical authority gate and operation ownership are not changed.
+
+Trusted current-main admissions passed for the editor, AppState ports, manager adapter, narrow
+runtime setter and directly related test surfaces. WP-209 confirmed no live repeat-range hunk
+overlap; Settings producer `244fb3ac` owns the AppState handler and actual stale-envelope/Room tests
+under a separate assignment. No AppState handler edits or held Settings/contract source are imported
+by this API successor. The existing callback
+`updateOCVSettings(event.event, event.token)` must survive that later handler composition; it publishes
+only the OCV fields under the original token, never a wholesale callback DTO replacement.
+
+The editor controls cover all five session-event persistence API families with old-token refusal,
+current-origin actual field changes, save failure without live publication, and cancellation releasing
+the serialized editor for a subsequent write. Real-Room guarded-capture and null-admission controls
+now include the four additional nullable-info/auto-add/repeat/default-scope calls (11 admission
+requests rather than seven), retaining the no-ticket/no-save/no-region-operation assertions.
+These controls are authored, not executed. The actual A-passed-initial-check/B-ready envelope matrix
+and current-subscription control remain with the AppState producer; API support alone is not a
+completed handler repair or composition acceptance.
+
+The handler producer also requested a synchronous `withCurrentSession(expectedToken, action)` port
+for AutoAdd's post-save storage-full UI effect. It checks the final token and performs only local
+publication under the runtime monitor, avoiding a token check/use race with external replacement.
+The action cannot suspend and its contract forbids I/O or lifecycle/device operations. JVM monitor
+reentrancy and synchronous observers remain an explicit independent-review concern; the actual
+handler must keep this action bounded to the local flag mutation. No coroutine authority is minted.
+
+### Queued-before-consumer mixed Settings successor
+
+Independent source review rejected c414's reverse-order control: it held the earlier event *inside*
+the editor, not before subscriber delivery. An earlier verified Settings hash could remain queued,
+a later preset could directly persist and return, and then the older event could overwrite Room.
+The same review found that direct preset persistence did not advance its recovery revision.
+c414 and 632a remain immutable; this is a separate source-only successor, not execution evidence.
+
+The callback-bearing preset operation now enqueues an acknowledged `PersistenceBarrier` into the
+same single Settings subscription **before** its newer radio writes. The preset retains the actual
+service operation lock while waiting, so no intervening radio mutation can slip between the fence
+and its callback. The ordinary `setPathHashModePersisted` ACK still waits outside that lock, unchanged.
+The barrier handler does not call any service operation: it awaits the editor's existing FIFO
+`sessionEdits` mutex using the original event token and real generation lease, without saving a row.
+This also drains earlier legacy handlers' UNDISPATCHED-launched editor jobs, not just their delivery.
+After the drain, the preset writes/verifies and awaits metadata under the same radio operation.
+Only a successful real callback advances the exact hash revision that this operation verified;
+the legacy one-argument overload does not pretend an empty callback persisted anything.
+
+Barrier completions participate in existing subscriber replacement/close failure and cancellation
+cleanup. An absent subscriber fails before the callback operation changes the radio. A stale
+barrier cannot recapture a successor as origin authority. No new channel gate or authority is minted.
+The callback and barrier consumer must not reenter operations taking the service's non-reentrant
+mutex. Callback failure/cancellation does not acknowledge the unpersisted hash revision.
+
+New actual-AppState/adapter/Room source controls pause the UI dispatcher before the earlier
+DeviceUpdated and hash events reach the editor, leaving real radio and Settings caller scopes live.
+They require zero conditional saves before release, an ordinary radio read while its ACK is pending,
+no overtaking preset radio or success, final radio/Room/live/preset agreement, and cleared recovery
+after direct success. A cancellation variant cancels the queued ordinary waiter. The existing
+reverse control is corrected to require the fence to drain its held earlier event first.
+Service controls also exercise cancelled and replaced barriers before any radio/callback write.
+These controls are authored, not compiled or executed.
+
+Fresh actual-main 5f4d trusted capability checks admitted SettingsEvent, SettingsService and the
+barrier-only AppState arm as `reviewed-support-consumer/modify-related-consumer`; related tests use
+`reviewed-support-test/add-or-update-related-test`. Producer 244 confirmed no live barrier-arm edit
+and specifically disposed this bounded arm; its separately frozen handler remains unchanged and
+requires explicit new sealed-case composition. No frozen ca657/c477 service blob is imported:
+future composition must retain its `nextRadioRevision()` and all acknowledged/default-scope/Repeat
+changes, transferring only the bounded callback/fence delta.
+
+On this successor's source, same-host `ci.py preflight --local --state <existing Windows state>
+--output <fresh absolute TEMP directory>`, `C:\Python312\python.exe
+.\tools\android-port\controller\validate.py`, `C:\Python312\python.exe
+.\tools\android-port\test_inventory.py --check`, `C:\Python312\python.exe
+.\tools\android-port\portmap.py --repo .` and `git diff --check` all passed.
+This is readiness/source evidence only, not Kotlin compilation, test discovery or execution.
+The shared Gradle execution hold, held canonical dependency, independent composition review and
+publication/activation/dispatch holds remain unchanged.
+
+Additional unexecuted fence controls cover an absent Settings subscriber refusing the direct preset
+before radio or metadata writes, and the editor queue waiting for an earlier held conditional save.
+The editor control cancels one queued fence, proves the following fence still waits, checks that
+neither fence adds a save, then exercises stale-origin refusal and current-origin acceptance.
+That isolated editor control uses the existing guard-off test access; it does not substitute for
+the actual manager/adapter/Room generation controls or establish standalone-main dependency closure.
+
+### Bind direct metadata to the actual verified preset result
+
+The 3431 source review found another false-ACK route: onboarding sampled cached device capability
+while the service independently queried current firmware capability. Cached unsupported/current
+supported could skip the direct hash save while still advancing the verified revision; the inverse
+could persist a hash never written by the service. This is a discriminating interleaving/input
+control, not a claim that stable firmware normally changes capability mid-session.
+
+The callback now receives `(SelfInfo, verifiedPathHashMode: UByte?)`. The hash argument is populated
+only after this operation actually writes and verifies that mode; null means no hash was written.
+Onboarding no longer samples cached support to decide its save. It persists only the supplied
+verified hash, and the service advances that operation's revision only after the callback returns
+successfully. The one-argument service API remains unchanged. The callback still must not reenter
+any method acquiring the same service operation lock.
+
+Three new actual adapter/Room source controls cover both capability mismatches and a direct hash
+save failure with cached support false/current support true. They pause the actual AppState
+dispatcher at the preset RF command, after the fence has drained, so queued hash/device events
+cannot manufacture the direct callback's success. Before releasing those events they require
+the actual command set, radio/Room/live values and recovery status to agree with the verified write;
+the failure control requires the real metadata error and an unacknowledged recovery revision.
+They then resume the consumer and recheck durable/live values and recovery.
+These controls remain uncompiled and unexecuted under the shared execution hold.
+
+The existing manager-backed Room refusal controls also include `awaitDeviceEdits`: unavailable
+original capture must refuse before lease admission, and rejected original-generation admission
+must refuse without executing the drain callback or touching a write ticket, save or region DAO.
+This extends the rejected-admission matrix from 11 to 12 entry points without weakening its
+unchanged Room/live assertions. It is source coverage on the held composed tree, not evidence that
+the requested independent actual-main foundation has been produced.
+
+## Hosted CI repair of PR #532 (head bfe19a4a6)
+
+Merged `origin/main` a6c77661f with the pushed head 121bea509 and 47 previously unpushed local
+commits (backup ref `backup/wp305-local-789f74d`; no force-push). The earlier "unexecuted/held"
+statements above are superseded for the manager-lease commits `49d797ee9`/`34b9a504b`: they were
+executed by hosted CI but still await independent exact-head review. No local Gradle was run and the
+retained execution lock was untouched.
+
+Hosted runs: 42303811078 (compile failure, BackupTransactionTest), 42304683529 (12 failures),
+42309767352 (5), 42312583459 (3), 42313951957 (2), 42315437793 (1), 42317068388 (1),
+42318362635 (all selected scopes passed). Fixes: restoration-route handling in `ConnectionManager.kt`
+(small; potential merge overlap with #495 head 80865c278, unreconciled), observable onboarding
+completion gate, Settings republish on `deviceAccess.changes`, Hash Size option test selection and
+a lease-test precondition (hydrating state is not DISCONNECTED; behavioral assertions unchanged).
+Not verified: physical device/radio, independent review. PR stays draft.

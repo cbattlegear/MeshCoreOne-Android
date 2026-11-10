@@ -5673,7 +5673,6 @@
   },
   "entitlements": "All ten themes are unlocked. Original product IDs are inert provenance, not permissions.",
   "generator": "tools/android-port/theme_convert.py",
-  "generator_sha256": "ea7fc099483c415cff6b0992586c87480a968a4beab7dd824850fef7aafcecd3",
   "primary_owned_inputs": {
     "AppIcon.icon/Assets/app-icon.png": "415a1a52d1a00ebc87d020507805a93c3e412c6a",
     "AppIcon.icon/Assets/background.png": "32d812bf0cb83f2da77be48dca7c544e1f701a62",
@@ -5764,11 +5763,6 @@
     "MC1Tests/ThemeLocalizedNameTests.swift": "18c5f20ebc7c28cdf9b753e25e260b9f829690d3",
     "MC1Tests/ThemeRegistryTests.swift": "0911076da0335968a0d544629757b035060f6c57",
     "MC1Tests/ThemeServiceTests.swift": "9f4a6d812ceaad0f89f34b059b8e20f44804b58e"
-  },
-  "reader": {
-    "blob_sha": "51f87a66c4a0af3cb92591484f4c7a242ecf7d2a",
-    "path": "tools/android-port/l10n_convert.py",
-    "revision": "2cf00464950e1fb9aae0dd913402eb3e12dc0044"
   },
   "recovery": {
     "de": {

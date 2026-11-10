@@ -54,6 +54,7 @@ data class ToolsFeatureDependencies(
     val toolsDiagnostics: ToolsDiagnosticsDependencies,
     val mapPreferences: MapPreferenceStore? = null,
     val nodeTableVersion: StateFlow<Int>? = null,
+    val sessionToken: StateFlow<com.meshcoreone.android.core.contracts.domain.SessionToken?>? = null,
 )
 
 @Composable
@@ -68,12 +69,15 @@ fun ToolsEntry(
         ?: androidx.compose.runtime.remember { androidx.compose.runtime.mutableIntStateOf(0) }
     val nodeTableVersion by dependencies?.nodeTableVersion?.collectAsStateWithLifecycle()
         ?: androidx.compose.runtime.remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    val sessionToken = dependencies?.sessionToken?.collectAsStateWithLifecycle()?.value
     when (selection) {
         null -> ToolsHome(onSelect)
         ToolSelection.TRACE_PATH -> TracePathScreen(
             dependencies?.let {
+                val radioId = if (it.sessionToken == null) it.radioId() else sessionToken?.radioId
                 TracePathScreen.Dependencies(
-                    it.trace, it.recentHops, it.diagnostics, it.radioId(), generation, it.mapPreferences, nodeTableVersion,
+                    it.trace, it.recentHops, it.diagnostics, radioId, generation,
+                    it.mapPreferences, nodeTableVersion,
                 )
             },
         )

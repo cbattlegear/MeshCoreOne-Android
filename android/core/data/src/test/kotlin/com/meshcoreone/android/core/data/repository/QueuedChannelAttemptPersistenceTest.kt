@@ -30,9 +30,13 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 
 class QueuedChannelAttemptPersistenceTest : RepositoryTest() {
+    @get:Rule val atomicRetirementFiles = TemporaryFolder()
+
     private fun channelMessage(resend: Boolean = false) =
         message(contactID = null, channelIndex = 5u, text = "original queued text\n",
             status = if (resend) MessageStatus.SENT else MessageStatus.PENDING)
@@ -1181,6 +1185,248 @@ class QueuedChannelAttemptPersistenceTest : RepositoryTest() {
             assertNull(retained.channelAttemptID)
             assertTrue(persisted.fetchQueuedChannelAttempts(EntityKey(RADIO_A, pending.id)).isEmpty())
             assertEquals(row, persisted.fetchMessage(EntityKey(RADIO_A, row.id)))
+        } finally {
+            operationToCancel = null
+            persisted.close()
+            database.close()
+        }
+    }
+
+    @Test fun atomicUnsentRetirementNeverPublishesReadyAndPreservesOriginalResendAndForeignEvidence() = runTest {
+        val row = channelMessage(resend = true).copy(sendCount = 8, heardRepeats = 4, failureSeen = true)
+        val pending = queued(row, resend = true)
+        seed(row, pending)
+        val key = attempt(pending)
+        val begun = store.beginQueuedChannelAttempt(key, assertNotNull(row.channelOccupantID), 17u)
+        val foreign = row.copy(radioId = RADIO_B)
+        val foreignPending = queued(foreign, resend = true)
+        seed(foreign, foreignPending)
+        val repeat = MessageRepeatDTO(UUID.randomUUID(), row.id, AT, Bytes.of(1), 1u, null, null)
+        store.saveMessageRepeat(RADIO_A, repeat)
+        db.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER reject_intermediate_ready BEFORE UPDATE OF channelDispatchStateRawValue ON pending_sends " +
+                "WHEN NEW.channelDispatchStateRawValue = ${QueuedChannelDispatchState.READY.rawValue} " +
+                "BEGIN SELECT RAISE(ABORT, 'inline cancellation cannot become READY'); END",
+        )
+        try {
+            assertEquals(QueuedChannelRetirement(MessageStatus.FAILED, true),
+                store.settleAndRetireDefinitelyUnsentQueuedChannelAttempt(key))
+        } finally {
+            db.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_intermediate_ready")
+        }
+        assertTrue(store.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id)).isEmpty())
+        assertEquals(row.copy(status = MessageStatus.FAILED, failureSeen = false),
+            store.fetchMessage(EntityKey(RADIO_A, row.id)))
+        assertEquals(begun.copy(phase = QueuedChannelAttemptPhase.DEFINITELY_UNSENT), store.fetchQueuedChannelAttempt(key))
+        assertEquals(listOf(repeat), store.fetchMessageRepeats(EntityKey(RADIO_A, row.id)).toList())
+        assertEquals(foreign, store.fetchMessage(EntityKey(RADIO_B, row.id)))
+        assertEquals(foreignPending.id, store.fetchPendingSends(RADIO_B).single().id)
+        rejection(QueuedChannelAttemptConflict.MISSING_SUBMISSION) {
+            store.settleAndRetireDefinitelyUnsentQueuedChannelAttempt(key)
+        }
+    }
+
+    @Test fun atomicUnsentRetirementDoesNotOverwriteDeliveredOrRepublishAlreadyFailedStatus() = runTest {
+        for (status in listOf(MessageStatus.DELIVERED, MessageStatus.FAILED)) {
+            val row = channelMessage().copy(status = status, failureSeen = true)
+            val pending = queued(row)
+            seed(row, pending)
+            val key = attempt(pending)
+            store.beginQueuedChannelAttempt(key, assertNotNull(row.channelOccupantID), 18u)
+            assertEquals(QueuedChannelRetirement(status, false),
+                store.settleAndRetireDefinitelyUnsentQueuedChannelAttempt(key))
+            assertEquals(row, store.fetchMessage(EntityKey(RADIO_A, row.id)))
+            assertTrue(store.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id)).isEmpty())
+            assertEquals(QueuedChannelAttemptPhase.DEFINITELY_UNSENT, store.fetchQueuedChannelAttempt(key)?.phase)
+        }
+    }
+
+    @Test fun atomicUnsentRetirementRejectsUnclaimedAndSettledSubmissionsWithoutChangingEvidence() = runTest {
+        val unclaimed = channelMessage()
+        val unclaimedPending = queued(unclaimed)
+        seed(unclaimed, unclaimedPending)
+        rejection(QueuedChannelAttemptConflict.SUBMISSION_NOT_READY) {
+            store.settleAndRetireDefinitelyUnsentQueuedChannelAttempt(attempt(unclaimedPending))
+        }
+        for (outcome in QueuedChannelAttemptOutcome.entries) {
+            val row = channelMessage()
+            val pending = queued(row)
+            seed(row, pending)
+            val key = attempt(pending)
+            store.beginQueuedChannelAttempt(key, assertNotNull(row.channelOccupantID), 19u)
+            store.settleQueuedChannelAttempt(key, outcome)
+            val retained = store.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id))
+            val evidence = store.fetchQueuedChannelAttempt(key)
+            rejection(QueuedChannelAttemptConflict.SUBMISSION_NOT_READY) {
+                store.settleAndRetireDefinitelyUnsentQueuedChannelAttempt(key)
+            }
+            assertEquals(retained, store.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id)))
+            assertEquals(evidence, store.fetchQueuedChannelAttempt(key))
+            assertEquals(row, store.fetchMessage(EntityKey(RADIO_A, row.id)))
+        }
+    }
+
+    @Test fun atomicUnsentRetirementRejectsOldAttemptsSiblingsAndChangedSavedIntent() = runTest {
+        val row = channelMessage()
+        val pending = queued(row)
+        seed(row, pending)
+        val old = attempt(pending)
+        store.beginQueuedChannelAttempt(old, assertNotNull(row.channelOccupantID), 20u)
+        store.settleQueuedChannelAttempt(old, QueuedChannelAttemptOutcome.DEFINITELY_UNSENT)
+        val current = attempt(pending)
+        store.beginQueuedChannelAttempt(current, assertNotNull(row.channelOccupantID), 21u)
+        val retained = store.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id))
+        val evidence = store.fetchQueuedChannelAttempts(EntityKey(RADIO_A, pending.id))
+        rejection(QueuedChannelAttemptConflict.SUBMISSION_NOT_READY) {
+            store.settleAndRetireDefinitelyUnsentQueuedChannelAttempt(old)
+        }
+        val sibling = queued(row)
+        insertReadySibling(sibling)
+        rejection(QueuedChannelAttemptConflict.RETAINED_SUBMISSION) {
+            store.settleAndRetireDefinitelyUnsentQueuedChannelAttempt(current)
+        }
+        db.pendingSends().delete(RADIO_A.value, sibling.id)
+        val changed = row.copy(text = "a newer saved intent")
+        store.saveMessage(changed)
+        rejection(QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION) {
+            store.settleAndRetireDefinitelyUnsentQueuedChannelAttempt(current)
+        }
+        assertEquals(changed, store.fetchMessage(EntityKey(RADIO_A, row.id)))
+        assertEquals(retained, store.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id)))
+        assertEquals(evidence, store.fetchQueuedChannelAttempts(EntityKey(RADIO_A, pending.id)))
+    }
+
+    @Test fun atomicUnsentRetirementRejectsUnknownAndForeignKeysWithoutChangingTheClaim() = runTest {
+        val legacy = channelMessage().copy(channelOccupantID = null)
+        val legacyPending = queued(legacy)
+        store.saveMessage(legacy)
+        store.upsertPendingSend(legacyPending)
+        rejection(QueuedChannelAttemptConflict.UNKNOWN_SUBMISSION) {
+            store.settleAndRetireDefinitelyUnsentQueuedChannelAttempt(attempt(legacyPending))
+        }
+        val row = channelMessage()
+        val pending = queued(row)
+        seed(row, pending)
+        val key = attempt(pending)
+        val begun = store.beginQueuedChannelAttempt(key, assertNotNull(row.channelOccupantID), 25u)
+        val retained = store.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id))
+        rejection(QueuedChannelAttemptConflict.MISSING_SUBMISSION) {
+            store.settleAndRetireDefinitelyUnsentQueuedChannelAttempt(key.copy(radioId = RADIO_B))
+        }
+        rejection(QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION) {
+            store.settleAndRetireDefinitelyUnsentQueuedChannelAttempt(key.copy(messageID = UUID.randomUUID()))
+        }
+        rejection(QueuedChannelAttemptConflict.SUBMISSION_NOT_READY) {
+            store.settleAndRetireDefinitelyUnsentQueuedChannelAttempt(key.copy(attemptID = UUID.randomUUID()))
+        }
+        assertEquals(retained, store.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id)))
+        assertEquals(begun, store.fetchQueuedChannelAttempt(key))
+        assertEquals(row, store.fetchMessage(EntityKey(RADIO_A, row.id)))
+        assertEquals(legacyPending, store.fetchPendingSendsForMessage(EntityKey(RADIO_A, legacy.id)).single())
+    }
+
+    @Test fun atomicUnsentRetirementRollsBackJournalDeletionAndStatusOnEveryWriteFailure() = runTest {
+        for (failurePoint in listOf(
+            "UPDATE OF phaseRawValue ON queued_channel_attempts",
+            "DELETE ON pending_sends",
+            "UPDATE OF statusRawValue ON messages",
+        )) {
+            val row = channelMessage()
+            val pending = queued(row)
+            seed(row, pending)
+            val key = attempt(pending)
+            val begun = store.beginQueuedChannelAttempt(key, assertNotNull(row.channelOccupantID), 22u)
+            val retained = store.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id))
+            db.openHelper.writableDatabase.execSQL(
+                "CREATE TRIGGER reject_atomic_retirement BEFORE $failurePoint " +
+                    "BEGIN SELECT RAISE(ABORT, 'controlled atomic retirement failure'); END",
+            )
+            try {
+                assertFailsWith<PersistenceStoreException> {
+                    store.settleAndRetireDefinitelyUnsentQueuedChannelAttempt(key)
+                }
+                assertEquals(retained, store.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id)))
+                assertEquals(begun, store.fetchQueuedChannelAttempt(key))
+                assertEquals(row, store.fetchMessage(EntityKey(RADIO_A, row.id)))
+            } finally {
+                db.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_atomic_retirement")
+            }
+            assertEquals(QueuedChannelRetirement(MessageStatus.FAILED, true),
+                store.settleAndRetireDefinitelyUnsentQueuedChannelAttempt(key))
+        }
+    }
+
+    @Test fun atomicUnsentRetirementReopensAsRetiredWithoutAnAutomaticReplayCandidate() = runTest {
+        val path = atomicRetirementFiles.root.resolve("atomic-retirement.db").absolutePath
+        var disk = MeshCoreDatabase.open(context, path)
+        var persisted = RoomPersistenceStore(disk, owner, clock)
+        val row = channelMessage()
+        val pending = queued(row)
+        val key = attempt(pending)
+        try {
+            persisted.saveMessage(row)
+            persisted.insertPendingSendAssigningSequence(pending)
+            val begun = persisted.beginQueuedChannelAttempt(key, assertNotNull(row.channelOccupantID), 23u)
+            persisted.close()
+            disk.close()
+            disk = MeshCoreDatabase.open(context, path)
+            persisted = RoomPersistenceStore(disk, owner, clock)
+            assertEquals(begun, persisted.fetchQueuedChannelAttempt(key))
+            assertEquals(QueuedChannelDispatchState.DISPATCHING,
+                persisted.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id)).single().channelDispatchState)
+            assertEquals(QueuedChannelRetirement(MessageStatus.FAILED, true),
+                persisted.settleAndRetireDefinitelyUnsentQueuedChannelAttempt(key))
+            persisted.close()
+            disk.close()
+            disk = MeshCoreDatabase.open(context, path)
+            persisted = RoomPersistenceStore(disk, owner, clock)
+            assertEquals(row.copy(status = MessageStatus.FAILED), persisted.fetchMessage(EntityKey(RADIO_A, row.id)))
+            assertTrue(persisted.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id)).isEmpty())
+            assertEquals(begun.copy(phase = QueuedChannelAttemptPhase.DEFINITELY_UNSENT),
+                persisted.fetchQueuedChannelAttempt(key))
+            rejection(QueuedChannelAttemptConflict.MISSING_SUBMISSION) {
+                persisted.settleAndRetireDefinitelyUnsentQueuedChannelAttempt(key)
+            }
+        } finally {
+            persisted.close()
+            disk.close()
+        }
+    }
+
+    @Test fun atomicUnsentRetirementLostReturnCannotMintASecondReceipt() = runTest {
+        var operationToCancel: Job? = null
+        val immediate = Executor { it.run() }
+        val cancellingExecutor = Executor { command ->
+            command.run()
+            operationToCancel?.cancel(CancellationException("controlled atomic retirement commit return"))
+        }
+        val database = Room.inMemoryDatabaseBuilder(context, MeshCoreDatabase::class.java)
+            .allowMainThreadQueries().setQueryExecutor(immediate).setTransactionExecutor(cancellingExecutor).build()
+        val persisted = RoomPersistenceStore(database, owner, clock)
+        try {
+            val row = channelMessage()
+            val pending = queued(row)
+            val key = attempt(pending)
+            persisted.saveMessage(row)
+            persisted.insertPendingSendAssigningSequence(pending)
+            val begun = persisted.beginQueuedChannelAttempt(key, assertNotNull(row.channelOccupantID), 24u)
+            var returned = false
+            val operation = launch(start = CoroutineStart.UNDISPATCHED) {
+                operationToCancel = currentCoroutineContext()[Job]
+                persisted.settleAndRetireDefinitelyUnsentQueuedChannelAttempt(key)
+                returned = true
+            }
+            operation.join()
+            operationToCancel = null
+            assertTrue(operation.isCancelled)
+            assertFalse(returned)
+            assertEquals(row.copy(status = MessageStatus.FAILED), persisted.fetchMessage(EntityKey(RADIO_A, row.id)))
+            assertTrue(persisted.fetchPendingSendsForMessage(EntityKey(RADIO_A, row.id)).isEmpty())
+            assertEquals(begun.copy(phase = QueuedChannelAttemptPhase.DEFINITELY_UNSENT),
+                persisted.fetchQueuedChannelAttempt(key))
+            rejection(QueuedChannelAttemptConflict.MISSING_SUBMISSION) {
+                persisted.settleAndRetireDefinitelyUnsentQueuedChannelAttempt(key)
+            }
         } finally {
             operationToCancel = null
             persisted.close()

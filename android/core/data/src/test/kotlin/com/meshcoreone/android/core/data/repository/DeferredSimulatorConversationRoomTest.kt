@@ -37,7 +37,8 @@ class DeferredSimulatorConversationRoomTest : RepositoryTest() {
         val writer = RoomPersistenceStore(db, owner, clock, channelIdentityMutation = gate)
         val fixture = fixture(channel = true)
         val channel = assertIs<SimulatorConversationParent.Channel>(fixture.parent).channel
-        val planned = plan(family(fixture))
+        var built = false
+        val planned = plan(family(fixture, build = { built = true; fixture }))
         val release = CompletableDeferred<Unit>()
         val operation = async(start = CoroutineStart.UNDISPATCHED) {
             gate.withChannelOperation { release.await() }
@@ -45,10 +46,12 @@ class DeferredSimulatorConversationRoomTest : RepositoryTest() {
         val seed = async(start = CoroutineStart.UNDISPATCHED) { writer.seedSimulatorConversation(planned, 0) }
         try {
             assertFalse(seed.isCompleted)
+            assertFalse(built)
             assertNull(db.channels().byId(channel.radioId.value, channel.id))
             release.complete(Unit)
             operation.await()
             val created = assertIs<SimulatorConversationSeedResult.Created>(seed.await())
+            assertTrue(built)
             assertNull(assertIs<SimulatorConversationParent.Channel>(created.parent).channel.occupantID)
             val unresolved = assertNotNull(db.channelOccupants().stateForIndex(channel.radioId.value, channel.index.toLong()))
             assertTrue(unresolved.unresolved)

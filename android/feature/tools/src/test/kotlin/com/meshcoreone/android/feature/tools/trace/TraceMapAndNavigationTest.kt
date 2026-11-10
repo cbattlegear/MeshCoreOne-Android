@@ -2,6 +2,10 @@
 package com.meshcoreone.android.feature.tools.trace
 
 import com.meshcoreone.android.core.model.Coordinate
+import com.meshcoreone.android.core.model.snapshot
+import com.meshcoreone.android.core.maps.GeoPoint
+import com.meshcoreone.android.core.maps.MapLineStyle
+import com.meshcoreone.android.core.maps.MapPinStyle
 import com.meshcoreone.android.feature.tools.navigation.ToolSelection
 import com.meshcoreone.android.feature.tools.navigation.ToolsNavigationState
 import kotlin.test.Test
@@ -11,6 +15,102 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class TraceMapAndNavigationTest {
+    @Test
+    fun `pretrace overlays use real outbound identities and preserve skipped hop indices`() {
+        map.configure(Coordinate(36.0, -123.0))
+        trace.addNode(north)
+        trace.addNode(unlocated)
+        trace.addNode(hill)
+        map.rebuildPathState()
+        assertEquals(listOf("trace-0", "trace-2"), map.lines.map { it.id })
+        assertEquals(listOf(0, 2), map.lines.map { it.pathIndex })
+        assertEquals(
+            listOf(GeoPoint(36.0, -123.0), GeoPoint(38.0, -122.0)), map.lines[0].points,
+        )
+        assertEquals(
+            listOf(GeoPoint(38.0, -122.0), GeoPoint(37.5, -121.5)), map.lines[1].points,
+        )
+        assertTrue(map.lines.all { it.style == MapLineStyle.TRACE_UNTRACED })
+        assertTrue(map.badges.isEmpty())
+        val markers = map.mapMarkers { _, _ -> error("No badges before a trace") }
+        assertEquals(1, markers.single { it.id == north.id }.hopIndex)
+        assertEquals(3, markers.single { it.id == hill.id }.hopIndex)
+        assertEquals(MapPinStyle.REPEATER_RING_WHITE, markers.single { it.id == hill.id }.style)
+        assertTrue(markers.all { it.clusterable })
+        map.clearPath()
+        assertTrue(map.lines.isEmpty())
+        assertTrue(map.badges.isEmpty())
+    }
+
+    @Test
+    fun `table refresh rebuilds successful SNR geometry and deterministic midpoint badges`() {
+        map.configure(Coordinate(37.0, 179.0))
+        val endpoint = north.copy(latitude = 39.0, longitude = -179.0)
+        trace.setContactsForTesting(listOf(endpoint))
+        trace.addNode(endpoint)
+        trace.editStateForTesting {
+            it.copy(result = TraceResult(
+                listOf(
+                    TraceHop(null, "Origin", 0.0, true, false, null, null),
+                    TraceHop(endpoint.publicKey, "North", -6.0, false, false, null, null),
+                ).snapshot(),
+                25, true, null, it.fullPathData, 1,
+            ))
+        }
+        map.rebuildPathState()
+        assertEquals(MapLineStyle.TRACE_WEAK, map.lines.single().style)
+        assertEquals(GeoPoint(38.0, 180.0), map.badges.single().coordinate)
+        assertEquals(java.util.UUID.fromString("00000000-0000-0000-0000-000000000001"), map.badges.single().id)
+        val before = map.badges.single().distanceMeters
+        assertTrue(before > 200_000 && before < 300_000)
+        val badge = map.mapMarkers { _, snr -> "link $snr" }.single { it.style == MapPinStyle.BADGE }
+        assertFalse(badge.clusterable)
+        assertEquals("link -6.0", badge.badgeText)
+        trace.setContactsForTesting(listOf(endpoint.copy(latitude = 40.0)))
+        map.rebuildPathState()
+        assertEquals(GeoPoint(40.0, -179.0), map.lines.single().points.last())
+        assertEquals(MapLineStyle.TRACE_WEAK, map.lines.single().style)
+        assertEquals(badge.id, map.badges.single().id)
+        map.setShowLabels(false)
+        assertTrue(map.mapMarkers { _, _ -> "link" }.filter { it.style != MapPinStyle.BADGE }.all { it.label == null })
+    }
+
+    @Test
+    fun `late response after path edit cannot decorate new geometry`() {
+        map.configure(Coordinate(37.0, -123.0))
+        val sender = FakeTraceSender()
+        harness.deps.device = device()
+        harness.deps.sender = sender
+        trace.configure(harness.deps)
+        trace.addNode(north)
+        harness.start { trace.runTrace() }
+        val pendingTag = sender.sent.single().tag
+        trace.addNode(south)
+        assertNull(trace.pendingTag)
+        harness.respond(pendingTag, listOf(node(0x3F, -6.0), node(null, 3.0)), RADIO)
+        assertNull(trace.current.result)
+
+        map.rebuildPathState()
+
+        assertEquals(listOf(MapLineStyle.TRACE_UNTRACED, MapLineStyle.TRACE_UNTRACED), map.lines.map { it.style })
+        assertTrue(map.badges.isEmpty())
+    }
+
+    @Test
+    fun `initial camera uses path or filtered candidates and empty candidates have no camera`() {
+        map.applyFilter(TraceMapPinFilter(favoritesOnly = true))
+        assertEquals(GeoPoint(37.0, -122.0), map.initialCamera()?.center)
+        trace.addNode(north)
+        map.rebuildPathState()
+        assertEquals(GeoPoint(38.0, -122.0), map.initialCamera()?.center)
+        map.clearPath()
+        trace.setContactsForTesting(emptyList())
+        trace.editStateForTesting { it.copy(discoveredRepeaters = emptyList()) }
+        map.rebuildPathState()
+        assertNull(map.allPinsCamera())
+        assertNull(map.initialCamera())
+    }
+
     @Test
     fun `trace line quality preserves source SNR boundaries`() {
         assertEquals(TraceLineQuality.UNTRACED, traceLineQuality(null))

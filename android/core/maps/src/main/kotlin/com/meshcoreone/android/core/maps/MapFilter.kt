@@ -1,6 +1,11 @@
 // PortedFrom: MC1/Views/Map/MapFilter.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.core.maps
 
+import com.google.gson.stream.JsonReader
+import com.google.gson.stream.JsonToken
+import java.io.IOException
+import java.io.StringReader
+
 enum class MapFilterHost { MAIN_MAP, TRACE_PATH, NEIGHBOR_SNR }
 
 enum class ContactMapType { CHAT, REPEATER, ROOM }
@@ -73,18 +78,34 @@ data class MapFilterState(
 
         fun decode(value: String): MapFilterState? {
             if (value.isBlank()) return null
-            fun boolean(key: String): Boolean? =
-                Regex(""""$key"\s*:\s*(true|false)""")
-                    .find(value)
-                    ?.groupValues
-                    ?.get(1)
-                    ?.toBooleanStrictOrNull()
+            val fields = setOf("favoritesOnly", "showDiscovered", "showChat", "showRepeater", "showRoom")
+            val booleans = mutableMapOf<String, Boolean>()
+            try {
+                JsonReader(StringReader(value)).use { reader ->
+                    reader.beginObject()
+                    while (reader.hasNext()) {
+                        val name = reader.nextName()
+                        if (name in fields) {
+                            if (reader.peek() != JsonToken.BOOLEAN) return null
+                            booleans[name] = reader.nextBoolean()
+                        } else {
+                            reader.skipValue()
+                        }
+                    }
+                    reader.endObject()
+                    if (reader.peek() != JsonToken.END_DOCUMENT) return null
+                }
+            } catch (_: IOException) {
+                return null
+            } catch (_: IllegalStateException) {
+                return null
+            }
             return MapFilterState(
-                favoritesOnly = boolean("favoritesOnly") ?: return null,
-                showDiscovered = boolean("showDiscovered") ?: return null,
-                showChat = boolean("showChat") ?: return null,
-                showRepeater = boolean("showRepeater") ?: return null,
-                showRoom = boolean("showRoom") ?: return null,
+                favoritesOnly = booleans["favoritesOnly"] ?: return null,
+                showDiscovered = booleans["showDiscovered"] ?: return null,
+                showChat = booleans["showChat"] ?: return null,
+                showRepeater = booleans["showRepeater"] ?: return null,
+                showRoom = booleans["showRoom"] ?: return null,
             )
         }
     }

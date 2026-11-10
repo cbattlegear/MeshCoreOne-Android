@@ -31,6 +31,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -38,6 +39,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -52,8 +54,10 @@ import com.meshcoreone.android.core.maps.GeoBounds
 import com.meshcoreone.android.core.maps.MapAvailability
 import com.meshcoreone.android.core.maps.MapCamera
 import com.meshcoreone.android.core.maps.MapFilterHost
-import com.meshcoreone.android.core.maps.MapFilterPreferences
 import com.meshcoreone.android.core.maps.MapFilterState
+import com.meshcoreone.android.core.maps.MapPreferences
+import com.meshcoreone.android.core.maps.resolvedMapIsDark
+import com.meshcoreone.android.core.maps.effectiveAppThemeIsDark
 import com.meshcoreone.android.core.maps.MapLibreMapSurface
 import com.meshcoreone.android.core.maps.MapLibreOpenFreeMap
 import com.meshcoreone.android.core.maps.MapLibreRuntime
@@ -75,6 +79,7 @@ import com.meshcoreone.android.core.ui.ScaffoldFeatureContent
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collect
 
 typealias OperationalMapSurface = @Composable (
     MapPresentationState, Boolean, Boolean, (MapCamera) -> Unit, (MapMarker) -> Unit,
@@ -150,38 +155,74 @@ private fun MapContent(
 ) {
     val context = LocalContext.current
     val preferences = remember(context) { context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE) }
-    var filter by remember {
-        mutableStateOf(
-            MapFilterPreferences.decodeOrSeed(
-                preferences.getString(FILTER_KEY, null).orEmpty(),
-                MapFilterHost.MAIN_MAP,
-            ),
-        )
-    }
-    var clustering by remember { mutableStateOf(preferences.getBoolean(CLUSTER_KEY, true)) }
-    var labels by remember { mutableStateOf(preferences.getBoolean(LABEL_KEY, true)) }
+    val preferenceStore = checkNotNull(dependencies.preferences) { "Process map preferences were not installed" }
+    var settings by remember(dependencies) { mutableStateOf<MapPreferences?>(null) }
+    var preferenceObservationError by remember { mutableStateOf<Exception?>(null) }
+    var preferenceWriteError by remember { mutableStateOf<Exception?>(null) }
+    var preferenceRetry by remember { mutableStateOf(0) }
+    val filter = settings?.filter ?: MapFilterState.seed(MapFilterHost.MAIN_MAP)
+    val clustering = settings?.clustering ?: true
+    val labels = settings?.labels ?: true
+    val appIsDark = effectiveAppThemeIsDark()
     val scope = rememberCoroutineScope()
     val holder = remember(dependencies, scope) { MapFeatureStateHolder(dependencies, scope, filter) }
     val feature by holder.state.collectAsStateWithLifecycle()
     DisposableEffect(holder) { onDispose { holder.close() } }
     var listVisible by remember { mutableStateOf(false) }
     var focusedPoint by remember { mutableStateOf(focus) }
+    val focusedPinId = remember { UUID.randomUUID() }
     var selectedFocus by remember { mutableStateOf<MapMarker?>(null) }
     var offlineVisible by remember { mutableStateOf(false) }
     var camera by remember {
-        mutableStateOf(preferences.getString(CAMERA_KEY, null)?.let(MapCamera::decode))
+        mutableStateOf(
+            if (focus == null) preferences.getString(CAMERA_KEY, null)?.let(MapCamera::decode) else null,
+        )
     }
+    var cameraCommandRevision by remember { mutableLongStateOf(0L) }
 
-    LaunchedEffect(feature.content) {
-        if (camera == null && focusedPoint == null) {
-            camera = feature.content.markers.map { it.marker.position }.boundingCamera()
+    LaunchedEffect(preferenceStore, holder, preferenceRetry) {
+        try {
+            preferenceStore.observe(MapFilterHost.MAIN_MAP).collect { next ->
+                if (holder.state.value.filter != next.filter) {
+                    holder.setFilter(next.filter)
+                    selectedFocus = null
+                }
+                settings = next
+                preferenceObservationError = null
+                preferenceWriteError = null
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            preferenceObservationError = failure
+        }
+    }
+    fun writePreference(write: suspend () -> Unit) {
+        scope.launch {
+            try {
+                write()
+                preferenceWriteError = null
+                if (preferenceObservationError != null) preferenceRetry++
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                preferenceWriteError = failure
+            }
+        }
+    }
+    val preferenceError = preferenceObservationError ?: preferenceWriteError
+
+    LaunchedEffect(feature.visibleMarkers, feature.loading, settings) {
+        if (settings != null && settings?.filter == feature.filter && camera == null && focusedPoint == null) {
+            camera = feature.visibleMarkers.map { it.marker.position }.boundingCamera()
         }
     }
     LaunchedEffect(focus) {
         if (focus != null) {
             focusedPoint = focus
             selectedFocus = null
-            camera = MapCamera(focus, 0.05, 0.05)
+            camera = MapCamera(focus, 0.01, 0.01)
+            cameraCommandRevision++
             onFocusConsumed()
         }
     }
@@ -189,7 +230,7 @@ private fun MapContent(
     val filtered = feature.visibleMarkers.map { it.marker }.toMutableList()
     focusedPoint?.let {
         filtered += MapMarker(
-            id = UUID(it.latitude.toBits(), it.longitude.toBits()),
+            id = focusedPinId,
             position = it,
             style = MapPinStyle.DROPPED_PIN,
             label = stringResource(R.string.l10n_app_map_map_callout_message),
@@ -201,8 +242,12 @@ private fun MapContent(
         availability = MapAvailability.Available(MapLibreOpenFreeMap.catalog),
         style = MapStyle.STANDARD,
         camera = camera,
+        cameraCommandRevision = cameraCommandRevision,
         points = filtered,
         lines = feature.content.lines,
+        isDark = settings?.let {
+            resolvedMapIsDark(it.appearance, appIsDark)
+        } ?: false,
     )
 
     mapSurface(
@@ -216,39 +261,43 @@ private fun MapContent(
             holder.select(it.id)
         },
     ) {
-        MapControls(
+        if (settings != null) MapControls(
             filter = filter,
-            onFilter = {
-                filter = it
-                holder.setFilter(it)
-                selectedFocus = null
-                preferences.edit().putString(FILTER_KEY, MapFilterPreferences.encode(it, MapFilterHost.MAIN_MAP)).apply()
+            onFilter = { transform ->
+                writePreference { preferenceStore.updateFilter(MapFilterHost.MAIN_MAP, transform) }
             },
             clustering = clustering,
             onClustering = {
-                clustering = it
-                preferences.edit().putBoolean(CLUSTER_KEY, it).apply()
+                writePreference { preferenceStore.setClustering(it) }
             },
             labels = labels,
             onLabels = {
-                labels = it
-                preferences.edit().putBoolean(LABEL_KEY, it).apply()
+                writePreference { preferenceStore.setLabels(it) }
             },
             listVisible = listVisible,
             onListVisible = { listVisible = it },
             onRefresh = holder::refresh,
             onOffline = { offlineVisible = !offlineVisible },
+            canCenterAll = filtered.isNotEmpty(),
+            onCenterAll = {
+                filtered.map { it.position }.boundingCamera()?.let {
+                    camera = it
+                    cameraCommandRevision++
+                }
+            },
             modifier = Modifier.align(Alignment.TopCenter),
         )
-        if (feature.loading && feature.error == null) {
+        if ((feature.loading || settings == null) && feature.error == null && preferenceError == null) {
             CircularProgressIndicator(Modifier.align(Alignment.Center))
         }
-        feature.error?.let { error ->
+        (preferenceError ?: feature.error)?.let { error ->
             val presented = remember(error) { UiErrorMapper().present(error) }
             Card(Modifier.align(Alignment.Center).padding(16.dp)) {
                 Column(Modifier.padding(12.dp)) {
                     Text(uiString(presented.content.message))
-                    Button(onClick = holder::refresh) {
+                    Button(onClick = {
+                        if (preferenceError != null) preferenceRetry++ else holder.refresh()
+                    }, modifier = Modifier.testTag("map:preference-retry")) {
                         Text(stringResource(R.string.l10n_app_map_map_controls_refresh))
                     }
                 }
@@ -290,7 +339,11 @@ private fun MapContent(
                         }
                         null -> Unit
                     }
-                    TextButton(onClick = { holder.select(null); selectedFocus = null }) {
+                    TextButton(onClick = {
+                        holder.select(null)
+                        selectedFocus = null
+                        focusedPoint = null
+                    }) {
                         Text(stringResource(R.string.l10n_app_map_map_common_done))
                     }
                 }
@@ -330,7 +383,7 @@ private fun MapContent(
 @Composable
 private fun MapControls(
     filter: MapFilterState,
-    onFilter: (MapFilterState) -> Unit,
+    onFilter: ((MapFilterState) -> MapFilterState) -> Unit,
     clustering: Boolean,
     onClustering: (Boolean) -> Unit,
     labels: Boolean,
@@ -339,6 +392,8 @@ private fun MapControls(
     onListVisible: (Boolean) -> Unit,
     onRefresh: () -> Unit,
     onOffline: () -> Unit,
+    canCenterAll: Boolean,
+    onCenterAll: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val controlModifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
@@ -348,6 +403,12 @@ private fun MapControls(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
+                AssistChip(
+                    onClick = onCenterAll,
+                    enabled = canCenterAll,
+                    modifier = controlModifier,
+                    label = { Text(stringResource(R.string.l10n_app_map_map_controls_centerall)) },
+                )
                 AssistChip(
                     onClick = onRefresh,
                     modifier = controlModifier,
@@ -398,14 +459,14 @@ private fun MapControls(
                 FilterChip(
                     selected = filter.favoritesOnly,
                     modifier = controlModifier,
-                    onClick = { onFilter(filter.setFavoritesOnly(!filter.favoritesOnly)) },
+                    onClick = { onFilter { it.setFavoritesOnly(!it.favoritesOnly) } },
                     label = { Text(stringResource(R.string.l10n_app_contacts_contacts_pathedit_filter_favorites)) },
                 )
                 FilterChip(
                     selected = filter.showDiscovered,
                     modifier = controlModifier,
                     enabled = !filter.favoritesOnly,
-                    onClick = { onFilter(filter.setShowDiscovered(!filter.showDiscovered)) },
+                    onClick = { onFilter { it.setShowDiscovered(!it.showDiscovered) } },
                     label = { Text(stringResource(R.string.l10n_app_map_map_callout_discovered)) },
                 )
                 FilterChip(
@@ -425,7 +486,9 @@ private fun MapControls(
                         selected = filter.allows(type),
                         modifier = controlModifier,
                         enabled = !filter.favoritesOnly,
-                        onClick = { onFilter(filter.setContactType(type, !filter.allows(type), MapFilterHost.MAIN_MAP)) },
+                        onClick = {
+                            onFilter { it.setContactType(type, !it.allows(type), MapFilterHost.MAIN_MAP) }
+                        },
                         label = {
                             Text(
                                 stringResource(
@@ -647,6 +710,3 @@ private fun normalizeLongitude(value: Double): Double {
 
 private const val PREFERENCES = "shared-map"
 private const val CAMERA_KEY = "camera-v1"
-private const val FILTER_KEY = "filter-v1"
-private const val CLUSTER_KEY = "cluster-v1"
-private const val LABEL_KEY = "labels-v1"

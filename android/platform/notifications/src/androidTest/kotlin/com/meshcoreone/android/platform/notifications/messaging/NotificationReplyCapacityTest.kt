@@ -1,10 +1,8 @@
 // AndroidOnly: WP-401 Real SQLite bounded first-reply reservations; no disk or OS text-survival promise.
 package com.meshcoreone.android.platform.notifications.messaging
 
-import android.app.Application
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteException
-import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.NotificationId
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
@@ -23,7 +21,9 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -31,8 +31,8 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31, 37])
 class NotificationReplyCapacityTest {
-    private val context = ApplicationProvider.getApplicationContext<Application>()
-    private val file = File(context.cacheDir, "reply-capacity-${UUID.randomUUID()}.db")
+    @get:Rule val temporary = TemporaryFolder()
+    private val file by lazy { File(temporary.root, "reply-capacity-${UUID.randomUUID()}.db") }
     private var limits = NotificationReplyLimits(2, 10_000, 20_000)
     private var custodyBudget = 30_000L
     private val issuance = NotificationReplyStagingStore.IssuanceLimits(10, 10_000, 100_000)
@@ -497,7 +497,7 @@ class NotificationReplyCapacityTest {
     @Test
     fun lostReservationReturnCannotReconcileIdenticalTokenAndBoundInReplacementNonce() = runTest {
         provision()
-        val replacementFile = File(context.cacheDir, "reply-capacity-replacement-${UUID.randomUUID()}.db")
+        val replacementFile = File(temporary.root, "reply-capacity-replacement-${UUID.randomUUID()}.db")
         try {
             val replacement = NotificationReplyEnrollmentStore(
                 replacementFile, limits, custodyBudget, issuance, copyLimits)

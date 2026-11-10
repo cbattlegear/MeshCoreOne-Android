@@ -1,10 +1,8 @@
 // AndroidOnly: WP-401 Real SQLite loss-aware enrollment causality and no-route copy-only retention.
 package com.meshcoreone.android.platform.notifications.messaging
 
-import android.app.Application
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteException
-import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.NotificationId
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
@@ -23,7 +21,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -31,8 +31,8 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31, 37])
 class NotificationReplyEnrollmentTest {
-    private val context = ApplicationProvider.getApplicationContext<Application>()
-    private val file = File(context.cacheDir, "reply-enrollment-${UUID.randomUUID()}.db")
+    @get:Rule val temporary = TemporaryFolder()
+    private val file by lazy { File(temporary.root, "reply-enrollment-${UUID.randomUUID()}.db") }
     private val limits = NotificationReplyLimits(3, 10_000, 30_000)
     private val issuance = NotificationReplyStagingStore.IssuanceLimits(3, 10_000, 30_000)
     private val operation = NotificationReplyEnrollmentStore.EnrollmentOperation(
@@ -209,7 +209,7 @@ class NotificationReplyEnrollmentTest {
         assertFalse(returned)
         val original = store.reconcile(operation) as NotificationReplyEnrollmentStore.EnrollmentResult.Observed
         assertEquals(operation.creationNonce, original.receipt.creationNonce)
-        val replacement = File(context.cacheDir, "reply-pre-return-${UUID.randomUUID()}.db")
+        val replacement = File(temporary.root, "reply-pre-return-${UUID.randomUUID()}.db")
         try {
             val differentNonce = operation.copy(creationNonce = UUID.randomUUID())
             val other = NotificationReplyEnrollmentStore(replacement, limits, 30_000, issuance, limits)
@@ -358,7 +358,7 @@ class NotificationReplyEnrollmentTest {
 
     @Test
     fun replacementSameOperationAndStoreButDifferentNonceCannotSatisfyLostPrepareReturn() = runTest {
-        val replacement = File(context.cacheDir, "reply-enrollment-replace-${UUID.randomUUID()}.db")
+        val replacement = File(temporary.root, "reply-enrollment-replace-${UUID.randomUUID()}.db")
         try {
             val other = NotificationReplyEnrollmentStore(replacement, limits, 30_000, issuance, limits)
             val otherOperation = operation.copy(creationNonce = UUID.randomUUID())
@@ -384,7 +384,7 @@ class NotificationReplyEnrollmentTest {
     @Test
     fun restoredPreparingSnapshotCannotBeUsedWithBoundReceiptAndStorageDoesNotClaimAntirollback() = runTest {
         val preparing = prepareFixture()
-        val snapshot = File(context.cacheDir, "reply-enrollment-snapshot-${UUID.randomUUID()}.db")
+        val snapshot = File(temporary.root, "reply-enrollment-snapshot-${UUID.randomUUID()}.db")
         try {
             file.copyTo(snapshot)
             val bound = bindFixture(preparing)
@@ -624,7 +624,7 @@ class NotificationReplyEnrollmentTest {
     fun replacementWithIdenticalCopySubmissionCannotReconcileLostReturnAcrossCreationNonces() = runTest {
         val bound = bindFixture(prepareFixture())
         val submission = UUID.randomUUID()
-        val replacement = File(context.cacheDir, "reply-copy-replace-${UUID.randomUUID()}.db")
+        val replacement = File(temporary.root, "reply-copy-replace-${UUID.randomUUID()}.db")
         try {
             val other = NotificationReplyEnrollmentStore(replacement, limits, 30_000, issuance, limits)
             val otherOperation = operation.copy(creationNonce = UUID.randomUUID())
@@ -650,7 +650,7 @@ class NotificationReplyEnrollmentTest {
 
     @Test
     fun oldJournalIsUntouchedAndOnlyNoRouteCopyProjectionIsNeededForSurvivingText() = runTest {
-        val oldFile = File(context.cacheDir, "reply-old-${UUID.randomUUID()}.db")
+        val oldFile = File(temporary.root, "reply-old-${UUID.randomUUID()}.db")
         try {
             val old = NotificationReplyStagingStore(oldFile, limits)
             assertEquals(NotificationReplyStagingStore.InitializeResult.Ready, old.initializeNew())

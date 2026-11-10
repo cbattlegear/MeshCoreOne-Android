@@ -45,8 +45,9 @@ the full run to CI. From `android/` (`gradlew.bat` on Windows):
 ./gradlew --dependency-verification strict :platform:notifications:testDebugUnitTest
 ```
 
-Notification SQLite tests use isolated JUnit temporary folders rather than Robolectric's long per-test cache
-paths, which can exceed the Windows SQLite path limit. They still exercise real on-disk SQLite transactions.
+Notification SQLite tests and the file-backed Room UUID-alias regression use isolated JUnit temporary folders
+rather than Robolectric's long per-test application paths, which can exceed the Windows SQLite path limit.
+They still exercise real on-disk SQLite transactions.
 
 | Root task | What it checks |
 | --- | --- |
@@ -95,6 +96,8 @@ gh run download <run-id> -n debug-apk           # fetch the debug APK from a run
 ```
 
 The Gradle cache is restored on every ref and saved only by successful runs on `main`.
+Backup interop tests declare their fixture inputs and per-test-task export outputs, so cached results also
+restore the backup files required by the Swift oracle.
 
 ## Maintenance
 

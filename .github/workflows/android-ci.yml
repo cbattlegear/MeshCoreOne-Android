@@ -82,7 +82,7 @@ jobs:
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: kotlin-backup-export
-          path: android/core/data/build/reports/wp203/interop/
+          path: android/core/data/build/reports/wp203/interop/testDebugUnitTest/
           if-no-files-found: error
           overwrite: true
           retention-days: 1

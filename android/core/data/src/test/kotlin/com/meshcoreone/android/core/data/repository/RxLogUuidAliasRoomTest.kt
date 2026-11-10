@@ -20,10 +20,14 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class RxLogUuidAliasRoomTest : RepositoryTest() {
+    @get:Rule val temporary = TemporaryFolder()
+
     private val radio = RadioId(UUID.fromString("ABCDEFAB-1234-5678-90AB-ABCDEFABCDEF"))
     private val entryId = UUID.fromString("FEDCBAFE-1234-5678-90AB-FEDCBAFEDCBA")
     private fun entry() = rx(radio, entryId).copy(channelName = "original", regionScope = "original")
@@ -332,7 +336,7 @@ class RxLogUuidAliasRoomTest : RepositoryTest() {
     }
 
     @Test fun independentFileBackedContextsRevalidateAfterAnAliasWriterCommitsAndPreserveBothValues() = runTest {
-        val name = "rx-alias-${UUID.randomUUID()}.db"
+        val name = temporary.root.resolve("rx-alias-${UUID.randomUUID()}.db").absolutePath
         val immediate = Executor { it.run() }
         fun open() = Room.databaseBuilder(context, MeshCoreDatabase::class.java, name)
             .allowMainThreadQueries().setQueryExecutor(immediate).setTransactionExecutor(immediate).build()

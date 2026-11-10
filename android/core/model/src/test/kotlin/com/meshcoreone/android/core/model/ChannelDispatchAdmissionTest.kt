@@ -49,34 +49,35 @@ class ChannelDispatchAdmissionTest {
             assertEquals(0L, admission.inFlightCount)
         }
 
-        @Test fun pauseRejectsNewAdmissionWithoutDiscardingTheAdmittedDrain() {
-            val token = token()
-            val connection = Any()
-            val admission = ChannelDispatchAdmission(token, connection)
-            val permit = assertNotNull(admission.tryAcquire(token, connection))
-            admission.pause()
-            assertTrue(admission.isPaused)
-            assertFalse(admission.isRevoked)
-            assertEquals(1L, admission.inFlightCount)
-            assertNull(admission.tryAcquire(token, connection))
-            permit.complete()
-            assertEquals(0L, admission.inFlightCount)
-            admission.resume()
-            assertFalse(admission.isPaused)
-            assertNotNull(admission.tryAcquire(token, connection)).complete()
-        }
+    }
 
-        @Test fun resumeCannotUndoRevocationDuringAnIdentityPause() {
-            val token = token()
-            val connection = Any()
-            val admission = ChannelDispatchAdmission(token, connection)
-            admission.pause()
-            admission.revoke()
-            admission.resume()
-            assertTrue(admission.isRevoked)
-            assertNull(admission.tryAcquire(token, connection))
-            assertEquals(0L, admission.inFlightCount)
-        }
+    @Test fun pauseRejectsNewAdmissionWithoutDiscardingTheAdmittedDrain() {
+        val token = token()
+        val connection = Any()
+        val admission = ChannelDispatchAdmission(token, connection)
+        val permit = assertNotNull(admission.tryAcquire(token, connection))
+        admission.pause()
+        assertTrue(admission.isPaused)
+        assertFalse(admission.isRevoked)
+        assertEquals(1L, admission.inFlightCount)
+        assertNull(admission.tryAcquire(token, connection))
+        permit.complete()
+        assertEquals(0L, admission.inFlightCount)
+        admission.resume()
+        assertFalse(admission.isPaused)
+        assertNotNull(admission.tryAcquire(token, connection)).complete()
+    }
+
+    @Test fun resumeCannotUndoRevocationDuringAnIdentityPause() {
+        val token = token()
+        val connection = Any()
+        val admission = ChannelDispatchAdmission(token, connection)
+        admission.pause()
+        admission.revoke()
+        admission.resume()
+        assertTrue(admission.isRevoked)
+        assertNull(admission.tryAcquire(token, connection))
+        assertEquals(0L, admission.inFlightCount)
     }
 
     @Test fun revokeRetainsAdmittedAccountingAndCompletionNeverReactivatesIt() {

@@ -32,7 +32,6 @@ import com.meshcoreone.android.core.model.RoomMessageDTO
 import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.model.canonicalString
 import com.meshcoreone.android.core.protocol.bytes.Bytes
-import com.meshcoreone.android.core.services.notifications.didReceive
 import com.meshcoreone.android.feature.chats.rooms.RoomConversationStateHolder
 import com.meshcoreone.android.feature.chats.timeline.ChatViewModel
 import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
@@ -103,7 +102,9 @@ class MountedNotificationRetentionTest : RoomProcessTest() {
             assertTrue(holder.state.value.messages.any { it.id == message.id })
             assertEquals(0L, assertNotNull(store.fetchRemoteNodeSession(EntityKey(radio, room.id))).unreadCount)
             fixture.assertRetappable(post, before)
-            graph.notificationService.didReceive(NotificationResponse(payload, NotificationAction.MARK_READ, null))
+            assertTrue(fixture.harness.container.handleNotificationResponse(
+                NotificationResponse(payload, NotificationAction.MARK_READ, null),
+            ))
             assertFalse(fixture.delivery.deliveredNotifications().any { it.id == post.id })
         } finally {
             screenScope.cancel()
@@ -172,7 +173,9 @@ class MountedNotificationRetentionTest : RoomProcessTest() {
             }
             fixture.assertRetappable(post, before)
             if (direct) {
-                graph.notificationService.didReceive(NotificationResponse(payload, NotificationAction.MARK_READ, null))
+                assertTrue(fixture.harness.container.handleNotificationResponse(
+                    NotificationResponse(payload, NotificationAction.MARK_READ, null),
+                ))
                 assertFalse(fixture.delivery.deliveredNotifications().any { it.id == post.id })
             }
         } finally {
@@ -239,8 +242,10 @@ class MountedNotificationRetentionTest : RoomProcessTest() {
             harness.assertReady()
             val graph = assertNotNull(harness.sessions.current)
             harness.eventually("notification action handlers are wired for the ready session") {
+                val navigation = harness.container.navigation.currentState
                 graph.notificationService.onMarkAsRead != null && graph.notificationService.onRoomMarkAsRead != null &&
-                    harness.sessions.current === graph && harness.appState.connectionState == DeviceConnectionState.READY
+                    harness.sessions.current === graph && harness.appState.connectionState == DeviceConnectionState.READY &&
+                    navigation.boundSessionToken == graph.token && navigation.navigationReady
             }
             return graph
         }

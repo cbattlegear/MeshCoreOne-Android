@@ -34,12 +34,14 @@ fun ChatsEntry(
     failureText: @Composable (Throwable) -> UiText = { UiText.Verbatim(it.message ?: it.javaClass.simpleName) },
     detailPane: (@Composable (ChatRoute?) -> Unit)? = null,
     avatarCache: AvatarImageCache? = null,
+    consumePendingRoomAuthentication: Boolean = true,
 ) {
     if (dependencies != null) {
         ChatsAdaptiveLayout(selectedRoute, detail = detailPane, list = { modifier ->
             ChatsListRoot(
                 dependencies, selectedRoute, onOpenChat, onClearSelection, onNewChannel,
                 onRoomAuthenticationRequested, failureText, modifier, avatarCache,
+                consumePendingRoomAuthentication = consumePendingRoomAuthentication,
             )
         })
         return

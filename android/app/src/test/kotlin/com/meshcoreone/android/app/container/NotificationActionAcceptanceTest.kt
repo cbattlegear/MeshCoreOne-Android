@@ -41,12 +41,22 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import org.junit.After
 import org.junit.Assert.*
+import org.junit.Before
 import org.junit.Test
 import org.robolectric.Shadows.shadowOf
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class NotificationActionAcceptanceTest : RoomProcessTest() {
+    @Before
+    @After
+    fun resetProcessDispatcher() {
+        // Quarantined actions deliberately outlive router replacement, but not a simulated process.
+        val type = Class.forName("com.meshcoreone.android.platform.notifications.messaging.NotificationActionDispatcher")
+        type.getMethod("resetForTesting\$notifications").invoke(type.getField("INSTANCE").get(null))
+    }
+
     @Test fun directAcceptedReplyIsNotReplayedByReplacementDispatcher() = runTest { replyBoundary(channel = false) }
     @Test fun channelAcceptedReplyIsNotReplayedByReplacementDispatcher() = runTest { replyBoundary(channel = true) }
     @Test fun unknownDirectAcceptanceIsNotReplayedOrRestoredAsUnsent() = runTest {

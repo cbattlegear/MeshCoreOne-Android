@@ -140,8 +140,14 @@ class ChatMapPreviewTest : RoomProcessTest() {
     @Test fun sharedLoadingFailureAndRetryReachBothCardsWithoutDuplicateRenders() = runTest {
         val first = CompletableDeferred<Bitmap?>()
         val second = CompletableDeferred<Bitmap?>()
+        val secondStarted = CompletableDeferred<Unit>()
         var calls = 0
-        withFixture(render = { if (++calls == 1) first.await() else second.await() }) {
+        withFixture(render = {
+            if (++calls == 1) first.await() else {
+                secondStarted.complete(Unit)
+                second.await()
+            }
+        }) {
             compose.runOnUiThread { host.setContent { MeshCoreTheme(motionScale = 0f) { Column {
                 repeat(2) { AppMessageContent(content, message, ::report, onMap = {}) }
             } } } }
@@ -155,6 +161,7 @@ class ChatMapPreviewTest : RoomProcessTest() {
             compose.onAllNodesWithContentDescription(retry, useUnmergedTree = true)[0]
                 .assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp).performClick()
             compose.onAllNodesWithTag("chat-map-loading", useUnmergedTree = true).assertCountEquals(2)
+            compose.waitUntil(10_000) { secondStarted.isCompleted }
             assertEquals(2, calls)
             compose.runOnIdle { second.complete(bitmap()) }
             compose.waitUntil(10_000) {

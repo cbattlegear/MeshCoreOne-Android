@@ -1,4 +1,5 @@
 // AndroidOnly: WP-305 Verify Settings onboarding cannot be unmounted while preset work is in flight.
+// AndroidOnly: WP-302 Verify mounted navigation preserves entry and session authority.
 package com.meshcoreone.android.app.navigation
 
 import android.content.Context
@@ -29,11 +30,15 @@ import com.meshcoreone.android.app.container.onboarding.ServicesRegionCatalog
 import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.core.contracts.FeatureId
 import com.meshcoreone.android.core.contracts.FeatureRoute
+import com.meshcoreone.android.core.contracts.domain.Generation
+import com.meshcoreone.android.core.contracts.domain.ProcessEpoch
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import com.meshcoreone.android.core.l10n.generated.AppOnboardingStrings as O
 import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings as S
 import com.meshcoreone.android.core.model.RegionSelection
+import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.services.simulator.DemoModeDefaults
 import com.meshcoreone.android.core.services.simulator.DemoModeManager
 import com.meshcoreone.android.feature.onboarding.InMemoryOnboardingFlagStore
@@ -47,15 +52,24 @@ import com.meshcoreone.android.feature.onboarding.OnboardingPresetTarget
 import com.meshcoreone.android.feature.onboarding.OnboardingStep
 import com.meshcoreone.android.feature.onboarding.OnboardingState
 import com.meshcoreone.android.feature.onboarding.ui.OnboardingFlow
+import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -116,7 +130,12 @@ class SettingsRerunNavigationTest {
         )
     }
 
-    private fun mountShell(navigation: NavigationCoordinator, onboarding: OnboardingFeatureDependencies) {
+    private fun mountShell(
+        navigation: NavigationCoordinator,
+        onboarding: OnboardingFeatureDependencies,
+        sessionCapture: (NavigationState) -> (MountedOnboardingProducer) -> Boolean = { { true } },
+    ) {
+        navigation.installOnboardingSessionCapture(sessionCapture)
         host.get().setContent {
             MeshCoreTheme(motionScale = 0f) {
                 NativeNavigationShell(navigation, onboarding = onboarding)
@@ -578,21 +597,609 @@ class SettingsRerunNavigationTest {
 
     @Test fun `off-tab onboarding completion cannot pop the selected tab entry`() {
         val navigation = NavigationCoordinator().also {
+            it.installOnboardingSessionCapture { { true } }
             it.navigateToDiscovery()
             it.selectTab(AppTab.SETTINGS)
             it.navigate(FeatureRoute(FeatureId.ONBOARDING))
-            it.selectTab(AppTab.NODES)
         }
+        val presented = navigation.publishedNavigation.value
+        val completion = navigation.captureMountedOnboarding(presented, presented.value.activeStack.last().id)
+        navigation.selectTab(AppTab.NODES)
         val selectedStack = navigation.state.value.activeStack
 
-        completeOnboardingNavigationIfCurrent(
-            navigation,
-            FeatureRoute(FeatureId.CHATS),
-            navigation::navigate,
-        )
+        assertFalse(navigation.completeMountedOnboarding(completion, MountedOnboardingProducer.NoDevice))
 
         assertEquals(AppTab.NODES, navigation.state.value.selectedTab)
         assertEquals(selectedStack, navigation.state.value.activeStack)
+    }
+
+    @Test fun `returning to an idle onboarding entry preserves its flow and accepts a fresh completion`() {
+        val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            val dependencies = appOnboarding(processScope, object : OnboardingPresetPort {
+                override val canApply = MutableStateFlow(false)
+                override suspend fun apply(presetId: String): OnboardingPresetOutcome =
+                    error("This flow must not apply a preset")
+            })
+            val navigation = NavigationCoordinator().also { it.selectTab(AppTab.SETTINGS) }
+            mountShell(navigation, dependencies)
+            compose.onNodeWithTag("open-radio-setup").performClick()
+            val retention = navigation.onboardingRetention(dependencies)
+            compose.waitUntil(5_000) { retention.mountedEntries.value.size == 1 }
+            val entry = retention.mountedEntries.value.values.single()
+            val originalWitness = entry.witness.get()
+            compose.runOnUiThread { entry.flow.onboarding.replacePath(listOf(OnboardingStep.PERMISSIONS)) }
+
+            compose.onNodeWithTag("tab:NODES").assertIsEnabled().performClick()
+            compose.onNodeWithTag("tab:SETTINGS").assertIsEnabled().performClick()
+            compose.waitUntil(5_000) { navigation.state.value.activeStack.last().id == entry.identity.entryId }
+            compose.waitUntil(5_000) { entry.witness.get() !== originalWitness }
+            compose.waitForIdle()
+            assertSame(entry, retention.mountedEntries.value[entry.identity])
+            assertEquals(OnboardingStep.PERMISSIONS, entry.flow.currentStep)
+            assertFalse(navigation.completeMountedOnboarding(originalWitness, MountedOnboardingProducer.NoDevice))
+
+            compose.runOnUiThread { entry.flow.confirmNoDevice() }
+            compose.waitUntil(5_000) { navigation.state.value.selectedTab == AppTab.CHATS }
+            compose.waitUntil(5_000) { !entry.owner.ownsFlowCoordinator(entry.flow) }
+        } finally {
+            processScope.cancel()
+        }
+    }
+
+    @Test fun `reactivated presentation keeps original authority and retirement`() {
+        for (retireOwner in listOf(false, true)) {
+            val navigation = NavigationCoordinator().also {
+                it.installOnboardingSessionCapture { { true } }
+                it.selectTab(AppTab.SETTINGS)
+                it.navigate(FeatureRoute(FeatureId.ONBOARDING))
+            }
+            val original = navigation.publishedNavigation.value
+            val entryId = original.value.activeStack.last().id
+            val first = checkNotNull(navigation.captureMountedOnboarding(original, entryId))
+            navigation.selectTab(AppTab.NODES)
+            navigation.selectTab(AppTab.SETTINGS)
+            val reactivated = navigation.publishedNavigation.value
+            val next = checkNotNull(navigation.prepareMountedOnboardingPresentation(first, reactivated))
+            assertSame(original, next.initiatingPresentation)
+            assertFalse(navigation.completeMountedOnboarding(first, MountedOnboardingProducer.NoDevice))
+            if (retireOwner) navigation.retireMountedOnboarding(first)
+            else navigation.retireMountedOnboardingPresentation(first)
+            assertEquals(
+                !retireOwner,
+                navigation.completeMountedOnboarding(next, MountedOnboardingProducer.NoDevice),
+            )
+        }
+    }
+
+    @Test fun `reactivated entry accepts its authorized first session binding`() {
+        val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            val token = SessionToken(ProcessEpoch(UUID(0, 81)), Generation(1), RadioId(UUID(0, 82)))
+            val target = OnboardingPresetTarget(token.epoch.value, token.generation.value, token.radioId.value)
+            val current = AtomicReference<OnboardingPresetTarget?>(null)
+            val presets = object : OnboardingPresetPort {
+                override val canApply = MutableStateFlow(false)
+                override fun currentTarget(): OnboardingPresetTarget? = current.get()
+                override suspend fun apply(presetId: String): OnboardingPresetOutcome =
+                    error("This flow must not apply a preset")
+            }
+            val dependencies = appOnboarding(processScope, presets)
+            val navigation = NavigationCoordinator().also { it.selectTab(AppTab.SETTINGS) }
+            val capture: (NavigationState) -> (MountedOnboardingProducer) -> Boolean = { _ ->
+                val origin = current.get()
+                val valid: (MountedOnboardingProducer) -> Boolean = { producer ->
+                    origin == null && current.get() == target &&
+                        producer == MountedOnboardingProducer.NoDeviceAtSession(token)
+                }
+                valid
+            }
+            mountShell(navigation, dependencies, capture)
+            compose.onNodeWithTag("open-radio-setup").performClick()
+            val retention = navigation.onboardingRetention(dependencies)
+            compose.waitUntil(5_000) { retention.mountedEntries.value.size == 1 }
+            val entry = retention.mountedEntries.value.values.single()
+            val original = entry.witness.get()
+
+            compose.onNodeWithTag("tab:NODES").assertIsEnabled().performClick()
+            current.set(target)
+            assertTrue(navigation.bindNotificationSession(token.radioId, null, token))
+            compose.onNodeWithTag("tab:SETTINGS").assertIsEnabled().performClick()
+            compose.waitUntil(5_000) { entry.witness.get() !== original }
+            assertSame(original.initiatingPresentation, entry.witness.get().initiatingPresentation)
+            compose.runOnUiThread { entry.flow.confirmNoDevice() }
+            compose.waitUntil(5_000) { navigation.state.value.selectedTab == AppTab.CHATS }
+            assertEquals(token, navigation.currentState.boundSessionToken)
+        } finally {
+            processScope.cancel()
+        }
+    }
+
+    @Test fun `reactivated entry rejects a replacement graph before navigation binding`() {
+        val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            val dependencies = appOnboarding(processScope, object : OnboardingPresetPort {
+                override val canApply = MutableStateFlow(false)
+                override suspend fun apply(presetId: String): OnboardingPresetOutcome =
+                    error("This flow must not apply a preset")
+            })
+            val navigation = NavigationCoordinator().also { it.selectTab(AppTab.SETTINGS) }
+            val currentGraph = AtomicReference(Any())
+            val capture: (NavigationState) -> (MountedOnboardingProducer) -> Boolean = { _ ->
+                val origin = currentGraph.get()
+                val valid: (MountedOnboardingProducer) -> Boolean = { currentGraph.get() === origin }
+                valid
+            }
+            mountShell(navigation, dependencies, capture)
+            compose.onNodeWithTag("open-radio-setup").performClick()
+            val retention = navigation.onboardingRetention(dependencies)
+            compose.waitUntil(5_000) { retention.mountedEntries.value.size == 1 }
+            val entry = retention.mountedEntries.value.values.single()
+            val original = entry.witness.get()
+
+            compose.onNodeWithTag("tab:NODES").assertIsEnabled().performClick()
+            currentGraph.set(Any())
+            compose.onNodeWithTag("tab:SETTINGS").assertIsEnabled().performClick()
+            compose.waitUntil(5_000) { entry.witness.get() !== original }
+            assertFalse(navigation.completeMountedOnboarding(entry.witness.get(), MountedOnboardingProducer.NoDevice))
+            compose.runOnUiThread { entry.flow.confirmNoDevice() }
+            compose.waitUntil(5_000) { entry.recovery.value.failed }
+            compose.onNodeWithTag("onboarding-completion-recovery").assertIsDisplayed()
+            assertEquals(AppTab.SETTINGS, navigation.currentState.selectedTab)
+            assertEquals(entry.identity.entryId, navigation.currentState.activeStack.last().id)
+        } finally {
+            processScope.cancel()
+        }
+    }
+
+    @Test fun `reactivated entry rejects a replacement session after binding`() {
+        val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            val radioId = RadioId(UUID(0, 83))
+            val epoch = ProcessEpoch(UUID(0, 84))
+            val originalToken = SessionToken(epoch, Generation(1), radioId)
+            val replacementToken = SessionToken(epoch, Generation(2), radioId)
+            val originalTarget = OnboardingPresetTarget(epoch.value, 1, radioId.value)
+            val replacementTarget = OnboardingPresetTarget(epoch.value, 2, radioId.value)
+            val current = AtomicReference(originalTarget)
+            val presets = object : OnboardingPresetPort {
+                override val canApply = MutableStateFlow(false)
+                override fun currentTarget() = current.get()
+                override suspend fun apply(presetId: String): OnboardingPresetOutcome =
+                    error("This flow must not apply a preset")
+            }
+            val dependencies = appOnboarding(processScope, presets)
+            val navigation = NavigationCoordinator().also {
+                it.selectTab(AppTab.SETTINGS)
+                assertTrue(it.bindNotificationSession(radioId, null, originalToken))
+            }
+            val capture: (NavigationState) -> (MountedOnboardingProducer) -> Boolean = { _ ->
+                val origin = current.get()
+                val valid: (MountedOnboardingProducer) -> Boolean = { current.get() == origin }
+                valid
+            }
+            mountShell(navigation, dependencies, capture)
+            compose.onNodeWithTag("open-radio-setup").performClick()
+            val retention = navigation.onboardingRetention(dependencies)
+            compose.waitUntil(5_000) { retention.mountedEntries.value.size == 1 }
+            val entry = retention.mountedEntries.value.values.single()
+            val original = entry.witness.get()
+
+            compose.onNodeWithTag("tab:NODES").assertIsEnabled().performClick()
+            current.set(replacementTarget)
+            assertTrue(navigation.bindNotificationSession(radioId, null, replacementToken))
+            compose.onNodeWithTag("tab:SETTINGS").assertIsEnabled().performClick()
+            compose.waitUntil(5_000) { entry.witness.get() !== original }
+            assertSame(original.initiatingPresentation, entry.witness.get().initiatingPresentation)
+            compose.runOnUiThread { entry.flow.confirmNoDevice() }
+            compose.waitUntil(5_000) { entry.recovery.value.failed }
+            compose.onNodeWithTag("onboarding-completion-recovery").assertIsDisplayed()
+            assertEquals(AppTab.SETTINGS, navigation.currentState.selectedTab)
+            assertEquals(entry.identity.entryId, navigation.currentState.activeStack.last().id)
+            assertEquals(replacementToken, navigation.currentState.boundSessionToken)
+        } finally {
+            processScope.cancel()
+        }
+    }
+
+    @Test fun `mounted restart rejects replacement during reset and accepts a new explicit attempt`() = runBlocking {
+        val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val completionStarted = CompletableDeferred<Unit>()
+        val releaseCompletion = CompletableDeferred<Unit>()
+        val resetStarted = CompletableDeferred<Unit>()
+        val releaseReset = CompletableDeferred<Unit>()
+        try {
+            val completed = AtomicBoolean()
+            val writes = AtomicInteger()
+            val resets = AtomicInteger()
+            val flags = object : OnboardingFlagStore {
+                override fun getBoolean(key: String) = completed.get()
+                override fun setBoolean(key: String, value: Boolean) { completed.set(value) }
+                override suspend fun persistBoolean(key: String, value: Boolean) {
+                    if (value && writes.incrementAndGet() == 1) {
+                        completionStarted.complete(Unit)
+                        releaseCompletion.await()
+                    }
+                    if (!value && resets.incrementAndGet() == 1) {
+                        resetStarted.complete(Unit)
+                        releaseReset.await()
+                    }
+                    completed.set(value)
+                }
+            }
+            val radioId = RadioId(UUID(0, 131))
+            val epoch = ProcessEpoch(UUID(0, 132))
+            val first = SessionToken(epoch, Generation(1), radioId)
+            val second = first.copy(generation = Generation(2))
+            val third = first.copy(generation = Generation(3))
+            fun target(token: SessionToken) =
+                OnboardingPresetTarget(token.epoch.value, token.generation.value, token.radioId.value)
+            val current = AtomicReference(target(first))
+            val presets = object : OnboardingPresetPort {
+                override val canApply = MutableStateFlow(false)
+                override fun currentTarget() = current.get()
+                override suspend fun apply(presetId: String): OnboardingPresetOutcome =
+                    error("This flow must not apply a preset")
+            }
+            val dependencies = TestRerunDependencies(appOnboarding(processScope, presets).forRerun(), flags, processScope)
+            val navigation = NavigationCoordinator().also {
+                it.selectTab(AppTab.SETTINGS)
+                assertTrue(it.bindNotificationSession(radioId, null, first))
+            }
+            val capture: (NavigationState) -> (MountedOnboardingProducer) -> Boolean = { _ ->
+                val origin = current.get()
+                val valid: (MountedOnboardingProducer) -> Boolean = { producer ->
+                    current.get() == origin && when (producer) {
+                        MountedOnboardingProducer.NoDevice -> true
+                        is MountedOnboardingProducer.NoDeviceAtSession -> target(producer.token) == origin
+                        is MountedOnboardingProducer.Preset -> target(producer.token) == origin
+                    }
+                }
+                valid
+            }
+            mountShell(navigation, dependencies, capture)
+            compose.onNodeWithTag("open-radio-setup").performClick()
+            val retention = navigation.onboardingRetention(dependencies)
+            compose.waitUntil(5_000) { retention.mountedEntries.value.size == 1 }
+            val entry = retention.mountedEntries.value.values.single()
+            val originalWitness = entry.witness.get()
+
+            compose.runOnUiThread { entry.flow.confirmNoDevice() }
+            withTimeout(5_000) { completionStarted.await() }
+            compose.runOnUiThread {
+                current.set(target(second))
+                assertTrue(navigation.bindNotificationSession(radioId, null, second))
+            }
+            releaseCompletion.complete(Unit)
+            compose.waitUntil(5_000) { entry.recovery.value.failed }
+            compose.onNodeWithTag("onboarding-completion-restart").performClick()
+            withTimeout(5_000) { resetStarted.await() }
+            compose.runOnUiThread {
+                current.set(target(third))
+                assertTrue(navigation.bindNotificationSession(radioId, null, third))
+            }
+            releaseReset.complete(Unit)
+            compose.waitUntil(5_000) { entry.recovery.value.failed && !entry.recovery.value.restarting }
+            assertSame(originalWitness, entry.witness.get())
+            assertRerunStillMounted(navigation)
+            assertFalse(completed.get())
+
+            compose.onNodeWithTag("onboarding-completion-restart").performClick()
+            compose.waitUntil(5_000) { !entry.recovery.value.failed && !entry.recovery.value.restarting }
+            compose.runOnUiThread { entry.flow.confirmNoDevice() }
+            compose.waitUntil(5_000) { navigation.state.value.selectedTab == AppTab.CHATS }
+            assertTrue(completed.get())
+            assertEquals(2, resets.get())
+            assertEquals(third, navigation.currentState.boundSessionToken)
+        } finally {
+            releaseCompletion.complete(Unit)
+            releaseReset.complete(Unit)
+            processScope.cancel()
+        }
+    }
+
+    @Test fun `in-flight completion is not rebound after a programmatic tab round trip`() = runBlocking {
+        val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val applyStarted = CompletableDeferred<Unit>()
+        val releaseApply = CompletableDeferred<Unit>()
+        try {
+            val token = SessionToken(ProcessEpoch(UUID(0, 91)), Generation(1), RadioId(UUID(0, 92)))
+            val target = OnboardingPresetTarget(token.epoch.value, token.generation.value, token.radioId.value)
+            val presets = object : OnboardingPresetPort {
+                override val canApply = MutableStateFlow(true)
+                override fun currentTarget() = target
+                override suspend fun apply(presetId: String): OnboardingPresetOutcome {
+                    applyStarted.complete(Unit)
+                    releaseApply.await()
+                    return OnboardingPresetOutcome.Applied
+                }
+            }
+            val dependencies = appOnboarding(processScope, presets)
+            val navigation = NavigationCoordinator().also {
+                it.selectTab(AppTab.SETTINGS)
+                assertTrue(it.bindNotificationSession(token.radioId, null, token))
+            }
+            mountShell(navigation, dependencies)
+            compose.onNodeWithTag("open-radio-setup").performClick()
+            val retention = navigation.onboardingRetention(dependencies)
+            compose.waitUntil(5_000) { retention.mountedEntries.value.size == 1 }
+            val entry = retention.mountedEntries.value.values.single()
+            val original = entry.witness.get()
+            val presetId = entry.flow.preset.visiblePresets().first().id
+            compose.runOnUiThread {
+                entry.flow.onboarding.replacePath(listOf(OnboardingStep.PRESET))
+                entry.flow.preset.select(presetId)
+                entry.flow.preset.apply()
+            }
+            withTimeout(5_000) { applyStarted.await() }
+            compose.runOnUiThread {
+                navigation.selectTab(AppTab.NODES)
+                navigation.selectTab(AppTab.SETTINGS)
+            }
+            compose.waitForIdle()
+            assertSame(original, entry.witness.get())
+            releaseApply.complete(Unit)
+            compose.waitUntil(5_000) { entry.recovery.value.failed }
+            compose.onNodeWithTag("onboarding-completion-recovery").assertIsDisplayed()
+            assertSame(original, entry.witness.get())
+            assertEquals(AppTab.SETTINGS, navigation.currentState.selectedTab)
+            assertEquals(entry.identity.entryId, navigation.currentState.activeStack.last().id)
+        } finally {
+            releaseApply.complete(Unit)
+            processScope.cancel()
+        }
+    }
+
+    @Test fun `failed in-flight action can refresh before a new completion`() = runBlocking {
+        val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val applyStarted = CompletableDeferred<Unit>()
+        val releaseApply = CompletableDeferred<Unit>()
+        try {
+            val token = SessionToken(ProcessEpoch(UUID(0, 93)), Generation(1), RadioId(UUID(0, 94)))
+            val target = OnboardingPresetTarget(token.epoch.value, token.generation.value, token.radioId.value)
+            val presets = object : OnboardingPresetPort {
+                override val canApply = MutableStateFlow(true)
+                override fun currentTarget() = target
+                override suspend fun apply(presetId: String): OnboardingPresetOutcome {
+                    applyStarted.complete(Unit)
+                    releaseApply.await()
+                    return OnboardingPresetOutcome.NotConnected
+                }
+            }
+            val dependencies = appOnboarding(processScope, presets)
+            val navigation = NavigationCoordinator().also {
+                it.selectTab(AppTab.SETTINGS)
+                assertTrue(it.bindNotificationSession(token.radioId, null, token))
+            }
+            mountShell(navigation, dependencies)
+            compose.onNodeWithTag("open-radio-setup").performClick()
+            val retention = navigation.onboardingRetention(dependencies)
+            compose.waitUntil(5_000) { retention.mountedEntries.value.size == 1 }
+            val entry = retention.mountedEntries.value.values.single()
+            val original = entry.witness.get()
+            val presetId = entry.flow.preset.visiblePresets().first().id
+            compose.runOnUiThread {
+                entry.flow.onboarding.replacePath(listOf(OnboardingStep.PRESET))
+                entry.flow.preset.select(presetId)
+                entry.flow.preset.apply()
+            }
+            withTimeout(5_000) { applyStarted.await() }
+            compose.runOnUiThread {
+                navigation.selectTab(AppTab.NODES)
+                navigation.selectTab(AppTab.SETTINGS)
+            }
+            compose.waitForIdle()
+            assertSame(original, entry.witness.get())
+            releaseApply.complete(Unit)
+            compose.waitUntil(5_000) { entry.witness.get() !== original }
+            compose.runOnUiThread {
+                entry.flow.onboarding.replacePath(listOf(OnboardingStep.PAIR))
+                entry.flow.confirmNoDevice()
+            }
+            compose.waitUntil(5_000) { navigation.state.value.selectedTab == AppTab.CHATS }
+            assertEquals(token, navigation.currentState.boundSessionToken)
+        } finally {
+            releaseApply.complete(Unit)
+            processScope.cancel()
+        }
+    }
+
+    @Test fun `rerun recreation retains its entry while retired work cannot complete a successor`() = runBlocking {
+        val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val applyStarted = CompletableDeferred<Unit>()
+        val releaseApply = CompletableDeferred<Unit>()
+        val applyExited = CompletableDeferred<Unit>()
+        try {
+            val token = SessionToken(ProcessEpoch(UUID(0, 31)), Generation(1), RadioId(UUID(0, 32)))
+            val target = OnboardingPresetTarget(token.epoch.value, token.generation.value, token.radioId.value)
+            var applies = 0
+            val presets = object : OnboardingPresetPort {
+                override val canApply = MutableStateFlow(true)
+                override fun currentTarget() = target
+                override suspend fun apply(presetId: String): OnboardingPresetOutcome {
+                    applies++
+                    applyStarted.complete(Unit)
+                    try {
+                        return withContext(NonCancellable) {
+                            releaseApply.await()
+                            OnboardingPresetOutcome.Applied
+                        }
+                    } finally {
+                        applyExited.complete(Unit)
+                    }
+                }
+            }
+            val dependencies = appOnboarding(processScope, presets)
+            val navigation = NavigationCoordinator().also {
+                it.selectTab(AppTab.SETTINGS)
+                assertTrue(it.bindNotificationSession(token.radioId, null, token))
+            }
+            mountShell(navigation, dependencies)
+            compose.onNodeWithTag("open-radio-setup").performClick()
+            val retention = navigation.onboardingRetention(dependencies)
+            compose.waitUntil(5_000) { retention.mountedEntries.value.size == 1 }
+            val first = retention.mountedEntries.value.values.single()
+            val oldWitness = first.witness.get()
+            val presetId = first.flow.preset.visiblePresets().first().id
+            compose.runOnUiThread {
+                first.flow.onboarding.replacePath(listOf(OnboardingStep.PRESET))
+                first.flow.preset.select(presetId)
+                first.flow.preset.apply()
+            }
+            withTimeout(5_000) { applyStarted.await() }
+
+            host.recreate()
+            mountShell(navigation, dependencies)
+            compose.waitForIdle()
+            assertSame(first, retention.mountedEntries.value[first.identity])
+            assertSame(oldWitness, first.witness.get())
+            assertTrue(first.flow.preset.state.value.isApplying)
+
+            compose.runOnUiThread {
+                assertTrue(navigation.back())
+                navigation.navigate(FeatureRoute(FeatureId.ONBOARDING))
+            }
+            compose.waitUntil(5_000) {
+                !first.owner.ownsFlowCoordinator(first.flow) &&
+                    retention.mountedEntries.value.values.any { it.identity != first.identity }
+            }
+            val successor = retention.mountedEntries.value.values.single()
+            assertNotSame(first.owner, successor.owner)
+            assertNotSame(first.flow, successor.flow)
+            assertFalse(navigation.completeMountedOnboarding(oldWitness, MountedOnboardingProducer.Preset(token)))
+            releaseApply.complete(Unit)
+            withTimeout(5_000) { applyExited.await() }
+            withTimeout(5_000) { first.flow.preset.state.first { !it.isApplying } }
+            compose.waitForIdle()
+            assertRerunStillMounted(navigation)
+            assertEquals(successor.identity.entryId, navigation.currentState.activeStack.last().id)
+            assertFalse(successor.flow.onboarding.hasCompletedOnboarding)
+            assertEquals(1, applies)
+
+            compose.runOnUiThread { successor.flow.confirmNoDevice() }
+            compose.waitUntil(5_000) { navigation.state.value.selectedTab == AppTab.CHATS }
+            assertEquals(token, navigation.currentState.boundSessionToken)
+        } finally {
+            releaseApply.complete(Unit)
+            processScope.cancel()
+        }
+    }
+
+    @Test fun `generic fallback creates a new flow after Activity scope recreation`() {
+        val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        try {
+            val base = appOnboarding(processScope, object : OnboardingPresetPort {
+                override val canApply = MutableStateFlow(false)
+                override suspend fun apply(presetId: String): OnboardingPresetOutcome =
+                    error("A fallback flow must not apply a preset")
+            })
+            val dependencies = object : OnboardingFeatureDependencies by base.forRerun() {
+                override fun retainedFlowCoordinator(): OnboardingFlowCoordinator? = null
+                override fun ownsFlowCoordinator(coordinator: OnboardingFlowCoordinator): Boolean = true
+            }
+            val navigation = NavigationCoordinator().also { it.selectTab(AppTab.SETTINGS) }
+            mountShell(navigation, dependencies)
+            compose.onNodeWithTag("open-radio-setup").performClick()
+            val retention = navigation.onboardingRetention(dependencies)
+            compose.waitUntil(5_000) { retention.mountedEntries.value.size == 1 }
+            val first = retention.mountedEntries.value.values.single()
+
+            host.recreate()
+            mountShell(navigation, dependencies)
+            compose.waitUntil(5_000) { retention.mountedEntries.value.values.singleOrNull()?.let { it !== first } == true }
+            val replacement = retention.mountedEntries.value.values.single()
+            assertEquals(first.identity, replacement.identity)
+            assertNotSame(first.flow, replacement.flow)
+            assertFalse(first.flow.onboarding.canStartCompletion())
+            assertTrue(replacement.flow.onboarding.canStartCompletion())
+        } finally {
+            processScope.cancel()
+        }
+    }
+
+    @Test fun `generic owner cannot be reused until entry retirement finishes`() {
+        val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val retiring = CountDownLatch(1)
+        val releaseRetirement = CountDownLatch(1)
+        try {
+            val base = appOnboarding(processScope, object : OnboardingPresetPort {
+                override val canApply = MutableStateFlow(false)
+                override suspend fun apply(presetId: String): OnboardingPresetOutcome =
+                    error("This flow must not apply a preset")
+            })
+            val dependencies = object : OnboardingFeatureDependencies by base.forRerun() {
+                @Volatile private var current = OnboardingFlowCoordinator(processScope, this).also {
+                    it.restoreStartingPath()
+                }
+                override fun retainedFlowCoordinator(): OnboardingFlowCoordinator = current
+                override fun ownsFlowCoordinator(coordinator: OnboardingFlowCoordinator) = current === coordinator
+                override fun onFlowCoordinatorEntryRemoved(coordinator: OnboardingFlowCoordinator) {
+                    retiring.countDown()
+                    check(releaseRetirement.await(5, TimeUnit.SECONDS))
+                    coordinator.onboarding.retireCompletion()
+                    current = OnboardingFlowCoordinator(processScope, this).also { it.restoreStartingPath() }
+                }
+            }
+            val navigation = NavigationCoordinator().also { it.selectTab(AppTab.SETTINGS) }
+            mountShell(navigation, dependencies)
+            compose.onNodeWithTag("open-radio-setup").performClick()
+            val retention = navigation.onboardingRetention(dependencies)
+            compose.waitUntil(5_000) { retention.mountedEntries.value.size == 1 }
+            val first = retention.mountedEntries.value.values.single()
+            compose.runOnUiThread { assertTrue(navigation.back()) }
+            compose.waitUntil(5_000) { retiring.count == 0L }
+            compose.runOnUiThread { navigation.navigate(FeatureRoute(FeatureId.ONBOARDING)) }
+            compose.waitForIdle()
+            assertTrue(retention.mountedEntries.value.isEmpty())
+            assertFalse(navigation.completeMountedOnboarding(first.witness.get(), MountedOnboardingProducer.NoDevice))
+
+            releaseRetirement.countDown()
+            compose.waitUntil(5_000) { retention.mountedEntries.value.size == 1 }
+            val successor = retention.mountedEntries.value.values.single()
+            assertNotSame(first.flow, successor.flow)
+            assertTrue(successor.flow.onboarding.canStartCompletion())
+        } finally {
+            releaseRetirement.countDown()
+            processScope.cancel()
+        }
+    }
+
+    @Test fun `failed owner retirement is visible and cannot reuse the old flow`() {
+        val processScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val retiring = CountDownLatch(1)
+        try {
+            val base = appOnboarding(processScope, object : OnboardingPresetPort {
+                override val canApply = MutableStateFlow(false)
+                override suspend fun apply(presetId: String): OnboardingPresetOutcome =
+                    error("This flow must not apply a preset")
+            })
+            val dependencies = object : OnboardingFeatureDependencies by base.forRerun() {
+                val current = OnboardingFlowCoordinator(processScope, this).also { it.restoreStartingPath() }
+                override fun retainedFlowCoordinator(): OnboardingFlowCoordinator = current
+                override fun ownsFlowCoordinator(coordinator: OnboardingFlowCoordinator) = current === coordinator
+                override fun onFlowCoordinatorEntryRemoved(coordinator: OnboardingFlowCoordinator) {
+                    retiring.countDown()
+                    throw IllegalStateException("onboarding owner did not retire")
+                }
+            }
+            val navigation = NavigationCoordinator().also { it.selectTab(AppTab.SETTINGS) }
+            mountShell(navigation, dependencies)
+            compose.onNodeWithTag("open-radio-setup").performClick()
+            val retention = navigation.onboardingRetention(dependencies)
+            compose.waitUntil(5_000) { retention.mountedEntries.value.size == 1 }
+            val first = retention.mountedEntries.value.values.single()
+            compose.runOnUiThread { assertTrue(navigation.back()) }
+            compose.waitUntil(5_000) { retiring.count == 0L }
+            compose.runOnUiThread { navigation.navigate(FeatureRoute(FeatureId.ONBOARDING)) }
+            compose.waitUntil(5_000) { retention.unavailableEntries.value.isNotEmpty() }
+            assertTrue(retention.mountedEntries.value.isEmpty())
+            assertFalse(navigation.completeMountedOnboarding(first.witness.get(), MountedOnboardingProducer.NoDevice))
+            compose.onNodeWithText(host.get().getString(L.commonErrorFailedToLoad)).assertIsDisplayed()
+            compose.onNodeWithTag("navigation-back").assertIsEnabled().performClick()
+            assertEquals(NavigationDestination.Root(AppTab.SETTINGS), navigation.state.value.activeStack.last().destination)
+        } finally {
+            processScope.cancel()
+        }
     }
 
     private class TestRerunDependencies(

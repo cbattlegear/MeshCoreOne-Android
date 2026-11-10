@@ -16,6 +16,9 @@ import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
 import com.meshcoreone.android.core.model.RadioId
 import java.util.UUID
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -23,6 +26,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -112,20 +116,22 @@ class NotificationActionDispatcherTest {
         NotificationActionDispatcher.enqueue(response("10000000-0000-0000-0000-000000000001"))
         runCurrent()
         assertEquals(1, calls)
+        first.cancel()
         NotificationActionDispatcher.install(this) { calls++; true }
         runCurrent()
         assertEquals(1, calls)
         assertTrue(NotificationActionDispatcher.drainOnce())
-        first.cancel()
     }
 
     @Test
     fun replacementRetriesAnUncommittedCancelledRouter() = runTest {
+        val first = CoroutineScope(coroutineContext + SupervisorJob(coroutineContext[Job]))
         var calls = 0
-        NotificationActionDispatcher.install(this) { calls++; awaitCancellation() }
+        NotificationActionDispatcher.install(first) { calls++; awaitCancellation() }
         NotificationActionDispatcher.enqueue(response("10000000-0000-0000-0000-000000000001"))
         runCurrent()
         assertEquals(1, calls)
+        first.cancel()
         NotificationActionDispatcher.install(this) { calls++; true }
         runCurrent()
         assertEquals(2, calls)
@@ -134,8 +140,9 @@ class NotificationActionDispatcherTest {
 
     @Test
     fun uncertainWireOutcomeDoesNotReplayOrBlockTheNextReadyAction() = runTest {
+        val first = CoroutineScope(coroutineContext + SupervisorJob(coroutineContext[Job]))
         var calls = 0
-        NotificationActionDispatcher.install(this) {
+        NotificationActionDispatcher.install(first) {
             calls++
             requireNotNull(currentCoroutineContext()[NotificationActionReceipt]).wireStarted()
             awaitCancellation()
@@ -144,6 +151,7 @@ class NotificationActionDispatcherTest {
         NotificationActionDispatcher.enqueue(response)
         runCurrent()
         NotificationActionDispatcher.enqueue(response)
+        first.cancel()
         NotificationActionDispatcher.install(this) { calls++; true }
         runCurrent()
         assertEquals(2, calls)
@@ -152,8 +160,9 @@ class NotificationActionDispatcherTest {
 
     @Test
     fun uncertainTextStillOccupiesCapacityRatherThanBeingSilentlyDiscarded() = runTest {
+        val first = CoroutineScope(coroutineContext + SupervisorJob(coroutineContext[Job]))
         var calls = 0
-        NotificationActionDispatcher.install(this) {
+        NotificationActionDispatcher.install(first) {
             calls++
             requireNotNull(currentCoroutineContext()[NotificationActionReceipt]).wireStarted()
             awaitCancellation()
@@ -161,6 +170,7 @@ class NotificationActionDispatcherTest {
         val response = response("10000000-0000-0000-0000-000000000001")
         NotificationActionDispatcher.enqueue(response)
         runCurrent()
+        first.cancel()
         NotificationActionDispatcher.install(this) { calls++; true }
         runCurrent()
         repeat(31) {
@@ -225,6 +235,142 @@ class NotificationActionDispatcherTest {
         NotificationActionDispatcher.install(this) { calls++; true }
         runCurrent()
         assertEquals(1, calls)
+    }
+
+    @Test
+    fun contentTapAcceptsOnlyAValidOpenPayloadIntoTheExistingQueue() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        val delivered = mutableListOf<NotificationResponse>()
+        val response = response("10000000-0000-0000-0000-000000000001").copy(action = null, userText = null)
+        val action = AndroidMessagingNotificationDelivery.ACTION_PREFIX + AndroidMessagingNotificationDelivery.ACTION_OPEN
+        try {
+            NotificationActionDispatcher.install(scope) { delivered += it; true }
+            assertEquals(NotificationContentTapResult.NOT_NOTIFICATION, NotificationContentTap.enqueue(Intent(Intent.ACTION_VIEW)))
+            assertEquals(NotificationContentTapResult.MALFORMED, NotificationContentTap.enqueue(Intent(action)))
+            val intent = NotificationPayloadCodec.write(Intent(action), response.payload)
+            assertEquals(NotificationContentTapResult.ENQUEUED, NotificationContentTap.enqueue(intent))
+            testScheduler.runCurrent()
+            assertEquals(listOf(response), delivered)
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun retryDuringTheFinalDelayIsLatchedUntilTheActiveDrainFinishes() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        var ready = false
+        var attempts = 0
+        val delivered = mutableListOf<NotificationResponse>()
+        val response = response("10000000-0000-0000-0000-000000000001")
+        try {
+            NotificationActionDispatcher.install(scope) { response ->
+                attempts++
+                if (!ready) false else true.also { delivered += response }
+            }
+            NotificationActionDispatcher.enqueue(response)
+            testScheduler.runCurrent()
+            testScheduler.advanceTimeBy(14_750)
+            testScheduler.runCurrent()
+            assertEquals(60, attempts)
+            assertTrue(delivered.isEmpty())
+
+            ready = true
+            NotificationActionDispatcher.retry()
+            testScheduler.advanceTimeBy(250)
+            testScheduler.runCurrent()
+            assertEquals(61, attempts)
+            assertEquals(listOf(response), delivered)
+
+            NotificationActionDispatcher.retry()
+            testScheduler.runCurrent()
+            assertEquals(61, attempts)
+            assertEquals(listOf(response), delivered)
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun replacementScopeWaitsForCancelledNoncooperativeDeliveryWithoutReplayingIt() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val originalScope = CoroutineScope(SupervisorJob() + dispatcher)
+        val replacementScope = CoroutineScope(SupervisorJob() + dispatcher)
+        val first = response("10000000-0000-0000-0000-000000000001")
+        val second = response("90000000-0000-0000-0000-000000000009")
+        val originalDeliveries = mutableListOf<NotificationResponse>()
+        val replacementDeliveries = mutableListOf<NotificationResponse>()
+        var continuation: Continuation<Unit>? = null
+        var released = false
+        var active = 0
+        var maxActive = 0
+        try {
+            NotificationActionDispatcher.install(originalScope) {
+                active++
+                maxActive = maxOf(maxActive, active)
+                suspendCoroutine<Unit> { suspended -> continuation = suspended }
+                originalDeliveries += it
+                active--
+                true
+            }
+            NotificationActionDispatcher.enqueue(first)
+            testScheduler.runCurrent()
+            assertTrue(continuation != null)
+            assertEquals(1, active)
+
+            originalScope.cancel()
+            NotificationActionDispatcher.install(replacementScope) {
+                active++
+                maxActive = maxOf(maxActive, active)
+                replacementDeliveries += it
+                active--
+                true
+            }
+            testScheduler.runCurrent()
+            assertTrue(replacementDeliveries.isEmpty())
+            assertEquals(1, active)
+
+            released = true
+            continuation!!.resume(Unit)
+            testScheduler.runCurrent()
+            assertEquals(listOf(first), originalDeliveries)
+            assertTrue(replacementDeliveries.isEmpty())
+
+            NotificationActionDispatcher.enqueue(second)
+            testScheduler.runCurrent()
+            assertEquals(listOf(second), replacementDeliveries)
+            assertEquals(1, maxActive)
+        } finally {
+            if (!released) continuation?.resume(Unit)
+            originalScope.cancel()
+            replacementScope.cancel()
+            testScheduler.runCurrent()
+        }
+    }
+
+    @Test
+    fun cancellationAfterACommitStillDrainsAnIdenticalQueuedDelivery() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        val same = response("10000000-0000-0000-0000-000000000001")
+        var calls = 0
+        try {
+            NotificationActionDispatcher.install(scope) {
+                calls++
+                checkNotNull(currentCoroutineContext()[NotificationActionCommit]).navigationCommitted()
+                if (calls == 1) throw kotlinx.coroutines.CancellationException("cancelled after commit")
+                true
+            }
+            NotificationActionDispatcher.enqueue(same)
+            NotificationActionDispatcher.enqueue(same)
+            testScheduler.runCurrent()
+            assertEquals(2, calls)
+
+            NotificationActionDispatcher.retry()
+            testScheduler.runCurrent()
+            assertEquals(2, calls)
+        } finally {
+            scope.cancel()
+        }
     }
 
     private fun response(radio: String): NotificationResponse {

@@ -8,6 +8,9 @@ import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import java.time.Instant
 import java.util.UUID
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 
 internal class ChannelRepository(
     private val context: RoomRepositoryContext,
@@ -146,6 +149,12 @@ internal class ChannelRepository(
             database.messages().unseenChannelMentionIDs(radioId.value, channelIndex.toLong()).snapshot()
         }
 
+    /** Simulator fixtures may insert an empty slot but must never replace a persisted occupant. */
+    suspend fun saveSimulatorChannel(dto: ChannelDTO): Unit = context.write("saveSimulatorChannel") {
+        applySimulatorChannel(prepareSimulatorChannel(dto))
+        Unit
+    }
+
     private suspend fun mutateChannel(
         operation: String, key: EntityKey, required: Boolean = false, mutation: (ChannelEntity) -> ChannelEntity,
     ) = context.write(operation) {
@@ -156,5 +165,87 @@ internal class ChannelRepository(
             database.channels().upsert(mutation(row))
             save()
         }
+    }
+
+    internal sealed interface SimulatorChannelSeedPlan {
+        sealed interface Existing : SimulatorChannelSeedPlan
+        sealed interface New : SimulatorChannelSeedPlan
+    }
+
+    private sealed class PreparedSimulatorChannelPlan(
+        val transaction: RepositoryTransaction,
+        val job: Job,
+        val fixture: ChannelDTO,
+        val row: ChannelEntity,
+    ) : SimulatorChannelSeedPlan {
+        class Existing(transaction: RepositoryTransaction, job: Job, fixture: ChannelDTO, row: ChannelEntity) :
+            PreparedSimulatorChannelPlan(transaction, job, fixture, row), SimulatorChannelSeedPlan.Existing
+
+        class New(transaction: RepositoryTransaction, job: Job, fixture: ChannelDTO, row: ChannelEntity) :
+            PreparedSimulatorChannelPlan(transaction, job, fixture, row), SimulatorChannelSeedPlan.New
+    }
+
+    internal suspend fun RepositoryTransaction.prepareSimulatorChannel(dto: ChannelDTO): SimulatorChannelSeedPlan {
+        val coroutine = currentCoroutineContext()
+        coroutine.ensureActive()
+        val job = coroutine[Job]
+        if (job == null || !database.inTransaction()) {
+            throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+        }
+        val identified = database.channels().byId(dto.radioId.value, dto.id)
+        val fixtureIdentities = database.channels().simulatorIdentityCohort(dto.radioId.value, dto.id)
+        if (fixtureIdentities.size > 1 || fixtureIdentities.singleOrNull() != identified ||
+            (identified != null && identified.index != dto.index.toLong())) {
+            throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+        }
+        val occupants = database.channels().simulatorSlotCohort(dto.radioId.value, dto.index.toLong())
+        val existing = occupants.singleOrNull()
+        if (occupants.size > 1 || (identified != null && identified != existing)) {
+            throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+        }
+        if (existing != null) {
+            if (database.channels().byId(existing.radioId, existing.id) != existing ||
+                database.channels().simulatorIdentityCohort(existing.radioId, existing.id).singleOrNull() != existing ||
+                existing.secret != dto.secret || existing.isEnabled != dto.isEnabled) {
+                throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+            }
+            return PreparedSimulatorChannelPlan.Existing(this, job, dto, existing)
+        }
+        return PreparedSimulatorChannelPlan.New(this, job, dto, dto.toEntity())
+    }
+
+    internal suspend fun RepositoryTransaction.applySimulatorChannel(plan: SimulatorChannelSeedPlan): ChannelEntity {
+        val coroutine = currentCoroutineContext()
+        coroutine.ensureActive()
+        if (plan !is PreparedSimulatorChannelPlan || plan.transaction !== this ||
+            plan.job !== coroutine[Job] || !database.inTransaction()) {
+            throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+        }
+        val current = prepareSimulatorChannel(plan.fixture)
+        if (current !is PreparedSimulatorChannelPlan ||
+            (current is SimulatorChannelSeedPlan.Existing) != (plan is SimulatorChannelSeedPlan.Existing) ||
+            current.row != plan.row) {
+            throw PersistenceStoreException(
+                PersistenceStoreError.SaveFailed("saveSimulatorChannel"),
+                IllegalStateException("Simulator channel plan no longer matches the persisted occupant"),
+            )
+        }
+        coroutine.ensureActive()
+        if (plan is SimulatorChannelSeedPlan.Existing) return plan.row
+        val inserted = plan.row
+        database.channels().insert(inserted)
+        val stored = database.channels().byId(inserted.radioId, inserted.id)
+        val identities = database.channels().simulatorIdentityCohort(inserted.radioId, inserted.id)
+        val occupants = database.channels().simulatorSlotCohort(inserted.radioId, inserted.index)
+        if (stored == null || stored != inserted || identities.singleOrNull() != inserted ||
+            occupants.singleOrNull() != inserted) {
+            throw PersistenceStoreException(
+                PersistenceStoreError.SaveFailed("saveSimulatorChannel"),
+                IllegalStateException("Simulator channel insert did not persist the expected row"),
+            )
+        }
+        coroutine.ensureActive()
+        save()
+        return stored
     }
 }

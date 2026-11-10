@@ -22,6 +22,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.currentCoroutineContext
@@ -164,21 +165,26 @@ internal class RoomRepositoryContext(
     internal suspend fun <T> restoreBackup(
         afterCommit: () -> Unit,
         block: suspend RepositoryTransaction.() -> T,
-    ): T = channelIdentityMutation.withChannelIdentityRestore {
-        access("importBackupDatabase", writing = true) {
-            mutex.withLock {
-                ensureOpen()
-                flushRxLocked()
-                val transaction = RepositoryTransaction(database, clock, pendingRx)
-                committedTransaction(
-                    afterCommit = {
-                        transaction.complete()
-                        afterCommit()
-                    },
-                    returnCommittedOnCancellation = true,
-                ) { transaction.block() }
+    ): T {
+        var committed = false
+        val restored = channelIdentityMutation.withChannelIdentityRestore {
+            access("importBackupDatabase", writing = true) {
+                mutex.withLock {
+                    ensureOpen()
+                    flushRxLocked()
+                    val transaction = RepositoryTransaction(database, clock, pendingRx)
+                    committedTransaction(
+                        afterCommit = {
+                            transaction.complete()
+                            committed = true
+                        },
+                        returnCommittedOnCancellation = true,
+                    ) { transaction.block() }
+                }
             }
         }
+        if (committed) withContext(NonCancellable) { afterCommit() }
+        return restored
     }
 
     suspend fun saveRx(row: RxLogEntryEntity) = access("saveRxLogEntry", writing = true) {

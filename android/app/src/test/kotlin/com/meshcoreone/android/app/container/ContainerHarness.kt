@@ -22,6 +22,7 @@ import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
+import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.runtime.ProcessConnectionPreferences
 import com.meshcoreone.android.core.runtime.RuntimeClock
 import com.meshcoreone.android.core.runtime.RuntimeDiagnostic
@@ -239,6 +240,14 @@ abstract class RoomProcessTest {
     internal lateinit var db: MeshCoreDatabase
     internal lateinit var store: RoomPersistenceStore
     private lateinit var owner: CoroutineScope
+
+    protected suspend fun seedReconciledChannel(
+        channel: com.meshcoreone.android.core.model.ChannelDTO,
+        backing: RoomPersistenceStore = store,
+    ) {
+        backing.saveChannel(channel)
+        backing.saveChannel(channel.radioId, ChannelInfo(channel.index, channel.name, channel.secret))
+    }
 
     @Before fun openStore() {
         reportPathRecencyPhase("room-open|START")

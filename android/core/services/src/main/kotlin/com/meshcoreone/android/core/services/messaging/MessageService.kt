@@ -1135,12 +1135,11 @@ class MessageService(
                 } catch (failure: PersistenceStoreException) {
                     // A lost begin response may have committed DISPATCHING. Never infer READY or send.
                     if (ownsOutcome) notification?.uncertain()
-                    remember("channelBegin.$pendingID", failure)
                     try { dataStore.fetchQueuedChannelAttempt(attemptKey) }
                     catch (readFailure: PersistenceStoreException) {
                         if (readFailure !== failure) failure.addSuppressed(readFailure)
                     }
-                    throw retainedChannel(pendingID, failure)
+                    return@dispatch ChannelPrewireResult.Rejected(failure)
                 }
                 val dispatch = MessageWriteDispatch()
                 var wireEntered = false
@@ -1171,7 +1170,7 @@ class MessageService(
                     } catch (settlement: Exception) {
                         if (ownsOutcome) notification?.uncertain()
                         cancelled.addSuppressed(if (settlement is QueuedChannelRetainedException) settlement
-                            else retainedChannel(pendingID, settlement))
+                            else QueuedChannelRetainedException(pendingID, settlement))
                         throw cancelled
                     }
                     if (wireAccepted) return@dispatch ChannelPrewireResult.CancelledAccepted(cancelled)
@@ -1184,26 +1183,44 @@ class MessageService(
                 } catch (failure: Exception) {
                     if (ownsOutcome) notification?.uncertain()
                     try { settleQueuedChannel(attemptKey, QueuedChannelAttemptOutcome.UNCERTAIN) }
-                    catch (settlement: QueuedChannelRetainedException) {
-                        if (settlement.cause !== failure) settlement.addSuppressed(failure)
-                        throw settlement
+                    catch (settlement: PersistenceStoreException) {
+                        throw QueuedChannelRetainedException(pendingID, settlement).also {
+                            if (settlement !== failure) it.addSuppressed(failure)
+                        }
                     }
-                    throw retainedChannel(pendingID, failure)
+                    throw QueuedChannelRetainedException(pendingID, failure)
                 }
                 // Inside the admitted operation: cancellation on dispatch return cannot erase acceptance.
-                ChannelPrewireResult.Accepted(settleQueuedChannel(attemptKey, QueuedChannelAttemptOutcome.ACCEPTED))
+                try {
+                    ChannelPrewireResult.Accepted(settleQueuedChannel(attemptKey, QueuedChannelAttemptOutcome.ACCEPTED))
+                } catch (failure: PersistenceStoreException) {
+                    ChannelPrewireResult.Rejected(failure)
+                }
             }
             when (result) {
                 is ChannelPrewireResult.Accepted -> result.attempt
-                is ChannelPrewireResult.Rejected -> throw retainedChannel(pendingID, result.failure)
+                is ChannelPrewireResult.Rejected -> throw QueuedChannelRetainedException(pendingID, result.failure)
                 is ChannelPrewireResult.CancelledUnsent -> throw result.cancellation
                 is ChannelPrewireResult.CancelledAccepted -> throw result.cancellation
             }
+        } catch (failure: QueuedChannelRetainedException) {
+            throw recordRetainedChannel(failure)
+        } catch (cancelled: CancellationException) {
+            cancelled.suppressed.filterIsInstance<QueuedChannelRetainedException>().forEach(::recordRetainedChannel)
+            throw cancelled
         } catch (failure: ChannelDispatchFailure) { throw retainedChannel(pendingID, failure) }
     }
 
     private fun retainedChannel(pendingID: UUID, failure: Throwable): QueuedChannelRetainedException =
-        QueuedChannelRetainedException(pendingID, failure).also { remember("channelRetained.$pendingID", it) }
+        recordRetainedChannel(QueuedChannelRetainedException(pendingID, failure))
+
+    private fun recordRetainedChannel(failure: QueuedChannelRetainedException): QueuedChannelRetainedException =
+        failure.also {
+            try { remember("channelRetained.${it.pendingID}", it) }
+            catch (reporterFailure: Exception) {
+                if (reporterFailure !== it && reporterFailure !== it.cause) it.addSuppressed(reporterFailure)
+            }
+        }
 
     private suspend fun settleQueuedChannel(
         attemptKey: QueuedChannelAttemptKey, outcome: QueuedChannelAttemptOutcome,
@@ -1216,7 +1233,7 @@ class MessageService(
             null
         }
         if (readback?.phase == outcome.phase) readback
-        else throw retainedChannel(attemptKey.pendingID, failure)
+        else throw failure
     }
 
     internal suspend fun completeQueuedChannel(attemptKey: QueuedChannelAttemptKey) =

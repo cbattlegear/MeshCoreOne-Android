@@ -21,8 +21,12 @@ import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
+import org.junit.Rule
+import org.junit.rules.TemporaryFolder
 
 class ChannelOccupantPersistenceTest : RepositoryTest() {
+    @get:Rule val temporary = TemporaryFolder()
+
     private fun info(name: String = "original", byte: Int = 1) =
         ChannelInfo(5u, name, Bytes(ByteArray(16) { byte.toByte() }))
 
@@ -89,7 +93,7 @@ class ChannelOccupantPersistenceTest : RepositoryTest() {
     }
 
     @Test fun dtoCreationReplacementAndReenableStayQuarantinedAcrossReopenUntilAuthoritativeReconciliation() = runTest {
-        val name = "unproved-dto-${UUID.randomUUID()}.db"
+        val name = temporary.root.resolve("unproved-dto.db").absolutePath
         var disk = MeshCoreDatabase.open(context, name)
         var persisted = RoomPersistenceStore(disk, owner, clock)
         try {
@@ -197,7 +201,7 @@ class ChannelOccupantPersistenceTest : RepositoryTest() {
     }
 
     @Test fun actualDatabaseReopenPreservesOriginalEpochAndHydratedEnvelope() = runTest {
-        val name = "channel-occupant-${UUID.randomUUID()}.db"
+        val name = temporary.root.resolve("channel-occupant.db").absolutePath
         var disk = MeshCoreDatabase.open(context, name)
         var persisted = RoomPersistenceStore(disk, owner, clock)
         try {
@@ -302,7 +306,7 @@ class ChannelOccupantPersistenceTest : RepositoryTest() {
         store.invalidateChannelOccupant(RADIO_A, 5u)
         assertNull(store.fetchChannelOccupantID(RADIO_A, 5u))
         assertNull(store.fetchChannelOccupantSnapshot(RADIO_A, 5u))
-        assertEquals(original.channel, store.fetchChannel(RADIO_A, 5u))
+        assertEquals(original.channel.copy(occupantID = null), store.fetchChannel(RADIO_A, 5u))
         store.saveChannel(RADIO_A, info())
         assertNotEquals(original.occupantID, assertNotNull(store.fetchChannelOccupantID(RADIO_A, 5u)))
     }
@@ -408,7 +412,7 @@ class ChannelOccupantPersistenceTest : RepositoryTest() {
     }
 
     @Test fun preRadioMutationMarkerSurvivesActualRestartAndDtoMetadataCannotClearIt() = runTest {
-        val name = "channel-unresolved-${UUID.randomUUID()}.db"
+        val name = temporary.root.resolve("channel-unresolved.db").absolutePath
         var disk = MeshCoreDatabase.open(context, name)
         var persisted = RoomPersistenceStore(disk, owner, clock)
         try {
@@ -445,7 +449,7 @@ class ChannelOccupantPersistenceTest : RepositoryTest() {
         )
         try {
             assertFailsWith<PersistenceStoreException> { store.saveChannel(RADIO_A, info(byte = 2)) }
-            assertEquals(original.channel, store.fetchChannel(RADIO_A, 5u))
+            assertEquals(original.channel.copy(occupantID = null), store.fetchChannel(RADIO_A, 5u))
             assertNull(store.fetchChannelOccupantID(RADIO_A, 5u))
             val authority = assertNotNull(db.channelOccupants().stateForIndex(RADIO_A.value, 5))
             assertTrue(authority.unresolved)

@@ -45,8 +45,11 @@ sealed interface ChatSelection {
         override fun hashCode(): Int = 31 * contact.radioId.hashCode() + contact.id.hashCode()
     }
     data class Channel(val channel: ChannelDTO) : ChatSelection {
-        override fun equals(other: Any?): Boolean = other is Channel && channel.radioId == other.channel.radioId && channel.id == other.channel.id
-        override fun hashCode(): Int = 31 * channel.radioId.hashCode() + channel.id.hashCode()
+        override fun equals(other: Any?): Boolean = other is Channel &&
+            channel.radioId == other.channel.radioId && channel.id == other.channel.id &&
+            channel.occupantID == other.channel.occupantID
+        override fun hashCode(): Int =
+            31 * (31 * channel.radioId.hashCode() + channel.id.hashCode()) + (channel.occupantID?.hashCode() ?: 0)
     }
     data class Room(val session: RemoteNodeSessionDTO) : ChatSelection {
         override fun equals(other: Any?): Boolean = other is Room && session.radioId == other.session.radioId && session.id == other.session.id

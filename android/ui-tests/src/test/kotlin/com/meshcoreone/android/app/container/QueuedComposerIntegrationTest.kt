@@ -60,7 +60,7 @@ class QueuedComposerIntegrationTest : RoomProcessTest() {
         }
     }
 
-    private suspend fun graph(test: TestScope, persistence: PersistenceStoreProtocol? = null): Graph {
+    private suspend fun graph(test: TestScope, persistence: PersistenceStoreProtocol = store): Graph {
         val h = ContainerHarness(test, store, persistenceOverride = persistence)
         h.links.configureRadio = { radio ->
             radio.knownContacts += contactFrame(peerKey, "Synthetic queue peer")
@@ -136,7 +136,7 @@ class QueuedComposerIntegrationTest : RoomProcessTest() {
             val saved = creation.await()
             replacement.await()
             assertEquals(displayed.occupantID, saved.channelOccupantID)
-            assertEquals(saved, store.fetchMessage(EntityKey(graph.radio, saved.id)))
+            assertEquals(saved.copy(status = MessageStatus.FAILED), store.fetchMessage(EntityKey(graph.radio, saved.id)))
             assertNotEquals(saved.channelOccupantID, store.fetchChannel(graph.radio, displayed.index)?.occupantID)
             val failure = assertFailsWith<PersistenceStoreException> {
                 store.validateChannelMessageOrigin(EntityKey(graph.radio, saved.id))

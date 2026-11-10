@@ -2,6 +2,7 @@
 package com.meshcoreone.android.feature.chats.composer
 
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.ChannelMessageEnvelope
 import com.meshcoreone.android.core.model.ChatConversationID
 import com.meshcoreone.android.core.model.ContactDTO

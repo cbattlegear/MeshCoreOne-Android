@@ -31,4 +31,4 @@ No assertion is removed or weakened, and no production Swift source changes. The
 
 - Root cause comes from reading `AdvertisementService.handleContactDeletedEvent` (the rollback key insert, the `pendingDeletedKeys` dequeue in the foreground, then `fetchContact`/`deleteContact`) and `recordPendingAdvertKey`, against the two CI failure messages.
 - **Not run locally.** `MC1Services` uses SwiftData `@Model` macros, which need a full Xcode toolchain; the contributor's machine has only the Command Line Tools. CI's `SPM Package Tests` job on this PR is the execution evidence.
-- `python tools/android-port/controller/validate.py` passes with the new amendment entry, and the controller test suites pass.
+- `python tools/android-port/controller/validate.py` passes with the new amendment entry, and the controller test suites pass. (The controller was retired by [ADR-007](007-maintainer-directed-process-teardown.md); `python tools/android-port/portmap.py` now performs the amendment validation.)

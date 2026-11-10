@@ -25,7 +25,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.DynamicTest
 
-/** Original Swift cases: display name `Suite::original name()`, matching docs/android/test-cases.json ids. */
+/** Original Swift cases: display name `Suite::original name()`, matching the frozen Swift case ids. */
 internal fun nodeConfigSourceCases(suite: String, vararg cases: Pair<String, suspend () -> Unit>): List<DynamicTest> =
     cases.map { (name, body) -> DynamicTest.dynamicTest("$suite::$name()") { nodeConfigRun(body) } }
 

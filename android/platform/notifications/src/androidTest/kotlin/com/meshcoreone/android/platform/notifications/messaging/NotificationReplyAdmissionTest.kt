@@ -1,10 +1,8 @@
 // AndroidOnly: WP-401 Real SQLite installation binding and truthful atomic intake without bootstrap authority.
 package com.meshcoreone.android.platform.notifications.messaging
 
-import android.app.Application
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteException
-import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.model.RadioId
@@ -20,7 +18,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -28,8 +28,8 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31, 37])
 class NotificationReplyAdmissionTest {
-    private val context = ApplicationProvider.getApplicationContext<Application>()
-    private val file = File(context.cacheDir, "reply-admission-${UUID.randomUUID()}.db")
+    @get:Rule val temporary = TemporaryFolder()
+    private val file by lazy { File(temporary.root, "reply-admission-${UUID.randomUUID()}.db") }
     private val limits = NotificationReplyLimits(3, 10_000, 30_000)
     private val store get() = NotificationReplyStagingStore(file, limits)
     private val post = NotificationReplyPost(1, UUID.randomUUID(), "REPLY")
@@ -255,7 +255,7 @@ class NotificationReplyAdmissionTest {
     @Test
     fun replacementAfterCommitCannotReconcileAsRetainedInAnotherInstallation() = runTest {
         val expected = provisionFixture()
-        val replacementFile = File(context.cacheDir, "replacement-admission-${UUID.randomUUID()}.db")
+        val replacementFile = File(temporary.root, "replacement-admission-${UUID.randomUUID()}.db")
         try {
             val replacement = NotificationReplyStagingStore(replacementFile, limits)
             assertEquals(NotificationReplyStagingStore.InitializeResult.Ready, replacement.initializeNew())

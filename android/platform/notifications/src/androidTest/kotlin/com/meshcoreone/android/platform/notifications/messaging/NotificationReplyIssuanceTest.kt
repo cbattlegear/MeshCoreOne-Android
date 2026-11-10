@@ -1,10 +1,8 @@
 // AndroidOnly: WP-401 Real SQLite issued-token durability, immutable routing and atomic raw reply admission.
 package com.meshcoreone.android.platform.notifications.messaging
 
-import android.app.Application
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteException
-import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.NotificationId
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
@@ -21,7 +19,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -29,8 +29,8 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31, 37])
 class NotificationReplyIssuanceTest {
-    private val context = ApplicationProvider.getApplicationContext<Application>()
-    private val file = File(context.cacheDir, "reply-issuance-${UUID.randomUUID()}.db")
+    @get:Rule val temporary = TemporaryFolder()
+    private val file by lazy { File(temporary.root, "reply-issuance-${UUID.randomUUID()}.db") }
     private val limits = NotificationReplyLimits(2, 10_000, 20_000)
     private val policy = NotificationReplyStagingStore.IssuanceLimits(3, 10_000, 30_000)
     private val store get() = NotificationReplyStagingStore(file, limits)
@@ -374,7 +374,7 @@ class NotificationReplyIssuanceTest {
     @Test
     fun replacementInstallationWithSameTokenAndProposalCannotReconcileOrAdmitOldIdentity() = runTest {
         val expected = provisionFixture()
-        val replacement = File(context.cacheDir, "reply-replacement-${UUID.randomUUID()}.db")
+        val replacement = File(temporary.root, "reply-replacement-${UUID.randomUUID()}.db")
         try {
             val other = NotificationReplyStagingStore(replacement, limits)
             assertEquals(NotificationReplyStagingStore.InitializeResult.Ready, other.initializeNew())

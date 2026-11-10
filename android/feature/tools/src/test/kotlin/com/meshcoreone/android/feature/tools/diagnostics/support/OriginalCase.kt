@@ -2,7 +2,7 @@
 package com.meshcoreone.android.feature.tools.diagnostics.support
 
 /**
- * Binds a JUnit method to the frozen Swift case id in docs/android/test-cases.json. The XML names
+ * Binds a JUnit method to the frozen Swift case id (`Suite::name()` in the pinned Swift sources). The XML names
  * the method; this annotation names the original case and how it was carried:
  * `source-behavior` (same assertions), `adapted-service-fake` (a feature-port fake stands in for
  * the real core:services collaborator), `platform-adaptation` (Android-specific shape, same

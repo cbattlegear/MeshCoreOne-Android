@@ -1,6 +1,9 @@
 # ADR 006: Automatic capability reservations
 
-**Status:** Accepted policy amendment; repository tooling activation is deferred to WP-003.
+**Status:** Superseded by [ADR-007](007-maintainer-directed-process-teardown.md), which removed reservations,
+capability admission and the repository tooling this ADR described. Kept as history.
+
+*Original status: accepted policy amendment; repository tooling activation was deferred to WP-003.*
 
 ## Context
 

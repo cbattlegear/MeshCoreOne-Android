@@ -3,11 +3,11 @@
 package com.meshcoreone.android.core.services.sync
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.DebugLogLevel
 import com.meshcoreone.android.core.model.MessageDTO
-import com.meshcoreone.android.core.model.NotificationLevel
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.ReactionDTO
 import com.meshcoreone.android.core.model.RxLogEntryDTO
@@ -202,11 +202,12 @@ internal suspend fun SyncCoordinator.updateChannelUnreadsAndNotify(
             if (hasSelfMention) dependencies.dataStore.incrementChannelUnreadMentionCount(key)
         }
     }
-    if (shouldPostChannelNotification(channel)) {
+    if (channel != null && shouldPostChannelNotification(channel)) {
         contain("postChannelMessageNotification", Unit) {
             notifications.postChannelMessageNotification(
-                channel?.name ?: "Channel $channelIndex", channelIndex, radioId, senderNodeName, messageText,
-                messageDTO.id, channel?.notificationLevel ?: NotificationLevel.ALL, hasSelfMention,
+                channel.name, channelIndex, radioId, senderNodeName, messageText,
+                messageDTO.id, channel.notificationLevel, hasSelfMention,
+                ChannelNotificationTarget.Unproved,
             )
         }
     } else {

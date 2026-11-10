@@ -1,6 +1,7 @@
 // AndroidOnly: WP-305 Boundary behavior for cancel/denial/adapter-off/manual-region/no-internet recovery and demo onboarding.
 package com.meshcoreone.android.feature.onboarding
 
+import com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt
 import com.meshcoreone.android.core.model.RegionSelection
 import com.meshcoreone.android.core.ui.UiText
 import java.util.UUID
@@ -676,6 +677,258 @@ class OnboardingFlowCoordinatorTest {
         fun drain() { while (true) (queued.poll() ?: return).run() }
     }
 
+    private fun assertBlockedBy(waiter: Thread, owner: Thread) {
+        val threads = java.lang.management.ManagementFactory.getThreadMXBean()
+        val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5)
+        var blockedByOwner = false
+        while (!blockedByOwner && System.nanoTime() < deadline) {
+            val info = threads.getThreadInfo(waiter.id)
+            blockedByOwner = info != null && info.threadState == Thread.State.BLOCKED &&
+                info.lockOwnerId == owner.id
+            if (!blockedByOwner) Thread.sleep(1)
+        }
+        assertTrue(blockedByOwner, "The competing action must wait on the lifecycle lock")
+    }
+
+    @Test fun idleCompletionPresentationRefreshDoesNotAdvanceFlowLifecycle() {
+        val owner = Job()
+        val flow = OnboardingFlowCoordinator(CoroutineScope(Dispatchers.Unconfined + owner), Deps())
+        val generation = flow.onboarding.lifecycleGeneration.value
+        var updates = 0
+        try {
+            assertTrue(flow.refreshCompletionPresentationIfIdle { updates++; true })
+            assertEquals(1, updates)
+            assertEquals(generation, flow.onboarding.lifecycleGeneration.value)
+            assertTrue(flow.onboarding.canStartCompletion())
+        } finally { owner.cancel() }
+    }
+
+    @Test fun presentationRefreshCannotReenterPresetOrNoDeviceAdmission() {
+        val dispatcher = QueuedDispatcher()
+        val owner = Job()
+        val flow = OnboardingFlowCoordinator(CoroutineScope(dispatcher + owner), Deps())
+        flow.preset.select("p")
+        try {
+            assertTrue(
+                flow.refreshCompletionPresentationIfIdle {
+                    flow.preset.apply()
+                    flow.confirmNoDevice()
+                    true
+                },
+            )
+            assertFalse(flow.preset.state.value.isApplying)
+            assertFalse(flow.isCompletingWithoutDevice.value)
+            assertTrue(flow.onboarding.canStartCompletion())
+            dispatcher.drain()
+        } finally { owner.cancel(); dispatcher.drain() }
+    }
+
+    @Test fun presentationRefreshRejectsActivePresetAndNoDeviceWork() = kotlinx.coroutines.runBlocking {
+        val dispatcher = QueuedDispatcher()
+        val presetOwner = Job()
+        val presetFlow = OnboardingFlowCoordinator(CoroutineScope(dispatcher + presetOwner), Deps())
+        presetFlow.preset.select("p")
+        presetFlow.preset.apply()
+        var presetUpdateCalled = false
+        try {
+            assertTrue(presetFlow.preset.state.value.isApplying)
+            assertFalse(presetFlow.refreshCompletionPresentationIfIdle { presetUpdateCalled = true; true })
+            assertFalse(presetUpdateCalled)
+        } finally { presetOwner.cancel(); dispatcher.drain() }
+
+        val noDeviceStarted = CompletableDeferred<Unit>()
+        val releaseNoDevice = CompletableDeferred<Unit>()
+        val flags = object : OnboardingFlagStore {
+            private var value = false
+            override fun getBoolean(key: String) = value
+            override fun setBoolean(key: String, value: Boolean) { this.value = value }
+            override suspend fun persistBoolean(
+                key: String,
+                value: Boolean,
+                requireCurrent: () -> Unit,
+                seal: (OnboardingCompletionAttempt) -> Boolean,
+                attempt: OnboardingCompletionAttempt,
+            ) {
+                requireCurrent()
+                check(seal(attempt))
+                noDeviceStarted.complete(Unit)
+                releaseNoDevice.await()
+                setBoolean(key, value)
+            }
+        }
+        val noDeviceOwner = Job()
+        val noDeviceFlow = OnboardingFlowCoordinator(
+            CoroutineScope(Dispatchers.Unconfined + noDeviceOwner), Deps(flags = flags),
+        )
+        try {
+            noDeviceFlow.confirmNoDevice()
+            noDeviceStarted.await()
+            assertTrue(noDeviceFlow.isCompletingWithoutDevice.value)
+            assertTrue(noDeviceFlow.onboarding.hasUnsettledCompletion)
+            var noDeviceUpdateCalled = false
+            assertFalse(noDeviceFlow.refreshCompletionPresentationIfIdle { noDeviceUpdateCalled = true; true })
+            assertFalse(noDeviceUpdateCalled)
+        } finally {
+            releaseNoDevice.complete(Unit)
+            noDeviceOwner.cancel()
+        }
+    }
+
+    @Test fun presentationRefreshRejectsCompletedAndRetiredFlows() = kotlinx.coroutines.runBlocking {
+        val owner = Job()
+        val completed = OnboardingFlowCoordinator(CoroutineScope(Dispatchers.Unconfined + owner), Deps())
+        try {
+            completed.onboarding.completeOnboarding()
+            var completedUpdateCalled = false
+            assertFalse(completed.refreshCompletionPresentationIfIdle { completedUpdateCalled = true; true })
+            assertFalse(completedUpdateCalled)
+
+            val retired = OnboardingFlowCoordinator(CoroutineScope(Dispatchers.Unconfined + owner), Deps())
+            retired.onboarding.retireCompletion()
+            var retiredUpdateCalled = false
+            assertFalse(retired.refreshCompletionPresentationIfIdle { retiredUpdateCalled = true; true })
+            assertFalse(retiredUpdateCalled)
+        } finally { owner.cancel() }
+    }
+
+    @Test fun presentationRefreshRejectsUncertainAndActiveReadback() = kotlinx.coroutines.runBlocking {
+        class UnknownWrite : IllegalStateException(), OnboardingCompletionOutcomeUnknown
+
+        var storedValue = false
+        val readbackStarted = CompletableDeferred<Unit>()
+        val releaseReadback = CompletableDeferred<Unit>()
+        val flags = object : OnboardingFlagStore {
+            override fun getBoolean(key: String) = storedValue
+            override fun setBoolean(key: String, value: Boolean) { storedValue = value }
+            override suspend fun persistBoolean(
+                key: String,
+                value: Boolean,
+                requireCurrent: () -> Unit,
+                seal: (OnboardingCompletionAttempt) -> Boolean,
+                attempt: OnboardingCompletionAttempt,
+            ) {
+                requireCurrent()
+                check(seal(attempt))
+                storedValue = value
+                throw UnknownWrite()
+            }
+            override suspend fun reconcileCompletion(
+                attempt: OnboardingCompletionAttempt,
+                requireCurrent: () -> Unit,
+                onFinished: (Result<Boolean>) -> Unit,
+            ) {
+                requireCurrent()
+                readbackStarted.complete(Unit)
+                releaseReadback.await()
+                onFinished(Result.success(storedValue))
+            }
+        }
+        val owner = Job()
+        val flow = OnboardingFlowCoordinator(
+            CoroutineScope(Dispatchers.Unconfined + owner), Deps(flags = flags),
+        )
+        try {
+            flow.confirmNoDevice()
+            assertTrue(flow.onboarding.canReconcileCompletion())
+            var uncertainUpdateCalled = false
+            assertFalse(flow.refreshCompletionPresentationIfIdle { uncertainUpdateCalled = true; true })
+            assertFalse(uncertainUpdateCalled)
+
+            flow.retryCompletion()
+            readbackStarted.await()
+            assertFalse(flow.onboarding.canReconcileCompletion())
+            assertTrue(flow.isCompletingWithoutDevice.value)
+            var reconciliationUpdateCalled = false
+            assertFalse(flow.refreshCompletionPresentationIfIdle { reconciliationUpdateCalled = true; true })
+            assertFalse(reconciliationUpdateCalled)
+
+            releaseReadback.complete(Unit)
+            assertTrue(flow.onboarding.hasCompletedOnboarding)
+        } finally {
+            releaseReadback.complete(Unit)
+            owner.cancel()
+        }
+    }
+
+    @Test fun presentationRefreshAndPresetAdmissionShareTheLifecycleLock() {
+        val dispatcher = QueuedDispatcher()
+        val owner = Job()
+        val updateEntered = java.util.concurrent.CountDownLatch(1)
+        val releaseUpdate = java.util.concurrent.CountDownLatch(1)
+        val applyStarted = java.util.concurrent.CountDownLatch(1)
+        val refreshThread = java.util.concurrent.atomic.AtomicReference<Thread>()
+        val applyThread = java.util.concurrent.atomic.AtomicReference<Thread>()
+        val flow = OnboardingFlowCoordinator(CoroutineScope(dispatcher + owner), Deps())
+        flow.preset.select("p")
+        val refresh = java.util.concurrent.CompletableFuture.supplyAsync {
+            refreshThread.set(Thread.currentThread())
+            flow.refreshCompletionPresentationIfIdle {
+                updateEntered.countDown()
+                check(releaseUpdate.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                true
+            }
+        }
+        try {
+            assertTrue(updateEntered.await(5, java.util.concurrent.TimeUnit.SECONDS))
+            val apply = java.util.concurrent.CompletableFuture.runAsync {
+                applyThread.set(Thread.currentThread())
+                applyStarted.countDown()
+                flow.preset.apply()
+            }
+            assertTrue(applyStarted.await(5, java.util.concurrent.TimeUnit.SECONDS))
+            assertBlockedBy(applyThread.get(), refreshThread.get())
+            releaseUpdate.countDown()
+            assertTrue(refresh.get(5, java.util.concurrent.TimeUnit.SECONDS))
+            apply.get(5, java.util.concurrent.TimeUnit.SECONDS)
+            assertTrue(flow.preset.state.value.isApplying)
+        } finally { releaseUpdate.countDown(); owner.cancel(); dispatcher.drain() }
+    }
+
+    @Test fun presetAdmissionWinningTheLifecycleLockMakesPresentationRefreshFail() {
+        val dispatcher = QueuedDispatcher()
+        val owner = Job()
+        val targetEntered = java.util.concurrent.CountDownLatch(1)
+        val releaseTarget = java.util.concurrent.CountDownLatch(1)
+        val refreshStarted = java.util.concurrent.CountDownLatch(1)
+        val applyThread = java.util.concurrent.atomic.AtomicReference<Thread>()
+        val refreshThread = java.util.concurrent.atomic.AtomicReference<Thread>()
+        var firstTargetRead = true
+        val presets = object : OnboardingPresetPort {
+            override val canApply = kotlinx.coroutines.flow.MutableStateFlow(true)
+            override fun currentTarget(): OnboardingPresetTarget? {
+                if (firstTargetRead) {
+                    firstTargetRead = false
+                    targetEntered.countDown()
+                    check(releaseTarget.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                }
+                return FakePresets().target
+            }
+            override suspend fun apply(presetId: String) = OnboardingPresetOutcome.Applied
+        }
+        val flow = OnboardingFlowCoordinator(CoroutineScope(dispatcher + owner), Deps(presets = presets))
+        flow.preset.select("p")
+        val apply = java.util.concurrent.CompletableFuture.runAsync {
+            applyThread.set(Thread.currentThread())
+            flow.preset.apply()
+        }
+        try {
+            assertTrue(targetEntered.await(5, java.util.concurrent.TimeUnit.SECONDS))
+            var updateCalled = false
+            val refresh = java.util.concurrent.CompletableFuture.supplyAsync {
+                refreshThread.set(Thread.currentThread())
+                refreshStarted.countDown()
+                flow.refreshCompletionPresentationIfIdle { updateCalled = true; true }
+            }
+            assertTrue(refreshStarted.await(5, java.util.concurrent.TimeUnit.SECONDS))
+            assertBlockedBy(refreshThread.get(), applyThread.get())
+            releaseTarget.countDown()
+            apply.get(5, java.util.concurrent.TimeUnit.SECONDS)
+            assertFalse(refresh.get(5, java.util.concurrent.TimeUnit.SECONDS))
+            assertFalse(updateCalled)
+            assertTrue(flow.preset.state.value.isApplying)
+        } finally { releaseTarget.countDown(); owner.cancel(); dispatcher.drain() }
+    }
+
     @Test fun synchronousNestedResetCannotReopenCompletionWhileTheOriginalResetIsAdmitted() = kotlinx.coroutines.runBlocking {
         val writes = mutableListOf<Boolean>()
         val store = object : OnboardingFlagStore {
@@ -720,6 +973,10 @@ class OnboardingFlowCoordinatorTest {
         val resettingThread = java.util.concurrent.atomic.AtomicReference<Thread>()
         var targetReads = 0
         val applied = mutableListOf<String>()
+        val target = OnboardingPresetTarget(
+            UUID.fromString("00000000-0000-0000-0000-000000000001"), 1,
+            UUID.fromString("00000000-0000-0000-0000-000000000002"),
+        )
         val port = object : OnboardingPresetPort {
             override val canApply = kotlinx.coroutines.flow.MutableStateFlow(true)
             override fun currentTarget(): OnboardingPresetTarget? {
@@ -727,7 +984,7 @@ class OnboardingFlowCoordinatorTest {
                     entered.countDown()
                     check(release.await(5, java.util.concurrent.TimeUnit.SECONDS))
                 }
-                return null
+                return target
             }
             override suspend fun apply(presetId: String): OnboardingPresetOutcome {
                 applied += presetId
@@ -850,6 +1107,160 @@ class OnboardingFlowCoordinatorTest {
                 assertTrue(flow.onboarding.hasCompletedOnboarding)
                 assertTrue(flags.getBoolean(OnboardingState.KEY_HAS_COMPLETED))
             } finally { owner.cancel(); dispatcher.drain() }
+        }
+
+    @Test fun noDeviceConfirmationAfterReadyPublishesTheAdmittingSession() =
+        kotlinx.coroutines.runBlocking {
+            val owner = Job()
+            try {
+                val presets = FakePresets()
+                val target = checkNotNull(presets.target)
+                val pairing = FakePairing().apply {
+                    connection.value = OnboardingConnectionSnapshot(isReady = true)
+                }
+                val flow = OnboardingFlowCoordinator(
+                    CoroutineScope(Dispatchers.Unconfined + owner), Deps(presets = presets, pairing = pairing),
+                )
+
+                flow.confirmNoDevice()
+
+                val publication = checkNotNull(flow.onboarding.completionPublication.value)
+                assertEquals(OnboardingCompletionProducer.NoDevice(target.toSessionToken()), publication.producer)
+                assertNotNull(publication.attemptId)
+                assertTrue(flow.onboarding.hasCompletedOnboarding)
+            } finally { owner.cancel()             }
+        }
+
+    @Test fun reentrantResetDuringNoDeviceTargetCaptureDoesNotStrandCompletionAdmission() =
+        kotlinx.coroutines.runBlocking {
+            val owner = Job()
+            val flags = InMemoryOnboardingFlagStore()
+            lateinit var flow: OnboardingFlowCoordinator
+            var resetOnTargetCapture = true
+            val target = OnboardingPresetTarget(
+                UUID.fromString("00000000-0000-0000-0000-000000000001"),
+                1,
+                UUID.fromString("00000000-0000-0000-0000-000000000002"),
+            )
+            val presets = object : OnboardingPresetPort {
+                override val canApply = kotlinx.coroutines.flow.MutableStateFlow(true)
+                override fun currentTarget(): OnboardingPresetTarget? {
+                    if (resetOnTargetCapture) {
+                        resetOnTargetCapture = false
+                        kotlinx.coroutines.runBlocking { flow.onboarding.resetOnboarding() }
+                    }
+                    return target
+                }
+                override suspend fun apply(presetId: String): OnboardingPresetOutcome {
+                    return OnboardingPresetOutcome.Applied
+                }
+            }
+            try {
+                flow = OnboardingFlowCoordinator(
+                    CoroutineScope(Dispatchers.Unconfined + owner), Deps(flags = flags, presets = presets),
+                )
+
+                flow.confirmNoDevice()
+
+                assertFalse(flow.isCompletingWithoutDevice.value)
+                assertTrue(flow.canCompleteWithoutDevice())
+                assertFalse(flags.getBoolean(OnboardingState.KEY_HAS_COMPLETED))
+                assertNull(flow.onboarding.completionPublication.value)
+
+                flow.confirmNoDevice()
+
+                assertTrue(flow.onboarding.hasCompletedOnboarding)
+                assertEquals(
+                    OnboardingCompletionProducer.NoDevice(target.toSessionToken()),
+                    flow.onboarding.completionPublication.value?.producer,
+                )
+                assertFalse(flow.isCompletingWithoutDevice.value)
+            } finally { owner.cancel() }
+        }
+
+    @Test fun noDeviceAttemptWithoutSessionDoesNotAdoptALaterBinding() =
+        kotlinx.coroutines.runBlocking {
+            val dispatcher = QueuedDispatcher()
+            val owner = Job()
+            try {
+                val presets = FakePresets().apply { target = null }
+                val flow = OnboardingFlowCoordinator(CoroutineScope(dispatcher + owner), Deps(presets = presets))
+
+                flow.confirmNoDevice()
+                presets.target = FakePresets().target
+                dispatcher.drain()
+
+                val publication = checkNotNull(flow.onboarding.completionPublication.value)
+                assertEquals(OnboardingCompletionProducer.NoDevice(null), publication.producer)
+                assertNotNull(publication.attemptId)
+                Unit
+            } finally { owner.cancel(); dispatcher.drain() }
+        }
+
+    @Test fun noDeviceReplacementDuringPersistenceRetainsOriginalProducerAndAttemptOnReadback() =
+        kotlinx.coroutines.runBlocking {
+            class UnknownWrite : IllegalStateException(), OnboardingCompletionOutcomeUnknown
+
+            var stored = false
+            var originalAttemptId: UUID? = null
+            val enteredPersistence = CompletableDeferred<Unit>()
+            val releasePersistence = CompletableDeferred<Unit>()
+            val flags = object : OnboardingFlagStore {
+                override fun getBoolean(key: String) = stored
+                override fun setBoolean(key: String, value: Boolean) { stored = value }
+
+                override suspend fun persistBoolean(
+                    key: String,
+                    value: Boolean,
+                    requireCurrent: () -> Unit,
+                    seal: (OnboardingCompletionAttempt) -> Boolean,
+                    attempt: OnboardingCompletionAttempt,
+                ) {
+                    requireCurrent()
+                    check(seal(attempt))
+                    originalAttemptId = attempt.id
+                    enteredPersistence.complete(Unit)
+                    releasePersistence.await()
+                    stored = value
+                    throw UnknownWrite()
+                }
+
+                override suspend fun reconcileCompletion(
+                    attempt: OnboardingCompletionAttempt,
+                    requireCurrent: () -> Unit,
+                    onFinished: (Result<Boolean>) -> Unit,
+                ) {
+                    requireCurrent()
+                    assertEquals(originalAttemptId, attempt.id)
+                    onFinished(Result.success(stored))
+                }
+            }
+            val owner = Job()
+            val presets = FakePresets()
+            val originalTarget = checkNotNull(presets.target)
+            val flow = OnboardingFlowCoordinator(
+                CoroutineScope(Dispatchers.Unconfined + owner), Deps(flags = flags, presets = presets),
+            )
+            try {
+                flow.confirmNoDevice()
+                enteredPersistence.await()
+                presets.target = originalTarget.copy(generation = originalTarget.generation + 1)
+                releasePersistence.complete(Unit)
+                assertTrue(flow.hasCompletionError.value)
+
+                flow.retryCompletion()
+
+                val publication = checkNotNull(flow.onboarding.completionPublication.value)
+                assertEquals(
+                    OnboardingCompletionProducer.NoDevice(originalTarget.toSessionToken()),
+                    publication.producer,
+                )
+                assertEquals(originalAttemptId, publication.attemptId)
+                assertTrue(flow.onboarding.hasCompletedOnboarding)
+            } finally {
+                releasePersistence.complete(Unit)
+                owner.cancel()
+            }
         }
 
     @Test fun preResetWiFiAndPairingSuccessCannotAdvanceOrClearANewerConnection() = kotlinx.coroutines.runBlocking {
@@ -1239,9 +1650,14 @@ class OnboardingFlowCoordinatorTest {
                 releaseWrite.await()
             }
         }
+        val target = OnboardingPresetTarget(
+            UUID.fromString("00000000-0000-0000-0000-000000000001"),
+            1,
+            UUID.fromString("00000000-0000-0000-0000-000000000002"),
+        )
         val presets = object : OnboardingPresetPort {
             override val canApply = kotlinx.coroutines.flow.MutableStateFlow(true)
-            override fun currentTarget(): OnboardingPresetTarget? = null
+            override fun currentTarget() = target
             override suspend fun apply(presetId: String): OnboardingPresetOutcome {
                 applyStarted.complete(Unit)
                 return releaseApply.await()

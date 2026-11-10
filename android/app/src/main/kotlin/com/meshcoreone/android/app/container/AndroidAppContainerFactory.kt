@@ -43,7 +43,6 @@ import com.meshcoreone.android.core.services.content.LocationService
 import com.meshcoreone.android.core.services.content.RegionResolver
 import com.meshcoreone.android.core.services.diagnostics.PersistentLogger
 import com.meshcoreone.android.core.services.messaging.ChatSendQueueProgress
-import com.meshcoreone.android.core.services.notifications.didReceive
 import com.meshcoreone.android.core.services.rendering.DraftStore
 import com.meshcoreone.android.core.services.simulator.DemoModeManager
 import com.meshcoreone.android.core.services.sync.SyncLogSink
@@ -180,12 +179,7 @@ object AndroidAppContainerFactory {
         cleanup.addFirst { chatContent.close() }
         val notificationDelivery = AndroidMessagingNotificationDelivery(application, mainScope) { response ->
             val current = holder.get() ?: return@AndroidMessagingNotificationDelivery false
-            val session = current.sessions.current ?: return@AndroidMessagingNotificationDelivery false
-            if (current.appState.connectionState != com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY) {
-                return@AndroidMessagingNotificationDelivery false
-            }
-            session.notificationService.didReceive(response)
-            true
+            current.handleNotificationResponse(response)
         }
         val environment = AndroidHostEnvironment(
             application,
@@ -245,6 +239,7 @@ object AndroidAppContainerFactory {
                 notificationDelivery = notificationDelivery,
                 notificationPreferences = storage.notificationPreferences(),
                 notificationStrings = AndroidNotificationStringProvider(application),
+                onNotificationNavigationReady = notificationDelivery::retryPendingActions,
                 contactPreferences = SharedPreferencesContactFlags(application),
                 draftStore = DraftStore(SharedPreferencesDraftDefaults(application)),
                 mainScope = mainScope,

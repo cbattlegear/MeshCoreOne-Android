@@ -99,7 +99,11 @@ class FakeRegion(var detected: RegionSelection? = null, presets: Map<String?, Li
 
 class FakePresets(var outcome: OnboardingPresetOutcome = OnboardingPresetOutcome.Applied) : OnboardingPresetPort {
     override val canApply = MutableStateFlow(true)
-    var target: OnboardingPresetTarget? = null
+    var target: OnboardingPresetTarget? = OnboardingPresetTarget(
+        UUID.fromString("00000000-0000-0000-0000-000000000001"),
+        1,
+        UUID.fromString("00000000-0000-0000-0000-000000000002"),
+    )
     val applied = mutableListOf<String>()
     override fun currentTarget() = target
     override suspend fun apply(presetId: String): OnboardingPresetOutcome { applied += presetId; return outcome }

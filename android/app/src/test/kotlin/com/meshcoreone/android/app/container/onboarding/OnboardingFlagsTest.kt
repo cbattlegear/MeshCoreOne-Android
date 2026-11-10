@@ -10,9 +10,11 @@ import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.ui.SharedTip
 import com.meshcoreone.android.core.ui.ShowOnceTips
 import com.meshcoreone.android.core.ui.TipHostState
+import com.meshcoreone.android.feature.onboarding.OnboardingPresetTarget
 import com.meshcoreone.android.feature.onboarding.OnboardingState
 import com.meshcoreone.android.feature.onboarding.OnboardingFlagStore
 import java.io.File
+import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Deferred
@@ -44,6 +46,11 @@ import java.io.IOException
 @Config(sdk = [31])
 class OnboardingFlagsTest {
     @get:Rule val temporary = TemporaryFolder()
+    private val originalPresetTarget = OnboardingPresetTarget(
+        UUID.fromString("00000000-0000-0000-0000-000000000001"),
+        1,
+        UUID.fromString("00000000-0000-0000-0000-000000000002"),
+    )
 
     private fun storage(): MeshCoreStorage {
         val directory = temporary.newFolder()
@@ -241,7 +248,9 @@ class OnboardingFlagsTest {
                     },
                 )
                 val state = OnboardingState(flags)
-                val original = com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt.Preset("original", null)
+                val original = com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt.Preset(
+                    "original", originalPresetTarget,
+                )
                 assertFailsWith<OnboardingCompletionOutcomeUnknownException> {
                     state.completeOnboardingWithReceipt(original, {}) { it.trySeal() }
                 }
@@ -297,7 +306,9 @@ class OnboardingFlagsTest {
                     },
                 )
                 val state = OnboardingState(flags)
-                val original = com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt.Preset("original", null)
+                val original = com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt.Preset(
+                    "original", originalPresetTarget,
+                )
                 assertFailsWith<OnboardingCompletionOutcomeUnknownException> {
                     state.completeOnboardingWithReceipt(original, {}) { it.trySeal() }
                 }

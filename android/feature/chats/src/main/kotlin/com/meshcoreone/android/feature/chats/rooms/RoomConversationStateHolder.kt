@@ -3,6 +3,10 @@
 // PortedFrom: MC1Tests/ViewModels/RoomConversationViewModelOrderingTests.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.feature.chats.rooms
 
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
+import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceError
+import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceException
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.RemoteNodeSessionDTO
 import com.meshcoreone.android.core.model.RoomMessageDTO
@@ -12,10 +16,12 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.awaitCancellation
-import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -55,6 +61,7 @@ class RoomConversationStateHolder(
     val state: StateFlow<RoomConversationState> = mutableState
 
     private val operation = Mutex()
+    private val authentication = Mutex()
     private var eventsJob: Job? = null
     private var reloadJob: Job? = null
     private var generation = 0L
@@ -126,7 +133,7 @@ class RoomConversationStateHolder(
                 }
                 dependencies.data.markAsRead(session)
                 dependencies.data.markFailedSendsSeen(session)
-                dependencies.removeDeliveredNotifications(session)
+                // A mounted read is not a durable OPEN receipt, so retain content taps for retry.
                 dependencies.updateBadgeCount()
                 dependencies.conversationsChanged()
             }
@@ -156,7 +163,12 @@ class RoomConversationStateHolder(
     suspend fun prepareAuthentication() {
         mutableState.update { it.copy(authenticationContact = null, authenticationLookupComplete = false, failure = null) }
         try {
-            val contact = dependencies.data.contactFor(mutableState.value.session)
+            val session = mutableState.value.session
+            val contact = dependencies.data.contactFor(session)
+            currentCoroutineContext().ensureActive()
+            if (contact != null && (contact.radioId != session.radioId || contact.publicKey != session.publicKey)) {
+                throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+            }
             mutableState.update { it.copy(authenticationContact = contact, authenticationLookupComplete = true) }
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -166,22 +178,47 @@ class RoomConversationStateHolder(
         }
     }
 
-    suspend fun authenticate(password: String?, rememberPassword: Boolean) {
-        val contact = mutableState.value.authenticationContact ?: return
-        mutableState.update { it.copy(isAuthenticating = true, failure = null) }
+    suspend fun authenticate(password: String?, rememberPassword: Boolean): Boolean {
+        if (authenticateForNavigation(password, rememberPassword) == null) return false
+        mutableState.update { it.copy(authenticationContact = null) }
+        load()
+        return true
+    }
+
+    suspend fun authenticateForNavigation(password: String?, rememberPassword: Boolean): RemoteNodeSessionDTO? {
+        if (!authentication.tryLock()) return null
         try {
-            val joined = dependencies.service.join(contact, password?.takeIf(String::isNotEmpty), rememberPassword)
-            mutableState.update {
-                it.copy(session = joined, isAuthenticating = false, authenticationContact = null)
+            val current = mutableState.value
+            val contact = current.authenticationContact ?: return null
+            mutableState.update { it.copy(isAuthenticating = true, failure = null) }
+            try {
+                val joined = dependencies.service.join(contact, password?.takeIf(String::isNotEmpty), rememberPassword)
+                currentCoroutineContext().ensureActive()
+                if (joined.radioId != current.session.radioId || joined.publicKey != current.session.publicKey ||
+                    !joined.isRoom
+                ) throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+                if (!joined.isConnected) throw MessageServiceException(MessageServiceError.NotConnected)
+                mutableState.update {
+                    it.copy(session = joined, isAuthenticating = false)
+                }
+                return joined
+            } catch (cancelled: CancellationException) {
+                mutableState.update { it.copy(isAuthenticating = false) }
+                throw cancelled
+            } catch (failure: Exception) {
+                mutableState.update { it.copy(isAuthenticating = false, failure = failure) }
+                dependencies.diagnostics.report("authenticate room", failure)
+                return null
             }
-            load()
-        } catch (cancelled: CancellationException) {
-            mutableState.update { it.copy(isAuthenticating = false) }
-            throw cancelled
-        } catch (failure: Exception) {
-            mutableState.update { it.copy(isAuthenticating = false, failure = failure) }
-            dependencies.diagnostics.report("authenticate room", failure)
+        } finally {
+            authentication.unlock()
         }
+    }
+
+    fun reportAuthenticationRetired() {
+        val failure = MessageServiceException(MessageServiceError.NotConnected)
+        mutableState.update { it.copy(failure = failure) }
+        dependencies.diagnostics.report("complete room authentication", failure)
     }
 
     suspend fun reconnect() {

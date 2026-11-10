@@ -19,10 +19,14 @@ import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.runBlocking
@@ -114,7 +118,8 @@ class RoomConversationStateHolderTest {
 
         rig.holder.load()
 
-        assertEquals(listOf("fetch", "read", "failed", "notifications", "badge", "changed"), rig.log)
+        assertEquals(listOf("fetch", "read", "failed", "badge", "changed"), rig.log)
+        assertFalse(rig.log.contains("notifications"), "A mounted read cannot retire a notification retry")
         assertTrue(rig.holder.state.value.hasLoadedOnce)
     }
 
@@ -129,6 +134,79 @@ class RoomConversationStateHolderTest {
         assertEquals("secret:false", rig.service.joinCall)
         assertTrue(rig.holder.state.value.session.isConnected)
         assertNull(rig.holder.state.value.authenticationContact)
+        assertEquals(listOf("fetch", "read", "failed", "badge", "changed"), rig.log)
+    }
+
+    @Test
+    fun `pre-navigation authentication joins without reading or clearing notifications`() = runBlocking {
+        val rig = rig(connected = false)
+        rig.holder.prepareAuthentication()
+
+        val joined = rig.holder.authenticateForNavigation("secret", true)
+
+        assertTrue(requireNotNull(joined).isConnected)
+        assertEquals("secret:true", rig.service.joinCall)
+        assertTrue(rig.log.isEmpty())
+        assertFalse(rig.holder.state.value.hasLoadedOnce)
+    }
+
+    @Test
+    fun `authentication lookup and join failures remain visible without read side effects`() = runBlocking {
+        val rig = rig(connected = false)
+        rig.data.contactFailure = IllegalStateException("lookup failed")
+        rig.holder.prepareAuthentication()
+        assertIs<IllegalStateException>(rig.holder.state.value.failure)
+        assertTrue(rig.holder.state.value.authenticationLookupComplete)
+        assertNull(rig.holder.state.value.authenticationContact)
+
+        rig.data.contactFailure = null
+        rig.holder.prepareAuthentication()
+        rig.service.joinFailure = IllegalStateException("login failed")
+        assertNull(rig.holder.authenticateForNavigation("secret", false))
+        assertIs<IllegalStateException>(rig.holder.state.value.failure)
+        assertFalse(rig.holder.state.value.isAuthenticating)
+        assertTrue(rig.log.isEmpty())
+    }
+
+    @Test
+    fun `failed reauthentication reports failure even when the previous session was connected`() = runBlocking {
+        val rig = rig(connected = true)
+        rig.holder.prepareAuthentication()
+        rig.service.joinFailure = IllegalStateException("login failed")
+
+        assertFalse(rig.holder.authenticate("secret", false))
+        assertTrue(rig.holder.state.value.session.isConnected)
+        assertIs<IllegalStateException>(rig.holder.state.value.failure)
+        assertTrue(rig.log.isEmpty())
+    }
+
+    @Test
+    fun `authentication rejects a different returned room identity`() = runBlocking {
+        val rig = rig(connected = false)
+        rig.holder.prepareAuthentication()
+        rig.service.joinResult = rig.session.copy(isConnected = true, publicKey = Bytes(ByteArray(32) { 9 }))
+
+        assertNull(rig.holder.authenticateForNavigation("secret", false))
+        assertIs<com.meshcoreone.android.core.contracts.domain.PersistenceStoreException>(rig.holder.state.value.failure)
+        assertFalse(rig.holder.state.value.session.isConnected)
+        assertTrue(rig.log.isEmpty())
+    }
+
+    @Test
+    fun `cancelling an in-flight authentication propagates and a second submit does not join`() = runBlocking {
+        val rig = rig(connected = false)
+        rig.holder.prepareAuthentication()
+        rig.service.joinGate = CompletableDeferred()
+        val pending = async(start = CoroutineStart.UNDISPATCHED) {
+            rig.holder.authenticateForNavigation("secret", false)
+        }
+        assertTrue(rig.holder.state.value.isAuthenticating)
+        assertNull(rig.holder.authenticateForNavigation("second", true))
+        assertEquals("secret:false", rig.service.joinCall)
+        pending.cancelAndJoin()
+        assertFalse(rig.holder.state.value.isAuthenticating)
+        assertNull(rig.holder.state.value.failure)
+        assertTrue(rig.log.isEmpty())
     }
 
     @Test
@@ -250,13 +328,16 @@ private class FakeRoomData(
     val messages: MutableList<RoomMessageDTO>,
     private val log: MutableList<String>,
 ) : RoomConversationDataSource {
+    var contactFailure: Throwable? = null
     override suspend fun fetchMessages(session: RemoteNodeSessionDTO): List<RoomMessageDTO> {
         log += "fetch"
         return messages
     }
     override suspend fun refreshSession(session: RemoteNodeSessionDTO) = this.session
-    override suspend fun contactFor(session: RemoteNodeSessionDTO): ContactDTO =
-        Fixtures.contact(name = session.name, typeRawValue = 3u, publicKey = session.publicKey)
+    override suspend fun contactFor(session: RemoteNodeSessionDTO): ContactDTO {
+        contactFailure?.let { throw it }
+        return Fixtures.contact(name = session.name, typeRawValue = 3u, publicKey = session.publicKey)
+    }
     override suspend fun markAsRead(session: RemoteNodeSessionDTO) { log += "read" }
     override suspend fun markFailedSendsSeen(session: RemoteNodeSessionDTO) { log += "failed" }
     fun updateSession(value: RemoteNodeSessionDTO) { session = value }
@@ -267,12 +348,17 @@ private class FakeRoomService(
     private val data: FakeRoomData,
 ) : RoomConversationService {
     var joinCall: String? = null
+    var joinFailure: Throwable? = null
+    var joinResult: RemoteNodeSessionDTO? = null
+    var joinGate: CompletableDeferred<RemoteNodeSessionDTO>? = null
     var reconnectCalls = 0
     var postFailure: Throwable? = null
 
     override suspend fun join(contact: ContactDTO, password: String?, rememberPassword: Boolean): RemoteNodeSessionDTO {
         joinCall = "$password:$rememberPassword"
-        return original.copy(isConnected = true, permissionLevel = RoomPermissionLevel.READ_WRITE).also(data::updateSession)
+        joinFailure?.let { throw it }
+        return (joinGate?.await() ?: joinResult ?:
+            original.copy(isConnected = true, permissionLevel = RoomPermissionLevel.READ_WRITE)).also(data::updateSession)
     }
     override suspend fun reconnect(session: RemoteNodeSessionDTO): RemoteNodeSessionDTO {
         reconnectCalls++

@@ -35,8 +35,11 @@ import org.junit.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.CoroutineContext
 
 class SettingsPathHashPersistenceTest : RoomProcessTest() {
@@ -595,6 +598,73 @@ class SettingsPathHashPersistenceTest : RoomProcessTest() {
         }
     }
 
+    @Test fun sameSessionRewireRetainsQueuedSettingsEventsAndPendingPersistence() = runTest {
+        val ui = HeldSettingsDispatcher(StandardTestDispatcher(testScheduler))
+        val commits = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val observing = AtomicBoolean()
+        val observed = object : PersistenceStoreProtocol by store {
+            override suspend fun saveDeviceIfUnchanged(
+                dto: DeviceDTO, expected: DeviceWriteSnapshot, isCurrent: () -> Boolean,
+            ): Boolean {
+                val saved = store.saveDeviceIfUnchanged(dto, expected, isCurrent)
+                if (saved && observing.get()) commits += dto.nodeName
+                return saved
+            }
+        }
+        withSettings(
+            observed, beforeClose = { ui.resume() },
+            mainScope = CoroutineScope(backgroundScope.coroutineContext + ui),
+        ) { h, _, failures, radioMode ->
+            val before = assertNotNull(h.manager.connectedDevice)
+            val session = assertNotNull(h.sessions.current)
+            val service = session.settingsService
+            val radio = h.links.radios.single()
+            val previousResponse = radio.respond
+            val replyName = AtomicReference("Event A")
+            radio.respond = { command ->
+                if (command[0].toInt() == 0x01) listOf(FirmwareRadio(radio.publicKey, replyName.get()).selfPacket())
+                else previousResponse(command)
+            }
+            observing.set(true)
+            ui.pause()
+            service.refreshDeviceInfo()
+            val persisted = async(start = CoroutineStart.UNDISPATCHED) { service.setPathHashModePersisted(1u) }
+            replyName.set("Event B")
+            service.refreshDeviceInfo()
+            h.eventually("verified settings are queued behind the paused subscriber") {
+                radioMode() == 1u.toUByte() && ui.pending > 0
+            }
+            assertFalse(persisted.isCompleted)
+            assertEquals(before, store.fetchDevice(before.id))
+            val rewiring = async {
+                repeat(2) { h.appState.wireServicesIfConnected() }
+            }
+            h.eventually("same-session rewires complete while the subscriber is paused") { rewiring.isCompleted }
+            rewiring.await()
+            assertSame(session, h.sessions.current)
+            assertFalse(persisted.isCompleted, "Rewiring must not fail the existing persistence waiter")
+            replyName.set("Event C")
+            service.refreshDeviceInfo()
+            assertEquals(before, store.fetchDevice(before.id))
+            ui.resume()
+            h.eventually("the original subscriber persists all queued settings") {
+                persisted.isCompleted && h.manager.connectedDevice?.nodeName == "Event C"
+            }
+            assertEquals(1u.toUByte(), persisted.await())
+            val saved = assertNotNull(store.fetchDevice(before.id))
+            assertEquals("Event C", saved.nodeName)
+            assertEquals(1u.toUByte(), saved.pathHashMode)
+            assertEquals(saved, h.manager.connectedDevice)
+            assertFalse(service.pathHashModeNeedsRecovery)
+            assertTrue(failures.isEmpty())
+            val orderedNames = mutableListOf<String>()
+            synchronized(commits) { commits.toList() }.forEach {
+                if (it.startsWith("Event ") && orderedNames.lastOrNull() != it) orderedNames += it
+            }
+            assertEquals(listOf("Event A", "Event B", "Event C"), orderedNames)
+        }
+    }
+
     @Test fun alreadyEnteredOldRoomCommitCannotLandAfterNewerAcknowledgedMode() = runTest {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
@@ -623,6 +693,7 @@ class SettingsPathHashPersistenceTest : RoomProcessTest() {
                 armed = true
                 holder.onModeSelected(2u)
                 h.eventually("old Room write entered") { entered.isCompleted }
+                h.appState.tearDownAppStateSessionState()
                 h.appState.wireServicesIfConnected()
                 h.eventually("retired original waiter fails") {
                     !holder.state.value.isApplying && failures.isNotEmpty()

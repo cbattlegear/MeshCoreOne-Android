@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
@@ -19,6 +20,9 @@ import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
+import androidx.compose.ui.test.junit4.ComposeContentTestRule
+import androidx.compose.ui.test.junit4.ComposeTestRule
+import androidx.compose.ui.test.junit4.StateRestorationTester
 import com.meshcoreone.android.core.contracts.FeatureId
 import com.meshcoreone.android.core.contracts.FeatureRoute
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
@@ -211,6 +215,93 @@ class MapMountedConsumerTest {
         assertEquals(replaced, requireNotNull(latest).points.single { it.style == MapPinStyle.DROPPED_PIN })
     }
 
+    @Test fun consumedFocusAndItsSelectionSurviveRestorationWithoutReplayingTheRequest() {
+        val saved = MapCamera(GeoPoint(51.0, 0.0), 0.5, 0.5)
+        host.get().getSharedPreferences("shared-map", 0).edit()
+            .putString("camera-v1", saved.encode()).commit()
+        runBlocking {
+            MeshCoreStorage.get(host.get()).preferences.set(
+                AppStorageKey.mapFilterMainMap, MapFilterState(favoritesOnly = true).encode(),
+            )
+        }
+        val focus = GeoPoint(10.0, 20.0)
+        val pendingFocus = mutableStateOf<GeoPoint?>(focus)
+        val dispatched = mutableListOf<MapPresentationState>()
+        var consumed = 0
+        val restoration = restorationTester()
+        mount(
+            MapFeatureDependencies(source { content() }, offline()),
+            focus = { pendingFocus.value },
+            onFocusConsumed = { consumed++; pendingFocus.value = null },
+            onPresentation = { dispatched += it },
+            restoration = restoration,
+        )
+        val pin = dispatched.last().points.single { it.style == MapPinStyle.DROPPED_PIN }
+        compose.onNodeWithTag("pick:${pin.id}").performClick()
+        compose.onNodeWithText("10.0, 20.0").assertIsDisplayed()
+
+        dispatched.clear()
+        restoration.emulateSavedInstanceStateRestore()
+        advanceFrames()
+        compose.waitForIdle()
+
+        assertEquals(1, consumed)
+        assertTrue(dispatched.isNotEmpty())
+        assertTrue("Restoration must not dispatch the older cross-launch camera", dispatched.none { it.camera == saved })
+        assertEquals(pin, dispatched.last().points.single { it.style == MapPinStyle.DROPPED_PIN })
+        assertEquals(MapCamera(focus, 0.01, 0.01), dispatched.last().camera)
+        compose.onNodeWithText("10.0, 20.0").assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.l10n_app_map_map_common_done)).performClick()
+        compose.waitForIdle()
+        restoration.emulateSavedInstanceStateRestore()
+        advanceFrames()
+        compose.waitForIdle()
+        assertEquals(1, consumed)
+        assertTrue(dispatched.last().points.none { it.style == MapPinStyle.DROPPED_PIN })
+        compose.onNodeWithText("10.0, 20.0").assertDoesNotExist()
+        assertEquals(MapCamera(focus, 0.01, 0.01), dispatched.last().camera)
+        val nextFocus = GeoPoint(30.0, 40.0)
+        compose.runOnIdle { pendingFocus.value = nextFocus }
+        compose.waitForIdle()
+        assertEquals(2, consumed)
+        val replacement = dispatched.last().points.single { it.style == MapPinStyle.DROPPED_PIN }
+        assertEquals(pin.id, replacement.id)
+        assertEquals(nextFocus, replacement.position)
+        assertEquals(MapCamera(nextFocus, 0.01, 0.01), dispatched.last().camera)
+    }
+
+    @Test fun explicitFramingSurvivesRestorationBeforeNativeCameraPersistence() {
+        val dispatched = mutableListOf<MapPresentationState>()
+        lateinit var reportCamera: (MapCamera) -> Unit
+        val restoration = restorationTester()
+        mount(
+            MapFeatureDependencies(source { content() }, offline()),
+            onPresentation = { dispatched += it },
+            onCameraCallback = { reportCamera = it },
+            restoration = restoration,
+        )
+        val pan = MapCamera(GeoPoint(5.0, 6.0), 0.2, 0.3, MapCameraPose(12.0, 45.0, 30.0))
+        compose.runOnIdle { reportCamera(pan) }
+        compose.onNodeWithText(text(R.string.l10n_app_map_map_controls_centerall)).performClick()
+        compose.waitForIdle()
+        val framed = requireNotNull(dispatched.last().camera)
+        assertNotEquals(pan, framed)
+        assertEquals(pan.encode(), host.get().getSharedPreferences("shared-map", 0).getString("camera-v1", null))
+
+        dispatched.clear()
+        restoration.emulateSavedInstanceStateRestore()
+        advanceFrames()
+        compose.waitForIdle()
+
+        assertTrue(dispatched.isNotEmpty())
+        assertTrue("Restoration must retain the explicit frame before native persistence", dispatched.all { it.camera == framed })
+        compose.runOnIdle { reportCamera(pan) }
+        restoration.emulateSavedInstanceStateRestore()
+        advanceFrames()
+        compose.waitForIdle()
+        assertEquals(pan, dispatched.last().camera)
+    }
+
     @Test fun initialAndExplicitFramingUseOnlyVisiblePinsAndEmptyMapDisablesCenterAll() {
         host.get().getSharedPreferences("shared-map", 0).edit().putString(
             "filter-v1", MapFilterState(favoritesOnly = true).encode(),
@@ -389,21 +480,23 @@ class MapMountedConsumerTest {
         onPresentation: (MapPresentationState) -> Unit = {},
         appColorSchemePreference: AppColorSchemePreference = AppColorSchemePreference.SYSTEM,
         dependenciesProvider: (() -> MapFeatureDependencies)? = null,
+        restoration: StateRestorationTester? = null,
+        onCameraCallback: ((MapCamera) -> Unit) -> Unit = {},
     ) {
         val bound = dependencies.copy(preferences = dependencies.preferences ?: AppMapPreferences(
             MeshCoreStorage.get(host.get()).preferences,
             host.get().getSharedPreferences("shared-map", 0),
         ))
         host.get().runOnUiThread {
-            host.get().setContent {
+            val content: @Composable () -> Unit = {
                 MeshCoreTheme(colorSchemePreference = appColorSchemePreference, systemDark = false, motionScale = 0f) {
                     MapEntry(
                         FeatureRoute(FeatureId.MAP), { error("No generic navigation") },
                         dependenciesProvider?.invoke() ?: bound,
                         focus = focus(),
                         onFocusConsumed = onFocusConsumed,
-                        mapSurface = { state, _, _, _, select, overlay ->
-                            SideEffect { onPresentation(state) }
+                        mapSurface = { state, _, _, camera, select, overlay ->
+                            SideEffect { onPresentation(state); onCameraCallback(camera) }
                             Box(Modifier.fillMaxSize()) {
                                 Column(Modifier.align(androidx.compose.ui.Alignment.Center).testTag("test-renderer")) {
                                     state.points.forEach { marker ->
@@ -416,6 +509,7 @@ class MapMountedConsumerTest {
                     )
                 }
             }
+            if (restoration == null) host.get().setContent(content = content) else restoration.setContent(content)
         }
         advanceFrames()
         compose.waitForIdle()
@@ -425,6 +519,14 @@ class MapMountedConsumerTest {
         }
         compose.waitForIdle()
     }
+
+    private fun restorationTester() = StateRestorationTester(
+        object : ComposeContentTestRule, ComposeTestRule by compose {
+            override fun setContent(composable: @Composable () -> Unit) {
+                host.get().setContent(content = composable)
+            }
+        },
+    )
 
     private fun advanceFrames() {
         repeat(6) {

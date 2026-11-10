@@ -35,6 +35,8 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -169,11 +171,11 @@ private fun MapContent(
     val feature by holder.state.collectAsStateWithLifecycle()
     DisposableEffect(holder) { onDispose { holder.close() } }
     var listVisible by remember { mutableStateOf(false) }
-    var focusedPoint by remember { mutableStateOf(focus) }
-    val focusedPinId = remember { UUID.randomUUID() }
-    var selectedFocus by remember { mutableStateOf<MapMarker?>(null) }
+    var focusedPoint by rememberSaveable(stateSaver = FocusedPointSaver) { mutableStateOf(focus) }
+    val focusedPinId = UUID.fromString(rememberSaveable { UUID.randomUUID().toString() })
+    var focusedPinSelected by rememberSaveable { mutableStateOf(false) }
     var offlineVisible by remember { mutableStateOf(false) }
-    var camera by remember {
+    var camera by rememberSaveable(stateSaver = CameraSaver) {
         mutableStateOf(
             if (focus == null) preferences.getString(CAMERA_KEY, null)?.let(MapCamera::decode) else null,
         )
@@ -185,7 +187,7 @@ private fun MapContent(
             preferenceStore.observe(MapFilterHost.MAIN_MAP).collect { next ->
                 if (holder.state.value.filter != next.filter) {
                     holder.setFilter(next.filter)
-                    selectedFocus = null
+                    if (settings != null) focusedPinSelected = false
                 }
                 settings = next
                 preferenceObservationError = null
@@ -220,7 +222,7 @@ private fun MapContent(
     LaunchedEffect(focus) {
         if (focus != null) {
             focusedPoint = focus
-            selectedFocus = null
+            focusedPinSelected = false
             camera = MapCamera(focus, 0.01, 0.01)
             cameraCommandRevision++
             onFocusConsumed()
@@ -257,7 +259,7 @@ private fun MapContent(
             preferences.edit().putString(CAMERA_KEY, it.encode()).apply()
         },
         {
-            selectedFocus = it.takeIf { marker -> marker.style == MapPinStyle.DROPPED_PIN }
+            focusedPinSelected = it.style == MapPinStyle.DROPPED_PIN
             holder.select(it.id)
         },
     ) {
@@ -303,7 +305,9 @@ private fun MapContent(
                 }
             }
         }
-        val selectedItem = feature.selected ?: selectedFocus?.let {
+        val selectedItem = feature.selected ?: filtered.firstOrNull {
+            focusedPinSelected && it.id == focusedPinId
+        }?.let {
             MapFeatureMarker(it, ContactMapType.CHAT, false, false)
         }
         selectedItem?.let { item ->
@@ -341,7 +345,7 @@ private fun MapContent(
                     }
                     TextButton(onClick = {
                         holder.select(null)
-                        selectedFocus = null
+                        focusedPinSelected = false
                         focusedPoint = null
                     }) {
                         Text(stringResource(R.string.l10n_app_map_map_common_done))
@@ -358,7 +362,7 @@ private fun MapContent(
                     items(filtered, key = { it.id }) { marker ->
                         TextButton(
                             onClick = {
-                                selectedFocus = marker.takeIf { it.style == MapPinStyle.DROPPED_PIN }
+                                focusedPinSelected = marker.style == MapPinStyle.DROPPED_PIN
                                 holder.select(marker.id)
                             },
                             modifier = Modifier.fillMaxWidth(),
@@ -707,6 +711,15 @@ private fun normalizeLongitude(value: Double): Double {
     return normalized
 }
 
+
+private val FocusedPointSaver = Saver<GeoPoint?, List<Double>>(
+    save = { point -> point?.let { listOf(it.latitude, it.longitude) } },
+    restore = { coordinates -> GeoPoint(coordinates[0], coordinates[1]) },
+)
+private val CameraSaver = Saver<MapCamera?, String>(
+    save = { it?.encode() },
+    restore = MapCamera::decode,
+)
 
 private const val PREFERENCES = "shared-map"
 private const val CAMERA_KEY = "camera-v1"

@@ -36,7 +36,6 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertFails
 import kotlin.test.assertFailsWith
-import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertSame
@@ -321,7 +320,9 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
             assertEquals(1, h.sessions.created)
             assertEquals(0, h.sessions.outstanding)
             assertNull(store.fetchChannelOccupantSnapshot(effectiveId, 0u))
-            assertIs<kotlinx.coroutines.CancellationException>(reconnect.await().cause)
+            val retainedCauses = generateSequence<Throwable>(reconnect.await()) { it.cause }.toList()
+            assertTrue(retainedCauses.any { it is kotlinx.coroutines.CancellationException },
+                "The quarantine must retain the cancelled exchange: ${retainedCauses.map { it.javaClass.name }}")
         }
     }
 

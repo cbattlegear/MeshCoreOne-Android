@@ -98,7 +98,7 @@ private fun <T> unsupportedRole(type: Class<T>): T = type.cast(
 
 internal class RecordingStore : PersistenceStoreProtocol by unsupportedRole(PersistenceStoreProtocol::class.java),
     ChannelHistoryPersisting by unsupportedRole(ChannelHistoryPersisting::class.java),
-    QueuedChannelTerminalPersisting, QueuedChannelReadinessPersisting {
+    QueuedChannelTerminalPersisting, QueuedChannelReadinessPersisting, InlineChannelAttemptPersisting {
     val messages = linkedMapOf<EntityKey, MessageDTO>()
     val contacts = linkedMapOf<EntityKey, ContactDTO>()
     val channels = linkedMapOf<EntityKey, ChannelDTO>()
@@ -337,6 +337,37 @@ internal class RecordingStore : PersistenceStoreProtocol by unsupportedRole(Pers
         access("beginQueuedChannelAttempt")
         val pendingKey = EntityKey(key.radioId, key.pendingID)
         val row = pending[pendingKey] ?: reject(key, QueuedChannelAttemptConflict.MISSING_SUBMISSION)
+        val attempt = preparedChannelAttempt(row, key, expectedOccupantID, wireTimestamp)
+        channelAttempts[key] = attempt
+        pending[pendingKey] = row.copy(channelDispatchState = QueuedChannelDispatchState.DISPATCHING, channelAttemptID = key.attemptID)
+        after?.invoke("beginQueuedChannelAttempt")
+        return attempt
+    }
+    override suspend fun beginInlineChannelAttempt(
+        submission: PendingSendDTO, key: QueuedChannelAttemptKey, expectedOccupantID: UUID, wireTimestamp: UInt,
+    ): QueuedChannelAttempt {
+        access("beginInlineChannelAttempt")
+        val pendingKey = EntityKey(key.radioId, key.pendingID)
+        if (submission.radioId != key.radioId || submission.id != key.pendingID || submission.messageID != key.messageID
+        ) reject(submission, QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION)
+        if (submission.channelDispatchState != null || submission.channelAttemptID != null) {
+            reject(submission, QueuedChannelAttemptConflict.UNKNOWN_SUBMISSION)
+        }
+        if (pendingKey in pending || channelAttempts.keys.any { it.radioId == key.radioId && it.pendingID == key.pendingID } ||
+            pending.values.any { it.radioId == key.radioId && it.messageID == key.messageID }
+        ) reject(submission, QueuedChannelAttemptConflict.RETAINED_SUBMISSION)
+        val sequence = Math.incrementExact(pending.values.filter { it.radioId == key.radioId }.maxOfOrNull { it.sequence } ?: 0)
+        val row = submission.copy(sequence = sequence, channelDispatchState = QueuedChannelDispatchState.READY)
+        val attempt = preparedChannelAttempt(row, key, expectedOccupantID, wireTimestamp)
+        // No suspension or observable READY insertion between the two committed fixture writes.
+        channelAttempts[key] = attempt
+        pending[pendingKey] = row.copy(channelDispatchState = QueuedChannelDispatchState.DISPATCHING, channelAttemptID = key.attemptID)
+        after?.invoke("beginInlineChannelAttempt")
+        return attempt
+    }
+    private fun preparedChannelAttempt(
+        row: PendingSendDTO, key: QueuedChannelAttemptKey, expectedOccupantID: UUID, wireTimestamp: UInt,
+    ): QueuedChannelAttempt {
         val message = messages[EntityKey(key.radioId, key.messageID)]
         if (row.channelDispatchState != QueuedChannelDispatchState.READY || row.channelAttemptID != null) {
             reject(row, QueuedChannelAttemptConflict.SUBMISSION_NOT_READY)
@@ -353,12 +384,8 @@ internal class RecordingStore : PersistenceStoreProtocol by unsupportedRole(Pers
         if (channelAttempts.keys.any { it.radioId == key.radioId && it.attemptID == key.attemptID }) {
             reject(row, QueuedChannelAttemptConflict.ATTEMPT_ID_REUSED)
         }
-        val attempt = QueuedChannelAttempt(key, requireNotNull(row.channelIndex), expectedOccupantID,
+        return QueuedChannelAttempt(key, requireNotNull(row.channelIndex), expectedOccupantID,
             wireTimestamp, row.isResend, QueuedChannelAttemptPhase.DISPATCHING, false)
-        channelAttempts[key] = attempt
-        pending[pendingKey] = row.copy(channelDispatchState = QueuedChannelDispatchState.DISPATCHING, channelAttemptID = key.attemptID)
-        after?.invoke("beginQueuedChannelAttempt")
-        return attempt
     }
     override suspend fun settleQueuedChannelAttempt(
         key: QueuedChannelAttemptKey, outcome: QueuedChannelAttemptOutcome,
@@ -434,7 +461,8 @@ internal class RecordingStore : PersistenceStoreProtocol by unsupportedRole(Pers
         ) reject(row, QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION)
         val status = if (message.status == MessageStatus.DELIVERED) message.status else MessageStatus.FAILED
         pending.remove(EntityKey(key.radioId, key.pendingID))
-        messages[messageKey] = message.copy(status = status)
+        messages[messageKey] = message.copy(status = status,
+            failureSeen = if (status != message.status) false else message.failureSeen)
         channelAttempts[key] = latest.copy(phase = QueuedChannelAttemptPhase.DEFINITELY_UNSENT)
         after?.invoke("settleAndRetireDefinitelyUnsentQueuedChannelAttempt")
         return QueuedChannelRetirement(status, status != message.status)

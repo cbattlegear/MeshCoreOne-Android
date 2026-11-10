@@ -694,7 +694,7 @@ class CommitRecoveryTest {
     ) {
         if (h.store.channels.values.none { it.radioId == RADIO && it.index == 0.toUByte() }) h.store.seedChannelCreation()
         val creationStore = object : PersistenceStoreProtocol by store, ChannelHistoryPersisting by h.store,
-            QueuedChannelTerminalPersisting by h.store {
+            QueuedChannelTerminalPersisting by h.store, InlineChannelAttemptPersisting by h.store {
             override suspend fun createOrReconcileChannelMessage(
                 creation: ChannelMessageCreation, timestamp: UInt, createdAt: Instant,
             ): MessageDTO = h.store.capturedChannelMessage(creation, timestamp, createdAt).also {

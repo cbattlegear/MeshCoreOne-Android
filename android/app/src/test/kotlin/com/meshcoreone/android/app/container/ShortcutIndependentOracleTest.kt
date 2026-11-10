@@ -21,14 +21,19 @@ import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.model.BatteryInfo
 import com.meshcoreone.android.core.services.contacts.AdvertisementError
 import com.meshcoreone.android.core.services.contacts.ChannelServiceError
+import com.meshcoreone.android.core.services.sync.SyncClock
 import com.meshcoreone.android.platform.shortcuts.*
 import java.util.Locale
 import kotlin.test.*
+import kotlin.time.Duration
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import org.junit.Test
 
 class ShortcutIndependentOracleTest : RoomProcessTest() {
@@ -38,12 +43,18 @@ class ShortcutIndependentOracleTest : RoomProcessTest() {
     private val text = AndroidShortcutText(context)
 
     private suspend fun connected(test: TestScope, channel: Boolean = false): ContainerHarness {
-        val h = ContainerHarness(test, store)
+        val syncClock = if (channel) object : SyncClock by SyncClock.SYSTEM {
+            override suspend fun sleep(duration: Duration) =
+                withContext(Dispatchers.Default) { delay(duration) }
+        } else SyncClock.SYSTEM
+        val h = ContainerHarness(test, store, syncClock = syncClock)
         h.links.configureRadio = { firmware ->
             firmware.knownContacts += contactFrame(key(4), "Independent peer")
             firmware.respond = { frame ->
                 when {
                     frame[0].toInt() in 2..3 -> emptyList()
+                    // Keep the budget oracle operational but not draining its durable submissions.
+                    channel && frame[0].toInt() == 4 -> listOf(Bytes.of(1, 2))
                     channel && frame[0].toInt() == 0x1f -> listOf(
                         if (frame[1].toInt() == 0) Bytes.of(0x12, 0) +
                             Bytes.utf8("Oracle").paddedOrTruncated(32) + Bytes(ByteArray(16) { 9 })
@@ -55,7 +66,8 @@ class ShortcutIndependentOracleTest : RoomProcessTest() {
         }
         if (channel) h.container.foreground.activityStarted()
         h.manager.connect(h.target())
-        h.eventually("independent shortcut oracle READY") { h.manager.connectionState == DeviceConnectionState.READY }
+        val expected = if (channel) DeviceConnectionState.SYNCING else DeviceConnectionState.READY
+        h.eventually("independent shortcut oracle $expected") { h.manager.connectionState == expected }
         h.settle()
         return h
     }
@@ -149,6 +161,8 @@ class ShortcutIndependentOracleTest : RoomProcessTest() {
                 assertEquals(occupant, it.channelOccupantID)
                 assertEquals(occupant, assertNotNull(it.channelMessageEnvelope()).channelOccupantID)
             }
+            assertEquals(DeviceConnectionState.SYNCING, h.manager.connectionState)
+            assertTrue(h.links.radios.single().sent.none { it[0].toInt() == 3 })
         } finally { h.container.close() }
     }
 

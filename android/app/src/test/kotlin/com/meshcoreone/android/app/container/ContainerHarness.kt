@@ -4,6 +4,8 @@
 // AndroidOnly: WP-312 Explicit optional map dependency injection for App adapter tests.
 package com.meshcoreone.android.app.container
 
+import com.meshcoreone.android.app.state.AccessibilityAnnouncer
+import com.meshcoreone.android.app.state.AppStatePlatform
 import com.meshcoreone.android.core.database.MeshCoreDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -81,11 +83,15 @@ internal class MemoryDraftDefaults : DraftDefaults {
 }
 
 internal class RecordingLifecycle(
-    private val onCreated: (RadioSessionContainer) -> Unit = {},
+    initialOnCreated: (RadioSessionContainer) -> Unit = {},
 ) : SessionLifecycleListener {
     val created = java.util.Collections.synchronizedList(mutableListOf<RadioSessionContainer>())
     val tornDown = java.util.Collections.synchronizedList(mutableListOf<RadioSessionContainer>())
-    override fun created(container: RadioSessionContainer) { created += container; onCreated(container) }
+    @Volatile var onCreated: (RadioSessionContainer) -> Unit = initialOnCreated
+    override fun created(container: RadioSessionContainer) {
+        created += container
+        onCreated(container)
+    }
     override fun tornDown(container: RadioSessionContainer) { tornDown += container }
 }
 
@@ -133,6 +139,10 @@ internal class ContainerHarness(
     regionStore: com.meshcoreone.android.app.state.RegionSelectionStore? = null,
     preferencesOverride: ProcessConnectionPreferences? = null,
     simulatorSeedStore: com.meshcoreone.android.core.services.simulator.SimulatorSeedStore = RoomSimulatorSeedStore(store),
+    notificationNavigationReady: () -> Unit = {},
+    notificationReadyDispatcher: kotlinx.coroutines.CoroutineDispatcher = kotlinx.coroutines.Dispatchers.Default,
+    platform: AppStatePlatform = AppStatePlatform.NONE,
+    accessibility: AccessibilityAnnouncer = SilentAnnouncements,
     onSessionCreated: (RadioSessionContainer) -> Unit = {},
 ) {
     val scheduler: TestCoroutineScheduler = test.testScheduler
@@ -173,6 +183,8 @@ internal class ContainerHarness(
             simulatorSeedStore = simulatorSeedStore,
             notificationDelivery = delivery,
             notificationPreferences = FixedNotificationPreferences(),
+            onNotificationNavigationReady = notificationNavigationReady,
+            notificationReadyDispatcher = notificationReadyDispatcher,
             contactPreferences = MemoryFlags(),
             draftStore = draftStore,
             chatSendQueueProgress = chatSendQueueProgress,
@@ -185,7 +197,8 @@ internal class ContainerHarness(
             messageServiceConfig = messageServiceConfig,
             chatSendQueueConfig = chatSendQueueConfig,
             runtimeRecoveryDispatcher = recoveryDispatcher,
-            accessibility = SilentAnnouncements,
+            accessibility = accessibility,
+            platform = platform,
             sessionLifecycle = lifecycle,
             runtimeReporter = RuntimeIssueReporter { diagnostics += it },
             messagingReporter = com.meshcoreone.android.core.contracts.domain.MessagingIssueReporter { messagingDiagnostics += it },

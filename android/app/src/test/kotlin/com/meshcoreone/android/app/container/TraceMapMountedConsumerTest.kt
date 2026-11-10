@@ -158,12 +158,16 @@ class TraceMapMountedConsumerTest {
 
     @Test fun initialMapPreferenceFailureShowsRetryWithoutLoadingIndicator() {
         var attempts = 0
+        val initialReadStarted = CompletableDeferred<Unit>()
         val retryStarted = CompletableDeferred<Unit>()
         val retryResult = CompletableDeferred<MapPreferences>()
         val failingPreferences = object : MapPreferenceStore {
             override fun observe(host: MapFilterHost): kotlinx.coroutines.flow.Flow<MapPreferences> =
                 kotlinx.coroutines.flow.flow {
-                    if (++attempts == 1) throw IOException("preference read failed")
+                    if (++attempts == 1) {
+                        initialReadStarted.complete(Unit)
+                        throw IOException("preference read failed")
+                    }
                     retryStarted.complete(Unit)
                     emit(retryResult.await())
                 }
@@ -179,9 +183,10 @@ class TraceMapMountedConsumerTest {
 
         val error = text(L.commonErrorFailedToLoad)
         val retry = text(M.mapPreviewRetryButtonAccessibilityLabel)
+        waitUntilAdvancingFrames { initialReadStarted.isCompleted }
+        waitUntilAdvancingFrames { failures.size == 1 }
         waitUntilAdvancingFrames {
-            failures.size == 1 &&
-                compose.onAllNodesWithText(error).fetchSemanticsNodes().isNotEmpty() &&
+            compose.onAllNodesWithText(error).fetchSemanticsNodes().isNotEmpty() &&
                 compose.onAllNodesWithText(retry).fetchSemanticsNodes().isNotEmpty()
         }
         compose.onNodeWithText(error).assertIsDisplayed()

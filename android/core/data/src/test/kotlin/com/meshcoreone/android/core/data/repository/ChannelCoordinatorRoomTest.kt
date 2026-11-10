@@ -59,7 +59,6 @@ class ChannelCoordinatorRoomTest : RepositoryTest() {
             sent += ChannelInfo(index, name, secret)
         }
         override suspend fun setChannel(index: UByte, name: String, secret: Bytes, dispatch: ChannelWriteDispatch) {
-            dispatch.claim()
             setChannel(index, name, secret)
         }
     }

@@ -25,6 +25,7 @@ import com.meshcoreone.android.feature.nodes.deps.NodesAdvertisementService
 import com.meshcoreone.android.feature.nodes.deps.NodesClock
 import com.meshcoreone.android.feature.nodes.deps.NodesContactFailure
 import com.meshcoreone.android.feature.nodes.deps.NodesContactService
+import com.meshcoreone.android.feature.nodes.deps.NodesConnectionSnapshot
 import com.meshcoreone.android.feature.nodes.deps.NodesDataStore
 import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
 import com.meshcoreone.android.feature.nodes.deps.NodesNotificationCleanup
@@ -39,12 +40,15 @@ import kotlin.time.Duration
 import kotlin.time.Duration.Companion.nanoseconds
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import org.json.JSONArray
 
-internal fun AppContainer.createNodesFeatureDependencies(): NodesFeatureDependencies =
-    NodesFeatureDependencies(
-        session = AppNodesSession(this),
+internal fun AppContainer.createNodesFeatureDependencies(): NodesFeatureDependencies {
+    val session = AppNodesSession(this)
+    return NodesFeatureDependencies(
+        session = session,
         uriCodec = object : ContactUriCodec {
             override fun exportContactUri(name: String, publicKey: Bytes, type: com.meshcoreone.android.core.protocol.model.ContactType) =
                 ContactService.exportContactURI(name, publicKey, type)
@@ -70,14 +74,31 @@ internal fun AppContainer.createNodesFeatureDependencies(): NodesFeatureDependen
         messages = nodesMessages,
         announcer = nodesAnnouncer,
         preferences = nodesPreferences,
+        locations = combine(nodesLocations, session.connectionSnapshots()) { phone, connection ->
+            phone ?: connection.device?.takeIf { it.hasLocation }?.let {
+                com.meshcoreone.android.core.model.Coordinate(it.latitude, it.longitude)
+            }
+        }.distinctUntilChanged(),
         clock = object : NodesClock {
             override val wallNow: Instant get() = Instant.now()
             override val elapsed: Duration get() = System.nanoTime().nanoseconds
             override suspend fun sleep(duration: Duration) = delay(duration)
         },
     )
+}
 
 private class AppNodesSession(private val container: AppContainer) : NodesSession {
+    override fun connectionSnapshots() = combine(
+        container.sessions.currentSessions,
+        container.connectionManager.snapshot,
+        container.appState.servicesVersion,
+        container.appState.sessionStateChangeCount,
+        container.deviceAccess.changes,
+    ) { graph, _, _, _, _ ->
+        NodesConnectionSnapshot(currentRadioId(), graph, connectedDevice(), connectionState())
+    }.distinctUntilChanged()
+
+    override fun connectionIdentity(): Any? = container.sessions.current
     override fun connectionState() = container.appState.connectionState
     override fun connectedDevice() = container.appState.connectedDevice
     override fun currentRadioId() = container.appState.currentRadioId

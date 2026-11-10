@@ -4,6 +4,7 @@ package com.meshcoreone.android.feature.nodes.support
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.model.ContactDTO
+import com.meshcoreone.android.core.model.Coordinate
 import com.meshcoreone.android.core.model.ContactFrame
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.DiscoveredNodeDTO
@@ -19,6 +20,7 @@ import com.meshcoreone.android.feature.nodes.deps.NodesAdvertEvent
 import com.meshcoreone.android.feature.nodes.deps.NodesAdvertisementService
 import com.meshcoreone.android.feature.nodes.deps.NodesContactService
 import com.meshcoreone.android.feature.nodes.deps.NodesContactFailure
+import com.meshcoreone.android.feature.nodes.deps.NodesConnectionSnapshot
 import com.meshcoreone.android.feature.nodes.deps.NodesDataStore
 import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
 import com.meshcoreone.android.feature.nodes.deps.NodesMessage
@@ -35,6 +37,7 @@ import java.util.UUID
 import kotlin.time.Duration
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 
 /** Multicast broadcaster: subscribers register when [subscribe] is called. */
@@ -64,18 +67,22 @@ internal class FakeDataStore : NodesDataStore {
     var fetchContactsError: Exception? = null
     var fetchDiscoveredError: Exception? = null
     var fetchContactsGate: (suspend () -> Unit)? = null
+    var fetchContactBehavior: (suspend (RadioId, Bytes) -> ContactDTO?)? = null
     val touched = mutableListOf<Pair<Bytes, Instant>>()
     val deletedDiscovered = mutableListOf<EntityKey>()
 
     override suspend fun fetchContacts(radioId: RadioId): List<ContactDTO> {
+        val snapshot = contacts.filter { it.radioId == radioId }
         fetchContactsGate?.invoke()
         fetchContactsError?.let { throw it }
-        return contacts.filter { it.radioId == radioId }
+        return snapshot
     }
 
     override suspend fun fetchContact(key: EntityKey): ContactDTO? = contacts.firstOrNull { it.id == key.id }
-    override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? =
-        contacts.firstOrNull { it.radioId == radioId && it.publicKey == publicKey }
+    override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+        fetchContactBehavior?.let { return it(radioId, publicKey) }
+        return contacts.firstOrNull { it.radioId == radioId && it.publicKey == publicKey }
+    }
 
     override suspend fun fetchBlockedContacts(radioId: RadioId): List<ContactDTO> = contacts.filter { it.radioId == radioId && it.isBlocked }
     override suspend fun fetchContactPublicKeys(radioId: RadioId): Set<Bytes> = contacts.filter { it.radioId == radioId }.map { it.publicKey }.toSet()
@@ -178,8 +185,12 @@ internal class FakeContactService(private val store: FakeDataStore? = null) : No
 internal class FakeAdvertisementService : NodesAdvertisementService {
     val broadcaster = TestBroadcaster<NodesAdvertEvent>()
     val syncingFlags = mutableListOf<Boolean>()
+    var syncingBehavior: suspend (Boolean) -> Unit = {}
     override fun events(): EventSubscription<NodesAdvertEvent> = broadcaster.subscribe()
-    override suspend fun setSyncingContacts(isSyncing: Boolean) { syncingFlags += isSyncing }
+    override suspend fun setSyncingContacts(isSyncing: Boolean) {
+        syncingFlags += isSyncing
+        syncingBehavior(isSyncing)
+    }
 }
 
 internal class FakeTraceService(var behavior: suspend (UInt, UByte, Bytes) -> MessageSentInfo = { _, _, _ -> FakeContactService.sentInfo(0u) }) :
@@ -199,23 +210,53 @@ internal class FakeNotificationCleanup : NodesNotificationCleanup {
 
 /** Mutable app-graph facts; null services model a disconnected radio. */
 internal class FakeSession : NodesSession {
+    private val connection = MutableStateFlow(NodesConnectionSnapshot(null, null))
+    override fun connectionSnapshots() = connection
     var state: DeviceConnectionState = DeviceConnectionState.READY
+        set(value) {
+            field = value
+            publishConnection()
+        }
     var device: DeviceDTO? = null
+        set(value) {
+            field = value
+            publishConnection()
+        }
     var radioId: RadioId? = null
+        set(value) {
+            field = value
+            publishConnection()
+        }
     var offlineStore: NodesDataStore? = null
     var servicesStore: NodesDataStore? = null
     var contacts: NodesContactService? = null
+        set(value) {
+            field = value
+            publishConnection()
+        }
     var adverts: NodesAdvertisementService? = null
     var trace: NodesTraceService? = null
     var notifications: NodesNotificationCleanup? = null
+    var onContactServiceRead: () -> Unit = {}
+    var onAdvertisementServiceRead: () -> Unit = {}
+    var onConnectionStateRead: () -> Unit = {}
+    var onRadioIdRead: () -> Unit = {}
+    var onDeviceRead: () -> Unit = {}
+    var onServicesStoreRead: () -> Unit = {}
+    var onOfflineStoreRead: () -> Unit = {}
 
-    override fun connectionState() = state
-    override fun connectedDevice() = device
-    override fun currentRadioId() = radioId
-    override fun offlineDataStore() = offlineStore
-    override fun servicesDataStore() = servicesStore
-    override fun contactService() = contacts
-    override fun advertisementService() = adverts
+    private fun publishConnection() {
+        connection.value = NodesConnectionSnapshot(radioId, contacts, device, state)
+    }
+
+    override fun connectionState() = state.also { onConnectionStateRead() }
+    override fun connectionIdentity() = contacts
+    override fun connectedDevice() = device.also { onDeviceRead() }
+    override fun currentRadioId() = radioId.also { onRadioIdRead() }
+    override fun offlineDataStore() = offlineStore.also { onOfflineStoreRead() }
+    override fun servicesDataStore() = servicesStore.also { onServicesStoreRead() }
+    override fun contactService() = contacts.also { onContactServiceRead() }
+    override fun advertisementService() = adverts.also { onAdvertisementServiceRead() }
     override fun traceService() = trace
     override fun notificationCleanup() = notifications
 }
@@ -271,10 +312,11 @@ internal class Harness(
     val announcer = RecordingAnnouncer()
     val timeouts = FixedTimeouts()
     val codec = FakeUriCodec()
+    val locations = MutableStateFlow<Coordinate?>(null)
     val dependencies = NodesFeatureDependencies(
         session = session, uriCodec = codec, timeouts = timeouts,
         messages = UserFacingMessages { error -> "failed: ${error.message}" },
-        announcer = announcer, preferences = preferences, clock = clock, locale = { locale },
+        announcer = announcer, preferences = preferences, clock = clock, locale = { locale }, locations = locations,
     )
 
     /** Wires a connected radio: every provider returns its double. */

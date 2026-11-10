@@ -1,25 +1,16 @@
-name: Copilot Android setup validation
+name: Copilot setup steps
 
 on:
   workflow_dispatch:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - .github/workflows/copilot-setup-steps.yml
-      - android/gradle/toolchain-lock.json
-      - android/gradle/wrapper/**
-      - tools/android-port/controller/ci.py
-      - tools/android-port/controller/ci_environment.py
-      - tools/android-port/controller/provision.py
+      - .github/actions/setup-android/action.yml
   push:
     branches: [main]
     paths:
       - .github/workflows/copilot-setup-steps.yml
-      - tools/android-port/controller/ci.py
-      - tools/android-port/controller/ci_environment.py
-      - tools/android-port/controller/provision.py
-      - android/gradle/toolchain-lock.json
-      - android/gradle/wrapper/**
+      - .github/actions/setup-android/action.yml
 
 permissions:
   contents: read
@@ -27,56 +18,28 @@ permissions:
 jobs:
   copilot-setup-steps:
     runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    timeout-minutes: 59
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      GRADLE_OPTS: '-Dorg.gradle.jvmargs="-Xms64m -Xmx3072m -XX:MaxMetaspaceSize=768m -Dfile.encoding=UTF-8"'
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - uses: ./.github/actions/setup-android
         with:
-          python-version: "3.12.4"
-          architecture: x64
-      - name: Declare ephemeral cloud inputs
-        shell: pwsh
-        run: |
-          $root = Join-Path $env:RUNNER_TEMP 'meshcoreone-cloud'
-          "ANDROID_CI_OUTPUT=$(Join-Path $root 'evidence')" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
-          "ANDROID_CI_STATE=$(Join-Path (Join-Path $root 'toolchain') 'environment.json')" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
-      - name: Install checksum-pinned verification tooling
+          save-cache: "false"
+      - name: Prefetch Gradle dependencies
+        working-directory: android
+        env:
+          JAVA_OPTS: -Xms32m -Xmx128m
         run: >-
-          python -m pip install --disable-pip-version-check --require-hashes
-          --no-deps --only-binary=:all: -r tools/android-port/controller/requirements-ci.txt --quiet
-      - name: Explicit checksum-pinned SDK/JDK provisioning
-        shell: pwsh
-        run: python tools/android-port/controller/ci.py provision --root (Split-Path $env:ANDROID_CI_STATE -Parent) --accept-sdk-license
-      - name: Prepare process-only environment for later workers
-        shell: pwsh
-        run: |
-          $state = Get-Content -Raw $env:ANDROID_CI_STATE | ConvertFrom-Json
-          $values = @{
-            JAVA_HOME = $state.java_home
-            ANDROID_HOME = $state.android_home
-            ANDROID_SDK_ROOT = $state.android_home
-            GRADLE_USER_HOME = Join-Path $state.private_root 'gradle-root'
-            ANDROID_USER_HOME = Join-Path $state.private_root 'android-user'
-          }
-          foreach ($name in $values.Keys) {
-            "$name=$($values[$name])" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
-          }
-          (Join-Path $state.java_home 'bin') | Out-File $env:GITHUB_PATH -Append -Encoding utf8
-      - name: Worker readiness is mandatory even if cloud setup previously failed
-        run: python tools/android-port/controller/ci.py preflight
-      - name: Resolve actual scaffold dependencies in strict mode
-        run: python tools/android-port/controller/ci.py run --stage prepare
-      - name: Preserve setup evidence, not a cloud-assignability receipt
-        if: ${{ always() }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: cloud-setup-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ env.ANDROID_CI_OUTPUT }}
-          if-no-files-found: error
-          retention-days: 7
+          ./gradlew
+          --no-daemon --console=plain
+          --dependency-verification strict
+          --build-cache
+          -Pkotlin.compiler.execution.strategy=in-process
+          resolveScaffoldDependencies

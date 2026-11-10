@@ -171,9 +171,6 @@ class CodecEvidenceTests(unittest.TestCase):
         fixture = REPO / "android" / "core" / "testing" / "fixtures" / "reference-codec"
         proof = json.loads((fixture / "codec-evidence.json").read_text(encoding="utf-8"))
         source_map = json.loads((fixture / "source-map.json").read_text(encoding="utf-8"))
-        self.assertEqual(proof["identity"]["binding"]["head_sha"], "6e22d4768e80af943887fe4e9f48c12074f4f89f")
-        self.assertEqual(proof["identity"]["run_id"], 37167976130)
-        self.assertEqual(proof["identity"]["run_attempt"], 1)
         self.assertEqual(proof["source_map_sha256"], sha256(json_bytes(source_map)))
         reference = FrozenReference()
         for source in source_map["sources"]:

@@ -40,6 +40,54 @@ class NotificationAcceptanceRecoveryTests {
     @Test fun acceptedRetryPreservesANewerUserDraft() = retryDraft("newer user text")
     @Test fun acceptedRetryPreservesANewerEqualTextUserDraft() = retryDraft("retry text")
 
+    @Test fun uncertainRetryCannotRestoreItsPriorUnsentDraft() = uncertainRetryDraft(null)
+    @Test fun uncertainRetryPreservesANewerUserDraft() = uncertainRetryDraft("newer user text")
+    @Test fun uncertainRetryPreservesANewerEqualTextUserDraft() = uncertainRetryDraft("retry text")
+
+    @Test fun actionDraftIsRetainedUntilDispatchOwnerProvesItWasNotSent() = runTest {
+        val n = NotificationHarness(this)
+        val contact = n.contact()
+        val receipt = NotificationActionReceipt()
+        n.service.saveActionDraft(contact.key, "retained original", receipt)
+        receipt.wireStarted()
+        assertNull(n.service.consumeDraft(contact.key))
+        receipt.wireNotDispatched()
+        assertEquals("retained original", n.service.consumeDraft(contact.key))
+        assertNull(n.service.consumeDraft(contact.key))
+    }
+
+    private fun uncertainRetryDraft(newerDraft: String?) = runTest {
+        val h = Harness(this)
+        val n = NotificationHarness(this, RADIO).authorize()
+        try {
+            h.start()
+            n.store.contacts[h.contact.key] = h.contact
+            val handler = NotificationActionHandler(n.store, sender(h), n.service, n.rooms, n.sync)
+            handler.configure({ true }, { "Me" })
+            h.store.before = { if (it == "saveMessage") awaitCancellation() }
+            val receipt = NotificationActionReceipt()
+            val first = launch(receipt) { handler.handleQuickReply(h.contact.key, "retry text") }
+            runCurrent()
+            first.cancelAndJoin()
+            assertEquals(NotificationActionReceipt.State.READY, receipt.state)
+            assertTrue(h.sends(CommandCode.SEND_MESSAGE).isEmpty())
+            assertEquals(1, n.delivery.posted.size)
+            if (newerDraft != null) n.service.saveDraft(h.contact.key, newerDraft)
+
+            h.store.before = null
+            h.transport.holdMessageReplies = true
+            val retry = launch(receipt) { handler.handleQuickReply(h.contact.key, "retry text") }
+            runCurrent()
+            assertEquals(NotificationActionReceipt.State.IN_FLIGHT, receipt.state)
+            assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+            retry.cancelAndJoin()
+            assertEquals(NotificationActionReceipt.State.UNCERTAIN, receipt.state)
+            assertEquals(newerDraft, n.service.consumeDraft(h.contact.key))
+            assertNull(n.service.consumeDraft(h.contact.key))
+            assertEquals(1, n.delivery.posted.size, "Uncertainty must not report another definite failure")
+        } finally { h.close() }
+    }
+
     private fun retryDraft(newerDraft: String?) = runTest {
         val h = Harness(this)
         val n = NotificationHarness(this, RADIO).authorize()

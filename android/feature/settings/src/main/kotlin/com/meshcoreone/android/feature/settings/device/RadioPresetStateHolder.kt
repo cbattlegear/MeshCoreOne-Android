@@ -155,23 +155,35 @@ class RadioPresetStateHolder(
         enableRepeatMode()
     }
 
-    private fun applyPreset(id: String) {
+    private fun applyPreset(
+        id: String,
+        repeat: Boolean = mutable.value.isRepeatEnabled,
+        expectedDeviceId: java.util.UUID? = connection.connectedDevice.value?.id,
+    ) {
         val snapshot = mutable.value
-        val list = if (snapshot.isRepeatEnabled) snapshot.repeatPresets else snapshot.presets
+        val list = if (repeat) snapshot.repeatPresets else snapshot.presets
         if (list.none { it.id == id }) {
             writeGate.set(false)
             return
         }
         mutable.update { it.copy(isApplying = true) }
         writeGate.set(true)
-        env.scope.launch { runApply(id, snapshot.isRepeatEnabled) }
+        env.scope.launch {
+            val applied = runApply(id, repeat, expectedDeviceId)
+            if (repeat) {
+                if (applied) mutable.update { it.copy(isRepeatEnabled = true, selectedPresetId = id) }
+                else syncRepeatModeToConnectedDevice()
+            }
+        }
     }
 
-    private suspend fun runApply(id: String, repeat: Boolean) {
+    private suspend fun runApply(id: String, repeat: Boolean, expectedDeviceId: java.util.UUID? = null): Boolean {
+        var applied = false
         try {
             val service = settingsService() ?: throw SettingsNotConnectedException()
+            val device = connection.connectedDevice.value ?: throw SettingsNotConnectedException()
+            if (expectedDeviceId != null && device.id != expectedDeviceId) return false
             if (repeat) {
-                val device = connection.connectedDevice.value ?: throw SettingsNotConnectedException()
                 val frequency = catalog.repeatFrequencyKHz(id) ?: throw SettingsNotConnectedException()
                 // Repeat Mode changes only the frequency; bandwidth, SF and CR stay as the radio has them.
                 service.setRadioParamsVerified(frequency, device.bandwidth, device.spreadingFactor, device.codingRate, clientRepeat = true)
@@ -179,15 +191,17 @@ class RadioPresetStateHolder(
                 service.applyRadioPresetVerified(id)
             }
             retryAlert.reset()
+            applied = connection.connectedDevice.value?.id == device.id
         } catch (cancelled: CancellationException) {
-            releaseApply()
             throw cancelled
         } catch (error: Exception) {
             mutable.update { it.copy(selectedPresetId = currentMatchingPresetId()) }
-            val message = failures.route(error) { applyPreset(id) }
+            val message = failures.route(error) { applyPreset(id, repeat, expectedDeviceId) }
             mutable.update { it.copy(errorMessage = message ?: it.errorMessage) }
+        } finally {
+            releaseApply()
         }
-        releaseApply()
+        return applied
     }
 
     private fun releaseApply() {
@@ -196,13 +210,47 @@ class RadioPresetStateHolder(
     }
 
     private fun enableRepeatMode() {
-        val presetId = mutable.value.device?.let { catalog.nearestRepeatPreset(it.frequency) }?.id ?: return
+        val device = mutable.value.device ?: return
+        val presetId = catalog.nearestRepeatPreset(device.frequency)?.id ?: return
         writeGate.set(true)
-        // Persist the current radio settings so Repeat Mode can be undone.
-        deviceStore.savePreRepeatSettings()
-        setRepeatToggle(true)
-        mutable.update { it.copy(selectedPresetId = presetId) }
-        applyPreset(presetId)
+        mutable.update { it.copy(isApplyingRepeat = true, errorMessage = null) }
+        env.scope.launch { runEnableRepeatMode(device.id, presetId) }
+    }
+
+    private suspend fun runEnableRepeatMode(deviceId: java.util.UUID, presetId: String) {
+        try {
+            if (!deviceStore.savePreRepeatSettings(deviceId) || connection.connectedDevice.value?.id != deviceId) {
+                throw SettingsNotConnectedException()
+            }
+            setRepeatToggle(true)
+            mutable.update { it.copy(selectedPresetId = presetId, isApplyingRepeat = false) }
+            if (!runApply(presetId, repeat = true, expectedDeviceId = deviceId)) {
+                syncRepeatModeToConnectedDevice()
+            }
+        } catch (cancelled: CancellationException) {
+            releaseRepeat()
+            throw cancelled
+        } catch (error: Exception) {
+            syncRepeatModeToConnectedDevice()
+            val message = failures.route(error) { enableRepeatMode() }
+            mutable.update { it.copy(errorMessage = message ?: it.errorMessage) }
+            releaseRepeat()
+        }
+    }
+
+    private fun syncRepeatModeToConnectedDevice() {
+        val device = connection.connectedDevice.value
+        mutable.update { current ->
+            val enabled = device?.clientRepeat == true
+            current.copy(
+                isRepeatEnabled = enabled,
+                selectedPresetId = when {
+                    device == null -> null
+                    enabled -> catalog.matchingRepeatPreset(device.frequency)?.id
+                    else -> catalog.resolvedPreset(device, current.region)?.id
+                },
+            )
+        }
     }
 
     private fun disableRepeatMode() {

@@ -38,7 +38,7 @@ PROTOBUF_LICENSE_SHA256 = "6e5e117324afd944dcf67f36cf329843bc1a92229a8cd9bb573d7
 PROTOBUF_RUNTIME_CLASS = "androidx/datastore/preferences/protobuf/RuntimeVersion.class"
 EXPECTED_NATIVE_ABIS = {"arm64-v8a", "armeabi-v7a", "x86", "x86_64"}
 sys.path.insert(0, str(ROOT / "tools" / "android-port"))
-from controller.errors import PortError
+from portlib.errors import PortError
 NOTICE_PINS = {
     "datastore-core-android-1.2.1.aar": (
         "META-INF/androidx/datastore/datastore-core/LICENSE.txt",
@@ -194,8 +194,8 @@ def static_class_constants(raw):
 
 
 def native_libraries(raw):
-    sys.path.insert(0, str(ROOT / "tools" / "android-port"))
-    from controller.apk_alignment import elf_load_alignment
+    sys.path.insert(0, str(ROOT / "android" / "scaffold"))
+    from apk_alignment import elf_load_alignment
 
     libraries = []
     with zipfile.ZipFile(io.BytesIO(raw)) as archive:

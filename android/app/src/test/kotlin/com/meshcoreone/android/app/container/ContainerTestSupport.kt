@@ -275,7 +275,7 @@ internal object NoScanGateway : BleScanGateway {
 }
 
 /** Notification delivery that records posts; existing fixtures default to denied permission. */
-internal class RecordingDelivery(
+internal open class RecordingDelivery(
     private val status: NotificationAuthorizationStatus = NotificationAuthorizationStatus.DENIED,
 ) : NotificationDeliveryPort {
     val posted = mutableListOf<NotificationRequest>()
@@ -287,6 +287,10 @@ internal class RecordingDelivery(
     override suspend fun setBadgeCount(count: Long) { badge = count }
     override suspend fun deliveredNotifications(): SnapshotList<DeliveredNotification> = SnapshotList.empty()
     override suspend fun removeDelivered(ids: SnapshotList<NotificationId>) = Unit
+    override suspend fun removeDeliveredSnapshot(
+        selected: SnapshotList<DeliveredNotification>,
+    ): SnapshotList<com.meshcoreone.android.core.contracts.notifications.SnapshotRemovalOutcome> =
+        error("Recording delivery exposes no delivered snapshots")
 }
 
 internal class FixedNotificationPreferences : NotificationPreferencesPort {

@@ -8,17 +8,29 @@ import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationManager
 import android.os.CancellationSignal
+import android.util.Log
 import com.meshcoreone.android.core.services.content.GeoCoordinate
 import com.meshcoreone.android.core.services.content.LocationAuthorizationStatus
 import com.meshcoreone.android.core.services.content.LocationProducing
 import com.meshcoreone.android.core.services.content.LocationServiceError
 import java.util.concurrent.Executor
 import kotlinx.coroutines.CancellableContinuation
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.collectLatest
 
 interface LocationPermissionResultReporting {
     fun reportPermissionResult(granted: Boolean)
@@ -42,14 +54,64 @@ class LocationManagerLocationProducing(
     private var closed = false
     private var active: Request? = null
     private var lastCoordinate: GeoCoordinate? = null
+    private val coordinates = MutableStateFlow<GeoCoordinate?>(null)
     private val mutableStatus = MutableStateFlow(readStatus())
     override val authorizationStatus: StateFlow<LocationAuthorizationStatus> = mutableStatus.asStateFlow()
     val currentLocation: GeoCoordinate? get() = synchronized(lock) { lastCoordinate }
 
+    /** A resumed list refreshes one authorized fix, keeping its cache and never tracking or prompting. */
+    fun foregroundLocations() = flow {
+        refreshAuthorization()
+        coroutineScope {
+            launch {
+                authorizationStatus.collectLatest { status ->
+                    if (isAuthorized(status) && synchronized(lock) { !closed }) {
+                        try {
+                            if (withTimeoutOrNull(10_000L) { acquireForegroundFix() } == null) {
+                                Log.w("NodesLocation", "Foreground location fix timed out; proximity unavailable")
+                            }
+                        } catch (error: LocationServiceError) {
+                            if (error == LocationServiceError.RequestInProgress) {
+                                Log.d("NodesLocation", "Observing the existing location request")
+                            } else {
+                                Log.w("NodesLocation", "Foreground location unavailable", error)
+                            }
+                        }
+                    }
+                }
+            }
+            emitAll(combine(authorizationStatus, coordinates) { status, coordinate ->
+                coordinate.takeIf { isAuthorized(status) && synchronized(lock) { !closed } }
+            })
+        }
+    }.distinctUntilChanged()
+
     private class Request(
         val continuation: CancellableContinuation<GeoCoordinate>,
+        val foreground: Boolean,
         val signal: CancellationSignal = CancellationSignal(),
-    )
+    ) {
+        val finished = CompletableDeferred<Result<GeoCoordinate>>()
+    }
+
+    private class ForegroundFixTakenOver : CancellationException("Explicit location request replaced list-owned fix")
+
+    private suspend fun acquireForegroundFix(): GeoCoordinate {
+        while (true) {
+            var existing: Request? = null
+            try {
+                return acquireLocation(foreground = true) { existing = it }
+            } catch (_: ForegroundFixTakenOver) {
+                currentCoroutineContext().ensureActive()
+                continue
+            } catch (error: LocationServiceError) {
+                if (error != LocationServiceError.RequestInProgress) throw error
+            }
+            val result = checkNotNull(existing).finished.await()
+            // Follow cancelled owners only within the caller's original timeout; never retry a failed fix.
+            if (result.exceptionOrNull() !is CancellationException) return result.getOrThrow()
+        }
+    }
 
     init {
         if (isAuthorized(mutableStatus.value)) determined = true
@@ -102,17 +164,28 @@ class LocationManagerLocationProducing(
 
     // Permission is checked immediately below and a revoke-after-check SecurityException is
     // handled. Lint does not propagate the OR guard through this coroutine callback bridge.
+    override suspend fun requestLocation(): GeoCoordinate = acquireLocation()
+
     @SuppressLint("MissingPermission")
-    override suspend fun requestLocation(): GeoCoordinate {
+    private suspend fun acquireLocation(foreground: Boolean = false, onBusy: ((Request) -> Unit)? = null): GeoCoordinate {
         refreshAuthorization()
         val manager = locationManager
             ?: throw LocationServiceError.RequestFailed("LocationManager system service unavailable")
         return suspendCancellableCoroutine { continuation ->
-            val request = Request(continuation)
+            val request = Request(continuation, foreground)
+            var replaced: Request? = null
             val failure = synchronized(lock) {
                 when {
                     closed -> LocationServiceError.RequestFailed("Location producer is closed")
-                    active != null -> LocationServiceError.RequestInProgress
+                    active?.foreground == true && !foreground && isAuthorized(mutableStatus.value) -> {
+                        replaced = active
+                        active = request
+                        null
+                    }
+                    active != null -> {
+                        onBusy?.invoke(checkNotNull(active))
+                        LocationServiceError.RequestInProgress
+                    }
                     !isAuthorized(mutableStatus.value) -> LocationServiceError.NotAuthorized(mutableStatus.value)
                     else -> {
                         active = request
@@ -125,6 +198,12 @@ class LocationManagerLocationProducing(
                 return@suspendCancellableCoroutine
             }
             continuation.invokeOnCancellation { cancel(request) }
+            replaced?.let { previous ->
+                val takenOver = ForegroundFixTakenOver()
+                previous.signal.cancel()
+                previous.finished.complete(Result.failure(takenOver))
+                previous.continuation.cancel(takenOver)
+            }
             if (!owns(request)) return@suspendCancellableCoroutine
             try {
                 if (
@@ -167,18 +246,24 @@ class LocationManagerLocationProducing(
     private fun owns(request: Request): Boolean = synchronized(lock) { active === request }
 
     private fun complete(request: Request, result: Result<GeoCoordinate>) {
-        val claimed = synchronized(lock) {
-            if (active !== request) false else {
+        val outcome = synchronized(lock) {
+            if (active !== request) null else {
                 active = null
                 if (!closed && request.continuation.isActive) {
-                    result.getOrNull()?.let { lastCoordinate = it }
+                    result.getOrNull()?.let {
+                        lastCoordinate = it
+                        coordinates.value = it
+                    }
+                    result
+                } else {
+                    Result.failure(CancellationException("Location callback's owner is no longer active"))
                 }
-                true
             }
         }
-        if (claimed) {
+        if (outcome != null) {
             request.signal.cancel()
-            request.continuation.resumeWith(result)
+            request.finished.complete(outcome)
+            request.continuation.resumeWith(outcome)
         }
     }
 
@@ -191,7 +276,9 @@ class LocationManagerLocationProducing(
         }
         if (claimed) {
             request.signal.cancel()
-            request.continuation.cancel(CancellationException("Location request cancelled"))
+            val cancelled = CancellationException("Location request cancelled")
+            request.finished.complete(Result.failure(cancelled))
+            request.continuation.cancel(cancelled)
         }
     }
 
@@ -199,6 +286,7 @@ class LocationManagerLocationProducing(
         val pending = synchronized(lock) {
             if (closed) return
             closed = true
+            coordinates.value = null
             active
         }
         pending?.let(::cancel)

@@ -1,5 +1,6 @@
 // AndroidOnly: WP-303 Builds OnboardingFeatureDependencies from the AppContainer and supplies the activity seams.
 // AndroidOnly: WP-211 Supply app-localized resources to the mounted regional catalog.
+// AndroidOnly: WP-305 Retain first-run and isolated Settings rerun flow sessions across Activity recreation.
 package com.meshcoreone.android.app.container.onboarding
 
 import android.content.Context
@@ -15,6 +16,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import com.meshcoreone.android.app.container.AppContainer
@@ -25,6 +27,11 @@ import com.meshcoreone.android.core.connectivity.permissions.AndroidPermissionSt
 import com.meshcoreone.android.core.connectivity.permissions.PermissionSnapshot
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
+import com.meshcoreone.android.core.contracts.domain.Generation
+import com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt
+import com.meshcoreone.android.core.contracts.domain.ProcessEpoch
+import com.meshcoreone.android.core.contracts.domain.SessionToken
+import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.app.content.LocationPermissionResultReporting
 import com.meshcoreone.android.core.services.content.RegionResolver
 import com.meshcoreone.android.core.services.device.RadioPreset
@@ -33,20 +40,30 @@ import com.meshcoreone.android.core.contracts.domain.errors.SettingsServiceExcep
 import com.meshcoreone.android.core.services.simulator.DemoModeManager
 import com.meshcoreone.android.feature.onboarding.OnboardingDemoPort
 import com.meshcoreone.android.feature.onboarding.OnboardingFeatureDependencies
+import com.meshcoreone.android.feature.onboarding.OnboardingFlowCoordinator
+import com.meshcoreone.android.feature.onboarding.InMemoryOnboardingFlagStore
 import com.meshcoreone.android.feature.onboarding.OnboardingFlagStore
 import com.meshcoreone.android.feature.onboarding.OnboardingPairingPort
 import com.meshcoreone.android.feature.onboarding.OnboardingPermissionKind
 import com.meshcoreone.android.feature.onboarding.OnboardingPermissionPort
 import com.meshcoreone.android.feature.onboarding.OnboardingPresetPort
+import com.meshcoreone.android.feature.onboarding.OnboardingPresetTarget
 import com.meshcoreone.android.feature.onboarding.OnboardingRegionPort
 import com.meshcoreone.android.feature.onboarding.OnboardingWiFiPort
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** Process-lifetime platform pieces the container cannot derive itself; built once by the container factory. */
 class OnboardingPlatform(
@@ -122,14 +139,53 @@ class AppStateOnboardingHost(private val container: AppContainer) : OnboardingCo
 
 /** [OnboardingRadioConfigurator] over the live session's settings service and the connected-device editor. */
 class AppStateRadioConfigurator(private val container: AppContainer) : OnboardingRadioConfigurator {
+    private val presetOperation = Mutex()
+
+    override fun sealCompletion(
+        target: OnboardingPresetTarget?,
+        attempt: OnboardingCompletionAttempt,
+    ): Boolean {
+        if (target == null) return false
+        return container.connectionManager.sealOnboardingCompletion(
+            SessionToken(
+                ProcessEpoch(target.epoch), Generation(target.generation), RadioId(target.radioId),
+            ),
+            attempt,
+        )
+    }
     override fun connectionStates(): Flow<DeviceConnectionState> =
         container.connectionManager.snapshot.map { it.state }.distinctUntilChanged()
     override val isDemoRadio: Boolean get() = container.connectionManager.isSimulatorConnection
+    override fun currentTarget(): OnboardingPresetTarget? =
+        container.connectionManager.snapshot.value.takeIf { it.state.isConnected }?.token?.let { token ->
+            OnboardingPresetTarget(token.epoch.value, token.generation.value, token.radioId.value)
+        }
 
-    override suspend fun applyPreset(preset: RadioPreset) {
-        val session = container.appState.services ?: throw SettingsServiceException(SettingsServiceError.NotConnected)
-        val info = session.settingsService.applyRadioPresetVerified(preset)
-        container.connectionPort.updateDevice(info, preset.id)
+    override suspend fun applyPreset(preset: RadioPreset) = applyPreset(preset, currentTarget())
+
+    override suspend fun applyPreset(preset: RadioPreset, expectedTarget: OnboardingPresetTarget?) {
+        presetOperation.withLock {
+            val session = container.appState.services
+                ?: throw SettingsServiceException(SettingsServiceError.NotConnected)
+            val token = session.token
+            if (expectedTarget != OnboardingPresetTarget(
+                    token.epoch.value, token.generation.value, token.radioId.value,
+                )
+            ) {
+                throw SettingsServiceException(SettingsServiceError.NotConnected)
+            }
+            session.settingsService.applyRadioPresetVerified(preset) { info, verifiedPathHashMode ->
+                kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                if (!container.connectionPort.updateDevice(info, preset.id, token)) {
+                    throw SettingsServiceException(SettingsServiceError.NotConnected)
+                }
+                verifiedPathHashMode?.let { mode ->
+                    if (!container.connectionPort.updatePathHashMode(mode, token)) {
+                        throw SettingsServiceException(SettingsServiceError.NotConnected)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -148,11 +204,64 @@ class AppOnboarding(
     private val settingsOpener: () -> Unit,
     private val locationReporter: LocationPermissionResultReporting?,
     private val sdkInt: Int,
+    /** Process-owned scope so completion and preset work outlive an Activity composition. */
+    private val flowScope: CoroutineScope,
     /** The first-run gate: true once the persisted completion flag is set. */
     val hasCompleted: StateFlow<Boolean>,
     val pairingState: com.meshcoreone.android.app.state.AppState? = null,
 ) : OnboardingFeatureDependencies {
+    val wasCompletedAtLoad: Boolean = hasCompleted.value
+    private var firstRunFlowCoordinator: OnboardingFlowCoordinator? = null
+    private var retiringFirstRunFlow: OnboardingFlowCoordinator? = null
+    private val firstRunRevision = MutableStateFlow(0L)
+    override val flowCoordinatorRevision: StateFlow<Long> = firstRunRevision.asStateFlow()
+    private val rerunDependencies by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { Rerun(this) }
+
     override fun openAppSettings() = settingsOpener()
+
+    @Synchronized
+    override fun retainedFlowCoordinator(): OnboardingFlowCoordinator {
+        retiringFirstRunFlow?.let {
+            if (it.onboarding.hasUnsettledCompletion) return it
+            releaseRetiringCoordinator(it)
+        }
+        return firstRunFlowCoordinator ?: OnboardingFlowCoordinator(flowScope, this).also {
+            it.restoreStartingPath()
+            firstRunFlowCoordinator = it
+        }
+    }
+
+    @Synchronized
+    override fun ownsFlowCoordinator(coordinator: OnboardingFlowCoordinator): Boolean =
+        firstRunFlowCoordinator === coordinator
+
+    @Synchronized
+    override fun onFlowCompletionHandled(coordinator: OnboardingFlowCoordinator) {
+        if (firstRunFlowCoordinator === coordinator) {
+            coordinator.onboarding.retireCompletion()
+            firstRunFlowCoordinator = null
+            if (coordinator.onboarding.hasUnsettledCompletion) {
+                retiringFirstRunFlow = coordinator
+                flowScope.launch {
+                    coordinator.onboarding.unsettledCompletionFlow.first { !it }
+                    synchronized(this@AppOnboarding) {
+                        releaseRetiringCoordinator(coordinator)
+                    }
+                }
+            } else if (!flags.getBoolean(com.meshcoreone.android.feature.onboarding.OnboardingState.KEY_HAS_COMPLETED)) {
+                firstRunRevision.value = Math.incrementExact(firstRunRevision.value)
+            }
+        }
+    }
+
+    private fun releaseRetiringCoordinator(coordinator: OnboardingFlowCoordinator) {
+        if (retiringFirstRunFlow === coordinator) {
+            retiringFirstRunFlow = null
+            if (!flags.getBoolean(com.meshcoreone.android.feature.onboarding.OnboardingState.KEY_HAS_COMPLETED)) {
+                firstRunRevision.value = Math.incrementExact(firstRunRevision.value)
+            }
+        }
+    }
 
     /** Records a finished runtime request: the location grant first (the producer reads it), then the snapshot. */
     fun onPermissionResult(kind: OnboardingPermissionKind, grants: Map<String, Boolean>) {
@@ -162,7 +271,7 @@ class AppOnboarding(
 
     @Composable
     override fun rememberPermissionRequester(onResult: () -> Unit): (OnboardingPermissionKind) -> Unit {
-        var pending by remember { mutableStateOf<OnboardingPermissionKind?>(null) }
+        var pending by rememberSaveable { mutableStateOf<OnboardingPermissionKind?>(null) }
         val latest by rememberUpdatedState(onResult)
         val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
             pending?.let { onPermissionResult(it, grants) }
@@ -187,13 +296,63 @@ class AppOnboarding(
     override fun InterceptBack(enabled: Boolean, onBack: () -> Unit) = BackHandler(enabled, onBack)
 
     /**
-     * The same bindings with a throwaway flag store, for re-running radio setup from Settings after onboarding:
-     * a completed persisted flag would otherwise end the flow on entry. Completion here persists nothing.
+     * Legacy single-entry rerun owner with in-memory completion flags. Multi-entry hosts must retain one
+     * [createRerunOwner] result per navigation entry.
      */
-    fun forRerun(): OnboardingFeatureDependencies = Rerun(this)
+    fun forRerun(): OnboardingFeatureDependencies = rerunDependencies
+
+    /**
+     * Creates an isolated Settings-rerun owner. The navigation host must retain the returned instance by
+     * navigation-entry identity across Activity recreation and retire only that entry's owner on removal.
+     */
+    fun createRerunOwner(): OnboardingFeatureDependencies = Rerun(this)
 
     private class Rerun(private val base: AppOnboarding) : OnboardingFeatureDependencies by base {
-        override val flags: OnboardingFlagStore = com.meshcoreone.android.feature.onboarding.InMemoryOnboardingFlagStore()
+        private val flowRevision = MutableStateFlow(0L)
+        override val flowCoordinatorRevision: StateFlow<Long> = flowRevision.asStateFlow()
+        private var sessionFlags: OnboardingFlagStore = InMemoryOnboardingFlagStore()
+        private var flowCoordinator: OnboardingFlowCoordinator? = null
+        private val retiringFlowCoordinators = mutableSetOf<OnboardingFlowCoordinator>()
+
+        override val flags: OnboardingFlagStore get() = sessionFlags
+
+        @Synchronized
+        override fun retainedFlowCoordinator(): OnboardingFlowCoordinator {
+            flowCoordinator?.let { return it }
+            return OnboardingFlowCoordinator(base.flowScope, this)
+                .also {
+                    it.restoreStartingPath()
+                    flowCoordinator = it
+                }
+        }
+
+        @Synchronized
+        override fun ownsFlowCoordinator(coordinator: OnboardingFlowCoordinator): Boolean =
+            flowCoordinator === coordinator
+
+        @Synchronized
+        override fun onFlowCompletionHandled(coordinator: OnboardingFlowCoordinator) {
+            retireFlowCoordinator(coordinator)
+        }
+
+        @Synchronized
+        override fun onFlowCoordinatorEntryRemoved(coordinator: OnboardingFlowCoordinator) {
+            retireFlowCoordinator(coordinator)
+        }
+
+        private fun retireFlowCoordinator(coordinator: OnboardingFlowCoordinator) {
+            if (flowCoordinator !== coordinator) return
+            coordinator.onboarding.retireCompletion()
+            flowCoordinator = null
+            sessionFlags = InMemoryOnboardingFlagStore()
+            flowRevision.value = Math.incrementExact(flowRevision.value)
+            if (coordinator.onboarding.hasUnsettledCompletion && retiringFlowCoordinators.add(coordinator)) {
+                base.flowScope.launch {
+                    coordinator.onboarding.unsettledCompletionFlow.first { !it }
+                    synchronized(this@Rerun) { retiringFlowCoordinators.remove(coordinator) }
+                }
+            }
+        }
 
         @Composable
         override fun rememberPermissionRequester(onResult: () -> Unit): (OnboardingPermissionKind) -> Unit =
@@ -232,6 +391,7 @@ object AppOnboardingFactory {
             settingsOpener = platform.openAppSettings,
             locationReporter = platform.locationReporter,
             sdkInt = platform.sdkInt,
+            flowScope = scope,
             hasCompleted = platform.flags.hasCompleted,
             pairingState = container.appState,
         )

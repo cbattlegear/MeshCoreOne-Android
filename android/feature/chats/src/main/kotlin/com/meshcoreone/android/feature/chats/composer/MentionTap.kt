@@ -5,6 +5,7 @@ package com.meshcoreone.android.feature.chats.composer
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.feature.chats.list.ChatTextMatching
+import com.meshcoreone.android.feature.chats.list.ChatMailtoPolicy
 import com.meshcoreone.android.feature.chats.list.SenderContactMatcher
 import java.util.UUID
 
@@ -38,7 +39,7 @@ object MentionTapEvaluator {
 /**
  * Body-link tap routing (iOS `MentionTapHandler` open-URL action): mention links resolve locally through
  * [MentionTapEvaluator]; other chat URLs go to [route] (the shared `ChatLinkRouter`); anything that is
- * still unclaimed opens externally only when it is an http(s) link, so custom schemes, intents,
+ * still unclaimed opens externally only when it is an http(s) or explicit mailto link, so custom schemes, intents,
  * `javascript:` and file URLs are never handed to the system.
  */
 class MessageLinkDispatcher(
@@ -58,7 +59,7 @@ class MessageLinkDispatcher(
             return true
         }
         if (route(url)) return true
-        if (LinkOpenPolicy.isOpenable(url)) {
+        if (LinkOpenPolicy.isOpenable(url) || ChatMailtoPolicy.isOpenable(url)) {
             openExternal(url)
             return true
         }

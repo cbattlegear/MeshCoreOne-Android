@@ -27,9 +27,8 @@ compiled JVM17 distribution runs on a compatible JDK without Android APIs.
 The owned module declares the following actual tasks:
 
 ```powershell
-# At repository root, using your approved explicit private environment:
-& .\android\scaffold\invoke-gradle.ps1 -ConstrainedMemory -BuildHeap 640m `
-  -GradleArguments @(':tools:meshcli:installDist', '--dependency-verification', 'strict')
+# At repository root, with JDK 21 on JAVA_HOME:
+& .\android\gradlew.bat -p android :tools:meshcli:installDist --dependency-verification strict
 
 # Examples below are MANUAL operator actions, never autonomous verification:
 & .\android\tools\meshcli\build\install\meshcli\bin\meshcli.bat --help

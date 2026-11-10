@@ -26,6 +26,14 @@ interface MessageDao : RowWriter<MessageEntity> {
     // Reject caller-ID reuse on a different radio without exposing that radio's DTO.
     @Query("SELECT * FROM messages WHERE id = :id")
     suspend fun forIdentity(id: UUID): List<MessageEntity>
+    @Query("SELECT deduplicationKey FROM messages WHERE radioId >= upper(:radioId) AND radioId <= lower(:radioId) AND radioId = :radioId COLLATE NOCASE AND deduplicationKey IS NOT NULL")
+    suspend fun simulatorDeduplicationKeys(radioId: UUID): List<String>
+    @Query("SELECT COUNT(*) FROM messages WHERE radioId >= upper(:radioId) AND radioId <= lower(:radioId) AND radioId = :radioId COLLATE NOCASE AND id = :id COLLATE NOCASE")
+    suspend fun countSimulatorIdentity(radioId: UUID, id: UUID): Long
+    @Query("SELECT * FROM messages WHERE radioId >= upper(:radioId) AND radioId <= lower(:radioId) AND radioId = :radioId COLLATE NOCASE AND deduplicationKey = :key")
+    suspend fun simulatorDeduplicationCohort(radioId: UUID, key: String): List<MessageEntity>
+    @Query("SELECT COUNT(*) FROM messages WHERE radioId >= upper(:radioId) AND radioId <= lower(:radioId) AND radioId = :radioId COLLATE NOCASE AND (contactID = :contactID COLLATE NOCASE OR channelIndex = :channelIndex)")
+    suspend fun countSimulatorConversation(radioId: UUID, contactID: UUID?, channelIndex: Long?): Long
     @Query("SELECT * FROM messages WHERE radioId = :radioId AND id = :id") suspend fun byId(radioId: UUID, id: UUID): MessageEntity?
     @Query("SELECT * FROM messages WHERE radioId = :radioId AND deduplicationKey = :key")
     suspend fun forDeduplicationKey(radioId: UUID, key: String): List<MessageEntity>
@@ -124,6 +132,14 @@ interface MessageDao : RowWriter<MessageEntity> {
 
 @Dao
 interface MessageRepeatDao : RowWriter<MessageRepeatEntity> {
+    @Query("SELECT COUNT(*) FROM message_repeats WHERE radioId >= upper(:radioId) AND radioId <= lower(:radioId) AND radioId = :radioId COLLATE NOCASE AND id = :id COLLATE NOCASE")
+    suspend fun countSimulatorIdentity(radioId: UUID, id: UUID): Long
+    @Query("SELECT * FROM message_repeats WHERE radioId >= upper(:radioId) AND radioId <= lower(:radioId) AND radioId = :radioId COLLATE NOCASE AND messageID = :messageID COLLATE NOCASE")
+    suspend fun simulatorMessageCohort(radioId: UUID, messageID: UUID): List<MessageRepeatEntity>
+    @Query("SELECT * FROM message_repeats WHERE radioId = :radioId AND id = :id")
+    suspend fun byId(radioId: UUID, id: UUID): MessageRepeatEntity?
+    @Query("SELECT EXISTS(SELECT 1 FROM message_repeats WHERE radioId >= upper(:radioId) AND radioId <= lower(:radioId) AND radioId = :radioId COLLATE NOCASE AND messageID = :messageID COLLATE NOCASE)")
+    suspend fun hasForMessage(radioId: UUID, messageID: UUID): Boolean
     @Query("SELECT * FROM message_repeats") suspend fun backupAll(): List<MessageRepeatEntity>
     @Query("SELECT * FROM message_repeats WHERE radioId = :radioId AND messageID = :messageID ORDER BY receivedAt_seconds, receivedAt_nanos")
     suspend fun forMessage(radioId: UUID, messageID: UUID): List<MessageRepeatEntity>
@@ -136,6 +152,20 @@ interface MessageRepeatDao : RowWriter<MessageRepeatEntity> {
 
 @Dao
 interface ReactionDao : RowWriter<ReactionEntity> {
+    @Query("SELECT COUNT(*) FROM reactions WHERE radioId >= upper(:radioId) AND radioId <= lower(:radioId) AND radioId = :radioId COLLATE NOCASE AND id = :id COLLATE NOCASE")
+    suspend fun countSimulatorIdentity(radioId: UUID, id: UUID): Long
+    @Query("SELECT * FROM reactions WHERE radioId >= upper(:radioId) AND radioId <= lower(:radioId) AND radioId = :radioId COLLATE NOCASE AND messageID = :messageID COLLATE NOCASE")
+    suspend fun simulatorMessageCohort(radioId: UUID, messageID: UUID): List<ReactionEntity>
+    @Query("SELECT EXISTS(SELECT 1 FROM reactions WHERE radioId >= upper(:radioId) AND radioId <= lower(:radioId) AND radioId = :radioId COLLATE NOCASE AND messageID = :messageID COLLATE NOCASE)")
+    suspend fun hasSimulatorMessage(radioId: UUID, messageID: UUID): Boolean
+    @Query("SELECT * FROM reactions WHERE radioId = :radioId AND id = :id")
+    suspend fun byId(radioId: UUID, id: UUID): ReactionEntity?
+    @Query("SELECT EXISTS(SELECT 1 FROM reactions WHERE radioId >= upper(:radioId) AND radioId <= lower(:radioId) AND radioId = :radioId COLLATE NOCASE AND (contactID = :contactID COLLATE NOCASE OR channelIndex = :channelIndex))")
+    suspend fun hasForConversation(radioId: UUID, contactID: UUID?, channelIndex: Long?): Boolean
+    @Query("SELECT COUNT(*) FROM reactions WHERE radioId >= upper(:radioId) AND radioId <= lower(:radioId) AND radioId = :radioId COLLATE NOCASE AND (contactID = :contactID COLLATE NOCASE OR channelIndex = :channelIndex)")
+    suspend fun countSimulatorConversation(radioId: UUID, contactID: UUID?, channelIndex: Long?): Long
+    @Query("SELECT COUNT(*) FROM reactions WHERE radioId = :radioId AND (contactID = :contactID OR channelIndex = :channelIndex)")
+    suspend fun countForConversation(radioId: UUID, contactID: UUID?, channelIndex: Long?): Long
     @Query("SELECT * FROM reactions") suspend fun backupAll(): List<ReactionEntity>
     @Query("SELECT * FROM reactions WHERE radioId = :radioId AND messageID = :messageID ORDER BY receivedAt_seconds DESC, receivedAt_nanos DESC LIMIT :limit")
     suspend fun forMessage(radioId: UUID, messageID: UUID, limit: Long): List<ReactionEntity>
@@ -156,6 +186,10 @@ interface PendingSendDao : RowWriter<PendingSendEntity> {
     suspend fun settleChannelAttempt(radioId: UUID, id: UUID, messageID: UUID, occupantID: UUID, attemptID: UUID, next: Long, nextAttemptID: UUID?): Int
     @Query("DELETE FROM pending_sends WHERE radioId = :radioId AND id = :id AND messageID = :messageID AND kindRawValue = 1 AND channelDispatchStateRawValue = 2 AND channelAttemptID = :attemptID")
     suspend fun deleteAcceptedChannelAttempt(radioId: UUID, id: UUID, messageID: UUID, attemptID: UUID): Int
+    @Query("SELECT EXISTS(SELECT 1 FROM pending_sends WHERE radioId >= upper(:radioId) AND radioId <= lower(:radioId) AND radioId = :radioId COLLATE NOCASE AND messageID = :messageID COLLATE NOCASE)")
+    suspend fun hasForMessage(radioId: UUID, messageID: UUID): Boolean
+    @Query("SELECT EXISTS(SELECT 1 FROM pending_sends WHERE radioId >= upper(:radioId) AND radioId <= lower(:radioId) AND radioId = :radioId COLLATE NOCASE AND (contactID = :contactID COLLATE NOCASE OR channelIndex = :channelIndex))")
+    suspend fun hasForConversation(radioId: UUID, contactID: UUID?, channelIndex: Long?): Boolean
     @Query("SELECT * FROM pending_sends WHERE radioId = :radioId ORDER BY sequence") suspend fun forRadio(radioId: UUID): List<PendingSendEntity>
     @Query("SELECT * FROM pending_sends WHERE radioId = :radioId AND messageID = :messageID ORDER BY sequence")
     suspend fun forMessage(radioId: UUID, messageID: UUID): List<PendingSendEntity>

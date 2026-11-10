@@ -17,24 +17,45 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import java.time.Instant
 
 /**
- * The exact persistence surface `SimulatorConnectionMode.seedDataStore` uses on the Swift `PersistenceStore`.
+ * Narrow persistence surface for the simulator seed and its native safety adaptations.
  *
- * Every member except the last two has the same signature as the `core:contracts` persistence interface it
- * mirrors (`DevicePersisting`, `ContactPersisting`, `ChannelPersisting`, `MessagePersisting`,
- * `ReactionPersisting`, `HeardRepeatPersisting`, `RxLogPersisting`, `NodeSnapshotPersisting`), so an adapter
- * over the real store is one delegation per member. The snapshot pair mirrors the Swift backup-import helpers
- * (`existingNodeStatusSnapshotKeys`, `batchInsertNodeStatusSnapshots`), which have no contract yet.
+ * The ordinary persistence members mirror the corresponding `core:contracts` interfaces. `seedContact`
+ * and `seedConversations` are simulator-specific hooks, while the snapshot pair mirrors Swift backup-import helpers
+ * (`existingNodeStatusSnapshotKeys`, `batchInsertNodeStatusSnapshots`) with no general contract yet.
  *
- * Semantics the seed relies on (from the Swift store): `saveContact`/`saveChannel`/`saveMessage`/`saveReaction`
- * and `saveMessageRepeat` upsert on the row id; `saveContact` overwrites `avatarImageData` (null included);
- * `saveMessage` (Swift `Message(dto:)`) drops the preview image/icon blobs and resets `linkPreviewFetched`, so
- * the seed reapplies its previews with `updateMessageLinkPreview`; `saveMessageRepeat` requires the parent
- * message; `saveRxLogEntry` is insert-only.
+ * The Swift store upserts contacts, channels, messages, reactions and repeats by row ID, and `saveContact`
+ * overwrites `avatarImageData` (null included). The production Room seed adapter deliberately preserves
+ * compatible existing conversations instead. The reference replay saves parents and messages separately,
+ * then reapplies preview and sidecar fields; a durable adapter can instead insert each new parent and its
+ * complete fixture children atomically. `saveMessageRepeat` requires the parent message.
  */
 interface SimulatorSeedStore {
     suspend fun saveDevice(dto: DeviceDTO)
     suspend fun fetchContact(key: EntityKey): ContactDTO?
     suspend fun saveContact(dto: ContactDTO)
+
+    /**
+     * The default retains Swift's avatar-only replay for reference-compatible stores. A durable adapter can
+     * override this with one atomic seed operation so a stale avatar read cannot race a delete or replacement.
+     */
+    suspend fun seedContact(dto: ContactDTO) {
+        val avatar = fetchContact(EntityKey(dto.radioId, dto.id))?.avatarImageData
+        saveContact(if (avatar != null) dto.withAvatar(avatar) else dto)
+    }
+
+    /**
+     * The default executes the reference replay unchanged without building the durable fixtures first.
+     * A durable adapter may validate the declared identities and build each absent parent's children inside
+     * its transaction. Existing conversations are preserved without constructing their fixture children.
+     */
+    suspend fun seedConversations(
+        buildPlan: () -> SimulatorDeferredFixturePlan,
+        replayReference: suspend () -> Unit,
+    ): SimulatorFixtureSeedResult {
+        replayReference()
+        return SimulatorFixtureSeedResult.ReferenceReplay
+    }
+
     suspend fun saveChannel(dto: ChannelDTO)
     suspend fun saveMessage(dto: MessageDTO)
     suspend fun updateMessageLinkPreview(
@@ -50,6 +71,23 @@ interface SimulatorSeedStore {
     suspend fun batchInsertNodeStatusSnapshots(
         dtos: SnapshotList<NodeStatusSnapshotDTO>, existingKeys: SnapshotSet<NodeStatusSnapshotKey>,
     ): NodeStatusSnapshotInsertResult
+}
+
+sealed interface SimulatorFixtureParent {
+    data class Direct(val contact: ContactDTO) : SimulatorFixtureParent
+    data class Channel(val channel: ChannelDTO) : SimulatorFixtureParent
+}
+
+data class SimulatorFixtureConversation(
+    val parent: SimulatorFixtureParent,
+    val messages: SnapshotList<MessageDTO>,
+    val reactions: SnapshotList<ReactionDTO>,
+    val repeats: SnapshotList<MessageRepeatDTO>,
+)
+
+sealed interface SimulatorFixtureSeedResult {
+    data object ReferenceReplay : SimulatorFixtureSeedResult
+    data class Durable(val created: Int, val preservedExisting: Int) : SimulatorFixtureSeedResult
 }
 
 /**

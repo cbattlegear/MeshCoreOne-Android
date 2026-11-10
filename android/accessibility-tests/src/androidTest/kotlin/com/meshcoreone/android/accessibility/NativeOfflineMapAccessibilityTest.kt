@@ -154,7 +154,11 @@ class NativeOfflineMapAccessibilityTest : DeviceAccessibilityHarness() {
             mapOf(OfflineLayer.BASE to OfflineLayerPolicy(OfflineLayer.BASE, 14, MapLibreOpenFreeMap.attribution)),
             bytes, network, { Instant.parse("2026-10-14T00:00:00Z") }, { packId },
         )
-        val dependencies = MapFeatureDependencies(MapFeatureDataSource { MapFeatureContent() }, controller)
+        val dependencies = MapFeatureDependencies(
+            MapFeatureDataSource { MapFeatureContent() },
+            controller,
+            preferences = AccessibilityMapPreferences(),
+        )
         content {
             MeshCoreTheme(motionScale = 0f) {
                 AuditSurface {

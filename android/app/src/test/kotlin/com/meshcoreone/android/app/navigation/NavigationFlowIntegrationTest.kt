@@ -1248,9 +1248,14 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
 
     private suspend fun assertMountedDirectNotification(h: ContainerHarness, contact: ContactDTO) {
         mount(h)
+        compose.waitForIdle()
+        val mounted = h.container.navigation.state.value
+        compose.onNodeWithTag("entry:${mounted.activeStack.last().id}").assertIsDisplayed()
         assertTrue(h.container.handleNotificationResponse(NotificationResponse(
             NotificationPayload.DirectMessage(EntityKey(contact.radioId, contact.id), UUID.randomUUID()), null, null,
-        )))
+        )), "Mounted notification must be handled (connection=${h.manager.connectionState}, " +
+            "currentSession=${h.sessions.current?.let(h.container::isCurrentSession)}, " +
+            "navigation=${h.container.navigation.currentState})")
         compose.waitForIdle()
         val state = h.container.navigation.state.value
         assertEquals(AppTab.CHATS, state.selectedTab)

@@ -1107,6 +1107,10 @@ class MessageService(
         val ownsOutcome = notification?.state == NotificationActionReceipt.State.READY
         val wireContext = if (trackNotification) currentCoroutineContext() else null
         synchronized(lock) { failedNotifications.remove(envelope.messageID) }
+        var retainedFailure: QueuedChannelRetainedException? = null
+        var beginFailure: PersistenceStoreException? = null
+        fun retain(failure: Throwable) = QueuedChannelRetainedException(pendingID, failure).also { retainedFailure = it }
+        fun reject(failure: PersistenceStoreException) = ChannelPrewireResult.Rejected(failure).also { retain(failure) }
         return try {
             val attemptKey = QueuedChannelAttemptKey(token.radioId, pendingID, envelope.messageID, newID())
             val result = lease.owner.dispatch(lease, envelope.channelIndex, occupantID,
@@ -1116,10 +1120,10 @@ class MessageService(
                 val siblings = try {
                     dataStore.fetchPendingSendsForMessage(key(envelope.messageID))
                 } catch (failure: PersistenceStoreException) {
-                    return@dispatch ChannelPrewireResult.Rejected(failure)
+                    return@dispatch reject(failure)
                 }
                 if (siblings.any { it.id != pendingID }) {
-                    return@dispatch ChannelPrewireResult.Rejected(PersistenceStoreException(PersistenceStoreError.InvalidData,
+                    return@dispatch reject(PersistenceStoreException(PersistenceStoreError.InvalidData,
                         QueuedChannelAttemptRejected(EntityKey(token.radioId, pendingID),
                             QueuedChannelAttemptConflict.RETAINED_SUBMISSION)))
                 }
@@ -1135,11 +1139,12 @@ class MessageService(
                 } catch (failure: PersistenceStoreException) {
                     // A lost begin response may have committed DISPATCHING. Never infer READY or send.
                     if (ownsOutcome) notification?.uncertain()
+                    beginFailure = failure
                     try { dataStore.fetchQueuedChannelAttempt(attemptKey) }
                     catch (readFailure: PersistenceStoreException) {
                         if (readFailure !== failure) failure.addSuppressed(readFailure)
                     }
-                    return@dispatch ChannelPrewireResult.Rejected(failure)
+                    return@dispatch reject(failure)
                 }
                 val dispatch = MessageWriteDispatch()
                 var wireEntered = false
@@ -1169,8 +1174,9 @@ class MessageService(
                         }
                     } catch (settlement: Exception) {
                         if (ownsOutcome) notification?.uncertain()
-                        cancelled.addSuppressed(if (settlement is QueuedChannelRetainedException) settlement
-                            else QueuedChannelRetainedException(pendingID, settlement))
+                        val retained = if (settlement is QueuedChannelRetainedException) settlement else retain(settlement)
+                        retainedFailure = retained
+                        cancelled.addSuppressed(retained)
                         throw cancelled
                     }
                     if (wireAccepted) return@dispatch ChannelPrewireResult.CancelledAccepted(cancelled)
@@ -1184,31 +1190,41 @@ class MessageService(
                     if (ownsOutcome) notification?.uncertain()
                     try { settleQueuedChannel(attemptKey, QueuedChannelAttemptOutcome.UNCERTAIN) }
                     catch (settlement: PersistenceStoreException) {
-                        throw QueuedChannelRetainedException(pendingID, settlement).also {
+                        throw retain(settlement).also {
                             if (settlement !== failure) it.addSuppressed(failure)
                         }
                     }
-                    throw QueuedChannelRetainedException(pendingID, failure)
+                    throw retain(failure)
                 }
                 // Inside the admitted operation: cancellation on dispatch return cannot erase acceptance.
                 try {
                     ChannelPrewireResult.Accepted(settleQueuedChannel(attemptKey, QueuedChannelAttemptOutcome.ACCEPTED))
                 } catch (failure: PersistenceStoreException) {
-                    ChannelPrewireResult.Rejected(failure)
+                    reject(failure)
                 }
             }
             when (result) {
                 is ChannelPrewireResult.Accepted -> result.attempt
-                is ChannelPrewireResult.Rejected -> throw QueuedChannelRetainedException(pendingID, result.failure)
+                is ChannelPrewireResult.Rejected -> throw requireNotNull(retainedFailure)
                 is ChannelPrewireResult.CancelledUnsent -> throw result.cancellation
                 is ChannelPrewireResult.CancelledAccepted -> throw result.cancellation
             }
         } catch (failure: QueuedChannelRetainedException) {
-            throw recordRetainedChannel(failure)
-        } catch (cancelled: CancellationException) {
-            cancelled.suppressed.filterIsInstance<QueuedChannelRetainedException>().forEach(::recordRetainedChannel)
-            throw cancelled
-        } catch (failure: ChannelDispatchFailure) { throw retainedChannel(pendingID, failure) }
+            retainedFailure = failure
+            throw failure
+        } catch (failure: ChannelDispatchFailure) { throw retain(failure) }
+        finally {
+            // Prompt cancellation on fence return must not discard the captured persistence failure.
+            retainedFailure?.let { retained ->
+                beginFailure?.let { failure ->
+                    try { remember("channelBegin.$pendingID", failure) }
+                    catch (reporterFailure: Exception) {
+                        if (reporterFailure !== retained && reporterFailure !== failure) retained.addSuppressed(reporterFailure)
+                    }
+                }
+                recordRetainedChannel(retained)
+            }
+        }
     }
 
     private fun retainedChannel(pendingID: UUID, failure: Throwable): QueuedChannelRetainedException =

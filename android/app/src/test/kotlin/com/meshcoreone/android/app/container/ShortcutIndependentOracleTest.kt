@@ -9,6 +9,9 @@ import android.content.res.Configuration
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.ChannelHistoryPersisting
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.contracts.domain.QueuedChannelReadinessPersisting
 import com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueServiceException
 import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceError
@@ -16,24 +19,23 @@ import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceExcept
 import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.model.OCVPreset
 import com.meshcoreone.android.core.model.TextType
+import com.meshcoreone.android.core.model.PendingSendDTO
+import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.model.BatteryInfo
 import com.meshcoreone.android.core.services.contacts.AdvertisementError
 import com.meshcoreone.android.core.services.contacts.ChannelServiceError
-import com.meshcoreone.android.core.services.sync.SyncClock
 import com.meshcoreone.android.platform.shortcuts.*
 import java.util.Locale
 import kotlin.test.*
-import kotlin.time.Duration
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
-import kotlinx.coroutines.withContext
 import org.junit.Test
 
 class ShortcutIndependentOracleTest : RoomProcessTest() {
@@ -42,19 +44,22 @@ class ShortcutIndependentOracleTest : RoomProcessTest() {
     }
     private val text = AndroidShortcutText(context)
 
-    private suspend fun connected(test: TestScope, channel: Boolean = false): ContainerHarness {
-        val syncClock = if (channel) object : SyncClock by SyncClock.SYSTEM {
-            override suspend fun sleep(duration: Duration) =
-                withContext(Dispatchers.Default) { delay(duration) }
-        } else SyncClock.SYSTEM
-        val h = ContainerHarness(test, store, syncClock = syncClock)
+    private suspend fun connected(
+        test: TestScope, channel: Boolean = false, channelQueueReadEntered: CompletableDeferred<Unit>? = null,
+    ): ContainerHarness {
+        val persistence = if (channelQueueReadEntered != null) object :
+            PersistenceStoreProtocol by store, ChannelHistoryPersisting by store, QueuedChannelReadinessPersisting by store {
+            override suspend fun fetchPendingSendsForMessage(key: EntityKey): SnapshotList<PendingSendDTO> {
+                channelQueueReadEntered.complete(Unit)
+                awaitCancellation()
+            }
+        } else store
+        val h = ContainerHarness(test, store, persistenceOverride = persistence)
         h.links.configureRadio = { firmware ->
             firmware.knownContacts += contactFrame(key(4), "Independent peer")
             firmware.respond = { frame ->
                 when {
                     frame[0].toInt() in 2..3 -> emptyList()
-                    // Keep the budget oracle operational but not draining its durable submissions.
-                    channel && frame[0].toInt() == 4 -> listOf(Bytes.of(1, 2))
                     channel && frame[0].toInt() == 0x1f -> listOf(
                         if (frame[1].toInt() == 0) Bytes.of(0x12, 0) +
                             Bytes.utf8("Oracle").paddedOrTruncated(32) + Bytes(ByteArray(16) { 9 })
@@ -66,8 +71,7 @@ class ShortcutIndependentOracleTest : RoomProcessTest() {
         }
         if (channel) h.container.foreground.activityStarted()
         h.manager.connect(h.target())
-        val expected = if (channel) DeviceConnectionState.SYNCING else DeviceConnectionState.READY
-        h.eventually("independent shortcut oracle $expected") { h.manager.connectionState == expected }
+        h.eventually("independent shortcut oracle READY") { h.manager.connectionState == DeviceConnectionState.READY }
         h.settle()
         return h
     }
@@ -117,7 +121,8 @@ class ShortcutIndependentOracleTest : RoomProcessTest() {
     }
 
     @Test fun actualChannelAdapterAcceptsExactUtf8BudgetRejectsOneMoreAndRechecksChangedLiveName() = runTest {
-        val h = connected(this, channel = true)
+        val queueReadEntered = CompletableDeferred<Unit>()
+        val h = connected(this, channel = true, channelQueueReadEntered = queueReadEntered)
         try {
             val adapter = AppShortcutRadio(h.container)
             val radio = assertNotNull(adapter.currentRadioId)
@@ -161,7 +166,8 @@ class ShortcutIndependentOracleTest : RoomProcessTest() {
                 assertEquals(occupant, it.channelOccupantID)
                 assertEquals(occupant, assertNotNull(it.channelMessageEnvelope()).channelOccupantID)
             }
-            assertEquals(DeviceConnectionState.SYNCING, h.manager.connectionState)
+            queueReadEntered.await()
+            assertEquals(DeviceConnectionState.READY, h.manager.connectionState)
             assertTrue(h.links.radios.single().sent.none { it[0].toInt() == 3 })
         } finally { h.container.close() }
     }

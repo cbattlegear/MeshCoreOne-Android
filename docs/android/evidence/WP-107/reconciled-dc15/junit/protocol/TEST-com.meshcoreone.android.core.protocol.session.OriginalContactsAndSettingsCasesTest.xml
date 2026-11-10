@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="com.meshcoreone.android.core.protocol.session.OriginalContactsAndSettingsCasesTest" tests="2" skipped="0" failures="0" errors="0" timestamp="2026-10-04T14:33:34.125Z" hostname="BATTLEGEAR" time="0.012">
-  <properties/>
-  <testcase name="AutoContactRefreshTests::auto-refresh coalesces bursty contact invalidations()" classname="com.meshcoreone.android.core.protocol.session.OriginalContactsAndSettingsCasesTest" time="0.003"/>
-  <testcase name="OtherParamsSerializationTests::concurrent granular setters do not revert each other()" classname="com.meshcoreone.android.core.protocol.session.OriginalContactsAndSettingsCasesTest" time="0.007"/>
-  <system-out><![CDATA[]]></system-out>
-  <system-err><![CDATA[]]></system-err>
-</testsuite>

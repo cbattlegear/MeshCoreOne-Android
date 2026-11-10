@@ -310,13 +310,9 @@ tasks.withType<Test>().configureEach {
     }
 }
 
-// WP-218 diagnostic-only addition: hosted CI invokes the root verify stage with Gradle's
-// `--quiet` flag, which otherwise suppresses the failing test's identity and stack trace even on
-// a failed Test task (confirmed by direct inspection of tools/android-port/controller/ci.py and
-// the uploaded CI artifact, which contains no JUnit XML/report on a failed run). This mirrors the
-// exact same local pattern already used by core/designsystem/build.gradle.kts for the same
-// reason: no behavior change, no new dependency/config; `logger.error` always prints regardless
-// of the configured Gradle log level, so this is the one reliable way to see which test failed.
+// Failing tests print their identity and stack trace at every Gradle log level, including `--quiet`.
+// Diagnostic only: no behavior change, no new dependency or configuration. Mirrors
+// core/designsystem/build.gradle.kts.
 // AndroidOnly: WP-501 Quiet-visible path-recency observation; no task or test outcome changes.
 tasks.configureEach {
     if (name == "compileDebugKotlin" || name == "compileDebugUnitTestKotlin") {

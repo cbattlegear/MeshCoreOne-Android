@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="com.meshcoreone.android.core.protocol.primitives.WireTablesTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-10-04T03:08:37.123Z" hostname="BATTLEGEAR" time="0.211">
-  <properties/>
-  <testcase name="Every named command and response opcode matches the pinned wire table()" classname="com.meshcoreone.android.core.protocol.primitives.WireTablesTest" time="0.122"/>
-  <testcase name="Every response category matches the pinned source routing switch()" classname="com.meshcoreone.android.core.protocol.primitives.WireTablesTest" time="0.042"/>
-  <testcase name="Every packet width matches the pinned source including composed widths()" classname="com.meshcoreone.android.core.protocol.primitives.WireTablesTest" time="0.045"/>
-  <system-out><![CDATA[]]></system-out>
-  <system-err><![CDATA[]]></system-err>
-</testsuite>

@@ -511,7 +511,7 @@ class RemoteNodesComposeTest {
     @Test fun savedLocationPickerPreservesRepeatedPanAndZoomReports() {
         show(); open(); expand(L.remoteNodesSettingsIdentityLocation)
         compose.onNodeWithText(text(L.remoteNodesSettingsPickOnMap)).performScrollTo().performClick()
-        settleMapComposition()
+        waitForSyntheticMap()
         compose.runOnIdle {
             assertEquals(MapCamera(GeoPoint(37.7, -122.4), .05, .05), requireNotNull(renderedMap).camera)
         }
@@ -519,7 +519,7 @@ class RemoteNodesComposeTest {
         movePickerCamera(MapCamera(GeoPoint(39.0, -122.0), .3, .7))
         compose.onNodeWithText(text(L.remoteNodesCancel)).performScrollTo().performClick()
         compose.onNodeWithText(text(L.remoteNodesSettingsPickOnMap)).performScrollTo().performClick()
-        settleMapComposition()
+        waitForSyntheticMap()
         compose.runOnIdle {
             assertEquals("Reopening must initialize from the unchanged saved location",
                 MapCamera(GeoPoint(37.7, -122.4), .05, .05), requireNotNull(renderedMap).camera)

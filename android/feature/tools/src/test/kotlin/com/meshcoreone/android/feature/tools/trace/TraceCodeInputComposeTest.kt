@@ -2,6 +2,7 @@
 // AndroidOnly: WP-314 TS-11 Mounted path editing controls drive the real state holder.
 // AndroidOnly: WP-314 TS-13 Mounted Save/name actions persist through the real holder.
 // AndroidOnly: WP-314 TS-14 Mounted comparisons consume actual saved history and trace responses.
+// AndroidOnly: WP-314 TS-19 Mounted hash-width actions respect the live radio's firmware capability.
 package com.meshcoreone.android.feature.tools.trace
 
 import android.app.Activity
@@ -95,6 +96,64 @@ class TraceCodeInputComposeTest {
     @Before fun setup() = attachHost()
 
     @After fun dispose() = destroyHost()
+
+    @Test fun unsupportedFirmwareDisablesWidthChoicesWithoutChangingThePathOrResult() {
+        for ((version, text) in listOf(7u.toUByte() to "v1.9.0", 8u.toUByte() to "v1.10.0")) {
+            val harness = configured()
+            harness.deps.device = device(firmwareVersion = version, firmwareVersionString = text)
+            harness.holder.addNode(contact(0xAA, name = "Tower"))
+            harness.holder.editStateForTesting {
+                it.copy(activeSavedPath = savedPath(Bytes.of(0xAA)), result = result(emptyList()))
+            }
+            val before = harness.state
+            mountPathList(harness)
+            scrollToIndex(8)
+            for (label in listOf("1 B", "2 B", "4 B")) {
+                val node = button(label)
+                assertTrue(node.config.contains(SemanticsProperties.Disabled), "$text must disable $label")
+                val action = assertNotNull(node.config[SemanticsActions.OnClick].action)
+                host.get().runOnUiThread { action() }
+                settle()
+                assertEquals(before, harness.state, "$text must not change the trace")
+            }
+        }
+    }
+
+    @Test fun supportedFirmwareAllowsWidthChoicesAndRetainedActionsRecheckLiveCapability() {
+        val harness = configured()
+        harness.holder.addNode(contact(0xAA, name = "Tower"))
+        mountPathList(harness)
+        scrollToIndex(8)
+        click("2 B")
+        assertEquals(1u.toUByte(), harness.state.traceHashMode)
+        assertEquals(Bytes.of(0xAA, 0x00), harness.state.outboundPath.single().hashBytes)
+
+        val retained = assertNotNull(button("4 B").config[SemanticsActions.OnClick].action)
+        harness.holder.editStateForTesting {
+            it.copy(activeSavedPath = savedPath(Bytes.of(0xAA, 0x00)), result = result(emptyList()))
+        }
+        val before = harness.state
+        host.get().runOnUiThread {
+            harness.deps.device = device(firmwareVersionString = "v1.10.0")
+            retained()
+        }
+        settle()
+        assertEquals(before, harness.state, "An old enabled action cannot alter an unsupported radio")
+
+        val newerFirmware = configured()
+        newerFirmware.deps.device = device(firmwareVersionString = "v1.12.0")
+        newerFirmware.holder.addNode(contact(0xAA, name = "Tower"))
+        newerFirmware.holder.editStateForTesting {
+            it.copy(activeSavedPath = savedPath(Bytes.of(0xAA)), result = result(emptyList()))
+        }
+        mountPathList(newerFirmware)
+        scrollToIndex(8)
+        click("4 B")
+        assertEquals(2u.toUByte(), newerFirmware.state.traceHashMode)
+        assertEquals(Bytes.of(0xAA, 0x00, 0x00, 0x00), newerFirmware.state.outboundPath.single().hashBytes)
+        assertNull(newerFirmware.state.activeSavedPath)
+        assertNull(newerFirmware.state.result)
+    }
 
     @Test fun mountedTraceComparisonUsesAcceptanceOrderAtEqualTimestampsAndClockRollback() {
         for (rollback in listOf(false, true)) {

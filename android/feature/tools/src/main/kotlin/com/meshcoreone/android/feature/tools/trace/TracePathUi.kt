@@ -3,6 +3,7 @@
 // PortedFrom: MC1/Views/Tools/TracePath/TraceResultsSectionView.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Tools/TracePath/SavePathRowView.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Tools/TracePath/ComparisonRowView.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Tools/TracePath/Map/PathActionsSectionView.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.feature.tools.trace
 
 import androidx.compose.foundation.layout.Arrangement
@@ -421,13 +422,19 @@ internal fun TracePathListContent(
             }
         }
         item {
+            val supportsWidthChoice = holder.deps.connectedDevice()?.supportsTraceHashSizeOverride != false
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf(0u.toUByte(), 1u.toUByte(), 2u.toUByte()).forEach { mode ->
                     val bytes = 1 shl mode.toInt()
-                    val setMode = { if (canEdit()) holder.setTraceHashMode(mode) }
+                    val setMode = {
+                        if (canEdit() && holder.deps.connectedDevice()?.supportsTraceHashSizeOverride != false) {
+                            holder.setTraceHashMode(mode)
+                        }
+                    }
                     FilterChip(
                         selected = holder.effectiveTraceMode == mode,
                         onClick = setMode,
+                        enabled = supportsWidthChoice,
                         modifier = Modifier.semantics { onClick { setMode(); true } },
                         label = { Text("$bytes B") },
                     )

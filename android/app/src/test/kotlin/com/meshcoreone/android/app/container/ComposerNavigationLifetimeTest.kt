@@ -13,6 +13,12 @@ import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.app.navigation.AppChatConversationScreen
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.ChannelHistoryRejected
+import com.meshcoreone.android.core.contracts.domain.ChannelHistoryPersisting
+import com.meshcoreone.android.core.contracts.domain.ChannelMessageCreation
+import com.meshcoreone.android.core.contracts.domain.ChannelOccupantSnapshot
+import com.meshcoreone.android.core.contracts.domain.ChannelSubmissionPersisting
+import com.meshcoreone.android.core.contracts.domain.QueuedChannelReadinessPersisting
+import com.meshcoreone.android.core.contracts.domain.QueuedChannelTerminalPersisting
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
@@ -50,6 +56,7 @@ import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import org.robolectric.Robolectric
 import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
@@ -59,6 +66,7 @@ import org.robolectric.annotation.GraphicsMode
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ComposerNavigationLifetimeTest : RoomProcessTest() {
     @get:Rule val compose = createEmptyComposeRule()
+    @get:Rule val databases = TemporaryFolder()
     private lateinit var host: ActivityController<ComponentActivity>
     private enum class Boundary { BEFORE_START, BEFORE_CREATE, AFTER_CREATE, BEFORE_QUEUE, AFTER_QUEUE }
     private enum class RecoveryFailure { PENDING_READ, STATUS_WRITE }
@@ -300,7 +308,7 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
             "Restart Send Again requires the held successful channel replacement"
         }
         val diskContext = if (restartSendAgain) ApplicationProvider.getApplicationContext<Context>() else null
-        val diskName = "wp308-send-again-${UUID.randomUUID()}.db"
+        val diskName = java.io.File(databases.root, "send-again.db").absolutePath
         var disk = diskContext?.let { DiskHistoryStore(it, diskName) }
         val store = disk?.store ?: this@ComposerNavigationLifetimeTest.store
         var initialContainerClosed = false
@@ -329,7 +337,16 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                 gate.await()
             }
         }
-        val persistence = object : PersistenceStoreProtocol by store {
+        val persistence = object : PersistenceStoreProtocol by store, ChannelHistoryPersisting by store,
+            QueuedChannelReadinessPersisting by store, QueuedChannelTerminalPersisting by store,
+            ChannelSubmissionPersisting by store {
+            override suspend fun fetchChannelOccupantSnapshot(radioId: RadioId, index: UByte): ChannelOccupantSnapshot? {
+                if (unreadableChannel) {
+                    failedChannelReads++
+                    throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+                }
+                return store.fetchChannelOccupantSnapshot(radioId, index)
+            }
             override suspend fun fetchChannel(radioId: RadioId, index: UByte): ChannelDTO? {
                 if (unreadableChannel) {
                     failedChannelReads++
@@ -352,6 +369,27 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                     recoveryUnavailable = recoveryFailure != null
                     throw PersistenceStoreException(PersistenceStoreError.InvalidData)
                 }
+            }
+            override suspend fun createOrReconcileChannelMessage(
+                creation: ChannelMessageCreation, timestamp: UInt, createdAt: java.time.Instant,
+            ): MessageDTO {
+                if (creation.text != original) return store.createOrReconcileChannelMessage(creation, timestamp, createdAt)
+                captured = MessageDTO(
+                    creation.messageID, creation.origin.radioId, channelIndex = creation.origin.channelIndex,
+                    text = creation.text, timestamp = timestamp, createdAt = createdAt, textType = creation.textType,
+                    channelOccupantID = creation.origin.expectedOccupantID,
+                )
+                pause(Boundary.BEFORE_CREATE)
+                if (abortSlotWrite || failBeforeCommit) throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+                val canonical = store.createOrReconcileChannelMessage(creation, timestamp, createdAt)
+                creations++
+                captured = canonical
+                pause(Boundary.AFTER_CREATE)
+                if (creationFailure) {
+                    recoveryUnavailable = recoveryFailure != null
+                    throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+                }
+                return canonical
             }
             override suspend fun fetchMessage(key: EntityKey): MessageDTO? {
                 if (unreadableCreation && key.id == captured?.id) {
@@ -386,12 +424,17 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
             }
         }
         val h = ContainerHarness(this, store, persistenceOverride = persistence)
+        val firmwareChannels = mutableMapOf<UByte, Bytes>()
         h.links.configureRadio = { radio ->
             radio.knownContacts += contactFrame(peerKey, "Lifetime peer")
             radio.respond = { frame ->
                 when (frame[0].toInt()) {
                     2, 3 -> listOf(Bytes.of(1, if (channel) 6 else 2))
-                    0x20 -> listOf(Bytes.of(0))
+                    0x20 -> {
+                        firmwareChannels[frame[1]] = Bytes.of(0x12) + frame.slice(1, frame.size)
+                        listOf(Bytes.of(0))
+                    }
+                    0x1f -> firmwareChannels[frame[1]]?.let(::listOf)
                     else -> null
                 }
             }
@@ -405,7 +448,7 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
             val radio = requireNotNull(h.appState.currentRadioId)
             val contact = requireNotNull(store.fetchContact(radio, peerKey))
             if (!channel && creationFailure) assertNull("First outgoing message has no list metadata", contact.lastMessageDate)
-            val slot = if (restartSendAgain) {
+            val slot = if (channel) {
                 initiating.channelService.setChannelWithSecret(
                     radio, 0u, "Lifetime channel", Bytes(ByteArray(16) { 5 }),
                 )
@@ -414,6 +457,15 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                 ChannelDTO(radioId = radio, index = 0u, name = "Lifetime channel").also { store.saveChannel(it) }
             }
             val target = if (channel) ComposerTarget.Channel(slot) else ComposerTarget.Direct(contact)
+            suspend fun radioErrorAccounted(id: UUID): Boolean {
+                val message = store.fetchMessage(EntityKey(radio, id))
+                val pending = store.fetchPendingSendsForMessage(EntityKey(radio, id))
+                return if (channel) {
+                    message?.status == (if (pending.singleOrNull()?.isResend == true) MessageStatus.FAILED else MessageStatus.PENDING) &&
+                        pending.singleOrNull()?.channelDispatchState == QueuedChannelDispatchState.UNCERTAIN &&
+                        pending.single().channelOccupantID == message.channelOccupantID
+                } else message?.status == MessageStatus.FAILED && pending.isEmpty()
+            }
             val conversation = if (channel) TimelineConversation.Channel(slot) else TimelineConversation.Direct(contact)
             val feature = h.container.chatsFeature
             val location = object : ComposerLocationSource {
@@ -651,6 +703,7 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                     initialContainerClosed = true
                     requireNotNull(disk).close()
                     disk = null
+                    assertTrue("The restart control uses an actual on-disk database", java.io.File(diskName).isFile)
                     val reopenedDisk = DiskHistoryStore(requireNotNull(diskContext), diskName)
                     disk = reopenedDisk
                     val reopenedStore = reopenedDisk.store
@@ -739,7 +792,7 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                         feature.timeline(conversation).retryService.retry(rows.single(), conversation)
                         h.eventually("explicit Retry on the original occupant sends exactly once") {
                             runBlocking {
-                                store.fetchPendingSendsForMessage(EntityKey(radio, rows.single().id)).isEmpty() &&
+                                radioErrorAccounted(rows.single().id) &&
                                     h.links.radios.single().sent.count { it[0].toInt() == 3 } == 1
                             }
                         }
@@ -767,8 +820,7 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                 h.manager.connect(connectionTarget)
                 h.eventually("replacement drains the one durable queue row") {
                     runBlocking {
-                        store.fetchMessage(EntityKey(radio, saved.id))?.status == MessageStatus.FAILED &&
-                            store.fetchPendingSendsForMessage(EntityKey(radio, saved.id)).isEmpty()
+                        radioErrorAccounted(saved.id)
                     }
                 }
                 assertEquals(1, h.links.radios.sumOf { link -> link.sent.count { it[0].toInt() == if (channel) 3 else 2 } })
@@ -791,19 +843,28 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                 assertEquals(radio, saved.radioId)
                 assertEquals(original, saved.text)
                 assertEquals(if (channel) slot.index else null, saved.channelIndex)
-                h.eventually("real queue emits exactly one terminal send") {
+                h.eventually("real queue accounts exactly one physical send") {
                     runBlocking {
-                        store.fetchMessage(EntityKey(radio, saved.id))?.status == MessageStatus.FAILED &&
-                            store.fetchPendingSendsForMessage(EntityKey(radio, saved.id)).isEmpty()
+                        radioErrorAccounted(saved.id)
                     }
                 }
                 assertEquals(1, h.links.radios.single().sent.count { it[0].toInt() == if (channel) 3 else 2 })
-                assertTrue(store.fetchPendingSendsForMessage(EntityKey(radio, saved.id)).isEmpty())
+                if (channel) {
+                    assertEquals(QueuedChannelDispatchState.UNCERTAIN,
+                        store.fetchPendingSendsForMessage(EntityKey(radio, saved.id)).single().channelDispatchState)
+                } else assertTrue(store.fetchPendingSendsForMessage(EntityKey(radio, saved.id)).isEmpty())
                 if (channel) {
                     assertEquals(saved.id, envelopes.single().messageID)
                     assertFalse(envelopes.single().isResend)
                 }
             }
+        } catch (failure: AssertionError) {
+            val pending = captured?.let { store.fetchPendingSendsForMessage(EntityKey(it.radioId, it.id)) }
+            val diagnostics = h.messagingDiagnostics.map { diagnostic ->
+                val cause = (diagnostic as? com.meshcoreone.android.core.contracts.domain.MessagingDiagnostic.Failure)?.cause
+                "$diagnostic; causes=${generateSequence(cause) { it.cause }.take(8).toList()}"
+            }
+            throw AssertionError("${failure.message}; pending=$pending; messaging=$diagnostics", failure)
         } finally {
             gate.complete(Unit)
             replacement?.close()

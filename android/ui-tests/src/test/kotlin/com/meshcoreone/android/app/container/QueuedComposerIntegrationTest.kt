@@ -60,9 +60,12 @@ class QueuedComposerIntegrationTest : RoomProcessTest() {
             radio.respond = { frame ->
                 when {
                     frame[0].toInt() in 2..3 -> listOf(Bytes.of(1, 2))
-                    frame[0].toInt() == 0x1f && frame[1].toInt() == 0 ->
-                        listOf(Bytes.of(0x12, 0) + Bytes.utf8("Synthetic local channel").paddedOrTruncated(32) +
-                            Bytes(ByteArray(16) { 0x11 }))
+                    frame[0].toInt() == 0x1f -> listOf(
+                        if (frame[1].toInt() == 0) {
+                            Bytes.of(0x12, 0) + Bytes.utf8("Synthetic local channel").paddedOrTruncated(32) +
+                                Bytes(ByteArray(16) { 0x11 })
+                        } else Bytes.of(0x12, frame[1].toInt()) + Bytes(ByteArray(48)),
+                    )
                     else -> null
                 }
             }

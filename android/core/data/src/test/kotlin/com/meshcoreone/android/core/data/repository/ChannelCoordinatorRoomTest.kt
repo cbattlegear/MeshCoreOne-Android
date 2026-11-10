@@ -9,6 +9,7 @@ import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.protocol.event.MeshTransportError
 import com.meshcoreone.android.core.protocol.session.ChannelFetchResult
 import com.meshcoreone.android.core.protocol.session.ChannelSessionOps
+import com.meshcoreone.android.core.protocol.session.ChannelWriteDispatch
 import com.meshcoreone.android.core.services.contacts.ChannelDecryptionCache
 import com.meshcoreone.android.core.services.contacts.ChannelService
 import com.meshcoreone.android.core.services.contacts.ChannelServiceClock
@@ -56,6 +57,10 @@ class ChannelCoordinatorRoomTest : RepositoryTest() {
         val sent = mutableListOf<ChannelInfo>()
         override suspend fun setChannel(index: UByte, name: String, secret: Bytes) {
             sent += ChannelInfo(index, name, secret)
+        }
+        override suspend fun setChannel(index: UByte, name: String, secret: Bytes, dispatch: ChannelWriteDispatch) {
+            dispatch.claim()
+            setChannel(index, name, secret)
         }
     }
 

@@ -139,7 +139,10 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
     @Test fun realRoomPartialReadRemainsUncertainWhenResponseRouterReturnsTrue() = runTest {
         var clearCalls = 0
         var failClear = false
-        val persistence = object : PersistenceStoreProtocol by store {
+        val persistence = object : PersistenceStoreProtocol by store,
+            ChannelHistoryPersisting by store,
+            QueuedChannelTerminalPersisting by store,
+            InlineChannelAttemptPersisting by store {
             override suspend fun clearUnreadCount(key: EntityKey) {
                 if (failClear) {
                     clearCalls++

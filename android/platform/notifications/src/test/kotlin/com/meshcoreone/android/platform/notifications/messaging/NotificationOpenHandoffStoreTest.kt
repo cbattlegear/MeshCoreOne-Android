@@ -1,7 +1,6 @@
 // AndroidOnly: WP-401 Verify indexed durable notification-open identity and idempotent acknowledgement.
 package com.meshcoreone.android.platform.notifications.messaging
 
-import androidx.test.core.app.ApplicationProvider
 import android.database.sqlite.SQLiteDatabase
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
@@ -16,7 +15,9 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -24,8 +25,10 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31, 37])
 class NotificationOpenHandoffStoreTest {
-    private val context = ApplicationProvider.getApplicationContext<android.app.Application>()
-    private val databaseFile = File(context.cacheDir, "notification-open-${UUID.randomUUID()}.db")
+    @get:Rule val temporary = TemporaryFolder()
+    private val databaseFile by lazy {
+        File(temporary.root, "notification-open-${UUID.randomUUID()}.db")
+    }
     private val store get() = NotificationOpenHandoffStore(databaseFile)
     private val contact = EntityKey(RadioId(UUID(0, 1)), UUID(0, 2))
     private val direct = NotificationPayload.DirectMessage(contact, UUID(0, 3))

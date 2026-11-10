@@ -22,6 +22,7 @@ import com.meshcoreone.android.core.runtime.RuntimePreferenceValue
 import com.meshcoreone.android.core.services.remote.ImportProgress
 import com.meshcoreone.android.core.services.remote.ImportStep
 import com.meshcoreone.android.core.services.remote.NodeConfigJson
+import com.meshcoreone.android.core.services.contacts.ChannelDispatchFailure
 import com.meshcoreone.android.feature.settings.app.nodeconfig.NodeConfigDocuments
 import java.util.UUID
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -33,6 +34,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFails
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertSame
@@ -169,6 +171,39 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
             val original = radio.respond
             radio.respond = { packet ->
                 if (packet[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue) listOf(Bytes.of(1, 1)) else original(packet)
+            }
+
+            @Test fun oldIdentityCannotQueueAChannelWriteBehindThePhysicalKeyMutation() = runTest {
+                withIdentityNode { h, node, radio, _ ->
+                    node.channelService.setChannelWithSecret(node.token.radioId, 0u, "Before", Bytes.fromHex(secret))
+                    val original = radio.respond
+                    var heldKeyWrite = false
+                    radio.respond = { packet ->
+                        if (packet[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue) {
+                            heldKeyWrite = true
+                            emptyList()
+                        } else if (packet[0] == CommandCode.SEND_CHANNEL_MESSAGE.rawValue) {
+                            listOf(Bytes.of(0))
+                        } else original(packet)
+                    }
+                    val identity = backgroundScope.async {
+                        runCatching { node.nodeConfigService.importConfig(config, ConfigSections(nodeIdentity = true), node.token.radioId) }
+                    }
+                    h.eventually("physical key mutation with old channel authority already paused") { heldKeyWrite }
+                    val oldSend = backgroundScope.async {
+                        assertFails { node.messageService.sendChannelMessage("Old identity", 0u, node.token.radioId, TextType.PLAIN) }
+                    }
+                    h.eventually("old-identity dispatch rejects before waiting behind the held key exchange") { oldSend.isCompleted }
+                    assertTrue(generateSequence(oldSend.await()) { it.cause }.any { it is ChannelDispatchFailure.RetiredSession })
+                    assertTrue(radio.sent.none { it[0] == CommandCode.SEND_CHANNEL_MESSAGE.rawValue })
+                    radio.push(Bytes.of(1, 1))
+                    h.eventually("rejected key mutation restores the original authority") { identity.isCompleted }
+                    assertTrue(identity.await().isFailure)
+                    assertSame(node, h.sessions.current)
+                    val resumed = node.messageService.sendChannelMessage("Original identity resumed", 0u, node.token.radioId, TextType.PLAIN)
+                    assertEquals(MessageStatus.SENT, store.fetchMessage(EntityKey(node.token.radioId, resumed.id))?.status)
+                    assertEquals(1, radio.sent.count { it[0] == CommandCode.SEND_CHANNEL_MESSAGE.rawValue })
+                }
             }
             val work = backgroundScope.async {
                 runCatching { node.nodeConfigService.importConfig(config, sections, node.token.radioId) }

@@ -35,14 +35,14 @@ class ChannelDispatchAdmission(val token: SessionToken, val connectionIdentity: 
             val current = state.get()
             if (current < 0 || state.compareAndSet(current, current or Long.MIN_VALUE)) return
         }
+    }
 
-        fun pause() {
-            paused.set(true)
-        }
+    fun pause() {
+        paused.set(true)
+    }
 
-        fun resume() {
-            paused.set(false)
-        }
+    fun resume() {
+        paused.set(false)
     }
 
     private fun completeAdmission() {
@@ -59,6 +59,5 @@ class ChannelDispatchAdmission(val token: SessionToken, val connectionIdentity: 
         fun complete() {
             if (completed.compareAndSet(false, true)) admission.completeAdmission()
         }
-
     }
 }

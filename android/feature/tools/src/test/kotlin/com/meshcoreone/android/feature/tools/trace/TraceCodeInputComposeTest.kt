@@ -59,6 +59,7 @@ import com.meshcoreone.android.core.maps.MapMarker
 import com.meshcoreone.android.core.maps.MapPinStyle
 import com.meshcoreone.android.core.maps.MapPreferenceStore
 import com.meshcoreone.android.core.maps.MapPreferences
+import com.meshcoreone.android.core.maps.semanticText
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SavedTracePathDTO
@@ -75,6 +76,7 @@ import java.time.Duration
 import java.text.DateFormat
 import java.util.Date
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -208,6 +210,42 @@ class TraceCodeInputComposeTest {
             assertTrue(preferences.observe(MapFilterHost.TRACE_PATH).value.clustering)
             assertEquals(true, renderedClustering)
         }
+    }
+
+    @Test fun mapLabelControlKeepsContactAndDiscoveredNamesAccessible() {
+        val h = connectedMapHarness()
+        val contact = contact(0xAA, name = "North", latitude = 38.0, longitude = -122.0)
+            .copy(nickname = "Summit")
+        val discovered = discovered(key(0xBB), "Hill", latitude = 37.5, longitude = -121.5)
+        h.holder.setContactsForTesting(listOf(contact))
+        h.holder.editStateForTesting { it.copy(discoveredRepeaters = listOf(discovered)) }
+        h.holder.addNode(contact)
+        val preferences = TraceCodeInputMapPreferences()
+        val renderedMarkers = AtomicReference<List<MapMarker>>(emptyList())
+        val surface: TraceMapSurface = { presentation, _, _, _, _, overlay ->
+            SideEffect { renderedMarkers.set(presentation.points) }
+            Box(Modifier.fillMaxSize(), content = overlay)
+        }
+        mountPathMap(h, preferences, surface = surface)
+
+        fun markers() = renderedMarkers.get().associateBy { it.id }
+        assertEquals("Summit", markers().getValue(contact.id).label)
+        assertEquals("Hill", markers().getValue(discovered.id).label)
+        assertEquals("Summit, 1", markers().getValue(contact.id).semanticText)
+        assertEquals("Hill", markers().getValue(discovered.id).semanticText)
+
+        val label = host.get().getString(M.mapControlsShowLabels)
+        click(label)
+        assertFalse(preferences.observe(MapFilterHost.TRACE_PATH).value.labels)
+        assertNull(markers().getValue(contact.id).label)
+        assertNull(markers().getValue(discovered.id).label)
+        assertEquals("Summit, 1", markers().getValue(contact.id).semanticText)
+        assertEquals("Hill", markers().getValue(discovered.id).semanticText)
+
+        click(label)
+        assertTrue(preferences.observe(MapFilterHost.TRACE_PATH).value.labels)
+        assertEquals("Summit", markers().getValue(contact.id).label)
+        assertEquals("Hill", markers().getValue(discovered.id).label)
     }
 
     @Test fun clusteringWriteFailureIsVisibleAndCanBeRetried() {

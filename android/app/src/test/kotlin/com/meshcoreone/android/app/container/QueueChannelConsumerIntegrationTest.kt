@@ -211,6 +211,7 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
                 createdAt = EPOCH, sortDate = EPOCH, direction = MessageDirection.OUTGOING,
                 status = MessageStatus.PENDING, channelOccupantID = occupantID,
             )
+            store.saveMessage(message)
             pending = store.admitQueueChannelFixture(
                 message, UUID.fromString("A0000000-0000-0000-0000-000000000005"),
                 isResend = false, localNodeName = "Stored Node", initialAttemptCount = 7,
@@ -223,8 +224,6 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
                 UUID.fromString("B0000000-0000-0000-0000-000000000005"), foreignRadioId, foreignMessage.id,
                 PendingSendKind.CHANNEL, null, 0u, false, "Foreign pending", 1_704_067_200u, "Foreign Node", 1, EPOCH, 2,
             )
-            store.saveMessage(message)
-            store.upsertPendingSend(pending)
             store.saveMessage(foreignMessage)
             store.upsertPendingSend(foreignPending)
             val connect = harness.container.uiScope.async {

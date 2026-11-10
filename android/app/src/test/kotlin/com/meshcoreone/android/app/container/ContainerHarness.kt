@@ -261,6 +261,8 @@ internal suspend fun RoomPersistenceStore.admitQueueChannelFixture(
     require(initialAttemptCount >= 0 && initialAttemptCount <= Int.MAX_VALUE.toLong())
     val channelIndex = checkNotNull(message.channelIndex)
     val occupantID = checkNotNull(message.channelOccupantID)
+    val messageKey = EntityKey(message.radioId, message.id)
+    check(fetchMessage(messageKey)?.channelOccupantID == occupantID)
     val envelope = ChannelMessageEnvelope(
         message.id, channelIndex, isResend, message.text, message.timestamp, localNodeName, occupantID,
     )
@@ -276,7 +278,6 @@ internal suspend fun RoomPersistenceStore.admitQueueChannelFixture(
     repeat(initialAttemptCount.toInt()) {
         incrementReadyQueuedChannelAttemptCount(pendingKey, message.id)
     }
-    val messageKey = EntityKey(message.radioId, message.id)
     return checkNotNull(fetchPendingSendsForMessage(messageKey).singleOrNull { it.id == pendingID }).also {
         check(it.sequence == sequence)
         check(it.channelDispatchState == QueuedChannelDispatchState.READY)

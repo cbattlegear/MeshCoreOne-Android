@@ -83,9 +83,9 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
     @Test fun allocationRecoveryUsesTypedResourcesWithoutLeakingDiagnosticCopy() {
         val unresolved = ChannelMutationError.SyncIncomplete(SnapshotList.of<UByte>(1u))
         val uncertain = ChannelMutationError.ReconciliationRequired(IllegalStateException("private radio diagnostic"))
-        assertEquals(UiText.Resource(com.meshcoreone.android.app.R.string.platform_channel_sync_incomplete),
+        assertEquals(UiText.Resource(com.meshcoreone.android.R.string.platform_channel_sync_incomplete),
             channelFailureText(unresolved))
-        assertEquals(UiText.Resource(com.meshcoreone.android.app.R.string.platform_channel_reconciliation_required),
+        assertEquals(UiText.Resource(com.meshcoreone.android.R.string.platform_channel_reconciliation_required),
             channelFailureText(uncertain))
         assertFalse(channelFailureText(uncertain).resolve(host.get().resources).contains("private radio diagnostic"))
         assertEquals(UiText.Resource(com.meshcoreone.android.core.l10n.generated.AppChatsStrings.chatsJoinFromMessageErrorNoSlots),
@@ -292,7 +292,7 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
                 requestJob.isCompleted
             }
             assertEquals(cancel, requestJob.isCancelled)
-            compose.onNodeWithText(host.get().getString(com.meshcoreone.android.app.R.string.platform_channel_already_saved))
+            compose.onNodeWithText(host.get().getString(com.meshcoreone.android.R.string.platform_channel_already_saved))
                 .assertIsDisplayed()
             probe.set(false)
             for (value in listOf(1080, 390, 1080)) {
@@ -611,14 +611,15 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
             val radio = assertNotNull(h.appState.currentRadioId)
             assertEquals("Radio occupant", store.fetchChannel(radio, 1u)?.name)
             val cleanSync = assertNotNull(h.manager.lastCleanChannelSync)
-            h.manager.disconnect(com.meshcoreone.android.core.runtime.RuntimeDisconnectReason.WIFI_RECONNECT_PREP)
-            h.scheduler.runCurrent()
-            assertEquals(cleanSync, h.manager.lastCleanChannelSync, "A transient reconnect retains the recent-sync stamp")
-            h.manager.connect(target)
+            h.manager.teardownSessionForReconnect()
+            val rebuilt = backgroundScope.async { h.manager.rebuildSession(target.deviceId) }
             h.eventually("fresh graph becomes ready inside the recent-sync window") {
-                h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
+                rebuilt.isCompleted &&
+                    h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
             }
+            rebuilt.await()
             h.assertReady()
+            assertEquals(cleanSync, h.manager.lastCleanChannelSync, "Same-radio reconnect skips the recent channel phase")
             val fresh = assertNotNull(h.sessions.current)
             assertNotSame(old.channelService, fresh.channelService)
             assertTrue(old.isTornDown)
@@ -750,7 +751,7 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
                 compose.waitUntil(10_000) {
                     h.scheduler.runCurrent()
                     compose.onAllNodesWithText(
-                        host.get().getString(com.meshcoreone.android.app.R.string.platform_channel_sync_incomplete),
+                        host.get().getString(com.meshcoreone.android.R.string.platform_channel_sync_incomplete),
                     ).fetchSemanticsNodes().isNotEmpty()
                 }
                 h.assertReady()

@@ -30,9 +30,9 @@ import com.meshcoreone.android.core.ui.uiString
 import kotlinx.coroutines.launch
 
 internal fun channelFailureText(failure: Throwable): UiText = when (failure) {
-    is ChannelSheetError.AlreadyCommitted -> UiText.Resource(com.meshcoreone.android.app.R.string.platform_channel_already_saved)
-    is ChannelMutationError.SyncIncomplete -> UiText.Resource(com.meshcoreone.android.app.R.string.platform_channel_sync_incomplete)
-    is ChannelMutationError.ReconciliationRequired -> UiText.Resource(com.meshcoreone.android.app.R.string.platform_channel_reconciliation_required)
+    is ChannelSheetError.AlreadyCommitted -> UiText.Resource(com.meshcoreone.android.R.string.platform_channel_already_saved)
+    is ChannelMutationError.SyncIncomplete -> UiText.Resource(com.meshcoreone.android.R.string.platform_channel_sync_incomplete)
+    is ChannelMutationError.ReconciliationRequired -> UiText.Resource(com.meshcoreone.android.R.string.platform_channel_reconciliation_required)
     is ChannelSheetError.NoAvailableSlots, is ChannelMutationError.NoAvailableSlots -> UiText.Resource(C.chatsJoinFromMessageErrorNoSlots)
     ChannelSheetError.NoDeviceConnected -> UiText.Resource(C.chatsInputRequiresConnection)
     ChannelSheetError.InvalidName, ChannelSheetError.InvalidHashtag -> UiText.Resource(C.chatsJoinFromMessageErrorInvalidName)

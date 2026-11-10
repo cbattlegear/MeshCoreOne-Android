@@ -40,6 +40,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.Lifecycle
 import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.model.DiscoveredNodeDTO
@@ -57,6 +58,9 @@ internal fun DiscoveryScreen(
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
+    val userLocation by dependencies.locations.collectAsStateWithLifecycle(
+        initialValue = null, minActiveState = Lifecycle.State.RESUMED,
+    )
     val holder = remember(dependencies) { DiscoveryStateHolder(dependencies, scope) }
     val state by holder.state.collectAsStateWithLifecycle()
     var search by remember { mutableStateOf("") }
@@ -66,8 +70,9 @@ internal fun DiscoveryScreen(
     var clearConfirmation by remember { mutableStateOf(false) }
 
     LaunchedEffect(holder) { holder.loadDiscoveredNodes() }
-    LaunchedEffect(search, segment, sort, state.discoveredNodes) {
-        holder.updateVisibleNodes(search, segment, sort, null)
+    LaunchedEffect(search, segment, sort, state.discoveredNodes, userLocation) {
+        val effectiveSort = if (sort == NodeSortOrder.DISTANCE && userLocation == null) NodeSortOrder.LAST_HEARD else sort
+        holder.updateVisibleNodes(search, segment, effectiveSort, userLocation)
     }
 
     Column(modifier.fillMaxSize()) {

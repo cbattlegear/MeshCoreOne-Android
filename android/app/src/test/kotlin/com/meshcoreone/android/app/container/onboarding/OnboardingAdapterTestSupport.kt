@@ -6,6 +6,7 @@ import com.meshcoreone.android.core.connectivity.permissions.ConnectivityPermiss
 import com.meshcoreone.android.core.connectivity.permissions.PermissionSnapshot
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.services.device.RadioPreset
+import com.meshcoreone.android.feature.onboarding.OnboardingPresetTarget
 import java.util.UUID
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -40,6 +41,11 @@ class FakeRadio(var failure: Exception? = null, var demo: Boolean = false) : Onb
     val state = MutableStateFlow(DeviceConnectionState.READY)
     val applied = mutableListOf<RadioPreset>()
     override fun connectionStates(): Flow<DeviceConnectionState> = state
+    override fun currentTarget() = OnboardingPresetTarget(
+        UUID.fromString("00000000-0000-0000-0000-000000000001"),
+        1,
+        UUID.fromString("00000000-0000-0000-0000-000000000002"),
+    ).takeIf { state.value == DeviceConnectionState.READY }
     override val isDemoRadio: Boolean get() = demo
     override suspend fun applyPreset(preset: RadioPreset) { failure?.let { throw it }; applied += preset }
 }

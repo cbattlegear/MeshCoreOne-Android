@@ -11,6 +11,7 @@ import com.meshcoreone.android.core.contracts.notifications.NotificationAuthoriz
 import com.meshcoreone.android.core.contracts.notifications.NotificationCategory
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
+import com.meshcoreone.android.core.contracts.notifications.SnapshotRemovalOutcome
 import com.meshcoreone.android.core.model.NotificationLevel
 import com.meshcoreone.android.core.protocol.model.ContactType
 import java.util.UUID
@@ -404,6 +405,62 @@ class NotificationPolicyNativeTests {
 
     @TestFactory
     fun removal(): List<DynamicTest> = listOf(
+        nativeCase("snapshot cleanup preserves same-ID posts arriving after contact channel and room selection") {
+            val contact = EntityKey(RADIO_A, contactID)
+            val session = UUID.randomUUID()
+            data class RemovalCase(
+                val payload: NotificationPayload,
+                val cleanup: suspend (NotificationService) -> Unit,
+            )
+            val cases = listOf(
+                RemovalCase(NotificationPayload.NewContact(contact)) { it.removeDeliveredNotifications(contactID) },
+                RemovalCase(NotificationPayload.ChannelMessage(RADIO_A, 2u, messageID)) {
+                    it.removeDeliveredNotifications(2u, RADIO_A)
+                },
+                RemovalCase(NotificationPayload.RoomMessage("Ops", EntityKey(RADIO_A, session), messageID)) {
+                    it.removeDeliveredNotificationsForRoom(session)
+                },
+            )
+            for ((payload, cleanup) in cases) {
+                val h = NotificationHarness(this)
+                h.delivery.show("reused", payload)
+                val selected = CompletableDeferred<Unit>()
+                val resume = CompletableDeferred<Unit>()
+                h.delivery.beforeSnapshotRemoval = { selected.complete(Unit); resume.await() }
+                val job = launch { cleanup(h.service) }
+                selected.await()
+                h.delivery.show("reused", payload)
+                resume.complete(Unit)
+                job.join()
+                assertEquals(listOf(NotificationId("reused")), h.delivery.shownIds)
+                assertEquals(listOf(SnapshotRemovalOutcome.SUPERSEDED), h.delivery.lastSnapshotOutcomes)
+                assertTrue(h.delivery.removals.isEmpty())
+            }
+        },
+        nativeCase("unknown snapshot identity is retained while explicit logical-ID removal still removes replacement") {
+            val h = NotificationHarness(this)
+            val id = "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE"
+            h.delivery.show(id, NotificationPayload.NewContact(EntityKey(RADIO_A, contactID)))
+            h.delivery.forgetPostIdentity(id)
+            h.service.removeDeliveredNotifications(contactID)
+            assertEquals(listOf(SnapshotRemovalOutcome.UNKNOWN_IDENTITY), h.delivery.lastSnapshotOutcomes)
+            assertEquals(listOf(NotificationId(id)), h.delivery.shownIds)
+            h.delivery.show(id, NotificationPayload.NewContact(EntityKey(RADIO_A, contactID)))
+            h.service.removeDeliveredNotification(messageID)
+            assertTrue(h.delivery.shownIds.isEmpty())
+            assertEquals(listOf(listOf(NotificationId(id))), h.delivery.removals)
+        },
+        nativeCase("snapshot cleanup failure is contained and cancellation propagates without logical fallback") {
+            val h = NotificationHarness(this)
+            h.delivery.show("reused", NotificationPayload.NewContact(EntityKey(RADIO_A, contactID)))
+            h.delivery.failing += "removeDeliveredSnapshot"
+            h.service.removeDeliveredNotifications(contactID)
+            assertEquals(listOf(NotificationId("reused")), h.delivery.shownIds)
+            assertTrue(h.delivery.removals.isEmpty())
+            h.delivery.failing.clear()
+            h.delivery.cancelling = "removeDeliveredSnapshot"
+            assertFailsWith<CancellationException> { h.service.removeDeliveredNotifications(contactID) }
+        },
         nativeCase("contact removal lists once and removes every contact-keyed notification only") {
             val h = NotificationHarness(this)
             val contact = EntityKey(RADIO_A, contactID)
@@ -510,6 +567,59 @@ class NotificationPolicyNativeTests {
             h.service.onQuickReply = { _, _ -> throw IllegalStateException("forwarder failed") }
             h.service.didReceive(NotificationResponse(dm, NotificationAction.REPLY, "boom"))
             assertEquals(emptyList(), h.store.calls)
+        },
+        nativeCase("action dispatch distinguishes missing forwarders from handled actions") {
+            val h = NotificationHarness(this)
+            val contact = EntityKey(RADIO_A, contactID)
+            val session = EntityKey(RADIO_A, UUID.randomUUID())
+            val direct = NotificationPayload.DirectMessage(contact, messageID)
+            val channel = NotificationPayload.ChannelMessage(RADIO_A, 3u, messageID)
+            val room = NotificationPayload.RoomMessage("Room", session, messageID)
+            val responses = listOf(
+                NotificationResponse(direct, NotificationAction.REPLY, "direct"),
+                NotificationResponse(channel, NotificationAction.REPLY, "channel"),
+                NotificationResponse(direct, NotificationAction.MARK_READ, null),
+                NotificationResponse(channel, NotificationAction.MARK_READ, null),
+                NotificationResponse(room, NotificationAction.MARK_READ, null),
+            )
+            responses.forEach {
+                assertEquals(NotificationResponseDispatch.ACTION_CALLBACK_MISSING, h.service.didReceiveWithResult(it))
+            }
+            val calls = mutableListOf<String>()
+            h.service.onQuickReply = { _, _ -> calls += "direct reply" }
+            h.service.onChannelQuickReply = { _, _, _ -> calls += "channel reply" }
+            h.service.onMarkAsRead = { _, _ -> calls += "direct read" }
+            h.service.onChannelMarkAsRead = { _, _, _ -> calls += "channel read" }
+            h.service.onRoomMarkAsRead = { _, _ -> calls += "room read" }
+            responses.forEach {
+                assertEquals(NotificationResponseDispatch.ACTION_HANDLED, h.service.didReceiveWithResult(it))
+            }
+            assertEquals(listOf("direct reply", "channel reply", "direct read", "channel read", "room read"), calls)
+            assertEquals(
+                NotificationResponseDispatch.ACTION_HANDLED,
+                h.service.didReceiveWithResult(NotificationResponse(direct, NotificationAction.REPLY, null)),
+            )
+        },
+        nativeCase("tap dispatch reports optional and invoked callbacks without changing cancellation") {
+            val h = NotificationHarness(this)
+            val contact = EntityKey(RADIO_A, contactID)
+            val response = NotificationResponse(NotificationPayload.DirectMessage(contact, messageID), null, null)
+            assertEquals(NotificationResponseDispatch.TAP_CALLBACK_MISSING, h.service.didReceiveWithResult(response))
+            var calls = 0
+            h.service.onNotificationTapped = {
+                assertEquals(contact, it)
+                calls++
+            }
+            assertEquals(NotificationResponseDispatch.TAP_CALLBACK_INVOKED, h.service.didReceiveWithResult(response))
+            assertEquals(1, calls)
+            h.service.onNotificationTapped = { throw IllegalStateException("callback failed") }
+            assertEquals(NotificationResponseDispatch.TAP_CALLBACK_INVOKED, h.service.didReceiveWithResult(response))
+            h.service.onNotificationTapped = { throw CancellationException("cancelled") }
+            assertFailsWith<CancellationException> { h.service.didReceiveWithResult(response) }
+            assertEquals(
+                NotificationResponseDispatch.ACTION_HANDLED,
+                h.service.didReceiveWithResult(NotificationResponse(response.payload, NotificationAction.REPLY, null)),
+            )
         },
     )
 }

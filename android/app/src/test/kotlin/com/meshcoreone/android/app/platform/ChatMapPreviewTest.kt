@@ -16,6 +16,7 @@ import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.app.container.*
+import com.meshcoreone.android.app.container.RoomProcessTest
 import com.meshcoreone.android.app.content.DataStoreLinkPreviewPreferencesSource
 import com.meshcoreone.android.app.navigation.AppMapSettings
 import com.meshcoreone.android.app.navigation.AppMessageContent
@@ -139,8 +140,14 @@ class ChatMapPreviewTest : RoomProcessTest() {
     @Test fun sharedLoadingFailureAndRetryReachBothCardsWithoutDuplicateRenders() = runTest {
         val first = CompletableDeferred<Bitmap?>()
         val second = CompletableDeferred<Bitmap?>()
+        val secondStarted = CompletableDeferred<Unit>()
         var calls = 0
-        withFixture(render = { if (++calls == 1) first.await() else second.await() }) {
+        withFixture(render = {
+            if (++calls == 1) first.await() else {
+                secondStarted.complete(Unit)
+                second.await()
+            }
+        }) {
             compose.runOnUiThread { host.setContent { MeshCoreTheme(motionScale = 0f) { Column {
                 repeat(2) { AppMessageContent(content, message, ::report, onMap = {}) }
             } } } }
@@ -154,6 +161,7 @@ class ChatMapPreviewTest : RoomProcessTest() {
             compose.onAllNodesWithContentDescription(retry, useUnmergedTree = true)[0]
                 .assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp).performClick()
             compose.onAllNodesWithTag("chat-map-loading", useUnmergedTree = true).assertCountEquals(2)
+            compose.waitUntil(10_000) { secondStarted.isCompleted }
             assertEquals(2, calls)
             compose.runOnIdle { second.complete(bitmap()) }
             compose.waitUntil(10_000) {
@@ -209,10 +217,20 @@ class ChatMapPreviewTest : RoomProcessTest() {
 
     @Test fun memoryTrimDuringRenderingNotifiesTheLoadingCardAndDeduplicatesItsReplacement() = runTest {
         val first = CompletableDeferred<Bitmap?>()
+        val firstStarted = CompletableDeferred<Unit>()
         var calls = 0
-        withFixture(render = { if (++calls == 1) first.await() else bitmap() }) {
+        withFixture(render = {
+            if (++calls == 1) {
+                firstStarted.complete(Unit)
+                first.await()
+            } else bitmap()
+        }) {
             mount(message)
             compose.onNodeWithTag("chat-map-loading", useUnmergedTree = true).assertIsDisplayed()
+            compose.waitUntil(10_000) {
+                compose.waitForIdle()
+                firstStarted.isCompleted
+            }
             assertEquals(1, requests.size)
             compose.runOnIdle { content.trimMemory() }
             compose.onNodeWithTag("chat-map-loading", useUnmergedTree = true).assertIsDisplayed()
@@ -224,6 +242,33 @@ class ChatMapPreviewTest : RoomProcessTest() {
             }
             assertEquals(requests.first(), requests.last())
             compose.onNodeWithTag("chat-map-loading", useUnmergedTree = true).assertDoesNotExist()
+        }
+    }
+
+    @Test fun rendererEntrySynchronizationDoesNotCompleteTheHeldRender() = runTest {
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Bitmap?>()
+        withFixture(render = {
+            started.complete(Unit)
+            release.await()
+        }) {
+            mount(message)
+            compose.waitUntil(10_000) {
+                compose.waitForIdle()
+                started.isCompleted
+            }
+            assertEquals(1, requests.size)
+            assertFalse(release.isCompleted)
+            assertFalse(previews.snapshots.isResolved(requests.single()))
+            compose.onNodeWithTag("chat-map-loading", useUnmergedTree = true).assertIsDisplayed()
+            compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).assertDoesNotExist()
+            compose.runOnIdle { release.complete(bitmap()) }
+            compose.waitUntil(10_000) {
+                compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).isDisplayed()
+            }
+            compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).assertIsDisplayed()
+            compose.onNodeWithTag("chat-map-loading", useUnmergedTree = true).assertDoesNotExist()
+            assertEquals(1, requests.size)
         }
     }
 
@@ -272,6 +317,9 @@ class ChatMapPreviewTest : RoomProcessTest() {
             }
             compose.onNodeWithTag("chat-map-loading", useUnmergedTree = true).assertDoesNotExist()
             compose.onNodeWithContentDescription(retry, useUnmergedTree = true).performClick()
+            compose.waitUntil(10_000) {
+                compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).isDisplayed()
+            }
             compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).assertIsDisplayed()
             assertEquals(2, requests.size)
         }

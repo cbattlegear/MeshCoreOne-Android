@@ -69,7 +69,7 @@ object NavigationSavedState {
                 else -> return invalid()
             }
             if (stacks.getValue(tab).isEmpty() && destination !is NavigationDestination.Root) return invalid()
-            stacks.getValue(tab).add(NavigationEntry(id, destination))
+            stacks.getValue(tab).add(NavigationEntry(id, destination, tab))
         }
         if (stacks.any { (_, entries) -> entries.isEmpty() }) return invalid()
         val selectedStack = stacks.getValue(selected)

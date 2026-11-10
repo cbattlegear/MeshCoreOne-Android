@@ -8,11 +8,13 @@ import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
 import com.meshcoreone.android.core.protocol.event.ConnectionState
+import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.protocol.event.FrequencyRange
 import com.meshcoreone.android.core.protocol.session.MeshCoreSession
 import com.meshcoreone.android.core.protocol.session.SessionClock
 import com.meshcoreone.android.core.protocol.session.SessionCorrelationException
 import com.meshcoreone.android.core.protocol.session.SessionDiagnostic
+import java.lang.ref.WeakReference
 import java.time.Instant
 import java.util.UUID
 import kotlin.coroutines.CoroutineContext
@@ -28,7 +30,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 class ConnectionManager(
-    private val devices: DevicePersisting,
+    private val devices: DeviceSessionPersisting,
     private val rooms: RoomPersisting,
     private val contacts: ContactPersisting,
     private val maintenance: ProcessRuntimeMaintenance,
@@ -46,9 +48,31 @@ class ConnectionManager(
     epoch: ProcessEpoch = ProcessEpoch(UUID.randomUUID()),
     private val recoveryDispatcher: CoroutineDispatcher = Dispatchers.Default,
     private val simulatorDeviceId: UUID? = null,
+    private val publicationRegistry: RuntimePublicationRegistryIdentity? = null,
 ) : ConnectionController, BLEReconnectionDelegate {
     private class RuntimeOperation(val owner: Any) : AbstractCoroutineContextElement(Key) {
         companion object Key : CoroutineContext.Key<RuntimeOperation>
+    }
+    private class RebuildOperation(
+        val generation: RadioGeneration,
+        val retirementCaller: Job? = null,
+        @Volatile var callbackJob: Job? = null,
+    ) : AbstractCoroutineContextElement(Key) {
+        companion object Key : CoroutineContext.Key<RebuildOperation>
+    }
+    private class ChannelOperationContext(val manager: ConnectionManager) : AbstractCoroutineContextElement(Key) {
+        companion object Key : CoroutineContext.Key<ChannelOperationContext>
+        @Volatile var active = true
+        @Volatile var leased = false
+    }
+    private class DeviceWriteContext(
+        val manager: ConnectionManager,
+        val generation: RadioGeneration,
+        val token: SessionToken,
+        val deviceId: UUID,
+    ) : AbstractCoroutineContextElement(Key) {
+        companion object Key : CoroutineContext.Key<DeviceWriteContext>
+        @Volatile var active = true
     }
     private data class Submission(
         val work: Deferred<Unit>,
@@ -58,6 +82,39 @@ class ConnectionManager(
         val stop: Deferred<TeardownReport>?,
         val detachedLive: Boolean = false,
     )
+    internal class NavigationSubmission(
+        val work: Deferred<Unit>,
+        val revision: Long,
+        val startGeneration: Long,
+        val initiatingJob: Job?,
+    ) {
+        var firstExposure: NavigationExposure? = null
+        var interposedOwner = false
+        var callerCancelled = false
+        var settled = false
+
+        fun isRevoked(): Boolean = work.isCancelled ||
+            !settled && (callerCancelled || initiatingJob?.isCancelled == true)
+    }
+    internal class NavigationExposure(
+        val managerIdentity: Any,
+        val epoch: ProcessEpoch,
+        val ownerNumber: Long,
+        val ownerRevision: Long,
+        val submission: NavigationSubmission?,
+        val session: WeakReference<MeshCoreSession>,
+        val token: SessionToken,
+        val slot: RuntimePublicationSlot<*>,
+        val graph: WeakReference<RuntimePublishableServices>,
+        val fence: RuntimePublicationFence,
+    )
+    internal class NavigationRebuild(val coordinatorGeneration: Long, val caller: Job?) {
+        var cancelled = false
+        var completed = false
+
+        fun isRevoked(): Boolean = !completed && (cancelled || caller?.isCancelled == true)
+    }
+
     internal class RadioGeneration(
         val number: Long,
         val target: ConnectionTarget,
@@ -81,6 +138,17 @@ class ConnectionManager(
         var servicesClosed: Deferred<TeardownReport>? = null
         var physicalClosed: Deferred<TeardownReport>? = null
         var operation: Deferred<Unit>? = null
+        var navigationSubmission: NavigationSubmission? = null
+        var navigationRebuild: NavigationRebuild? = null
+        var navigationExposure: NavigationExposure? = null
+        var initiatingJob: Job? = null
+        var establishmentJob: Job? = null
+        var establishmentReconnectGeneration: Long? = null
+        var establishmentCompleted = false
+        var establishmentSettled = false
+        var rebuildScopeJob: Job? = null
+        var rebuildRetirementClaimed = false
+        var rebuildRetirementCaller: Job? = null
         var sawConnected = false
         var logicalEnded = false
         var physicalEnding = false
@@ -88,7 +156,38 @@ class ConnectionManager(
         var lossHandled = false
         var correlationAccounting: Deferred<Unit>? = null
         var identityHandoff: Deferred<Unit>? = null
+        var channelOperationsRetired = false
+        var channelOperationsDrained: CompletableDeferred<Unit>? = null
         val registrationReady = CompletableDeferred<Unit>()
+    }
+
+    /**
+     * A manager-issued in-flight operation, not a radio slot/origin proof. Constructor visibility is
+     * not authentication: every use must match this manager's private issued-instance registry.
+     * Retirement refuses new admissions and waits for admitted callbacks before service teardown.
+     */
+    class ChannelOperationLease internal constructor(
+        internal val manager: ConnectionManager,
+        internal val generation: RadioGeneration,
+        internal val token: SessionToken,
+        internal val session: MeshCoreSession,
+        internal val identityScope: ChannelIdentityWriteScope,
+        internal val ownerJob: Job,
+    ) {
+        val radioId: RadioId get() = token.radioId
+
+        suspend fun readChannel(index: UByte): ChannelInfo {
+            manager.requireChannelLease(this, radioId)
+            synchronized(manager.lock) {
+                check(manager.isCurrent(generation) && !generation.channelOperationsRetired) {
+                    "A retired channel operation cannot start another protocol query"
+                }
+            }
+            return session.getChannel(index)
+        }
+
+        suspend fun <T> withChannelIdentityMutation(radioId: RadioId, block: suspend () -> T): T =
+            manager.withChannelLeaseIdentity(this, radioId, block)
     }
 
     private val lock = Any()
@@ -109,11 +208,464 @@ class ConnectionManager(
     override val connectionIntent: ConnectionIntent get() = values.value.intent
     override val connectionState: DeviceConnectionState get() = values.value.state
     val processEpoch = epoch
+    private val navigationIdentity = Any()
+    class NavigationLifecycleStamp internal constructor(
+        internal val managerIdentity: Any,
+        internal val revision: Long,
+        internal val lastGeneration: Long,
+        internal val activeGeneration: Long?,
+        internal val retainedGeneration: Long?,
+        internal val submission: NavigationSubmission?,
+        internal val exposureAtCapture: Boolean,
+    )
+
+    class OfflineNavigationLifecycle internal constructor(
+        internal val lifecycle: NavigationLifecycleStamp,
+        internal val exposureCount: Long,
+        internal val retainedTarget: ConnectionTarget?,
+    )
+
+    /**
+     * The action must only inspect lifecycle state or perform a non-blocking atomic commit. It must not
+     * suspend, publish observable state, or acquire a delivery/staging lock.
+     */
+    fun <T> withNavigationCommitBoundary(action: () -> T): T = synchronized(lock, action)
+
+    fun captureNavigationLifecycle(): NavigationLifecycleStamp = synchronized(lock) {
+        val owner = active
+        val submission = pendingNavigationSubmission?.takeIf { it.work === pending } ?: owner?.navigationSubmission
+        val exposure = if (owner != null) owner.navigationExposure != null
+            else submission?.firstExposure != null || retained?.navigationExposure != null
+        NavigationLifecycleStamp(
+            navigationIdentity, revision, nextGeneration, owner?.number, retained?.number, submission, exposure,
+        )
+    }
+
+    fun isNavigationLifecycleCurrent(stamp: NavigationLifecycleStamp): Boolean = synchronized(lock) {
+        if (stamp.managerIdentity !== navigationIdentity || closed || shutdown != null || stamp.exposureAtCapture)
+            return@synchronized false
+        val owner = active
+        if (stamp.activeGeneration != null) {
+            val submission = stamp.submission
+            return@synchronized owner?.navigationExposure == null &&
+                revision == stamp.revision && nextGeneration == stamp.lastGeneration &&
+                owner?.number == stamp.activeGeneration && retained?.number == stamp.retainedGeneration &&
+                (owner?.let {
+                    isCurrent(it) && !it.job.isCancelled && it.operation?.isCancelled != true &&
+                        it.navigationRebuild?.isRevoked() != true
+                } ?: true) &&
+                (submission == null || !submission.isRevoked() &&
+                    (pendingNavigationSubmission === submission && pending === submission.work ||
+                        owner?.navigationSubmission === submission))
+        }
+        if (owner?.navigationExposure != null || retained?.navigationExposure != null) return@synchronized false
+        if (stamp.retainedGeneration != null) {
+            return@synchronized revision == stamp.revision && nextGeneration == stamp.lastGeneration &&
+                owner == null && retained?.number == stamp.retainedGeneration &&
+                (stamp.submission == null || !stamp.submission.isRevoked() && stamp.submission.firstExposure == null &&
+                    pendingNavigationSubmission === stamp.submission && pending === stamp.submission.work)
+        }
+        if (revision == stamp.revision && nextGeneration == stamp.lastGeneration &&
+            owner == null && retained == null && stamp.submission == null
+        ) return@synchronized true
+        val submission = pendingNavigationSubmission?.takeIf { it.work === pending }
+            ?: owner?.navigationSubmission
+            ?: return@synchronized false
+        if (submission.isRevoked() || submission.work.isCompleted || submission.firstExposure != null ||
+            submission.interposedOwner || retained != null ||
+            owner != null && (owner.navigationSubmission !== submission || !isCurrent(owner))
+        ) return@synchronized false
+        if (stamp.submission != null) {
+            stamp.submission === submission && stamp.revision == submission.revision
+        } else {
+            stamp.revision != Long.MAX_VALUE && submission.revision == stamp.revision + 1 &&
+                submission.startGeneration == stamp.lastGeneration
+        }
+    }
+
+    /** A fresh offline capture can retain historical exposure, but cannot follow any new submission or owner. */
+    fun isOfflineNavigationLifecycleCurrent(stamp: NavigationLifecycleStamp): Boolean = synchronized(lock) {
+        stamp.managerIdentity === navigationIdentity && !closed && shutdown == null &&
+            stamp.activeGeneration == null && stamp.submission == null &&
+            revision == stamp.revision && nextGeneration == stamp.lastGeneration &&
+            active == null && retained?.number == stamp.retainedGeneration &&
+            pending == null && pendingNavigationSubmission == null &&
+            values.value.state == DeviceConnectionState.DISCONNECTED && values.value.token == null &&
+            deviceValue == null
+    }
+
+    /** A quiescent offline witness may follow its first exposed successor, not a later replacement. */
+    fun captureOfflineNavigationLifecycle(stamp: NavigationLifecycleStamp): OfflineNavigationLifecycle? =
+        synchronized(lock) {
+            if (!isOfflineNavigationLifecycleCurrent(stamp)) null
+            else OfflineNavigationLifecycle(stamp, navigationExposureCount, retained?.target)
+        }
+
+    fun isFirstNavigationSessionAfterOffline(
+        offline: OfflineNavigationLifecycle,
+        token: SessionToken,
+        registry: RuntimePublicationRegistryIdentity,
+        graph: RuntimePublishableServices,
+    ): Boolean = synchronized(lock) {
+        val stamp = offline.lifecycle
+        val owner = active ?: return@synchronized false
+        val exposure = owner.navigationExposure ?: return@synchronized false
+        if (stamp.managerIdentity !== navigationIdentity || offline.exposureCount == Long.MAX_VALUE ||
+            navigationExposureCount != offline.exposureCount + 1 ||
+            owner.number <= stamp.lastGeneration || nextGeneration != owner.number ||
+            !isInitialNavigationSession(captureNavigationLifecycle(), token, registry, graph)
+        ) return@synchronized false
+        val submission = owner.navigationSubmission
+        if (submission != null) {
+            stamp.revision != Long.MAX_VALUE && submission.revision == stamp.revision + 1 &&
+                submission.startGeneration == stamp.lastGeneration && !submission.isRevoked() &&
+                !submission.interposedOwner && submission.firstExposure === exposure
+        } else {
+            val rebuild = owner.navigationRebuild ?: return@synchronized false
+            stamp.retainedGeneration != null && offline.retainedTarget != null &&
+                owner.target == offline.retainedTarget && revision == stamp.revision &&
+                !rebuild.isRevoked() && rebuild.coordinatorGeneration == reconnectionCoordinator.reconnectGeneration
+        }
+    }
+
+    fun isNavigationSessionCurrent(token: SessionToken, allowUnpublished: Boolean = false): Boolean =
+        synchronized(lock) {
+            val owner = active
+            owner != null && shutdown == null && isCurrent(owner) && !owner.job.isCancelled &&
+                owner.operation?.isCancelled != true && hasLiveEstablishmentLocked(owner) &&
+                owner.navigationSubmission?.isRevoked() != true && owner.navigationRebuild?.isRevoked() != true &&
+                owner.token == token &&
+                (values.value.token == token || allowUnpublished && values.value.token == null)
+        }
+
+    fun isInitialNavigationSession(
+        stamp: NavigationLifecycleStamp,
+        token: SessionToken,
+        registry: RuntimePublicationRegistryIdentity,
+        graph: RuntimePublishableServices,
+    ): Boolean = synchronized(lock) manager@{
+        val owner = active ?: return@manager false
+        val exposure = owner.navigationExposure ?: return@manager false
+        if (stamp.managerIdentity !== navigationIdentity || !isNavigationSessionCurrent(token, allowUnpublished = true) ||
+            owner.operation?.isCancelled == true || exposure.managerIdentity !== navigationIdentity ||
+            exposure.epoch != processEpoch || exposure.ownerNumber != owner.number ||
+            exposure.ownerRevision != owner.revision || exposure.token != token ||
+            exposure.session.get() !== owner.session || exposure.graph.get() !== graph ||
+            exposure.slot.identity !== registry || exposure.submission !== owner.navigationSubmission
+        ) return@manager false
+        val slot = exposure.slot
+        val fence = exposure.fence
+        synchronized(slot.monitor) {
+            synchronized(fence.monitor) graph@{
+                if (slot.live !== graph || fence.closed || !fence.published || fence.withdrawn ||
+                    fence.registry !== registry ||
+                    !fence.belongsTo(graph)
+                ) return@graph false
+                if (stamp.activeGeneration != null) {
+                    stamp.activeGeneration == owner.number && stamp.revision == revision &&
+                        stamp.lastGeneration == nextGeneration
+                } else {
+                    val submission = owner.navigationSubmission ?: return@graph false
+                    if (stamp.retainedGeneration != null || stamp.exposureAtCapture ||
+                        submission.isRevoked() || submission.interposedOwner || submission.firstExposure !== exposure ||
+                        owner.number <= stamp.lastGeneration || nextGeneration != owner.number
+                    ) return@graph false
+                    if (stamp.submission != null) {
+                        stamp.submission === submission && stamp.revision == submission.revision
+                    } else {
+                        stamp.revision != Long.MAX_VALUE && submission.revision == stamp.revision + 1 &&
+                            submission.startGeneration == stamp.lastGeneration
+                    }
+                }
+            }
+        }
+    }
+
+    internal fun isPublicationAuthorityCurrent(authority: RuntimePublicationAuthority): Boolean = synchronized(lock) {
+        isPublicationAuthorityCurrentLocked(authority)
+    }
+
+    private fun isPublicationAuthorityCurrentLocked(authority: RuntimePublicationAuthority): Boolean {
+        val owner = authority.owner
+        return authority.manager === this && shutdown == null && active === owner && isCurrent(owner) &&
+            owner.session === authority.session && owner.token == authority.token &&
+            owner.ownership === authority.ownership && authority.registry != null &&
+            authority.registry === publicationRegistry && !owner.job.isCancelled && owner.operation?.isCancelled != true &&
+            hasLiveEstablishmentLocked(owner) &&
+            owner.navigationSubmission?.isRevoked() != true && owner.navigationRebuild?.isRevoked() != true
+    }
+
+    internal fun <T : RuntimePublishableServices> publishNavigationService(
+        authority: RuntimePublicationAuthority,
+        target: RuntimePublicationTarget<T>,
+    ): RuntimePublicationOutcome {
+        val published = RuntimePublicationOutcome.PUBLISHED
+        val alreadyPublished = RuntimePublicationOutcome.ALREADY_PUBLISHED
+        val stale = RuntimePublicationOutcome.STALE_OWNER
+        val closedGraph = RuntimePublicationOutcome.CLOSED_GRAPH
+        val invalid = RuntimePublicationOutcome.INVALID_TARGET
+        val differentRegistry = RuntimePublicationOutcome.DIFFERENT_REGISTRY
+        val displaced = RuntimePublicationOutcome.DISPLACED
+        val withdrawn = RuntimePublicationOutcome.WITHDRAWN
+        synchronized(lock) {
+            if (!isPublicationAuthorityCurrentLocked(authority)) return stale
+            val owner = authority.owner
+            val slot = target.slot
+            val fence = target.fence
+            synchronized(slot.monitor) {
+                synchronized(fence.monitor) {
+                    if (!isPublicationAuthorityCurrentLocked(authority)) return stale
+                    if (fence.closed) return closedGraph
+                    if (!fence.belongsTo(target.graph) || target.session !== authority.session ||
+                        target.token != authority.token || fence.registry !== authority.registry
+                    ) return invalid
+                    if (fence.registry !== slot.identity) return differentRegistry
+                    if (fence.withdrawn) return withdrawn
+                    if (fence.published) {
+                        if (slot.live !== target.graph) return displaced
+                        val existing = owner.navigationExposure ?: return invalid
+                        if (existing.managerIdentity !== navigationIdentity || existing.epoch != processEpoch ||
+                            existing.ownerNumber != owner.number || existing.ownerRevision != owner.revision ||
+                            existing.session.get() !== authority.session || existing.token != authority.token ||
+                            existing.slot !== slot || existing.graph.get() !== target.graph ||
+                            existing.fence !== fence || existing.submission !== owner.navigationSubmission
+                        ) return invalid
+                        return alreadyPublished
+                    }
+                    if (owner.navigationExposure != null) return invalid
+                    val submission = owner.navigationSubmission
+                    if (submission != null &&
+                        (submission.revision != owner.revision || submission.work !== owner.operation)
+                    ) return invalid
+                    val nextCreated = Math.incrementExact(slot.created)
+                    val nextExposureCount = Math.incrementExact(navigationExposureCount)
+                    val exposure = NavigationExposure(
+                        navigationIdentity, processEpoch, owner.number, owner.revision, submission,
+                        WeakReference(authority.session), authority.token, slot,
+                        WeakReference<RuntimePublishableServices>(target.graph), fence,
+                    )
+                    val firstExposureOwner = submission?.takeIf { it.firstExposure == null }
+                    if (!isPublicationAuthorityCurrentLocked(authority)) return stale
+                    fence.published = true
+                    owner.navigationExposure = exposure
+                    if (firstExposureOwner != null) firstExposureOwner.firstExposure = exposure
+                    navigationExposureCount = nextExposureCount
+                    slot.created = nextCreated
+                    slot.live = target.graph
+                    return published
+                }
+            }
+        }
+    }
+
     private var nextGeneration = 0L
     private var revision = 0L
+    private var navigationExposureCount = 0L
     private var active: RadioGeneration? = null
     private var retained: RadioGeneration? = null
+    private val channelOperationLeases = mutableSetOf<ChannelOperationLease>()
+    private val deviceWrites = mutableSetOf<DeviceWriteContext>()
+
+    fun captureDeviceWrite(): Pair<SessionToken, DeviceDTO>? = synchronized(lock) {
+        val owner = active ?: return@synchronized null
+        val token = owner.token ?: return@synchronized null
+        val device = deviceValue ?: return@synchronized null
+        if (!isCurrent(owner) || !owner.job.isActive || !hasLiveEstablishmentLocked(owner) || owner.channelOperationsRetired ||
+            values.value.token != token || !values.value.state.isConnected ||
+            owner.device?.id != device.id || device.radioId != token.radioId) return@synchronized null
+        token to device
+    }
+
+    /**
+     * Orders a captured generation's awaited device edit before retirement completes. A null result
+     * refuses stale admission; an admitted callback retains its drain until terminal commit/rollback.
+     */
+    suspend fun <T : Any> withDeviceWrite(
+        token: SessionToken,
+        deviceId: UUID,
+        block: suspend () -> T,
+    ): T? = withDeviceWriteLease(token, deviceId) { block() }
+
+    suspend fun <T : Any> withDeviceWriteLease(
+        token: SessionToken,
+        deviceId: UUID,
+        block: suspend (isLeaseCurrent: () -> Boolean) -> T,
+    ): T? {
+        val caller = currentCoroutineContext()
+        caller.ensureActive()
+        check(caller[DeviceWriteContext]?.active != true &&
+            caller[ChannelOperationContext]?.active != true) {
+            "A generation write cannot nest in an owned generation operation"
+        }
+        val marker = synchronized(lock) {
+            val owner = active
+            if (owner == null || !isCurrent(owner) || !owner.job.isActive || !hasLiveEstablishmentLocked(owner) ||
+                owner.channelOperationsRetired || owner.token != token ||
+                owner.device?.id != deviceId || owner.device?.radioId != token.radioId ||
+                values.value.token != token || !values.value.state.isConnected) {
+                return null
+            }
+            DeviceWriteContext(this, owner, token, deviceId).also { deviceWrites += it }
+        }
+        try {
+            val isLeaseCurrent = {
+                synchronized(lock) {
+                    marker.active && marker in deviceWrites &&
+                        marker.token == token && marker.deviceId == deviceId
+                }
+            }
+            return withContext(marker) { block(isLeaseCurrent) }
+        } finally {
+            val drained = synchronized(lock) {
+                marker.active = false
+                deviceWrites.remove(marker)
+                readyGenerationDrainLocked(marker.generation)
+            }
+            drained?.complete(Unit)
+        }
+    }
+
+    suspend fun <T> withChannelOperationScope(
+        block: suspend (ChannelIdentityWriteScope) -> T,
+    ): T {
+        check(currentCoroutineContext()[ChannelOperationContext]?.active != true) {
+            "A channel operation cannot reacquire its process lane"
+        }
+        val marker = ChannelOperationContext(this)
+        // Install the inherited deadlock guard before minting the exact-Job process capability.
+        return withContext(marker) {
+            try {
+                ChannelIdentityMutex.PROCESS.withChannelOperationScope(block)
+            } finally {
+                marker.active = false
+            }
+        }
+    }
+
+    suspend fun <T> withChannelOperationLease(
+        token: SessionToken,
+        session: MeshCoreSession,
+        radioId: RadioId,
+        identityScope: ChannelIdentityWriteScope,
+        block: suspend (ChannelOperationLease) -> T,
+    ): T {
+        ChannelIdentityMutex.PROCESS.requireChannelOperationScope(identityScope)
+        val marker = currentCoroutineContext()[ChannelOperationContext]
+        check(marker != null && marker.active && marker.manager === this && !marker.leased) {
+            "Channel leases require this manager's owned operation callback"
+        }
+        val job = checkNotNull(currentCoroutineContext()[Job])
+        val lease = synchronized(lock) {
+            val owner = active
+            check(owner != null && isCurrent(owner) && owner.job.isActive && hasLiveEstablishmentLocked(owner) &&
+                !owner.channelOperationsRetired && owner.target != ConnectionTarget.Simulator &&
+                owner.token == token && owner.session === session && token.radioId == radioId &&
+                owner.device?.radioId == radioId &&
+                values.value.token == token && values.value.state.isConnected &&
+                owner.services != null && owner.ownership != null &&
+                channelOperationLeases.none { it.ownerJob === job }) {
+                "Channel operation does not belong to the current physical radio session"
+            }
+            checkNotNull(owner.ownership).verifyReturned(checkNotNull(owner.services).services)
+            ChannelOperationLease(this, owner, token, session, identityScope, job).also {
+                channelOperationLeases += it
+                marker.leased = true
+            }
+        }
+        try {
+            return block(lease)
+        } finally {
+            val drained = synchronized(lock) {
+                channelOperationLeases.remove(lease)
+                marker.leased = false
+                readyGenerationDrainLocked(lease.generation)
+            }
+            drained?.complete(Unit)
+        }
+    }
+
+    private suspend fun <T> withChannelLeaseIdentity(
+        lease: ChannelOperationLease,
+        radioId: RadioId,
+        block: suspend () -> T,
+    ): T {
+        requireChannelLease(lease, radioId)
+        return lease.identityScope.withChannelIdentityMutation {
+            requireChannelLease(lease, radioId)
+            block()
+        }
+    }
+
+    private suspend fun requireChannelLease(lease: ChannelOperationLease, radioId: RadioId) {
+        val caller = currentCoroutineContext()
+        caller.ensureActive()
+        check(caller[Job] === lease.ownerJob) { "Channel lease belongs to a different callback Job" }
+        ChannelIdentityMutex.PROCESS.requireChannelOperationScope(lease.identityScope)
+        synchronized(lock) {
+            check(lease.manager === this && lease in channelOperationLeases &&
+                lease.radioId == radioId && lease.generation.token == lease.token &&
+                lease.generation.session === lease.session) {
+                "Channel lease is foreign, expired, or bound to a different radio session"
+            }
+        }
+    }
+
+    private fun retireChannelOperationsLocked(owner: RadioGeneration): CompletableDeferred<Unit> {
+        owner.channelOperationsRetired = true
+        return owner.channelOperationsDrained ?: CompletableDeferred<Unit>().also { drained ->
+            // This new deferred has no waiters until it is published below.
+            if (channelOperationLeases.none { it.generation === owner } &&
+                deviceWrites.none { it.generation === owner }) drained.complete(Unit)
+            owner.channelOperationsDrained = drained
+        }
+    }
+
+    private fun readyGenerationDrainLocked(owner: RadioGeneration): CompletableDeferred<Unit>? =
+        owner.channelOperationsDrained.takeIf {
+            owner.channelOperationsRetired &&
+            channelOperationLeases.none { it.generation === owner } &&
+                deviceWrites.none { it.generation === owner }
+        }
+
+    private suspend fun requireNoChannelOperationLease() {
+        val caller = currentCoroutineContext()
+        caller[RebuildOperation]?.let { origin ->
+            check((origin.retirementCaller ?: caller[Job]) === origin.callbackJob) {
+                "Only the original rebuild callback can synchronously retire its owned scope"
+            }
+            val root = synchronized(lock) { origin.generation.rebuildScopeJob }
+            if (root != null) {
+                rebuildSiblings(root, origin.retirementCaller ?: checkNotNull(caller[Job]))
+            }
+        }
+
+        val write = caller[DeviceWriteContext]
+        check(write == null || write.manager !== this || !write.active) {
+            "A device write or its child cannot await retirement of its inherited operation"
+        }
+        val marker = caller[ChannelOperationContext]
+        check(marker == null || marker.manager !== this || !marker.active || !marker.leased) {
+            "A channel callback or its child cannot await retirement of its inherited lease"
+        }
+        val job = caller[Job]
+        synchronized(lock) {
+            check(channelOperationLeases.none { it.ownerJob === job }) {
+                "A channel operation cannot await retirement of its own lease"
+            }
+        }
+    }
+    private fun hasRebuildClaimLocked(origin: RebuildOperation?): Boolean =
+        origin == null || isCurrent(origin.generation) &&
+            !origin.generation.channelOperationsRetired && !origin.generation.physicalEnding
+
+    private fun requireRebuildClaimLocked(origin: RebuildOperation?) {
+        check(hasRebuildClaimLocked(origin)) {
+            "A retired rebuild callback cannot claim another lifecycle operation"
+        }
+    }
+
     private var pending: Deferred<Unit>? = null
+    private var pendingNavigationSubmission: NavigationSubmission? = null
     private var pendingTarget: ConnectionTarget? = null
     private var precedingStop: Deferred<TeardownReport>? = null
     private var activated = false
@@ -143,6 +695,12 @@ class ConnectionManager(
         pendingTarget == ConnectionTarget.Simulator || (active ?: retained)?.target == ConnectionTarget.Simulator
     }
     val allowedRepeatFrequencyRanges: SnapshotList<FrequencyRange> get() = synchronized(lock) { repeatRanges }
+    fun updateAllowedRepeatFrequencyRanges(ranges: SnapshotList<FrequencyRange>, expectedToken: SessionToken): Boolean =
+        synchronized(lock) {
+            if (currentDevice(expectedToken) == null) return@synchronized false
+            repeatRanges = ranges
+            true
+        }
     val detectedPlatform: DevicePlatform get() = synchronized(lock) { platformValue }
     val lastCleanChannelSync: Pair<RadioId, Instant>? get() = synchronized(lock) { cleanSync }
     val lastAttemptedChannelSync: Pair<RadioId, Instant>? get() = synchronized(lock) { attemptedSync }
@@ -160,7 +718,9 @@ class ConnectionManager(
             ?: reconnectionCoordinator.reconnectingDeviceId
     val activeReconnectDeviceId: UUID? get() = synchronized(lock) { rebuildDevice }
         ?: reconnectionCoordinator.reconnectingDeviceId
-    val reconnectionCoordinator = BLEReconnectionCoordinator(this, processScope, clock, reporter)
+    val reconnectionCoordinator = BLEReconnectionCoordinator(
+        this, processScope, clock, reporter, lifecycleLock = lock,
+    )
 
     init {
         processJob.invokeOnCompletion { cause ->
@@ -276,9 +836,13 @@ class ConnectionManager(
         forceReconnect: Boolean,
         expectedRevision: Long? = null,
     ) {
+        requireNoChannelOperationLease()
         currentCoroutineContext().ensureActive()
         synchronized(lock) { if (expectedRevision != null && revision != expectedRevision) return }
-        val initiatingJob = currentCoroutineContext()[Job]
+        val initiatingJob = checkNotNull(currentCoroutineContext()[Job])
+        val rebuildOrigin = currentCoroutineContext()[RebuildOperation]?.let {
+            RebuildOperation(it.generation, initiatingJob, it.callbackJob)
+        }
         val reentrant = currentCoroutineContext()[RuntimeOperation]?.owner === operationIdentity
         requireOpen()
         val normalized = normalizeTarget(target)
@@ -304,6 +868,7 @@ class ConnectionManager(
                 active?.target == normalized && values.value.state.isOperational
             }) return
         val submission = synchronized(lock) {
+            requireRebuildClaimLocked(rebuildOrigin)
             if (expectedRevision != null && revision != expectedRevision) return
             val duplicate = pending
             if (duplicate != null && !duplicate.isCompleted && !duplicate.isCancelled && pendingTarget == normalized) {
@@ -311,16 +876,18 @@ class ConnectionManager(
             }
             revision = Math.incrementExact(revision)
             val claimedRevision = revision
+            val startingGeneration = nextGeneration
             val previous = pending
             // Swift connect(to:) routes a connected BLE radio through switchDevice, whose catch fires onConnectionLost.
             val switching = (deviceId != null || normalized == ConnectionTarget.Simulator) && values.value.state.isConnected
             val oldOwners = detachOwnersLocked(DeviceConnectionState.CONNECTING, ConnectionIntent.WantsConnection(forceFullSync))
             val predecessor = precedingStop
-            val oldStop = cleanupScope.async(start = CoroutineStart.LAZY) {
+            val oldStop = cleanupScope.async(context = rebuildOrigin ?: kotlin.coroutines.EmptyCoroutineContext, start = CoroutineStart.LAZY) {
                 val inherited = predecessor?.await()
                 val own = closeCaptured(oldOwners, disconnectPhysical = true)
                 combineReports(inherited, own)
             }.also { precedingStop = it; it.start() }
+            lateinit var navigationSubmission: NavigationSubmission
             val task = processScope.async(context = RuntimeOperation(operationIdentity), start = CoroutineStart.LAZY) {
                 withOperation(reentrant) {
                     requireRevision(claimedRevision)
@@ -341,7 +908,17 @@ class ConnectionManager(
                         throw ConnectionError.DeviceNotFound()
                     }
                     requireRevision(claimedRevision)
-                    if (deviceId != null && tryAdoptOrReject(normalized, forceFullSync, breakGlass = breakGlass)) return@withOperation
+                    if (deviceId != null && tryAdoptOrReject(
+                            normalized, forceFullSync, breakGlass = breakGlass, navigationSubmission = navigationSubmission,
+                            initiatingJob = initiatingJob,
+                        )) {
+                        synchronized(lock) {
+                            (active ?: retained)?.takeIf {
+                                it.revision == claimedRevision && it.initiatingJob === initiatingJob
+                            }?.let { completeEstablishment(it) }
+                        }
+                        return@withOperation
+                    }
                     // An owned link whose adoption failed published DISCONNECTED; Swift sets .connecting again.
                     if (connectionState != DeviceConnectionState.CONNECTING) publish(claimedRevision) { connectingSnapshot() }
                     val attempts = if (deviceId == null) 1 else
@@ -349,12 +926,16 @@ class ConnectionManager(
                     var lastFailure: Exception? = null
                     for (attempt in 1..attempts) {
                         requireRevision(claimedRevision)
-                        val owner = newGeneration(normalized, claimedRevision)
+                        val owner = newGeneration(
+                            normalized, claimedRevision, navigationSubmission = navigationSubmission,
+                            initiatingJob = initiatingJob, establishmentJob = checkNotNull(currentCoroutineContext()[Job]),
+                        )
                         try {
                             establish(owner, forceFullSync)
                             requireCurrent(owner)
                             recordConnectionSuccess()
                             stopReconnectionWatchdog(initiatingJob)
+                            completeEstablishment(owner)
                             return@withOperation
                         } catch (cancelled: CancellationException) {
                             if (!isRetained(owner)) closeGeneration(owner, true, cancelled)
@@ -390,7 +971,18 @@ class ConnectionManager(
                     throw checkNotNull(lastFailure)
                 }
             }
+            navigationSubmission = NavigationSubmission(task, claimedRevision, startingGeneration, initiatingJob)
+            observeNavigationSubmissionCancellation(navigationSubmission)
+            task.invokeOnCompletion { failure ->
+                if (failure == null) synchronized(lock) {
+                    (active ?: retained)?.takeIf {
+                        it.operation === task && it.initiatingJob === initiatingJob &&
+                            isEstablishmentOwner(it) && it.establishmentCompleted && hasLiveEstablishmentLocked(it)
+                    }?.establishmentSettled = true
+                }
+            }
             pending = task
+            pendingNavigationSubmission = navigationSubmission
             pendingTarget = normalized
             Submission(task, previous, claimedRevision, true, oldStop, switching && oldOwners.isNotEmpty())
         }
@@ -402,6 +994,15 @@ class ConnectionManager(
             }
             work.start()
             work.await()
+            synchronized(lock) {
+                (active ?: retained?.takeIf { it.restorationRoute })?.takeIf { it.operation === work }?.let {
+                    if (!hasLiveEstablishmentLocked(it)) {
+                        throw CancellationException("Revoked shared connection completion")
+                    }
+                    // Await may observe final work state before completion handlers acquire this lock.
+                    settleEstablishmentLocked(it)
+                }
+            }
         }
         catch (cancelled: CancellationException) {
             finishFailedSubmission(submission, cancelled)
@@ -410,12 +1011,35 @@ class ConnectionManager(
             finishFailedSubmission(submission, failure)
             throw failure
         } finally {
-            synchronized(lock) { if (ownsSubmissionLocked(submission)) { pending = null; pendingTarget = null } }
+            synchronized(lock) {
+                if (ownsSubmissionLocked(submission)) {
+                    pending = null
+                    pendingNavigationSubmission = null
+                    pendingTarget = null
+                }
+            }
         }
     }
 
     private fun ownsSubmissionLocked(submission: Submission): Boolean =
         submission.ownsAttempt && !closed && revision == submission.revision && pending === submission.work
+
+    @OptIn(InternalCoroutinesApi::class)
+    private fun observeNavigationSubmissionCancellation(submission: NavigationSubmission) {
+        val cancellation = submission.initiatingJob?.invokeOnCompletion(onCancelling = true, invokeImmediately = true) { cause ->
+            if (cause != null) synchronized(lock) {
+                if (!submission.settled) submission.callerCancelled = true
+            }
+        }
+        submission.work.invokeOnCompletion { cause ->
+            synchronized(lock) {
+                if (cause == null && !submission.callerCancelled && submission.initiatingJob?.isCancelled != true) {
+                    submission.settled = true
+                }
+            }
+            cancellation?.dispose()
+        }
+    }
 
     private suspend fun finishFailedSubmission(submission: Submission, primary: Throwable) {
         if (!submission.ownsAttempt) return
@@ -428,12 +1052,23 @@ class ConnectionManager(
             submission.work.join()
             try {
                 val abortedOwner = synchronized(lock) {
-                    if (ownsSubmissionLocked(submission) && submission.work.isCancelled) {
-                        active?.takeIf { it.revision == submission.revision && it.operation === submission.work }
+                    if (ownsSubmissionLocked(submission)) {
+                        (active ?: retained?.takeIf { it.restorationRoute })?.takeIf {
+                            it.revision == submission.revision && it.operation === submission.work
+                        }?.let {
+                            if (!submission.work.isCancelled && it.establishmentCompleted &&
+                                hasLiveEstablishmentLocked(it)) {
+                                settleEstablishmentLocked(it)
+                            }
+                            it.takeIf { owner ->
+                                submission.work.isCancelled || !owner.establishmentSettled
+                            }
+                        }
                     } else null
                 }
                 if (abortedOwner != null) {
                     val report = closeGeneration(abortedOwner, true, primary)
+                    synchronized(lock) { if (retained === abortedOwner) retained = null }
                     if (!report.isComplete) reporter.report(RuntimeDiagnostic.Teardown(report))
                 }
                 val stopped = submission.stop?.await()
@@ -598,6 +1233,7 @@ class ConnectionManager(
             SessionInputs(token, session, this, owner.scope), device,
             serviceCallbacks(owner, token),
             transportType = link.type,
+            publication = RuntimePublicationAuthority(this, owner, session, token, ownership, publicationRegistry),
         ), ownership)
         ownership.verifyReturned(services)
         synchronized(lock) {
@@ -605,9 +1241,19 @@ class ConnectionManager(
             owner.services = OwnedRadioServices(services, ownership, context)
         }
         requireCurrent(owner)
-        devices.saveDevice(device)
+        if (existing == null) {
+            if (!devices.insertDeviceIfAbsent(device)) throw DeviceWriteConflict()
+        } else {
+            devices.editDevice(deviceId, isCurrent = { isCurrent(owner) }) { latest ->
+                DeviceDTO.fromConnection(deviceId, radioId, info, capabilities, autoAdd, latest, methods, clock.instant)
+                    .copy(isActive = latest.isActive, lastConnected = latest.lastConnected)
+            } ?: throw ConnectionError.DeviceNotFound()
+        }
         requireCurrent(owner)
-        devices.setActiveDevice(device.id)
+        if (!devices.activateDeviceIfCurrent(device.id) { isCurrent(owner) }) {
+            requireCurrent(owner)
+            throw DeviceWriteConflict()
+        }
         requireCurrent(owner)
         val activatedDevice = devices.fetchDevice(device.id) ?: throw ConnectionError.DeviceNotFound()
         requireCurrent(owner)
@@ -697,6 +1343,7 @@ class ConnectionManager(
             RuntimeServiceInputs(
                 SessionInputs(token, session, this, owner.scope), device, serviceCallbacks(owner, token),
                 transportType = link.type,
+                publication = RuntimePublicationAuthority(this, owner, session, token, ownership, publicationRegistry),
             ),
             ownership,
         )
@@ -709,7 +1356,10 @@ class ConnectionManager(
         requireCurrent(owner)
         simulator.seedSimulator()
         requireCurrent(owner)
-        devices.setActiveDevice(device.id)
+        if (!devices.activateDeviceIfCurrent(device.id) { isCurrent(owner) }) {
+            requireCurrent(owner)
+            throw DeviceWriteConflict()
+        }
         requireCurrent(owner)
         val activatedDevice = devices.fetchDevice(device.id) ?: throw ConnectionError.DeviceNotFound()
         requireCurrent(owner)
@@ -797,14 +1447,20 @@ class ConnectionManager(
         reason: RuntimeDisconnectReason,
         expectedOwner: RadioGeneration? = null,
     ): Pair<TeardownReport, Long>? {
+        requireNoChannelOperationLease()
+        val rebuildOrigin = currentCoroutineContext()[RebuildOperation]?.let {
+            RebuildOperation(it.generation, checkNotNull(currentCoroutineContext()[Job]), it.callbackJob)
+        }
         val reentrant = currentCoroutineContext()[RuntimeOperation]?.owner === operationIdentity
         val before = snapshot.value
         val (cleanup, expectedRevision) = synchronized(lock) {
+            requireRebuildClaimLocked(rebuildOrigin)
             if (expectedOwner != null && !ownsIdentityRecovery(expectedOwner)) return null
             revision = Math.incrementExact(revision)
             val expectedRevision = revision
             val work = pending
             pending = null
+            pendingNavigationSubmission = null
             pendingTarget = null
             deviceValue = null
             repeatRanges = SnapshotList.empty()
@@ -815,7 +1471,7 @@ class ConnectionManager(
             } else publishLocked(DeviceConnectionState.DISCONNECTED, ConnectionState.Disconnected, null, null)
             val owners = detachOwnersLocked(DeviceConnectionState.DISCONNECTED)
             val predecessor = precedingStop
-            val cleanup = cleanupScope.async(start = CoroutineStart.LAZY) {
+            val cleanup = cleanupScope.async(context = rebuildOrigin ?: kotlin.coroutines.EmptyCoroutineContext, start = CoroutineStart.LAZY) {
                 val inherited = predecessor?.await()
                 if (!reentrant) work?.cancelAndJoin()
                 val own = closeCaptured(owners, disconnectPhysical = true)
@@ -861,6 +1517,10 @@ class ConnectionManager(
     }
 
     override suspend fun teardownSessionForReconnect() {
+        requireNoChannelOperationLease()
+        check(currentCoroutineContext()[RebuildOperation] == null) {
+            "A rebuild callback cannot synchronously start reconnect teardown"
+        }
         val old = synchronized(lock) {
             active?.also {
                 active = null
@@ -881,10 +1541,20 @@ class ConnectionManager(
     }
 
     override suspend fun rebuildSession(deviceId: UUID) {
+        requireNoChannelOperationLease()
+        check(currentCoroutineContext()[RebuildOperation] == null) {
+            "A rebuild callback cannot synchronously claim reconnect lifecycle work"
+        }
         val reentrant = currentCoroutineContext()[RuntimeOperation]?.owner === operationIdentity
         val expectedCoordinator = reconnectionCoordinator.reconnectGeneration
         val expectedRevision = synchronized(lock) { revision }
         val old = synchronized(lock) { retained ?: active }
+        synchronized(lock) {
+            if (old?.restorationRoute == true && old.initiatingJob != null &&
+                !hasLiveEstablishmentLocked(old)) {
+                throw CancellationException("Revoked restoration adoption")
+            }
+        }
         val target = old?.target ?: platform.targetForDevice(deviceId) ?: throw ConnectionError.DeviceNotFound()
         rebuildClaimed(deviceId, target, old, expectedRevision, expectedCoordinator, reentrant)
     }
@@ -897,41 +1567,105 @@ class ConnectionManager(
         expectedCoordinator: Long,
         reentrant: Boolean,
     ) {
+        requireNoChannelOperationLease()
+        val initiatingJob = checkNotNull(currentCoroutineContext()[Job])
+        val navigationRebuild = NavigationRebuild(expectedCoordinator, initiatingJob)
         synchronized(lock) {
             if (!wantsCurrent(expectedRevision)) throw CancellationException("Superseded rebuild claim")
             if (rebuildDevice != null && rebuildDevice != deviceId) throw CancellationException("Superseded session rebuild")
             rebuildDevice = deviceId
         }
+        val cancellation = observeNavigationRebuildCancellation(navigationRebuild)
         try {
+            if (old?.restorationRoute == true && old.initiatingJob != null) {
+                val work = synchronized(lock) { old.operation }
+                    ?: throw CancellationException("Restoration has no original work")
+                if (!work.isCompleted && reentrant) {
+                    throw CancellationException("Restoration cannot transfer its unfinished own work")
+                }
+                work.await()
+                synchronized(lock) { settleEstablishmentLocked(old) }
+            }
             withOperation(reentrant) {
                 if (!wantsCurrent(expectedRevision) || reconnectionCoordinator.reconnectGeneration != expectedCoordinator) {
                     throw CancellationException("Superseded session rebuild")
                 }
+                synchronized(lock) {
+                    if (old?.restorationRoute == true && old.initiatingJob != null &&
+                        (!old.establishmentSettled || !hasLiveEstablishmentLocked(old) || !isRelevant(old))) {
+                        throw CancellationException("Revoked restoration transfer")
+                    }
+                }
                 // WP-107's retained-link receipt is not a new physical generation: close it before reacquisition.
                 if (old != null) closeGeneration(old, disconnectPhysical = true)
                 synchronized(lock) { if (retained === old) retained = null; if (active === old) active = null }
-                val owner = newGeneration(target, expectedRevision)
+                val owner = newGeneration(
+                    target, expectedRevision, navigationRebuild = navigationRebuild,
+                    initiatingJob = initiatingJob, reconnectGeneration = expectedCoordinator,
+                )
                 try {
-                    establish(owner, (connectionIntent as? ConnectionIntent.WantsConnection)?.forceFullSync == true, reconnecting = true)
-                    requireCurrent(owner)
-                    if (reconnectionCoordinator.reconnectGeneration != expectedCoordinator) throw CancellationException("Stale rebuild completion")
-                    recordConnectionSuccess()
-                    stopReconnectionWatchdog()
+                    coroutineScope {
+                        val establishmentJob = checkNotNull(currentCoroutineContext()[Job])
+                        synchronized(lock) {
+                            requireCurrent(owner)
+                            check(!owner.channelOperationsRetired) { "Rebuild retired before scope installation" }
+                            owner.establishmentJob = establishmentJob
+                            owner.rebuildScopeJob = establishmentJob
+                        }
+                        val rebuildOrigin = RebuildOperation(owner)
+                        withContext(rebuildOrigin + RuntimeOperation(operationIdentity)) {
+                            rebuildOrigin.callbackJob = checkNotNull(currentCoroutineContext()[Job])
+                            establish(owner, (connectionIntent as? ConnectionIntent.WantsConnection)?.forceFullSync == true, reconnecting = true)
+                            synchronized(lock) {
+                                if (!isCurrent(owner) || navigationRebuild.isRevoked() ||
+                                    reconnectionCoordinator.reconnectGeneration != expectedCoordinator
+                                ) throw CancellationException("Stale rebuild completion")
+                                recordConnectionSuccess()
+                            }
+                            stopReconnectionWatchdog(initiatingJob)
+                            completeEstablishment(owner)
+                        }
+                    }
+                    synchronized(lock) {
+                        if (navigationRebuild.isRevoked()) throw CancellationException("Revoked navigation rebuild")
+                        settleEstablishmentLocked(owner)
+                        navigationRebuild.completed = true
+                    }
                 } catch (failure: Exception) {
-                    closeGeneration(owner, disconnectPhysical = false, primary = failure)
+                    if (!synchronized(lock) { owner.channelOperationsRetired }) {
+                        closeGeneration(owner, disconnectPhysical = false, primary = failure)
+                    }
                     synchronized(lock) { if (active === owner) { active = null; retained = owner } }
                     throw failure
                 }
             }
         } finally {
+            cancellation?.dispose()
             synchronized(lock) { if (rebuildDevice == deviceId) rebuildDevice = null }
         }
     }
 
+    @OptIn(InternalCoroutinesApi::class)
+    private fun observeNavigationRebuildCancellation(rebuild: NavigationRebuild): DisposableHandle? =
+        rebuild.caller?.invokeOnCompletion(onCancelling = true, invokeImmediately = true) { cause ->
+            if (cause != null) synchronized(lock) {
+                if (!rebuild.completed) rebuild.cancelled = true
+            }
+        }
+
     override suspend fun disconnectTransport() = disconnectTransport(requireComplete = false)
 
     suspend fun disconnectTransport(requireComplete: Boolean) {
-        val owner = synchronized(lock) { retained ?: active } ?: return
+        requireNoChannelOperationLease()
+        val origin = currentCoroutineContext()[RebuildOperation]
+        val owner = synchronized(lock) {
+            requireRebuildClaimLocked(origin)
+            (retained ?: active)?.also {
+                check(origin == null || origin.generation === it) {
+                    "A rebuild callback cannot retire a different generation"
+                }
+            }
+        } ?: return
         val report = (if (requireComplete) revalidateRetainedTeardown(owner) else null) ?: closeGeneration(owner, true)
         synchronized(lock) { if (retained === owner) retained = null; if (active === owner) active = null }
         if (!report.isComplete) {
@@ -962,6 +1696,10 @@ class ConnectionManager(
     }
 
     override suspend fun handleReconnectionFailure() {
+        requireNoChannelOperationLease()
+        check(currentCoroutineContext()[RebuildOperation] == null) {
+            "A rebuild callback cannot synchronously claim reconnect lifecycle work"
+        }
         val expectedCoordinator = reconnectionCoordinator.reconnectGeneration
         val expectedRevision = synchronized(lock) { revision }
         val owner = synchronized(lock) {
@@ -1136,7 +1874,13 @@ class ConnectionManager(
     fun resetPreserveBudgetAfterDeviceSwitch() = recordConnectionSuccess()
 
     suspend fun switchDevice(target: ConnectionTarget) {
-        synchronized(lock) { cleanSync = null; attemptedSync = null }
+        requireNoChannelOperationLease()
+        val origin = currentCoroutineContext()[RebuildOperation]
+        synchronized(lock) {
+            requireRebuildClaimLocked(origin)
+            cleanSync = null
+            attemptedSync = null
+        }
         // The owned submission reports connection loss once, after its captured generation is torn down.
         connectAttempt(target, forceFullSync = true, forceReconnect = false)
         if (connectionState.isOperational) resetPreserveBudgetAfterDeviceSwitch()
@@ -1159,7 +1903,8 @@ class ConnectionManager(
         if (!isCurrent(owner)) return radioId
         if (radioId == null && before.publicKey != info.publicKey) {
             requireCurrent(owner)
-            devices.saveDevice(before.copy(publicKey = info.publicKey))
+            devices.editDevice(before.id, isCurrent = { isCurrent(owner) }) { it.copy(publicKey = info.publicKey) }
+                ?: throw ConnectionError.DeviceNotFound()
             requireCurrent(owner)
         }
         if (radioId != null || before.publicKey != info.publicKey) {
@@ -1203,13 +1948,23 @@ class ConnectionManager(
     }
 
     suspend fun close(): TeardownReport {
+        requireNoChannelOperationLease()
+        check(currentCoroutineContext()[RebuildOperation] == null) {
+            "A rebuild callback cannot synchronously shut down its own runtime"
+        }
         val reentrant = currentCoroutineContext()[RuntimeOperation]?.owner === operationIdentity
         val except = if (reentrant) synchronized(lock) { pending } else null
         return withContext(NonCancellable) { startShutdown(null, except).await() }
     }
-    suspend fun awaitShutdown(): TeardownReport = withContext(NonCancellable) {
-        val work = synchronized(lock) { shutdown } ?: throw IllegalStateException("Runtime has not shut down")
-        work.await()
+    suspend fun awaitShutdown(): TeardownReport {
+        requireNoChannelOperationLease()
+        check(currentCoroutineContext()[RebuildOperation] == null) {
+            "A rebuild callback cannot await shutdown draining its own scope"
+        }
+        return withContext(NonCancellable) {
+            val work = synchronized(lock) { shutdown } ?: throw IllegalStateException("Runtime has not shut down")
+            work.await()
+        }
     }
 
     private fun startShutdown(cause: Throwable?, except: Job? = null): Deferred<TeardownReport> = synchronized(lock) {
@@ -1219,7 +1974,9 @@ class ConnectionManager(
             stopReconnectionWatchdog()
             stopWiFiReconnection()
             stopHeartbeat()
-            val work = synchronized(lock) { pending.also { pending = null; pendingTarget = null } }
+            val work = synchronized(lock) {
+                pending.also { pending = null; pendingNavigationSubmission = null; pendingTarget = null }
+            }
             if (work !== except) work?.cancelAndJoin()
             val preceding = synchronized(lock) { precedingStop }
             val precedingReport = preceding?.await()
@@ -1237,14 +1994,65 @@ class ConnectionManager(
         }
     }
 
-    private fun newGeneration(target: ConnectionTarget, claimedRevision: Long): RadioGeneration = synchronized(lock) {
+    private fun newGeneration(
+        target: ConnectionTarget,
+        claimedRevision: Long,
+        navigationSubmission: NavigationSubmission? = null,
+        navigationRebuild: NavigationRebuild? = null,
+        initiatingJob: Job? = null,
+        establishmentJob: Job? = null,
+        reconnectGeneration: Long? = null,
+    ): RadioGeneration = synchronized(lock) {
         requireRevision(claimedRevision)
+        val pendingSubmission = pendingNavigationSubmission?.takeIf {
+            it.work === pending && it.revision == claimedRevision
+        }
+        if (navigationSubmission != null) requireNavigationSubmissionLocked(navigationSubmission, claimedRevision)
+        if (navigationSubmission == null && pendingSubmission != null) pendingSubmission.interposedOwner = true
         nextGeneration = Math.incrementExact(nextGeneration)
         RadioGeneration(nextGeneration, target, claimedRevision, context, processJob).also {
             active = it
             it.operation = pending
+            it.navigationSubmission = navigationSubmission
+            it.navigationRebuild = navigationRebuild
+            it.initiatingJob = initiatingJob
+            it.establishmentJob = establishmentJob
+            it.establishmentReconnectGeneration = reconnectGeneration
         }
     }
+
+    private fun requireNavigationSubmissionLocked(submission: NavigationSubmission, claimedRevision: Long) {
+        if (closed || shutdown != null || revision != claimedRevision || submission.revision != claimedRevision ||
+            pendingNavigationSubmission !== submission || pending !== submission.work ||
+            submission.work.isCompleted || submission.isRevoked()
+        ) throw CancellationException("Superseded navigation submission")
+    }
+
+    private fun hasLiveEstablishmentLocked(owner: RadioGeneration): Boolean =
+        (owner.establishmentReconnectGeneration == null ||
+            owner.establishmentReconnectGeneration == reconnectionCoordinator.reconnectGeneration) &&
+            (owner.establishmentSettled ||
+                (owner.initiatingJob?.isCancelled == false && owner.establishmentJob?.isCancelled == false &&
+                    (owner.establishmentCompleted ||
+                        (owner.initiatingJob?.isActive == true && owner.establishmentJob?.isActive == true))))
+
+    private fun completeEstablishment(owner: RadioGeneration) = synchronized(lock) {
+        if (!isEstablishmentOwner(owner)) throw CancellationException("Superseded establishment owner")
+        if (!hasLiveEstablishmentLocked(owner)) throw CancellationException("Superseded generation establishment")
+        owner.establishmentCompleted = true
+    }
+
+    private fun settleEstablishmentLocked(owner: RadioGeneration) {
+        if (!isEstablishmentOwner(owner)) throw CancellationException("Superseded establishment owner")
+        if (!owner.establishmentCompleted || !hasLiveEstablishmentLocked(owner)) {
+            throw CancellationException("Revoked generation settlement")
+        }
+        owner.establishmentSettled = true
+    }
+
+    private fun isEstablishmentOwner(owner: RadioGeneration): Boolean =
+        if (owner.restorationRoute) isRelevant(owner) && connectionIntent.wantsConnection
+        else isCurrent(owner)
 
     private suspend fun <T> withOperation(reentrant: Boolean, action: suspend () -> T): T =
         if (reentrant) action() else operations.withLock { action() }
@@ -1253,7 +2061,25 @@ class ConnectionManager(
         owner: RadioGeneration, disconnectPhysical: Boolean, primary: Throwable? = null,
         publishDisconnected: Boolean = true,
     ): TeardownReport {
-        synchronized(lock) {
+        requireNoChannelOperationLease()
+        val rebuildOrigin = currentCoroutineContext()[RebuildOperation]
+        val inheritedRebuild = rebuildOrigin?.generation === owner
+        val retirementCaller = if (inheritedRebuild) {
+            rebuildOrigin?.retirementCaller ?: checkNotNull(currentCoroutineContext()[Job])
+        } else null
+        val (rebuildScope, drainingCaller) = synchronized(lock) {
+            if (rebuildOrigin != null && rebuildOrigin.retirementCaller == null) {
+                requireRebuildClaimLocked(rebuildOrigin)
+                check(inheritedRebuild) { "A rebuild callback cannot retire a different generation" }
+            }
+            if (!owner.rebuildRetirementClaimed) {
+                owner.rebuildRetirementClaimed = true
+                owner.rebuildRetirementCaller = retirementCaller
+            }
+            check(!inheritedRebuild || owner.rebuildRetirementCaller === retirementCaller) {
+                "A rebuild callback cannot await another retirement of its own scope"
+            }
+            retireChannelOperationsLocked(owner)
             owner.correlationAccounting?.cancel()
             if (primary != null && provenForeignAdmission(primary, owner)) {
                 owner.link?.let { PhysicalOwnership.release(it.transport, owner.physicalOwner) }
@@ -1269,9 +2095,22 @@ class ConnectionManager(
                     publishLocked(DeviceConnectionState.DISCONNECTED, ConnectionState.Disconnected, null, values.value.issue)
                 }
             }
+            owner.rebuildScopeJob to owner.rebuildRetirementCaller
         }
+        if (drainingCaller == null) rebuildScope?.cancel()
         val serviceWork = synchronized(owner.lock) {
             owner.servicesClosed ?: cleanupScope.async(start = CoroutineStart.LAZY) {
+                if (drainingCaller == null) rebuildScope?.join()
+                else if (rebuildScope != null) {
+                    while (true) {
+                        val siblings = rebuildSiblings(rebuildScope, drainingCaller)
+                        if (siblings.isEmpty()) break
+                        siblings.forEach { it.cancel() }
+                        siblings.forEach { it.join() }
+                    }
+                }
+                val channelOperations = synchronized(lock) { retireChannelOperationsLocked(owner) }
+                channelOperations.await()
                 val issues = mutableListOf<TeardownIssue>()
                 suspend fun attempt(stage: LifecycleStage, action: suspend () -> Unit) {
                     try { action() } catch (failure: Exception) { issues += TeardownIssue(stage, failure) }
@@ -1334,6 +2173,22 @@ class ConnectionManager(
         return result
     }
 
+    private fun rebuildSiblings(root: Job, caller: Job): List<Job> {
+        fun path(job: Job): List<Job>? {
+            if (job === caller) return listOf(job)
+            for (child in job.children) {
+                val tail = path(child)
+                if (tail != null) return listOf(job) + tail
+            }
+            return null
+        }
+        val lineage = checkNotNull(path(root)) { "Rebuild retirement caller is not in the owned scope" }
+        return lineage.flatMapIndexed { index, job ->
+            val descendant = lineage.getOrNull(index + 1)
+            job.children.filter { it !== descendant }.toList()
+        }
+    }
+
     private suspend fun stopCurrent(disconnectPhysical: Boolean): TeardownReport {
         val owners = synchronized(lock) { detachOwnersLocked(DeviceConnectionState.DISCONNECTED) }
         return closeCaptured(owners, disconnectPhysical)
@@ -1341,7 +2196,10 @@ class ConnectionManager(
 
     private fun detachOwnersLocked(state: DeviceConnectionState, intent: ConnectionIntent = values.value.intent): List<RadioGeneration> {
         val owners = listOfNotNull(active, retained).distinct()
-        owners.forEach { it.correlationAccounting?.cancel() }
+        owners.forEach {
+            retireChannelOperationsLocked(it)
+            it.correlationAccounting?.cancel()
+        }
         active = null
         retained = null
         deviceValue = null
@@ -1449,8 +2307,24 @@ class ConnectionManager(
 
     private suspend fun tryAdoptOrReject(
         target: ConnectionTarget, forceFullSync: Boolean, health: Boolean = false, breakGlass: Boolean = false,
+        navigationSubmission: NavigationSubmission? = null,
+        initiatingJob: Job? = null,
     ): Boolean {
-        val expectedRevision = synchronized(lock) { revision }
+        val operation = checkNotNull(currentCoroutineContext()[Job])
+        val expectedRevision = synchronized(lock) {
+            if (navigationSubmission != null) {
+                requireNavigationSubmissionLocked(navigationSubmission, revision)
+                if (operation !== navigationSubmission.work) {
+                    throw CancellationException("Navigation submission is not the current operation")
+                }
+            }
+            revision
+        }
+        fun restorationRoute(): RadioGeneration =
+            ensureRestorationRoute(
+                target, expectedRevision, navigationSubmission = navigationSubmission,
+                initiatingJob = initiatingJob, establishmentJob = operation,
+            )
         val deviceId = (target as? ConnectionTarget.Bluetooth)?.deviceId ?: return false
         val state = platform.state(target)
         if (!wantsCurrent(expectedRevision)) throw CancellationException("Superseded platform query")
@@ -1462,12 +2336,12 @@ class ConnectionManager(
                 // DISCONNECTED tears the pending connect down and falls through to a fresh attempt that can surface
                 // the real failure (e.g. an invalidated bond) instead of deferring to the same doomed wait again.
                 reconnectionCoordinator.clearReconnectingDevice()
-                closeGeneration(ensureRestorationRoute(target, expectedRevision), disconnectPhysical = true)
+                closeGeneration(restorationRoute(), disconnectPhysical = true)
                 if (!wantsCurrent(expectedRevision)) throw CancellationException("Superseded break-glass")
                 return false
             }
             setIntent(ConnectionIntent.WantsConnection(forceFullSync))
-            ensureRestorationRoute(target, expectedRevision)
+            restorationRoute()
             reconnectionCoordinator.restartTimeout(deviceId)
             return true
         }
@@ -1478,7 +2352,7 @@ class ConnectionManager(
         var route: RadioGeneration? = null
         if (ours && state.phase == "idle") {
             setIntent(ConnectionIntent.WantsConnection(forceFullSync))
-            route = ensureRestorationRoute(target, expectedRevision)
+            route = restorationRoute()
             reconnectionCoordinator.handleEnteringAutoReconnect(deviceId)
             if (!wantsCurrent(expectedRevision)) throw CancellationException("Superseded adoption preparation")
             val adopted = platform.adoptSystemLink(target)
@@ -1504,11 +2378,42 @@ class ConnectionManager(
         throw LinkFailure.DeviceConnectedToOtherApp()
     }
 
-    private fun ensureRestorationRoute(target: ConnectionTarget, expectedRevision: Long): RadioGeneration {
-        val existing = synchronized(lock) { (active ?: retained)?.takeIf { it.target == target && it.revision == expectedRevision } }
-        if (existing != null) return existing
-        val owner = newGeneration(target, expectedRevision)
-        owner.restorationRoute = true
+    private fun ensureRestorationRoute(
+        target: ConnectionTarget,
+        expectedRevision: Long,
+        navigationSubmission: NavigationSubmission? = null,
+        initiatingJob: Job? = null,
+        establishmentJob: Job? = null,
+    ): RadioGeneration {
+        val (owner, created) = synchronized(lock) {
+            if (navigationSubmission != null) requireNavigationSubmissionLocked(navigationSubmission, expectedRevision)
+            val existing = (active ?: retained)?.takeIf {
+                it.target == target && it.revision == expectedRevision
+            }
+            if (existing != null) {
+                // A closed ordinary generation is still the reusable platform route; only restoration routes are revocable.
+                if (existing.restorationRoute && (!isRelevant(existing) || existing.channelOperationsRetired)) {
+                    throw CancellationException("Retired restoration route")
+                }
+                if (initiatingJob != null && !existing.establishmentSettled && !existing.channelOperationsRetired) {
+                    if (existing.initiatingJob != null && existing.initiatingJob !== initiatingJob) {
+                        throw CancellationException("Restoration already has an initiating operation")
+                    }
+                    existing.initiatingJob = initiatingJob
+                    existing.establishmentJob = establishmentJob
+                    existing.operation = pending
+                }
+                existing to false
+            } else {
+                newGeneration(
+                    target, expectedRevision, navigationSubmission = navigationSubmission,
+                    initiatingJob = initiatingJob, establishmentJob = establishmentJob,
+                ).also {
+                    it.restorationRoute = true
+                } to true
+            }
+        }
+        if (!created) return owner
         prepareLink(owner)
         return owner
     }
@@ -1607,6 +2512,39 @@ class ConnectionManager(
     /** Clears the auth-failure latch so the next failure episode for the same device re-presents recovery. */
     fun clearSurfacedAuthenticationFailure() { synchronized(lock) { authFailureDevice = null } }
 
+    /** A suspended producer must supply its originating token, never the token observed on return. */
+    fun sealOnboardingCompletion(expectedToken: SessionToken, attempt: OnboardingCompletionAttempt): Boolean =
+        synchronized(lock) {
+            val owner = active ?: return@synchronized false
+            owner.token == expectedToken && values.value.state.isConnected && isCurrent(owner) && attempt.trySeal()
+        }
+
+    fun replaceConnectedDevice(device: DeviceDTO, expectedToken: SessionToken): ConnectedDeviceEdit? = synchronized(lock) {
+        if (active?.token != expectedToken || !values.value.state.isConnected) return@synchronized null
+        replaceConnectedDevice(device)
+    }
+
+    fun currentDevice(expectedToken: SessionToken): DeviceDTO? = synchronized(lock) {
+        val owner = active ?: return@synchronized null
+        if (owner.token != expectedToken || !values.value.state.isConnected || !isCurrent(owner)) return@synchronized null
+        deviceValue
+    }
+
+    /** Only synchronous local publication; action must not perform I/O or start runtime operations. */
+    fun withCurrentSession(expectedToken: SessionToken, action: () -> Unit): Boolean = synchronized(lock) {
+        if (currentDevice(expectedToken) == null) return@synchronized false
+        action()
+        true
+    }
+
+    fun transformConnectedDevice(
+        expectedToken: SessionToken?,
+        transform: (DeviceDTO) -> DeviceDTO,
+    ): ConnectedDeviceEdit? = synchronized(lock) {
+        val current = if (expectedToken == null) deviceValue else currentDevice(expectedToken)
+        replaceConnectedDevice(transform(current ?: return@synchronized null))
+    }
+
     /** Swift updateDevice(with:) after a device edit, limited to the current generation's radio. */
     fun replaceConnectedDevice(device: DeviceDTO): ConnectedDeviceEdit? = synchronized(lock) {
         val owner = active ?: return@synchronized null
@@ -1656,16 +2594,27 @@ class ConnectionManager(
     private fun requireOpen() { synchronized(lock) { check(!closed && processJob.isActive) { "Connection runtime is closed" } } }
     private fun currentTransportType(): TransportType? = synchronized(lock) { (active ?: retained)?.link?.type }
     private suspend fun setIntent(intent: ConnectionIntent) {
-        val expected = synchronized(lock) { revision }
-        if (!setIntentIfCurrent(intent, expected)) throw CancellationException("Superseded connection request")
+        val origin = currentCoroutineContext()[RebuildOperation]
+        val expected = synchronized(lock) {
+            requireRebuildClaimLocked(origin)
+            origin?.generation?.revision ?: revision
+        }
+        if (!setIntentIfCurrent(intent, expected, origin)) throw CancellationException("Superseded connection request")
     }
-    private suspend fun setIntentIfCurrent(intent: ConnectionIntent, expected: Long): Boolean {
+    private suspend fun setIntentIfCurrent(
+        intent: ConnectionIntent,
+        expected: Long,
+        origin: RebuildOperation? = null,
+    ): Boolean {
+        fun mayCommit(): Boolean = synchronized(lock) {
+            !closed && revision == expected && hasRebuildClaimLocked(origin)
+        }
         currentCoroutineContext().ensureActive()
-        if (!isRevisionCurrent(expected)) return false
-        lastConnection.persistIntent(intent) { isRevisionCurrent(expected) }
+        if (!mayCommit()) return false
+        lastConnection.persistIntent(intent) { mayCommit() }
         currentCoroutineContext().ensureActive()
         return synchronized(lock) {
-            if (closed || revision != expected) false
+            if (!mayCommit()) false
             else {
                 publishLocked(intent = intent)
                 true

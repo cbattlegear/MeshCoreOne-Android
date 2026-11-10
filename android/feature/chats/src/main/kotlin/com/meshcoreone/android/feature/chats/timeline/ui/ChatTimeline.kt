@@ -139,6 +139,8 @@ fun ChatTimeline(
     showSenderName: Boolean = true,
     showsIncomingAvatars: Boolean = true,
     incomingAvatar: @Composable (MessageDTO) -> Unit = DefaultIncomingAvatar,
+    // Repeated deliveries may request the same message without replacing the timeline.
+    initialAnchorRequestId: Long? = null,
     messageBody: @Composable (MessageDTO, Boolean) -> Unit = DefaultMessageBody,
 ) {
     val visualRows = state.rows.asReversed()
@@ -155,7 +157,7 @@ fun ChatTimeline(
     val savedViewportAnchor = savedViewportMessageId?.let {
         TimelineScrollAnchor(UUID.fromString(it), savedViewportOffset)
     }
-    LaunchedEffect(state.initialAnchor, state.initialAnchorConsumed, visualRows) {
+    LaunchedEffect(state.initialAnchor, state.initialAnchorConsumed, visualRows, initialAnchorRequestId) {
         if (state.initialAnchorConsumed || visualRows.isEmpty()) return@LaunchedEffect
         val position = resolveInitialTimelinePosition(
             state.initialAnchor,

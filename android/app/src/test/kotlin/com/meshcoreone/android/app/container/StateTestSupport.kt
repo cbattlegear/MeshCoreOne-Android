@@ -17,6 +17,7 @@ import com.meshcoreone.android.core.connectivity.device.RemoveUnfavoritedResult
 import com.meshcoreone.android.core.connectivity.pairing.SystemPairedAccessory
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.RegionSelection
@@ -44,6 +45,9 @@ internal class FakeConnectionPort : AppConnectionPort {
     override val shouldDeferOpportunisticReconnect: Boolean get() = isPairingFlowActive
     override var isPairingFlowActive: Boolean = false
     val calls: MutableList<String> = Collections.synchronizedList(mutableListOf())
+    var currentToken: SessionToken? = null
+    val sessionTokens: MutableList<SessionToken> = Collections.synchronizedList(mutableListOf())
+    var beforeSessionUpdate: () -> Unit = {}
 
     // Pairing registry model.
     val paired = mutableListOf<SystemPairedAccessory>()
@@ -53,6 +57,10 @@ internal class FakeConnectionPort : AppConnectionPort {
     var lastRemoved: UUID? = null
     var connectFailure: Exception? = null
     var beforePicker: suspend () -> Unit = {}
+    var disconnectAction: suspend () -> Unit = {
+        connectionState = DeviceConnectionState.DISCONNECTED
+        connectedDevice = null
+    }
 
     override suspend fun activate() { calls += "activate" }
     override suspend fun appDidEnterBackground() { calls += "background" }
@@ -62,8 +70,7 @@ internal class FakeConnectionPort : AppConnectionPort {
     override fun clearSurfacedAuthenticationFailure() { calls += "clearAuthLatch" }
     override suspend fun disconnect(reason: RuntimeDisconnectReason) {
         calls += "disconnect:$reason"
-        connectionState = DeviceConnectionState.DISCONNECTED
-        connectedDevice = null
+        disconnectAction()
     }
     override suspend fun connectViaWiFi(host: String, port: UShort, forceFullSync: Boolean) { calls += "wifi:$host:$port" }
     override suspend fun connect(deviceId: UUID, forceReconnect: Boolean) {
@@ -91,12 +98,54 @@ internal class FakeConnectionPort : AppConnectionPort {
         return RemoveUnfavoritedResult(0, 0)
     }
     override fun updateDevice(info: SelfInfo, appliedRadioPresetId: String?) { calls += "updateDeviceInfo" }
+    override suspend fun updateDevice(info: SelfInfo, appliedRadioPresetId: String?, expectedToken: SessionToken): Boolean {
+        if (!acceptsSession(expectedToken)) return false
+        calls += "updateDeviceInfo"
+        return true
+    }
     override fun updateDevice(device: DeviceDTO) { calls += "updateDevice" }
+    override fun updateOCVSettings(device: DeviceDTO, expectedToken: SessionToken) { calls += "updateDevice" }
     override fun updateAutoAddConfig(config: AutoAddConfig) { calls += "autoAdd" }
+    override suspend fun updateAutoAddConfig(config: AutoAddConfig, expectedToken: SessionToken): Boolean {
+        if (!acceptsSession(expectedToken)) return false
+        calls += "autoAdd"
+        return true
+    }
     override fun updateClientRepeat(enabled: Boolean) { calls += "clientRepeat:$enabled" }
+    override suspend fun updateClientRepeat(enabled: Boolean, expectedToken: SessionToken): Boolean {
+        if (!acceptsSession(expectedToken)) return false
+        calls += "clientRepeat:$enabled"
+        return true
+    }
     override fun updatePathHashMode(mode: UByte) { calls += "pathHash:$mode" }
+    override suspend fun updatePathHashMode(mode: UByte, expectedToken: SessionToken): Boolean {
+        if (!acceptsSession(expectedToken)) return false
+        calls += "pathHash:$mode"
+        return true
+    }
     override fun updateDefaultFloodScopeName(name: String?) { calls += "floodScope:$name" }
+    override suspend fun updateDefaultFloodScopeName(name: String?, expectedToken: SessionToken): Boolean {
+        if (!acceptsSession(expectedToken)) return false
+        calls += "floodScope:$name"
+        return true
+    }
     override fun setAllowedRepeatFreqRanges(ranges: SnapshotList<FrequencyRange>) { calls += "repeatRanges" }
+    override fun setAllowedRepeatFreqRanges(ranges: SnapshotList<FrequencyRange>, expectedToken: SessionToken): Boolean {
+        if (!acceptsSession(expectedToken)) return false
+        calls += "repeatRanges"
+        return true
+    }
+    override fun withCurrentSession(expectedToken: SessionToken, action: () -> Unit): Boolean {
+        if (!acceptsSession(expectedToken)) return false
+        action()
+        return true
+    }
+
+    private fun acceptsSession(expectedToken: SessionToken): Boolean {
+        sessionTokens += expectedToken
+        beforeSessionUpdate()
+        return currentToken == expectedToken
+    }
 }
 
 /** Stores the selection as the production JSON text, so a round trip proves the stored form decodes to the same value. */

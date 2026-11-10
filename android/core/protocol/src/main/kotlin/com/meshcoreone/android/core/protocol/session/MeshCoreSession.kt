@@ -19,8 +19,11 @@ import com.meshcoreone.android.core.protocol.transport.MeshTransport
 import java.time.Instant
 import java.util.UUID
 import kotlin.coroutines.CoroutineContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.withContext
 
 class MeshCoreSession private constructor(
     transport: MeshTransport,
@@ -206,12 +209,70 @@ class MeshCoreSession private constructor(
             }
         }
     }
-    override suspend fun addContact(contact: MeshContact) {
+    override suspend fun addContact(contact: MeshContact) = addContact(contact, ContactWriteDispatch()) {}
+
+    override suspend fun addContact(contact: MeshContact, dispatch: ContactWriteDispatch, onCommitted: suspend () -> Unit) {
+        addContactConditionally(contact, dispatch, null, onCommitted)
+    }
+
+    override suspend fun addContactIf(
+        contact: MeshContact,
+        dispatch: ContactWriteDispatch,
+        shouldDispatch: suspend () -> Boolean,
+        onCommitted: suspend () -> Unit,
+    ) {
+        addContactConditionally(contact, dispatch, shouldDispatch, onCommitted)
+    }
+
+    private suspend fun addContactConditionally(
+        contact: MeshContact,
+        dispatch: ContactWriteDispatch,
+        shouldDispatch: (suspend () -> Boolean)?,
+        onCommitted: suspend () -> Unit,
+    ) {
+        dispatch.exchangeDispatch.claim()
         requireFullPublicKey(contact.publicKey, "addContact")
         validateContactPath(contact.outPathLength, contact.outPath)
-        simple(PacketBuilder.updateContact(contact))
+        core.exchange(dispatch.exchangeDispatch) {
+            dispatch.beforeDispatch()
+            if (shouldDispatch != null) {
+                val needed = try {
+                    shouldDispatch()
+                } catch (failure: Exception) {
+                    dispatch.markDefinitelyUnsent(failure)
+                    throw failure
+                }
+                if (!needed) {
+                    dispatch.markDefinitelyUnsent()
+                    return@exchange
+                }
+            }
+            try {
+                simple(PacketBuilder.updateContact(contact))
+                dispatch.markAccepted()
+            } catch (rejected: MeshCoreException.DeviceError) {
+                dispatch.markRejected(rejected)
+                throw rejected
+            } catch (invalid: MeshCoreException.InvalidInput) {
+                dispatch.markRejected(invalid)
+                throw invalid
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                dispatch.markUncertain(failure)
+                throw failure
+            }
+            // The radio has committed. Caller cancellation or teardown cannot undo this local tail.
+            withContext(NonCancellable) { onCommitted() }
+        }
     }
-    override suspend fun removeContact(publicKey: Bytes) { requireFullPublicKey(publicKey, "removeContact"); simple(PacketBuilder.removeContact(publicKey)) }
+    override suspend fun removeContact(publicKey: Bytes) = removeContact(publicKey, ChannelWriteDispatch())
+
+    override suspend fun removeContact(publicKey: Bytes, dispatch: ChannelWriteDispatch) {
+        dispatch.claim()
+        requireFullPublicKey(publicKey, "removeContact")
+        core.exchange(dispatch) { simple(PacketBuilder.removeContact(publicKey)) }
+    }
     override suspend fun resetPath(publicKey: Bytes) { requireFullPublicKey(publicKey, "resetPath"); simple(PacketBuilder.resetPath(publicKey)) }
     override suspend fun shareContact(publicKey: Bytes) { requireFullPublicKey(publicKey, "shareContact"); simple(PacketBuilder.shareContact(publicKey)) }
     override suspend fun exportContact(publicKey: Bytes?): String {
@@ -256,10 +317,27 @@ class MeshCoreSession private constructor(
         requirePrefix(destination, "sendMessage")
         return messageSent(PacketBuilder.sendMessage(destination, text, timestamp, attempt))
     }
+    override suspend fun sendMessage(
+        destination: Bytes, text: String, timestamp: Instant, attempt: UByte, dispatch: MessageWriteDispatch,
+    ): MessageSentInfo {
+        dispatch.claim()
+        requirePrefix(destination, "sendMessage")
+        val packet = PacketBuilder.sendMessage(destination, text, timestamp, attempt)
+        return core.exchange(dispatch.accounting) {
+            query(packet, "messageSent", errorMatcher = ::deviceError) { (it as? MeshEvent.MessageSent)?.info }
+        }
+    }
     suspend fun sendMessage(destination: Destination, text: String, timestamp: Instant = Instant.now(), attempt: UByte = 0u): MessageSentInfo =
         sendMessage(destination.publicKey(6), text, timestamp, attempt)
     override suspend fun sendChannelMessage(channel: UByte, text: String, timestamp: Instant) =
         simple(PacketBuilder.sendChannelMessage(channel, text, timestamp))
+    override suspend fun sendChannelMessage(
+        channel: UByte, text: String, timestamp: Instant, dispatch: MessageWriteDispatch,
+    ) {
+        dispatch.claim()
+        val packet = PacketBuilder.sendChannelMessage(channel, text, timestamp)
+        core.exchange(dispatch.accounting) { simple(packet) }
+    }
     override suspend fun sendCommand(destination: Bytes, command: String, timestamp: Instant): MessageSentInfo {
         requirePrefix(destination, "sendCommand")
         return messageSent(PacketBuilder.sendCommand(destination, command, timestamp))

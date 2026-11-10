@@ -11,6 +11,7 @@
 package com.meshcoreone.android.core.protocol.session
 
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.event.*
 import com.meshcoreone.android.core.protocol.model.*
 import java.time.Instant
@@ -29,6 +30,21 @@ interface MessagingSessionOps {
         destination: Bytes, text: String, timestamp: Instant = Instant.now(), attempt: UByte = 0u,
     ): MessageSentInfo
     suspend fun sendChannelMessage(channel: UByte, text: String, timestamp: Instant = Instant.now())
+    /** Unsupported implementations preserve the old call and leave cancellation accounting UNKNOWN. */
+    suspend fun sendMessage(
+        destination: Bytes, text: String, timestamp: Instant = Instant.now(), attempt: UByte = 0u,
+        dispatch: MessageWriteDispatch,
+    ): MessageSentInfo {
+        dispatch.claim()
+        return sendMessage(destination, text, timestamp, attempt)
+    }
+    /** Use a fresh handle per attempt; a returned OK is not end-to-end message delivery. */
+    suspend fun sendChannelMessage(
+        channel: UByte, text: String, timestamp: Instant = Instant.now(), dispatch: MessageWriteDispatch,
+    ) {
+        dispatch.claim()
+        sendChannelMessage(channel, text, timestamp)
+    }
 }
 
 interface ContactSessionOps {
@@ -38,7 +54,59 @@ interface ContactSessionOps {
     /** Only NOT_FOUND returns null; other device errors propagate with their raw code. */
     suspend fun getContact(publicKey: Bytes): MeshContact?
     suspend fun addContact(contact: MeshContact)
+    /**
+     * Completes an accepted write before releasing its response owner. The completion must not
+     * issue another session request. Legacy implementations cannot prove cancellation was unsent.
+     */
+    suspend fun addContact(contact: MeshContact, dispatch: ContactWriteDispatch, onCommitted: suspend () -> Unit) {
+        dispatch.exchangeDispatch.claim()
+        try {
+            dispatch.beforeDispatch()
+            try {
+                addContact(contact)
+                dispatch.markAccepted()
+            } catch (rejected: MeshCoreException.DeviceError) {
+                dispatch.markRejected(rejected)
+                throw rejected
+            } catch (invalid: MeshCoreException.InvalidInput) {
+                dispatch.markRejected(invalid)
+                throw invalid
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                dispatch.markUncertain(failure)
+                throw failure
+            }
+            onCommitted()
+        } finally {
+            dispatch.exchangeDispatch.exchangeFinished()
+        }
+    }
+    /**
+     * Evaluates [shouldDispatch] while owning the same serializer as contact writes. The predicate
+     * must not issue another session request. Roles without that guarantee fail before sending.
+     */
+    suspend fun addContactIf(
+        contact: MeshContact,
+        dispatch: ContactWriteDispatch,
+        shouldDispatch: suspend () -> Boolean,
+        onCommitted: suspend () -> Unit,
+    ) {
+        dispatch.exchangeDispatch.claim()
+        try {
+            val failure = UnsupportedOperationException("Serialized conditional contact writes are unavailable")
+            dispatch.markDefinitelyUnsent(failure)
+            throw failure
+        } finally {
+            dispatch.exchangeDispatch.exchangeFinished()
+        }
+    }
     suspend fun removeContact(publicKey: Bytes)
+    /** Legacy roles cannot prove a failed removal was unsent. */
+    suspend fun removeContact(publicKey: Bytes, dispatch: ChannelWriteDispatch) {
+        dispatch.claim()
+        removeContact(publicKey)
+    }
     suspend fun resetPath(publicKey: Bytes)
     suspend fun sendPathDiscovery(destination: Bytes): MessageSentInfo
     suspend fun shareContact(publicKey: Bytes)
@@ -46,6 +114,90 @@ interface ContactSessionOps {
     suspend fun exportContact(publicKey: Bytes? = null): String
     suspend fun importContact(cardData: Bytes)
     suspend fun changeContactFlags(contact: MeshContact, flags: ContactFlags)
+}
+
+/** Android-only cancellation fence for a contact write, using the existing serialized-write accounting. */
+class ContactWriteDispatch(
+    beforeDispatchAction: (ContactWriteDispatch) -> Unit = {},
+    onExchangeFinishedAction: (ContactWriteDispatch) -> Unit = {},
+    onOutcomeChangedAction: (ContactWriteDispatch) -> Unit = {},
+) {
+    private val beforeDispatchCallback = java.util.concurrent.atomic.AtomicReference<((ContactWriteDispatch) -> Unit)?>(beforeDispatchAction)
+    private val onExchangeFinishedCallback = java.util.concurrent.atomic.AtomicReference<((ContactWriteDispatch) -> Unit)?>(onExchangeFinishedAction)
+    private val onOutcomeChangedCallback = java.util.concurrent.atomic.AtomicReference<((ContactWriteDispatch) -> Unit)?>(onOutcomeChangedAction)
+    internal val exchangeDispatch = ChannelWriteDispatch {
+        beforeDispatchCallback.set(null)
+        onOutcomeChangedCallback.set(null)
+        onExchangeFinishedCallback.getAndSet(null)?.invoke(this)
+    }
+
+    private val terminalOutcome = java.util.concurrent.atomic.AtomicReference<ContactWriteDispatchOutcome?>(null)
+    private val failure = java.util.concurrent.atomic.AtomicReference<Exception?>(null)
+
+    /** Read after cancellation; false means unknown or potentially written, never rolled back. */
+    val definitelyUnsent: Boolean
+        get() = outcome == ContactWriteDispatchOutcome.DEFINITELY_UNSENT
+
+    val cancellationDisposition: ChannelWriteCancellationDisposition
+        get() = exchangeDispatch.cancellationDisposition
+
+    val terminalFailure: Exception? get() = failure.get()
+
+    val outcome: ContactWriteDispatchOutcome
+        get() {
+            val terminal = terminalOutcome.get()
+            val disposition = exchangeDispatch.cancellationDisposition
+            if (terminal == ContactWriteDispatchOutcome.MAY_HAVE_WRITTEN &&
+                disposition == ChannelWriteCancellationDisposition.DEFINITELY_UNSENT) {
+                return ContactWriteDispatchOutcome.DEFINITELY_UNSENT
+            }
+            return terminal ?: when (disposition) {
+                ChannelWriteCancellationDisposition.UNKNOWN -> ContactWriteDispatchOutcome.UNKNOWN
+                ChannelWriteCancellationDisposition.DEFINITELY_UNSENT -> ContactWriteDispatchOutcome.DEFINITELY_UNSENT
+                ChannelWriteCancellationDisposition.MAY_HAVE_WRITTEN -> ContactWriteDispatchOutcome.MAY_HAVE_WRITTEN
+            }
+        }
+
+    internal fun beforeDispatch() {
+        try {
+            beforeDispatchCallback.get()?.invoke(this)
+        } catch (failure: Exception) {
+            markDefinitelyUnsent(failure)
+            throw failure
+        }
+    }
+
+    internal fun markAccepted() {
+        terminalOutcome.set(ContactWriteDispatchOutcome.ACCEPTED)
+        onOutcomeChangedCallback.get()?.invoke(this)
+    }
+
+    internal fun markRejected(failure: Exception) {
+        this.failure.set(failure)
+        terminalOutcome.set(ContactWriteDispatchOutcome.REJECTED)
+        onOutcomeChangedCallback.get()?.invoke(this)
+    }
+
+    internal fun markUncertain(failure: Exception) {
+        this.failure.set(failure)
+        if (terminalOutcome.compareAndSet(null, ContactWriteDispatchOutcome.MAY_HAVE_WRITTEN)) {
+            onOutcomeChangedCallback.get()?.invoke(this)
+        }
+    }
+
+    internal fun markDefinitelyUnsent(failure: Exception? = null) {
+        this.failure.set(failure)
+        terminalOutcome.set(ContactWriteDispatchOutcome.DEFINITELY_UNSENT)
+        onOutcomeChangedCallback.get()?.invoke(this)
+    }
+}
+
+enum class ContactWriteDispatchOutcome {
+    UNKNOWN,
+    DEFINITELY_UNSENT,
+    MAY_HAVE_WRITTEN,
+    ACCEPTED,
+    REJECTED,
 }
 
 interface ChannelSessionOps {

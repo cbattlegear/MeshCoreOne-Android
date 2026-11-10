@@ -62,7 +62,7 @@ class ContactServiceSessionTests {
             }
         },
         contactsNative("a firmware NOT_FOUND reply to removeContact surfaces contactNotFound and keeps the local row") {
-            val store = ContactsFakeStore()
+            val store = ContactsFakeStore(listOf(contactsDevice(radioId)))
             store.seed(com.meshcoreone.android.core.model.ContactDTO(radioId = radioId, publicKey = contactsKey(0x41), name = "Kept", lastHeardTimestamp = null))
             withRadio({ frame -> if (frame[0].toInt() == REMOVE_CONTACT) listOf(Bytes.of(RESPONSE_ERROR, 2)) else emptyList() }) { session ->
                 assertFailsWith<ContactServiceError.ContactNotFound> {

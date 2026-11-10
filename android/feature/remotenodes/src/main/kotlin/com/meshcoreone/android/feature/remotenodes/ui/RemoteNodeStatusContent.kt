@@ -113,13 +113,14 @@ internal fun RemoteNodeStatusContent(
                                     camera.latitudeSpan, camera.longitudeSpan,
                                 ))
                             },
-                            )
-                            plotted.unplottable.forEach { item ->
-                                key(item.neighbor.publicKeyPrefix) {
-                                    RemoteValue(item.displayName, remoteText(NeighborRows.snrText(item.neighbor.snr, locale)))
-                                    if (item.matchKind == NodeNameMatchKind.FALLBACK) RemoteNodePossibleMatch(item.displayName)
-                                }
+                        )
+                        plotted.unplottable.forEach { item ->
+                            key(item.neighbor.publicKeyPrefix) {
+                                RemoteValue(item.displayName, remoteText(NeighborRows.snrText(item.neighbor.snr, locale)))
+                                if (item.matchKind == NodeNameMatchKind.FALLBACK) RemoteNodePossibleMatch(item.displayName)
                             }
+                        }
+                    }
                 }
             } else {
                 val fix = state.currentLocationFix

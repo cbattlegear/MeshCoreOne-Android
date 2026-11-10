@@ -76,7 +76,7 @@ class TraceMapAndNavigationTest {
     }
 
     @Test
-    fun `late matching-tag response after path edit leaves new geometry untraced`() {
+    fun `late response after path edit cannot decorate new geometry`() {
         map.configure(Coordinate(37.0, -123.0))
         val sender = FakeTraceSender()
         harness.deps.device = device()
@@ -86,11 +86,9 @@ class TraceMapAndNavigationTest {
         harness.start { trace.runTrace() }
         val pendingTag = sender.sent.single().tag
         trace.addNode(south)
+        assertNull(trace.pendingTag)
         harness.respond(pendingTag, listOf(node(0x3F, -6.0), node(null, 3.0)), RADIO)
-        val lateResult = checkNotNull(trace.current.result)
-        assertTrue(lateResult.success)
-        assertTrue(lateResult.tracedPathBytes.isEmpty)
-        assertFalse(lateResult.tracedPathBytes == trace.current.fullPathData)
+        assertNull(trace.current.result)
 
         map.rebuildPathState()
 

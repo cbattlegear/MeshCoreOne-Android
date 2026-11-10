@@ -376,6 +376,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
                 when {
                     !aligned -> false
                     producer is MountedOnboardingProducer.Preset && graph?.token != producer.token -> false
+                    producer is MountedOnboardingProducer.NoDeviceAtSession && graph?.token != producer.token -> false
                     producer == MountedOnboardingProducer.NoDevice && graph !== initiating -> false
                     graph == null -> initiating == null && token == null &&
                         (connectionManager.isNavigationLifecycleCurrent(lifecycle) ||
@@ -889,6 +890,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
     /** Process shutdown: closes the runtime (tearing down any live graph), then every process resource. */
     suspend fun close() {
         withContext(NonCancellable) {
+            dependencies.onboardingPlatform?.flags?.shutdown()
             hostBinding?.close()
             appState.shutdown()
             statePlatform.close()

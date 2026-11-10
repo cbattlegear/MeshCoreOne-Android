@@ -35,8 +35,16 @@ import java.time.Clock
 import java.time.Instant
 import java.util.WeakHashMap
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -238,7 +246,7 @@ class ContactService(
     suspend fun addOrUpdateContact(radioId: RadioId, contact: ContactFrame) {
         val observation = ContactWritePredecessors.Observation()
         try {
-            val previousFrame = ContactWritePredecessors.withFence(preferences, radioId, contact.publicKey) {
+            val previousFrame = ContactWritePredecessors.withAdmittedFence(preferences, radioId, contact.publicKey) {
                 contacts.fetchContact(radioId, contact.publicKey)?.toContactFrame().also {
                     ContactWritePredecessors.observe(preferences, radioId, contact.publicKey, observation, it)
                 }
@@ -850,6 +858,64 @@ private object ContactWritePredecessors {
         radioId: RadioId,
         publicKey: Bytes,
         operation: suspend () -> T,
+    ): T = withFenceReference(preferences, radioId, publicKey) { fence ->
+        fence.mutex.withLock { operation() }
+    }
+
+    suspend fun <T> withAdmittedFence(
+        preferences: ContactPreferenceFlags,
+        radioId: RadioId,
+        publicKey: Bytes,
+        operation: suspend () -> T,
+    ): T = withFenceReference(preferences, radioId, publicKey) { fence ->
+        // Keep the queued lookup in place while checking recovery changes.
+        coroutineScope {
+            ContactWriteRecovery.precheckWrite(preferences, radioId)
+            val acquired = CompletableDeferred<Unit>()
+            val admitted = CompletableDeferred<Unit>()
+            val lookup = async(start = CoroutineStart.UNDISPATCHED) {
+                fence.mutex.withLock {
+                    acquired.complete(Unit)
+                    // The recovery watcher must relinquish admission before the lookup can begin.
+                    admitted.await()
+                    currentCoroutineContext().ensureActive()
+                    ContactWriteRecovery.precheckWrite(preferences, radioId)
+                    operation()
+                }
+            }
+            try {
+                while (!acquired.isCompleted) {
+                    val recovery = async(start = CoroutineStart.UNDISPATCHED) {
+                        ContactWriteRecovery.updates(preferences, radioId)
+                            .first { it is ContactWriteRecoveryState.Required }
+                    }
+                    try {
+                        select<Unit> {
+                            acquired.onAwait { Unit }
+                            lookup.onAwait { Unit }
+                            recovery.onAwait {
+                                if (!acquired.isCompleted) {
+                                    ContactWriteRecovery.precheckWrite(preferences, radioId)
+                                }
+                            }
+                        }
+                    } finally {
+                        recovery.cancel()
+                    }
+                }
+                admitted.complete(Unit)
+                lookup.await()
+            } finally {
+                lookup.cancel()
+            }
+        }
+    }
+
+    private suspend fun <T> withFenceReference(
+        preferences: ContactPreferenceFlags,
+        radioId: RadioId,
+        publicKey: Bytes,
+        operation: suspend (Fence) -> T,
     ): T {
         val key = Key(radioId, publicKey)
         val fence = synchronized(this) {
@@ -858,7 +924,7 @@ private object ContactWritePredecessors {
                 .also { it.users++ }
         }
         try {
-            return fence.mutex.withLock { operation() }
+            return operation(fence)
         } finally {
             synchronized(this) {
                 if (--fence.users == 0) {

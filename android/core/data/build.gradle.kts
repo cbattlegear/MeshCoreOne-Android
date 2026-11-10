@@ -1,5 +1,6 @@
 // AndroidOnly: WP-202 Admitted Room repository dependencies and complete native assertion hook.
 import org.gradle.api.artifacts.result.UnresolvedDependencyResult
+import org.gradle.api.tasks.PathSensitivity
 
 plugins {
     id("mesh.android.library")
@@ -23,8 +24,15 @@ dependencyLocking {
 }
 
 tasks.withType<Test>().configureEach {
-    systemProperty("wp203.interop.output", layout.buildDirectory.dir("reports/wp203/interop").get().asFile.absolutePath)
-    providers.gradleProperty("wp203InteropInputDir").orNull?.let { systemProperty("wp203.interop.input", it) }
+    val interopOutput = layout.buildDirectory.dir("reports/wp203/interop/$name")
+    outputs.dir(interopOutput).withPropertyName("backupInterop")
+    systemProperty("wp203.interop.output", interopOutput.get().asFile.absolutePath)
+    inputs.dir(rootProject.layout.projectDirectory.dir("core/testing/fixtures/reference-codec"))
+        .withPropertyName("backupReferenceFixtures").withPathSensitivity(PathSensitivity.RELATIVE)
+    providers.gradleProperty("wp203InteropInputDir").orNull?.let {
+        inputs.dir(it).withPropertyName("backupInteropInput").withPathSensitivity(PathSensitivity.RELATIVE)
+        systemProperty("wp203.interop.input", it)
+    }
 }
 
 val repository = rootProject.projectDir.parentFile

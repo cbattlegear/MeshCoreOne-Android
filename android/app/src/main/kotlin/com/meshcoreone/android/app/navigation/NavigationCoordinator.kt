@@ -26,12 +26,14 @@ import com.meshcoreone.android.feature.chats.list.ContactLinkPublications
 import com.meshcoreone.android.feature.chats.list.ContactLinkHandoffOutcome
 import com.meshcoreone.android.feature.chats.list.ContactLinkTargetCompletion
 import com.meshcoreone.android.feature.chats.list.ContactLinkContext
+import com.meshcoreone.android.feature.onboarding.OnboardingFeatureDependencies
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import java.util.UUID
+import java.util.IdentityHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -50,6 +52,7 @@ internal data class NavigationCleanupOwner(
 
 internal sealed interface MountedOnboardingProducer {
     data object NoDevice : MountedOnboardingProducer
+    data class NoDeviceAtSession(val token: SessionToken) : MountedOnboardingProducer
     data class Preset(val token: SessionToken) : MountedOnboardingProducer
 }
 
@@ -58,14 +61,25 @@ internal class MountedOnboardingCompletion internal constructor(
     internal val presented: NavigationStateStore.PublishedSnapshot,
     internal val entryId: Long,
     private val sessionCurrent: (MountedOnboardingProducer) -> Boolean,
+    internal val initiatingPresentation: NavigationStateStore.PublishedSnapshot = presented,
+    private val authorityRetired: AtomicBoolean = AtomicBoolean(false),
 ) {
-    private val retired = AtomicBoolean(false)
+    private val presentationRetired = AtomicBoolean(false)
     internal fun belongsTo(owner: Any): Boolean = this.owner === owner
-    internal fun isActive(owner: Any): Boolean = belongsTo(owner) && !retired.get()
+    internal fun isActive(owner: Any): Boolean =
+        belongsTo(owner) && !authorityRetired.get() && !presentationRetired.get()
     internal fun isCurrent(owner: Any, producer: MountedOnboardingProducer): Boolean =
         isActive(owner) && sessionCurrent(producer)
+    internal fun forPresentation(
+        presented: NavigationStateStore.PublishedSnapshot,
+    ): MountedOnboardingCompletion = MountedOnboardingCompletion(
+        owner, presented, entryId, sessionCurrent, initiatingPresentation, authorityRetired,
+    )
+    internal fun retirePresentation(owner: Any) {
+        if (belongsTo(owner)) presentationRetired.set(true)
+    }
     internal fun retire(owner: Any) {
-        if (belongsTo(owner)) retired.set(true)
+        if (belongsTo(owner)) authorityRetired.set(true)
     }
 }
 
@@ -84,8 +98,14 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     private val drainMutex = Mutex()
     private val localCommitLock = Any()
     private val onboardingIdentity = Any()
+    private val onboardingRetentions = IdentityHashMap<OnboardingFeatureDependencies, OnboardingEntryRetention>()
     private var commitBoundary: (() -> Unit) -> Unit = { action -> synchronized(localCommitLock, action) }
     private var onboardingSessionCapture: (NavigationState) -> (MountedOnboardingProducer) -> Boolean = { { false } }
+
+    internal fun onboardingRetention(dependencies: OnboardingFeatureDependencies): OnboardingEntryRetention =
+        synchronized(onboardingRetentions) {
+            onboardingRetentions.getOrPut(dependencies) { OnboardingEntryRetention(this, dependencies) }
+        }
 
     internal fun installCommitBoundary(boundary: (() -> Unit) -> Unit) {
         commitBoundary = boundary
@@ -101,7 +121,7 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         presented: NavigationStateStore.PublishedSnapshot,
         entryId: Long,
     ): MountedOnboardingCompletion? {
-        if (!mutableState.owns(presented)) return null
+        if (!isCurrentPresentedEntry(presented, entryId)) return null
         val entry = presented.value.activeStack.last()
         if (entry.id != entryId || entry.destination != NavigationDestination.Auxiliary(FeatureId.ONBOARDING)) {
             return null
@@ -114,16 +134,86 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     internal fun captureFirstRunOnboarding(
         presented: NavigationStateStore.PublishedSnapshot,
     ): FirstRunOnboardingCompletion? {
-        if (!mutableState.owns(presented)) return null
         val entry = presented.value.activeStack.last()
+        if (!isCurrentPresentedEntry(presented, entry.id)) return null
         return FirstRunOnboardingCompletion(
             MountedOnboardingCompletion(onboardingIdentity, presented, entry.id, onboardingSessionCapture(presented.value)),
         )
     }
 
+    internal fun prepareMountedOnboardingPresentation(
+        previous: MountedOnboardingCompletion,
+        presented: NavigationStateStore.PublishedSnapshot,
+    ): MountedOnboardingCompletion? = prepareOnboardingPresentation(
+        previous, presented, mounted = true, requireNewEpoch = true,
+    )
+
+    internal fun prepareMountedOnboardingRestart(
+        previous: MountedOnboardingCompletion,
+        presented: NavigationStateStore.PublishedSnapshot,
+    ): MountedOnboardingCompletion? = prepareOnboardingPresentation(
+        previous, presented, mounted = true, requireNewEpoch = false,
+    )
+
+    internal fun prepareFirstRunOnboardingRestart(
+        previous: FirstRunOnboardingCompletion,
+        presented: NavigationStateStore.PublishedSnapshot,
+    ): FirstRunOnboardingCompletion? = prepareOnboardingPresentation(
+        previous.authority, presented, mounted = false, requireNewEpoch = false,
+    )?.let(::FirstRunOnboardingCompletion)
+
+    private fun prepareOnboardingPresentation(
+        previous: MountedOnboardingCompletion,
+        presented: NavigationStateStore.PublishedSnapshot,
+        mounted: Boolean,
+        requireNewEpoch: Boolean,
+    ): MountedOnboardingCompletion? {
+        if (!previous.isActive(onboardingIdentity) ||
+            (requireNewEpoch && previous.presented.activeEntryEpoch == presented.activeEntryEpoch) ||
+            !isCurrentPresentedEntry(presented, previous.entryId)
+        ) return null
+        val identity = previous.initiatingPresentation.entryIdentity(previous.entryId) ?: return null
+        if (presented.entryIdentity(previous.entryId) != identity ||
+            (mounted && presented.value.activeStack.last().destination !=
+                NavigationDestination.Auxiliary(FeatureId.ONBOARDING))
+        ) return null
+        return previous.forPresentation(presented)
+    }
+
+    internal fun isOnboardingRestartCurrent(completion: MountedOnboardingCompletion): Boolean {
+        var current = false
+        commitBoundary {
+            val snapshot = mutableState.snapshot()
+            val producer = snapshot.value.boundSessionToken?.let { MountedOnboardingProducer.NoDeviceAtSession(it) }
+                ?: MountedOnboardingProducer.NoDevice
+            current = sameOnboardingSession(snapshot, completion.initiatingPresentation.value) &&
+                completion.isCurrent(onboardingIdentity, producer)
+        }
+        return current
+    }
+
+    private fun isCurrentPresentedEntry(
+        presented: NavigationStateStore.PublishedSnapshot,
+        entryId: Long,
+    ): Boolean {
+        if (!mutableState.owns(presented)) return false
+        val identity = presented.entryIdentity(entryId) ?: return false
+        val current = mutableState.snapshot()
+        return current.activeEntryEpoch == presented.activeEntryEpoch &&
+            current.value.selectedTab == presented.value.selectedTab &&
+            current.value.activeStack.last() == presented.value.activeStack.last() &&
+            current.value.activeStack.last().id == entryId &&
+            current.entryBirthRevisions[entryId] == identity.birthRevision
+    }
+
     internal fun retireMountedOnboarding(completion: MountedOnboardingCompletion?) {
         if (completion == null || !completion.belongsTo(onboardingIdentity)) return
         commitBoundary { completion.retire(onboardingIdentity) }
+    }
+
+    internal fun retireMountedOnboardingPresentation(completion: MountedOnboardingCompletion) {
+        if (!completion.belongsTo(onboardingIdentity)) return
+        commitBoundary { completion.retirePresentation(onboardingIdentity) }
     }
 
     internal fun retireFirstRunOnboarding(completion: FirstRunOnboardingCompletion?) =
@@ -1001,37 +1091,45 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         completion: FirstRunOnboardingCompletion?, producer: MountedOnboardingProducer,
     ): Boolean = completeOnboarding(completion?.authority, producer, mounted = false)
 
+    private fun sameOnboardingSession(
+        snapshot: NavigationStateStore.Snapshot,
+        initiating: NavigationState,
+    ): Boolean {
+        val state = snapshot.value
+        val unchanged = state.generation == initiating.generation && state.radioId == initiating.radioId &&
+            state.boundSessionToken == initiating.boundSessionToken
+        val immediateBinding = initiating.generation < Long.MAX_VALUE &&
+            state.generation == initiating.generation + 1
+        val bindingAfterCleanup = initiating.generation < Long.MAX_VALUE - 1 &&
+            state.generation == initiating.generation + 2 &&
+            snapshot.guardedRadioCleanupGeneration == initiating.generation
+        val firstBinding = initiating.boundSessionToken == null &&
+            (immediateBinding || bindingAfterCleanup) &&
+            state.radioId != null && state.boundSessionToken?.radioId == state.radioId
+        return unchanged || firstBinding
+    }
+
     private fun completeOnboarding(
         completion: MountedOnboardingCompletion?, producer: MountedOnboardingProducer, mounted: Boolean,
     ): Boolean {
         if (completion == null || !completion.belongsTo(onboardingIdentity)) return false
         val presented = completion.presented
         val source = presented.value
+        val initiating = completion.initiatingPresentation.value
         val entry = source.activeStack.last()
+        val entryIdentity = presented.entryIdentity(entry.id) ?: return false
         if (entry.id != completion.entryId ||
             mounted && entry.destination != NavigationDestination.Auxiliary(FeatureId.ONBOARDING)
         ) {
             return false
-        }
-        fun sameSession(snapshot: NavigationStateStore.Snapshot): Boolean {
-            val state = snapshot.value
-            val unchanged = state.generation == source.generation && state.radioId == source.radioId &&
-                state.boundSessionToken == source.boundSessionToken
-            val immediateBinding = source.generation < Long.MAX_VALUE && state.generation == source.generation + 1
-            val bindingAfterCleanup = source.generation < Long.MAX_VALUE - 1 &&
-                state.generation == source.generation + 2 &&
-                snapshot.guardedRadioCleanupGeneration == source.generation
-            val firstBinding = source.boundSessionToken == null &&
-                (immediateBinding || bindingAfterCleanup) &&
-                state.radioId != null && state.boundSessionToken?.radioId == state.radioId
-            return unchanged || firstBinding
         }
 
         while (true) {
             val snapshot = mutableState.snapshot()
             val current = snapshot.value
             if (snapshot.revision < presented.revision || snapshot.activeEntryEpoch != presented.activeEntryEpoch ||
-                !sameSession(snapshot) ||
+                snapshot.entryBirthRevisions[entry.id] != entryIdentity.birthRevision ||
+                !sameOnboardingSession(snapshot, initiating) ||
                 current.selectedTab != source.selectedTab || current.activeStack.last() != entry
             ) return false
             val next = if (mounted) {
@@ -1041,7 +1139,10 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
             }
             when (commitIfCurrent(
                 snapshot, next,
-                isCurrent = { sameSession(mutableState.snapshot()) && completion.isCurrent(onboardingIdentity, producer) },
+                isCurrent = {
+                    sameOnboardingSession(mutableState.snapshot(), initiating) &&
+                        completion.isCurrent(onboardingIdentity, producer)
+                },
                 onCommitted = { completion.retire(onboardingIdentity) },
             )) {
                 true -> return true
@@ -1060,10 +1161,12 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
     private fun reportOnboardingFailure(completion: MountedOnboardingCompletion?): Boolean {
         if (completion == null || !completion.belongsTo(onboardingIdentity)) return false
         val source = completion.presented
+        val entryIdentity = source.entryIdentity(completion.entryId) ?: return false
         while (true) {
             val snapshot = mutableState.snapshot()
             val current = snapshot.value
             if (snapshot.activeEntryEpoch != source.activeEntryEpoch ||
+                snapshot.entryBirthRevisions[completion.entryId] != entryIdentity.birthRevision ||
                 current.selectedTab != source.value.selectedTab ||
                 current.activeStack.last() != source.value.activeStack.last()
             ) return false

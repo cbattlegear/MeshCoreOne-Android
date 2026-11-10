@@ -39,6 +39,7 @@ import com.meshcoreone.android.app.navigation.NavigationFailure
 import com.meshcoreone.android.app.navigation.NavigationSavedState
 import com.meshcoreone.android.app.navigation.NavigationState
 import com.meshcoreone.android.app.container.onboarding.OnboardingGate
+import com.meshcoreone.android.app.container.onboarding.onboardingShellVisible
 import com.meshcoreone.android.core.connectivity.pairing.CompanionChooserHost
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.designsystem.ThemeServiceHost
@@ -212,8 +213,7 @@ open class MainActivity : ComponentActivity() {
             val screen: @Composable () -> Unit = {
                 val answer = resolved
                 val connectionRecovery = answer?.container?.appState?.connectionUI?.state?.collectAsState()?.value
-                val onboardingCompleted = (answer?.container?.onboarding?.hasCompleted
-                    ?: remember { kotlinx.coroutines.flow.MutableStateFlow(true) }).collectAsState().value
+                val shellVisible = onboardingShellVisible(host.navigation, answer?.container?.onboarding)
                 if (answer == null) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
                 } else if (answer.failure != null) {
@@ -236,7 +236,7 @@ open class MainActivity : ComponentActivity() {
                         NativeNavigationShell(
                             host.navigation,
                             unreadCount = unread,
-                            onboarding = bound?.forRerun(),
+                            onboarding = bound,
                             map = answer.container?.mapFeature,
                             tools = tools,
                             nodes = answer.container?.nodesFeature,
@@ -263,7 +263,7 @@ open class MainActivity : ComponentActivity() {
                     navigation = host.navigation,
                     pendingExternalRoute = host.pendingExternalRoute,
                     showExternalLinkFailure = answer != null && answer.failure == null,
-                    shellVisible = answer != null && answer.failure == null && onboardingCompleted,
+                    shellVisible = answer != null && answer.failure == null && shellVisible,
                     nodesAvailable = answer?.container?.nodesFeature != null,
                     connectionRecoveryVisible = connectionRecovery?.showingConnectionFailedAlert == true ||
                         connectionRecovery?.otherAppWarningDeviceId != null,

@@ -4,6 +4,7 @@ import org.gradle.api.tasks.InputDirectory
 import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.process.CommandLineArgumentProvider
+import org.jetbrains.kotlin.gradle.tasks.KotlinCompileTool
 
 // AndroidOnly: WP-002 Delivery adapter boundary without notifications or permission requests.
 plugins {
@@ -29,6 +30,20 @@ extensions.configure<com.android.build.api.dsl.LibraryExtension> {
     sourceSets.getByName("test").kotlin.srcDir(
         "src/androidTest/kotlin/com/meshcoreone/android/platform/notifications/messaging",
     )
+}
+
+tasks.withType<KotlinCompileTool>().configureEach {
+    if (name.startsWith("compile") && name.endsWith("AndroidTestKotlin")) {
+        exclude(
+            "**/com/meshcoreone/android/platform/notifications/messaging/NotificationReplyAdmissionTest.kt",
+            "**/com/meshcoreone/android/platform/notifications/messaging/NotificationReplyCapacityTest.kt",
+            "**/com/meshcoreone/android/platform/notifications/messaging/NotificationReplyEnrollmentTest.kt",
+            "**/com/meshcoreone/android/platform/notifications/messaging/NotificationReplyIssuanceTest.kt",
+            "**/com/meshcoreone/android/platform/notifications/messaging/NotificationReplyLifecycleTest.kt",
+            "**/com/meshcoreone/android/platform/notifications/messaging/NotificationReplyPublicationTest.kt",
+            "**/com/meshcoreone/android/platform/notifications/messaging/NotificationReplyStagingStoreTest.kt",
+        )
+    }
 }
 
 class NotificationPlatformSdkArguments(

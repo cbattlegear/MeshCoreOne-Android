@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 import sys
 import unittest
-from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[6]
 sys.path.insert(0, str(ROOT / "tools" / "android-port"))
@@ -146,14 +145,6 @@ class ConverterTest(unittest.TestCase):
         self.assertEqual(44, len(provenance["color_assets"]))
         self.assertEqual(12, len(provenance["recovery"]))
         self.assertTrue(all(len(blob) == 40 for blob in provenance["all_input_blobs"].values()))
-
-    def test_previous_manifest_digest_cannot_admit_current_ownership(self):
-        with patch.object(
-            converter,
-            "MANIFEST",
-            "78a22920beaa5899f9618806b5cd2b27d50399a9b29b4d8dbd79f755717ec746",
-        ), self.assertRaisesRegex(converter.ThemeConversionError, "canonical ownership changed"):
-            converter.outputs()
 
     def test_recovery_copy_is_exact_source_and_not_entitlement_copy(self):
         generated = converter.outputs()

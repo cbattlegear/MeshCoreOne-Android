@@ -511,6 +511,101 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         }
     }
 
+    @Test fun noDeviceAttemptAcceptsItsExactReadyGraphIncludingTheFirstBinding() = runTest {
+        for (mounted in listOf(false, true)) {
+            for (readyAtCapture in listOf(false, true)) {
+                val h = ContainerHarness(this, store)
+                try {
+                    if (readyAtCapture) connect(h)
+                    val n = h.container.navigation
+                    n.selectTab(AppTab.SETTINGS)
+                    if (mounted) n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+                    val presented = n.publishedNavigation.value
+                    val firstRun = if (mounted) null else n.captureFirstRunOnboarding(presented)
+                    val mountedCompletion = if (mounted) {
+                        n.captureMountedOnboarding(presented, presented.value.activeStack.last().id)
+                    } else null
+                    if (!readyAtCapture) connect(h)
+                    val graph = assertNotNull(h.sessions.current)
+                    val wrongToken = graph.token.copy(generation = Generation(graph.token.generation.value + 1))
+                    val before = n.currentState
+                    val wrongAccepted = if (mounted) {
+                        n.completeMountedOnboarding(mountedCompletion, MountedOnboardingProducer.NoDeviceAtSession(wrongToken))
+                    } else {
+                        n.completeFirstRunOnboarding(firstRun, MountedOnboardingProducer.NoDeviceAtSession(wrongToken))
+                    }
+                    assertFalse(wrongAccepted)
+                    assertEquals(before, n.currentState)
+                    val accepted = if (mounted) {
+                        n.completeMountedOnboarding(mountedCompletion, MountedOnboardingProducer.NoDeviceAtSession(graph.token))
+                    } else {
+                        n.completeFirstRunOnboarding(firstRun, MountedOnboardingProducer.NoDeviceAtSession(graph.token))
+                    }
+                    assertTrue(accepted)
+                    assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+                    assertEquals(graph.token, n.currentState.boundSessionToken)
+                } finally {
+                    h.container.close()
+                }
+            }
+        }
+    }
+
+    @Test fun noDeviceAttemptRejectsAReplacementGraphUntilANewEntryWitnessIsCaptured() = runTest {
+        for (mounted in listOf(false, true)) {
+            for (differentRadio in listOf(false, true)) {
+                val deviceA = UUID(0, 1101)
+                val deviceB = UUID(0, 1102)
+                val h = ContainerHarness(
+                    this, store,
+                    identity = { target ->
+                        if ((target as? ConnectionTarget.Bluetooth)?.deviceId == deviceA) key(7) else key(8)
+                    },
+                )
+                try {
+                    connect(h, h.target(deviceA))
+                    val n = h.container.navigation
+                    n.selectTab(AppTab.SETTINGS)
+                    if (mounted) n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+                    val presented = n.publishedNavigation.value
+                    val firstRun = if (mounted) null else n.captureFirstRunOnboarding(presented)
+                    val mountedCompletion = if (mounted) {
+                        n.captureMountedOnboarding(presented, presented.value.activeStack.last().id)
+                    } else null
+                    val original = assertNotNull(h.sessions.current)
+                    h.manager.disconnect()
+                    h.settle()
+                    connect(h, h.target(if (differentRadio) deviceB else deviceA))
+                    val successor = assertNotNull(h.sessions.current)
+                    assertEquals(differentRadio, original.token.radioId != successor.token.radioId)
+                    assertTrue(original.token != successor.token)
+                    val before = n.currentState
+                    for (token in listOf(original.token, successor.token)) {
+                        val accepted = if (mounted) {
+                            n.completeMountedOnboarding(mountedCompletion, MountedOnboardingProducer.NoDeviceAtSession(token))
+                        } else {
+                            n.completeFirstRunOnboarding(firstRun, MountedOnboardingProducer.NoDeviceAtSession(token))
+                        }
+                        assertFalse(accepted)
+                        assertEquals(before, n.currentState)
+                    }
+                    val current = n.publishedNavigation.value
+                    val accepted = if (mounted) {
+                        val replacement = n.captureMountedOnboarding(current, current.value.activeStack.last().id)
+                        n.completeMountedOnboarding(replacement, MountedOnboardingProducer.NoDeviceAtSession(successor.token))
+                    } else {
+                        val replacement = n.captureFirstRunOnboarding(current)
+                        n.completeFirstRunOnboarding(replacement, MountedOnboardingProducer.NoDeviceAtSession(successor.token))
+                    }
+                    assertTrue(accepted)
+                    assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+                } finally {
+                    h.container.close()
+                }
+            }
+        }
+    }
+
     @Test fun firstRunDelayedProducerCannotNavigateAReplacementGraphAndFreshAttemptCanRecover() = runTest {
         val deviceA = UUID(0, 1021)
         val deviceB = UUID(0, 1022)
@@ -536,6 +631,8 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             val settings = current.stacks.getValue(AppTab.SETTINGS)
             assertFalse(n.completeFirstRunOnboarding(original, MountedOnboardingProducer.Preset(first.token)))
             assertFalse(n.completeFirstRunOnboarding(original, MountedOnboardingProducer.NoDevice))
+            assertFalse(n.completeFirstRunOnboarding(original, MountedOnboardingProducer.NoDeviceAtSession(first.token)))
+            assertFalse(n.completeFirstRunOnboarding(original, MountedOnboardingProducer.NoDeviceAtSession(replacement.token)))
             assertFalse(n.completeFirstRunOnboarding(original, MountedOnboardingProducer.Preset(replacement.token)))
             assertEquals(current, n.currentState)
             n.retireFirstRunOnboarding(original)
@@ -3686,10 +3783,10 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         val saving = CompletableDeferred<Unit>()
         val releaseSave = CompletableDeferred<Unit>()
         val persistence = object : PersistenceStoreProtocol by store {
-            override suspend fun saveDevice(device: DeviceDTO) {
+            override suspend fun activateDeviceIfCurrent(id: UUID, isCurrent: () -> Boolean): Boolean {
                 saving.complete(Unit)
                 releaseSave.await()
-                store.saveDevice(device)
+                return store.activateDeviceIfCurrent(id, isCurrent)
             }
         }
         val h = ContainerHarness(this, store, persistenceOverride = persistence)
@@ -5284,10 +5381,10 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         val publication = CompletableDeferred<Unit>()
         val reads = CopyOnWriteArrayList<Pair<RadioId, Bytes>>()
         val persistence = object : PersistenceStoreProtocol by store {
-            override suspend fun saveDevice(device: DeviceDTO) {
+            override suspend fun activateDeviceIfCurrent(id: UUID, isCurrent: () -> Boolean): Boolean {
                 saving.complete(Unit)
                 publication.await()
-                store.saveDevice(device)
+                return store.activateDeviceIfCurrent(id, isCurrent)
             }
 
             override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
@@ -5395,10 +5492,10 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         val publication = CompletableDeferred<Unit>()
         val saving = CompletableDeferred<Unit>()
         val persistence = object : PersistenceStoreProtocol by store {
-            override suspend fun saveDevice(device: DeviceDTO) {
+            override suspend fun activateDeviceIfCurrent(id: UUID, isCurrent: () -> Boolean): Boolean {
                 saving.complete(Unit)
                 publication.await()
-                store.saveDevice(device)
+                return store.activateDeviceIfCurrent(id, isCurrent)
             }
         }
         val h = ContainerHarness(this, store, persistenceOverride = persistence)

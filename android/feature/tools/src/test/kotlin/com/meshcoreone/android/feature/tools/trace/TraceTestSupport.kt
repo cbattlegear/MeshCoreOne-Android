@@ -35,7 +35,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 
 /**
- * Binds a test to an original Swift case id from `docs/android/test-cases.json`. The method name
+ * Binds a test to an original Swift case id (`Suite::name()` in the frozen Swift sources). The method name
  * is a JVM-safe rendering; this id is exact.
  */
 @Target(AnnotationTarget.FUNCTION)

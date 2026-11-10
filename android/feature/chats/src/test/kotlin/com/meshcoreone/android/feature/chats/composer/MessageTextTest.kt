@@ -286,7 +286,7 @@ class MessageTextTest {
         assertEquals("37.7749, -122.4194", text.substring(match.start, match.end))
     }
 
-    // Independent Unicode 17 UCD properties; provenance and notice: docs/android/parity/README.md.
+    // Independent Unicode 17 UCD properties; provenance and notice: docs/android/notices/README.md.
     private fun assertNoBidiControls(text: String) {
         val bidi = Regex("[\\x{061C}\\x{200E}-\\x{200F}\\x{202A}-\\x{202E}\\x{2066}-\\x{2069}]")
         for (scalar in listOf(0x061C, 0x200E, 0x200F, 0x202A, 0x202B, 0x202C, 0x202D, 0x202E, 0x2066, 0x2067, 0x2068, 0x2069)) {

@@ -29,6 +29,7 @@ import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Badge
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -52,10 +53,12 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.focus.focusRestorer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -103,6 +106,7 @@ import com.meshcoreone.android.feature.settings.SettingsEntry
 import com.meshcoreone.android.feature.tools.ToolsEntry
 import com.meshcoreone.android.feature.tools.ToolsFeatureDependencies
 import com.meshcoreone.android.app.container.AppChatsFeature
+import com.meshcoreone.android.app.container.onboarding.AppOnboarding
 import com.meshcoreone.android.feature.tools.los.LineOfSightEntry
 import com.meshcoreone.android.feature.tools.los.LineOfSightFeatureDependencies
 import com.meshcoreone.android.core.ui.UiErrorMapper
@@ -116,6 +120,10 @@ import com.meshcoreone.android.core.l10n.R as Strings
 
 internal val LocalNavigationEntryId = staticCompositionLocalOf<Long?> { null }
 internal val LocalPresentedNavigation = staticCompositionLocalOf<NavigationStateStore.PublishedSnapshot?> { null }
+private val LocalOnboardingRetention = staticCompositionLocalOf<OnboardingEntryRetention?> { null }
+private val LocalOnboardingEntries =
+    staticCompositionLocalOf<Map<NavigationEntryIdentity, OnboardingEntryRetention.MountedEntry>> { emptyMap() }
+private val LocalUnavailableOnboardingEntries = staticCompositionLocalOf<Set<NavigationEntryIdentity>> { emptySet() }
 
 @Composable
 internal fun presentedNavigation(coordinator: NavigationCoordinator): NavigationStateStore.PublishedSnapshot =
@@ -161,8 +169,66 @@ fun NativeNavigationShell(
     val publication by coordinator.publishedNavigation.collectAsStateWithLifecycle()
     val presented = publication
     val state = presented.value
+    val onboardingRetention = remember(coordinator, onboarding) {
+        onboarding?.let(coordinator::onboardingRetention)
+    }
+    val uiScope = rememberCoroutineScope()
+    LaunchedEffect(onboardingRetention, onboarding, uiScope) {
+        if (onboardingRetention != null) {
+            if (onboarding is AppOnboarding) onboarding.observeNavigationEntries(onboardingRetention)
+            else onboardingRetention.observe(uiScope)
+        }
+    }
+    val onboardingEntries = onboardingRetention?.mountedEntries?.collectAsStateWithLifecycle()?.value.orEmpty()
+    val unavailableOnboardingEntries =
+        onboardingRetention?.unavailableEntries?.collectAsStateWithLifecycle()?.value.orEmpty()
+    val latestPresented by rememberUpdatedState(presented)
+    val latestOnboardingEntries by rememberUpdatedState(onboardingEntries)
+    val latestUnavailableOnboardingEntries by rememberUpdatedState(unavailableOnboardingEntries)
+    val onboardingAvailabilityRevision =
+        onboardingRetention?.availabilityRevision?.collectAsStateWithLifecycle()?.value
+    val baseOnboardingRevision = onboarding?.flowCoordinatorRevision?.collectAsStateWithLifecycle()?.value
     LaunchedEffect(coordinator, chats) {
         if (chats != null) coordinator.contactHandoffUpdates.collect { chats.acceptContactOffers() }
+    }
+    val onboardingRouteActive = state.activeStack.lastOrNull()?.destination ==
+        NavigationDestination.Auxiliary(FeatureId.ONBOARDING)
+    val activeEntry = state.activeStack.last()
+    val activeEntryIdentity = presented.entryIdentity(activeEntry.id)
+    val onboardingEntry = if (onboardingRouteActive) activeEntryIdentity?.let(onboardingEntries::get) else null
+    val ownerRevision = onboardingEntry?.owner?.flowCoordinatorRevision?.collectAsStateWithLifecycle()?.value
+    val onboardingFlow = onboardingEntry?.flow
+    val presetState = onboardingFlow?.preset?.state?.collectAsStateWithLifecycle()?.value
+    val completingWithoutDevice = onboardingFlow?.isCompletingWithoutDevice
+        ?.collectAsStateWithLifecycle()?.value ?: false
+    val clearingPairings = onboardingFlow?.isClearingPairings?.collectAsStateWithLifecycle()?.value ?: false
+    val completed = onboardingFlow?.onboarding?.hasCompletedOnboardingFlow
+        ?.collectAsStateWithLifecycle()?.value ?: false
+    val unsettled = onboardingFlow?.onboarding?.unsettledCompletionFlow
+        ?.collectAsStateWithLifecycle()?.value ?: false
+    val completionGate = onboardingFlow?.onboarding?.completionGateFlow?.collectAsStateWithLifecycle()?.value
+    val presentationRevision = onboardingEntry?.presentationRevision?.collectAsStateWithLifecycle()?.value
+    LaunchedEffect(
+        onboardingRetention, activeEntryIdentity, presented.revision, ownerRevision,
+        onboardingAvailabilityRevision, baseOnboardingRevision, presentationRevision,
+        presetState?.isApplying, completingWithoutDevice, clearingPairings, completed, unsettled, completionGate,
+    ) {
+        if (onboardingRouteActive) onboardingRetention?.mount(presented, activeEntry.id)
+    }
+    val canNavigateFromCurrentRoute = !onboardingRouteActive || onboarding == null ||
+        activeEntryIdentity != null && activeEntryIdentity in unavailableOnboardingEntries ||
+        (onboardingEntry != null && !completed && !completingWithoutDevice && presetState?.isApplying != true &&
+            onboardingFlow?.canLeaveCurrentFlow() != false)
+    val canNavigateFromCurrentRouteNow by rememberUpdatedState {
+        val current = coordinator.publishedNavigation.value
+        val currentEntry = current.value.activeStack.last()
+        val activeRouteIsOnboarding = currentEntry.destination ==
+            NavigationDestination.Auxiliary(FeatureId.ONBOARDING)
+        val identity = current.entryIdentity(currentEntry.id)
+        !activeRouteIsOnboarding || onboarding == null ||
+            identity != null && identity in onboardingRetention?.unavailableEntries?.value.orEmpty() ||
+            identity?.let { onboardingRetention?.mountedEntries?.value?.get(it) }
+                ?.flow?.canLeaveCurrentFlow() == true
     }
     val holders = AppTab.entries.associateWith { rememberSaveableStateHolder() }
     val owners = state.stacks.flatMap { (tab, stack) -> stack.map { it.id to tab } }.toMap()
@@ -235,7 +301,8 @@ fun NativeNavigationShell(
                 NavigationSuiteItem(
                     navigationSuiteType = type,
                     selected = state.selectedTab == tab,
-                    onClick = { coordinator.selectTab(tab) },
+                    onClick = { if (canNavigateFromCurrentRouteNow()) coordinator.selectTab(tab) },
+                    enabled = canNavigateFromCurrentRoute,
                     modifier = Modifier
                         .heightIn(min = if (useRail) 72.dp else 80.dp * fontScale)
                         .testTag("tab:${tab.name}")
@@ -292,7 +359,8 @@ fun NativeNavigationShell(
                             navigationIcon = {
                                 if (state.canGoBack) {
                                     IconButton(
-                                        onClick = { coordinator.back(presented) },
+                                        onClick = { if (canNavigateFromCurrentRouteNow()) coordinator.back(presented) },
+                                        enabled = canNavigateFromCurrentRoute,
                                         modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("navigation-back"),
                                     ) {
                                         Icon(painterResource(R.drawable.ic_back), stringResource(Strings.string.scaffold_back))
@@ -302,12 +370,22 @@ fun NativeNavigationShell(
                             actions = {
                                 if (state.selectedTab == AppTab.NODES) {
                                     androidx.compose.material3.TextButton(
-                                        { coordinator.navigate(FeatureRoute(FeatureId.REMOTE_NODES)) },
-                                        Modifier.heightIn(min = 48.dp).testTag("open-remote-nodes"),
+                                        onClick = {
+                                            if (canNavigateFromCurrentRouteNow()) {
+                                                coordinator.navigate(FeatureRoute(FeatureId.REMOTE_NODES))
+                                            }
+                                        },
+                                        enabled = canNavigateFromCurrentRoute,
+                                        modifier = Modifier.heightIn(min = 48.dp).testTag("open-remote-nodes"),
                                     ) { Text(stringResource(com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings.remoteNodesAuthManagement)) }
                                 }
                                 IconButton(
-                                    onClick = { coordinator.navigate(FeatureRoute(FeatureId.ONBOARDING)) },
+                                    onClick = {
+                                        if (canNavigateFromCurrentRouteNow()) {
+                                            coordinator.navigate(FeatureRoute(FeatureId.ONBOARDING))
+                                        }
+                                    },
+                                    enabled = canNavigateFromCurrentRoute,
                                     modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).testTag("open-radio-setup"),
                                 ) {
                                     Icon(MeshSymbol.RADIO.vector, stringResource(Strings.string.scaffold_onboarding_title))
@@ -334,7 +412,7 @@ fun NativeNavigationShell(
                     modifier = Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding),
                     entryDecorators = listOf(decorator),
                     sceneStrategies = listOf(strategy),
-                    onBack = { coordinator.back(presented) },
+                    onBack = { if (canNavigateFromCurrentRouteNow()) coordinator.back(presented) },
                     transitionSpec = {
                         androidx.compose.animation.fadeIn(
                             androidx.compose.animation.core.tween(if (motionScale == 0f) 0 else 180),
@@ -351,7 +429,10 @@ fun NativeNavigationShell(
                         ) {
                             CompositionLocalProvider(
                                 LocalNavigationEntryId provides entry.id,
-                                LocalPresentedNavigation provides presented,
+                                LocalPresentedNavigation provides latestPresented,
+                                LocalOnboardingRetention provides onboardingRetention,
+                                LocalOnboardingEntries provides latestOnboardingEntries,
+                                LocalUnavailableOnboardingEntries provides latestUnavailableOnboardingEntries,
                             ) {
                                 Box(Modifier.fillMaxSize().focusRestorer().focusGroup().testTag("entry:${entry.id}")) {
                                     content(entry.destination, coordinator::navigate)
@@ -532,12 +613,60 @@ private fun ExistingFeatureContent(
         }
         FeatureId.SETTINGS -> if (settings != null) AppSettingsContent(settings, destination, coordinator)
             else SettingsEntry(route, navigate)
-        FeatureId.ONBOARDING -> OnboardingEntry(
-            route,
-            // Leaving the auxiliary setup route pops it before moving on (completion targets the Chats root).
-            { target -> coordinator.back(presented); navigate(target) },
-            onboarding,
-        )
+        FeatureId.ONBOARDING -> {
+            val retention = LocalOnboardingRetention.current
+            val entryId = LocalNavigationEntryId.current
+            val identity = entryId?.let(presented::entryIdentity)
+            val entries = LocalOnboardingEntries.current
+            val unavailableEntries = LocalUnavailableOnboardingEntries.current
+            val entry = identity?.let(entries::get)
+            when {
+                onboarding == null -> OnboardingEntry(route, navigate)
+                retention == null || entry == null -> Box(
+                    Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    if (identity != null && identity in unavailableEntries) {
+                        Text(stringResource(L.commonErrorFailedToLoad))
+                    } else {
+                        CircularProgressIndicator()
+                    }
+                }
+                else -> {
+                    val recovery by entry.recovery.collectAsStateWithLifecycle()
+                    val presentationRevision by entry.presentationRevision.collectAsStateWithLifecycle()
+                    val preset by entry.flow.preset.state.collectAsStateWithLifecycle()
+                    val completing by entry.flow.isCompletingWithoutDevice.collectAsStateWithLifecycle()
+                    val clearing by entry.flow.isClearingPairings.collectAsStateWithLifecycle()
+                    val completed by entry.flow.onboarding.hasCompletedOnboardingFlow.collectAsStateWithLifecycle()
+                    val unsettled by entry.flow.onboarding.unsettledCompletionFlow.collectAsStateWithLifecycle()
+                    val witness = remember(entry, presentationRevision) { entry.witness.get() }
+                    val waitingForPresentation =
+                        presented.value.activeStack.last().id == entry.identity.entryId &&
+                            witness.presented.activeEntryEpoch != presented.activeEntryEpoch &&
+                            !preset.isApplying && !completing && !clearing && !completed && !unsettled &&
+                            entry.flow.canLeaveCurrentFlow() && !recovery.failed
+                    if (waitingForPresentation) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator()
+                        }
+                    } else {
+                        OnboardingEntry(
+                            route = route,
+                            onNavigate = {},
+                            dependencies = entry.owner,
+                            onCompletionPublication = { flow, completion, commit ->
+                                if (presented.value.activeStack.last().id != entry.identity.entryId) false
+                                else retention.deliver(entry, flow, completion, commit)
+                            },
+                            completionDeliveryKey = presented.revision to recovery.deliveryRevision,
+                            flowCoordinator = entry.flow,
+                        )
+                    }
+                    OnboardingCompletionRecovery(retention, entry)
+                }
+            }
+        }
         FeatureId.REMOTE_NODES -> RemoteNodesEntry(route, navigate, remoteNodes, cliContent = { session, send, enabled ->
             AppRemoteNodeCli(session, send, enabled)
         }, launch = (destination as? NavigationDestination.RemoteNode)?.let {

@@ -16,6 +16,7 @@ import com.meshcoreone.android.core.model.TextType
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.CommandCode
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
+import com.meshcoreone.android.core.runtime.RuntimeDiagnostic
 import com.meshcoreone.android.core.runtime.ProcessConnectionPreferences
 import com.meshcoreone.android.core.runtime.RuntimePreferenceSnapshot
 import com.meshcoreone.android.core.runtime.RuntimePreferenceValue
@@ -35,6 +36,7 @@ import org.junit.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertFails
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertSame
@@ -286,7 +288,7 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
         assertSame(node, h.sessions.current)
     }
 
-    @Test fun cancellingAfterThePrivateKeyWriteReconcilesAndReleasesThePartialImport() = runTest {
+    @Test fun cancellingAnUnsettledEffectiveIdentityChannelWriteRetainsQuarantine() = runTest {
         withIdentityNode { h, node, radio, effectiveId ->
             val original = radio.respond
             radio.respond = { packet ->
@@ -305,11 +307,21 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
             assertTrue(work.isCancelled)
             assertEquals(listOf(ImportStep.PrivateKey), progress.map { it.step })
             assertNull(store.fetchContact(effectiveId, contactKey))
-            h.eventually("partial identity handoff", virtualBudgetMillis = 10_000) {
-                h.sessions.current?.token?.radioId == effectiveId
+            h.eventually("partial import cannot reopen an uncertain effective identity", virtualBudgetMillis = 10_000) {
+                node.isTornDown && h.diagnostics.filterIsInstance<RuntimeDiagnostic.Failure>().any {
+                    it.operation == "identity.rebuild" && it.cause is ChannelDispatchFailure.UnsettledDispatch
+                }
             }
             assertTrue(node.isTornDown)
-            assertEquals(2, h.sessions.created)
+            assertNull(h.sessions.current)
+            assertEquals(1, h.sessions.created)
+            assertEquals(0, h.sessions.outstanding)
+            assertNull(store.fetchChannelOccupantSnapshot(effectiveId, 0u))
+            val blocked = h.diagnostics.filterIsInstance<RuntimeDiagnostic.Failure>()
+                .single { it.operation == "identity.rebuild" }
+            assertIs<kotlinx.coroutines.CancellationException>(
+                assertIs<ChannelDispatchFailure.UnsettledDispatch>(blocked.cause).cause,
+            )
         }
     }
 

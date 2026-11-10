@@ -294,8 +294,12 @@ class TraceMapMountedConsumerTest {
                         text(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_pathedit_filter_favorites),
                     ).fetchSemanticsNodes().isNotEmpty())
         }
-        compose.onNodeWithTag("trace-map:center-all").assertIsEnabled()
-        assertNotNull(latest!!.camera)
+        if (awaitPreferences) {
+            compose.onNodeWithTag("trace-map:center-all").assertIsEnabled()
+            assertNotNull(latest!!.camera)
+        } else {
+            compose.onNodeWithTag("trace-map:center-all").assertIsNotEnabled()
+        }
     }
 
     private fun advanceFrames() {

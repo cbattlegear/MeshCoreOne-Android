@@ -264,6 +264,18 @@ internal class RecordingStore : PersistenceStoreProtocol by unsupportedRole(Pers
     override suspend fun updateChannelLastMessage(key: EntityKey, date: Instant?) {
         access("updateChannelLastMessage"); channels[key]?.let { channels[key] = it.copy(lastMessageDate = date) }
     }
+    override suspend fun applyChannelMessageMetadataIfCurrentOccupant(
+        scope: ChannelHistoryScope, lastMessageDate: Instant?, incrementUnreadCount: Boolean,
+    ): ChannelOccupantMetadataMutationOutcome {
+        access("applyChannelMessageMetadataIfCurrentOccupant")
+        val channel = channels.values.singleOrNull { it.radioId == scope.radioId && it.index == scope.channelIndex }
+        if (channel == null || !channel.isEnabled || channelOccupants[scope.radioId to scope.channelIndex] != scope.expectedOccupantID) {
+            return ChannelOccupantMetadataMutationOutcome.STALE_OR_UNPROVED
+        }
+        channels[EntityKey(channel.radioId, channel.id)] = channel.copy(lastMessageDate = lastMessageDate,
+            unreadCount = if (incrementUnreadCount) Math.incrementExact(channel.unreadCount) else channel.unreadCount)
+        return ChannelOccupantMetadataMutationOutcome.APPLIED
+    }
     override suspend fun insertPendingSendAssigningSequence(dto: PendingSendDTO): Long {
         access("insertPendingSendAssigningSequence")
         val sequence = Math.incrementExact(pending.values.filter { it.radioId == dto.radioId }.maxOfOrNull { it.sequence } ?: 0)

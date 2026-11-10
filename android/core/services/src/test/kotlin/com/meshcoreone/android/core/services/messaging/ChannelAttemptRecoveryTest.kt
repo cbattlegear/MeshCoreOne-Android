@@ -19,6 +19,52 @@ import org.junit.jupiter.api.TestFactory
 class ChannelAttemptRecoveryTest {
     private class FencedCancellation(val identity: Any) : CancellationException("cancel actual messaging request")
 
+    @TestFactory fun retryReadOnlyFailures() = (1..5).map { boundary ->
+        native("readonly-channel-boundary-$boundary-parks-and-resumes-without-recount-or-replay") {
+            val h = Harness(this); h.start()
+            val row = h.pending(h.message(MessageStatus.PENDING, 0u))
+            val failure = storageFailure()
+            var reads = 0
+            h.store.before = {
+                if (boundary < 5 && it == "fetchPendingSendsForMessage" && ++reads == boundary) throw failure
+                if (boundary == 5 && it == "fetchQueuedChannelAttempt") throw failure
+            }
+            val queue = h.queue()
+            queue.hydrate(); runCurrent()
+            val accepted = boundary == 5
+            assertEquals(if (accepted) 1 else 0, h.sends(CommandCode.SEND_CHANNEL_MESSAGE).size)
+            assertEquals(if (boundary <= 2) 0 else 1, h.store.calls.count { it == "incrementReadyQueuedChannelAttemptCount" })
+            assertEquals(1, queue.queuedEnvelopeCount)
+            assertEquals(if (accepted) QueuedChannelDispatchState.ACCEPTED else QueuedChannelDispatchState.READY,
+                h.store.pending.getValue(EntityKey(RADIO, row.id)).channelDispatchState)
+            h.store.before = null
+            queue.transportDidOpen(); runCurrent(); queue.awaitDrainCompletion()
+            assertEquals(1, h.sends(CommandCode.SEND_CHANNEL_MESSAGE).size)
+            assertEquals(1, h.store.calls.count { it == "incrementReadyQueuedChannelAttemptCount" })
+            assertEquals(1, h.store.channelAttempts.size)
+            assertTrue(h.store.channelAttempts.values.single().isCompleted)
+            assertTrue(h.store.pending.isEmpty())
+            assertEquals(MessageStatus.SENT, h.stored(row.messageID).status)
+        }
+    } + native("completion-after-replacement-does-not-attribute-old-send-to-new-occupant-metadata") {
+        val h = Harness(this)
+        h.store.seedChannelCreation()
+        h.start()
+        val originalChannel = h.store.channels.values.single()
+        val row = h.pending(h.message(MessageStatus.PENDING, 0u))
+        val accepted = h.service.sendQueuedChannel(row.id, requireNotNull(row.channelMessageEnvelope()), true)
+        val replacement = originalChannel.copy(name = "replacement", secret = com.meshcoreone.android.core.protocol.bytes.Bytes(ByteArray(16) { 2 }),
+            unreadCount = 8, lastMessageDate = BASE_TIME.minusSeconds(30))
+        h.store.channels[EntityKey(RADIO, replacement.id)] = replacement
+        h.store.channelOccupants[RADIO to 0u.toUByte()] = UUID.randomUUID()
+        h.service.completeQueuedChannel(accepted.key)
+        assertEquals(replacement, h.store.channels.getValue(EntityKey(RADIO, replacement.id)))
+        assertEquals(MessageStatus.SENT, h.stored(row.messageID).status)
+        assertTrue(h.store.pending.isEmpty())
+        assertEquals(1, h.sends(CommandCode.SEND_CHANNEL_MESSAGE).size)
+        assertFalse("updateChannelLastMessage" in h.store.calls)
+    }
+
     @TestFactory fun storageFailureIsolation() = listOf(false, true).flatMap { inline ->
         listOf("before-begin", "committed-begin", "begin-readback", "accepted-rollback", "accepted-readback").map { boundary ->
             native("storage-only-$boundary-inline-$inline-keeps-shared-radio-and-successor-usable") {
@@ -357,7 +403,7 @@ class ChannelAttemptRecoveryTest {
             }
             entered.await()
             val send = async {
-                assertFailsWith<QueuedChannelRetainedException> {
+                assertFailsWith<PersistenceStoreException> {
                     h.service.sendQueuedChannel(row.id, requireNotNull(row.channelMessageEnvelope()), true)
                 }
             }
@@ -365,7 +411,7 @@ class ChannelAttemptRecoveryTest {
             val readFailure = storageFailure()
             h.store.faults["fetchPendingSendsForMessage"] = readFailure
             release.complete(Unit); holder.join()
-            assertSame(readFailure, send.await().cause)
+            assertSame(readFailure, send.await())
             h.store.faults.clear()
             assertEquals(row, h.store.pending.getValue(EntityKey(RADIO, row.id)))
             assertTrue(h.store.channelAttempts.isEmpty())

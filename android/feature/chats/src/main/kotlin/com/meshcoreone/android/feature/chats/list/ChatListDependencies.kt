@@ -21,7 +21,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 
 /** Identity of a channel slot for the batched last-message fetch. */
-data class ChatChannelKey(val radioId: RadioId, val channelIndex: UByte, val id: UUID)
+data class ChatChannelKey(val radioId: RadioId, val channelIndex: UByte, val id: UUID, val occupantID: UUID? = null)
 
 /** Persistence reads/writes the list needs (the iOS `DataStore` subset ChatViewModel used). */
 interface ChatListDataSource {

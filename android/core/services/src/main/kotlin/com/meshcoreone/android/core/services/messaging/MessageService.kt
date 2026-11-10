@@ -45,6 +45,7 @@ internal class QueuedChannelRetainedException(val pendingID: UUID, cause: Throwa
 private sealed interface ChannelPrewireResult {
     data class Accepted(val attempt: QueuedChannelAttempt) : ChannelPrewireResult
     data class Rejected(val failure: PersistenceStoreException) : ChannelPrewireResult
+    data class ReadFailed(val failure: PersistenceStoreException) : ChannelPrewireResult
     data class CancelledUnsent(val cancellation: CancellationException) : ChannelPrewireResult
     data class CancelledAccepted(val cancellation: CancellationException) : ChannelPrewireResult
 }
@@ -1120,7 +1121,7 @@ class MessageService(
                 val siblings = try {
                     dataStore.fetchPendingSendsForMessage(key(envelope.messageID))
                 } catch (failure: PersistenceStoreException) {
-                    return@dispatch reject(failure)
+                    return@dispatch ChannelPrewireResult.ReadFailed(failure)
                 }
                 if (siblings.any { it.id != pendingID }) {
                     return@dispatch reject(PersistenceStoreException(PersistenceStoreError.InvalidData,
@@ -1206,6 +1207,7 @@ class MessageService(
             when (result) {
                 is ChannelPrewireResult.Accepted -> result.attempt
                 is ChannelPrewireResult.Rejected -> throw requireNotNull(retainedFailure)
+                is ChannelPrewireResult.ReadFailed -> throw result.failure
                 is ChannelPrewireResult.CancelledUnsent -> throw result.cancellation
                 is ChannelPrewireResult.CancelledAccepted -> throw result.cancellation
             }
@@ -1285,7 +1287,12 @@ class MessageService(
             if (dataStore.fetchMessage(key(attemptKey.messageID))?.status != MessageStatus.DELIVERED) {
                 events.yield(MessageStatusEvent.StatusResolved(attemptKey.messageID, MessageStatus.SENT, null))
             }
-            bookkeeping("channelDate.${attemptKey.messageID}") { updateChannelDate(accepted.channelIndex) }
+            bookkeeping("channelDate.${attemptKey.messageID}") {
+                dataStore.applyChannelMessageMetadataIfCurrentOccupant(
+                    ChannelHistoryScope(attemptKey.radioId, accepted.channelIndex, accepted.channelOccupantID),
+                    clock.wallClock.instant(), incrementUnreadCount = false,
+                )
+            }
         }
     }
 
@@ -1370,14 +1377,6 @@ class MessageService(
         ownership.check("inlineChannel.accepted")
         completeChannelAttempt(accepted.key)
         return accepted.wireTimestamp
-    }
-
-    private suspend fun updateChannelDate(index: UByte) {
-        dataStore.fetchChannel(token.radioId, index)?.let {
-            ownership.check("channelDate.read")
-            dataStore.updateChannelLastMessage(key(it.id), clock.wallClock.instant())
-            ownership.check("channelDate.saved")
-        }
     }
 
     private suspend fun <T> bookkeeping(operation: String, block: suspend () -> T) {

@@ -26,9 +26,41 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
 import org.junit.Test
 
 class ChatListRepairTest {
+    @Test fun `replacement evicts old channel preview and ignores late old-origin fetch`() = scenario {
+        val deps = FakeDependencies()
+        val original = channel("A").copy(occupantID = UUID.randomUUID())
+        val replacement = original.copy(occupantID = UUID.randomUUID())
+        val oldMessage = com.meshcoreone.android.core.model.MessageDTO(
+            radioId = original.radioId, channelIndex = original.index, text = "old A",
+            timestamp = 100u, createdAt = Instant.ofEpochSecond(100), channelOccupantID = original.occupantID,
+        )
+        val newMessage = oldMessage.copy(id = UUID.randomUUID(), text = "new B", channelOccupantID = replacement.occupantID)
+        val holder = ChatListStateHolder(deps, scope)
+        holder.setBuffers(channels = listOf(original))
+        holder.recomputeSnapshot()
+        deps.data.channelMessages = mapOf(original.id to listOf(oldMessage))
+        holder.loadLastMessagePreviews()
+        assertEquals(oldMessage, holder.state.value.lastMessages[original.id])
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        deps.data.channelPreviewGate = { entered.complete(Unit); release.await() }
+        val staleLoad = scope.launch { holder.loadLastMessagePreviews() }
+        entered.await()
+        holder.setBuffers(channels = listOf(replacement))
+        holder.recomputeSnapshot()
+        assertNull(holder.state.value.lastMessages[original.id])
+        deps.data.channelPreviewGate = null
+        deps.data.channelMessages = mapOf(replacement.id to listOf(newMessage))
+        holder.loadLastMessagePreviews()
+        release.complete(Unit)
+        staleLoad.join()
+        assertEquals(newMessage, holder.state.value.lastMessages[replacement.id])
+    }
+
     @Test
     fun `typed disconnected delete maps to original localized error resource`() {
         assertEquals(

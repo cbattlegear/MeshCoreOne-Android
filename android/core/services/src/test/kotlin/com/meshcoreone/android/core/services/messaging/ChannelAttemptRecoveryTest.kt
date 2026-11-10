@@ -26,7 +26,7 @@ class ChannelAttemptRecoveryTest {
             val failure = storageFailure()
             var reads = 0
             h.store.before = {
-                if (boundary < 5 && it == "fetchPendingSendsForMessage" && ++reads == boundary) throw failure
+                if (boundary < 5 && it == "fetchPendingSendsForMessage" && ++reads >= boundary) throw failure
                 if (boundary == 5 && it == "fetchQueuedChannelAttempt") throw failure
             }
             val queue = h.queue()

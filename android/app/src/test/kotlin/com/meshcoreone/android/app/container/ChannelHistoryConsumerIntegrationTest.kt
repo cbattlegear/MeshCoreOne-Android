@@ -69,7 +69,7 @@ class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
             store.saveChannel(radio, ChannelInfo(0u, "C", Bytes(ByteArray(16) { 3 })))
             assertFailsWith<PersistenceStoreException> { data.fetchMessage(incoming.id) }
         } finally {
-            h.close()
+            h.container.close()
         }
     }
 
@@ -95,7 +95,7 @@ class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
             assertNull(store.fetchChannelOccupantSnapshot(radio, 0u))
             assertTrue(store.fetchPendingSends(radio).isEmpty())
         } finally {
-            h.close()
+            h.container.close()
         }
     }
 }

@@ -29,6 +29,7 @@ import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.core.services.contacts.ChannelServiceError
+import com.meshcoreone.android.core.services.contacts.ChannelDispatchFailure
 import com.meshcoreone.android.core.services.contacts.AdvertisementError
 import com.meshcoreone.android.platform.shortcuts.*
 import java.util.Collections
@@ -575,29 +576,28 @@ class ShortcutQueueIntegrationTest : RoomProcessTest() {
             assertTrue(old.isTornDown)
             assertEquals(1, store.fetchPendingSendsForMessage(key).size)
             configure(h, rejectSend = true)
-            h.manager.connect(h.target(target))
             if (channel) {
-                h.eventually("replacement generation retains the original uncertain channel attempt") {
-                    h.manager.connectionState == DeviceConnectionState.READY && runBlocking {
-                        store.fetchPendingSendsForMessage(key).singleOrNull()?.let {
-                            it.id == beforeDisconnect.id &&
-                                it.channelDispatchState == QueuedChannelDispatchState.UNCERTAIN &&
-                                it.channelAttemptID == originalAttemptID
-                        } == true
-                    }
+                assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> {
+                    h.manager.connect(h.target(target))
                 }
+                val retained = store.fetchPendingSendsForMessage(key).single()
+                assertEquals(beforeDisconnect.id, retained.id)
+                assertEquals(QueuedChannelDispatchState.UNCERTAIN, retained.channelDispatchState)
+                assertEquals(originalAttemptID, retained.channelAttemptID)
+                assertNull(h.sessions.current)
                 assertEquals(MessageStatus.PENDING, store.fetchMessage(key)?.status)
                 assertEquals(0, failures, "An uncertain channel attempt is not terminal failure")
             } else {
+                h.manager.connect(h.target(target))
                 h.eventually("replacement generation terminal status") {
                     failures == 1 && h.sessions.current?.chatSendQueueService?.queuedEnvelopeCount == 0 && runBlocking {
                         store.fetchPendingSendsForMessage(key).isEmpty() &&
                             store.fetchMessage(key)?.status == MessageStatus.FAILED
                     }
                 }
+                assertNotEquals(old.token, assertNotNull(h.sessions.current).token)
             }
-            assertNotEquals(old.token, assertNotNull(h.sessions.current).token)
-            assertEquals(2, h.lifecycle.created.size)
+            assertEquals(if (channel) 1 else 2, h.lifecycle.created.size)
             assertEquals(original, assertNotNull(store.fetchMessage(key)).text)
             assertEquals(1, messages(store, recipient).size)
             assertEquals(if (channel) listOf(1, 0) else listOf(1, 1), h.links.radios.map { firmware ->
@@ -666,6 +666,11 @@ class ShortcutQueueIntegrationTest : RoomProcessTest() {
                 assertEquals(SendResult.Queued, flow(h).execute(id(recipient), original))
                 EntityKey(recipient.radioId, messages(backing, recipient).single().id)
             }
+            h.eventually("original process starts both accepted attempts before file close", virtualBudgetMillis = 0) {
+                val sent = h.links.radios.single().sent
+                sent.count { it[0].toInt() == 2 } == 1 && sent.count { it[0].toInt() == 3 } == 1
+            }
+            val originalAttemptID = assertNotNull(backing.fetchPendingSendsForMessage(keys.last()).single().channelAttemptID)
             h.container.close()
             backing.close()
             owner.cancel()
@@ -699,10 +704,12 @@ class ShortcutQueueIntegrationTest : RoomProcessTest() {
             assertEquals(MessageStatus.PENDING, channelMessage.status)
             val uncertain = backing.fetchPendingSendsForMessage(keys.last()).single()
             assertEquals(QueuedChannelDispatchState.UNCERTAIN, uncertain.channelDispatchState)
-            assertNotNull(uncertain.channelAttemptID)
+            assertEquals(originalAttemptID, uncertain.channelAttemptID)
             val firmware = replacement.links.radios.single()
             assertEquals(1, firmware.sent.count { it[0].toInt() == 2 })
-            assertEquals(1, firmware.sent.count { it[0].toInt() == 3 })
+            assertEquals(listOf(1, 0), listOf(h, replacement).map { graph ->
+                graph.links.radios.single().sent.count { it[0].toInt() == 3 }
+            })
             assertEquals(keys.first().radioId, replacement.appState.currentRadioId)
             assertEquals(1, replacement.lifecycle.created.size)
             assertEquals(1, backing.fetchMessages(keys.first().radioId, 0u, 100, 0).size)

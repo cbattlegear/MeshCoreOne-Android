@@ -18,18 +18,19 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import com.meshcoreone.android.core.datastore.AppStorageKey
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
-import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.designsystem.AppColorSchemePreference
+import com.meshcoreone.android.core.designsystem.MeshCoreTheme
+import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
+import com.meshcoreone.android.core.l10n.generated.AppMapStrings as M
 import com.meshcoreone.android.core.maps.*
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.feature.tools.trace.*
-import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
-import com.meshcoreone.android.core.l10n.generated.AppMapStrings as M
 import java.io.IOException
 import java.time.Duration
 import java.time.Instant
 import java.util.UUID
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.*
@@ -156,9 +157,16 @@ class TraceMapMountedConsumerTest {
     }
 
     @Test fun initialMapPreferenceFailureShowsRetryWithoutLoadingIndicator() {
+        var attempts = 0
+        val retryStarted = CompletableDeferred<Unit>()
+        val retryResult = CompletableDeferred<MapPreferences>()
         val failingPreferences = object : MapPreferenceStore {
-            override fun observe(host: MapFilterHost) =
-                kotlinx.coroutines.flow.flow<MapPreferences> { throw IOException("preference read failed") }
+            override fun observe(host: MapFilterHost): kotlinx.coroutines.flow.Flow<MapPreferences> =
+                kotlinx.coroutines.flow.flow {
+                    if (++attempts == 1) throw IOException("preference read failed")
+                    retryStarted.complete(Unit)
+                    emit(retryResult.await())
+                }
             override suspend fun setFilter(host: MapFilterHost, filter: MapFilterState) = Unit
             override suspend fun updateFilter(
                 host: MapFilterHost,
@@ -181,10 +189,18 @@ class TraceMapMountedConsumerTest {
         compose.onNodeWithTag("trace-map:preferences-loading").assertDoesNotExist()
 
         compose.onNodeWithText(retry).performClick()
-        compose.waitUntil(5_000) { failures.size == 2 }
+        compose.waitUntil(5_000) { retryStarted.isCompleted }
         compose.onNodeWithText(error).assertIsDisplayed()
         compose.onNodeWithText(retry).assertIsDisplayed()
         compose.onNodeWithTag("trace-map:preferences-loading").assertDoesNotExist()
+
+        retryResult.complete(MapPreferences(MapFilterState(), true, true, MapColorPreference.SYSTEM))
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithText(error).fetchSemanticsNodes().isEmpty() &&
+                compose.onAllNodesWithText(
+                    text(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_pathedit_filter_favorites),
+                ).fetchSemanticsNodes().isNotEmpty()
+        }
     }
 
     @Test fun explicitTraceFramingReissuesAfterPanAndOnRepeatedFit() {

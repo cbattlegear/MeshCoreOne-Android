@@ -704,7 +704,6 @@ internal fun TracePathMapContent(
     val formatBadge: (Double, Double) -> String = remember(badgeFormatter) { badgeFormatter::format }
     val appIsDark = effectiveAppThemeIsDark()
     LaunchedEffect(preferences, retry) {
-        preferenceError = false
         try {
             preferences.observe(MapFilterHost.TRACE_PATH).collect {
                 settings = it

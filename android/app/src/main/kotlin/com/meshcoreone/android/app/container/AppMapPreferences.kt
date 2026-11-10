@@ -114,7 +114,7 @@ internal class AppMapPreferences(
                 }
             }
         }
-        if (!legacyKeys.fold(legacy.edit()) { editor, key -> editor.remove(key) }.commit()) {
+        if (!legacy.edit().remove("filter-v1").remove("cluster-v1").remove("labels-v1").commit()) {
             throw IOException("Unable to retire private map preferences after migration")
         }
     }

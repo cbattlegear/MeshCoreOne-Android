@@ -223,7 +223,8 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
         val previousDeliveryFinished = CompletableDeferred<Unit>()
         var holdBeforeWire = beforeWire
         val persistence = object : PersistenceStoreProtocol by store,
-            ChannelHistoryPersisting by store, QueuedChannelTerminalPersisting by store,
+            ChannelHistoryPersisting by store,
+            QueuedChannelTerminalPersisting by store,
             InlineChannelAttemptPersisting by store {
             override suspend fun saveMessage(dto: MessageDTO) {
                 if (holdBeforeWire) {

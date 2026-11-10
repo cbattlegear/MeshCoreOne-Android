@@ -38,6 +38,7 @@ import com.meshcoreone.android.core.services.messaging.MessageService
 import com.meshcoreone.android.core.services.messaging.MessageServiceConfig
 import com.meshcoreone.android.core.services.messaging.MessagePollingService
 import com.meshcoreone.android.core.services.messaging.PoolBackoffConfig
+import com.meshcoreone.android.core.services.contacts.ChannelDispatchFailure
 import com.meshcoreone.android.core.services.contacts.ChannelDispatchFence
 import com.meshcoreone.android.core.services.contacts.ChannelService
 import java.security.MessageDigest
@@ -625,8 +626,10 @@ class MessagingRoomIntegrationTest {
             assertEquals(QueuedChannelDispatchState.UNCERTAIN, retained.getValue(firstRow.id).channelDispatchState)
             assertNotNull(retained.getValue(firstRow.id).channelAttemptID)
             assertEquals(3L, retained.getValue(secondRow.id).attemptCount)
-            assertEquals(QueuedChannelDispatchState.UNCERTAIN, retained.getValue(secondRow.id).channelDispatchState)
-            assertNotNull(retained.getValue(secondRow.id).channelAttemptID)
+            assertEquals(QueuedChannelDispatchState.READY, retained.getValue(secondRow.id).channelDispatchState)
+            assertNull(retained.getValue(secondRow.id).channelAttemptID)
+            assertTrue(store.fetchQueuedChannelAttempts(EntityKey(radio, secondRow.id)).isEmpty())
+            assertEquals(1, g.firmware.channelSent().size)
             assertEquals(first, store.fetchMessage(EntityKey(radio, first.id)))
             assertTrue(store.hasPendingSend(EntityKey(radio, first.id)))
             assertTrue(store.hasPendingSend(EntityKey(radio, second.id)))
@@ -637,7 +640,11 @@ class MessagingRoomIntegrationTest {
             assertTrue(observed.isEmpty())
             assertEquals(channel, store.fetchChannel(radio, 0u))
             val report = g.queue.shutdown()
-            assertTrue(report.isComplete, report.issues.toString())
+            assertFalse(report.isComplete)
+            assertEquals(2, report.issues.size)
+            val retainedCauses = report.issues.map { generateSequence(it.cause) { cause -> cause.cause }.toList() }
+            assertEquals(1, retainedCauses.count { causes -> causes.any { it is ChannelDispatchFailure.UnsettledDispatch } })
+            assertTrue(retainedCauses.all { causes -> causes.any { it is MeshCoreException.DeviceError && it.code == 2.toUByte() } })
             assertEquals(setOf(firstRow.id, secondRow.id), store.fetchPendingSends(radio).map { it.id }.toSet())
         } finally {
             listener.cancelAndJoin()
@@ -968,7 +975,8 @@ class MessagingRoomIntegrationTest {
         val message = g.service.createPendingChannelMessage("Hello channel", 0u, radio)
         assertEquals(snapshot.occupantID, message.channelOccupantID)
         val events = g.service.statusEvents()
-        assertFailsWith<MessageServiceException> { g.service.sendPendingChannelMessage(message.id) }
+        val failure = assertFails { g.service.sendPendingChannelMessage(message.id) }
+        assertIs<ChannelDispatchFailure.UnreconciledSession>(failure.cause)
         assertEquals(message.copy(status = MessageStatus.FAILED), store.fetchMessage(EntityKey(radio, message.id)))
         assertTrue(g.firmware.channelSent().isEmpty())
         assertTrue(completedStatuses(g, events).isEmpty(), "The queue owns pending-send failure publication")
@@ -982,7 +990,7 @@ class MessagingRoomIntegrationTest {
         val message = channelMessage("Hello channel", ChannelHistoryScope.from(snapshot)).copy(
             timestamp = 42u, createdAt = base.minusSeconds(1), sortDate = base.minusSeconds(1),
             status = MessageStatus.FAILED, heardRepeats = 3, sendCount = 1)
-        store.saveMessage(message)
+        store.saveChannelMessage(message, ChannelHistoryScope.from(snapshot))
         val g = RadioGeneration(55)
         g.start()
         g.firmware.configureChannel(snapshot.channel)

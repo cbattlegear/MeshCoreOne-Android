@@ -48,7 +48,7 @@ interface ComposerSendPort {
         text: String, contact: ContactDTO, textType: TextType = TextType.PLAIN, replyToId: UUID? = null,
     ): MessageDTO
     suspend fun createPendingChannel(
-        text: String, channelIndex: UByte, radioId: RadioId, textType: TextType = TextType.PLAIN,
+        text: String, channel: ChannelDTO, textType: TextType = TextType.PLAIN,
     ): MessageDTO
     suspend fun enqueueDM(envelope: DirectMessageEnvelope)
     suspend fun enqueueChannel(envelope: ChannelMessageEnvelope)

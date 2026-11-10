@@ -488,7 +488,7 @@ class EmojiComposerComposeTest {
             )),
             object : ComposerSendPort {
                 override suspend fun createPendingDirect(text: String, contact: ContactDTO, textType: TextType, replyToId: UUID?): MessageDTO = forbidden("send.direct")
-                override suspend fun createPendingChannel(text: String, channelIndex: UByte, radioId: RadioId, textType: TextType): MessageDTO = forbidden("send.channel")
+                override suspend fun createPendingChannel(text: String, channel: ChannelDTO, textType: TextType): MessageDTO = forbidden("send.channel")
                 override suspend fun enqueueDM(envelope: DirectMessageEnvelope): Unit = forbidden("enqueue.direct")
                 override suspend fun enqueueChannel(envelope: ChannelMessageEnvelope): Unit = forbidden("enqueue.channel")
                 override suspend fun signalDMEnqueued(envelope: DirectMessageEnvelope): Unit = forbidden("retry")

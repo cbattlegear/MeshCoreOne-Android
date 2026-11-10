@@ -3,12 +3,11 @@
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.contracts.domain.*
-import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceError
-import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceException
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
+import com.meshcoreone.android.core.services.contacts.ChannelDispatchFailure
 import java.util.UUID
 import kotlin.coroutines.CoroutineContext
 import kotlin.test.*
@@ -60,7 +59,7 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
             f.assertWire()
             f.assertCurrentGraph()
             val report = f.live.chatSendQueueService.shutdown()
-            assertTrue(report.isComplete, "An uncertain send must not create query-recovery teardown: ${report.issues}")
+            f.assertRetainedTeardown(report)
             f.assertStored(MessageStatus.PENDING, pending = true)
             f.disconnect()
             f.assertStored(MessageStatus.PENDING, pending = true)
@@ -80,7 +79,7 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
             assertTrue(f.failures("terminal").isEmpty())
 
             val report = f.live.chatSendQueueService.shutdown()
-            assertTrue(report.isComplete, "No query is started for a raw uncertain send: ${report.issues}")
+            f.assertRetainedTeardown(report)
             assertSame(report, f.live.chatSendQueueService.shutdown())
             assertFalse(f.live.chatSendQueueService.isObservingConnection)
             f.assertStored(MessageStatus.PENDING, pending = true)
@@ -131,17 +130,21 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
     }
 
     private fun assertDeviceError2(cause: Throwable) {
-        val service = assertIs<MessageServiceException>(
-            generateSequence(cause) { it.cause }.filterIsInstance<MessageServiceException>().single(),
-        )
-        val session = assertIs<MessageServiceError.SessionError>(service.error)
-        assertEquals(2.toUByte(), assertIs<MeshCoreException.DeviceError>(session.underlying).code)
+        val device = generateSequence(cause) { it.cause }.filterIsInstance<MeshCoreException.DeviceError>().single()
+        assertEquals(2.toUByte(), device.code)
     }
 
     private fun Fixture.assertRetainedDeviceError2() {
         val failures = retainedFailures()
         assertTrue(failures.isNotEmpty(), "The raw send error must be retained")
         failures.forEach(::assertDeviceError2)
+    }
+
+    private fun Fixture.assertRetainedTeardown(report: TeardownReport) {
+        assertFalse(report.isComplete)
+        assertEquals(listOf(LifecycleStage.STOP_SERVICES), report.issues.map { it.stage })
+        assertSame(retainedFailures().first(), report.issues.single().cause)
+        assertDeviceError2(report.issues.single().cause)
     }
 
     private class RecoveryGate(private val delegate: CoroutineDispatcher) : CoroutineDispatcher() {
@@ -171,7 +174,7 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
         val radioId = RadioId(UUID.fromString("A0000000-0000-0000-0000-000000000001"))
         private val foreignRadioId = RadioId(UUID.fromString("B0000000-0000-0000-0000-000000000001"))
         private val deviceID = UUID.fromString("A0000000-0000-0000-0000-000000000002")
-        private val channel = ChannelDTO(
+        private var channel = ChannelDTO(
             UUID.fromString("A0000000-0000-0000-0000-000000000003"), radioId, 0u, "Test",
             Bytes.fromHex("aa".repeat(16)),
         )
@@ -216,6 +219,7 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
             store.saveDevice(DeviceDTO(radioId = foreignRadioId, publicKey = key(8),
                 nodeName = "Foreign Node", isActive = false))
             seedReconciledChannel(channel)
+            channel = assertNotNull(store.fetchChannel(radioId, channel.index))
             val occupantID = assertNotNull(store.fetchChannelOccupantID(radioId, 0u))
             message = MessageDTO(
                 id = UUID.fromString("A0000000-0000-0000-0000-000000000004"), radioId = radioId,
@@ -238,6 +242,7 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
             )
             store.saveMessage(foreignMessage)
             store.upsertPendingSend(foreignPending)
+            harness.container.foreground.activityStarted()
             val connect = harness.container.uiScope.async {
                 harness.manager.connect(harness.target(deviceID))
             }
@@ -331,28 +336,29 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
             val retained = store.fetchPendingSendsForMessage(EntityKey(radioId, message.id)).single()
             val previousFirmware = firmware
             sending = false
-            harness.manager.connect(harness.target(deviceID))
-            harness.assertReady()
+            val blocked = assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> {
+                harness.manager.connect(harness.target(deviceID))
+            }
+            assertDeviceError2(blocked)
             harness.settle()
-            val successor = assertNotNull(harness.sessions.current)
-            assertNotSame(live, successor)
-            assertEquals(live.token.radioId, successor.token.radioId)
-            assertTrue(successor.token.generation.value > live.token.generation.value)
-            assertSame(store, successor.dataStore)
-            assertEquals(2, harness.sessions.created)
-            assertEquals(0, successor.chatSendQueueService.queuedEnvelopeCount)
+            assertNull(harness.sessions.current)
+            assertEquals(1, harness.lifecycle.created.size, "Quarantine rejects the successor before service construction")
             assertEquals(listOf(retained), store.fetchPendingSendsForMessage(EntityKey(radioId, message.id)))
             assertEquals(listOf(send), previousFirmware.sent.filter { it[0] == 3.toUByte() })
-            assertTrue(firmware.sent.any { it[0] == 31.toUByte() }, "The successor must perform its own channel sync")
-            assertTrue(firmware.sent.none { it[0] == 3.toUByte() }, "Reconnection cannot replay an uncertain submission")
+            assertTrue(harness.links.radios.size > 1)
+            harness.links.radios.drop(1).forEach { successor ->
+                assertTrue(successor.sent.none { it[0] == 31.toUByte() }, "Quarantine rejects every successor before channel sync")
+                assertTrue(successor.sent.none { it[0] == 3.toUByte() }, "Reconnection cannot replay an uncertain submission")
+            }
         }
 
-        suspend fun disconnect(expectedIssue: Throwable? = null) {
+        suspend fun disconnect() {
             val report = harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
-            if (expectedIssue == null) assertTrue(report.isComplete, "Unexpected teardown issues: ${report.issues}")
-            else {
-                assertEquals(listOf(LifecycleStage.STOP_SERVICES), report.issues.map { it.stage })
-                assertSame(expectedIssue, report.issues.single().cause)
+            assertFalse(report.isComplete)
+            assertEquals(listOf(LifecycleStage.STOP_SERVICES), report.issues.map { it.stage })
+            report.issues.forEach {
+                assertSame(retainedFailures().first(), it.cause)
+                assertDeviceError2(it.cause)
             }
             assertTrue(live.isTornDown)
             assertFalse(live.chatSendQueueService.isObservingConnection)

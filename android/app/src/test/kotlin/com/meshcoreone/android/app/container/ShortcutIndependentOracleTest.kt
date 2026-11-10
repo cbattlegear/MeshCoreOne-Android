@@ -44,13 +44,16 @@ class ShortcutIndependentOracleTest : RoomProcessTest() {
             firmware.respond = { frame ->
                 when {
                     frame[0].toInt() in 2..3 -> emptyList()
-                    channel && frame[0].toInt() == 0x1f && frame[1].toInt() == 0 ->
-                        listOf(Bytes.of(0x12, 0) + Bytes.utf8("Oracle").paddedOrTruncated(32) +
-                            Bytes(ByteArray(16) { 9 }))
+                    channel && frame[0].toInt() == 0x1f -> listOf(
+                        if (frame[1].toInt() == 0) Bytes.of(0x12, 0) +
+                            Bytes.utf8("Oracle").paddedOrTruncated(32) + Bytes(ByteArray(16) { 9 })
+                        else Bytes.of(0x12, frame[1].toInt()) + Bytes(ByteArray(48)),
+                    )
                     else -> null
                 }
             }
         }
+        if (channel) h.container.foreground.activityStarted()
         h.manager.connect(h.target())
         h.eventually("independent shortcut oracle READY") { h.manager.connectionState == DeviceConnectionState.READY }
         h.settle()

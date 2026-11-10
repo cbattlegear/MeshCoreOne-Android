@@ -987,10 +987,10 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                         pinned.createPendingDirect(text, contact, textType, replyToId)
                     }
                     override suspend fun createPendingChannel(
-                        text: String, channelIndex: UByte, radioId: RadioId, textType: TextType,
+                        text: String, channel: ChannelDTO, textType: TextType,
                     ) = withContext(receipt) {
                         checkChannel()
-                        pinned.createPendingChannel(text, channelIndex, radioId, textType).also {
+                        pinned.createPendingChannel(text, channel, textType).also {
                             checkChannel()
                         }
                     }
@@ -1019,10 +1019,10 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 app.messageEventStream.send(MessageEvent.DirectMessageReceived(it, contact))
                 app.refreshConversations()
             }
-        override suspend fun createPendingChannel(text: String, channelIndex: UByte, radioId: RadioId, textType: TextType) =
-            acceptedSession().messageService.createPendingChannelMessage(text, channelIndex, radioId, textType).also {
+        override suspend fun createPendingChannel(text: String, channel: ChannelDTO, textType: TextType) =
+            acceptedSession().messageService.createPendingChannelMessage(text, channel, textType).also {
                 beforeChannelPublication()
-                app.messageEventStream.send(MessageEvent.ChannelMessageReceived(it, channelIndex))
+                app.messageEventStream.send(MessageEvent.ChannelMessageReceived(it, channel.index))
                 app.refreshConversations()
             }
         override suspend fun enqueueDM(envelope: DirectMessageEnvelope) =

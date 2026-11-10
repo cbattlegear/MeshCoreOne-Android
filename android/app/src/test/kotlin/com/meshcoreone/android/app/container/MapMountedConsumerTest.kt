@@ -12,6 +12,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
@@ -302,6 +303,56 @@ class MapMountedConsumerTest {
         assertEquals(pan, dispatched.last().camera)
     }
 
+    @Test fun newPendingFocusOverridesRestoredPinAndCameraBeforeAnyPresentation() {
+        val original = GeoPoint(10.0, 20.0)
+        val replacement = GeoPoint(30.0, 40.0)
+        val pendingFocus = mutableStateOf<GeoPoint?>(original)
+        val dispatched = mutableListOf<MapPresentationState>()
+        var replaceOnDispose = false
+        var consumed = 0
+        val restoration = restorationTester()
+        mount(
+            MapFeatureDependencies(source { content() }, offline()),
+            focus = { pendingFocus.value },
+            onFocusConsumed = { consumed++; pendingFocus.value = null },
+            onPresentation = { dispatched += it },
+            restoration = restoration,
+            onMapDispose = {
+                if (replaceOnDispose) {
+                    replaceOnDispose = false
+                    pendingFocus.value = replacement
+                }
+            },
+        )
+        val pinId = dispatched.last().points.single { it.style == MapPinStyle.DROPPED_PIN }.id
+        compose.runOnIdle { replaceOnDispose = true }
+        dispatched.clear()
+        restoration.emulateSavedInstanceStateRestore()
+        advanceFrames()
+        compose.waitForIdle()
+
+        assertEquals(2, consumed)
+        assertTrue(dispatched.isNotEmpty())
+        assertTrue(
+            "A new pending focus must own every restored camera presentation",
+            dispatched.all { it.camera == MapCamera(replacement, 0.01, 0.01) },
+        )
+        dispatched.forEach { state ->
+            val pin = state.points.single { it.style == MapPinStyle.DROPPED_PIN }
+            assertEquals(pinId, pin.id)
+            assertEquals(replacement, pin.position)
+        }
+
+        dispatched.clear()
+        restoration.emulateSavedInstanceStateRestore()
+        advanceFrames()
+        compose.waitForIdle()
+        assertEquals(2, consumed)
+        assertTrue(dispatched.isNotEmpty())
+        assertTrue(dispatched.all { it.camera == MapCamera(replacement, 0.01, 0.01) })
+        assertEquals(replacement, dispatched.last().points.single { it.id == pinId }.position)
+    }
+
     @Test fun initialAndExplicitFramingUseOnlyVisiblePinsAndEmptyMapDisablesCenterAll() {
         host.get().getSharedPreferences("shared-map", 0).edit().putString(
             "filter-v1", MapFilterState(favoritesOnly = true).encode(),
@@ -482,6 +533,7 @@ class MapMountedConsumerTest {
         dependenciesProvider: (() -> MapFeatureDependencies)? = null,
         restoration: StateRestorationTester? = null,
         onCameraCallback: ((MapCamera) -> Unit) -> Unit = {},
+        onMapDispose: () -> Unit = {},
     ) {
         val bound = dependencies.copy(preferences = dependencies.preferences ?: AppMapPreferences(
             MeshCoreStorage.get(host.get()).preferences,
@@ -497,6 +549,7 @@ class MapMountedConsumerTest {
                         onFocusConsumed = onFocusConsumed,
                         mapSurface = { state, _, _, camera, select, overlay ->
                             SideEffect { onPresentation(state); onCameraCallback(camera) }
+                            DisposableEffect(Unit) { onDispose { onMapDispose() } }
                             Box(Modifier.fillMaxSize()) {
                                 Column(Modifier.align(androidx.compose.ui.Alignment.Center).testTag("test-renderer")) {
                                     state.points.forEach { marker ->

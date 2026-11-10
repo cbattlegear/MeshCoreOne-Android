@@ -230,7 +230,7 @@ private fun MapContent(
     }
 
     val filtered = feature.visibleMarkers.map { it.marker }.toMutableList()
-    focusedPoint?.let {
+    (focus ?: focusedPoint)?.let {
         filtered += MapMarker(
             id = focusedPinId,
             position = it,
@@ -243,7 +243,7 @@ private fun MapContent(
     val state = MapPresentationState(
         availability = MapAvailability.Available(MapLibreOpenFreeMap.catalog),
         style = MapStyle.STANDARD,
-        camera = camera,
+        camera = focus?.let { MapCamera(it, 0.01, 0.01) } ?: camera,
         cameraCommandRevision = cameraCommandRevision,
         points = filtered,
         lines = feature.content.lines,
@@ -306,7 +306,7 @@ private fun MapContent(
             }
         }
         val selectedItem = feature.selected ?: filtered.firstOrNull {
-            focusedPinSelected && it.id == focusedPinId
+            focus == null && focusedPinSelected && it.id == focusedPinId
         }?.let {
             MapFeatureMarker(it, ContactMapType.CHAT, false, false)
         }

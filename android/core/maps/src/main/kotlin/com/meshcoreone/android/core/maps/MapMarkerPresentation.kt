@@ -64,7 +64,7 @@ val MapMarker.symbolText: String
 /** Name visibility never suppresses a trace badge or hop/endpoint label. */
 val MapMarker.semanticText: String
     get() = listOfNotNull(
-        label?.takeIf(String::isNotBlank),
+        accessibilityLabel?.takeIf(String::isNotBlank) ?: label?.takeIf(String::isNotBlank),
         when (style) {
             MapPinStyle.POINT_A, MapPinStyle.POINT_B, MapPinStyle.REPEATER_HOP,
             MapPinStyle.REPEATER_RING_WHITE, MapPinStyle.CROSSHAIR, MapPinStyle.OBSTRUCTION -> symbolText

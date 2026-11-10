@@ -74,7 +74,12 @@ internal class FakeData : ChatListDataSource {
         channelPreviewGate?.invoke()
         return fetched
     }
-    override suspend fun fetchFailedSendConversationKeys(radioId: RadioId) = failedSend
+    var failedSendGate: (suspend () -> Unit)? = null
+    override suspend fun fetchFailedSendConversationKeys(radioId: RadioId): FailedSendConversationKeys {
+        val fetched = failedSend
+        failedSendGate?.invoke()
+        return fetched
+    }
     override suspend fun setContactMuted(contactId: UUID, isMuted: Boolean) { calls += "muted:$contactId:$isMuted" }
     override suspend fun setChannelNotificationLevel(channelId: UUID, level: NotificationLevel) { calls += "level:$channelId:$level" }
     override suspend fun setSessionNotificationLevel(sessionId: UUID, level: NotificationLevel) { calls += "slevel:$sessionId:$level" }

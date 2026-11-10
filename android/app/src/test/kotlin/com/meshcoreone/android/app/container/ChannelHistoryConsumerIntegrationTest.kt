@@ -42,6 +42,11 @@ class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
             assertFailsWith<PersistenceStoreException> {
                 oldTimeline.fetchMessages(TimelineConversation.Channel(a), 50, 0)
             }
+            store.incrementChannelUnreadCount(EntityKey(radio, b.id))
+            assertFailsWith<PersistenceStoreException> { oldTimeline.clearUnread(TimelineConversation.Channel(a)) }
+            assertEquals(1L, store.fetchChannel(radio, b.index)?.unreadCount)
+            data.clearUnread(conversation)
+            assertEquals(0L, store.fetchChannel(radio, b.index)?.unreadCount)
             val summaries = h.container.chatsFeature.listFor(radio).data
             val key = ChatChannelKey(radio, b.index, b.id, b.occupantID)
             assertEquals(listOf(current), summaries.fetchLastChannelMessages(listOf(key), 3).getValue(b.id))

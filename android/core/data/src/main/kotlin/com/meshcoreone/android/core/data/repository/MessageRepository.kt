@@ -214,6 +214,14 @@ internal class MessageRepository(
             save()
         }
 
+    override suspend fun clearChannelTimelineUnread(origin: ChannelHistoryScope) =
+        context.write("clearChannelTimelineUnread") {
+            requireCurrentChannelOrigin(origin)
+            val channel = database.channels().forIndex(origin.radioId.value, origin.channelIndex.toLong()).single()
+            database.channels().upsert(channel.copy(unreadCount = 0))
+            save()
+        }
+
     override suspend fun fetchChannelHistoryWindow(
         origin: ChannelHistoryScope, anchorSortDate: Instant?, floorLimit: Long,
     ): MessageWindow = readChannelHistory("fetchChannelHistoryWindow", origin) {

@@ -40,6 +40,7 @@ interface ChannelHistoryPersisting {
     suspend fun countUnseenChannelTimelineFailures(origin: ChannelHistoryScope): Long
     suspend fun fetchChannelTimelineMessage(origin: ChannelHistoryScope, message: EntityKey): MessageDTO?
     suspend fun markChannelTimelineFailuresSeen(origin: ChannelHistoryScope)
+    suspend fun clearChannelTimelineUnread(origin: ChannelHistoryScope)
     suspend fun fetchChannelHistory(origin: ChannelHistoryScope, limit: Long = 50, offset: Long = 0): SnapshotList<MessageDTO>
     suspend fun fetchChannelHistoryWindow(origin: ChannelHistoryScope, anchorSortDate: Instant?, floorLimit: Long): MessageWindow
     suspend fun countChannelHistory(origin: ChannelHistoryScope): Long

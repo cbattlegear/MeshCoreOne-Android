@@ -742,8 +742,11 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 when (conversation) {
                     is TimelineConversation.Direct ->
                         store.clearUnreadCount(EntityKey(radio, conversation.contact.id))
-                    is TimelineConversation.Channel ->
-                        store.clearChannelUnreadCount(radio, conversation.channel.index)
+                    is TimelineConversation.Channel -> {
+                        val channel = conversation.channel
+                        if (radio == MockDataProvider.simulatorRadioId) store.clearChannelUnreadCount(radio, channel.index)
+                        else channelHistory.clearChannelTimelineUnread(channelOrigin(radio, channel.index, channel.occupantID))
+                    }
                 }
                 container.sessions.current?.notificationService?.updateBadgeCount()
                 app.refreshConversations()

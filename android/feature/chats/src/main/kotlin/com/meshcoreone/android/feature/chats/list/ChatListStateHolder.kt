@@ -233,7 +233,7 @@ class ChatListStateHolder(
         val stale = (current.snapshot.favorites + current.snapshot.others).filterIsInstance<Conversation.Channel>()
             .filter { old -> channels[old.id]?.let { sameChannelHistory(old.channel, it) } != true }.map { it.id }.toSet()
         return current.copy(snapshot = snapshot, snapshotGeneration = current.snapshotGeneration + 1,
-            lastMessages = current.lastMessages.filterKeys { it !in stale })
+            lastMessages = current.lastMessages.filterKeys { it !in stale }, failedSendIds = current.failedSendIds - stale)
     }
 
     private fun sameChannelHistory(left: ChannelDTO, right: ChannelDTO): Boolean =
@@ -457,10 +457,16 @@ class ChatListStateHolder(
             mutableState.update { it.copy(failedSendIds = emptySet()) }
             return
         }
+        val channels = mutableState.value.channels
         try {
             val keys = data.fetchFailedSendConversationKeys(radioId)
             if (generation != failedSendRefreshGeneration || !currentJobActive()) return
-            mutableState.update { it.copy(failedSendIds = (keys.contactIDs + keys.channelIDs + keys.roomSessionIDs).toSet()) }
+            mutableState.update { current ->
+                val latest = current.channels.associateBy { it.id }
+                val stale = channels.filter { old -> latest[old.id]?.let { sameChannelHistory(old, it) } != true }
+                    .map { it.id }.toSet()
+                current.copy(failedSendIds = (keys.contactIDs + (keys.channelIDs - stale) + keys.roomSessionIDs).toSet())
+            }
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (failure: Exception) {

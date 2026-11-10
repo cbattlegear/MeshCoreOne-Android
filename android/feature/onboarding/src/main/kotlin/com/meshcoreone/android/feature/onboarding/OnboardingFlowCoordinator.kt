@@ -14,13 +14,15 @@ import kotlinx.coroutines.launch
 
 class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val deps: OnboardingFeatureDependencies) {
     private var completing = false
+    @Volatile
+    private var refreshingCompletionPresentation = false
     private var pendingPairAfterPermission = false
     val onboarding = OnboardingState(deps.flags)
     val permissions = PermissionsCoordinator(deps.permissions)
     val deviceScan = DeviceScanCoordinator(
         scope, deps.pairing, deps.demo, deps.permissions,
         onConnected = { onboarding.append(OnboardingStep.REGION) },
-        canStartConnection = { !completing && onboarding.canStartCompletion() },
+        canStartConnection = { !refreshingCompletionPresentation && !completing && onboarding.canStartCompletion() },
         lifecycle = onboarding,
     )
     val wifi = WiFiConnectionCoordinator(
@@ -28,11 +30,16 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
         onConnected = {
             val generation = onboarding.lifecycleGeneration.value
             deviceScan.dismissSheet()
-            if (onboarding.lifecycleGeneration.value == generation && !completing && onboarding.canStartCompletion()) {
+            if (
+                onboarding.lifecycleGeneration.value == generation &&
+                !refreshingCompletionPresentation &&
+                !completing &&
+                onboarding.canStartCompletion()
+            ) {
                 onboarding.append(OnboardingStep.REGION)
             }
         },
-        canStartConnection = { !completing && onboarding.canStartCompletion() },
+        canStartConnection = { !refreshingCompletionPresentation && !completing && onboarding.canStartCompletion() },
         lifecycle = onboarding,
     )
     val region = RegionStepCoordinator(scope, deps.region, { deps.permissions.snapshot.value.location == PermissionStatus.GRANTED }) {
@@ -40,7 +47,7 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
     }
     val preset = PresetStepCoordinator(
         scope, deps.region, deps.presets,
-        canStart = { !completing && onboarding.canStartCompletion() },
+        canStart = { !refreshingCompletionPresentation && !completing && onboarding.canStartCompletion() },
         lifecycle = onboarding, onCompleted = ::completePreset,
     )
 
@@ -96,6 +103,30 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
             !onboarding.hasUnsettledCompletion
     fun back(): Boolean = canLeaveCurrentFlow() && onboarding.pop()
 
+    /**
+     * Runs a non-blocking atomic host-witness swap only while this flow is idle.
+     * [update] must not suspend, perform I/O or navigation, or call back into product behavior.
+     */
+    fun refreshCompletionPresentationIfIdle(update: () -> Boolean): Boolean = onboarding.withLifecycle {
+        if (
+            refreshingCompletionPresentation ||
+            completing ||
+            clearing.value ||
+            preset.state.value.isApplying ||
+            onboarding.hasCompletedOnboarding ||
+            onboarding.hasUnsettledCompletion ||
+            !onboarding.canStartCompletion() ||
+            onboarding.canReconcileCompletion()
+        ) return@withLifecycle false
+
+        refreshingCompletionPresentation = true
+        try {
+            update()
+        } finally {
+            refreshingCompletionPresentation = false
+        }
+    }
+
     /** Just-in-time Bluetooth permission: ask on first "Add device", then resume pairing from the result. */
     fun addDevice(requestPermission: (OnboardingPermissionKind) -> Unit) {
         if (deviceScan.startPairing() == PairingBlocker.BLUETOOTH_PERMISSION) {
@@ -124,10 +155,16 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
         completionError.value = false
     }
 
-    fun canCompleteWithoutDevice(): Boolean =
-        (onboarding.canStartCompletion() || onboarding.canReconcileCompletion()) && !preset.state.value.isApplying &&
-            !completing && !clearing.value && !deviceScan.state.value.localBusy &&
-            !deps.pairing.connection.value.isBusy && !wifi.state.value.isConnecting
+    fun canCompleteWithoutDevice(): Boolean = onboarding.withLifecycle {
+        !refreshingCompletionPresentation &&
+            (onboarding.canStartCompletion() || onboarding.canReconcileCompletion()) &&
+            !preset.state.value.isApplying &&
+            !completing &&
+            !clearing.value &&
+            !deviceScan.state.value.localBusy &&
+            !deps.pairing.connection.value.isBusy &&
+            !wifi.state.value.isConnecting
+    }
 
     fun dismissPairingSheet() {
         if (canDismissPairingSheet()) deviceScan.dismissSheet()
@@ -144,18 +181,35 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
         val job = onboarding.withLifecycle {
             if (!canCompleteWithoutDevice()) return@withLifecycle null
             val generation = onboarding.lifecycleGeneration.value
+            val reconciling = onboarding.canReconcileCompletion()
+            val targetAtAttempt = if (reconciling) null else deps.presets.currentTarget()
+            if (
+                onboarding.lifecycleGeneration.value != generation ||
+                !canCompleteWithoutDevice() ||
+                onboarding.canReconcileCompletion() != reconciling
+            ) return@withLifecycle null
+            val sessionAtAttempt = targetAtAttempt?.toSessionToken()
             completing = true
             completingWithoutDevice.value = true
             scope.launch(start = CoroutineStart.LAZY) {
                 try {
-                    if (onboarding.canReconcileCompletion()) {
+                    if (reconciling) {
                         check(onboarding.reconcileCompletion(generation)) {
                             "Onboarding completion was not committed; retry is now available"
                         }
                     } else {
-                        onboarding.completeOnboarding {
-                            check(onboarding.lifecycleGeneration.value == generation) { "Onboarding attempt was retired" }
-                        }
+                        onboarding.completeOnboardingWithSeal(
+                            sessionAtAttempt = sessionAtAttempt,
+                            requireCurrent = {
+                                check(onboarding.lifecycleGeneration.value == generation) {
+                                    "Onboarding attempt was retired"
+                                }
+                            },
+                            seal = { attempt ->
+                                targetAtAttempt?.let { deps.presets.sealCompletion(it, attempt) }
+                                    ?: attempt.trySeal()
+                            },
+                        )
                     }
                     onboarding.withLifecycle {
                         if (onboarding.lifecycleGeneration.value == generation) {
@@ -184,7 +238,9 @@ class OnboardingFlowCoordinator(private val scope: CoroutineScope, private val d
 
     fun clearStalePairings() {
         val job = onboarding.withLifecycle {
-            if (clearing.value || completing || !onboarding.canStartCompletion()) return@withLifecycle null
+            if (clearing.value || refreshingCompletionPresentation || completing || !onboarding.canStartCompletion()) {
+                return@withLifecycle null
+            }
             val generation = onboarding.lifecycleGeneration.value
             clearing.update { true }
             scope.launch(start = CoroutineStart.LAZY) {

@@ -470,6 +470,12 @@ class OnboardingRegionPresetComposeTest {
         }
         override val presets = object : OnboardingPresetPort {
             override val canApply = this@Fixture.canApply
+            private val target = OnboardingPresetTarget(
+                epoch = UUID.fromString("50200000-0000-0000-0000-000000000315"),
+                generation = 1,
+                radioId = UUID.fromString("50200000-0000-0000-0000-000000000316"),
+            )
+            override fun currentTarget() = target
             override suspend fun apply(presetId: String): OnboardingPresetOutcome =
                 ApplyAttempt(presetId, currentCoroutineContext().job).also { applies += it }.result.await()
         }

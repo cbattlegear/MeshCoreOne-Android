@@ -63,10 +63,11 @@ class NotificationActionHandler(
     // MARK: - Quick Reply
 
     suspend fun handleQuickReply(contact: EntityKey, text: String) {
+        val action = currentCoroutineContext()[NotificationActionReceipt] ?: NotificationActionReceipt()
+        notificationService.trackActionDraft(contact, action)
         val stored = contained("fetchContact", null) { dataStore.fetchContact(contact) } ?: return
 
         if (connectionReady() && contact.radioId == radioId && stored.radioId == radioId) {
-            val action = currentCoroutineContext()[NotificationActionReceipt] ?: NotificationActionReceipt()
             sendReply(
                 actionReceipt = action,
                 send = { messageService.sendDirectMessage(text, stored) },
@@ -83,17 +84,16 @@ class NotificationActionHandler(
             return
         }
 
-        replyNotSent(contact, stored.displayName, text)
+        replyNotSent(contact, stored.displayName, text, action)
     }
 
     private suspend fun replyNotSent(
         contact: EntityKey,
         displayName: String,
         text: String,
-        owner: NotificationActionReceipt? = null,
+        owner: NotificationActionReceipt,
     ) {
-        if (owner == null) notificationService.saveDraft(contact, text)
-        else notificationService.saveActionDraft(contact, text, owner)
+        notificationService.saveActionDraft(contact, text, owner)
         notificationService.postQuickReplyFailedNotification(displayName, contact)
     }
 

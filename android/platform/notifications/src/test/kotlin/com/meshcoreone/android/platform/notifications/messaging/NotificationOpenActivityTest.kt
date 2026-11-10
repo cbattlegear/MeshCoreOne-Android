@@ -213,7 +213,7 @@ class NotificationOpenActivityTest {
                     NotificationResponse(
                         expected,
                         if (reply) NotificationAction.REPLY else NotificationAction.MARK_READ,
-                        if (reply) "own radio reply" else null,
+                        if (reply) "  own radio reply  " else null,
                     ),
                     received.last(),
                 )

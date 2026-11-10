@@ -24,6 +24,7 @@ import com.meshcoreone.android.core.model.canonicalString
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.protocol.model.ContactType
 import java.util.UUID
+import java.util.WeakHashMap
 import java.util.concurrent.atomic.AtomicReference
 import java.util.logging.Level
 import java.util.logging.Logger
@@ -159,6 +160,9 @@ class NotificationService(
     /** Guarded by [lock]: in-memory quick-reply drafts, lost with the session as in Swift. */
     private val pendingDrafts = HashMap<EntityKey, String>()
     private val pendingDraftOwners = HashMap<EntityKey, NotificationActionReceipt>()
+    private class ActionDraft(val contact: EntityKey, var revoked: Boolean = false)
+    // Keep revocation for the action's lifetime, without retaining completed action receipts.
+    private val actionDrafts = WeakHashMap<NotificationActionReceipt, ActionDraft>()
 
     // MARK: - Setup and authorization
 
@@ -377,11 +381,22 @@ class NotificationService(
         synchronized(lock) {
             pendingDrafts[contact] = text
             pendingDraftOwners.remove(contact)
+            actionDrafts.values.filter { it.contact == contact }.forEach { it.revoked = true }
+        }
+    }
+
+    internal fun trackActionDraft(contact: EntityKey, owner: NotificationActionReceipt) {
+        synchronized(lock) {
+            val draft = actionDrafts.getOrPut(owner) { ActionDraft(contact) }
+            check(draft.contact == contact) { "A notification action cannot change its draft target" }
         }
     }
 
     internal fun saveActionDraft(contact: EntityKey, text: String, owner: NotificationActionReceipt) {
         synchronized(lock) {
+            val draft = checkNotNull(actionDrafts[owner]) { "Notification draft tracking must start before sending" }
+            check(draft.contact == contact) { "A notification action cannot change its draft target" }
+            if (draft.revoked) return
             pendingDrafts[contact] = text
             pendingDraftOwners[contact] = owner
         }

@@ -42,7 +42,11 @@ the full run to CI. From `android/` (`gradlew.bat` on Windows):
 ./gradlew --dependency-verification strict verifyScaffoldTests verifyRoomSchema validateModuleGraph
 ./gradlew --dependency-verification strict :core:protocol:test              # JVM modules: :<module>:test
 ./gradlew --dependency-verification strict :feature:chats:testDebugUnitTest # Android modules: :<module>:testDebugUnitTest
+./gradlew --dependency-verification strict :platform:notifications:testDebugUnitTest
 ```
+
+Notification SQLite tests use isolated JUnit temporary folders rather than Robolectric's long per-test cache
+paths, which can exceed the Windows SQLite path limit. They still exercise real on-disk SQLite transactions.
 
 | Root task | What it checks |
 | --- | --- |

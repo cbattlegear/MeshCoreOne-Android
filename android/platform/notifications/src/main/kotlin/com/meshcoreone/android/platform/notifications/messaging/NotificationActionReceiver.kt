@@ -1,4 +1,5 @@
 // AndroidOnly: WP-401 Cold-start-safe notification action receiver and bounded process dispatcher.
+// AndroidOnly: WP-215 Process-memory acceptance fencing and lossless reply intake.
 // AndroidOnly: WP-215 Separate, bounded custody of actions rejected before dispatcher admission.
 package com.meshcoreone.android.platform.notifications.messaging
 
@@ -14,6 +15,8 @@ import android.os.Handler
 import android.os.Looper
 import android.widget.Toast
 import com.meshcoreone.android.core.contracts.notifications.NotificationAction
+import com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt
+import com.meshcoreone.android.core.contracts.notifications.NotificationReadReceipt
 import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
 import com.meshcoreone.android.platform.notifications.R
 import java.io.File
@@ -38,6 +41,9 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -50,11 +56,11 @@ open class NotificationActionReceiver : BroadcastReceiver() {
         }
         val originalText = if (action == NotificationAction.REPLY) {
             RemoteInput.getResultsFromIntent(intent)?.getCharSequence(REMOTE_INPUT_KEY)?.toString()
-                ?.takeIf { it.isNotBlank() } ?: return
+                ?.takeIf(String::isNotBlank) ?: return
         } else {
             null
         }
-        val result = NotificationActionDispatcher.enqueue(NotificationResponse(payload, action, originalText?.trim()))
+        val result = NotificationActionDispatcher.enqueue(NotificationResponse(payload, action, originalText))
         if (result == EnqueueResult.REJECTED_CAPACITY &&
             (action == NotificationAction.REPLY || action == NotificationAction.MARK_READ)
         ) {
@@ -590,7 +596,19 @@ internal object NotificationActionDispatcher {
 
     private val logger = Logger.getLogger("com.mc1.NotificationActions")
     private val lock = Any()
-    private val pending = ArrayDeque<NotificationResponse>()
+    private class PendingAction(
+        val response: NotificationResponse,
+        val receipt: NotificationActionReceipt = NotificationActionReceipt(),
+        val readReceipt: NotificationReadReceipt = NotificationReadReceipt(),
+        val commit: NotificationActionCommit = NotificationActionCommit(),
+    ) {
+        val preventsReplay: Boolean
+            get() = receipt.preventsReplay || readReceipt.preventsReplay || commit.isCommitted()
+    }
+    private val pending = ArrayDeque<PendingAction>()
+    // Not durable recovery: retain uncertain text without re-routing it or blocking the ready FIFO.
+    private val unresolved = ArrayDeque<PendingAction>()
+    private val delivery = Mutex()
     private var scope: CoroutineScope? = null
     private var router: (suspend (NotificationResponse) -> Boolean)? = null
     private var installation: Any? = null
@@ -608,8 +626,8 @@ internal object NotificationActionDispatcher {
 
     fun enqueue(response: NotificationResponse): EnqueueResult {
         val accepted = synchronized(lock) {
-            if (pending.size >= MAX_PENDING) false else {
-                pending.addLast(response)
+            if (pending.size + unresolved.size >= MAX_PENDING) false else {
+                pending.addLast(PendingAction(response))
                 true
             }
         }
@@ -633,7 +651,7 @@ internal object NotificationActionDispatcher {
         val owner = scope ?: return null
         if (drainJob != null || owner.coroutineContext[Job]?.isActive == false) return null
         val installed = installation
-        val job = owner.launch(context = NotificationActionCommit(), start = CoroutineStart.LAZY) {
+        val job = owner.launch(start = CoroutineStart.LAZY) {
             repeat(RETRY_COUNT) {
                 synchronized(lock) { retryRequested = false }
                 if (drainOnce()) return@launch
@@ -656,33 +674,52 @@ internal object NotificationActionDispatcher {
         return job
     }
 
-    internal suspend fun drainOnce(): Boolean {
+    internal suspend fun drainOnce(): Boolean = delivery.withLock {
         while (true) {
             currentCoroutineContext().ensureActive()
             val next = synchronized(lock) {
                 retryRequested = false
                 pending.firstOrNull()
-            } ?: return true
-            val target = synchronized(lock) { router } ?: return false
-            val commit = currentCoroutineContext()[NotificationActionCommit]
-            commit?.reset()
-            var returned = false
-            val accepted = try {
-                target(next).also { returned = true }
+            } ?: return@withLock true
+            val target = synchronized(lock) { router } ?: return@withLock false
+            var handled = false
+            try {
+                if (!next.preventsReplay) {
+                    // Set this before withContext's cancellable return to the dispatcher.
+                    withContext(next.receipt + next.readReceipt + next.commit) {
+                        target(next.response).also {
+                            handled = it
+                            if (!it && next.commit.isCommitted()) {
+                                logger.severe("Notification handler rejected an already committed navigation")
+                            }
+                        }
+                    }
+                }
             } finally {
-                if (!returned && commit?.isCommitted() == true) removeCurrent(next)
+                if (handled || next.preventsReplay) {
+                    synchronized(lock) {
+                        if (pending.firstOrNull() === next) {
+                            val state = next.receipt.state
+                            if (state == NotificationActionReceipt.State.IN_FLIGHT ||
+                                state == NotificationActionReceipt.State.UNCERTAIN ||
+                                next.readReceipt.state == NotificationReadReceipt.State.STARTED ||
+                                next.readReceipt.state == NotificationReadReceipt.State.UNCERTAIN
+                            ) {
+                                next.receipt.uncertain()
+                                next.readReceipt.uncertain()
+                                unresolved.addLast(next)
+                                logger.warning("Notification action outcome unknown; response retained in process only, replay suppressed")
+                            }
+                            pending.removeFirst()
+                            if (pending.isNotEmpty()) retryRequested = true
+                        }
+                    }
+                }
             }
-            if (!accepted && commit?.isCommitted() != true) return false
-            if (!accepted) logger.severe("Notification handler rejected an already committed navigation")
-            removeCurrent(next)
+            if (!handled && !next.preventsReplay) return@withLock false
         }
-    }
-
-    private fun removeCurrent(response: NotificationResponse) = synchronized(lock) {
-        if (pending.firstOrNull() === response) {
-            pending.removeFirst()
-            if (pending.isNotEmpty()) retryRequested = true
-        }
+        @Suppress("UNREACHABLE_CODE")
+        true
     }
 
     internal fun resetForTesting() {
@@ -690,6 +727,7 @@ internal object NotificationActionDispatcher {
             val previous = drainJob
             drainJob = null
             pending.clear()
+            unresolved.clear()
             scope = null
             router = null
             installation = null

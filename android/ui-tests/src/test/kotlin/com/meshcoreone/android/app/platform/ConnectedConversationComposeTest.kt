@@ -240,7 +240,7 @@ class ConnectedConversationComposeTest : RoomProcessTest() {
                 compose.waitForIdle()
                 compose.onNode(fieldMatcher).assertIsDisplayed().assertTextContains(retained)
                 if (channel) {
-                    compose.onNodeWithText(original).assertIsDisplayed()
+                    compose.onNodeWithContentDescription("$original. $sending").assertIsDisplayed()
                     compose.onNodeWithText(retry).assertDoesNotExist()
                 } else {
                     compose.onNodeWithContentDescription("$original. $failed").assertIsDisplayed()

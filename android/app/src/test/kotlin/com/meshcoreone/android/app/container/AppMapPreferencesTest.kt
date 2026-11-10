@@ -111,6 +111,32 @@ class AppMapPreferencesTest {
         assertEquals("10,20,0.5,0.5", legacy.getString("camera-v1", null))
     }
 
+    @Test fun malformedPrivatePreferenceTypesAreRetiredWithoutBlockingObservation() = runBlocking {
+        assertTrue(legacy.edit().putBoolean("filter-v1", true)
+            .putString("cluster-v1", "false").putInt("labels-v1", 1).commit())
+
+        assertEquals(
+            MapPreferences(MapFilterState(), true, true, MapColorPreference.SYSTEM),
+            adapter.observe(MapFilterHost.MAIN_MAP).first(),
+        )
+        assertFalse(legacy.contains("filter-v1"))
+        assertFalse(legacy.contains("cluster-v1"))
+        assertFalse(legacy.contains("labels-v1"))
+    }
+
+    @Test fun malformedPrivateFilterDoesNotPreventValidSettingsMigration() = runBlocking {
+        assertTrue(legacy.edit().putBoolean("filter-v1", true)
+            .putBoolean("cluster-v1", false).putInt("labels-v1", 1).commit())
+
+        assertEquals(
+            MapPreferences(MapFilterState(), false, true, MapColorPreference.SYSTEM),
+            adapter.observe(MapFilterHost.MAIN_MAP).first(),
+        )
+        assertFalse(legacy.contains("filter-v1"))
+        assertFalse(legacy.contains("cluster-v1"))
+        assertFalse(legacy.contains("labels-v1"))
+    }
+
     @Test fun privateSettingsMoveToTheDeclaredHostAndBackupKeysAndSurviveANewAdapter() = runBlocking {
         val filter = MapFilterState(showDiscovered = true, showRoom = false)
         assertTrue(legacy.edit().putString("filter-v1", filter.encode())

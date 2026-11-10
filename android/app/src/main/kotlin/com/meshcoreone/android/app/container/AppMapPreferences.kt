@@ -80,27 +80,41 @@ internal class AppMapPreferences(
     }
 
     private suspend fun migratePrivatePreferences() {
-        val raw = legacy.getString("filter-v1", null)
-        val clustering = if (legacy.contains("cluster-v1")) legacy.getBoolean("cluster-v1", true) else null
-        val labels = if (legacy.contains("labels-v1")) legacy.getBoolean("labels-v1", true) else null
-        if (raw == null && clustering == null && labels == null) return
-        store.update {
-            if (!snapshot.contains(AppStorageKey.mapFilterMainMap) && raw != null) {
-                val migrated = MapFilterPreferences.migrate(raw, null, MapFilterHost.MAIN_MAP).state
-                val resolved = snapshot.stored(AppStorageKey.showDiscoveredNodesOnMap)
-                    ?.let { migrated.copy(showDiscovered = it) }
-                    ?: migrated
-                this[AppStorageKey.mapFilterMainMap] =
-                    MapFilterPreferences.encode(resolved, MapFilterHost.MAIN_MAP)
-            }
-            if (!snapshot.contains(AppStorageKey.mapClusteringEnabled) && clustering != null) {
-                this[AppStorageKey.mapClusteringEnabled] = clustering
-            }
-            if (!snapshot.contains(AppStorageKey.mapShowLabels) && labels != null) {
-                this[AppStorageKey.mapShowLabels] = labels
+        val values = legacy.all
+        val raw = values["filter-v1"] as? String
+        val clustering = values["cluster-v1"] as? Boolean
+        val labels = values["labels-v1"] as? Boolean
+        val legacyKeys = listOf("filter-v1", "cluster-v1", "labels-v1")
+        val malformedKeys = legacyKeys.filter { key ->
+            values.containsKey(key) && when (key) {
+                "filter-v1" -> values[key] !is String
+                else -> values[key] !is Boolean
             }
         }
-        if (!legacy.edit().remove("filter-v1").remove("cluster-v1").remove("labels-v1").commit()) {
+        if (malformedKeys.isNotEmpty()) {
+            Logger.getLogger("com.meshcoreone.android.MapPreferences")
+                .warning("Ignoring malformed private map preference keys: ${malformedKeys.joinToString()}")
+        }
+        if (legacyKeys.none(values::containsKey)) return
+        if (raw != null || clustering != null || labels != null) {
+            store.update {
+                if (!snapshot.contains(AppStorageKey.mapFilterMainMap) && raw != null) {
+                    val migrated = MapFilterPreferences.migrate(raw, null, MapFilterHost.MAIN_MAP).state
+                    val resolved = snapshot.stored(AppStorageKey.showDiscoveredNodesOnMap)
+                        ?.let { migrated.copy(showDiscovered = it) }
+                        ?: migrated
+                    this[AppStorageKey.mapFilterMainMap] =
+                        MapFilterPreferences.encode(resolved, MapFilterHost.MAIN_MAP)
+                }
+                if (!snapshot.contains(AppStorageKey.mapClusteringEnabled) && clustering != null) {
+                    this[AppStorageKey.mapClusteringEnabled] = clustering
+                }
+                if (!snapshot.contains(AppStorageKey.mapShowLabels) && labels != null) {
+                    this[AppStorageKey.mapShowLabels] = labels
+                }
+            }
+        }
+        if (!legacyKeys.fold(legacy.edit()) { editor, key -> editor.remove(key) }.commit()) {
             throw IOException("Unable to retire private map preferences after migration")
         }
     }

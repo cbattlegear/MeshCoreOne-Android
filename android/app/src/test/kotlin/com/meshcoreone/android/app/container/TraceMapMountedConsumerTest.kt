@@ -24,6 +24,9 @@ import com.meshcoreone.android.core.maps.*
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.feature.tools.trace.*
+import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
+import com.meshcoreone.android.core.l10n.generated.AppMapStrings as M
+import java.io.IOException
 import java.time.Duration
 import java.time.Instant
 import java.util.UUID
@@ -152,6 +155,38 @@ class TraceMapMountedConsumerTest {
         compose.waitUntil(5_000) { latest?.isDark == true }
     }
 
+    @Test fun initialMapPreferenceFailureShowsRetryWithoutLoadingIndicator() {
+        val failingPreferences = object : MapPreferenceStore {
+            override fun observe(host: MapFilterHost) =
+                kotlinx.coroutines.flow.flow<MapPreferences> { throw IOException("preference read failed") }
+            override suspend fun setFilter(host: MapFilterHost, filter: MapFilterState) = Unit
+            override suspend fun updateFilter(
+                host: MapFilterHost,
+                transform: (MapFilterState) -> MapFilterState,
+            ) = Unit
+            override suspend fun setClustering(enabled: Boolean) = Unit
+            override suspend fun setLabels(enabled: Boolean) = Unit
+        }
+        mount(mapPreferences = failingPreferences, awaitPreferences = false)
+
+        val error = text(L.commonErrorFailedToLoad)
+        val retry = text(M.mapPreviewRetryButtonAccessibilityLabel)
+        compose.waitUntil(5_000) {
+            failures.size == 1 &&
+                compose.onAllNodesWithText(error).fetchSemanticsNodes().isNotEmpty() &&
+                compose.onAllNodesWithText(retry).fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText(error).assertIsDisplayed()
+        compose.onNodeWithText(retry).assertIsDisplayed()
+        compose.onNodeWithTag("trace-map:preferences-loading").assertDoesNotExist()
+
+        compose.onNodeWithText(retry).performClick()
+        compose.waitUntil(5_000) { failures.size == 2 }
+        compose.onNodeWithText(error).assertIsDisplayed()
+        compose.onNodeWithText(retry).assertIsDisplayed()
+        compose.onNodeWithTag("trace-map:preferences-loading").assertDoesNotExist()
+    }
+
     @Test fun explicitTraceFramingReissuesAfterPanAndOnRepeatedFit() {
         mount()
         val initialRevision = latest!!.cameraCommandRevision
@@ -181,6 +216,8 @@ class TraceMapMountedConsumerTest {
 
     private fun mount(
         appColorSchemePreference: AppColorSchemePreference = AppColorSchemePreference.SYSTEM,
+        mapPreferences: MapPreferenceStore? = null,
+        awaitPreferences: Boolean = true,
     ) {
         val directory = object : TraceNodeDirectory {
             override suspend fun fetchContacts(radioId: RadioId) = tableContacts
@@ -199,7 +236,7 @@ class TraceMapMountedConsumerTest {
             override fun stringList(key: String) = values[key]
             override fun setStringList(key: String, value: List<String>) { values[key] = value }
         }
-        val preferences = AppMapPreferences(
+        val preferences = mapPreferences ?: AppMapPreferences(
             MeshCoreStorage.get(host.get()).preferences, host.get().getSharedPreferences("shared-map", 0),
         )
         val dependencies = TracePathScreen.Dependencies(
@@ -236,8 +273,10 @@ class TraceMapMountedConsumerTest {
         advanceFrames()
         waitUntilAdvancingFrames {
             latest?.points?.size == 3 &&
-                compose.onAllNodesWithText(text(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_pathedit_filter_favorites))
-                    .fetchSemanticsNodes().isNotEmpty()
+                (!awaitPreferences ||
+                    compose.onAllNodesWithText(
+                        text(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_pathedit_filter_favorites),
+                    ).fetchSemanticsNodes().isNotEmpty())
         }
         compose.onNodeWithTag("trace-map:center-all").assertIsEnabled()
         assertNotNull(latest!!.camera)

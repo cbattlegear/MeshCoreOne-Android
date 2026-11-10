@@ -704,6 +704,7 @@ internal fun TracePathMapContent(
     val formatBadge: (Double, Double) -> String = remember(badgeFormatter) { badgeFormatter::format }
     val appIsDark = effectiveAppThemeIsDark()
     LaunchedEffect(preferences, retry) {
+        preferenceError = false
         try {
             preferences.observe(MapFilterHost.TRACE_PATH).collect {
                 settings = it
@@ -770,7 +771,9 @@ internal fun TracePathMapContent(
         }
     }
     Column(Modifier.fillMaxSize()) {
-        if (loaded == null) CircularProgressIndicator(Modifier.padding(16.dp))
+        if (loaded == null && !preferenceError) {
+            CircularProgressIndicator(Modifier.padding(16.dp).testTag("trace-map:preferences-loading"))
+        }
         if (preferenceError) {
             Text(stringResource(L.commonErrorFailedToLoad), color = MaterialTheme.colorScheme.error)
             TextButton(onClick = { retry++ }) { Text(stringResource(M.mapPreviewRetryButtonAccessibilityLabel)) }

@@ -1618,6 +1618,57 @@ class TraceCodeInputComposeTest {
     @Test fun differentRadioReconnectRejectsRetainedHashMode() = retainedListActionAcrossReconnect(true, "hash")
     @Test fun sameRadioReconnectRejectsRetainedRepeaterAdd() = retainedListActionAcrossReconnect(false, "repeater")
     @Test fun differentRadioReconnectRejectsRetainedRepeaterAdd() = retainedListActionAcrossReconnect(true, "repeater")
+    @Test fun sameRadioReconnectRejectsRetainedDiscoveredRepeaterAdd() = retainedListActionAcrossReconnect(false, "discovered")
+    @Test fun differentRadioReconnectRejectsRetainedDiscoveredRepeaterAdd() = retainedListActionAcrossReconnect(true, "discovered")
+    @Test fun traceMapRunButtonDisablesWhenDisconnected() {
+        val epoch = com.meshcoreone.android.core.contracts.domain.ProcessEpoch(UUID.randomUUID())
+        var token = com.meshcoreone.android.core.contracts.domain.SessionToken(
+            epoch, com.meshcoreone.android.core.contracts.domain.Generation(1), RADIO,
+        )
+        var version = 1
+        val persistence = InMemoryTracePathStore { T0 }
+        val path = savedPath(Bytes.of(0xA1), radioId = RADIO)
+        persistence.insert(path)
+        val recorded = FakeTraceSender()
+        val deps = FakeTraceDependencies().apply {
+            device = device()
+            store = persistence
+            sender = recorded
+        }
+        val feature = object : TracePathFeatureDependencies by deps {
+            override fun sessionToken() = token
+            override fun originatingSessionToken(generation: Int) = token.takeIf { generation == version }
+            override fun isOriginatingSessionCurrent(
+                generation: Int,
+                token: com.meshcoreone.android.core.contracts.domain.SessionToken?,
+            ) = generation == version && token == this.sessionToken()
+        }
+        val connection = mutableStateOf(TracePathScreen.Dependencies(
+            feature, MapRecentsStorage(), RecordingDiagnostics(), RADIO, 1,
+            mapPreferences = host.get().mapPreferences,
+        ))
+        content.setContent { MaterialTheme { TracePathScreen(connection.value, host.get().mapSurface) } }
+        settle()
+        click(host.get().getString(C.contactsTraceSaved))
+        click(path.name)
+        click(host.get().getString(C.contactsTraceModeMap))
+        val runLabel = host.get().getString(C.contactsTraceListRunTrace)
+        val retainedRun = assertNotNull(button(runLabel).config[SemanticsActions.OnClick].action)
+        assertFalse(button(runLabel).config.contains(SemanticsProperties.Disabled))
+
+        host.get().runOnUiThread {
+            deps.device = null
+            version = 2
+            token = token.copy(generation = com.meshcoreone.android.core.contracts.domain.Generation(2))
+            connection.value = connection.value.copy(generation = version)
+        }
+        settle()
+        assertTrue(button(runLabel).config.contains(SemanticsProperties.Disabled))
+        host.get().runOnUiThread { assertTrue(retainedRun()) }
+        settle()
+        assertTrue(recorded.sent.isEmpty(), "A retained Run action cannot send after disconnection")
+    }
+
     @Test fun sameRadioReconnectRejectsRetainedRun() = retainedListActionAcrossReconnect(false, "run")
     @Test fun differentRadioReconnectRejectsRetainedRun() = retainedListActionAcrossReconnect(true, "run")
     @Test fun sameRadioReconnectRejectsRetainedCancel() = retainedListActionAcrossReconnect(false, "cancel")
@@ -1645,7 +1696,10 @@ class TraceCodeInputComposeTest {
             store = persistence
             sender = recorded
             responses = { events.subscribe() }
-            directory = FakeNodeDirectory(contacts = listOf(contact(0xA1, name = "Alpha"), contact(0xB2, name = "Bravo")))
+            directory = FakeNodeDirectory(
+                contacts = listOf(contact(0xA1, name = "Alpha"), contact(0xB2, name = "Bravo")),
+                nodes = if (action == "discovered") listOf(discovered(key(0xE5), "Scout")) else emptyList(),
+            )
         }
         val feature = object : TracePathFeatureDependencies by deps {
             override fun sessionToken() = token
@@ -1684,6 +1738,7 @@ class TraceCodeInputComposeTest {
             "batch" -> 9
             "hash" -> 8
             "repeater" -> 7
+            "discovered" -> 8
             "run", "cancel" -> 11
             else -> 4
         })
@@ -1697,6 +1752,7 @@ class TraceCodeInputComposeTest {
             "batch" -> switchAction(true)
             "hash" -> assertNotNull(button("4 B").config[SemanticsActions.OnClick].action)
             "repeater" -> assertNotNull(button("Bravo").config[SemanticsActions.OnClick].action)
+            "discovered" -> assertNotNull(button("Scout").config[SemanticsActions.OnClick].action)
             "run" -> assertNotNull(button(runLabel).config[SemanticsActions.OnClick].action)
             "cancel" -> assertNotNull(button(host.get().getString(C.contactsTraceListRunningTrace)).config[SemanticsActions.OnClick].action)
             "paste" -> assertNotNull(button("Paste from clipboard").config[SemanticsActions.OnClick].action)
@@ -1711,7 +1767,7 @@ class TraceCodeInputComposeTest {
             connection.value = connection.value.copy(radioId = nextRadio, generation = version)
         }
         settle()
-        scrollToIndex(11)
+        scrollToIndex(if (action == "discovered") 13 else 11)
         click(runLabel)
         val sent = recorded.sent.last()
         val sendCount = recorded.sent.size
@@ -1741,6 +1797,7 @@ class TraceCodeInputComposeTest {
             "batch" -> 9
             "hash" -> 8
             "repeater" -> 7
+            "discovered" -> 8
             "run", "cancel" -> 11
             else -> 4
         })
@@ -1749,6 +1806,7 @@ class TraceCodeInputComposeTest {
             "batch" -> host.get().runOnUiThread { assertTrue(switchAction(true)()) }
             "hash" -> click("4 B")
             "repeater" -> click("Bravo")
+            "discovered" -> click("Scout")
             "run", "cancel" -> {
                 click(runLabel)
                 assertEquals(sendCount + 1, recorded.sent.size)
@@ -1769,10 +1827,11 @@ class TraceCodeInputComposeTest {
                 (if (action == "auto") switches.first() else switches.last()).config[SemanticsProperties.ToggleableState],
                 "Fresh B toggle changes the real holder")
         }
-        if (codeAction || action == "repeater") {
-            scrollToIndex(12)
+        if (codeAction || action == "repeater" || action == "discovered") {
+            scrollToIndex(if (action == "discovered") 13 else 12)
             click(runLabel)
-            assertEquals(Bytes.of(0xA1, 0xB2), recorded.sent.last().path, "Fresh B $action changes the real route")
+            val expected = if (action == "discovered") Bytes.of(0xA1, 0xE5) else Bytes.of(0xA1, 0xB2)
+            assertEquals(expected, recorded.sent.last().path, "Fresh B $action changes the real route")
             click(host.get().getString(C.contactsTraceListRunningTrace))
         } else if (action == "hash") {
             scrollToIndex(11)
@@ -1797,6 +1856,11 @@ class TraceCodeInputComposeTest {
     @Test fun sameRadioReconnectRejectsARetainedClearConfirmation() = retainedPathEditAcrossReconnect(false, "confirm")
 
     @Test fun differentRadioReconnectRejectsARetainedClearConfirmation() = retainedPathEditAcrossReconnect(true, "confirm")
+
+    @Test fun sameRadioReconnectRetiresMapClearDialogAndConfirmation() = retainedPathEditAcrossReconnect(false, "map-dialog")
+
+    @Test fun differentRadioReconnectRejectsRetainedMapClearConfirmation() =
+        retainedPathEditAcrossReconnect(true, "map-confirm")
 
     private fun retainedPathEditAcrossReconnect(crossRadio: Boolean, action: String) {
         val epoch = com.meshcoreone.android.core.contracts.domain.ProcessEpoch(UUID.randomUUID())
@@ -1828,30 +1892,39 @@ class TraceCodeInputComposeTest {
         }
         val connection = mutableStateOf(TracePathScreen.Dependencies(
             feature, MapRecentsStorage(), RecordingDiagnostics(), RADIO, 1,
+            mapPreferences = host.get().mapPreferences,
         ))
-        content.setContent { MaterialTheme { TracePathScreen(connection.value) } }
+        content.setContent { MaterialTheme { TracePathScreen(connection.value, host.get().mapSurface) } }
         settle()
         click(host.get().getString(C.contactsTraceSaved))
         click(path.name)
-        val isClear = action == "dialog" || action == "confirm"
+        val isMap = action.startsWith("map-")
+        val isClear = action == "dialog" || action == "confirm" || isMap
+        if (isMap) {
+            click(host.get().getString(C.contactsTraceModeMap))
+            settle()
+        }
         val resource = when (action) {
             "up" -> C.contactsDetailAvatarCropMoveUp
             "down" -> C.contactsDetailAvatarCropMoveDown
             else -> L.commonDelete
         }
-        scrollToIndex(if (action == "up") 3 else 2)
-        val label = "${host.get().getString(resource)}: ${
-            C.contactsTraceListHopLabel(host.get().resources, if (action == "up") 2 else 1,
-                if (action == "up") "Bravo (B2)" else "Alpha (A1)")
-        }"
-        val oldHop = if (isClear) null else assertNotNull(actionButton(label).config[SemanticsActions.OnClick].action)
-        scrollToIndex(5)
-        val clearLabel = host.get().getString(C.contactsTraceClearPath)
+        val oldHop = if (isClear) null else {
+            scrollToIndex(if (action == "up") 3 else 2)
+            val label = "${host.get().getString(resource)}: ${
+                C.contactsTraceListHopLabel(host.get().resources, if (action == "up") 2 else 1,
+                    if (action == "up") "Bravo (B2)" else "Alpha (A1)")
+            }"
+            assertNotNull(actionButton(label).config[SemanticsActions.OnClick].action)
+        }
+        if (!isMap) scrollToIndex(5)
+        val clearLabel = host.get().getString(if (isMap) C.contactsTraceMapClear else C.contactsTraceClearPath)
+        val confirmLabel = host.get().getString(C.contactsTraceClearPath)
         val oldOpen = assertNotNull(button(clearLabel).config[SemanticsActions.OnClick].action)
         val oldConfirm = if (isClear) {
             click(clearLabel)
-            assertNotNull(button(clearLabel).config[SemanticsActions.OnClick].action).also {
-                if (action == "confirm") click(host.get().getString(L.commonCancel))
+            assertNotNull(button(confirmLabel).config[SemanticsActions.OnClick].action).also {
+                if (action == "confirm" || action == "map-confirm") click(host.get().getString(L.commonCancel))
             }
         } else null
         val nextRadio = if (crossRadio) RadioId(UUID.randomUUID()) else RADIO
@@ -1864,7 +1937,7 @@ class TraceCodeInputComposeTest {
         }
         settle()
         assertFalse(ShadowDialog.getLatestDialog()?.isShowing == true, "Reconnect retires A's clear dialog")
-        scrollToIndex(14)
+        if (!isMap) scrollToIndex(14)
         click(host.get().getString(C.contactsTraceListRunTrace))
         assertEquals(Bytes.of(0xA1, 0xB2, 0xC3), recorded.sent.single().path, "B retains the editable route")
         host.get().runOnUiThread { assertTrue((oldConfirm ?: assertNotNull(oldHop))()) }
@@ -1876,12 +1949,16 @@ class TraceCodeInputComposeTest {
             host.get().runOnUiThread { assertTrue(oldOpen()) }
             settle()
             assertFalse(ShadowDialog.getLatestDialog()?.isShowing == true, "A's retained open cannot create a B dialog")
-            scrollToIndex(5)
+            if (!isMap) scrollToIndex(5)
             click(clearLabel)
-            click(clearLabel)
-            assertTrue(texts().contains(host.get().getString(C.contactsTraceListEmptyPath)))
+            click(confirmLabel)
+            if (!isMap) assertTrue(texts().contains(host.get().getString(C.contactsTraceListEmptyPath)))
             assertFalse(texts().contains(host.get().getString(C.contactsTraceListRunningTrace)))
         } else {
+            val label = "${host.get().getString(resource)}: ${
+                C.contactsTraceListHopLabel(host.get().resources, if (action == "up") 2 else 1,
+                    if (action == "up") "Bravo (B2)" else "Alpha (A1)")
+            }"
             scrollToIndex(if (action == "up") 3 else 2)
             clickDescription(label)
             val expected = if (action == "remove") listOf(0xB2, 0xC3) else listOf(0xB2, 0xA1, 0xC3)

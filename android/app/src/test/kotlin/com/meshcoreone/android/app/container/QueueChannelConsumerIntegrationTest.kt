@@ -211,10 +211,9 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
                 createdAt = EPOCH, sortDate = EPOCH, direction = MessageDirection.OUTGOING,
                 status = MessageStatus.PENDING, channelOccupantID = occupantID,
             )
-            pending = PendingSendDTO(
-                UUID.fromString("A0000000-0000-0000-0000-000000000005"), radioId, message.id,
-                PendingSendKind.CHANNEL, null, 0u, false, "Hello channel", 1_704_067_200u,
-                "Stored Node", 1, EPOCH, 7, occupantID, QueuedChannelDispatchState.READY,
+            pending = store.admitQueueChannelFixture(
+                message, UUID.fromString("A0000000-0000-0000-0000-000000000005"),
+                isResend = false, localNodeName = "Stored Node", initialAttemptCount = 7,
             )
             foreignMessage = message.copy(
                 id = UUID.fromString("B0000000-0000-0000-0000-000000000004"), radioId = foreignRadioId,

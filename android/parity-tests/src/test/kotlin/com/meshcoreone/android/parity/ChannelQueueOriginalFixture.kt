@@ -152,9 +152,9 @@ internal class ChannelQueueOriginalFixture(
     lateinit var messageA: MessageDTO
     lateinit var messageB: MessageDTO
     lateinit var pendingA: PendingSendDTO
-    lateinit var pendingB: PendingSendDTO
 
     suspend fun seed() {
+        require(attempts in 0..Int.MAX_VALUE.toLong())
         assertNotEquals(device.id, radio.value)
         store.saveDevice(device)
         store.saveChannel(channel)
@@ -179,20 +179,22 @@ internal class ChannelQueueOriginalFixture(
         messageB = channelMessage("Second message")
         assertNotEquals(messageA.id, messageB.id)
         assertMessages(messageA, messageB)
-        pendingA = PendingSendDTO(UUID.randomUUID(), radio, messageA.id, PendingSendKind.CHANNEL,
-            null, 0u, true, "Hello channel", 1_704_067_200u, "Test Radio", 1, instant, attempts,
-            channelOccupantID = channelOccupantID,
-            channelDispatchState = QueuedChannelDispatchState.READY)
-        pendingB = PendingSendDTO(UUID.randomUUID(), radio, messageB.id, PendingSendKind.CHANNEL,
-            null, 0u, false, "Second message", 1_704_067_200u, "Test Radio", 2, instant, 2,
-            channelOccupantID = channelOccupantID,
-            channelDispatchState = QueuedChannelDispatchState.READY)
-        store.upsertPendingSend(pendingA)
+        val envelopeA = ChannelMessageEnvelope(messageA.id, 0u, true, "Hello channel",
+            1_704_067_200u, "Test Radio", channelOccupantID)
+        val submission = ChannelSubmission(
+            UUID.randomUUID(), ChannelHistoryScope(radio, channel.index, channelOccupantID), envelopeA,
+        )
+        store.admitChannelSubmission(submission, instant)
+        repeat(attempts.toInt()) {
+            store.incrementReadyQueuedChannelAttemptCount(EntityKey(radio, submission.pendingID), messageA.id)
+        }
+        pendingA = checkNotNull(store.fetchPendingSendsForMessage(EntityKey(radio, submission.pendingID)).singleOrNull())
         assertRows(pendingA)
-        assertEquals(ChannelMessageEnvelope(messageA.id, 0u, true, "Hello channel", 1_704_067_200u, "Test Radio"),
-            pendingA.channelMessageEnvelope()?.copy(channelOccupantID = channelOccupantID))
-        assertEquals(ChannelMessageEnvelope(messageB.id, 0u, false, "Second message", 1_704_067_200u, "Test Radio"),
-            pendingB.channelMessageEnvelope()?.copy(channelOccupantID = channelOccupantID))
+        assertEquals(envelopeA, pendingA.channelMessageEnvelope())
+        val envelopeB = ChannelMessageEnvelope(messageB.id, 0u, false, "Second message",
+            1_704_067_200u, "Test Radio", channelOccupantID)
+        val pendingB = PendingSendDTO.fromEnvelope(envelopeB, radio, enqueuedAt = instant)
+        assertEquals(envelopeB, pendingB.channelMessageEnvelope())
     }
 
     suspend fun startDrain() { queue.hydrate(); test.runCurrent(); signals.ready(); test.runCurrent() }

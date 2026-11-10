@@ -16,9 +16,16 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.SQLiteMode
 import com.meshcoreone.android.core.contracts.domain.BluetoothAddress
 import com.meshcoreone.android.core.contracts.domain.BluetoothPairingHandle
+import com.meshcoreone.android.core.contracts.domain.ChannelHistoryScope
+import com.meshcoreone.android.core.contracts.domain.ChannelSubmission
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
+import com.meshcoreone.android.core.model.ChannelMessageEnvelope
+import com.meshcoreone.android.core.model.MessageDTO
+import com.meshcoreone.android.core.model.PendingSendDTO
+import com.meshcoreone.android.core.model.QueuedChannelDispatchState
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
@@ -37,6 +44,7 @@ import com.meshcoreone.android.core.services.messaging.ChannelQueryAccountingEve
 import com.meshcoreone.android.core.services.messaging.MessageServiceConfig
 import com.meshcoreone.android.core.services.rendering.DraftDefaults
 import com.meshcoreone.android.core.services.rendering.DraftStore
+import java.time.Instant
 import java.util.UUID
 import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.test.TestCoroutineScheduler
@@ -229,6 +237,30 @@ internal class ContainerHarness(
 
     fun assertReady() {
         check(manager.connectionState == DeviceConnectionState.READY) { "state=${manager.connectionState}" }
+    }
+}
+
+internal suspend fun RoomPersistenceStore.admitQueueChannelFixture(
+    message: MessageDTO,
+    pendingID: UUID,
+    isResend: Boolean,
+    localNodeName: String?,
+    initialAttemptCount: Long,
+): PendingSendDTO {
+    require(initialAttemptCount >= 0 && initialAttemptCount <= Int.MAX_VALUE.toLong())
+    val channelIndex = checkNotNull(message.channelIndex)
+    val occupantID = checkNotNull(message.channelOccupantID)
+    val origin = ChannelHistoryScope(message.radioId, channelIndex, occupantID)
+    val envelope = ChannelMessageEnvelope(
+        message.id, channelIndex, isResend, message.text, message.timestamp, localNodeName, occupantID,
+    )
+    val pending = EntityKey(message.radioId, pendingID)
+    admitChannelSubmission(ChannelSubmission(pendingID, origin, envelope), message.createdAt)
+    repeat(initialAttemptCount.toInt()) {
+        incrementReadyQueuedChannelAttemptCount(pending, message.id)
+    }
+    return checkNotNull(fetchPendingSendsForMessage(pending).singleOrNull()).also {
+        check(it.channelDispatchState == QueuedChannelDispatchState.READY)
     }
 }
 

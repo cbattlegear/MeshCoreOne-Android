@@ -58,6 +58,7 @@ import com.meshcoreone.android.core.protocol.event.MeshTransportError
 import com.meshcoreone.android.core.protocol.event.RouteType
 import com.meshcoreone.android.core.protocol.model.BatteryInfo
 import com.meshcoreone.android.core.protocol.model.ContactType
+import com.meshcoreone.android.core.runtime.RuntimeDiagnostic
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.core.services.content.BoundedHttpFetching
 import com.meshcoreone.android.core.services.content.HttpFetchAttempt
@@ -845,7 +846,18 @@ class SimulatorOnboardingIntegrationTest : RoomProcessTest() {
             button(L.commonOk).performClick()
             val invalidData = UiErrorMapper().persistenceError(PersistenceStoreError.InvalidData)
                 .resolve(host.get().resources)
+            fun invalidDataFailureCount(): Int = synchronized(harness.diagnostics) {
+                harness.diagnostics.count {
+                    it is RuntimeDiagnostic.Failure && it.operation == "connect.attempt.1" &&
+                        (it.cause as? PersistenceStoreException)?.error == PersistenceStoreError.InvalidData
+                }
+            }
+            var observedFailures = invalidDataFailureCount()
             fun assertVisibleFailure() {
+                harness.eventually("simulator fixture collision rejection", virtualBudgetMillis = 2_000, virtualStepMillis = 5) {
+                    invalidDataFailureCount() > observedFailures
+                }
+                observedFailures = invalidDataFailureCount()
                 compose.waitUntil(30_000) {
                     harness.settle()
                     compose.onAllNodesWithText(invalidData).fetchSemanticsNodes().isNotEmpty()

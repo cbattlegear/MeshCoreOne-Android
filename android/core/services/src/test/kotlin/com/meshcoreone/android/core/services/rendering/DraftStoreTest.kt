@@ -5,7 +5,9 @@ import com.meshcoreone.android.core.model.ChatConversationID
 import com.meshcoreone.android.core.model.RadioId
 import java.util.UUID
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import org.junit.jupiter.api.DynamicTest
 import org.junit.jupiter.api.TestFactory
 
@@ -36,6 +38,33 @@ class DraftStoreTest {
 
     @TestFactory
     fun draftStoreTests(): List<DynamicTest> = listOf(
+        case("empty slot vacate invalidates a selected recovery destination without a persistence write") {
+            val defaults = InMemoryDraftDefaults()
+            val store = DraftStore(defaults)
+            val id = channel(radioId, 2u)
+            val revision = store.revision(id)
+            store.clearChannelDrafts(radioId, setOf(2u))
+            store.clearChannelDrafts(radioId, setOf(2u))
+            assertFalse(store.restoreIfUnchanged(id, revision, "old selected text"))
+            assertNull(store.draft(id))
+            assertEquals(0, defaults.writes)
+            assertTrue(store.restoreIfUnchanged(id, store.revision(id), "new explicit selection"))
+            assertEquals("new explicit selection", store.draft(id))
+        },
+        case("direct typing and clearing invalidates a recovery token without affecting another chat") {
+            val store = DraftStore(InMemoryDraftDefaults())
+            val id = dm(radioId, contactID)
+            val other = channel(radioId, 2u)
+            val revision = store.revision(id)
+            val otherRevision = store.revision(other)
+            store.setDraft("new typing", id)
+            store.clearDraft(id)
+            assertFalse(store.restoreIfUnchanged(id, revision, "stale recovery"))
+            assertTrue(store.restoreIfUnchanged(other, otherRevision, "unrelated draft"))
+            assertNull(store.draft(id))
+            assertFalse(store.restoreIfUnchanged(other, store.revision(other), "overwrite"))
+            assertEquals("unrelated draft", store.draft(other))
+        },
         case("setDraft / draft / clearDraft round-trip") {
             val store = DraftStore(InMemoryDraftDefaults())
             val id = dm(radioId, contactID)

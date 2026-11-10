@@ -5,6 +5,8 @@
 package com.meshcoreone.android.core.data.repository
 
 import android.content.Context
+import android.content.ContextWrapper
+import android.database.sqlite.SQLiteDatabase
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.EntityKey
@@ -15,6 +17,7 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.PayloadType
 import com.meshcoreone.android.core.protocol.event.RouteType
 import com.meshcoreone.android.core.protocol.model.ContactType
+import java.io.File
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneId
@@ -29,6 +32,8 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import org.junit.After
 import org.junit.Before
+import org.junit.Rule
+import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -83,17 +88,28 @@ class RepositoryClock(var now: Instant = AT) : Clock() {
     override fun withZone(zone: ZoneId): Clock = Clock.fixed(now, zone)
 }
 
+// Native SQLite paths must not include Robolectric's long per-method application directory.
+internal class DatabaseTestContext(base: Context, private val directory: File) : ContextWrapper(base) {
+    override fun getApplicationContext(): Context = this
+    override fun getDatabasePath(name: String): File =
+        File(name).let { if (it.isAbsolute) it else File(directory, name) }
+    override fun deleteDatabase(name: String): Boolean = SQLiteDatabase.deleteDatabase(getDatabasePath(name))
+}
+
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31])
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 abstract class RepositoryTest {
+    @get:Rule val databaseDirectory = TemporaryFolder()
     protected lateinit var db: MeshCoreDatabase
     protected lateinit var store: RoomPersistenceStore
     protected val clock = RepositoryClock()
     protected val scheduler = TestCoroutineScheduler()
     protected val owner = CoroutineScope(SupervisorJob() + StandardTestDispatcher(scheduler))
     protected val issues = mutableListOf<PersistenceStoreException>()
-    protected val context: Context get() = ApplicationProvider.getApplicationContext()
+    protected val context: Context by lazy {
+        DatabaseTestContext(ApplicationProvider.getApplicationContext(), databaseDirectory.root)
+    }
 
     @Before fun openRepository() {
         val immediate = Executor { it.run() }

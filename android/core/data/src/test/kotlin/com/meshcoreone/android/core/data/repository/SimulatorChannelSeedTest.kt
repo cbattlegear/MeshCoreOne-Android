@@ -2,6 +2,7 @@
 package com.meshcoreone.android.core.data.repository
 
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
+import com.meshcoreone.android.core.contracts.domain.ChannelIdentityMutex
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.database.toEntity
 import com.meshcoreone.android.core.model.ChannelDTO
@@ -10,6 +11,7 @@ import com.meshcoreone.android.core.model.NotificationLevel
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.canonicalString
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -86,6 +88,43 @@ class SimulatorChannelSeedTest : RepositoryTest() {
         assertEquals(foreign, store.fetchChannel(entity(RADIO_B, foreign.id)))
         assertEquals(listOf(fixture), store.fetchChannels(RADIO_A))
         assertEquals(listOf(foreign), store.fetchChannels(RADIO_B))
+    }
+
+    @Test fun simulatorInsertWaitsForChannelOperationsAndCannotResolveAnUncertainSlot() = runTest {
+        val gate = ChannelIdentityMutex()
+        val writer = RoomPersistenceStore(db, owner, clock, channelIdentityMutation = gate)
+        val fixture = seed()
+        val release = CompletableDeferred<Unit>()
+        val operation = async(start = CoroutineStart.UNDISPATCHED) {
+            gate.withChannelOperation { release.await() }
+        }
+        val insert = async(start = CoroutineStart.UNDISPATCHED) { writer.saveSimulatorChannel(fixture) }
+        try {
+            assertFalse(insert.isCompleted)
+            assertNull(db.channels().byId(RADIO_A.value, fixture.id))
+            release.complete(Unit)
+            operation.await()
+            insert.await()
+            val unresolved = assertNotNull(db.channelOccupants().stateForIndex(RADIO_A.value, 0))
+            assertTrue(unresolved.unresolved)
+            assertNull(writer.fetchChannelOccupantSnapshot(RADIO_A, 0u))
+            writer.saveSimulatorChannel(fixture)
+            assertEquals(unresolved, db.channelOccupants().stateForIndex(RADIO_A.value, 0))
+            assertNull(writer.fetchChannel(RADIO_A, 0u)?.occupantID)
+
+            writer.saveChannel(RADIO_A, ChannelInfo(0u, fixture.name, fixture.secret))
+            val current = assertNotNull(writer.fetchChannelOccupantSnapshot(RADIO_A, 0u))
+            writer.saveSimulatorChannel(fixture)
+            assertEquals(current, writer.fetchChannelOccupantSnapshot(RADIO_A, 0u))
+            writer.withChannelOperation { scoped, _ -> scoped.beginChannelMutation(RADIO_A, 0u) }
+            val uncertain = assertNotNull(db.channelOccupants().stateForIndex(RADIO_A.value, 0))
+            writer.saveSimulatorChannel(fixture)
+            assertEquals(uncertain, db.channelOccupants().stateForIndex(RADIO_A.value, 0))
+            assertNull(writer.fetchChannelOccupantSnapshot(RADIO_A, 0u))
+        } finally {
+            release.complete(Unit)
+            writer.close()
+        }
     }
 
     @Test fun simulatorChannelPlanIsTransactionBoundAndComposesWithOtherWrites() = runTest {

@@ -22,6 +22,7 @@ import com.meshcoreone.android.core.runtime.RuntimePreferenceValue
 import com.meshcoreone.android.core.services.remote.ImportProgress
 import com.meshcoreone.android.core.services.remote.ImportStep
 import com.meshcoreone.android.core.services.remote.NodeConfigJson
+import com.meshcoreone.android.core.services.contacts.ChannelDispatchFailure
 import com.meshcoreone.android.feature.settings.app.nodeconfig.NodeConfigDocuments
 import java.util.UUID
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -33,6 +34,8 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFails
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertSame
@@ -170,6 +173,7 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
             radio.respond = { packet ->
                 if (packet[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue) listOf(Bytes.of(1, 1)) else original(packet)
             }
+
             val work = backgroundScope.async {
                 runCatching { node.nodeConfigService.importConfig(config, sections, node.token.radioId) }
             }
@@ -181,6 +185,39 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
             assertTrue(node.messagePollingService.isAutoFetching)
             assertFalse(h.manager.shouldDeferOpportunisticReconnect)
             assertPathUpdateRefreshesTheRealContact(h, node, radio, contactKey)
+        }
+    }
+
+    @Test fun oldIdentityCannotQueueAChannelWriteBehindThePhysicalKeyMutation() = runTest {
+        withIdentityNode { h, node, radio, _ ->
+            node.channelService.setChannelWithSecret(node.token.radioId, 0u, "Before", Bytes.fromHex(secret))
+            val original = radio.respond
+            var heldKeyWrite = false
+            radio.respond = { packet ->
+                if (packet[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue) {
+                    heldKeyWrite = true
+                    emptyList()
+                } else if (packet[0] == CommandCode.SEND_CHANNEL_MESSAGE.rawValue) {
+                    listOf(Bytes.of(0))
+                } else original(packet)
+            }
+            val identity = backgroundScope.async {
+                runCatching { node.nodeConfigService.importConfig(config, ConfigSections(nodeIdentity = true), node.token.radioId) }
+            }
+            h.eventually("physical key mutation with old channel authority already paused") { heldKeyWrite }
+            val oldSend = backgroundScope.async {
+                assertFails { node.messageService.sendChannelMessage("Old identity", 0u, node.token.radioId, TextType.PLAIN) }
+            }
+            h.eventually("old-identity dispatch rejects before waiting behind the held key exchange") { oldSend.isCompleted }
+            assertTrue(generateSequence(oldSend.await()) { it.cause }.any { it is ChannelDispatchFailure.RetiredSession })
+            assertTrue(radio.sent.none { it[0] == CommandCode.SEND_CHANNEL_MESSAGE.rawValue })
+            radio.push(Bytes.of(1, 1))
+            h.eventually("rejected key mutation restores the original authority") { identity.isCompleted }
+            assertTrue(identity.await().isFailure)
+            assertSame(node, h.sessions.current)
+            val resumed = node.messageService.sendChannelMessage("Original identity resumed", 0u, node.token.radioId, TextType.PLAIN)
+            assertEquals(MessageStatus.SENT, store.fetchMessage(EntityKey(node.token.radioId, resumed.id))?.status)
+            assertEquals(1, radio.sent.count { it[0] == CommandCode.SEND_CHANNEL_MESSAGE.rawValue })
         }
     }
 
@@ -251,7 +288,7 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
         assertSame(node, h.sessions.current)
     }
 
-    @Test fun cancellingAfterThePrivateKeyWriteReconcilesAndReleasesThePartialImport() = runTest {
+    @Test fun cancellingAnUnsettledEffectiveIdentityChannelWriteRetainsQuarantine() = runTest {
         withIdentityNode { h, node, radio, effectiveId ->
             val original = radio.respond
             radio.respond = { packet ->
@@ -270,11 +307,27 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
             assertTrue(work.isCancelled)
             assertEquals(listOf(ImportStep.PrivateKey), progress.map { it.step })
             assertNull(store.fetchContact(effectiveId, contactKey))
-            h.eventually("partial identity handoff", virtualBudgetMillis = 10_000) {
-                h.sessions.current?.token?.radioId == effectiveId
+            h.eventually("uncertain partial import retires its captured graph") { node.isTornDown }
+            h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            val previousAttempts = h.links.radios.size
+            val reconnectFailure = assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> {
+                h.manager.connect(h.target())
             }
             assertTrue(node.isTornDown)
-            assertEquals(2, h.sessions.created)
+            assertNull(h.sessions.current)
+            assertEquals(1, h.sessions.created)
+            assertEquals(0, h.sessions.outstanding)
+            assertNull(store.fetchChannelOccupantSnapshot(effectiveId, 0u))
+            val retainedCauses = generateSequence<Throwable>(reconnectFailure) { it.cause }.toList()
+            assertTrue(retainedCauses.any { it is kotlinx.coroutines.CancellationException },
+                "The quarantine must retain the cancelled exchange: ${retainedCauses.map { it.javaClass.name }}")
+            val successors = h.links.radios.drop(previousAttempts)
+            assertTrue(successors.isNotEmpty())
+            successors.forEach { successor ->
+                assertEquals(newKey, successor.publicKey)
+                assertTrue(successor.sent.none { it[0] == CommandCode.GET_CHANNEL.rawValue })
+                assertTrue(successor.sent.none { it[0] == CommandCode.SEND_CHANNEL_MESSAGE.rawValue })
+            }
         }
     }
 

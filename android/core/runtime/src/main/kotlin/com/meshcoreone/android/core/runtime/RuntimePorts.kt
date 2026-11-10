@@ -82,6 +82,8 @@ data class RuntimeServiceCallbacks(
     val beginIdentityImport: suspend (kotlinx.coroutines.Deferred<Unit>) -> Unit,
     val reconcileIdentity: suspend (kotlinx.coroutines.Deferred<Unit>) -> RadioId?,
     val recoverIdentity: suspend (kotlinx.coroutines.Deferred<Unit>) -> Unit,
+    val identityImportAdmission: suspend (kotlinx.coroutines.Deferred<Unit>) -> com.meshcoreone.android.core.contracts.domain.ChannelDispatchAdmission,
+    val finishIdentityImport: suspend (Boolean) -> Unit,
 )
 
 data class RuntimeServiceInputs(

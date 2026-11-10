@@ -128,9 +128,9 @@ internal class NodeConfigSettingsAdapter(private val resolve: () -> SettingsServ
     ) = settings.setOtherParams(autoAddContacts, telemetryModes, advertLocationPolicyRaw, multiAcks)
 }
 
-internal class NodeConfigChannelAdapter(private val channels: ChannelService) : NodeConfigChannelWriter {
+internal class NodeConfigChannelAdapter(private val channels: () -> ChannelService) : NodeConfigChannelWriter {
     override suspend fun setChannelWithSecret(radioId: RadioId, index: UByte, name: String, secret: Bytes) =
-        channels.setChannelWithSecret(radioId, index, name, secret)
+        channels().setChannelWithSecret(radioId, index, name, secret)
 }
 
 // endregion

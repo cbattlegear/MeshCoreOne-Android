@@ -97,6 +97,19 @@ interface ChannelDao : RowWriter<ChannelEntity> {
     @Query("SELECT * FROM channels WHERE radioId = :radioId ORDER BY `index`") fun observe(radioId: UUID): Flow<List<ChannelEntity>>
     @Query("SELECT * FROM channels WHERE radioId = :radioId AND id = :id") suspend fun byId(radioId: UUID, id: UUID): ChannelEntity?
     @Query("SELECT * FROM channels WHERE radioId = :radioId AND `index` = :index") suspend fun forIndex(radioId: UUID, index: Long): List<ChannelEntity>
+    // AndroidOnly: WP-202 Return SQLite's affected-row count so ignored metadata writes cannot report success.
+    @Query(
+        "UPDATE channels SET lastMessageDate_seconds = :seconds, lastMessageDate_nanos = :nanos, unreadCount = :unreadCount " +
+            "WHERE radioId = :radioId AND id = :id AND `index` = :index AND isEnabled = 1",
+    )
+    suspend fun updateMessageMetadata(
+        radioId: UUID,
+        id: UUID,
+        index: Long,
+        seconds: Long?,
+        nanos: Int?,
+        unreadCount: Long,
+    ): Int
     @Query("SELECT * FROM channels WHERE radioId >= upper(:radioId) AND radioId <= lower(:radioId) AND radioId COLLATE NOCASE = :radioId AND id COLLATE NOCASE = :id")
     suspend fun simulatorIdentityCohort(radioId: UUID, id: UUID): List<ChannelEntity>
     @Query("SELECT * FROM channels WHERE radioId >= upper(:radioId) AND radioId <= lower(:radioId) AND radioId COLLATE NOCASE = :radioId AND `index` = :index")

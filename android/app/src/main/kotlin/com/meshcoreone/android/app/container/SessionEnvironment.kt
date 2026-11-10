@@ -13,6 +13,7 @@ import com.meshcoreone.android.core.protocol.session.SessionClock
 import com.meshcoreone.android.core.protocol.session.SystemSessionClock
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.core.services.contacts.ContactPreferenceFlags
+import com.meshcoreone.android.core.services.contacts.ChannelDispatchFence
 import com.meshcoreone.android.core.services.diagnostics.DebugLogBuffer
 import com.meshcoreone.android.core.services.messaging.ChatSendQueueConfig
 import com.meshcoreone.android.core.services.messaging.ChatSendQueueProgress
@@ -69,6 +70,7 @@ class SessionEnvironment(
     val messageServiceConfig: MessageServiceConfig = MessageServiceConfig(),
     val chatSendQueueConfig: ChatSendQueueConfig = ChatSendQueueConfig(),
     val onChannelQueryAccounting: ((ChannelQueryAccountingEvent) -> Unit)? = null,
+    val channelDispatchFence: ChannelDispatchFence = ChannelDispatchFence(),
 )
 
 /** Observes container creation and teardown so the process owner can prove no graph leaks. */

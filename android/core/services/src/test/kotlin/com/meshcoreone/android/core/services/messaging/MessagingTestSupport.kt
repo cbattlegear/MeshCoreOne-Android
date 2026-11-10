@@ -17,6 +17,7 @@ import com.meshcoreone.android.core.protocol.session.SessionClock
 import com.meshcoreone.android.core.protocol.transport.MeshTransport
 import com.meshcoreone.android.core.protocol.transport.mock.MockTransport
 import com.meshcoreone.android.core.protocol.transport.mock.MockTransportException
+import com.meshcoreone.android.core.services.contacts.ChannelDispatchFence
 import java.lang.reflect.Proxy
 import java.security.MessageDigest
 import java.time.Clock
@@ -89,27 +90,95 @@ internal class TestSignals(initial: SessionToken = token()) : ConnectionSignals 
     }
 }
 
-private fun unsupportedStore(): PersistenceStoreProtocol = PersistenceStoreProtocol::class.java.cast(
-    Proxy.newProxyInstance(PersistenceStoreProtocol::class.java.classLoader, arrayOf(PersistenceStoreProtocol::class.java)) { _, method, _ ->
+private fun <T> unsupportedRole(type: Class<T>): T = type.cast(
+    Proxy.newProxyInstance(type.classLoader, arrayOf(type)) { _, method, _ ->
         throw UnsupportedOperationException("Undeclared test operation: ${method.name}")
     },
 )
 
-internal class RecordingStore : PersistenceStoreProtocol by unsupportedStore() {
+internal class RecordingStore : PersistenceStoreProtocol by unsupportedRole(PersistenceStoreProtocol::class.java),
+    ChannelHistoryPersisting by unsupportedRole(ChannelHistoryPersisting::class.java),
+    QueuedChannelTerminalPersisting, QueuedChannelReadinessPersisting, InlineChannelAttemptPersisting {
     val messages = linkedMapOf<EntityKey, MessageDTO>()
     val contacts = linkedMapOf<EntityKey, ContactDTO>()
     val channels = linkedMapOf<EntityKey, ChannelDTO>()
     val devices = linkedMapOf<RadioId, DeviceDTO>()
     val pending = linkedMapOf<EntityKey, PendingSendDTO>()
+    val channelAttempts = linkedMapOf<QueuedChannelAttemptKey, QueuedChannelAttempt>()
+    val channelOccupants = mutableMapOf<Pair<RadioId, UByte>, UUID>()
     val calls = mutableListOf<String>()
     val faults = mutableMapOf<String, PersistenceStoreException>()
     var before: (suspend (String) -> Unit)? = null
+    var after: (suspend (String) -> Unit)? = null
     private suspend fun access(name: String) {
         calls += name
         before?.invoke(name)
         faults[name]?.let { throw it }
     }
     override suspend fun saveMessage(dto: MessageDTO) { access("saveMessage"); messages[EntityKey(dto.radioId, dto.id)] = dto }
+    fun seedChannelCreation(index: UByte = 0u, radio: RadioId = RADIO): ChannelOccupantSnapshot {
+        val channel = ChannelDTO(radioId = radio, index = index, name = "Test", secret = Bytes(ByteArray(16) { 0x11 }))
+        channels[EntityKey(radio, channel.id)] = channel
+        val occupant = channelOccupants.getOrPut(radio to index, UUID::randomUUID)
+        return ChannelOccupantSnapshot(channel, occupant)
+    }
+    override suspend fun fetchChannelOccupantSnapshot(radioId: RadioId, index: UByte): ChannelOccupantSnapshot? {
+        access("fetchChannelOccupantSnapshot")
+        val channel = channels.values.singleOrNull { it.radioId == radioId && it.index == index } ?: return null
+        return channelOccupants[radioId to index]?.let { ChannelOccupantSnapshot(channel, it) }
+    }
+    suspend fun capturedChannelMessage(creation: ChannelMessageCreation, timestamp: UInt, createdAt: Instant): MessageDTO {
+        access("createOrReconcileChannelMessage")
+        val origin = creation.origin
+        val key = EntityKey(origin.radioId, creation.messageID)
+        messages[key]?.let { existing ->
+            val conflict = when {
+                existing.contactID != null || existing.channelIndex != origin.channelIndex ||
+                    existing.direction != MessageDirection.OUTGOING -> ChannelHistoryConflict.MESSAGE_DESTINATION_MISMATCH
+                existing.channelOccupantID == null -> ChannelHistoryConflict.UNKNOWN_MESSAGE_ORIGIN
+                existing.channelOccupantID != origin.expectedOccupantID || existing.text != creation.text ||
+                    existing.textType != creation.textType -> ChannelHistoryConflict.ORIGIN_MISMATCH
+                else -> null
+            }
+            if (conflict != null) {
+                throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                    ChannelHistoryRejected(conflict, origin, key))
+            }
+            return existing
+        }
+        return MessageDTO(id = creation.messageID, radioId = origin.radioId, channelIndex = origin.channelIndex,
+            text = creation.text, timestamp = timestamp, createdAt = createdAt, textType = creation.textType,
+            channelOccupantID = origin.expectedOccupantID)
+    }
+    override suspend fun createOrReconcileChannelMessage(
+        creation: ChannelMessageCreation, timestamp: UInt, createdAt: Instant,
+    ): MessageDTO {
+        val row = capturedChannelMessage(creation, timestamp, createdAt)
+        if (messages[EntityKey(row.radioId, row.id)] == null) saveMessage(row)
+        return row
+    }
+    override suspend fun validateChannelMessageOrigin(message: EntityKey): ChannelHistoryScope {
+        access("validateChannelMessageOrigin")
+        val row = messages[message]
+            ?: throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                ChannelHistoryRejected(ChannelHistoryConflict.MESSAGE_NOT_FOUND, messageKey = message))
+        val index = row.channelIndex
+        if (index == null || row.contactID != null) {
+            throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                ChannelHistoryRejected(ChannelHistoryConflict.MESSAGE_DESTINATION_MISMATCH, messageKey = message))
+        }
+        val occupant = row.channelOccupantID
+            ?: throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                ChannelHistoryRejected(ChannelHistoryConflict.UNKNOWN_MESSAGE_ORIGIN, messageKey = message))
+        val origin = ChannelHistoryScope(row.radioId, index, occupant)
+        val current = channelOccupants[row.radioId to index]
+        if (current == null || current != occupant) {
+            throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                ChannelHistoryRejected(if (current == null) ChannelHistoryConflict.UNKNOWN_AUTHORITY
+                    else ChannelHistoryConflict.STALE_OCCUPANT, origin, message))
+        }
+        return origin
+    }
     override suspend fun fetchMessage(key: EntityKey): MessageDTO? { access("fetchMessage"); return messages[key] }
     override suspend fun fetchMessage(deduplicationKey: String, radioId: RadioId): MessageDTO? =
         messages.values.firstOrNull { it.radioId == radioId && it.deduplicationKey == deduplicationKey }
@@ -189,13 +258,29 @@ internal class RecordingStore : PersistenceStoreProtocol by unsupportedStore() {
     override suspend fun fetchChannel(radioId: RadioId, index: UByte): ChannelDTO? {
         access("fetchChannel"); return channels.values.firstOrNull { it.radioId == radioId && it.index == index }
     }
+    override suspend fun fetchChannelOccupantID(radioId: RadioId, index: UByte): UUID? {
+        access("fetchChannelOccupantID"); return channelOccupants[radioId to index]
+    }
     override suspend fun updateChannelLastMessage(key: EntityKey, date: Instant?) {
         access("updateChannelLastMessage"); channels[key]?.let { channels[key] = it.copy(lastMessageDate = date) }
     }
     override suspend fun insertPendingSendAssigningSequence(dto: PendingSendDTO): Long {
         access("insertPendingSendAssigningSequence")
         val sequence = Math.incrementExact(pending.values.filter { it.radioId == dto.radioId }.maxOfOrNull { it.sequence } ?: 0)
-        pending[EntityKey(dto.radioId, dto.id)] = dto.copy(sequence = sequence)
+        val key = EntityKey(dto.radioId, dto.id)
+        if (dto.kind == PendingSendKind.CHANNEL) {
+            if (key in pending || channelAttempts.keys.any { it.radioId == dto.radioId && it.pendingID == dto.id } ||
+                pending.values.any { it.radioId == dto.radioId && it.messageID == dto.messageID &&
+                    it.channelDispatchState != QueuedChannelDispatchState.READY }
+            ) reject(dto, QueuedChannelAttemptConflict.RETAINED_SUBMISSION)
+            if (dto.channelDispatchState != null || dto.channelAttemptID != null) {
+                reject(dto, QueuedChannelAttemptConflict.UNKNOWN_SUBMISSION)
+            }
+        }
+        pending[key] = dto.copy(sequence = sequence,
+            channelDispatchState = QueuedChannelDispatchState.READY.takeIf {
+                dto.kind == PendingSendKind.CHANNEL && dto.channelOccupantID != null
+            })
         return sequence
     }
     override suspend fun upsertPendingSend(dto: PendingSendDTO) { pending[EntityKey(dto.radioId, dto.id)] = dto }
@@ -216,10 +301,203 @@ internal class RecordingStore : PersistenceStoreProtocol by unsupportedStore() {
         pending[EntityKey(row.radioId, row.id)] = row.copy(attemptCount = next)
         return next
     }
+    override suspend fun incrementReadyQueuedChannelAttemptCount(pending: EntityKey, messageID: UUID): Long {
+        access("incrementReadyQueuedChannelAttemptCount")
+        val row = this.pending[pending] ?: throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+            QueuedChannelAttemptRejected(pending, QueuedChannelAttemptConflict.MISSING_SUBMISSION))
+        if (row.kind != PendingSendKind.CHANNEL || row.messageID != messageID) {
+            reject(row, QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION)
+        }
+        if (row.channelDispatchState == null) reject(row, QueuedChannelAttemptConflict.UNKNOWN_SUBMISSION)
+        if (row.channelDispatchState != QueuedChannelDispatchState.READY || row.channelAttemptID != null) {
+            reject(row, QueuedChannelAttemptConflict.RETAINED_SUBMISSION)
+        }
+        val message = messages[EntityKey(row.radioId, messageID)]
+        if (row.channelIndex == null || row.contactID != null || row.channelOccupantID == null ||
+            message == null || message.contactID != null || message.direction != MessageDirection.OUTGOING ||
+            message.channelIndex != row.channelIndex || message.channelOccupantID != row.channelOccupantID ||
+            message.text != row.messageText
+        ) reject(row, QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION)
+        if (this.pending.values.any { it.radioId == row.radioId && it.messageID == messageID && it.id != row.id &&
+                (it.channelDispatchState != QueuedChannelDispatchState.READY || it.channelAttemptID != null) }) {
+            reject(row, QueuedChannelAttemptConflict.RETAINED_SUBMISSION)
+        }
+        val next = Math.incrementExact(row.attemptCount ?: 0)
+        this.pending[pending] = row.copy(attemptCount = next)
+        after?.invoke("incrementReadyQueuedChannelAttemptCount")
+        return next
+    }
     override suspend fun deletePendingSendsForMessage(key: EntityKey) {
         access("deletePendingSendsForMessage")
         pending.entries.removeIf { it.value.radioId == key.radioId && it.value.messageID == key.id }
     }
+    override suspend fun beginQueuedChannelAttempt(
+        key: QueuedChannelAttemptKey, expectedOccupantID: UUID, wireTimestamp: UInt,
+    ): QueuedChannelAttempt {
+        access("beginQueuedChannelAttempt")
+        val pendingKey = EntityKey(key.radioId, key.pendingID)
+        val row = pending[pendingKey] ?: reject(key, QueuedChannelAttemptConflict.MISSING_SUBMISSION)
+        val attempt = preparedChannelAttempt(row, key, expectedOccupantID, wireTimestamp)
+        channelAttempts[key] = attempt
+        pending[pendingKey] = row.copy(channelDispatchState = QueuedChannelDispatchState.DISPATCHING, channelAttemptID = key.attemptID)
+        after?.invoke("beginQueuedChannelAttempt")
+        return attempt
+    }
+    override suspend fun beginInlineChannelAttempt(
+        submission: PendingSendDTO, key: QueuedChannelAttemptKey, expectedOccupantID: UUID, wireTimestamp: UInt,
+    ): QueuedChannelAttempt {
+        access("beginInlineChannelAttempt")
+        val pendingKey = EntityKey(key.radioId, key.pendingID)
+        if (submission.radioId != key.radioId || submission.id != key.pendingID || submission.messageID != key.messageID
+        ) reject(submission, QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION)
+        if (submission.channelDispatchState != null || submission.channelAttemptID != null) {
+            reject(submission, QueuedChannelAttemptConflict.UNKNOWN_SUBMISSION)
+        }
+        if (pendingKey in pending || channelAttempts.keys.any { it.radioId == key.radioId && it.pendingID == key.pendingID } ||
+            pending.values.any { it.radioId == key.radioId && it.messageID == key.messageID }
+        ) reject(submission, QueuedChannelAttemptConflict.RETAINED_SUBMISSION)
+        val sequence = Math.incrementExact(pending.values.filter { it.radioId == key.radioId }.maxOfOrNull { it.sequence } ?: 0)
+        val row = submission.copy(sequence = sequence, channelDispatchState = QueuedChannelDispatchState.READY)
+        val attempt = preparedChannelAttempt(row, key, expectedOccupantID, wireTimestamp)
+        // No suspension or observable READY insertion between the two committed fixture writes.
+        channelAttempts[key] = attempt
+        pending[pendingKey] = row.copy(channelDispatchState = QueuedChannelDispatchState.DISPATCHING, channelAttemptID = key.attemptID)
+        after?.invoke("beginInlineChannelAttempt")
+        return attempt
+    }
+    private fun preparedChannelAttempt(
+        row: PendingSendDTO, key: QueuedChannelAttemptKey, expectedOccupantID: UUID, wireTimestamp: UInt,
+    ): QueuedChannelAttempt {
+        val message = messages[EntityKey(key.radioId, key.messageID)]
+        if (row.channelDispatchState != QueuedChannelDispatchState.READY || row.channelAttemptID != null) {
+            reject(row, QueuedChannelAttemptConflict.SUBMISSION_NOT_READY)
+        }
+        if (row.kind != PendingSendKind.CHANNEL || row.contactID != null ||
+            row.messageID != key.messageID || row.channelOccupantID != expectedOccupantID ||
+            message?.channelOccupantID != expectedOccupantID || message.channelIndex != row.channelIndex ||
+            message.text != row.messageText || message.direction != MessageDirection.OUTGOING || message.contactID != null
+        ) reject(row, QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION)
+        if (pending.values.any { it.radioId == key.radioId && it.messageID == key.messageID && it.id != key.pendingID &&
+                (it.channelDispatchState != QueuedChannelDispatchState.READY || it.channelAttemptID != null) }) {
+            reject(row, QueuedChannelAttemptConflict.RETAINED_SUBMISSION)
+        }
+        if (channelAttempts.keys.any { it.radioId == key.radioId && it.attemptID == key.attemptID }) {
+            reject(row, QueuedChannelAttemptConflict.ATTEMPT_ID_REUSED)
+        }
+        return QueuedChannelAttempt(key, requireNotNull(row.channelIndex), expectedOccupantID,
+            wireTimestamp, row.isResend, QueuedChannelAttemptPhase.DISPATCHING, false)
+    }
+    override suspend fun settleQueuedChannelAttempt(
+        key: QueuedChannelAttemptKey, outcome: QueuedChannelAttemptOutcome,
+    ): QueuedChannelAttempt {
+        access("settleQueuedChannelAttempt")
+        val attempt = channelAttempts[key] ?: reject(key, QueuedChannelAttemptConflict.MISSING_ATTEMPT)
+        if (attempt.phase == outcome.phase) return attempt
+        if (attempt.phase != QueuedChannelAttemptPhase.DISPATCHING) reject(key, QueuedChannelAttemptConflict.CONFLICTING_SETTLEMENT)
+        val pendingKey = EntityKey(key.radioId, key.pendingID)
+        val row = pending[pendingKey] ?: reject(key, QueuedChannelAttemptConflict.MISSING_SUBMISSION)
+        if (row.messageID != key.messageID || row.channelAttemptID != key.attemptID ||
+            row.channelDispatchState != QueuedChannelDispatchState.DISPATCHING ||
+            row.channelOccupantID != attempt.channelOccupantID
+        ) reject(row, QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION)
+        val settled = attempt.copy(phase = outcome.phase)
+        channelAttempts[key] = settled
+        pending[pendingKey] = row.copy(channelDispatchState = outcome.submissionState,
+            channelAttemptID = key.attemptID.takeUnless { outcome == QueuedChannelAttemptOutcome.DEFINITELY_UNSENT })
+        after?.invoke("settleQueuedChannelAttempt")
+        return settled
+    }
+    override suspend fun fetchQueuedChannelAttempt(key: QueuedChannelAttemptKey): QueuedChannelAttempt? {
+        access("fetchQueuedChannelAttempt"); return channelAttempts[key]
+    }
+    override suspend fun fetchQueuedChannelAttempts(pending: EntityKey): SnapshotList<QueuedChannelAttempt> {
+        access("fetchQueuedChannelAttempts")
+        return channelAttempts.values.filter { it.key.radioId == pending.radioId && it.key.pendingID == pending.id }.snapshot()
+    }
+    override suspend fun completeAcceptedQueuedChannelAttempt(key: QueuedChannelAttemptKey) {
+        access("completeAcceptedQueuedChannelAttempt")
+        val attempt = channelAttempts[key] ?: reject(key, QueuedChannelAttemptConflict.MISSING_ATTEMPT)
+        if (attempt.phase != QueuedChannelAttemptPhase.ACCEPTED) reject(key, QueuedChannelAttemptConflict.NOT_ACCEPTED)
+        if (attempt.isCompleted) return
+        val row = pending[EntityKey(key.radioId, key.pendingID)]
+            ?: reject(key, QueuedChannelAttemptConflict.MISSING_SUBMISSION)
+        if (pending.values.any { it.radioId == key.radioId && it.messageID == key.messageID && it.id != key.pendingID }) {
+            reject(row, QueuedChannelAttemptConflict.RETAINED_SUBMISSION)
+        }
+        val messageKey = EntityKey(key.radioId, key.messageID)
+        val message = messages.getValue(messageKey)
+        if (row.messageID != key.messageID || row.channelDispatchState != QueuedChannelDispatchState.ACCEPTED ||
+            row.channelAttemptID != key.attemptID || row.channelOccupantID != attempt.channelOccupantID ||
+            row.isResend != attempt.isResend || message.channelOccupantID != attempt.channelOccupantID ||
+            message.channelIndex != attempt.channelIndex || message.text != row.messageText ||
+            message.direction != MessageDirection.OUTGOING || message.contactID != null
+        ) reject(row, QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION)
+        messages[messageKey] = message.copy(
+            status = if (message.status == MessageStatus.DELIVERED) MessageStatus.DELIVERED else MessageStatus.SENT,
+            timestamp = attempt.wireTimestamp, sendCount = message.sendCount + if (attempt.isResend) 1 else 0,
+            heardRepeats = if (attempt.isResend) 0 else message.heardRepeats)
+        pending.remove(EntityKey(key.radioId, key.pendingID))
+        channelAttempts[key] = attempt.copy(isCompleted = true)
+        after?.invoke("completeAcceptedQueuedChannelAttempt")
+    }
+    override suspend fun settleAndRetireDefinitelyUnsentQueuedChannelAttempt(
+        key: QueuedChannelAttemptKey,
+    ): QueuedChannelRetirement {
+        access("settleAndRetireDefinitelyUnsentQueuedChannelAttempt")
+        val row = pending[EntityKey(key.radioId, key.pendingID)]
+            ?: reject(key, QueuedChannelAttemptConflict.MISSING_SUBMISSION)
+        val latest = channelAttempts.values.lastOrNull { it.key.radioId == key.radioId && it.key.pendingID == key.pendingID }
+        if (row.channelDispatchState != QueuedChannelDispatchState.DISPATCHING || row.channelAttemptID != key.attemptID ||
+            latest?.key != key || latest.phase != QueuedChannelAttemptPhase.DISPATCHING || latest.isCompleted ||
+            pending.values.any { it.radioId == key.radioId && it.messageID == key.messageID && it.id != key.pendingID }
+        ) reject(row, QueuedChannelAttemptConflict.RETAINED_SUBMISSION)
+        val messageKey = EntityKey(key.radioId, key.messageID)
+        val message = messages.getValue(messageKey)
+        if (row.messageID != key.messageID || row.kind != PendingSendKind.CHANNEL || row.contactID != null ||
+            row.channelOccupantID != latest.channelOccupantID || row.channelIndex != latest.channelIndex ||
+            row.isResend != latest.isResend || message.direction != MessageDirection.OUTGOING || message.contactID != null ||
+            message.channelOccupantID != latest.channelOccupantID || message.channelIndex != latest.channelIndex ||
+            message.text != row.messageText
+        ) reject(row, QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION)
+        val status = if (message.status == MessageStatus.DELIVERED) message.status else MessageStatus.FAILED
+        pending.remove(EntityKey(key.radioId, key.pendingID))
+        messages[messageKey] = message.copy(status = status,
+            failureSeen = if (status != message.status) false else message.failureSeen)
+        channelAttempts[key] = latest.copy(phase = QueuedChannelAttemptPhase.DEFINITELY_UNSENT)
+        after?.invoke("settleAndRetireDefinitelyUnsentQueuedChannelAttempt")
+        return QueuedChannelRetirement(status, status != message.status)
+    }
+
+    override suspend fun retireDefinitelyUnsentQueuedChannelAttempt(key: QueuedChannelAttemptKey): QueuedChannelRetirement {
+        access("retireDefinitelyUnsentQueuedChannelAttempt")
+        val row = pending[EntityKey(key.radioId, key.pendingID)]
+            ?: reject(key, QueuedChannelAttemptConflict.MISSING_SUBMISSION)
+        val latest = channelAttempts.values.lastOrNull { it.key.radioId == key.radioId && it.key.pendingID == key.pendingID }
+        if (row.channelDispatchState != QueuedChannelDispatchState.READY || row.channelAttemptID != null ||
+            latest?.key != key || latest.phase != QueuedChannelAttemptPhase.DEFINITELY_UNSENT ||
+            pending.values.any { it.radioId == key.radioId && it.messageID == key.messageID && it.id != key.pendingID }
+        ) reject(row, QueuedChannelAttemptConflict.RETAINED_SUBMISSION)
+        val messageKey = EntityKey(key.radioId, key.messageID)
+        val message = messages.getValue(messageKey)
+        if (row.messageID != key.messageID || row.kind != PendingSendKind.CHANNEL || row.contactID != null ||
+            latest.isCompleted || row.channelOccupantID != latest.channelOccupantID ||
+            row.channelIndex != latest.channelIndex || row.isResend != latest.isResend ||
+            message.direction != MessageDirection.OUTGOING || message.contactID != null ||
+            message.channelOccupantID != latest.channelOccupantID || message.channelIndex != latest.channelIndex ||
+            message.text != row.messageText
+        ) reject(row, QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION)
+        val status = if (message.status == MessageStatus.DELIVERED) message.status else MessageStatus.FAILED
+        pending.remove(EntityKey(key.radioId, key.pendingID))
+        messages[messageKey] = message.copy(status = status)
+        after?.invoke("retireDefinitelyUnsentQueuedChannelAttempt")
+        return QueuedChannelRetirement(status, status != message.status)
+    }
+    private fun reject(row: PendingSendDTO, reason: QueuedChannelAttemptConflict): Nothing =
+        throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+            QueuedChannelAttemptRejected(EntityKey(row.radioId, row.id), reason))
+    private fun reject(key: QueuedChannelAttemptKey, reason: QueuedChannelAttemptConflict): Nothing =
+        throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+            QueuedChannelAttemptRejected(EntityKey(key.radioId, key.pendingID), reason))
 }
 
 internal class FirmwareTransport(private val senderPublicKey: Bytes = SELF) : MeshTransport {
@@ -227,6 +505,7 @@ internal class FirmwareTransport(private val senderPublicKey: Bytes = SELF) : Me
     var appStartReply: Bytes = selfInfoPacket(senderPublicKey)
     var beforeReply: (suspend (Bytes) -> Unit)? = null
     var holdMessageReplies = false
+    var holdChannelReplies = false
     var holdGetReplies = false
     var acknowledge = false
     var ackBeforeAcceptance = false
@@ -273,6 +552,7 @@ internal class FirmwareTransport(private val senderPublicKey: Bytes = SELF) : Me
             }
             CommandCode.SEND_CHANNEL_MESSAGE -> {
                 channelError?.let { mock.simulateError(it); return }
+                if (holdChannelReplies) return
                 mock.simulateOK()
             }
             CommandCode.RESET_PATH -> mock.simulateOK()
@@ -331,24 +611,39 @@ internal class Harness(
             override fun events(filter: EventFilter): Flow<MeshEvent> = dispatcher.subscribe(filter)
         }
     } ?: session
+    private val channelIdentity = ChannelIdentityMutex()
+    val channelFence = ChannelDispatchFence(channelIdentity)
+    val channelLease = channelFence.openSession(token, serviceSession, ChannelDispatchAdmission(token, serviceSession))
     val diagnostics = mutableListOf<MessagingDiagnostic>()
     private val queues = mutableListOf<ChatSendQueueService>()
     private val pollers = mutableListOf<MessagePollingService>()
     val service = MessageService(token, localPublicKey, serviceSession, store, signals, scope, config, clock,
-        jitter = { 1.0 }, reporter = MessagingIssueReporter { diagnostics += it })
+        jitter = { 1.0 }, reporter = MessagingIssueReporter { diagnostics += it }, channelDispatchLease = channelLease)
     init { synchronized(fixtures) { fixtures.getOrPut(test) { mutableListOf() } += this } }
     suspend fun start() {
         store.saveContact(contact)
         session.start()
         assertEquals(localPublicKey, session.currentSelfInfo?.publicKey)
+        channelIdentity.withChannelOperationScope { identity ->
+            channelFence.recordReconciled(channelLease, identity,
+                store.channelOccupants.keys.filter { it.first == token.radioId }.map { it.second })
+        }
     }
     fun stored(id: UUID): MessageDTO = assertNotNull(store.messages[EntityKey(RADIO, id)])
     suspend fun message(
         status: MessageStatus = MessageStatus.SENT, channel: UByte? = null,
         text: String = "hello", timestamp: UInt = 100u,
     ): MessageDTO {
+        val occupant = channel?.let { index ->
+            store.channelOccupants.getOrPut(RADIO to index, UUID::randomUUID).also {
+                channelIdentity.withChannelOperationScope { identity ->
+                    channelFence.recordReconciled(channelLease, identity, listOf(index))
+                }
+            }
+        }
         val dto = MessageDTO(radioId = RADIO, contactID = if (channel == null) CONTACT else null,
-            channelIndex = channel, text = text, timestamp = timestamp, createdAt = clock.wallClock.instant(), status = status)
+            channelIndex = channel, text = text, timestamp = timestamp, createdAt = clock.wallClock.instant(), status = status,
+            channelOccupantID = occupant)
         store.saveMessage(dto)
         return dto
     }
@@ -369,6 +664,7 @@ internal class Harness(
             pollers.asReversed().forEach { release { it.close() } }
             queues.asReversed().forEach { release { it.shutdown() } }
             release { service.close() }
+            channelFence.retire(channelLease)
             release { session.stop() }
         }
         finally {
@@ -395,10 +691,14 @@ internal class Harness(
         val dto = if (channelIndex == null) PendingSendDTO.fromEnvelope(
             DirectMessageEnvelope(message.id, CONTACT, isResend), RADIO, enqueuedAt = clock.wallClock.instant())
         else PendingSendDTO.fromEnvelope(ChannelMessageEnvelope(message.id, channelIndex, isResend,
-            message.text, message.timestamp, "Test"), RADIO, enqueuedAt = clock.wallClock.instant())
+            message.text, message.timestamp, "Test", message.channelOccupantID), RADIO, enqueuedAt = clock.wallClock.instant())
         val persisted = dto.copy(sequence = 1, attemptCount = attempt)
-        store.upsertPendingSend(persisted)
-        return persisted
+        if (channelIndex == null) {
+            store.upsertPendingSend(persisted)
+            return persisted
+        }
+        store.insertPendingSendAssigningSequence(persisted)
+        return store.pending.getValue(EntityKey(RADIO, persisted.id))
     }
 }
 

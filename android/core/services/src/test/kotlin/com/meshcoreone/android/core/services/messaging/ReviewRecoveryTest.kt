@@ -40,7 +40,9 @@ class ReviewRecoveryTest {
         },
         native("a durable inline DM or channel save completing at disconnect fails before any wire command") {
             for (channel in listOf(false, true)) {
-                val h = Harness(this); h.start(); val release = CompletableDeferred<Unit>()
+                val h = Harness(this)
+                if (channel) h.store.seedChannelCreation()
+                h.start(); val release = CompletableDeferred<Unit>()
                 h.store.before = { if (it == "saveMessage") release.await() }
                 val send = backgroundScope.async {
                     try {
@@ -141,12 +143,14 @@ class ReviewRecoveryTest {
             assertTrue(h.store.fetchPendingSends(RADIO).isEmpty())
             assertEquals(2, h.sends(CommandCode.SEND_MESSAGE).size); assertTrue(q.shutdown().isComplete); h.close()
         },
-        native("DM and channel preflight faults restore pending before parking without a wire send or attempt bump") {
+        native("DM preflight restores pending while channel preflight retains status without a wire send or attempt bump") {
             for (channel in listOf<UByte?>(null, 0u)) {
                 val h = Harness(this); h.start(); val message = h.message(MessageStatus.FAILED, channel); h.pending(message)
-                h.store.faults["incrementPendingSendAttemptCount"] = storageFailure(); val q = h.queue()
+                h.store.faults[if (channel == null) "incrementPendingSendAttemptCount"
+                    else "incrementReadyQueuedChannelAttemptCount"] = storageFailure()
+                val q = h.queue()
                 q.hydrate(); runCurrent()
-                assertEquals(MessageStatus.PENDING, h.stored(message.id).status)
+                assertEquals(if (channel == null) MessageStatus.PENDING else MessageStatus.FAILED, h.stored(message.id).status)
                 assertEquals(0L, h.store.fetchPendingSends(RADIO).single().attemptCount)
                 assertTrue(h.sends(CommandCode.SEND_MESSAGE).isEmpty())
                 assertTrue(h.sends(CommandCode.SEND_CHANNEL_MESSAGE).isEmpty()); q.shutdown(); h.close()

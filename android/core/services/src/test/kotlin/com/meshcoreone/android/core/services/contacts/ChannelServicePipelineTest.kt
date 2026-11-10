@@ -104,14 +104,21 @@ class ChannelServicePipelineTest {
             session.script(2u, { failureEntries++; throw failure })
             var commits = 0
             val observedStore = object : ChannelPersisting by store {
-                override suspend fun batchSaveChannels(
-                    radioId: RadioId, configured: SnapshotList<ChannelInfo>,
-                    unconfiguredIndices: SnapshotList<UByte>, pruneBeyond: UByte?,
-                ) = store.batchSaveChannels(radioId, configured, unconfiguredIndices, pruneBeyond).also {
-                    commits++
-                    assertEquals(read, configured.toList())
-                    assertTrue(unconfiguredIndices.isEmpty(), "an unread slot must not be classified as empty")
-                    assertEquals(4.toUByte(), pruneBeyond)
+                override suspend fun <T> withChannelOperation(
+                    block: suspend (ChannelPersisting, com.meshcoreone.android.core.contracts.domain.ChannelIdentityWriteScope) -> T,
+                ): T = store.withChannelOperation { scoped, scope ->
+                    val observed = object : ChannelPersisting by scoped {
+                        override suspend fun batchSaveChannels(
+                            radioId: RadioId, configured: SnapshotList<ChannelInfo>,
+                            unconfiguredIndices: SnapshotList<UByte>, pruneBeyond: UByte?,
+                        ) = scoped.batchSaveChannels(radioId, configured, unconfiguredIndices, pruneBeyond).also {
+                            commits++
+                            assertEquals(read, configured.toList())
+                            assertTrue(unconfiguredIndices.isEmpty(), "an unread slot must not be classified as empty")
+                            assertEquals(4.toUByte(), pruneBeyond)
+                        }
+                    }
+                    block(observed, scope)
                 }
             }
             val service = ChannelService(session, observedStore, null, ChannelsRecordingClock())

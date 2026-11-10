@@ -244,8 +244,7 @@ private fun AppChatConversation(
             feature.content, mentionContacts, composerDevice?.nodeName, rendered, feature::updateRenderEnvironment,
         )
         var replyTo by remember(conversation.id) { mutableStateOf<java.util.UUID?>(null) }
-        val sender = remember(feature, target) {
-            val underlying = feature.sender(conversation.id.radioId)
+        val decorateSender: (ComposerSendPort) -> ComposerSendPort = remember(feature, target) { { underlying ->
             object : ComposerSendPort by underlying {
                 override suspend fun createPendingDirect(
                     text: String, contact: com.meshcoreone.android.core.model.ContactDTO,
@@ -257,12 +256,9 @@ private fun AppChatConversation(
                     }
                 }
             }
-        }
-        val composer = remember(feature, target, sender) {
-            ComposerStateHolder(
-                target, sender, feature.drafts, environment, scope,
-                ComposerTimer { delay(it) }, ComposerDiagnostics(feature::report),
-            )
+        } }
+        val composer = remember(feature, target, decorateSender) {
+            feature.composer(target, environment, scope, decorateSender)
         }
         val notificationSource by feature.notificationSource.collectAsState()
         LaunchedEffect(composer, notificationSource) {

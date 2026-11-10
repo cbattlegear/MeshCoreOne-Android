@@ -222,9 +222,14 @@ internal class ContactRepository(
     ): SnapshotMap<UUID, Long> {
         if (contacts.isEmpty()) return emptyMap<UUID, Long>().snapshotMap()
         return context.write("adoptOrphanedDirectMessages") {
+            // AndroidOnly: WP-202 A delta subset must not hide another persisted prefix match.
+            val allContacts = database.contacts().forRadio(radioId.value)
+            val persistedById = allContacts.associateBy { it.id }
             val byId = LinkedHashMap<UUID, ContactEntity>()
             for (candidate in contacts) {
-                database.contacts().byId(radioId.value, candidate.id)?.let { byId[it.id] = it }
+                persistedById[candidate.id]
+                    ?.takeIf { it.publicKey == candidate.publicKey }
+                    ?.let { byId[it.id] = it }
             }
             val counts = LinkedHashMap<UUID, Long>()
             val newest = LinkedHashMap<UUID, Instant>()
@@ -234,7 +239,7 @@ internal class ContactRepository(
                 if (message.directionRawValue != MessageDirection.INCOMING.rawValue) continue
                 val prefix = message.senderKeyPrefix ?: continue
                 if (prefix.isEmpty || RepositoryReactionPolicy.isDirectReaction(message.text)) continue
-                val matches = contacts.filter { it.publicKey.startsWith(prefix) }
+                val matches = allContacts.filter { it.publicKey.startsWith(prefix) }
                 if (matches.size != 1) continue
                 val match = matches.single()
                 if (match.id !in byId) continue

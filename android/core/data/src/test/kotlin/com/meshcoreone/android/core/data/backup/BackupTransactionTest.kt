@@ -128,7 +128,7 @@ class BackupTransactionTest : BackupRoomTest() {
             try {
                 assertTrue(reopened.devices().all().isEmpty())
                 assertTrue(reopened.contacts().forRadio(RADIO.value).isEmpty())
-                assertEquals(1, reopened.openHelper.readableDatabase.version)
+                assertEquals(MeshCoreDatabase.SCHEMA_VERSION, reopened.openHelper.readableDatabase.version)
             } finally { reopened.close() }
         } finally {
             process.close()

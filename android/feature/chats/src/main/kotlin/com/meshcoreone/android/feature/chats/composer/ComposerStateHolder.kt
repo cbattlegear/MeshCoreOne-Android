@@ -20,12 +20,16 @@ import com.meshcoreone.android.feature.chats.timeline.TimelineDraftStore
 import java.util.UUID
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 
 /**
  * Owns one conversation's composer: the draft (persisted through the shared [TimelineDraftStore]),
@@ -48,6 +52,8 @@ class ComposerStateHolder(
     private val timer: ComposerTimer,
     private val diagnostics: ComposerDiagnostics = ComposerDiagnostics { _, _ -> },
     private val locale: java.util.Locale = java.util.Locale.getDefault(),
+    private val sendScope: CoroutineScope = scope,
+    private val captureSendPort: () -> ComposerSendPort = { sendPort },
 ) {
     private val mutableState = MutableStateFlow(initialState())
     val state: StateFlow<ComposerUiState> = mutableState.asStateFlow()
@@ -56,6 +62,7 @@ class ComposerStateHolder(
     private var sendJob: Job? = null
     private var shareJob: Job? = null
     private val observers = ArrayList<Job>()
+    private var draftRevision = 0L
 
     init {
         observers += scope.launch {
@@ -80,6 +87,17 @@ class ComposerStateHolder(
         observers += scope.launch {
             environment.recentSenderOrder.collect { mutableState.update(::withMentions) }
         }
+        (drafts as? ComposerDraftStore)?.let { shared ->
+            observers += scope.launch {
+                shared.changes.collect {
+                    mutableState.update { current ->
+                        if (current.draft.isEmpty() && !current.isSending) {
+                            withMentions(current.copy(draft = drafts.get(target.conversationId).orEmpty()))
+                        } else current
+                    }
+                }
+            }
+        }
     }
 
     private fun initialState(): ComposerUiState {
@@ -98,6 +116,7 @@ class ComposerStateHolder(
 
     /** User typed or pasted; also persists the draft (empty clears it). */
     fun onDraftChanged(text: String) {
+        draftRevision++
         mutableState.update { withMentions(it.copy(draft = text, sendPhase = clearFailure(it.sendPhase))) }
         drafts.set(target.conversationId, text.ifEmpty { null })
     }
@@ -180,47 +199,112 @@ class ComposerStateHolder(
         if (!snapshot.canSend) return false
         val captured = ComposerText.trimmed(snapshot.draft)
         if (captured.isEmpty()) return false
+        if (!sendScope.isActive) return false
+        val acceptedPort = captureSendPort()
         mutableState.update { it.copy(draft = "", isCoolingDown = true, sendPhase = ComposerSendPhase.Sending, mentionQuery = null, mentionSuggestions = emptyList()) }
         drafts.set(target.conversationId, null)
+        val acceptedRevision = draftRevision
+        val storedRevision = (drafts as? ComposerDraftStore)?.revision(target.conversationId)
         cooldownJob?.cancel()
         cooldownJob = scope.launch {
             timer.delay(ComposerLimits.SEND_COOLDOWN_MILLIS)
             mutableState.update { it.copy(isCoolingDown = false) }
         }
-        sendJob = scope.launch { deliver(captured) }
+        sendJob = sendScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            deliver(captured, acceptedPort, acceptedRevision, storedRevision)
+        }
         return true
     }
 
-    private suspend fun deliver(text: String) {
+    private suspend fun deliver(
+        text: String, acceptedPort: ComposerSendPort, acceptedRevision: Long, storedRevision: Long?,
+    ) {
         var pendingId: UUID? = null
         try {
-            val pending = createPending(text)
+            val pending = createPending(text, acceptedPort)
             pendingId = pending.id
-            enqueuePending(pending)
+            enqueuePending(pending, acceptedPort)
             mutableState.update { it.copy(sendPhase = ComposerSendPhase.Idle) }
         } catch (cancelled: CancellationException) {
+            if (sendScope !== scope) {
+                // Creation has joined its owned write before propagating cancellation. Finish only
+                // local recovery; never enqueue or retry from a cancelled operation.
+                withContext(NonCancellable) {
+                    try {
+                        recoverCreation(text, acceptedPort, pendingId, acceptedRevision, storedRevision, cancelled)
+                    } catch (recoveryFailure: Exception) {
+                        if (pendingId == null && acceptedPort.creationOutcome() is ComposerCreationOutcome.NotCommitted) {
+                            acceptedPort.retainDraftForRecovery(text, storedRevision)
+                        }
+                        diagnostics.report("sendRecovery", recoveryFailure)
+                        mutableState.update { it.copy(sendPhase = ComposerSendPhase.Failed(
+                            ComposerSendFailure.OTHER,
+                            pendingId != null || acceptedPort.creationOutcome() is ComposerCreationOutcome.Committed,
+                        )) }
+                        cancelled.addSuppressed(recoveryFailure)
+                    }
+                }
+            }
             throw cancelled
         } catch (failure: Throwable) {
             diagnostics.report("send", failure)
-            val saved = pendingId != null
-            mutableState.update { current ->
-                val restored = if (!saved && current.draft.isEmpty()) text else current.draft
-                withMentions(current.copy(draft = restored, sendPhase = ComposerSendPhase.Failed(classify(failure), saved)))
+            try {
+                recoverCreation(text, acceptedPort, pendingId, acceptedRevision, storedRevision, failure)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (recoveryFailure: Exception) {
+                if (pendingId == null && acceptedPort.creationOutcome() is ComposerCreationOutcome.NotCommitted) {
+                    acceptedPort.retainDraftForRecovery(text, storedRevision)
+                }
+                diagnostics.report("sendRecovery", recoveryFailure)
+                mutableState.update { it.copy(sendPhase = ComposerSendPhase.Failed(
+                    ComposerSendFailure.OTHER,
+                    pendingId != null || acceptedPort.creationOutcome() is ComposerCreationOutcome.Committed,
+                )) }
+                failure.addSuppressed(recoveryFailure)
             }
-            if (!saved) drafts.set(target.conversationId, mutableState.value.draft.ifEmpty { null })
-            pendingId?.let { sendPort.recordLocalEnqueueFailure(it) }
         }
     }
 
-    private suspend fun createPending(text: String) = when (target) {
-        is ComposerTarget.Direct -> sendPort.createPendingDirect(text, target.contact, TextType.PLAIN, null)
-        is ComposerTarget.Channel -> sendPort.createPendingChannel(text, target.channel.index, target.channel.radioId, TextType.PLAIN)
+    private suspend fun recoverCreation(
+        text: String, port: ComposerSendPort, pendingId: UUID?, acceptedRevision: Long,
+        storedRevision: Long?, failure: Throwable,
+    ) {
+        val outcome = port.creationOutcome()
+        if (outcome is ComposerCreationOutcome.Uncertain) port.retainUncertainCreation(storedRevision)
+        val savedId = pendingId ?: (outcome as? ComposerCreationOutcome.Committed)?.message?.id
+        val definitelyUnsaved = savedId == null && outcome is ComposerCreationOutcome.NotCommitted
+        if (definitelyUnsaved && port.canRestoreDraft() && draftRevision == acceptedRevision) {
+            val versioned = drafts as? ComposerDraftStore
+            if (versioned != null && storedRevision != null) {
+                versioned.restoreIfUnchanged(target.conversationId, storedRevision, text)
+            } else if (drafts.get(target.conversationId).isNullOrEmpty()) {
+                drafts.set(target.conversationId, text)
+            }
+        }
+        mutableState.update { current ->
+            withMentions(current.copy(
+                draft = current.draft.ifEmpty { drafts.get(target.conversationId).orEmpty() },
+                sendPhase = ComposerSendPhase.Failed(classify(failure), savedId != null),
+            ))
+        }
+        // An interrupted enqueue may still be completing durable acceptance in the queue's owner.
+        // Only a known creation with no enqueue attempt is safe to fail after cancellation.
+        if (savedId != null && (failure !is CancellationException || pendingId == null)) {
+            if (pendingId == null) port.recordCommittedCreationFailure(savedId)
+            else port.recordLocalEnqueueFailure(savedId)
+        }
     }
 
-    private suspend fun enqueuePending(message: MessageDTO) {
+    private suspend fun createPending(text: String, port: ComposerSendPort) = when (target) {
+        is ComposerTarget.Direct -> port.createPendingDirect(text, target.contact, TextType.PLAIN, null)
+        is ComposerTarget.Channel -> port.createPendingChannel(text, target.channel, TextType.PLAIN)
+    }
+
+    private suspend fun enqueuePending(message: MessageDTO, port: ComposerSendPort) {
         when (target) {
-            is ComposerTarget.Direct -> sendPort.enqueueDM(DirectMessageEnvelope(message.id, target.contact.id))
-            is ComposerTarget.Channel -> sendPort.enqueueChannel(
+            is ComposerTarget.Direct -> port.enqueueDM(DirectMessageEnvelope(message.id, target.contact.id))
+            is ComposerTarget.Channel -> port.enqueueChannel(
                 ChannelMessageEnvelope(
                     messageID = message.id,
                     channelIndex = target.channel.index,
@@ -228,6 +312,7 @@ class ComposerStateHolder(
                     messageText = message.text,
                     messageTimestamp = message.timestamp,
                     localNodeName = environment.device.value?.nodeName,
+                    channelOccupantID = message.channelOccupantID,
                 ),
             )
         }
@@ -250,11 +335,11 @@ class ComposerStateHolder(
 
     fun dismissFailure() = mutableState.update { it.copy(sendPhase = clearFailure(it.sendPhase)) }
 
-    /** Cancels observers and in-flight work (screen leaves composition). */
+    /** Screen work ends here; accepted sends with an explicit longer-lived owner retain that owner. */
     fun close() {
         observers.forEach(Job::cancel)
         cooldownJob?.cancel()
-        sendJob?.cancel()
+        if (sendScope === scope) sendJob?.cancel()
         shareJob?.cancel()
     }
 }

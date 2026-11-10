@@ -70,10 +70,16 @@ internal suspend fun TestScope.withChannelQueueFixture(
             val report = f.queue.shutdown()
             assertFalse(report.isComplete)
             assertEquals(listOf(LifecycleStage.STOP_SERVICES), report.issues.map { it.stage })
-            assertSame(f.failures("channelRetained", f.pendingA.id).single(), report.issues.single().cause)
+            assertSame(f.retainedFailure(), report.issues.single().cause)
             assertOriginalChannelDeviceError2(report.issues.single().cause)
         }
-        retainFailure { assertTrue(f.messages.close().isComplete) }
+        retainFailure {
+            val report = f.messages.close()
+            assertFalse(report.isComplete)
+            assertEquals(listOf(LifecycleStage.STOP_SERVICES), report.issues.map { it.stage })
+            assertSame(f.retainedFailure(), report.issues.single().cause)
+            assertOriginalChannelDeviceError2(report.issues.single().cause)
+        }
         retainFailure { f.session.stop() }
         retainFailure { f.channelDispatchFence.retire(f.channelDispatchLease) }
         retainFailure { f.store.close() }
@@ -230,6 +236,9 @@ internal class ChannelQueueOriginalFixture(
     fun sends(command: Int) = transport.sent.filter { it[0].toInt() == command }
     fun failures(phase: String, id: UUID) = diagnostics.map { it.second }
         .filterIsInstance<MessagingDiagnostic.Failure>().filter { it.operation == "$phase.$id" }.map { it.cause }
+
+    // Both service owners report the same retained exception.
+    fun retainedFailure(): Throwable = failures("channelRetained", pendingA.id).distinct().single()
 
     private suspend fun channelMessage(text: String) = store.createOrReconcileChannelMessage(
         ChannelMessageCreation(UUID.randomUUID(), ChannelHistoryScope(radio, channel.index, channelOccupantID), text),

@@ -21,7 +21,7 @@ class ChannelQueryCorrelationDiagnosticTest {
             f.startDrain()
             f.queue.awaitDrainCompletion()
 
-            val rawFailure = f.failures("channelRetained", f.pendingA.id).single()
+            val rawFailure = f.retainedFailure()
             assertOriginalChannelDeviceError2(rawFailure)
             f.assertUncertainAttempt(f.pendingA, expectedAttemptCount = 8)
             f.assertMessages(f.messageA, f.messageB)

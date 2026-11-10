@@ -32,7 +32,7 @@ class ChannelQueueOriginalPredicateTest {
             assertTrue(f.queries.isEmpty())
             assertTrue(f.failures("park", f.messageA.id).isEmpty())
             assertTrue(f.failures("terminal", f.messageA.id).isEmpty())
-            assertOriginalChannelDeviceError2(f.failures("channelRetained", f.pendingA.id).single())
+            assertOriginalChannelDeviceError2(f.retainedFailure())
         }
     }
 
@@ -40,7 +40,7 @@ class ChannelQueueOriginalPredicateTest {
         withChannelQueueFixture(0) { f ->
             f.startDrain()
             f.queue.awaitDrainCompletion()
-            val originalFailure = f.failures("channelRetained", f.pendingA.id).single()
+            val originalFailure = f.retainedFailure()
             assertOriginalChannelDeviceError2(originalFailure)
 
             advanceTimeBy(31_000)
@@ -82,7 +82,7 @@ class ChannelQueueOriginalPredicateTest {
             assertTrue(f.queries.isEmpty())
             assertTrue(f.queryResults.isEmpty())
             assertTrue(f.failures("terminal", f.messageA.id).isEmpty())
-            assertOriginalChannelDeviceError2(f.failures("channelRetained", f.pendingA.id).single())
+            assertOriginalChannelDeviceError2(f.retainedFailure())
         }
     }
 }

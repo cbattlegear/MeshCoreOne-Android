@@ -135,6 +135,7 @@ class ConnectedConversationComposeTest : RoomProcessTest() {
             val send = compose.onNodeWithContentDescription(compose.activity.getString(C.chatsInputSendMessage))
             send.assertIsEnabled().performClick()
             val failed = compose.activity.getString(C.chatsMessageStatusFailed)
+            val sending = compose.activity.getString(C.chatsMessageStatusSending)
             val retry = compose.activity.getString(C.chatsMessageStatusRetry)
             var messageID: UUID? = null
             var retryTimestamp: UInt? = null
@@ -171,7 +172,7 @@ class ConnectedConversationComposeTest : RoomProcessTest() {
                 h.settle()
                 compose.waitForIdle()
                 if (channel) {
-                    compose.onNodeWithText(original).assertIsDisplayed()
+                    compose.onNodeWithContentDescription("$original. $sending").assertIsDisplayed()
                     compose.onNodeWithText(retry).assertDoesNotExist()
                 } else {
                     compose.waitUntil(30_000) {
@@ -215,7 +216,7 @@ class ConnectedConversationComposeTest : RoomProcessTest() {
                     assertEquals(2f, layouts.single().layoutInput.density.fontScale, 0f)
                     assertFalse("The actual 200% draft must not clip vertically at width$value", layouts.single().didOverflowHeight)
                     if (channel) {
-                        compose.onNodeWithText(original).assertIsDisplayed()
+                        compose.onNodeWithContentDescription("$original. $sending").assertIsDisplayed()
                         compose.onNodeWithText(retry).assertDoesNotExist()
                     } else {
                         compose.onNodeWithContentDescription("$original. $failed").assertIsDisplayed()

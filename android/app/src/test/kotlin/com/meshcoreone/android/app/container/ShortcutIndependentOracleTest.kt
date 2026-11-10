@@ -43,14 +43,18 @@ class ShortcutIndependentOracleTest : RoomProcessTest() {
             firmware.knownContacts += contactFrame(key(4), "Independent peer")
             firmware.respond = { frame ->
                 when {
+                    channel && frame[0].toInt() == 3 -> listOf(Bytes.of(0))
                     frame[0].toInt() in 2..3 -> emptyList()
-                    channel && frame[0].toInt() == 0x1f && frame[1].toInt() == 0 ->
-                        listOf(Bytes.of(0x12, 0) + Bytes.utf8("Oracle").paddedOrTruncated(32) +
-                            Bytes(ByteArray(16) { 9 }))
+                    channel && frame[0].toInt() == 0x1f -> listOf(
+                        if (frame[1].toInt() == 0) Bytes.of(0x12, 0) +
+                            Bytes.utf8("Oracle").paddedOrTruncated(32) + Bytes(ByteArray(16) { 9 })
+                        else Bytes.of(0x12, frame[1].toInt()) + Bytes(ByteArray(48)),
+                    )
                     else -> null
                 }
             }
         }
+        if (channel) h.container.foreground.activityStarted()
         h.manager.connect(h.target())
         h.eventually("independent shortcut oracle READY") { h.manager.connectionState == DeviceConnectionState.READY }
         h.settle()
@@ -136,16 +140,13 @@ class ShortcutIndependentOracleTest : RoomProcessTest() {
             val exact = "\u6d4b".repeat(43) + "ab"
             assertEquals(131, exact.toByteArray(Charsets.UTF_8).size)
             adapter.queueMessage(ShortcutRecipient.Channel(channel), exact)
+            assertNotNull(h.sessions.current).chatSendQueueService.awaitDrainCompletion()
             val messages = store.fetchMessages(radio, 0u, 100, 0)
             assertEquals(setOf("x".repeat(137), exact), messages.map { it.text }.toSet())
             assertTrue(messages.all { it.channelOccupantID == occupant })
-            val pending = store.fetchPendingSends(radio)
-            assertEquals(2, pending.size)
-            assertEquals(messages.map { it.id }.toSet(), pending.map { it.messageID }.toSet())
-            pending.forEach {
-                assertEquals(occupant, it.channelOccupantID)
-                assertEquals(occupant, assertNotNull(it.channelMessageEnvelope()).channelOccupantID)
-            }
+            assertTrue(messages.all { it.status == MessageStatus.SENT })
+            assertTrue(store.fetchPendingSends(radio).isEmpty())
+            assertEquals(2, h.links.radios.single().sent.count { it[0].toInt() == 3 })
         } finally { h.container.close() }
     }
 

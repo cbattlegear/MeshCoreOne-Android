@@ -68,6 +68,7 @@ class RadioSessionContainerFactory(
             messageServiceConfig = messageServiceConfig,
             chatSendQueueConfig = chatSendQueueConfig,
             onChannelQueryAccounting = onChannelQueryAccounting,
+            channelDispatchFence = channelDispatchFence,
         )
     }
 }

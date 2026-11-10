@@ -115,6 +115,12 @@ class RadioSessionContainer private constructor(
     internal val chatSendQueueProgress: ChatSendQueueProgress = env.chatSendQueueProgress
     private val session: MeshCoreSession = publicationSession
     private val radioId: RadioId = token.radioId
+    private val channelDispatchLease = env.channelDispatchFence.openSession(
+        token, session, inputs.connection.channelDispatchAdmission,
+    )
+    private val channelRetirement = containerJob.invokeOnCompletion {
+        env.channelDispatchFence.retire(channelDispatchLease)
+    }
     private val gaps = GapReporter { message -> logger.info(message) }
 
     internal suspend fun sendToolTrace(tag: UInt, authCode: UInt, flags: UByte, path: Bytes): MessageSentInfo =
@@ -184,8 +190,12 @@ class RadioSessionContainer private constructor(
         token, inputs.device.publicKey, session, dataStore, inputs.connection.signals, scope,
         config = env.messageServiceConfig,
         reporter = env.messagingReporter,
+        channelDispatchLease = channelDispatchLease,
     )
-    override val channelService = ChannelService(session, dataStore, ChannelDecryptionAdapter(rxLogService))
+    override val channelService = ChannelService(
+        session, dataStore, ChannelDecryptionAdapter(rxLogService),
+        dispatchFence = env.channelDispatchFence, dispatchLease = channelDispatchLease,
+    )
     // The settings/device services validate their generation against the published connection snapshot when they
     // are built, and the runtime publishes CONNECTED only after the factory returns. They are therefore created on
     // first use (app-state wiring and sync both run after publication) and fail fast if reached earlier.
@@ -481,6 +491,7 @@ class RadioSessionContainer private constructor(
     }
 
     override suspend fun tearDown(): TeardownReport {
+        env.channelDispatchFence.retire(channelDispatchLease)
         val (receipt, claimed) = synchronized(publicationFence.monitor) {
             teardown?.let { it to false } ?: CompletableDeferred<TeardownReport>().also {
                 teardown = it

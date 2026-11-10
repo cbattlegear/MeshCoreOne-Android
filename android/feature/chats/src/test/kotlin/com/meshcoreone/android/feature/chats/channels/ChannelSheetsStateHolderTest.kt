@@ -449,7 +449,7 @@ class ChannelSheetsStateHolderTest {
         try {
             assertTrue(entered.isCompleted)
             assertTrue(rig.holder.state.value.isSubmitting)
-            assertNotNull(rig.holder.state.value.committedWrite)
+            assertNull(rig.holder.state.value.committedWrite, "Receipt publication waits for the scoped operation to exit")
             rig.holder.back()
             rig.holder.open(ChannelSheetPage.JOIN_PRIVATE)
             rig.holder.updateName("New form")
@@ -466,8 +466,8 @@ class ChannelSheetsStateHolderTest {
 
     private fun rig(channels: List<ChannelDTO>, maxChannels: UByte): ChannelRig {
         val data = FakeChannelData(channels.toMutableList())
-        val service = FakeChannelService(data)
         val diagnostics = mutableListOf<String>()
+        val service = FakeChannelService(data) { operation, _ -> diagnostics += operation }
         val dependencies = object : ChannelSheetDependencies {
             override val data = data
             override val service = service
@@ -493,7 +493,7 @@ private class FakeChannelData(val channels: MutableList<ChannelDTO>) : ChannelSh
     var beforeRegionWrite: (suspend () -> Unit)? = null
     override suspend fun fetchChannels(radioId: RadioId) = channels.toList()
     override suspend fun fetchChannel(radioId: RadioId, index: UByte) = channels.firstOrNull { it.index == index }
-    override suspend fun setFloodScope(channel: ChannelDTO, scope: ChannelFloodScope): ChannelDTO {
+    suspend fun setFloodScope(channel: ChannelDTO, scope: ChannelFloodScope): ChannelDTO {
         beforeRegionWrite?.invoke()
         regionFailure?.let { throw it }
         lastRegion = (scope as? ChannelFloodScope.Region)?.name
@@ -503,7 +503,10 @@ private class FakeChannelData(val channels: MutableList<ChannelDTO>) : ChannelSh
     }
 }
 
-private class FakeChannelService(private val data: FakeChannelData) : ChannelSheetService {
+private class FakeChannelService(
+    private val data: FakeChannelData,
+    private val report: (String, Throwable) -> Unit,
+) : ChannelSheetService {
     var lastSecret: Bytes? = null
     var lastPassphrase: String? = null
     var passphraseCalls = 0
@@ -515,17 +518,31 @@ private class FakeChannelService(private val data: FakeChannelData) : ChannelShe
     var allocationCalls = 0
 
     override suspend fun createChannelWithSecret(
-        radioId: RadioId, maxChannels: UByte, name: String, secret: Bytes, onCommitted: (ChannelWriteReceipt) -> Unit,
+        radioId: RadioId, maxChannels: UByte, name: String, secret: Bytes, regionScope: String?,
+        onCommitted: (ChannelWriteReceipt) -> Unit,
     ): ChannelDTO {
         allocationCalls++
         beforeAllocation?.invoke()
         val index = freeSlot(maxChannels)
         setChannelWithSecret(radioId, index, name, secret)
         val saved = requireNotNull(data.fetchChannel(radioId, index))
-        onCommitted(ChannelWriteReceipt(EntityKey(radioId, saved.id), index))
+        val completed = try {
+            regionScope?.takeIf(String::isNotEmpty)?.let {
+                try {
+                    data.setFloodScope(saved, ChannelFloodScope.Region(it))
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (failure: Exception) {
+                    report("set joined channel region", failure)
+                    saved
+                }
+            } ?: saved
+        } finally {
+            onCommitted(ChannelWriteReceipt(EntityKey(radioId, saved.id), index))
+        }
         afterCommit?.invoke()
         completionFailure?.let { throw it }
-        return saved
+        return completed
     }
     override suspend fun joinHashtagChannel(
         radioId: RadioId, maxChannels: UByte, name: String, onCommitted: (ChannelWriteReceipt) -> Unit,

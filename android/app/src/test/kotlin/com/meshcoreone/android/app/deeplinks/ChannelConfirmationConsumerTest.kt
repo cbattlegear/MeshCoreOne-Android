@@ -26,6 +26,7 @@ import com.meshcoreone.android.app.navigation.channelFailureText
 import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.core.contracts.domain.ChannelIdentityWriteScope
 import com.meshcoreone.android.core.contracts.domain.ChannelPersisting
+import com.meshcoreone.android.core.contracts.domain.ChannelOccupantSnapshot
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
@@ -114,6 +115,127 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
 
             override suspend fun setChannelFloodScope(key: EntityKey, floodScope: ChannelFloodScope) =
                 channels.setChannelFloodScope(key, floodScope)
+        }
+    }
+
+    private enum class RegionReplacement { REUSED_ROW, RECREATED_ROW, ABA }
+
+    @Test fun joinedRegionAndMountedNavigationExcludeReusedRowReplacement() = runTest {
+        joinedRegionExcludesReplacement(RegionReplacement.REUSED_ROW)
+    }
+
+    @Test fun joinedRegionAndMountedNavigationExcludeDeletedAndRecreatedSlot() = runTest {
+        joinedRegionExcludesReplacement(RegionReplacement.RECREATED_ROW)
+    }
+
+    @Test fun joinedRegionAndMountedNavigationDoNotResampleAnABAIncarnation() = runTest {
+        joinedRegionExcludesReplacement(RegionReplacement.ABA)
+    }
+
+    private suspend fun TestScope.joinedRegionExcludesReplacement(mode: RegionReplacement) {
+        val reached = CompletableDeferred<ChannelOccupantSnapshot>()
+        val release = CompletableDeferred<Unit>()
+        val writtenOccupants = mutableListOf<java.util.UUID>()
+        val persistence = interceptChannelPersistence { scoped -> object : ChannelPersisting by scoped {
+            override suspend fun setChannelFloodScope(key: EntityKey, floodScope: ChannelFloodScope) {
+                if (floodScope == ChannelFloodScope.Region("region-a")) {
+                    val saved = assertNotNull(scoped.fetchChannelOccupantSnapshot(key.radioId, 1u))
+                    assertEquals(key.id, saved.channel.id)
+                    reached.complete(saved)
+                    release.await()
+                    assertEquals(saved.occupantID, scoped.fetchChannelOccupantID(key.radioId, 1u))
+                    writtenOccupants += saved.occupantID
+                }
+                scoped.setChannelFloodScope(key, floodScope)
+            }
+        } }
+        val h = ContainerHarness(this, store, persistenceOverride = persistence)
+        h.links.configureRadio = { radio ->
+            radio.respond = { frame -> when (frame[0].toInt()) {
+                0x1f -> listOf(emptyChannelReply(frame[1].toInt()))
+                0x20 -> listOf(Bytes.of(0))
+                else -> null
+            } }
+        }
+        val secretA = Bytes.fromHex("00112233445566778899AABBCCDDEEFF")
+        val secretB = Bytes(ByteArray(16) { 0x55 })
+        val navigation = h.container.navigation
+        val selections = java.util.Collections.synchronizedList(mutableListOf<ChatSelection?>())
+        val observer = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            navigation.state.collect { selections += it.chatsSelectedRoute }
+        }
+        try {
+            h.container.foreground.activityStarted()
+            h.manager.connect(h.target())
+            h.settle()
+            h.assertReady()
+            h.eventually("initial sync establishes the allocation domain") {
+                h.appState.syncCoordinator?.state == com.meshcoreone.android.core.services.sync.SyncState.Synced
+            }
+            val radio = assertNotNull(h.appState.currentRadioId)
+            val service = assertNotNull(h.container.sessions.current).channelService
+            AppDeepLinkRouter(ContainerDeepLinkEnvironment(h.container, navigation)).routeExternal(
+                "meshcore://channel/add?name=Joined%20A&secret=${secretA.hexString}&region_scope=region-a",
+            )
+            compose.runOnUiThread {
+                host.get().setContent { MeshCoreTheme(motionScale = 0f) {
+                    NativeNavigationShell(navigation, chats = h.container.chatsFeature)
+                } }
+            }
+            compose.waitUntil(10_000) {
+                h.scheduler.runCurrent()
+                !compose.onNodeWithText(host.get().getString(L.commonOk))
+                    .fetchSemanticsNode().config.contains(SemanticsProperties.Disabled)
+            }
+            compose.onNodeWithText(host.get().getString(L.commonOk)).performClick()
+            h.eventually("actual ACK and Room save reach local preference under the same operation", virtualBudgetMillis = 0) {
+                reached.isCompleted
+            }
+            val savedA = reached.await()
+            assertEquals("Joined A", savedA.channel.name)
+            assertEquals(secretA, savedA.channel.secret)
+            assertNotNull(navigation.state.value.pendingChannelConfirmation)
+            compose.onNodeWithText(host.get().getString(L.commonOk)).assertIsNotEnabled()
+            val replacement = async(UnconfinedTestDispatcher(testScheduler)) {
+                if (mode == RegionReplacement.RECREATED_ROW) {
+                    store.deleteChannel(EntityKey(radio, savedA.channel.id))
+                }
+                service.setChannelWithSecret(radio, 1u, "Replacement B", secretB)
+                if (mode == RegionReplacement.ABA) {
+                    service.setChannelWithSecret(radio, 1u, "Joined A", secretA)
+                }
+                val final = assertNotNull(store.fetchChannel(radio, 1u))
+                store.setChannelFloodScope(EntityKey(radio, final.id), ChannelFloodScope.Region("replacement-region"))
+            }
+            h.scheduler.runCurrent()
+            assertFalse(replacement.isCompleted, "Replacement must wait through A's local preference and return snapshot")
+            assertEquals(savedA, store.fetchChannelOccupantSnapshot(radio, 1u))
+            release.complete(Unit)
+            h.eventually("joined A completes its own confirmation and queued replacement finishes", virtualBudgetMillis = 0) {
+                replacement.isCompleted && navigation.state.value.pendingChannelConfirmation == null
+            }
+            replacement.await()
+            val final = assertNotNull(store.fetchChannelOccupantSnapshot(radio, 1u))
+            assertNotEquals(savedA.occupantID, final.occupantID, "ABA and recreated slots are new occupant incarnations")
+            if (mode == RegionReplacement.RECREATED_ROW) assertNotEquals(savedA.channel.id, final.channel.id)
+            else assertEquals(savedA.channel.id, final.channel.id, "Reused row UUID is deliberately not an occupant witness")
+            assertEquals(ChannelFloodScope.Region("replacement-region"), final.channel.floodScope)
+            assertEquals(if (mode == RegionReplacement.ABA) secretA else secretB, final.channel.secret)
+            assertEquals(listOf(savedA.occupantID), writtenOccupants, "A's region never writes against a replacement occupant")
+            val joined = savedA.channel.withFloodScope(ChannelFloodScope.Region("region-a"))
+            val observed = synchronized(selections) { selections.filterIsInstance<ChatSelection.Channel>().map { it.channel } }
+            assertTrue(joined in observed,
+                "The original consumer receives the immutable result captured before releasing the operation")
+            assertFalse(final.channel in observed, "Navigation must never substitute the replacement DTO")
+            assertTrue((navigation.state.value.chatsSelectedRoute as? ChatSelection.Channel)?.channel.let { it == null || it == joined },
+                "Existing occupant-retirement handling may clear A, but cannot select B")
+            compose.waitForIdle()
+            compose.onAllNodesWithText(host.get().getString(L.commonOk)).assertCountEquals(0)
+        } finally {
+            release.complete(Unit)
+            observer.cancel()
+            compose.runOnUiThread { host.get().setContent {} }
+            h.container.close()
         }
     }
 
@@ -280,7 +402,8 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
             assertEquals(returnedId.get(), saved.id)
             assertEquals("#test", saved.name)
             assertEquals(secret, saved.secret)
-            assertEquals(ChannelFloodScope.Inherit, saved.floodScope, "Failed setup has not applied the requested local region")
+            assertEquals(ChannelFloodScope.Region("testregion"), saved.floodScope,
+                "Local preference commits before the later read/cache failure while the saved occupant is still exclusive")
             assertEquals(before + 1, firmware.sent.count { it[0].toInt() == 0x20 })
             assertEquals(first, navigation.state.value.pendingChannelConfirmation)
             compose.onNodeWithText(host.get().getString(L.commonOk)).assertIsNotEnabled()

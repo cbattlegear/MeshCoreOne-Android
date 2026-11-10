@@ -10,6 +10,7 @@ import com.meshcoreone.android.core.contracts.domain.ChannelIdentityWriteScope
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.model.ChannelFloodScope
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
@@ -46,6 +47,87 @@ class ChannelServiceNativeTest {
             block: suspend (ChannelPersisting, ChannelIdentityWriteScope) -> T,
         ): T = rows.withChannelOperation { scoped, scope -> block(decorate(scoped), scope) }
     }
+
+    @TestFactory
+    fun joinedRegionCustody(): List<DynamicTest> = channelsCases("WP-405 joined region",
+        "preference failure is diagnosed without undoing an acknowledged join or quarantining later writes" to {
+            val radio = channelsRadioId()
+            val rows = ChannelsInMemoryStore()
+            val failure = IllegalStateException("local preference unavailable")
+            val records = mutableListOf<java.util.logging.LogRecord>()
+            val logger = java.util.logging.Logger.getLogger("com.mc1.ChannelService")
+            val handler = object : java.util.logging.Handler() {
+                override fun publish(record: java.util.logging.LogRecord) { records += record }
+                override fun flush() {}
+                override fun close() {}
+            }
+            val store = decorateStore(rows) { scoped -> object : ChannelPersisting by scoped {
+                override suspend fun setChannelFloodScope(key: EntityKey, floodScope: ChannelFloodScope) {
+                    throw failure
+                }
+            } }
+            val service = initializedAllocationService(radio, ChannelsMockSession(), store)
+            val commits = mutableListOf<EntityKey>()
+            logger.addHandler(handler)
+            try {
+                val joined = service.createChannelWithSecret(radio, 4u, "Joined", channelsSecret(0x11), "region-a") { key, _ ->
+                    commits += key
+                }
+                assertEquals(ChannelFloodScope.Inherit, joined.floodScope)
+                assertEquals(joined, rows.fetchChannel(radio, joined.index))
+                assertEquals(listOf(EntityKey(radio, joined.id)), commits)
+                assertTrue(records.any { it.level == java.util.logging.Level.SEVERE && it.thrown === failure })
+                assertEquals(2u, service.createChannelWithSecret(radio, 4u, "Independent consent", channelsSecret(0x22)).index)
+            } finally { logger.removeHandler(handler) }
+        },
+        "preference cancellation propagates with the actual saved UUID and releases the operation" to {
+            val radio = channelsRadioId()
+            val rows = ChannelsInMemoryStore()
+            val entered = CompletableDeferred<Unit>()
+            val store = decorateStore(rows) { scoped -> object : ChannelPersisting by scoped {
+                override suspend fun setChannelFloodScope(key: EntityKey, floodScope: ChannelFloodScope) {
+                    assertEquals(key.id, scoped.fetchChannel(radio, 1u)?.id)
+                    entered.complete(Unit)
+                    awaitCancellation()
+                }
+            } }
+            val service = initializedAllocationService(radio, ChannelsMockSession(), store)
+            val commits = mutableListOf<EntityKey>()
+            val joined = async(start = CoroutineStart.UNDISPATCHED) {
+                service.createChannelWithSecret(radio, 4u, "Joined", channelsSecret(0x11), "region-a") { key, _ ->
+                    commits += key
+                }
+            }
+            assertTrue(entered.isCompleted)
+            assertTrue(commits.isEmpty(), "Observers cannot execute while the scoped operation remains held")
+            joined.cancelAndJoin()
+            assertTrue(joined.isCancelled)
+            val saved = requireNotNull(rows.fetchChannel(radio, 1u))
+            assertEquals(ChannelFloodScope.Inherit, saved.floodScope)
+            assertEquals(listOf(EntityKey(radio, saved.id)), commits)
+            assertEquals(2u, service.createChannelWithSecret(radio, 4u, "Independent consent", channelsSecret(0x22)).index)
+        },
+        "replacement from the released commit observer cannot substitute the joined return snapshot" to {
+            val radio = channelsRadioId()
+            val rows = ChannelsInMemoryStore()
+            val service = initializedAllocationService(radio, ChannelsMockSession(), rows)
+            val joined = service.createChannelWithSecret(radio, 4u, "Joined A", channelsSecret(0x11), "region-a") { key, index ->
+                val replacement = async(start = CoroutineStart.UNDISPATCHED) {
+                    service.setChannelWithSecret(radio, index, "Replacement B", channelsSecret(0x22))
+                    rows.setChannelFloodScope(key, ChannelFloodScope.Region("region-b"))
+                }
+                assertTrue(replacement.isCompleted, "Commit observer must run outside both operation lanes")
+            }
+            val replacement = requireNotNull(rows.fetchChannel(radio, joined.index))
+            assertEquals(joined.id, replacement.id, "The row UUID deliberately survives occupant replacement")
+            assertEquals("Joined A", joined.name)
+            assertEquals(channelsSecret(0x11), joined.secret)
+            assertEquals(ChannelFloodScope.Region("region-a"), joined.floodScope)
+            assertEquals("Replacement B", replacement.name)
+            assertEquals(channelsSecret(0x22), replacement.secret)
+            assertEquals(ChannelFloodScope.Region("region-b"), replacement.floodScope)
+        },
+    )
 
     @TestFactory
     fun dispatchCancellationAccounting(): List<DynamicTest> = listOf(false, true).flatMap { clear ->

@@ -5,7 +5,6 @@
 package com.meshcoreone.android.feature.chats.channels
 
 import com.meshcoreone.android.core.model.ChannelDTO
-import com.meshcoreone.android.core.model.ChannelFloodScope
 import com.meshcoreone.android.core.model.ProtocolLimits
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -146,16 +145,9 @@ class ChannelSheetsStateHolder(
         if (name.isEmpty()) return fail(ChannelSheetError.InvalidName)
         if (secret.size != ProtocolLimits.CHANNEL_SECRET_SIZE) return fail(ChannelSheetError.InvalidSecret)
         return submit(shareAfter) { onCommitted ->
-            val channel = dependencies.service.createChannelWithSecret(requireRadio(), maxChannels, name, secret, onCommitted)
-            val region = regionScope?.takeIf(String::isNotEmpty) ?: return@submit channel
-            try {
-                dependencies.data.setFloodScope(channel, ChannelFloodScope.Region(region))
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (failure: Exception) {
-                dependencies.diagnostics.report("set joined channel region", failure)
-                channel
-            }
+            dependencies.service.createChannelWithSecret(
+                requireRadio(), maxChannels, name, secret, regionScope, onCommitted,
+            )
         }
     }
 

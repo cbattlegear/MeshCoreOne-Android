@@ -5,20 +5,19 @@ package com.meshcoreone.android.feature.chats.channels
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.model.ChannelDTO
-import com.meshcoreone.android.core.model.ChannelFloodScope
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 
 interface ChannelSheetDataSource {
     suspend fun fetchChannels(radioId: RadioId): List<ChannelDTO>
     suspend fun fetchChannel(radioId: RadioId, index: UByte): ChannelDTO?
-    suspend fun setFloodScope(channel: ChannelDTO, scope: ChannelFloodScope): ChannelDTO
 }
 
 interface ChannelSheetService {
     // The nonthrowing observer reports only an actually returned store UUID, even if later work fails.
     suspend fun createChannelWithSecret(
-        radioId: RadioId, maxChannels: UByte, name: String, secret: Bytes, onCommitted: (ChannelWriteReceipt) -> Unit,
+        radioId: RadioId, maxChannels: UByte, name: String, secret: Bytes, regionScope: String? = null,
+        onCommitted: (ChannelWriteReceipt) -> Unit,
     ): ChannelDTO
     suspend fun joinHashtagChannel(
         radioId: RadioId, maxChannels: UByte, name: String, onCommitted: (ChannelWriteReceipt) -> Unit,

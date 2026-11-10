@@ -25,6 +25,7 @@ import com.meshcoreone.android.core.protocol.model.sha256
 import com.meshcoreone.android.core.protocol.session.ChannelSessionOps
 import com.meshcoreone.android.core.protocol.session.ChannelWriteDispatch
 import com.meshcoreone.android.core.protocol.session.ChannelWriteCancellationDisposition
+import java.util.logging.Level
 import java.util.logging.Logger
 import kotlin.random.Random
 import kotlin.time.Duration.Companion.milliseconds
@@ -329,19 +330,21 @@ class ChannelService(
 
     suspend fun createChannelWithSecret(
         radioId: RadioId, maxChannels: UByte, name: String, secret: Bytes,
+        regionScope: String? = null,
         onCommitted: (EntityKey, UByte) -> Unit = { _, _ -> },
     ): ChannelDTO {
         if (!validateSecret(secret)) throw ChannelServiceError.SecretHashingFailed()
-        return allocateChannel(radioId, maxChannels, name, secret, false, onCommitted)
+        return allocateChannel(radioId, maxChannels, name, secret, false, regionScope, onCommitted)
     }
 
     suspend fun joinHashtagChannel(
         radioId: RadioId, maxChannels: UByte, name: String,
         onCommitted: (EntityKey, UByte) -> Unit = { _, _ -> },
-    ): ChannelDTO = allocateChannel(radioId, maxChannels, name, hashSecret(name), true, onCommitted)
+    ): ChannelDTO = allocateChannel(radioId, maxChannels, name, hashSecret(name), true, null, onCommitted)
 
     private suspend fun allocateChannel(
         radioId: RadioId, maxChannels: UByte, name: String, secret: Bytes, reuseName: Boolean,
+        regionScope: String?,
         onCommitted: (EntityKey, UByte) -> Unit,
     ): ChannelDTO {
         var committed: EntityKey? = null
@@ -370,6 +373,17 @@ class ChannelService(
                 writeChannelLocked(radioId, index, name, secret, store, scope, completions) { key ->
                     committed = key
                     committedIndex = index
+                }
+                regionScope?.takeIf(String::isNotEmpty)?.let { region ->
+                    // Replacement must not interleave between the saved occupant and its local preference.
+                    val key = requireNotNull(committed)
+                    try {
+                        store.setChannelFloodScope(key, ChannelFloodScope.Region(region))
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (failure: Exception) {
+                        logger.log(Level.SEVERE, "Failed to persist channel flood scope after join", failure)
+                    }
                 }
                 store.fetchChannel(radioId, index) ?: throw ChannelServiceError.ChannelNotFound()
             }

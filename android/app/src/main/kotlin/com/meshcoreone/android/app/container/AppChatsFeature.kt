@@ -888,19 +888,14 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         override val data = object : ChannelSheetDataSource {
             override suspend fun fetchChannels(radioId: RadioId) = store.fetchChannels(radioId)
             override suspend fun fetchChannel(radioId: RadioId, index: UByte) = store.fetchChannel(radioId, index)
-            override suspend fun setFloodScope(channel: ChannelDTO, scope: ChannelFloodScope): ChannelDTO {
-                store.setChannelFloodScope(EntityKey(channel.radioId, channel.id), scope)
-                return store.fetchChannel(channel.radioId, channel.index)
-                    ?: throw MessageServiceException(MessageServiceError.ChannelNotFound)
-            }
         }
         override val service = object : ChannelSheetService {
             override suspend fun createChannelWithSecret(
-                radioId: RadioId, maxChannels: UByte, name: String, secret: Bytes,
+                radioId: RadioId, maxChannels: UByte, name: String, secret: Bytes, regionScope: String?,
                 onCommitted: (ChannelWriteReceipt) -> Unit,
             ): ChannelDTO =
                 try {
-                    session(radioId).channelService.createChannelWithSecret(radioId, maxChannels, name, secret) { key, index ->
+                    session(radioId).channelService.createChannelWithSecret(radioId, maxChannels, name, secret, regionScope) { key, index ->
                         onCommitted(ChannelWriteReceipt(key, index))
                     }
                 } catch (_: com.meshcoreone.android.core.services.contacts.ChannelMutationError.NoAvailableSlots) {

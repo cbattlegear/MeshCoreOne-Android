@@ -27,6 +27,7 @@ import com.meshcoreone.android.feature.settings.app.nodeconfig.NodeConfigDocumen
 import java.util.UUID
 import java.util.concurrent.ConcurrentLinkedQueue
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.test.TestScope
@@ -218,6 +219,55 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
             val resumed = node.messageService.sendChannelMessage("Original identity resumed", 0u, node.token.radioId, TextType.PLAIN)
             assertEquals(MessageStatus.SENT, store.fetchMessage(EntityKey(node.token.radioId, resumed.id))?.status)
             assertEquals(1, radio.sent.count { it[0] == CommandCode.SEND_CHANNEL_MESSAGE.rawValue })
+        }
+    }
+
+    @Test fun anAdmittedChannelSendSettlesBeforeThePhysicalKeyMutation() = runTest {
+        withIdentityNode { h, node, radio, _ ->
+            node.channelService.setChannelWithSecret(node.token.radioId, 0u, "Before", Bytes.fromHex(secret))
+            val original = radio.respond
+            var heldSend = false
+            var keyWritten = false
+            radio.respond = { packet ->
+                when (packet[0]) {
+                    CommandCode.SEND_CHANNEL_MESSAGE.rawValue -> {
+                        heldSend = true
+                        emptyList()
+                    }
+                    CommandCode.IMPORT_PRIVATE_KEY.rawValue -> {
+                        keyWritten = true
+                        original(packet)
+                    }
+                    else -> original(packet)
+                }
+            }
+            val handoff = CompletableDeferred<Unit>()
+            try {
+                val sending = backgroundScope.async {
+                    node.messageService.sendChannelMessage("Admitted original identity", 0u, node.token.radioId, TextType.PLAIN)
+                }
+                h.eventually("original-identity SEND awaiting its actual reply") { heldSend }
+                // Import's initial self-info read can queue before its identity-admission callback.
+                val importing = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) {
+                    node.nodeConfigService.importConfig(config, ConfigSections(nodeIdentity = true), node.token.radioId, handoff)
+                }
+                assertFalse(sending.isCompleted)
+                assertFalse(importing.isCompleted)
+                assertFalse(keyWritten)
+                assertTrue(radio.sent.none { it[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue })
+                radio.push(Bytes.of(0))
+                h.eventually("the acknowledged SEND and subsequent identity import finish") {
+                    sending.isCompleted && importing.isCompleted
+                }
+                val receipt = sending.await()
+                importing.await()
+                assertEquals(MessageStatus.SENT, store.fetchMessage(EntityKey(node.token.radioId, receipt.id))?.status)
+                assertTrue(keyWritten)
+                assertEquals(newKey, radio.publicKey)
+                assertEquals(1, radio.sent.count { it[0] == CommandCode.SEND_CHANNEL_MESSAGE.rawValue })
+                assertEquals(1, radio.sent.count { it[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue })
+                assertSame(node, h.sessions.current)
+            } finally { handoff.complete(Unit) }
         }
     }
 

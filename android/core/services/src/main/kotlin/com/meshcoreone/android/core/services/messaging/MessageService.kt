@@ -1045,15 +1045,8 @@ class MessageService(
                 sendBoundary(dto.id, true, failDefinitelyUnsentInline = true) {
                     dataStore.saveMessage(dto)
                     ownership.check("sendChannelMessage.persisted")
-                    withPoolBackoff(2u) {
-                        checkIdentity("sendChannelMessage.wire")
-                        inlineWire { dispatch ->
-                            val timestamp = Instant.ofEpochSecond(dto.timestamp.toLong())
-                            if (dispatch == null) session.sendChannelMessage(channelIndex, text, timestamp)
-                            else session.sendChannelMessage(channelIndex, text, timestamp, dispatch = dispatch)
-                        }
-                    }
                 }
+                fencedLegacyChannelWire(dto, dto.timestamp, notification = true)
                 ownership.check("sendChannelMessage.accepted")
                 bookkeeping("inlineChannel.${dto.id}") {
                     dataStore.updateMessageStatus(key(dto.id), MessageStatus.SENT)
@@ -1061,6 +1054,7 @@ class MessageService(
                     events.yield(MessageStatusEvent.StatusResolved(dto.id, MessageStatus.SENT, null))
                     updateChannelDate(channelIndex)
                 }
+                synchronized(lock) { acceptedChannels.remove(dto.id) }
                 ChannelSendReceipt(dto.id, dto.timestamp)
             }
         }
@@ -1068,6 +1062,61 @@ class MessageService(
     override suspend fun sendPendingChannelMessage(messageID: UUID) { queuedChannel(messageID, false, true) }
     override suspend fun resendChannelMessage(messageID: UUID, preserveTimestamp: Boolean): UInt =
         queuedChannel(messageID, true, preserveTimestamp)
+
+    private suspend fun fencedLegacyChannelWire(row: MessageDTO, stamp: UInt, notification: Boolean = false) {
+        val lease = channelDispatchLease ?: throw ChannelDispatchFailure.RetiredSession()
+        val index = requireNotNull(row.channelIndex)
+        var wireEntered = false
+        var dispatch: MessageWriteDispatch? = null
+        var uncertainFailure: Exception? = null
+        try {
+            lease.owner.withMutation(lease) {
+                checkIdentity("legacyChannel.admitted")
+                suspend fun exchange(notificationDispatch: MessageWriteDispatch?) {
+                    val actual = notificationDispatch ?: MessageWriteDispatch()
+                    dispatch = actual
+                    wireEntered = true
+                    try {
+                        session.sendChannelMessage(index, row.text, Instant.ofEpochSecond(stamp.toLong()), dispatch = actual)
+                    } catch (cancelled: CancellationException) {
+                        if (actual.cancellationDisposition != ChannelWriteCancellationDisposition.DEFINITELY_UNSENT) {
+                            lease.owner.quarantine(lease, cancelled)
+                            uncertainFailure = cancelled
+                        }
+                        throw cancelled
+                    } catch (failure: Exception) {
+                        lease.owner.quarantine(lease, failure)
+                        uncertainFailure = failure
+                        throw ChannelDispatchFailure.UnsettledDispatch(failure)
+                    }
+                    synchronized(lock) { acceptedChannels[row.id] = stamp }
+                }
+                if (notification) inlineWire { exchange(it) } else exchange(null)
+            }
+        } catch (cancelled: CancellationException) {
+            if (!wireEntered || dispatch?.cancellationDisposition == ChannelWriteCancellationDisposition.DEFINITELY_UNSENT) {
+                failMessageAndRethrow(cancelled, row.id, notification, failDefinitelyUnsentInline = notification)
+            }
+            throw cancelled
+        } catch (failure: MessageServiceException) {
+            if (!wireEntered) {
+                failMessageAndRethrow(failure, row.id, notification, failDefinitelyUnsentInline = notification)
+            }
+            throw failure
+        } catch (failure: ChannelDispatchFailure) {
+            if (!wireEntered) {
+                failMessageAndRethrow(failure, row.id, notification, failDefinitelyUnsentInline = notification)
+            }
+            throw failure
+        } finally {
+            uncertainFailure?.let { failure ->
+                try { remember("legacyChannel.${row.id}", failure) }
+                catch (reportFailure: Exception) {
+                    if (reportFailure !== failure) failure.addSuppressed(reportFailure)
+                }
+            }
+        }
+    }
 
     internal suspend fun sendQueuedChannel(
         pendingID: UUID, envelope: ChannelMessageEnvelope, preserveTimestamp: Boolean,
@@ -1223,13 +1272,9 @@ class MessageService(
                 sendBoundary(id, false) {
                     if (isResend && !preserveTimestamp) dataStore.updateMessageTimestamp(key(id), stamp)
                     ownership.check("queuedChannel.timestamp")
-                    withPoolBackoff(2u) {
-                        checkIdentity("queuedChannel.wire")
-                        session.sendChannelMessage(index, row.text, Instant.ofEpochSecond(stamp.toLong()))
-                    }
                 }
+                fencedLegacyChannelWire(row, stamp)
                 ownership.check("queuedChannel.accepted")
-                synchronized(lock) { acceptedChannels[id] = stamp }
             }
             try {
                 dataStore.updateMessageStatus(key(id), MessageStatus.SENT)

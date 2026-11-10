@@ -394,7 +394,14 @@ class InlineChannelAttemptTest {
                 if (lostReturn) h.store.after = boundary else h.store.before = boundary
                 val receipt = NotificationActionReceipt()
                 val call = backgroundScope.async(receipt) {
-                    h.service.sendChannelMessage("retain admission fault", 0u, RADIO)
+                    if (cancelCaller) {
+                        h.service.sendChannelMessage("retain admission fault", 0u, RADIO)
+                        null
+                    } else {
+                        assertFailsWith<QueuedChannelRetainedException> {
+                            h.service.sendChannelMessage("retain admission fault", 0u, RADIO)
+                        }
+                    }
                 }
                 try {
                     entered.await()
@@ -419,7 +426,7 @@ class InlineChannelAttemptTest {
                         call.join()
                         assertFailsWith<CancellationException> { call.await() }
                     } else {
-                        assertSame(failure, assertFailsWith<QueuedChannelRetainedException> { call.await() }.cause)
+                        assertSame(failure, assertNotNull(call.await()).cause)
                     }
                     assertEquals(message, h.stored(message.id))
                     assertEquals(MessageStatus.PENDING, message.status)

@@ -270,28 +270,47 @@ class InlineChannelAttemptTest {
             assertEquals(QueuedChannelDispatchState.DISPATCHING, next.store.pending.values.single().channelDispatchState)
             assertTrue(next.sends(CommandCode.SEND_CHANNEL_MESSAGE).isEmpty())
         },
-        native("inline_lost_begin_return_retains_dispatching_and_blocks_restart_replay_without_any_wire") {
+        native("inline_cancel_after_atomic_admission_retires_before_protocol_entry_without_restart_replay") {
             val h = ready(this)
-            val failure = storageFailure()
-            h.store.after = { if (it == "beginQueuedChannelAttempt") throw failure }
-            val receipt = NotificationActionReceipt()
-            val retained = assertFailsWith<QueuedChannelRetainedException> {
-                withContext(receipt) { h.service.sendChannelMessage("prepared original", 0u, RADIO) }
+            val admitted = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            h.store.after = {
+                if (it == "beginInlineChannelAttempt") { admitted.complete(Unit); release.await() }
             }
-            assertSame(failure, retained.cause)
+            val receipt = NotificationActionReceipt()
+            val call = backgroundScope.async(receipt) {
+                h.service.sendChannelMessage("cancel before protocol", 0u, RADIO)
+            }
+            admitted.await()
             val message = h.store.messages.values.single()
-            val pending = h.store.pending.values.single()
-            assertEquals(QueuedChannelDispatchState.DISPATCHING, pending.channelDispatchState)
+            val pendingID = h.store.pending.values.single().id
+            h.store.messages[EntityKey(RADIO, message.id)] = message.copy(failureSeen = true)
+            assertEquals(QueuedChannelDispatchState.DISPATCHING, h.store.pending.values.single().channelDispatchState)
             assertEquals(QueuedChannelAttemptPhase.DISPATCHING, h.store.channelAttempts.values.single().phase)
-            assertEquals(NotificationActionReceipt.State.UNCERTAIN, receipt.state)
-            assertEquals(MessageStatus.PENDING, message.status)
+            assertEquals(NotificationActionReceipt.State.IN_FLIGHT, receipt.state)
             assertTrue(h.sends(CommandCode.SEND_CHANNEL_MESSAGE).isEmpty())
-            h.store.after = null; h.close()
+            call.cancel(); runCurrent()
+            assertFalse(call.isCompleted, "Cancellation must await noncancellable admission and exact cleanup")
+            release.complete(Unit); call.join()
+            assertFailsWith<CancellationException> { call.await() }
+            val attempt = h.store.channelAttempts.values.single()
+            assertEquals(pendingID, attempt.key.pendingID)
+            assertEquals(message.id, attempt.key.messageID)
+            assertEquals(message.channelOccupantID, attempt.channelOccupantID)
+            assertEquals(QueuedChannelAttemptPhase.DEFINITELY_UNSENT, attempt.phase)
+            assertEquals(message.copy(status = MessageStatus.FAILED), h.stored(message.id))
+            assertTrue(h.store.pending.isEmpty())
+            assertEquals(NotificationActionReceipt.State.READY, receipt.state)
+            assertFalse(receipt.preventsReplay)
+            assertFalse("insertPendingSendAssigningSequence" in h.store.calls)
+            assertTrue(h.sends(CommandCode.SEND_CHANNEL_MESSAGE).isEmpty())
+            h.store.after = null
+            h.close()
             val next = ready(this, h.store, generation = 2)
             next.queue().let { it.hydrate(); runCurrent(); it.awaitDrainCompletion() }
-            assertFailsWith<QueuedChannelRetainedException> { next.service.sendPendingChannelMessage(message.id) }
-            assertEquals(pending, next.store.pending.values.single())
-            assertEquals(message, next.stored(message.id))
+            assertTrue(next.store.pending.isEmpty())
+            assertEquals(attempt, next.store.channelAttempts.values.single())
+            assertEquals(message.copy(status = MessageStatus.FAILED), next.stored(message.id))
             assertTrue(next.sends(CommandCode.SEND_CHANNEL_MESSAGE).isEmpty())
         },
         native("inline_accepted_completion_failure_resumes_exact_attempt_after_restart_without_second_wire") {
@@ -352,6 +371,73 @@ class InlineChannelAttemptTest {
             h.store.after = null
         },
     )
+
+    @TestFactory fun admissionFailures() = listOf(false, true).flatMap { lostReturn ->
+        listOf(false, true).map { cancelCaller ->
+            native("inline_atomic_admission_lost_return_${lostReturn}_caller_cancelled_$cancelCaller") {
+                val h = ready(this)
+                val entered = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                val failure = storageFailure()
+                val boundary: suspend (String) -> Unit = {
+                    if (it == "beginInlineChannelAttempt") {
+                        entered.complete(Unit)
+                        release.await()
+                        throw failure
+                    }
+                }
+                if (lostReturn) h.store.after = boundary else h.store.before = boundary
+                val receipt = NotificationActionReceipt()
+                val call = backgroundScope.async(receipt) {
+                    h.service.sendChannelMessage("retain admission fault", 0u, RADIO)
+                }
+                entered.await()
+                val message = h.store.messages.values.single()
+                val pending = h.store.pending.values.singleOrNull()
+                val attempt = h.store.channelAttempts.values.singleOrNull()
+                if (lostReturn) {
+                    assertEquals(QueuedChannelDispatchState.DISPATCHING, assertNotNull(pending).channelDispatchState)
+                    assertEquals(QueuedChannelAttemptPhase.DISPATCHING, assertNotNull(attempt).phase)
+                    assertEquals(message.id, pending.messageID)
+                    assertEquals(pending.id, attempt.key.pendingID)
+                    assertEquals(message.channelOccupantID, attempt.channelOccupantID)
+                } else {
+                    assertNull(pending)
+                    assertNull(attempt)
+                }
+                assertEquals(NotificationActionReceipt.State.IN_FLIGHT, receipt.state)
+                assertTrue(h.sends(CommandCode.SEND_CHANNEL_MESSAGE).isEmpty())
+                if (cancelCaller) { call.cancel(); runCurrent() }
+                release.complete(Unit)
+                if (cancelCaller) {
+                    call.join()
+                    assertFailsWith<CancellationException> { call.await() }
+                } else {
+                    assertSame(failure, assertFailsWith<QueuedChannelRetainedException> { call.await() }.cause)
+                }
+                assertEquals(message, h.stored(message.id))
+                assertEquals(MessageStatus.PENDING, message.status)
+                assertEquals("retain admission fault", message.text)
+                assertEquals(pending, h.store.pending.values.singleOrNull())
+                assertEquals(attempt, h.store.channelAttempts.values.singleOrNull())
+                assertEquals(NotificationActionReceipt.State.UNCERTAIN, receipt.state)
+                assertTrue(receipt.preventsReplay)
+                assertTrue(h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any { it.cause === failure })
+                assertFalse("insertPendingSendAssigningSequence" in h.store.calls)
+                assertTrue(h.sends(CommandCode.SEND_CHANNEL_MESSAGE).isEmpty())
+                h.store.before = null; h.store.after = null
+                h.close()
+
+                val next = ready(this, h.store, generation = 2)
+                next.queue().let { it.hydrate(); runCurrent(); it.awaitDrainCompletion() }
+                assertEquals(message, next.stored(message.id))
+                assertEquals(pending, next.store.pending.values.singleOrNull())
+                assertEquals(attempt, next.store.channelAttempts.values.singleOrNull())
+                assertTrue(next.sends(CommandCode.SEND_CHANNEL_MESSAGE).isEmpty())
+                assertTrue(next.sends(CommandCode.GET_CHANNEL).isEmpty())
+            }
+        }
+    }
 
     @TestFactory fun legacyAndSettlementFailures() = listOf(false, true).flatMap { resend ->
         listOf(

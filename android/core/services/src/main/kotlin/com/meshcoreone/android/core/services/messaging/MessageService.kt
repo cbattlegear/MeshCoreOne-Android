@@ -1074,6 +1074,11 @@ class MessageService(
                 QueuedChannelAttemptRejected(EntityKey(token.radioId, pendingID),
                     QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION)))
         }
+        val inlineAdmission = if (newSubmission == null) null else {
+            dataStore as? InlineChannelAttemptPersisting
+                ?: throw retainedChannel(pendingID, PersistenceStoreException(PersistenceStoreError.InvalidData,
+                    UnsupportedOperationException("Atomic inline channel admission is not wired")))
+        }
         val stamp = if (!envelope.isResend || preserveTimestamp) row.timestamp else timestamp()
         val notification = if (trackNotification) currentCoroutineContext()[NotificationActionReceipt] else null
         val ownsOutcome = notification?.state == NotificationActionReceipt.State.READY
@@ -1098,9 +1103,12 @@ class MessageService(
                 journalStarted()
                 if (ownsOutcome) notification?.wireStarted()
                 try {
-                    // Inline intent becomes recoverable only inside the admitted lane, never scheduled.
-                    if (newSubmission != null) dataStore.insertPendingSendAssigningSequence(newSubmission)
-                    dataStore.beginQueuedChannelAttempt(attemptKey, occupantID, stamp)
+                    // Fresh inline intent and its attempt commit together, never as restart-ready work.
+                    if (newSubmission != null) {
+                        requireNotNull(inlineAdmission).beginInlineChannelAttempt(newSubmission, attemptKey, occupantID, stamp)
+                    } else {
+                        dataStore.beginQueuedChannelAttempt(attemptKey, occupantID, stamp)
+                    }
                 } catch (failure: PersistenceStoreException) {
                     // A lost begin response may have committed DISPATCHING. Never infer READY or send.
                     if (ownsOutcome) notification?.uncertain()

@@ -274,12 +274,14 @@ internal object NoScanGateway : BleScanGateway {
     override fun stopScan() = Unit
 }
 
-/** Notification delivery that records posts and reports a denied permission (the WP-401 adapter is unmerged). */
-internal open class RecordingDelivery : NotificationDeliveryPort {
+/** Notification delivery that records posts; existing fixtures default to denied permission. */
+internal open class RecordingDelivery(
+    private val status: NotificationAuthorizationStatus = NotificationAuthorizationStatus.DENIED,
+) : NotificationDeliveryPort {
     val posted = mutableListOf<NotificationRequest>()
     var badge: Long = 0
-    override suspend fun authorizationStatus(): NotificationAuthorizationStatus = NotificationAuthorizationStatus.DENIED
-    override suspend fun requestAuthorization(): Boolean = false
+    override suspend fun authorizationStatus(): NotificationAuthorizationStatus = status
+    override suspend fun requestAuthorization(): Boolean = status == NotificationAuthorizationStatus.AUTHORIZED
     override suspend fun registerCategories(categories: SnapshotList<NotificationCategoryDefinition>) = Unit
     override suspend fun post(request: NotificationRequest): NotificationPostResult { posted += request; return NotificationPostResult.Posted }
     override suspend fun setBadgeCount(count: Long) { badge = count }

@@ -10,6 +10,7 @@ import com.meshcoreone.android.core.contracts.domain.NotificationPreferencesPort
 import com.meshcoreone.android.core.contracts.domain.NotificationStringProvider
 import com.meshcoreone.android.core.contracts.domain.UnreadCounts
 import com.meshcoreone.android.core.contracts.notifications.NotificationAuthorizationStatus
+import com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt
 import com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget
 import com.meshcoreone.android.core.contracts.notifications.NotificationCategory
 import com.meshcoreone.android.core.contracts.notifications.NotificationDeliveryPort
@@ -23,6 +24,7 @@ import com.meshcoreone.android.core.model.canonicalString
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.protocol.model.ContactType
 import java.util.UUID
+import java.util.WeakHashMap
 import java.util.concurrent.atomic.AtomicReference
 import java.util.logging.Level
 import java.util.logging.Logger
@@ -157,6 +159,10 @@ class NotificationService(
 
     /** Guarded by [lock]: in-memory quick-reply drafts, lost with the session as in Swift. */
     private val pendingDrafts = HashMap<EntityKey, String>()
+    private val pendingDraftOwners = HashMap<EntityKey, NotificationActionReceipt>()
+    private class ActionDraft(val contact: EntityKey, var revoked: Boolean = false)
+    // Keep revocation for the action's lifetime, without retaining completed action receipts.
+    private val actionDrafts = WeakHashMap<NotificationActionReceipt, ActionDraft>()
 
     // MARK: - Setup and authorization
 
@@ -372,11 +378,45 @@ class NotificationService(
      * Keyed by radio plus id (Swift: contact UUID) so a same-UUID contact of another radio never sees it.
      */
     fun saveDraft(contact: EntityKey, text: String) {
-        synchronized(lock) { pendingDrafts[contact] = text }
+        synchronized(lock) {
+            pendingDrafts[contact] = text
+            pendingDraftOwners.remove(contact)
+            actionDrafts.values.filter { it.contact == contact }.forEach { it.revoked = true }
+        }
     }
 
-    /** Retrieves and removes the draft for [contact], or null when none exists. */
-    fun consumeDraft(contact: EntityKey): String? = synchronized(lock) { pendingDrafts.remove(contact) }
+    internal fun trackActionDraft(contact: EntityKey, owner: NotificationActionReceipt) {
+        synchronized(lock) {
+            val draft = actionDrafts.getOrPut(owner) { ActionDraft(contact) }
+            check(draft.contact == contact) { "A notification action cannot change its draft target" }
+        }
+    }
+
+    internal fun saveActionDraft(contact: EntityKey, text: String, owner: NotificationActionReceipt) {
+        synchronized(lock) {
+            val draft = checkNotNull(actionDrafts[owner]) { "Notification draft tracking must start before sending" }
+            check(draft.contact == contact) { "A notification action cannot change its draft target" }
+            if (draft.revoked) return
+            pendingDrafts[contact] = text
+            pendingDraftOwners[contact] = owner
+        }
+    }
+
+    internal fun clearActionDraft(contact: EntityKey, owner: NotificationActionReceipt) {
+        synchronized(lock) {
+            if (pendingDraftOwners[contact] === owner) {
+                pendingDrafts.remove(contact)
+                pendingDraftOwners.remove(contact)
+            }
+        }
+    }
+
+    /** Consumes only definitely-unsent drafts; receipt-fenced text stays retained, never in the composer. */
+    fun consumeDraft(contact: EntityKey): String? = synchronized(lock) {
+        if (pendingDraftOwners[contact]?.preventsReplay == true) return@synchronized null
+        pendingDraftOwners.remove(contact)
+        pendingDrafts.remove(contact)
+    }
 
     // MARK: - Badge
 

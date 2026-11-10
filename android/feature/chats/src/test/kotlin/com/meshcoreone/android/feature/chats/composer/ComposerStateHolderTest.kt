@@ -21,6 +21,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
+import java.util.UUID
 import org.junit.Test
 
 class ComposerStateHolderTest {
@@ -162,6 +163,8 @@ class ComposerStateHolderTest {
     fun `channel envelope captures current node identity after pending creation`() = scenario {
         val env = FakeEnvironment(device = ComposerDeviceInfo("Before", Bytes(ByteArray(32))))
         val rig = rig(ComposerTarget.Channel(channel), env)
+        val savedOccupant = UUID.fromString("30800000-0000-0000-0000-000000000001")
+        rig.port.channelOccupantID = savedOccupant
         rig.port.createGate = CompletableDeferred()
         rig.holder.onDraftChanged("  original \u4e2d\uD83D\uDE80 text  ")
         assertTrue(rig.holder.send())
@@ -172,7 +175,8 @@ class ComposerStateHolderTest {
         assertEquals("original \u4e2d\uD83D\uDE80 text", pending.text)
         assertEquals(channel.radioId, pending.radioId)
         assertEquals(channel.index, pending.channelIndex)
-        assertEquals(ChannelMessageEnvelope(pending.id, channel.index, false, pending.text, pending.timestamp, "After"),
+        assertEquals(savedOccupant, pending.channelOccupantID)
+        assertEquals(ChannelMessageEnvelope(pending.id, channel.index, false, pending.text, pending.timestamp, "After", savedOccupant),
             rig.port.channelEnvelopes.single())
     }
 

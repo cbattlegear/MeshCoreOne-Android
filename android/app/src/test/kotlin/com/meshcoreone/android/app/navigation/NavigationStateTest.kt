@@ -1587,6 +1587,24 @@ class NavigationStateTest {
         assertEquals(refreshed, n.state.value.pendingChatContact)
     }
 
+    @Test fun channelSelectionUsesIncarnationWithoutMakingPreferenceChangesAnotherDestination() {
+        val shown = channel.copy(occupantID = UUID(0, 100))
+        val renamed = shown.copy(name = "Renamed", isFavorite = true)
+        assertEquals(ChatSelection.Channel(shown), ChatSelection.Channel(renamed))
+        assertEquals(ChatSelection.Channel(shown).hashCode(), ChatSelection.Channel(renamed).hashCode())
+        val replacement = shown.copy(occupantID = UUID(0, 101))
+        assertNotEquals(ChatSelection.Channel(shown), ChatSelection.Channel(replacement))
+        assertNotEquals(ChatSelection.Channel(shown), ChatSelection.Channel(shown.copy(occupantID = null)))
+        val navigation = NavigationCoordinator()
+        navigation.navigateToChannel(shown)
+        val originalEntry = navigation.state.value.activeStack.last().id
+        navigation.navigateToChannel(renamed)
+        assertEquals(originalEntry, navigation.state.value.activeStack.last().id)
+        navigation.navigateToChannel(replacement)
+        assertNotEquals(originalEntry, navigation.state.value.activeStack.last().id)
+        assertEquals(replacement, (navigation.state.value.chatsSelectedRoute as ChatSelection.Channel).channel)
+    }
+
     @Test fun reactionScrollBelongsToTheCurrentEntryAcrossResizeAndBackPreview() = runTest {
         val n = NavigationCoordinator()
         n.navigateToChat(contact, message)

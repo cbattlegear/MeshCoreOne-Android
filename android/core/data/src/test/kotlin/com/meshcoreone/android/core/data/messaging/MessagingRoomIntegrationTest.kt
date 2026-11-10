@@ -640,7 +640,11 @@ class MessagingRoomIntegrationTest {
             assertTrue(observed.isEmpty())
             assertEquals(channel, store.fetchChannel(radio, 0u))
             val report = g.queue.shutdown()
-            assertTrue(report.isComplete, report.issues.toString())
+            assertFalse(report.isComplete)
+            assertEquals(2, report.issues.size)
+            val retainedCauses = report.issues.map { generateSequence(it.cause) { cause -> cause.cause }.toList() }
+            assertEquals(1, retainedCauses.count { causes -> causes.any { it is ChannelDispatchFailure.UnsettledDispatch } })
+            assertTrue(retainedCauses.all { causes -> causes.any { it is MeshCoreException.DeviceError && it.code == 2.toUByte() } })
             assertEquals(setOf(firstRow.id, secondRow.id), store.fetchPendingSends(radio).map { it.id }.toSet())
         } finally {
             listener.cancelAndJoin()

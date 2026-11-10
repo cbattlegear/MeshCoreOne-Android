@@ -171,7 +171,7 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
         val radioId = RadioId(UUID.fromString("A0000000-0000-0000-0000-000000000001"))
         private val foreignRadioId = RadioId(UUID.fromString("B0000000-0000-0000-0000-000000000001"))
         private val deviceID = UUID.fromString("A0000000-0000-0000-0000-000000000002")
-        private val channel = ChannelDTO(
+        private var channel = ChannelDTO(
             UUID.fromString("A0000000-0000-0000-0000-000000000003"), radioId, 0u, "Test",
             Bytes.fromHex("aa".repeat(16)),
         )
@@ -216,6 +216,7 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
             store.saveDevice(DeviceDTO(radioId = foreignRadioId, publicKey = key(8),
                 nodeName = "Foreign Node", isActive = false))
             seedReconciledChannel(channel)
+            channel = assertNotNull(store.fetchChannel(radioId, channel.index))
             val occupantID = assertNotNull(store.fetchChannelOccupantID(radioId, 0u))
             message = MessageDTO(
                 id = UUID.fromString("A0000000-0000-0000-0000-000000000004"), radioId = radioId,
@@ -238,6 +239,7 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
             )
             store.saveMessage(foreignMessage)
             store.upsertPendingSend(foreignPending)
+            harness.container.foreground.activityStarted()
             val connect = harness.container.uiScope.async {
                 harness.manager.connect(harness.target(deviceID))
             }

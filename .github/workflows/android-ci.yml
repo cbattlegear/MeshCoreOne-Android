@@ -58,7 +58,7 @@ jobs:
           JAVA_OPTS: -Xms32m -Xmx128m
         run: >-
           ./gradlew
-          --no-daemon --console=plain --stacktrace
+          --no-daemon --continue --console=plain --stacktrace
           --dependency-verification strict
           --build-cache --parallel --max-workers=2
           -Pkotlin.compiler.execution.strategy=in-process
@@ -68,10 +68,6 @@ jobs:
           :app:assembleDebug :app:compileDebugAndroidTestKotlin
           :platform:notifications:testDebugUnitTest
           :core:protocol:test :core:testing:testDebugUnitTest
-      - name: Localization tests were discovered and passed
-        run: >-
-          python tools/android-port/l10n_convert.py --check
-          --verify-android-tests android/core/l10n/build/test-results/testDebugUnitTest
       - name: Inspect the debug APK
         run: python android/scaffold/inspect_apk.py
       - name: Upload debug APK

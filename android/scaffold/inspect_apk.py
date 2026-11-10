@@ -9,7 +9,9 @@ import subprocess
 import sys
 import zipfile
 
-from apk_alignment import inspect_alignment
+# Other tools load this file by path, so the sibling module needs an explicit import root.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from apk_alignment import inspect_alignment  # noqa: E402
 
 
 ANDROID = Path(__file__).resolve().parents[1]

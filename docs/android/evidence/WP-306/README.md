@@ -121,3 +121,165 @@ run `41389610630` approved this same head with no open inline findings.
 No local Android/Gradle execution occurred; the prior local runner mismatch
 remains unresolved. Swift codec and SwiftData restore/export oracle jobs were
 skipped by workflow selection and are not claimed as verified.
+
+### Foundation substring-boundary repair candidate
+
+Based on trusted main
+`d85ac9f8a5367615099bc215acc8d022c11eb75b`, the next WP-306 candidate updates
+`ChatTextMatching.standardContains` and tests its actual
+`Conversation.filtered` search consumer across every filter. It rejects
+`straße`/`stras`, `ﬁle`/`f`, `한글`/`하`, and `ıstanbul`/`istanbul`, while
+retaining full `Straße`/`strasse` folding, folded suffix matches, normal search,
+fullwidth digit `１２`/`12`, and the Foundation-standard ZWJ emoji substring
+`👨‍👩‍👧`/`👨`.
+
+Independent expected values come from the captured outputs
+`docs/android/evidence/WP-311/oracle/wp311_more.output.txt` and
+`wp311_strings.output.txt`. The former records `std=true` and `noloc=false` for
+the ZWJ example but does not stamp a locale; the latter records
+`localizedStandardContains=true` for the digit example under `en_US`. These
+are Foundation reference outputs, not Android execution results. No broader
+locale-policy or device claim is made.
+
+Hosted exact-candidate verification for head
+`46a7303da5ce23cf5d349f1c8d0dcd4a2c74a556`, based on
+`d85ac9f8a5367615099bc215acc8d022c11eb75b`, completed successfully in Android
+candidate run `41396546339`. Its Linux Android build and aggregate `android-ci`
+passed. Hosted JUnit evidence records 444 named `feature:chats` test cases as
+passed, with no failed, errored or skipped cases. It positively discovers and passes
+`ChatTextMatchingTest.localizedStandardContains oracle`,
+`ChatTextMatchingTest.independent Unicode search probes retain search over all
+filters`, and `ConversationFilteringTest.search preserves Foundation expansion
+boundaries across every filter`. The fresh review on this head found no code
+findings but noted that host-JVM tests do not establish Android runtime `\X`
+segmentation parity; Android-device/platform validation remains open for human
+review. Local Android/Gradle execution, device behavior, and broader locale
+tailoring remain unverified. Swift codec/SwiftData oracle jobs were skipped by
+workflow selection and are not claimed as verified.
+
+The documentation-only follow-up head
+`e772505ba3b2b9e60cd503f34e8273579b252d88` was checked in Android candidate
+run `41398170548`. Both attempt 1 and the normal failed-job retry (attempt 2)
+failed `:app:testDebugUnitTest` in the unrelated
+`AndroidMalwareDomainFilterTest.publishes a new policy revision after a network
+refresh[31]`, with `TimeoutCancellationException: Timed out waiting for 5000 ms`
+at `AndroidMalwareDomainFilterTest.kt:73`. The earlier exact-code hosted run
+`41396546339` passed. Retain both failed attempts and the earlier pass; this
+does not establish the timeout's root cause or that it is flaky. No malware
+sources were changed, and the failure is not attributed to WP-306. The PR stays
+draft and unmerged pending clean required checks and human Android-runtime
+validation.
+
+After the coordinator released the diagnostic hold, the supported local
+launcher was invoked for head
+`0f694e831ceee3aa7c0b07610294a9202809a5fc` with affected base
+`d85ac9f8a5367615099bc215acc8d022c11eb75b`. It refused before product
+execution with `BLOCKED: Hard-lock collision for external resource
+gradle-execution: gradle-execution held`. Read-only recovery status showed a
+different live local-check owner and refused recovery. No product tests ran;
+the owner was not interrupted or changed, and direct Gradle was not used.
+
+### Capital sharp-S Foundation vector follow-up
+
+The captured WP-311 `localizedStandardContains` output records U+1E9E capital
+sharp-S (`ẞ`) searched for `ss` as true (`wp311_more.output.txt`). The matcher
+previously folded U+1E9E through `Locale.ROOT` upper/lower conversion to `ß`,
+so it did not match the two-character query. WP-306 now explicitly folds this
+scalar to `ss`, with a direct helper assertion and a `Conversation.filtered`
+assertion across every filter. Existing partial-expansion negatives, full
+expansion positives, width, dotless-i, Hangul, ZWJ and ordinary search vectors
+remain in both suites.
+
+The exact current-main predecessor candidate
+`d0b6ba6ffd81d6b6cb55f239c47a3f6d1bccb4ec` (base
+`99479711bfdb7c621765f09d671068ca8b8318ce`) failed hosted candidate run
+`41607197452` in `:app:mergeDebugResources` with `Java heap space`; this was
+before the capital sharp-S test addition and is not attributed to WP-306
+behavior. Its Swift codec oracle was skipped. The new source candidate's
+exact-head hosted checks are required before claiming that vector's test
+execution. No Android API31/37 runtime evidence is established by host CI.
+
+### Instrumented production search fixture (source only)
+
+The local follow-up integrates main
+`c06e9950323ab09ca386fe730f783c6ebc8c3983` without changing the existing search
+implementation, JVM cases or oracle outputs. It adds
+`android/app/src/androidTest/kotlin/com/meshcoreone/android/app/chats/ConversationSearchParityTest.kt`
+using the existing App AndroidJUnitRunner and dependencies. Trusted admission
+for WP-306, operation `add-or-update-related-test`, returned
+`reviewed-support-test`; this is not a WP-306 primary-owned App path.
+The Kotlin-root guard restricts it to related test source and requires actual
+native-method evidence for instrumentation acceptance.
+
+`productionStandardContainsMatchesCapturedFoundationVectors` directly calls
+the production helper for 21 captured vectors plus the empty-query negative.
+`productionConversationFilteredMatchesCapturedVectorsAcrossEveryFilter`
+passes the same 21 nonempty-query vectors through the production consumer for
+all five filters. Its real ContactDTO, ChannelDTO and RemoteNodeSessionDTO rows
+are muted with zero unread counts; positive search must still return all three
+row types in their original order, including under UNREAD and category filters.
+Negative vectors must return no rows. The test does not copy comparator logic
+or mock the filtering consumer.
+
+`productionConversationFilteredRetainsOnlyMatchingRowsInInputOrder` adds six
+interleaved, uniquely identified production rows: three matching and three
+nonmatching direct/channel/room rows. For each filter, `alpha` must return the
+literal room/channel/direct subset in input order, `beacon` only the matching
+channel, and `echo` only the otherwise nonmatching room. These 15 intended
+list comparisons distinguish row-by-row selection from returning all rows
+whenever any row matches. They do not derive expected subsets using the
+matcher under test. All 21 original vectors and their assertions are retained.
+
+The expected values retain the original WP-306 oracle and WP-311 `std` outputs,
+including partial/full expansion, capital sharp-S, Hangul, fullwidth digits and
+letters, dotless-i and ZWJ distinctions. No locale is inferred for `wp311_more`;
+the separately captured width/dotless-i vectors are stamped `en_US`.
+
+These are intended assertions, not test discovery or passing runtime results.
+No compilation, hosted dispatch, local Gradle or instrumented execution occurred
+for this local fixture. WP-503 still needs a trusted exact-source App-test
+runner/family binding and actual API31/37 execution of all three methods. No
+WP-503 runner/selector or build configuration was changed, and no device or
+whole-WP acceptance is claimed.
+
+## Explicit mailto tap fallback candidate
+
+Prepared against main `83fc29b14f082ef1806f2d68516668128f63b1d4`, retaining
+source pin `db14559b39d32322b06477c6ae676112f583db50`. This addresses only
+`CHAT-LINK-MAILTO-FALLBACK` in #404. It is not whole-WP completion.
+
+The actual path is explicit mailto body text -> `MessageLinkTokenizer` ->
+`MessageBody` link action -> `MessageLinkDispatcher` -> `ChatLinkRouter`
+declines -> `ChatExternalLinkOpener` -> Android `ACTION_SENDTO`. Both App
+direct/channel and room link bindings use this opener. No arbitrary schemes
+are admitted, and the shared HTTP(S)-only preview/network policy is unchanged.
+
+Intended controls, not execution results:
+
+- `ChatMailtoPolicyTest` retains recipients/query, rejects malformed/unsafe or
+  unsupported links, preserves web-only detection/policy, and checks tokenizer
+  punctuation/overlap and unchanged bare-email behavior.
+- `ChatMailtoConsumerTest.mountedChatMailtoTapStartsOnlyTheNativeSendToAction`
+  mounts the real App conversation and verifies exact action/data at the
+  Android context boundary, with no explicit component/selector.
+- `mountedChatMailtoWithoutHandlerShowsFailureInsteadOfCrashing` activates that
+  same path with an unavailable handler and requires the visible error dialog.
+- `unsafeSchemesNeverReachAnyExternalHandlerAndWebStillUsesItsOwnAction`
+  exercises the actual router/dispatcher/native adapter with negative schemes
+  and a positive HTTPS control.
+- `mountedMultipleMailLinksHaveDistinctRecipientActions` requires two distinct
+  resource-backed recipient labels and activates both through the mounted App
+  conversation. Mail actions reuse the existing localized `Open Link: %1$s`
+  label rather than exposing indistinguishable `Open Link` actions. Quoted-link,
+  internal-apostrophe, square-bracket wrapper and balanced-subject controls
+  preserve the intended URI. Only unmatched closing parentheses/brackets are
+  removed; balanced subject punctuation remains part of the link.
+- `mailtoTaskFlagIsOnlyAddedForNonActivityContexts` requires no new-task flag
+  for an Activity-backed wrapper and the required flag for an application-backed
+  wrapper. Mounted mail actions also assert that their Activity task is retained.
+
+The App test is configured for Robolectric API31/37, not real Android hardware.
+No new local execution is claimed; the retained local execution-owner hold is
+untouched. Canonical exact-head hosted CI and original discovery logs are the
+authority for compilation and passing software results, not this source map.
+The separate paused #417/#508 work and WP-503 native search work are untouched.

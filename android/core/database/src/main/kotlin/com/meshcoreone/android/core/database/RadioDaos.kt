@@ -43,6 +43,25 @@ interface ContactDao : RowWriter<ContactEntity> {
     fun observe(radioId: UUID): Flow<List<ContactEntity>>
     @Query("SELECT * FROM contacts WHERE radioId = :radioId AND id = :id")
     suspend fun byId(radioId: UUID, id: UUID): ContactEntity?
+    @Query("UPDATE contacts SET avatarImageData = :imageData WHERE radioId = :radioId AND id = :id AND publicKey = :expectedPublicKey")
+    suspend fun updateAvatar(radioId: UUID, id: UUID, expectedPublicKey: Bytes, imageData: Bytes?): Int
+    @Query("UPDATE contacts SET isFavorite = :isFavorite, flags = (flags & 254) | :favoriteBit WHERE radioId = :radioId AND id = :id AND publicKey = :expectedPublicKey")
+    suspend fun updateFavorite(radioId: UUID, id: UUID, expectedPublicKey: Bytes, isFavorite: Boolean, favoriteBit: Long): Int
+    @Query("""
+        UPDATE contacts SET
+            nickname = CASE WHEN :nickname IS NULL THEN nickname ELSE nullif(:nickname, '') END,
+            unreadCount = CASE WHEN :isBlocked = 1 AND isBlocked = 0 THEN 0 ELSE unreadCount END,
+            isBlocked = coalesce(:isBlocked, isBlocked),
+            isFavorite = coalesce(:isFavorite, isFavorite)
+        WHERE radioId = :radioId AND id = :id AND publicKey = :expectedPublicKey
+    """)
+    suspend fun updatePreferences(
+        radioId: UUID, id: UUID, expectedPublicKey: Bytes, nickname: String?, isBlocked: Boolean?, isFavorite: Boolean?,
+    ): Int
+    @Query("UPDATE contacts SET ocvPreset = :preset, customOCVArrayString = :customArray WHERE radioId = :radioId AND id = :id AND publicKey = :expectedPublicKey")
+    suspend fun updateOCVSettings(radioId: UUID, id: UUID, expectedPublicKey: Bytes, preset: String, customArray: String?): Int
+    @Query("UPDATE contacts SET flags = (flags & 241) | :telemetryBits WHERE radioId = :radioId AND id = :id AND publicKey = :expectedPublicKey")
+    suspend fun updateTelemetryPermissions(radioId: UUID, id: UUID, expectedPublicKey: Bytes, telemetryBits: Long): Int
     @Query("SELECT * FROM contacts WHERE radioId = :radioId AND publicKey = :key")
     suspend fun forPublicKey(radioId: UUID, key: Bytes): List<ContactEntity>
     @Query("SELECT * FROM contacts WHERE radioId = :radioId AND substr(publicKey, 1, :length) = :prefix")

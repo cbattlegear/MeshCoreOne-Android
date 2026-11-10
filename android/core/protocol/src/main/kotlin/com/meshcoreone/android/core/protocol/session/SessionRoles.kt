@@ -101,11 +101,14 @@ interface ContactSessionOps {
 class ContactWriteDispatch(
     beforeDispatchAction: (ContactWriteDispatch) -> Unit = {},
     onExchangeFinishedAction: (ContactWriteDispatch) -> Unit = {},
+    onOutcomeChangedAction: (ContactWriteDispatch) -> Unit = {},
 ) {
     private val beforeDispatchCallback = java.util.concurrent.atomic.AtomicReference<((ContactWriteDispatch) -> Unit)?>(beforeDispatchAction)
     private val onExchangeFinishedCallback = java.util.concurrent.atomic.AtomicReference<((ContactWriteDispatch) -> Unit)?>(onExchangeFinishedAction)
+    private val onOutcomeChangedCallback = java.util.concurrent.atomic.AtomicReference<((ContactWriteDispatch) -> Unit)?>(onOutcomeChangedAction)
     internal val exchangeDispatch = ChannelWriteDispatch {
         beforeDispatchCallback.set(null)
+        onOutcomeChangedCallback.set(null)
         onExchangeFinishedCallback.getAndSet(null)?.invoke(this)
     }
 
@@ -147,21 +150,26 @@ class ContactWriteDispatch(
 
     internal fun markAccepted() {
         terminalOutcome.set(ContactWriteDispatchOutcome.ACCEPTED)
+        onOutcomeChangedCallback.get()?.invoke(this)
     }
 
     internal fun markRejected(failure: Exception) {
         this.failure.set(failure)
         terminalOutcome.set(ContactWriteDispatchOutcome.REJECTED)
+        onOutcomeChangedCallback.get()?.invoke(this)
     }
 
     internal fun markUncertain(failure: Exception) {
         this.failure.set(failure)
-        terminalOutcome.compareAndSet(null, ContactWriteDispatchOutcome.MAY_HAVE_WRITTEN)
+        if (terminalOutcome.compareAndSet(null, ContactWriteDispatchOutcome.MAY_HAVE_WRITTEN)) {
+            onOutcomeChangedCallback.get()?.invoke(this)
+        }
     }
 
     private fun markDefinitelyUnsent(failure: Exception) {
         this.failure.set(failure)
         terminalOutcome.set(ContactWriteDispatchOutcome.DEFINITELY_UNSENT)
+        onOutcomeChangedCallback.get()?.invoke(this)
     }
 }
 

@@ -2,8 +2,10 @@
 package com.meshcoreone.android.feature.nodes.add
 
 import com.meshcoreone.android.core.l10n.R
+import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.ContactFrame
 import com.meshcoreone.android.core.model.ProtocolLimits
+import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.applicationBytesFromHex
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.bytes.utf8Prefix
@@ -13,6 +15,7 @@ import com.meshcoreone.android.feature.nodes.deps.NodesContactFailure
 import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
 import com.meshcoreone.android.feature.nodes.deps.NodesMessage
 import com.meshcoreone.android.feature.nodes.deps.ScannedContact
+import com.meshcoreone.android.feature.nodes.deps.ensureContactConnection
 import com.meshcoreone.android.feature.nodes.text.SwiftText
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -88,43 +91,61 @@ class AddContactStateHolder(private val dependencies: NodesFeatureDependencies) 
     }
 
     /** Sends the contact to the radio. Returns true when the sheet should dismiss. */
-    suspend fun add(): Boolean {
+    suspend fun add(): Boolean = addContact() != null
+
+    /** Returns the stored identity for immediate admission by the owning list. */
+    suspend fun addContact(
+        connection: Any? = dependencies.session.connectionIdentity(),
+        radioId: RadioId? = dependencies.session.currentRadioId(),
+    ): ContactDTO? {
+        if (state.value.isSubmitting) return null
         val session = dependencies.session
+        session.ensureContactConnection(connection, radioId)
         val contactService = session.contactService()
         val device = session.connectedDevice()
+        session.ensureContactConnection(connection, radioId)
         if (contactService == null || device == null) {
             fail(NodesMessage.res(R.string.l10n_app_contacts_contacts_add_error_notconnected), submitting = false)
-            return false
+            return null
         }
         val current = state.value
         val publicKey = applicationBytesFromHex(current.normalizedPublicKeyHex) ?: run {
             fail(NodesMessage.res(R.string.l10n_app_contacts_contacts_add_error_invalidformat), submitting = current.isSubmitting)
-            return false
+            return null
         }
         if (publicKey.size != ProtocolLimits.PUBLIC_KEY_SIZE) {
             val message = NodesMessage.res(
                 R.string.l10n_app_contacts_contacts_add_error_invalidsize, ProtocolLimits.PUBLIC_KEY_SIZE, AddContactState.PUBLIC_KEY_HEX_LENGTH,
             )
             fail(message, submitting = current.isSubmitting)
-            return false
+            return null
         }
         mutableState.update { it.copy(isSubmitting = true, errorMessage = null) }
         return try {
+            session.ensureContactConnection(connection, device.radioId)
             contactService.addOrUpdateContact(device.radioId, newContactFrame(publicKey, current.selectedType, current.contactName))
-            true
+            session.ensureContactConnection(connection, device.radioId)
+            val stored = contactService.getContact(device.radioId, publicKey)
+            session.ensureContactConnection(connection, device.radioId)
+            stored?.takeIf { it.radioId == device.radioId && it.publicKey == publicKey }
+                ?: throw NodesContactFailure.ContactNotFound()
         } catch (_: NodesContactFailure.ContactTableFull) {
+            session.ensureContactConnection(connection, device.radioId)
             fail(NodesMessage.res(R.string.l10n_app_contacts_contacts_add_error_nodelistfull, device.maxContacts.toInt()), submitting = false)
-            false
+            null
         } catch (cancelled: CancellationException) {
             mutableState.update { it.copy(isSubmitting = false) }
             throw cancelled
         } catch (error: Exception) {
+            session.ensureContactConnection(connection, device.radioId)
             val message = NodesMessage.Joined(
                 listOf(NodesMessage.res(R.string.l10n_app_contacts_contacts_common_error), NodesMessage.Text(dependencies.messages.message(error))),
                 ": ",
             )
             fail(message, submitting = false)
-            false
+            null
+        } finally {
+            mutableState.update { it.copy(isSubmitting = false) }
         }
     }
 

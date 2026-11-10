@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="com.meshcoreone.android.core.datastore.PersistenceKeysSourceTest" tests="2" skipped="0" failures="0" errors="0" timestamp="2026-10-04T22:04:53.237Z" hostname="BATTLEGEAR" time="0.027">
-  <properties/>
-  <testcase name="exactBareNames" classname="com.meshcoreone.android.core.datastore.PersistenceKeysSourceTest" time="0.016"/>
-  <testcase name="themeKeysAreNotInfrastructureKeys" classname="com.meshcoreone.android.core.datastore.PersistenceKeysSourceTest" time="0.007"/>
-  <system-out><![CDATA[]]></system-out>
-  <system-err><![CDATA[]]></system-err>
-</testsuite>

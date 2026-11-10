@@ -1,8 +1,12 @@
 // PortedFrom: MC1/Tips/DeviceMenuTip.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Tips/LiveActivityTip.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/MainSidebarView.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Components/BLEStatusIndicatorView.swift@db14559b39d32322b06477c6ae676112f583db50
 // Native adaptation: atomic process-owned DataStore claims; no permission or Live Update eligibility claim.
 package com.meshcoreone.android.core.ui
 
+import com.meshcoreone.android.core.contracts.AppTab
+import com.meshcoreone.android.core.datastore.AppStorageKey
 import com.meshcoreone.android.core.datastore.PreferenceKey
 import com.meshcoreone.android.core.datastore.PreferenceStore
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
@@ -24,6 +28,7 @@ enum class SharedTip(
 }
 
 data class TipHostState(
+    val selectedTab: AppTab,
     val deviceMenuVisible: Boolean,
     val connectedDevicePresent: Boolean,
     val liveStatusPresented: Boolean,
@@ -37,6 +42,38 @@ data class TipHostState(
 }
 
 class ShowOnceTips(private val preferences: PreferenceStore) {
+    private val pendingCompletion = PreferenceKey.StringKey("onboarding.completion.pending", "")
+    private val finalizedCompletion = PreferenceKey.StringKey("onboarding.completion.finalized", "")
+
+    suspend fun stageOnboardingCompletion(attemptId: String) {
+        preferences.set(pendingCompletion, attemptId)
+    }
+
+    /** Legacy Boolean writes have no attempt identity, even when the value is unchanged. */
+    suspend fun persistOnboardingFlag(completed: Boolean) {
+        preferences.update {
+            this[AppStorageKey.hasCompletedOnboarding] = completed
+            remove(finalizedCompletion)
+            remove(pendingCompletion)
+        }
+    }
+
+    /** Commits the first-run gate and its pending show-once event as one preference transaction. */
+    suspend fun completeOnboarding(attemptId: String? = null) {
+        preferences.update {
+            this[AppStorageKey.hasCompletedOnboarding] = true
+            this[SharedTip.DEVICE_MENU.eventKey] = true
+            if (attemptId != null) this[finalizedCompletion] = attemptId else remove(finalizedCompletion)
+            remove(pendingCompletion)
+        }
+    }
+
+    suspend fun isOnboardingCompletionFinalized(attemptId: String): Boolean {
+        val snapshot = preferences.snapshot()
+        return snapshot.stored(finalizedCompletion) == attemptId && snapshot[AppStorageKey.hasCompletedOnboarding] &&
+            snapshot[SharedTip.DEVICE_MENU.eventKey]
+    }
+
     suspend fun donateCompletedOnboarding() = donate(SharedTip.DEVICE_MENU)
     suspend fun donateRadioConnected() = donate(SharedTip.LIVE_STATUS)
 

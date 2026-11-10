@@ -5,14 +5,12 @@ import json
 import subprocess
 from pathlib import Path, PurePosixPath
 
-from controller.errors import PortError
-from controller.model import load_manifest
-from controller.schema import load_json
+from portlib.errors import PortError
+from portlib.model import load_manifest
+from portlib.schema import load_json
 
 SOURCE_SHA = "db14559b39d32322b06477c6ae676112f583db50"
 REPO = Path(__file__).resolve().parents[3]
-TEST_ROOTS = ("MC1Tests/", "MC1Services/Tests/", "MeshCore/Tests/")
-PATH_COUNTS = {"test": 428, "support": 40}
 
 
 class OracleError(PortError):
@@ -68,7 +66,7 @@ def write_or_check(path: Path, data: bytes, *, check: bool):
 class FrozenReference:
     def __init__(self, repo: Path = REPO, source_sha: str = SOURCE_SHA):
         if source_sha != SOURCE_SHA:
-            raise OracleError("Reference advancement is forbidden; WP-006 must review a pin amendment")
+            raise OracleError("Reference advancement is forbidden; bump the pin deliberately (docs/android/README.md, Maintenance)")
         self.repo = repo.resolve()
         self.source_sha = source_sha
         manifest = load_manifest(self.repo)
@@ -99,28 +97,6 @@ class FrozenReference:
             if kind == b"blob":
                 self.blobs[raw_path.decode("utf-8")] = blob.decode("ascii")
         self._cache: dict[str, str] = {}
-
-    def test_entries(self) -> list[dict]:
-        entries = sorted(
-            (entry for entry in self.inventory.values() if entry["kind"] in PATH_COUNTS),
-            key=lambda entry: entry["path"],
-        )
-        for kind, count in PATH_COUNTS.items():
-            if sum(entry["kind"] == kind for entry in entries) != count:
-                raise OracleError(f"Frozen {kind} path accounting changed; expected {count}")
-        expected = {entry["path"] for entry in entries}
-        pinned = {path for path in self.blobs if path.endswith(".swift") and path.startswith(TEST_ROOTS)}
-        if expected != pinned:
-            raise OracleError(f"Unaccounted pinned tests/support: {sorted(expected ^ pinned)}")
-        checkout = set()
-        for arguments in (("ls-files", "-z"), ("ls-files", "--others", "--exclude-standard", "-z")):
-            for raw_path in git(self.repo, *arguments).split(b"\0"):
-                path = raw_path.decode("utf-8")
-                if path.endswith(".swift") and path.startswith(TEST_ROOTS):
-                    checkout.add(path)
-        if expected != checkout:
-            raise OracleError(f"Missing, renamed or unknown reference test/support paths: {sorted(expected ^ checkout)}")
-        return entries
 
     def read_many(self, paths) -> dict[str, str]:
         paths = sorted(set(paths))

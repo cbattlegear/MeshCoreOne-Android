@@ -34,7 +34,10 @@ class ConnectionManagerPairingTest {
     private fun RuntimeHarness.editor(access: com.meshcoreone.android.core.connectivity.device.ConnectedDeviceAccess) =
         ConnectedDeviceEditor(access, devices, contacts, { null }, PRESET_MATCHER, scenario.scope, { clock.instant })
 
-    private fun RuntimeHarness.offlineEditor(device: DeviceDTO? = null) = editor(InMemoryDeviceAccess(device))
+    private fun RuntimeHarness.offlineEditor(device: DeviceDTO? = null): ConnectedDeviceEditor {
+        device?.let { devices.rows[it.id] = it }
+        return editor(InMemoryDeviceAccess(device))
+    }
 
     private fun preset(id: String) = PRESET_ROWS.first { it.id == id }
 

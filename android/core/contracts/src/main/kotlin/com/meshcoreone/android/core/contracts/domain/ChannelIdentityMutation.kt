@@ -1,19 +1,19 @@
-// AndroidOnly: WP-201 Process-owned channel identity exclusion shared by persistence and radio service producers.
+// AndroidOnly: WP-201 Process-owned channel operation exclusion; not connection, storage or receive-origin authority.
 package com.meshcoreone.android.core.contracts.domain
 
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.currentCoroutineContext
 
 interface ChannelIdentityMutation {
     suspend fun <T> withChannelOperation(block: suspend () -> T): T
     suspend fun <T> withChannelIdentityMutation(block: suspend () -> T): T
     suspend fun <T> withChannelIdentityRestore(block: suspend () -> T): T
-    suspend fun <T> withChannelOperationScope(block: suspend (ChannelIdentityWriteScope) -> T): T =
-        throw UnsupportedOperationException("Owned channel mutation scopes are not implemented by this gate")
-    suspend fun requireChannelOperationScope(scope: ChannelIdentityWriteScope): Unit =
-        throw UnsupportedOperationException("Owned channel mutation scopes cannot be validated by this gate")
+    suspend fun <T> withChannelOperationScope(block: suspend (ChannelIdentityWriteScope) -> T): T
+    suspend fun requireChannelOperationScope(scope: ChannelIdentityWriteScope)
 }
 
 interface ChannelIdentityWriteScope {
@@ -21,9 +21,9 @@ interface ChannelIdentityWriteScope {
 }
 
 /**
- * Lock order is operation then identity. Ordinary repository writes and restore own both.
- * Radio producers use an explicit operation scope whose repository writes acquire identity only.
- * Never invoke an ordinary gated repository writer inside either owned scope.
+ * Lock order is operation, identity, then the consumer's Room transaction. Ordinary writers and
+ * restore take both locks. An operation-scoped facade takes only identity through its exact scope.
+ * Locks are non-reentrant. This process-local gate neither fences raw SQL nor authenticates ingress.
  */
 class ChannelIdentityMutex : ChannelIdentityMutation {
     private val operation = Mutex()
@@ -33,15 +33,20 @@ class ChannelIdentityMutex : ChannelIdentityMutation {
         operationLock(block)
 
     override suspend fun <T> withChannelIdentityMutation(block: suspend () -> T): T =
-        identity.withLock(currentJob()) { block() }
+        operationLock {
+            val owner = activeJob()
+            identity.withLock(owner) {
+                check(activeJob() === owner) { "Channel identity Job changed while acquiring the gate" }
+                block()
+            }
+        }
 
     override suspend fun <T> withChannelIdentityRestore(block: suspend () -> T): T =
-        operationLock { identity.withLock(currentJob()) { block() } }
+        withChannelIdentityMutation(block)
 
     override suspend fun <T> withChannelOperationScope(block: suspend (ChannelIdentityWriteScope) -> T): T =
         operationLock {
-            val owner = currentJob()
-            val scope = OwnedIdentityScope(this, identity, owner)
+            val scope = OwnedIdentityScope(this, identity, activeJob())
             try {
                 block(scope)
             } finally {
@@ -54,19 +59,29 @@ class ChannelIdentityMutex : ChannelIdentityMutation {
         scope.requireOwner(this)
     }
 
-    private suspend fun <T> operationLock(block: suspend () -> T): T =
-        operation.withLock(currentJob()) { block() }
-
-    private suspend fun currentJob(): Job =
-        checkNotNull(currentCoroutineContext()[Job]) { "Channel operation requires an owned Job" }
+    private suspend fun <T> operationLock(block: suspend () -> T): T {
+        val owner = activeJob()
+        return operation.withLock(owner) {
+            check(activeJob() === owner) { "Channel operation Job changed while acquiring the gate" }
+            block()
+        }
+    }
 
     companion object {
         val PROCESS = ChannelIdentityMutex()
     }
 }
 
+private suspend fun activeJob(): Job {
+    val context = currentCoroutineContext()
+    context.ensureActive()
+    return checkNotNull(context[Job]) { "Channel operation requires an owned Job" }.also {
+        check(it !== NonCancellable) { "NonCancellable cannot own channel authority" }
+    }
+}
+
 private class OwnedIdentityScope(
-    private val gate: ChannelIdentityMutation,
+    private val gate: ChannelIdentityMutex,
     private val identity: Mutex,
     private val owner: Job,
 ) : ChannelIdentityWriteScope {
@@ -82,8 +97,9 @@ private class OwnedIdentityScope(
 
     fun close() { active = false }
 
-    suspend fun requireOwner(expectedGate: ChannelIdentityMutation) {
-        check(active && gate === expectedGate && currentCoroutineContext()[Job] === owner) {
+    suspend fun requireOwner(expectedGate: ChannelIdentityMutex) {
+        val current = activeJob()
+        check(active && gate === expectedGate && current === owner && owner.isActive) {
             "Channel mutation scope is expired or belongs to a different gate or Job"
         }
     }

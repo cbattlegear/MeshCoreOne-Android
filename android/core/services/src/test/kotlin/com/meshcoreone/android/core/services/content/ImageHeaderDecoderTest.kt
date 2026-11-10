@@ -1,7 +1,7 @@
 // PortedFrom: MC1Tests/Services/ImageHeaderDecoderTests.swift@db14559b39d32322b06477c6ae676112f583db50
-// The original test renders a real PNG via CGContext/CGImageDestination; this port builds
-// the equivalent PNG signature + IHDR chunk bytes directly, since ImageHeaderDecoder only
-// ever reads that header (it never decodes pixel data).
+// The original test renders and encodes a real PNG via CGContext/CGImageDestination; this
+// test uses the host-JVM ImageIO encoder and independently decodes the complete PNG before
+// asking ImageHeaderDecoder to report its header dimensions.
 //
 // The original Swift suite only covers PNG, but the real production contract
 // (CGImageSourceCreateWithData) is format-agnostic. The JPEG/GIF/WebP cases below are
@@ -14,7 +14,9 @@
 // header comment for why this file owns that function's port).
 package com.meshcoreone.android.core.services.content
 
+import java.awt.Color
 import java.awt.image.BufferedImage
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import javax.imageio.ImageIO
 import kotlin.test.Test
@@ -24,6 +26,7 @@ import kotlin.test.assertNull
 class ImageHeaderDecoderTest {
     private fun makeCompletePng(width: Int, height: Int): ByteArray {
         val image = BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB)
+        image.setRGB(0, 0, Color.GREEN.rgb)
         return ByteArrayOutputStream().use { output ->
             check(ImageIO.write(image, "png", output))
             output.toByteArray()
@@ -33,6 +36,13 @@ class ImageHeaderDecoderTest {
     @Test
     fun `decodeDimensions returns pixel dims for a valid PNG`() {
         val png = makeCompletePng(width = 480, height = 270)
+        val independentlyDecoded = requireNotNull(ImageIO.read(ByteArrayInputStream(png))) {
+            "The complete PNG fixture must decode independently"
+        }
+        assertEquals(480, independentlyDecoded.width)
+        assertEquals(270, independentlyDecoded.height)
+        assertEquals(Color.GREEN.rgb, independentlyDecoded.getRGB(0, 0))
+
         val dims = ImageHeaderDecoder.decodeDimensions(png)
         assertEquals(480, dims?.first)
         assertEquals(270, dims?.second)

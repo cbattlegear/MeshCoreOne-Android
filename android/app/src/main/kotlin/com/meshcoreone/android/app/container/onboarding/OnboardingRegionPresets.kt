@@ -4,6 +4,7 @@ package com.meshcoreone.android.app.container.onboarding
 
 import android.content.res.Resources
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt
 import com.meshcoreone.android.core.model.RegionSelection
 import com.meshcoreone.android.core.services.device.RadioPreset
 import com.meshcoreone.android.core.services.device.RadioPresets
@@ -18,6 +19,7 @@ import com.meshcoreone.android.feature.onboarding.OnboardingCountry
 import com.meshcoreone.android.feature.onboarding.OnboardingPresetOption
 import com.meshcoreone.android.feature.onboarding.OnboardingPresetOutcome
 import com.meshcoreone.android.feature.onboarding.OnboardingPresetPort
+import com.meshcoreone.android.feature.onboarding.OnboardingPresetTarget
 import com.meshcoreone.android.feature.onboarding.OnboardingRegionCatalog
 import com.meshcoreone.android.feature.onboarding.OnboardingRegionPort
 import com.meshcoreone.android.feature.onboarding.OnboardingSubdivision
@@ -97,9 +99,18 @@ class AppOnboardingRegionPort(
 interface OnboardingRadioConfigurator {
     fun connectionStates(): Flow<DeviceConnectionState>
     val isDemoRadio: Boolean
+    fun currentTarget(): OnboardingPresetTarget? = null
+    fun sealCompletion(
+        target: OnboardingPresetTarget?,
+        attempt: OnboardingCompletionAttempt,
+    ): Boolean = currentTarget() == target && attempt.trySeal()
 
     /** Throws [SettingsServiceException] (or a runtime failure) when the radio cannot be configured. */
     suspend fun applyPreset(preset: RadioPreset)
+    suspend fun applyPreset(preset: RadioPreset, expectedTarget: OnboardingPresetTarget?) {
+        if (currentTarget() != expectedTarget) throw SettingsServiceException(SettingsServiceError.NotConnected)
+        applyPreset(preset)
+    }
 }
 
 class AppOnboardingPresetPort(
@@ -109,13 +120,22 @@ class AppOnboardingPresetPort(
 ) : OnboardingPresetPort {
     override val canApply: StateFlow<Boolean> =
         radio.connectionStates().map { it.isOperational }.stateIn(scope, SharingStarted.Eagerly, false)
+    override fun currentTarget(): OnboardingPresetTarget? = radio.currentTarget()
+    override fun sealCompletion(
+        target: OnboardingPresetTarget?,
+        attempt: OnboardingCompletionAttempt,
+    ): Boolean = radio.sealCompletion(target, attempt)
 
-    override suspend fun apply(presetId: String): OnboardingPresetOutcome {
+    override suspend fun apply(presetId: String): OnboardingPresetOutcome = apply(presetId, currentTarget())
+
+    override suspend fun apply(presetId: String, expectedTarget: OnboardingPresetTarget?): OnboardingPresetOutcome {
+        if (currentTarget() != expectedTarget) return OnboardingPresetOutcome.NotConnected
         if (radio.isDemoRadio) return OnboardingPresetOutcome.NoRadioToConfigure
         val preset = lookup(presetId)
             ?: return OnboardingPresetOutcome.Failed(UiText.Verbatim("Unknown radio preset: $presetId"))
         return try {
-            radio.applyPreset(preset)
+            radio.applyPreset(preset, expectedTarget)
+            if (currentTarget() != expectedTarget) return OnboardingPresetOutcome.NotConnected
             OnboardingPresetOutcome.Applied
         } catch (cancelled: CancellationException) {
             throw cancelled

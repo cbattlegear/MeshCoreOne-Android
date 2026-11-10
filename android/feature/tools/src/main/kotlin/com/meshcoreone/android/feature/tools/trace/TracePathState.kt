@@ -5,8 +5,18 @@ import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.DiscoveredNodeDTO
 import com.meshcoreone.android.core.model.SavedTracePathDTO
 import com.meshcoreone.android.core.model.TracePathRunDTO
+import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import java.util.UUID
+
+/** AndroidOnly: WP-314 Bind comparison to response acceptance, not asynchronous storage completion. */
+data class AcceptedTraceComparison(
+    val resultId: UUID,
+    val pathId: UUID,
+    val radioId: RadioId,
+    val run: TracePathRunDTO,
+    val previous: TracePathRunDTO?,
+)
 
 /**
  * Immutable snapshot of the trace path builder. Values the source derived from the connected
@@ -34,7 +44,10 @@ data class TracePathState(
     val completedResults: List<TraceResult> = emptyList(),
     /** AndroidOnly: WP-314 Invalidate presentation on path edits without deleting batch history. */
     val batchPresentationActive: Boolean = false,
+    /** Retained history cannot authorize saving after its connection is retired. */
+    val batchResultsRetired: Boolean = false,
     val activeSavedPath: SavedTracePathDTO? = null,
+    val acceptedComparison: AcceptedTraceComparison? = null,
     /** Per-trace hash size override (path_sz 0/1/2); `null` follows the radio's `pathHashMode`. */
     val traceHashMode: UByte? = null,
 ) {
@@ -73,6 +86,9 @@ data class TracePathState(
     /** The second most recent successful run of the active saved path, for comparison. */
     val previousRun: TracePathRunDTO?
         get() {
+            acceptedComparison?.takeIf {
+                it.resultId == result?.id && it.pathId == activeSavedPath?.id && it.radioId == activeSavedPath?.radioId
+            }?.let { return it.previous }
             val successful = activeSavedPath?.runs.orEmpty().filter { it.success }.sortedByDescending { it.date }
             return if (successful.size >= 2) successful[1] else null
         }
@@ -93,6 +109,7 @@ data class TracePathState(
     val canSavePath: Boolean
         get() {
             if (batchEnabled) {
+                if (batchResultsRetired) return false
                 if (completedResults.isEmpty()) return false
                 val firstSuccess = successfulResults.firstOrNull() ?: return false
                 return fullPathData == firstSuccess.tracedPathBytes

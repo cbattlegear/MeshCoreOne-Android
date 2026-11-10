@@ -44,10 +44,14 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ShortcutQueueIntegrationTest : RoomProcessTest() {
+    @get:Rule val temporary = TemporaryFolder()
+
     private val peerKey = key(4)
     private val original = "Shortcut original \u6d4b\u8bd5 \u0645\u0631\u062d\u0628\u0627"
     private val text = AndroidShortcutText(ApplicationProvider.getApplicationContext())
@@ -653,7 +657,7 @@ class ShortcutQueueIntegrationTest : RoomProcessTest() {
 
     @Test fun acceptedDirectAndChannelRowsSurviveFileReopenWithUncertainChannelRetained() = runTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        val name = "wp502-shortcut-${UUID.randomUUID()}.db"
+        val name = temporary.root.resolve("wp502-shortcut.db").absolutePath
         val immediate = Executor { it.run() }
         fun open() = Room.databaseBuilder(context, MeshCoreDatabase::class.java, name)
             .allowMainThreadQueries().setQueryExecutor(immediate).setTransactionExecutor(immediate).build()

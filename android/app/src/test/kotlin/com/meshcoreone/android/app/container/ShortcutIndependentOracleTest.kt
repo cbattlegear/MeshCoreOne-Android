@@ -13,7 +13,6 @@ import com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueService
 import com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueServiceException
 import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceException
-import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.model.OCVPreset
 import com.meshcoreone.android.core.model.TextType
@@ -38,11 +37,19 @@ class ShortcutIndependentOracleTest : RoomProcessTest() {
     }
     private val text = AndroidShortcutText(context)
 
-    private suspend fun connected(test: TestScope): ContainerHarness {
+    private suspend fun connected(test: TestScope, channel: Boolean = false): ContainerHarness {
         val h = ContainerHarness(test, store)
         h.links.configureRadio = { firmware ->
             firmware.knownContacts += contactFrame(key(4), "Independent peer")
-            firmware.respond = { frame -> if (frame[0].toInt() in 2..3) emptyList() else null }
+            firmware.respond = { frame ->
+                when {
+                    frame[0].toInt() in 2..3 -> emptyList()
+                    channel && frame[0].toInt() == 0x1f && frame[1].toInt() == 0 ->
+                        listOf(Bytes.of(0x12, 0) + Bytes.utf8("Oracle").paddedOrTruncated(32) +
+                            Bytes(ByteArray(16) { 9 }))
+                    else -> null
+                }
+            }
         }
         h.manager.connect(h.target())
         h.eventually("independent shortcut oracle READY") { h.manager.connectionState == DeviceConnectionState.READY }
@@ -95,12 +102,12 @@ class ShortcutIndependentOracleTest : RoomProcessTest() {
     }
 
     @Test fun actualChannelAdapterAcceptsExactUtf8BudgetRejectsOneMoreAndRechecksChangedLiveName() = runTest {
-        val h = connected(this)
+        val h = connected(this, channel = true)
         try {
             val adapter = AppShortcutRadio(h.container)
             val radio = assertNotNull(adapter.currentRadioId)
-            val channel = ChannelDTO(radioId = radio, index = 0u, name = "Oracle", secret = Bytes(ByteArray(16) { 9 }))
-            store.saveChannel(channel)
+            val channel = assertNotNull(store.fetchChannel(radio, 0u))
+            val occupant = assertNotNull(store.fetchChannelOccupantSnapshot(radio, channel.index)).occupantID
             val device = assertNotNull(h.appState.connectedDevice)
             suspend fun setNodeName(name: String) {
                 val updated = device.copy(nodeName = name)
@@ -131,7 +138,14 @@ class ShortcutIndependentOracleTest : RoomProcessTest() {
             adapter.queueMessage(ShortcutRecipient.Channel(channel), exact)
             val messages = store.fetchMessages(radio, 0u, 100, 0)
             assertEquals(setOf("x".repeat(137), exact), messages.map { it.text }.toSet())
-            assertEquals(2, store.fetchPendingSends(radio).size)
+            assertTrue(messages.all { it.channelOccupantID == occupant })
+            val pending = store.fetchPendingSends(radio)
+            assertEquals(2, pending.size)
+            assertEquals(messages.map { it.id }.toSet(), pending.map { it.messageID }.toSet())
+            pending.forEach {
+                assertEquals(occupant, it.channelOccupantID)
+                assertEquals(occupant, assertNotNull(it.channelMessageEnvelope()).channelOccupantID)
+            }
         } finally { h.container.close() }
     }
 

@@ -90,13 +90,14 @@ internal class TestSignals(initial: SessionToken = token()) : ConnectionSignals 
     }
 }
 
-private fun unsupportedStore(): PersistenceStoreProtocol = PersistenceStoreProtocol::class.java.cast(
-    Proxy.newProxyInstance(PersistenceStoreProtocol::class.java.classLoader, arrayOf(PersistenceStoreProtocol::class.java)) { _, method, _ ->
+private fun <T> unsupportedRole(type: Class<T>): T = type.cast(
+    Proxy.newProxyInstance(type.classLoader, arrayOf(type)) { _, method, _ ->
         throw UnsupportedOperationException("Undeclared test operation: ${method.name}")
     },
 )
 
-internal class RecordingStore : PersistenceStoreProtocol by unsupportedStore(),
+internal class RecordingStore : PersistenceStoreProtocol by unsupportedRole(PersistenceStoreProtocol::class.java),
+    ChannelHistoryPersisting by unsupportedRole(ChannelHistoryPersisting::class.java),
     QueuedChannelTerminalPersisting, QueuedChannelReadinessPersisting {
     val messages = linkedMapOf<EntityKey, MessageDTO>()
     val contacts = linkedMapOf<EntityKey, ContactDTO>()
@@ -115,6 +116,69 @@ internal class RecordingStore : PersistenceStoreProtocol by unsupportedStore(),
         faults[name]?.let { throw it }
     }
     override suspend fun saveMessage(dto: MessageDTO) { access("saveMessage"); messages[EntityKey(dto.radioId, dto.id)] = dto }
+    fun seedChannelCreation(index: UByte = 0u, radio: RadioId = RADIO): ChannelOccupantSnapshot {
+        val channel = ChannelDTO(radioId = radio, index = index, name = "Test", secret = Bytes(ByteArray(16) { 0x11 }))
+        channels[EntityKey(radio, channel.id)] = channel
+        val occupant = channelOccupants.getOrPut(radio to index, UUID::randomUUID)
+        return ChannelOccupantSnapshot(channel, occupant)
+    }
+    override suspend fun fetchChannelOccupantSnapshot(radioId: RadioId, index: UByte): ChannelOccupantSnapshot? {
+        access("fetchChannelOccupantSnapshot")
+        val channel = channels.values.singleOrNull { it.radioId == radioId && it.index == index } ?: return null
+        return channelOccupants[radioId to index]?.let { ChannelOccupantSnapshot(channel, it) }
+    }
+    suspend fun capturedChannelMessage(creation: ChannelMessageCreation, timestamp: UInt, createdAt: Instant): MessageDTO {
+        access("createOrReconcileChannelMessage")
+        val origin = creation.origin
+        val key = EntityKey(origin.radioId, creation.messageID)
+        messages[key]?.let { existing ->
+            val conflict = when {
+                existing.contactID != null || existing.channelIndex != origin.channelIndex ||
+                    existing.direction != MessageDirection.OUTGOING -> ChannelHistoryConflict.MESSAGE_DESTINATION_MISMATCH
+                existing.channelOccupantID == null -> ChannelHistoryConflict.UNKNOWN_MESSAGE_ORIGIN
+                existing.channelOccupantID != origin.expectedOccupantID || existing.text != creation.text ||
+                    existing.textType != creation.textType -> ChannelHistoryConflict.ORIGIN_MISMATCH
+                else -> null
+            }
+            if (conflict != null) {
+                throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                    ChannelHistoryRejected(conflict, origin, key))
+            }
+            return existing
+        }
+        return MessageDTO(id = creation.messageID, radioId = origin.radioId, channelIndex = origin.channelIndex,
+            text = creation.text, timestamp = timestamp, createdAt = createdAt, textType = creation.textType,
+            channelOccupantID = origin.expectedOccupantID)
+    }
+    override suspend fun createOrReconcileChannelMessage(
+        creation: ChannelMessageCreation, timestamp: UInt, createdAt: Instant,
+    ): MessageDTO {
+        val row = capturedChannelMessage(creation, timestamp, createdAt)
+        if (messages[EntityKey(row.radioId, row.id)] == null) saveMessage(row)
+        return row
+    }
+    override suspend fun validateChannelMessageOrigin(message: EntityKey): ChannelHistoryScope {
+        access("validateChannelMessageOrigin")
+        val row = messages[message]
+            ?: throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                ChannelHistoryRejected(ChannelHistoryConflict.MESSAGE_NOT_FOUND, messageKey = message))
+        val index = row.channelIndex
+        if (index == null || row.contactID != null) {
+            throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                ChannelHistoryRejected(ChannelHistoryConflict.MESSAGE_DESTINATION_MISMATCH, messageKey = message))
+        }
+        val occupant = row.channelOccupantID
+            ?: throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                ChannelHistoryRejected(ChannelHistoryConflict.UNKNOWN_MESSAGE_ORIGIN, messageKey = message))
+        val origin = ChannelHistoryScope(row.radioId, index, occupant)
+        val current = channelOccupants[row.radioId to index]
+        if (current == null || current != occupant) {
+            throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                ChannelHistoryRejected(if (current == null) ChannelHistoryConflict.UNKNOWN_AUTHORITY
+                    else ChannelHistoryConflict.STALE_OCCUPANT, origin, message))
+        }
+        return origin
+    }
     override suspend fun fetchMessage(key: EntityKey): MessageDTO? { access("fetchMessage"); return messages[key] }
     override suspend fun fetchMessage(deduplicationKey: String, radioId: RadioId): MessageDTO? =
         messages.values.firstOrNull { it.radioId == radioId && it.deduplicationKey == deduplicationKey }

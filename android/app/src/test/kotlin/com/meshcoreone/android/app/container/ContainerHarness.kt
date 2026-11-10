@@ -20,7 +20,12 @@ import com.meshcoreone.android.core.contracts.domain.BluetoothAddress
 import com.meshcoreone.android.core.contracts.domain.BluetoothPairingHandle
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
+import com.meshcoreone.android.core.model.ChannelMessageEnvelope
+import com.meshcoreone.android.core.model.MessageDTO
+import com.meshcoreone.android.core.model.PendingSendDTO
+import com.meshcoreone.android.core.model.QueuedChannelDispatchState
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
@@ -39,6 +44,7 @@ import com.meshcoreone.android.core.services.messaging.ChannelQueryAccountingEve
 import com.meshcoreone.android.core.services.messaging.MessageServiceConfig
 import com.meshcoreone.android.core.services.rendering.DraftDefaults
 import com.meshcoreone.android.core.services.rendering.DraftStore
+import java.time.Instant
 import java.util.UUID
 import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.test.TestCoroutineScheduler
@@ -242,6 +248,39 @@ internal class ContainerHarness(
 
     fun assertReady() {
         check(manager.connectionState == DeviceConnectionState.READY) { "state=${manager.connectionState}" }
+    }
+}
+
+internal suspend fun RoomPersistenceStore.admitQueueChannelFixture(
+    message: MessageDTO,
+    pendingID: UUID,
+    isResend: Boolean,
+    localNodeName: String?,
+    initialAttemptCount: Long,
+): PendingSendDTO {
+    require(initialAttemptCount >= 0 && initialAttemptCount <= Int.MAX_VALUE.toLong())
+    val channelIndex = checkNotNull(message.channelIndex)
+    val occupantID = checkNotNull(message.channelOccupantID)
+    val messageKey = EntityKey(message.radioId, message.id)
+    check(fetchMessage(messageKey)?.channelOccupantID == occupantID)
+    val envelope = ChannelMessageEnvelope(
+        message.id, channelIndex, isResend, message.text, message.timestamp, localNodeName, occupantID,
+    )
+    val pendingKey = EntityKey(message.radioId, pendingID)
+    val sequence = insertPendingSendAssigningSequence(
+        PendingSendDTO.fromEnvelope(
+            envelope,
+            message.radioId,
+            id = pendingID,
+            enqueuedAt = message.createdAt,
+        ),
+    )
+    repeat(initialAttemptCount.toInt()) {
+        incrementReadyQueuedChannelAttemptCount(pendingKey, message.id)
+    }
+    return checkNotNull(fetchPendingSendsForMessage(messageKey).singleOrNull { it.id == pendingID }).also {
+        check(it.sequence == sequence)
+        check(it.channelDispatchState == QueuedChannelDispatchState.READY)
     }
 }
 

@@ -254,6 +254,14 @@ object AndroidAppContainerFactory {
                     coordinate?.let { com.meshcoreone.android.core.model.Coordinate(it.latitude, it.longitude) }
                 },
                 offlineMaps = offlineMaps,
+                phoneLocation = {
+                    locationProducing.currentLocation?.let {
+                        com.meshcoreone.android.core.model.Coordinate(it.latitude, it.longitude)
+                    }
+                },
+                mapPreferences = AppMapPreferences(
+                    storage.preferences, application.getSharedPreferences("shared-map", android.content.Context.MODE_PRIVATE),
+                ),
                 nodesMessages = UserFacingMessages { failure ->
                     UiErrorMapper().message(failure).resolve(application.resources)
                 },

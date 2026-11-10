@@ -2,10 +2,12 @@
 // AndroidOnly: WP-501 Fixed, class-scoped Room lifecycle diagnostic markers.
 // AndroidOnly: WP-207 Forward recovery scheduling through the real App graph.
 // AndroidOnly: WP-312 Explicit optional map dependency injection for App adapter tests.
+// AndroidOnly: WP-217 Inject stale-cleanup preferences for simulator reseed tests.
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.app.state.AccessibilityAnnouncer
 import com.meshcoreone.android.app.state.AppStatePlatform
+import com.meshcoreone.android.app.state.StaleCleanupPreferences
 import com.meshcoreone.android.core.database.MeshCoreDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -137,8 +139,10 @@ internal class ContainerHarness(
     themeService: com.meshcoreone.android.core.designsystem.ThemeService? = null,
     observeBleLink: Boolean = false,
     regionStore: com.meshcoreone.android.app.state.RegionSelectionStore? = null,
+    stalePreferences: StaleCleanupPreferences? = null,
     preferencesOverride: ProcessConnectionPreferences? = null,
     simulatorSeedStore: com.meshcoreone.android.core.services.simulator.SimulatorSeedStore = RoomSimulatorSeedStore(store),
+    phoneLocation: () -> com.meshcoreone.android.core.model.Coordinate? = { null },
     notificationNavigationReady: () -> Unit = {},
     notificationReadyDispatcher: kotlinx.coroutines.CoroutineDispatcher = kotlinx.coroutines.Dispatchers.Default,
     platform: AppStatePlatform = AppStatePlatform.NONE,
@@ -208,9 +212,11 @@ internal class ContainerHarness(
             chatContent = chatContent,
             offlineMaps = offlineMaps,
             advertLocation = advertLocation,
+            phoneLocation = phoneLocation,
             nodesLocations = nodesLocations,
             themeService = themeService,
             regionStore = regionStore,
+            stalePreferences = stalePreferences,
         ),
     )
     val manager get() = container.connectionManager

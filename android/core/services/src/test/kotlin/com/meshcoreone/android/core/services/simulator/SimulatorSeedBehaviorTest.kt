@@ -1,18 +1,26 @@
 // AndroidOnly: WP-217 native seed checks: determinism, clock injection, write order, linkage, skips and failures.
 package com.meshcoreone.android.core.services.simulator
 
+import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
+import com.meshcoreone.android.core.model.ContactDTO
+import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.NodeStatusSnapshotDTO
+import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.model.canonicalString
+import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.services.simulator.SimulatorTestSupport.blocking
 import com.meshcoreone.android.core.services.simulator.SimulatorTestSupport.native
 import com.meshcoreone.android.core.services.simulator.SimulatorTestSupport.oracleNow
 import com.meshcoreone.android.core.services.simulator.SimulatorTestSupport.seededStore
 import java.time.Duration
+import java.time.Instant
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.yield
@@ -21,6 +29,15 @@ import org.junit.jupiter.api.TestFactory
 
 class SimulatorSeedBehaviorTest {
     private val radioId = MockDataProvider.simulatorRadioId
+
+    private fun assertSeedFailurePropagated(expected: Exception, observed: Exception) {
+        if (expected is CancellationException) {
+            assertTrue(observed is CancellationException)
+            assertTrue(observed === expected || observed.cause === expected)
+        } else {
+            assertSame(expected, observed)
+        }
+    }
 
     @TestFactory
     fun determinismTests(): List<DynamicTest> = listOf(
@@ -95,10 +112,113 @@ class SimulatorSeedBehaviorTest {
             }
             assertEquals(expected, store.recordedCalls)
         },
+        native("default replay retains writes before a later fixture timestamp fails") {
+            val now = Instant.ofEpochSecond(100_000)
+            val contacts = MockDataProvider.contacts(now)
+            val channels = MockDataProvider.channels(now)
+            val aliceMessages = MockDataProvider.messages(MockDataProvider.aliceChenID, now)
+            assertFailsWith<IllegalArgumentException> { MockDataProvider.messages(MockDataProvider.bobMartinezID, now) }
+            val store = SimulatorInMemorySeedStore()
+
+            assertFailsWith<IllegalArgumentException> {
+                blocking { SimulatorTestSupport.mode(SettableClock(now)).seedDataStore(store) }
+            }
+
+            val expected = buildList {
+                add("saveDevice")
+                repeat(contacts.size) { add("fetchContact"); add("saveContact") }
+                repeat(channels.size) { add("saveChannel") }
+                repeat(aliceMessages.size) { add("saveMessage") }
+            }
+            assertEquals(expected, store.recordedCalls)
+            assertEquals(aliceMessages.map { it.id }.toSet(), store.allMessages().map { it.id }.toSet())
+        },
+        native("default replay preserves earlier contact failure and cancellation") {
+            val now = Instant.ofEpochSecond(100_000)
+            val failures = listOf(
+                PersistenceStoreException(PersistenceStoreError.InvalidData),
+                CancellationException("contact seed cancelled"),
+            )
+            for (failure in failures) {
+                val store = SimulatorInMemorySeedStore().apply { failOn("saveContact") { failure } }
+                assertSeedFailurePropagated(failure, assertFailsWith<Exception> {
+                    blocking { SimulatorTestSupport.mode(SettableClock(now)).seedDataStore(store) }
+                })
+                assertEquals(listOf("saveDevice", "fetchContact", "saveContact"), store.recordedCalls)
+            }
+        },
     )
 
     @TestFactory
     fun linkageTests(): List<DynamicTest> = listOf(
+        native("conversation bundles contain the original parent and complete message sidecars") {
+            val backing = SimulatorInMemorySeedStore()
+            var received: SnapshotList<SimulatorFixtureConversation>? = null
+            val store = object : SimulatorSeedStore by backing {
+                override suspend fun seedConversations(
+                    buildPlan: () -> SimulatorDeferredFixturePlan,
+                    replayReference: suspend () -> Unit,
+                ): SimulatorFixtureSeedResult {
+                    val plan = buildPlan()
+                    assertSame(plan, buildPlan())
+                    received = plan.families.map { it.build() }.snapshot()
+                    replayReference()
+                    return SimulatorFixtureSeedResult.ReferenceReplay
+                }
+            }
+            blocking { SimulatorTestSupport.mode().seedDataStore(store) }
+            val conversations = assertNotNull(received)
+            val contacts = MockDataProvider.contacts(oracleNow)
+            val channels = MockDataProvider.channels(oracleNow)
+            assertEquals(contacts.size + channels.size, conversations.size)
+            assertEquals(contacts, conversations.mapNotNull { (it.parent as? SimulatorFixtureParent.Direct)?.contact })
+            assertEquals(channels, conversations.mapNotNull { (it.parent as? SimulatorFixtureParent.Channel)?.channel })
+            val previews = MockDataProvider.linkPreviewSeeds.associateBy { it.messageID }
+            val summaries = MockDataProvider.reactedMessages.associateBy { it.messageID }
+            for (conversation in conversations) {
+                val raw = when (val parent = conversation.parent) {
+                    is SimulatorFixtureParent.Direct -> MockDataProvider.messages(parent.contact.id, oracleNow)
+                    is SimulatorFixtureParent.Channel -> MockDataProvider.channelMessages(parent.channel.index, oracleNow)
+                }
+                assertEquals(raw.map { it.id }, conversation.messages.map { it.id })
+                for ((original, actual) in raw.zip(conversation.messages)) {
+                    val preview = previews[original.id]
+                    assertEquals(
+                        original.copy(
+                            linkPreviewURL = preview?.url ?: original.linkPreviewURL,
+                            linkPreviewTitle = preview?.title ?: original.linkPreviewTitle,
+                            linkPreviewImageData = preview?.imageData ?: original.linkPreviewImageData,
+                            linkPreviewIconData = if (preview != null) null else original.linkPreviewIconData,
+                            linkPreviewFetched = preview != null || original.linkPreviewFetched,
+                            reactionSummary = summaries[original.id]?.summary ?: original.reactionSummary,
+                        ),
+                        actual,
+                    )
+                }
+                val ids = raw.map { it.id }.toSet()
+                assertEquals(
+                    MockDataProvider.reactedMessages.filter { it.messageID in ids }
+                        .flatMap { MockDataProvider.reactions(it.messageID, oracleNow) }.sortedBy { it.id },
+                    conversation.reactions.sortedBy { it.id },
+                )
+                assertEquals(
+                    MockDataProvider.messagesWithRepeats.filter { it in ids }
+                        .flatMap { MockDataProvider.messageRepeats(it, oracleNow) }.sortedBy { it.id },
+                    conversation.repeats.sortedBy { it.id },
+                )
+            }
+            val alice = conversations.single {
+                (it.parent as? SimulatorFixtureParent.Direct)?.contact?.id == MockDataProvider.aliceChenID
+            }
+            assertEquals(3L, (alice.parent as SimulatorFixtureParent.Direct).contact.unreadCount)
+            assertEquals(5, alice.messages.count { it.direction == MessageDirection.INCOMING && !it.isRead })
+            val mesh = conversations.single {
+                (it.parent as? SimulatorFixtureParent.Channel)?.channel?.index == MockDataProvider.meshHQChannelIndex
+            }
+            assertEquals(60L, (mesh.parent as SimulatorFixtureParent.Channel).channel.unreadCount)
+            assertEquals(60, mesh.messages.count { !it.isRead })
+            assertEquals(8, mesh.messages.count { !it.isRead && it.isOutgoing })
+        },
         native("every reaction summary matches its seeded reaction rows") {
             val store = seededStore()
             for (reacted in MockDataProvider.reactedMessages) {
@@ -143,6 +263,91 @@ class SimulatorSeedBehaviorTest {
 
     @TestFactory
     fun skipAndFailureTests(): List<DynamicTest> = listOf(
+        native("conversation seed failure and cancellation propagate before diagnostics are seeded") {
+            val failures = listOf(
+                PersistenceStoreException(PersistenceStoreError.InvalidData),
+                CancellationException("conversation seed cancelled"),
+            )
+            for (failure in failures) {
+                val backing = SimulatorInMemorySeedStore()
+                val store = object : SimulatorSeedStore by backing {
+                    override suspend fun seedConversations(
+                        buildPlan: () -> SimulatorDeferredFixturePlan,
+                        replayReference: suspend () -> Unit,
+                    ): SimulatorFixtureSeedResult = throw failure
+                }
+                assertSeedFailurePropagated(failure, assertFailsWith<Exception> {
+                    blocking { SimulatorTestSupport.mode().seedDataStore(store) }
+                })
+                assertEquals(listOf("saveDevice"), backing.recordedCalls)
+            }
+        },
+        native("a durable result must account for every conversation") {
+            val backing = SimulatorInMemorySeedStore()
+            val store = object : SimulatorSeedStore by backing {
+                override suspend fun seedConversations(
+                    buildPlan: () -> SimulatorDeferredFixturePlan,
+                    replayReference: suspend () -> Unit,
+                ): SimulatorFixtureSeedResult = SimulatorFixtureSeedResult.Durable(0, 0)
+            }
+            assertFailsWith<IllegalStateException> {
+                blocking { SimulatorTestSupport.mode().seedDataStore(store) }
+            }
+            assertEquals(listOf("saveDevice"), backing.recordedCalls)
+        },
+        native("a contact seed override receives the raw fixture without a separate avatar lookup") {
+            val backing = SimulatorInMemorySeedStore()
+            val received = mutableListOf<ContactDTO>()
+            val store = object : SimulatorSeedStore by backing {
+                override suspend fun seedContact(dto: ContactDTO) {
+                    received += dto
+                    backing.saveContact(dto)
+                }
+                override suspend fun fetchContact(key: EntityKey): ContactDTO? =
+                    error("The override must receive the raw fixture")
+                override suspend fun saveContact(dto: ContactDTO): Unit =
+                    error("The override must own the complete seed operation")
+            }
+
+            blocking { SimulatorTestSupport.mode().seedDataStore(store) }
+
+            assertEquals(MockDataProvider.contacts(oracleNow).toList(), received.toList())
+            assertTrue(received.all { it.avatarImageData == null })
+            assertTrue("fetchContact" !in backing.recordedCalls)
+        },
+        native("default contact seed propagates avatar read and save failures and cancellation") {
+            for (operation in listOf("fetchContact", "saveContact")) {
+                val failing = SimulatorInMemorySeedStore().apply { failOn(operation) }
+                assertFailsWith<PersistenceStoreException> {
+                    blocking { SimulatorTestSupport.mode().seedDataStore(failing) }
+                }
+                assertTrue("saveChannel" !in failing.recordedCalls)
+
+                val cancelled = SimulatorInMemorySeedStore().apply {
+                    failOn(operation) { CancellationException("contact seed cancelled") }
+                }
+                assertFailsWith<CancellationException> {
+                    blocking { SimulatorTestSupport.mode().seedDataStore(cancelled) }
+                }
+                assertTrue("saveChannel" !in cancelled.recordedCalls)
+            }
+        },
+        native("contact seed override propagates its failure and cancellation") {
+            val failures = listOf(
+                PersistenceStoreException(PersistenceStoreError.InvalidData),
+                CancellationException("contact seed cancelled"),
+            )
+            for (failure in failures) {
+                val backing = SimulatorInMemorySeedStore()
+                val store = object : SimulatorSeedStore by backing {
+                    override suspend fun seedContact(dto: ContactDTO): Unit = throw failure
+                }
+                assertSeedFailurePropagated(failure, assertFailsWith<Exception> {
+                    blocking { SimulatorTestSupport.mode().seedDataStore(store) }
+                })
+                assertEquals(listOf("saveDevice"), backing.recordedCalls)
+            }
+        },
         native("seeding inserts only the RX log entries that are missing") {
             val store = SimulatorInMemorySeedStore()
             store.insertRxEntry(MockDataProvider.rxLogEntries(oracleNow).first())

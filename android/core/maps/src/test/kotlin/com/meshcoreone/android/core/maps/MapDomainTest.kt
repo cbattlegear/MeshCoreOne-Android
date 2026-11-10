@@ -17,15 +17,97 @@ class MapDomainTest {
         assertTrue(resolvedMapIsDark(MapColorPreference.SYSTEM, true))
         assertFalse(resolvedMapIsDark(MapColorPreference.SYSTEM, false))
         assertFalse(resolvedMapIsDark(MapColorPreference.LIGHT, true))
+        assertFalse(resolvedMapIsDark(MapColorPreference.LIGHT, false))
         assertTrue(resolvedMapIsDark(MapColorPreference.DARK, false))
+        assertTrue(resolvedMapIsDark(MapColorPreference.DARK, true))
     }
 
     @Test
     fun cameraRoundTripsAndRejectsMalformedValues() {
         val camera = MapCamera(GeoPoint(37.7749, -122.4194), 0.25, 0.5)
         assertEquals(camera, MapCamera.decode(camera.encode()))
-        listOf("", "1,2,3", "1,2,3,4,5", "a,b,c,d", "10,20,NaN,1", "91,20,1,1", "10,20,0,1", "10,20,1,-1")
+        listOf("", "1,2,3", "1,2,3,4,5", "a,b,c,d", "10,20,nan,1", "10,20,NaN,1", "91,20,1,1", "10,20,0,1", "10,20,1,-1")
             .forEach { assertNull(MapCamera.decode(it)) }
+    }
+
+    @Test
+    fun invalidCameraIsRejectedAtConstructionAndDecoderBoundaries() {
+        for (span in listOf(Double.NaN, 0.0)) {
+            val error = runCatching { MapCamera(GeoPoint(10.0, 20.0), span, 1.0) }.exceptionOrNull()
+            assertTrue("Invalid constructor span $span", error is IllegalArgumentException)
+            // Swift permits constructing/encoding invalid regions; Android rejects them earlier.
+            assertNull(MapCamera.decode("10.0,20.0,$span,1.0"))
+        }
+    }
+
+    @Test
+    fun filterDefaultsAndFavoritesFreezeAllOriginalAxesUntilFavoritesClears() {
+        val defaults = MapFilterState()
+        assertFalse(defaults.favoritesOnly)
+        assertFalse(defaults.showDiscovered)
+        assertTrue(defaults.showChat && defaults.showRepeater && defaults.showRoom)
+        val original = MapFilterState(showDiscovered = true, showChat = true, showRepeater = false, showRoom = true)
+        val favorites = original.setFavoritesOnly(true)
+        assertTrue(favorites.favoritesOnly)
+        assertTrue(favorites.showDiscovered)
+        assertFalse(favorites.showRepeater)
+        assertEquals(favorites, favorites.setShowDiscovered(false))
+        assertEquals(favorites, favorites.setContactType(ContactMapType.CHAT, false, MapFilterHost.MAIN_MAP))
+        val restored = favorites.setFavoritesOnly(false)
+        assertFalse(restored.favoritesOnly)
+        assertTrue(restored.showDiscovered)
+        assertFalse(restored.showRepeater)
+        assertEquals(original, restored)
+        assertFalse(favorites.effectiveShowDiscovered)
+        assertTrue(favorites.showDiscovered)
+    }
+
+    @Test
+    fun everyLastContactTypeAndHostWithoutTypeCapabilitiesPreservesSourceState() {
+        for (type in ContactMapType.entries) {
+            val only = MapFilterState(
+                showChat = type == ContactMapType.CHAT,
+                showRepeater = type == ContactMapType.REPEATER,
+                showRoom = type == ContactMapType.ROOM,
+            )
+            assertEquals(type.name, only, only.setContactType(type, false, MapFilterHost.MAIN_MAP))
+        }
+        for (host in listOf(MapFilterHost.TRACE_PATH, MapFilterHost.NEIGHBOR_SNR)) {
+            val defaults = MapFilterState.seed(host)
+            for (type in ContactMapType.entries) {
+                assertEquals("$host/$type", defaults, defaults.setContactType(type, false, host))
+            }
+            val allOff = MapFilterState(showChat = false, showRepeater = false, showRoom = false)
+            assertEquals(allOff, allOff.sanitized(host))
+        }
+        val raw = MapFilterState(showDiscovered = true, showChat = false, showRepeater = false, showRoom = false)
+        val repaired = raw.sanitized(MapFilterHost.MAIN_MAP)
+        assertTrue(repaired.showChat && repaired.showRepeater && repaired.showRoom)
+        assertFalse(repaired.favoritesOnly)
+        assertTrue(repaired.showDiscovered)
+    }
+
+    @Test
+    fun filterRoundTripAndEverySeedDifferenceRetainsTheOriginalVector() {
+        val original = MapFilterState(
+            favoritesOnly = true, showDiscovered = true, showChat = false, showRepeater = true, showRoom = true,
+        )
+        assertEquals(original, MapFilterState.decode(original.encode()))
+        assertNull(MapFilterState.decode(""))
+        for (host in MapFilterHost.entries) {
+            val defaults = MapFilterState.seed(host)
+            assertFalse(defaults.differsFromSeed(host))
+            assertTrue(defaults.setFavoritesOnly(true).differsFromSeed(host))
+            assertTrue(defaults.setShowDiscovered(!defaults.showDiscovered).differsFromSeed(host))
+        }
+        for (type in ContactMapType.entries) {
+            val defaults = MapFilterState.seed(MapFilterHost.MAIN_MAP)
+            assertTrue(defaults.setContactType(type, false, MapFilterHost.MAIN_MAP).differsFromSeed(MapFilterHost.MAIN_MAP))
+        }
+        val noChat = MapFilterState(showChat = false)
+        assertFalse(noChat.allows(ContactMapType.CHAT))
+        assertTrue(noChat.allows(ContactMapType.REPEATER))
+        assertTrue(noChat.setFavoritesOnly(true).allows(ContactMapType.CHAT))
     }
 
     @Test
@@ -78,6 +160,22 @@ class MapDomainTest {
         val stored = MapFilterPreferences.migrate(MapFilterState(showDiscovered = false).encode(), true, MapFilterHost.MAIN_MAP)
         assertFalse(stored.state.showDiscovered)
         assertNull(stored.replacement)
+    }
+
+    @Test
+    fun filterDecodeRequiresACompleteJsonObjectWithActualBooleanValues() {
+        val valid = MapFilterState().encode()
+        assertEquals(MapFilterState(), MapFilterState.decode(valid))
+        for (invalid in listOf(
+            valid.dropLast(1), valid + " trailing", "[$valid]",
+            valid.replace("\"showChat\":true", "\"showChat\":truegarbage"),
+            valid.replace("\"showChat\":true", "\"showChat\":\"true\""),
+            valid.replace("\"showChat\":true,", ""),
+            valid.replace("\"showChat\":true", "\"showChat\":null"),
+        )) {
+            assertNull(invalid, MapFilterState.decode(invalid))
+        }
+        assertEquals(MapFilterState(), MapFilterState.decode(valid.dropLast(1) + ""","future":{"flag":true}}"""))
     }
 
     @Test

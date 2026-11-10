@@ -4,6 +4,7 @@ package com.meshcoreone.android.core.services.simulator
 import com.meshcoreone.android.core.model.ReactionDTO
 import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.model.canonicalString
+import com.meshcoreone.android.core.model.snapshot
 import java.time.Instant
 import java.util.UUID
 
@@ -26,39 +27,32 @@ internal val MockDataProvider.reactedMessages: SnapshotList<ReactedMessage>
  * Per-reactor reaction rows for the reactor-detail list. Swift's `ReactionDTO` defaults `receivedAt` to
  * `Date()`; here it is the seed's [now].
  */
-internal fun MockDataProvider.reactions(messageID: UUID, now: Instant): SnapshotList<ReactionDTO> = when (messageID) {
-    aliceReactedMessageID -> SnapshotList.of(
-        reaction("A0000000-0000-0000-0000-000000000001", messageID, "👍", "You", now, contactID = aliceChenID),
-        reaction("A0000000-0000-0000-0000-000000000002", messageID, "👍", "Bob Martinez", now, contactID = aliceChenID),
-        reaction("A0000000-0000-0000-0000-000000000003", messageID, "❤️", "Alice Chen", now, contactID = aliceChenID),
-    )
-    bayAreaReactedMessageID -> SnapshotList.of(
-        reaction("A1000000-0000-0000-0000-000000000001", messageID, "🎉", "Alice Chen", now, channelIndex = bayAreaChannelIndex),
-        reaction("A1000000-0000-0000-0000-000000000002", messageID, "🎉", "Bob Martinez", now, channelIndex = bayAreaChannelIndex),
-    )
-    bayAreaMentionMessageID -> SnapshotList.of(
-        reaction("A1000000-0000-0000-0000-000000000003", messageID, "👍", "Sim", now, channelIndex = bayAreaChannelIndex),
-    )
-    else -> SnapshotList.empty()
+internal fun MockDataProvider.reactions(messageID: UUID, now: Instant): SnapshotList<ReactionDTO> {
+    val contactID = if (messageID == aliceReactedMessageID) aliceChenID else null
+    val channelIndex = if (messageID == bayAreaReactedMessageID || messageID == bayAreaMentionMessageID) {
+        bayAreaChannelIndex
+    } else {
+        null
+    }
+    return fixtureReactionIdentities(messageID).map { identity ->
+        reaction(identity, now, contactID = contactID, channelIndex = channelIndex)
+    }.snapshot()
 }
 
 /** `messageHash` is the first 8 characters of Swift's uppercase `uuidString`. */
 @Suppress("LongParameterList")
 private fun MockDataProvider.reaction(
-    id: String,
-    messageID: UUID,
-    emoji: String,
-    sender: String,
+    identity: SimulatorFixtureReactionIdentity,
     now: Instant,
     contactID: UUID? = null,
     channelIndex: UByte? = null,
 ): ReactionDTO = ReactionDTO(
-    id = uuid(id),
-    messageID = messageID,
-    emoji = emoji,
-    senderName = sender,
-    messageHash = messageID.canonicalString().take(8),
-    rawText = emoji,
+    id = identity.id,
+    messageID = identity.messageID,
+    emoji = identity.emoji,
+    senderName = identity.senderName,
+    messageHash = identity.messageID.canonicalString().take(8),
+    rawText = identity.emoji,
     receivedAt = now,
     channelIndex = channelIndex,
     contactID = contactID,

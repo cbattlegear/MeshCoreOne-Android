@@ -88,6 +88,16 @@ class RoomPersistenceStore private constructor(
         inserted to skipped
     }
 
+    suspend fun saveSimulatorChannel(dto: ChannelDTO): Unit = channels.saveSimulatorChannel(dto)
+
+    suspend fun saveSimulatorContact(dto: ContactDTO): Unit = contacts.saveSimulatorContact(dto)
+
+    suspend fun seedSimulatorConversation(
+        plan: SimulatorConversationIdentityPlan,
+        familyIndex: Int,
+    ): SimulatorConversationSeedResult =
+        context.channelWrite("seedSimulatorConversation") { seedDeferredSimulatorConversation(plan, familyIndex, channels) }
+
     override suspend fun warmUp() {
         context.read("warmUp") { database.devices().count() }
         try {

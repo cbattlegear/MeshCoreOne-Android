@@ -94,6 +94,18 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
         }
     }
 
+    @Test fun actualFactorySuccessorCannotReplayTheRetainedUncertainSubmission() = runTest {
+        withFactoryQueue(QueryReply.CONFIGURED) { f ->
+            f.awaitUncertainAttempt()
+            f.assertRetainedDeviceError2()
+            f.assertWire()
+            f.disconnect()
+            f.assertSuccessorDoesNotReplay()
+            f.assertStored(MessageStatus.PENDING, pending = true)
+            f.assertStatusEvents(emptyList())
+        }
+    }
+
     private enum class QueryReply { CONFIGURED, UNCONFIGURED, RAW_NOT_FOUND, HELD }
 
     private suspend fun TestScope.withFactoryQueue(reply: QueryReply, body: suspend (Fixture) -> Unit) {
@@ -314,6 +326,26 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
         fun assertNoPhysicalRecovery() = assertEquals(
             0, recovery.queuedCount, "An uncertain send must not start a query-driven recovery job",
         )
+
+        suspend fun assertSuccessorDoesNotReplay() {
+            val retained = store.fetchPendingSendsForMessage(EntityKey(radioId, message.id)).single()
+            val previousFirmware = firmware
+            sending = false
+            harness.manager.connect(harness.target(deviceID))
+            harness.assertReady()
+            harness.settle()
+            val successor = assertNotNull(harness.sessions.current)
+            assertNotSame(live, successor)
+            assertEquals(live.token.radioId, successor.token.radioId)
+            assertTrue(successor.token.generation.value > live.token.generation.value)
+            assertSame(store, successor.dataStore)
+            assertEquals(2, harness.sessions.created)
+            assertEquals(0, successor.chatSendQueueService.queuedEnvelopeCount)
+            assertEquals(listOf(retained), store.fetchPendingSendsForMessage(EntityKey(radioId, message.id)))
+            assertEquals(listOf(send), previousFirmware.sent.filter { it[0] == 3.toUByte() })
+            assertTrue(firmware.sent.any { it[0] == 31.toUByte() }, "The successor must perform its own channel sync")
+            assertTrue(firmware.sent.none { it[0] == 3.toUByte() }, "Reconnection cannot replay an uncertain submission")
+        }
 
         suspend fun disconnect(expectedIssue: Throwable? = null) {
             val report = harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)

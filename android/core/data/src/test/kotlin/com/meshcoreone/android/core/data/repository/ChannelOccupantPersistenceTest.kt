@@ -302,7 +302,7 @@ class ChannelOccupantPersistenceTest : RepositoryTest() {
         store.invalidateChannelOccupant(RADIO_A, 5u)
         assertNull(store.fetchChannelOccupantID(RADIO_A, 5u))
         assertNull(store.fetchChannelOccupantSnapshot(RADIO_A, 5u))
-        assertEquals(original.channel, store.fetchChannel(RADIO_A, 5u))
+        assertEquals(original.channel.copy(occupantID = null), store.fetchChannel(RADIO_A, 5u))
         store.saveChannel(RADIO_A, info())
         assertNotEquals(original.occupantID, assertNotNull(store.fetchChannelOccupantID(RADIO_A, 5u)))
     }
@@ -445,7 +445,7 @@ class ChannelOccupantPersistenceTest : RepositoryTest() {
         )
         try {
             assertFailsWith<PersistenceStoreException> { store.saveChannel(RADIO_A, info(byte = 2)) }
-            assertEquals(original.channel, store.fetchChannel(RADIO_A, 5u))
+            assertEquals(original.channel.copy(occupantID = null), store.fetchChannel(RADIO_A, 5u))
             assertNull(store.fetchChannelOccupantID(RADIO_A, 5u))
             val authority = assertNotNull(db.channelOccupants().stateForIndex(RADIO_A.value, 5))
             assertTrue(authority.unresolved)

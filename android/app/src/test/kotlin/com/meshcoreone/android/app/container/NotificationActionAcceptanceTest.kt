@@ -268,6 +268,7 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
         val replacementOwner = CoroutineScope(backgroundScope.coroutineContext + SupervisorJob(backgroundScope.coroutineContext[Job]))
         val sendCommand = if (channel) 3 else 2
         try {
+            if (channel) h.container.foreground.activityStarted()
             h.manager.connect(h.target())
             h.settle()
             h.assertReady()

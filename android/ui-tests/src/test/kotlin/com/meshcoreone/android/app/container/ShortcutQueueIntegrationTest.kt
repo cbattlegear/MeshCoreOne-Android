@@ -58,8 +58,11 @@ class ShortcutQueueIntegrationTest : RoomProcessTest() {
             firmware.respond = { frame ->
                 when {
                     frame[0].toInt() == 4 && holdSync -> emptyList()
-                    frame[0].toInt() == 0x1f && frame[1].toInt() == 0 ->
-                        listOf(Bytes.of(0x12, 0) + Bytes.utf8("Synthetic channel").paddedOrTruncated(32) + Bytes(ByteArray(16) { 1 }))
+                    frame[0].toInt() == 0x1f -> listOf(
+                        if (frame[1].toInt() == 0) Bytes.of(0x12, 0) +
+                            Bytes.utf8("Synthetic channel").paddedOrTruncated(32) + Bytes(ByteArray(16) { 1 })
+                        else Bytes.of(0x12, frame[1].toInt()) + Bytes(ByteArray(48)),
+                    )
                     // The pinned protocol reports RESP_CODE_ERR=1 with the supplied raw error code.
                     frame[0].toInt() in 2..3 -> if (rejectSend) listOf(Bytes.of(1, if (frame[0].toInt() == 2) 2 else 6)) else emptyList()
                     else -> null
@@ -75,12 +78,11 @@ class ShortcutQueueIntegrationTest : RoomProcessTest() {
     ): ContainerHarness {
         val h = ContainerHarness(test, backing, identity = identity)
         configure(h, rejectSend = rejectSend)
+        h.container.foreground.activityStarted()
         h.manager.connect(h.target(target))
         h.eventually("shortcut services ready") { h.manager.connectionState == DeviceConnectionState.READY }
         val radio = assertNotNull(h.appState.currentRadioId)
-        if (backing.fetchChannels(radio).none { it.index == 0.toUByte() }) {
-            seedReconciledChannel(ChannelDTO(radioId = radio, index = 0u, name = "Synthetic channel"), backing)
-        }
+        assertNotNull(backing.fetchChannelOccupantSnapshot(radio, 0u))
         return h
     }
 

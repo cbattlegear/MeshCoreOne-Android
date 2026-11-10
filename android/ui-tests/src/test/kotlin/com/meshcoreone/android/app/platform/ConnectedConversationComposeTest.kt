@@ -156,6 +156,7 @@ class ConnectedConversationComposeTest : RoomProcessTest() {
                 assertEquals(channel && attempt == 1, pending.isResend)
                 if (channel) {
                     assertEquals(original, pending.messageText)
+                    assertEquals(requireNotNull(persisted.channelOccupantID), pending.channelOccupantID)
                     // A resend may update the row timestamp after enqueue captured its previous value.
                     assertEquals(if (attempt == 0) persisted.timestamp else requireNotNull(retryTimestamp), pending.messageTimestamp)
                     assertEquals("TestNode", pending.localNodeName)

@@ -254,12 +254,13 @@ internal suspend fun RoomPersistenceStore.admitQueueChannelFixture(
     val envelope = ChannelMessageEnvelope(
         message.id, channelIndex, isResend, message.text, message.timestamp, localNodeName, occupantID,
     )
-    val pending = EntityKey(message.radioId, pendingID)
+    val pendingKey = EntityKey(message.radioId, pendingID)
     admitChannelSubmission(ChannelSubmission(pendingID, origin, envelope), message.createdAt)
     repeat(initialAttemptCount.toInt()) {
-        incrementReadyQueuedChannelAttemptCount(pending, message.id)
+        incrementReadyQueuedChannelAttemptCount(pendingKey, message.id)
     }
-    return checkNotNull(fetchPendingSendsForMessage(pending).singleOrNull()).also {
+    val messageKey = EntityKey(message.radioId, message.id)
+    return checkNotNull(fetchPendingSendsForMessage(messageKey).singleOrNull { it.id == pendingID }).also {
         check(it.channelDispatchState == QueuedChannelDispatchState.READY)
     }
 }

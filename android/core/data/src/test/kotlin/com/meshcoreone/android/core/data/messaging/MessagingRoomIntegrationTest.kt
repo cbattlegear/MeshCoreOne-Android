@@ -139,6 +139,31 @@ class MessagingRoomIntegrationTest {
             timestamp = 1u,
             createdAt = base,
         )
+    private suspend fun admitChannelQueueRow(
+        message: MessageDTO,
+        origin: ChannelHistoryScope,
+        isResend: Boolean,
+        initialAttemptCount: Long,
+    ): PendingSendDTO {
+        require(initialAttemptCount in 0..Int.MAX_VALUE.toLong())
+        val pendingID = UUID.randomUUID()
+        val envelope = ChannelMessageEnvelope(
+            message.id, origin.channelIndex, isResend, message.text, message.timestamp, "Test Radio",
+            origin.expectedOccupantID,
+        )
+        store.admitChannelSubmission(
+            ChannelSubmission(pendingID, origin, envelope),
+            message.createdAt,
+        )
+        val pendingKey = EntityKey(message.radioId, pendingID)
+        repeat(initialAttemptCount.toInt()) {
+            store.incrementReadyQueuedChannelAttemptCount(pendingKey, message.id)
+        }
+        return checkNotNull(
+            store.fetchPendingSendsForMessage(EntityKey(message.radioId, message.id))
+                .singleOrNull { it.id == pendingID },
+        )
+    }
     private suspend fun RadioGeneration.reconcileSeededChannel(
         channels: ChannelService, snapshot: ChannelOccupantSnapshot,
     ) = store.withChannelOperation { scoped, identity ->
@@ -519,11 +544,10 @@ class MessagingRoomIntegrationTest {
         g.firmware.error = 2u
         g.firmware.emptyChannelSlot = true
         val message = channelMessage("Hello channel", origin)
-        val row = PendingSendDTO.fromEnvelope(ChannelMessageEnvelope(message.id, 0u, true,
-            message.text, message.timestamp, "Test Radio", origin.expectedOccupantID), radio)
-            .copy(sequence = 1, attemptCount = initialAttempts)
-        store.upsertPendingSend(row)
-        val foreign = row.copy(radioId = other)
+        val row = admitChannelQueueRow(message, origin, isResend = true, initialAttemptCount = initialAttempts)
+        val foreign = row.copy(
+            id = UUID.randomUUID(), radioId = other, channelDispatchState = null, channelAttemptID = null,
+        )
         store.upsertPendingSend(foreign)
         val events = g.service.statusEvents()
         g.queue.hydrate()
@@ -572,16 +596,12 @@ class MessagingRoomIntegrationTest {
         g.firmware.error = 2u
         val first = channelMessage("Hello channel", origin)
         val second = channelMessage("Second message", origin)
-        val firstRow = PendingSendDTO.fromEnvelope(
-            ChannelMessageEnvelope(first.id, 0u, true, first.text, first.timestamp, "Test Radio", origin.expectedOccupantID), radio,
-        ).copy(sequence = 1, attemptCount = 7)
-        val secondRow = PendingSendDTO.fromEnvelope(
-            ChannelMessageEnvelope(second.id, 0u, false, second.text, second.timestamp, "Test Radio", origin.expectedOccupantID), radio,
-        ).copy(sequence = 2, attemptCount = 2)
-        store.upsertPendingSend(firstRow)
-        store.upsertPendingSend(secondRow)
+        val firstRow = admitChannelQueueRow(first, origin, isResend = true, initialAttemptCount = 7)
+        val secondRow = admitChannelQueueRow(second, origin, isResend = false, initialAttemptCount = 2)
         val foreignMessage = first.copy(radioId = other)
-        val foreignRow = firstRow.copy(radioId = other)
+        val foreignRow = firstRow.copy(
+            id = UUID.randomUUID(), radioId = other, channelDispatchState = null, channelAttemptID = null,
+        )
         store.saveMessage(foreignMessage)
         store.upsertPendingSend(foreignRow)
         val status = g.service.statusEvents()

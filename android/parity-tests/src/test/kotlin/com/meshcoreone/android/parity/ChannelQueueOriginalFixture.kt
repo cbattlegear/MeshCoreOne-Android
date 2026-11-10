@@ -188,7 +188,9 @@ internal class ChannelQueueOriginalFixture(
         repeat(attempts.toInt()) {
             store.incrementReadyQueuedChannelAttemptCount(EntityKey(radio, submission.pendingID), messageA.id)
         }
-        pendingA = checkNotNull(store.fetchPendingSendsForMessage(EntityKey(radio, submission.pendingID)).singleOrNull())
+        pendingA = checkNotNull(
+            store.fetchPendingSendsForMessage(EntityKey(radio, messageA.id)).singleOrNull { it.id == submission.pendingID },
+        )
         assertRows(pendingA)
         assertEquals(envelopeA, pendingA.channelMessageEnvelope())
         val envelopeB = ChannelMessageEnvelope(messageB.id, 0u, false, "Second message",

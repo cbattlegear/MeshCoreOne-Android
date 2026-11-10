@@ -98,6 +98,7 @@ class QueuedComposerIntegrationTest : RoomProcessTest() {
             Kind.CHANNEL -> sender.enqueueChannel(ChannelMessageEnvelope(
                 message.id, graph.channel.index, false, message.text, message.timestamp,
                 graph.harness.appState.connectedDevice?.nodeName,
+                checkNotNull(message.channelOccupantID),
             ))
         }
     }

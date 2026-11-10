@@ -52,7 +52,7 @@ internal class AppShortcutRadio(private val container: AppContainer) : ShortcutR
         val pending = try {
             when (recipient) {
                 is ShortcutRecipient.Contact -> session.messageService.createPendingMessage(text, recipient.dto, TextType.PLAIN, null)
-                is ShortcutRecipient.Channel -> session.messageService.createPendingChannelMessage(text, recipient.dto.index, recipient.radioId, TextType.PLAIN)
+                is ShortcutRecipient.Channel -> session.messageService.createPendingChannelMessage(text, recipient.dto, TextType.PLAIN)
             }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) {

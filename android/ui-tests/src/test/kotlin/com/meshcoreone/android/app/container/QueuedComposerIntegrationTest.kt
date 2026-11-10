@@ -6,14 +6,21 @@ package com.meshcoreone.android.app.container
 import com.meshcoreone.android.app.state.MessageEvent
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
+import com.meshcoreone.android.core.contracts.domain.ChannelHistoryConflict
+import com.meshcoreone.android.core.contracts.domain.ChannelHistoryRejected
+import com.meshcoreone.android.core.contracts.domain.ChannelHistoryPersisting
+import com.meshcoreone.android.core.contracts.domain.ChannelMessageCreation
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueServiceException
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.feature.chats.composer.*
 import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
 import java.util.Collections
+import java.time.Instant
 import java.util.UUID
 import java.util.logging.Handler
 import java.util.logging.LogRecord
@@ -53,8 +60,8 @@ class QueuedComposerIntegrationTest : RoomProcessTest() {
         }
     }
 
-    private suspend fun graph(test: TestScope): Graph {
-        val h = ContainerHarness(test, store)
+    private suspend fun graph(test: TestScope, persistence: PersistenceStoreProtocol? = null): Graph {
+        val h = ContainerHarness(test, store, persistenceOverride = persistence)
         h.links.configureRadio = { radio ->
             radio.knownContacts += contactFrame(peerKey, "Synthetic queue peer")
             radio.respond = { frame ->
@@ -95,8 +102,106 @@ class QueuedComposerIntegrationTest : RoomProcessTest() {
         val sender = graph.feature.sender(graph.radio)
         return when (kind) {
             Kind.DIRECT -> sender.createPendingDirect(original, graph.contact)
-            Kind.CHANNEL -> sender.createPendingChannel(original, graph.channel.index, graph.radio)
+            Kind.CHANNEL -> sender.createPendingChannel(original, graph.channel)
         }
+    }
+
+    @Test fun displayedCreationHoldsReplacementUntilItsOriginalPendingPublicationCommits() = runTest {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val persistence = object : PersistenceStoreProtocol by store, ChannelHistoryPersisting by store {
+            override suspend fun createOrReconcileChannelMessage(
+                creation: ChannelMessageCreation, timestamp: UInt, createdAt: Instant,
+            ): MessageDTO {
+                entered.complete(Unit)
+                release.await()
+                return store.createOrReconcileChannelMessage(creation, timestamp, createdAt)
+            }
+        }
+        val graph = graph(this, persistence)
+        val h = graph.harness
+        try {
+            val displayed = graph.channel
+            val creation = backgroundScope.async {
+                graph.feature.sender(graph.radio).createPendingChannel(original, displayed)
+            }
+            entered.await()
+            val replacement = backgroundScope.async {
+                store.saveChannel(graph.radio, ChannelInfo(displayed.index, "Replacement", Bytes(ByteArray(16) { 0x22 })))
+            }
+            testScheduler.runCurrent()
+            assertFalse(creation.isCompleted)
+            assertFalse(replacement.isCompleted, "Replacement must not pass the validated publication boundary")
+            release.complete(Unit)
+            val saved = creation.await()
+            replacement.await()
+            assertEquals(displayed.occupantID, saved.channelOccupantID)
+            assertEquals(saved, store.fetchMessage(EntityKey(graph.radio, saved.id)))
+            assertNotEquals(saved.channelOccupantID, store.fetchChannel(graph.radio, displayed.index)?.occupantID)
+            val failure = assertFailsWith<PersistenceStoreException> {
+                store.validateChannelMessageOrigin(EntityKey(graph.radio, saved.id))
+            }
+            assertEquals(ChannelHistoryConflict.STALE_OCCUPANT, assertIs<ChannelHistoryRejected>(failure.cause).reason)
+            assertTrue(store.fetchPendingSends(graph.radio).isEmpty())
+            assertTrue(h.links.radios.single().sent.none { it[0].toInt() == 3 })
+        } finally { release.complete(Unit); h.container.close() }
+    }
+
+    @Test fun displayedChannelCannotCreateForAReplacementWithTheSameRowID() = runTest {
+        rejectsDisplayedOrigin(restoreOriginalSecret = false, missingWitness = false)
+    }
+
+    @Test fun displayedChannelCannotCreateAfterAnABAReplacement() = runTest {
+        rejectsDisplayedOrigin(restoreOriginalSecret = true, missingWitness = false)
+    }
+
+    @Test fun aMissingDisplayedWitnessCannotBeFilledFromTheCurrentSlot() = runTest {
+        rejectsDisplayedOrigin(restoreOriginalSecret = false, missingWitness = true)
+    }
+
+    private suspend fun TestScope.rejectsDisplayedOrigin(restoreOriginalSecret: Boolean, missingWitness: Boolean) {
+        val graph = graph(this)
+        val h = graph.harness
+        try {
+            val displayed = graph.channel
+            assertNotNull(displayed.occupantID)
+            if (!missingWitness) {
+                store.saveChannel(graph.radio, ChannelInfo(displayed.index, "Replacement", Bytes(ByteArray(16) { 0x22 })))
+                if (restoreOriginalSecret) store.saveChannel(graph.radio, displayed.toChannelInfo())
+                val current = assertNotNull(store.fetchChannel(graph.radio, displayed.index))
+                assertEquals(displayed.id, current.id, "The reusable row UUID is deliberately unchanged")
+                assertNotEquals(displayed.occupantID, current.occupantID)
+                if (restoreOriginalSecret) assertEquals(displayed.secret, current.secret)
+            }
+            val intent = if (missingWitness) displayed.copy(occupantID = null) else displayed
+            val failure = assertFailsWith<PersistenceStoreException> {
+                graph.feature.sender(graph.radio).createPendingChannel(original, intent)
+            }
+            assertEquals(
+                if (missingWitness) ChannelHistoryConflict.UNKNOWN_AUTHORITY else ChannelHistoryConflict.STALE_OCCUPANT,
+                assertIs<ChannelHistoryRejected>(failure.cause).reason,
+            )
+            assertTrue(store.fetchMessages(graph.radio, displayed.index).isEmpty())
+            assertTrue(store.fetchPendingSends(graph.radio).isEmpty())
+            assertTrue(h.links.radios.single().sent.none { it[0].toInt() == 3 })
+        } finally { h.container.close() }
+    }
+
+    @Test fun displayedOriginSurvivesASameOccupantRenameBeforeCreation() = runTest {
+        val graph = graph(this)
+        val h = graph.harness
+        try {
+            val displayed = graph.channel
+            val occupant = assertNotNull(displayed.occupantID)
+            store.saveChannel(graph.radio, displayed.toChannelInfo().copy(name = "Renamed"))
+            assertEquals(occupant, store.fetchChannel(graph.radio, displayed.index)?.occupantID)
+            val saved = graph.feature.sender(graph.radio).createPendingChannel(original, displayed)
+            assertEquals(occupant, saved.channelOccupantID)
+            assertEquals(original, saved.text)
+            assertEquals(saved, store.fetchMessage(EntityKey(graph.radio, saved.id)))
+            assertTrue(store.fetchPendingSends(graph.radio).isEmpty())
+            assertTrue(h.links.radios.single().sent.none { it[0].toInt() == 3 })
+        } finally { h.container.close() }
     }
 
     @Test fun explicitChannelResendForwardsTheSavedOriginIntoTheRealQueueAndAttempt() = runTest {
@@ -266,8 +371,8 @@ class QueuedComposerIntegrationTest : RoomProcessTest() {
                 }
                 override suspend fun createPendingDirect(text: String, contact: ContactDTO, textType: TextType, replyToId: UUID?) =
                     created(underlying.createPendingDirect(text, contact, textType, replyToId))
-                override suspend fun createPendingChannel(text: String, channelIndex: UByte, radioId: RadioId, textType: TextType) =
-                    created(underlying.createPendingChannel(text, channelIndex, radioId, textType))
+                override suspend fun createPendingChannel(text: String, channel: ChannelDTO, textType: TextType) =
+                    created(underlying.createPendingChannel(text, channel, textType))
             }
             graph.select(kind)
             val composer = holder(test, graph, kind, port, diagnostics)

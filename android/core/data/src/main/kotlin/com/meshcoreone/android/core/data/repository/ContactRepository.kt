@@ -92,6 +92,15 @@ internal class ContactRepository(
         save()
     }
 
+    /**
+     * Android simulator safety adaptation: retain existing state except advancing fixture freshness.
+     * Conversation seeding must use the shared preparation/result to preserve an existing parent's actual ID.
+     */
+    suspend fun saveSimulatorContact(dto: ContactDTO): Unit = context.write("saveSimulatorContact") {
+        val result = applySimulatorContact(prepareSimulatorContact(dto))
+        if (result.mutated) save()
+    }
+
     override suspend fun updateContactAvatar(
         key: EntityKey, expectedPublicKey: Bytes, imageData: Bytes?,
     ): ContactAvatarUpdateResult = context.write("updateContactAvatar") {

@@ -3,6 +3,15 @@ package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
+import com.meshcoreone.android.core.data.repository.SimulatorConversationFamily
+import com.meshcoreone.android.core.data.repository.SimulatorConversationIdentityPlan
+import com.meshcoreone.android.core.data.repository.SimulatorConversationParent
+import com.meshcoreone.android.core.data.repository.SimulatorConversationSeed
+import com.meshcoreone.android.core.data.repository.SimulatorConversationSeedResult
+import com.meshcoreone.android.core.data.repository.SimulatorMessageIdentity
+import com.meshcoreone.android.core.data.repository.SimulatorReactionIdentity
+import com.meshcoreone.android.core.data.repository.SimulatorReactionSummary
+import com.meshcoreone.android.core.data.repository.SimulatorRepeatIdentity
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.DeviceDTO
@@ -18,13 +27,54 @@ import com.meshcoreone.android.core.model.snapshotSet
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.services.simulator.NodeStatusSnapshotInsertResult
 import com.meshcoreone.android.core.services.simulator.NodeStatusSnapshotKey
+import com.meshcoreone.android.core.services.simulator.SimulatorDeferredFixturePlan
+import com.meshcoreone.android.core.services.simulator.SimulatorFixtureConversation
+import com.meshcoreone.android.core.services.simulator.SimulatorFixtureParent
+import com.meshcoreone.android.core.services.simulator.SimulatorFixtureSeedResult
 import com.meshcoreone.android.core.services.simulator.SimulatorSeedStore
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 
 class RoomSimulatorSeedStore(private val store: RoomPersistenceStore) : SimulatorSeedStore {
     override suspend fun saveDevice(dto: DeviceDTO) { store.insertDeviceIfAbsent(dto) }
     override suspend fun fetchContact(key: EntityKey): ContactDTO? = store.fetchContact(key)
     override suspend fun saveContact(dto: ContactDTO) = store.saveContact(dto)
-    override suspend fun saveChannel(dto: ChannelDTO) = store.saveChannel(dto)
+    override suspend fun seedContact(dto: ContactDTO) = store.saveSimulatorContact(dto)
+
+    override suspend fun seedConversations(
+        buildPlan: () -> SimulatorDeferredFixturePlan,
+        replayReference: suspend () -> Unit,
+    ): SimulatorFixtureSeedResult {
+        val caller = currentCoroutineContext()
+        caller.ensureActive()
+        val plan = try {
+            buildPlan().toRoomSimulatorIdentityPlan()
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (failure: Exception) {
+            try {
+                caller.ensureActive()
+            } catch (cancellation: CancellationException) {
+                if (cancellation !== failure) cancellation.addSuppressed(failure)
+                throw cancellation
+            }
+            throw failure
+        }
+        caller.ensureActive()
+        var created = 0
+        var preserved = 0
+        for (index in plan.families.indices) {
+            caller.ensureActive()
+            when (store.seedSimulatorConversation(plan, index)) {
+                is SimulatorConversationSeedResult.Created -> created = Math.incrementExact(created)
+                is SimulatorConversationSeedResult.PreservedExisting -> preserved = Math.incrementExact(preserved)
+            }
+        }
+        return SimulatorFixtureSeedResult.Durable(created, preserved)
+    }
+
+    override suspend fun saveChannel(dto: ChannelDTO) = store.saveSimulatorChannel(dto)
     override suspend fun saveMessage(dto: MessageDTO) = store.saveMessage(dto)
     override suspend fun updateMessageLinkPreview(
         key: EntityKey, url: String?, title: String?, imageData: Bytes?, iconData: Bytes?, fetched: Boolean,
@@ -51,4 +101,40 @@ class RoomSimulatorSeedStore(private val store: RoomPersistenceStore) : Simulato
         )
         return NodeStatusSnapshotInsertResult(inserted, skipped)
     }
+}
+
+internal fun SimulatorDeferredFixturePlan.toRoomSimulatorIdentityPlan(): SimulatorConversationIdentityPlan =
+    SimulatorConversationIdentityPlan.validate(
+        families.map { family ->
+            SimulatorConversationFamily(
+                parent = family.parent.toRoomSimulatorParent(),
+                messages = family.messages.map {
+                    SimulatorMessageIdentity(it.id, it.deduplicationKey, it.replyToID)
+                },
+                reactions = family.reactions.map {
+                    SimulatorReactionIdentity(it.id, it.messageID, it.senderName, it.emoji)
+                },
+                repeats = family.repeats.map {
+                    SimulatorRepeatIdentity(it.id, it.messageID, it.rxLogEntryID)
+                },
+                previewTargets = family.previewTargets,
+                summaries = family.summaries.map { SimulatorReactionSummary(it.messageID, it.summary) },
+                repeatTargets = family.repeatTargets,
+            ) {
+                family.build().toRoomSimulatorSeed()
+            }
+        },
+    )
+
+internal fun SimulatorFixtureConversation.toRoomSimulatorSeed(): SimulatorConversationSeed =
+    SimulatorConversationSeed(
+        parent = parent.toRoomSimulatorParent(),
+        messages = messages,
+        reactions = reactions,
+        repeats = repeats,
+    )
+
+private fun SimulatorFixtureParent.toRoomSimulatorParent(): SimulatorConversationParent = when (this) {
+    is SimulatorFixtureParent.Direct -> SimulatorConversationParent.Direct(contact)
+    is SimulatorFixtureParent.Channel -> SimulatorConversationParent.Channel(channel)
 }

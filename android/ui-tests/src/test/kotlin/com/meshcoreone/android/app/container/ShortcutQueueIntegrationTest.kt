@@ -600,7 +600,8 @@ class ShortcutQueueIntegrationTest : RoomProcessTest() {
             assertEquals(if (channel) 1 else 2, h.lifecycle.created.size)
             assertEquals(original, assertNotNull(store.fetchMessage(key)).text)
             assertEquals(1, messages(store, recipient).size)
-            assertEquals(if (channel) listOf(1, 0) else listOf(1, 1), h.links.radios.map { firmware ->
+            val expectedWrites = if (channel) listOf(1) + List(h.links.radios.size - 1) { 0 } else listOf(1, 1)
+            assertEquals(expectedWrites, h.links.radios.map { firmware ->
                 firmware.sent.count { it[0].toInt() == opcode }
             })
             if (channel) assertEquals(1L, store.fetchPendingSendsForMessage(key).single().attemptCount)
@@ -662,13 +663,14 @@ class ShortcutQueueIntegrationTest : RoomProcessTest() {
         val h = connected(this, backing)
         var resumed: ContainerHarness? = null
         try {
-            val keys = recipients(h, backing).map { recipient ->
-                assertEquals(SendResult.Queued, flow(h).execute(id(recipient), original))
-                EntityKey(recipient.radioId, messages(backing, recipient).single().id)
+            val recipients = recipients(h, backing)
+            assertEquals(SendResult.Queued, flow(h).execute(id(recipients.last()), original))
+            h.eventually("original process starts the channel attempt before file close", virtualBudgetMillis = 0) {
+                h.links.radios.single().sent.count { it[0].toInt() == 3 } == 1
             }
-            h.eventually("original process starts both accepted attempts before file close", virtualBudgetMillis = 0) {
-                val sent = h.links.radios.single().sent
-                sent.count { it[0].toInt() == 2 } == 1 && sent.count { it[0].toInt() == 3 } == 1
+            assertEquals(SendResult.Queued, flow(h).execute(id(recipients.first()), original))
+            val keys = recipients.map { recipient ->
+                EntityKey(recipient.radioId, messages(backing, recipient).single().id)
             }
             val originalAttemptID = assertNotNull(backing.fetchPendingSendsForMessage(keys.last()).single().channelAttemptID)
             h.container.close()

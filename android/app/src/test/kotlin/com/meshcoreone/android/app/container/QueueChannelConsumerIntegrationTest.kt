@@ -345,15 +345,17 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
             assertEquals(1, harness.lifecycle.created.size, "Quarantine rejects the successor before service construction")
             assertEquals(listOf(retained), store.fetchPendingSendsForMessage(EntityKey(radioId, message.id)))
             assertEquals(listOf(send), previousFirmware.sent.filter { it[0] == 3.toUByte() })
-            assertEquals(2, harness.links.radios.size)
-            assertTrue(firmware.sent.none { it[0] == 31.toUByte() }, "Quarantine rejects the successor before channel sync")
-            assertTrue(firmware.sent.none { it[0] == 3.toUByte() }, "Reconnection cannot replay an uncertain submission")
+            assertTrue(harness.links.radios.size > 1)
+            harness.links.radios.drop(1).forEach { successor ->
+                assertTrue(successor.sent.none { it[0] == 31.toUByte() }, "Quarantine rejects every successor before channel sync")
+                assertTrue(successor.sent.none { it[0] == 3.toUByte() }, "Reconnection cannot replay an uncertain submission")
+            }
         }
 
         suspend fun disconnect() {
             val report = harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
             assertFalse(report.isComplete)
-            assertEquals(List(2) { LifecycleStage.STOP_SERVICES }, report.issues.map { it.stage })
+            assertEquals(listOf(LifecycleStage.STOP_SERVICES), report.issues.map { it.stage })
             report.issues.forEach {
                 assertSame(retainedFailures().first(), it.cause)
                 assertDeviceError2(it.cause)

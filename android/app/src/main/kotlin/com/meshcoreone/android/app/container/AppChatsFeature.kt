@@ -763,7 +763,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         val index = message.channelIndex
             ?: throw MessageServiceException(MessageServiceError.ChannelNotFound)
         queue.enqueueChannel(
-            ChannelMessageEnvelope(id, index, isResend, message.text, message.timestamp, localName),
+            ChannelMessageEnvelope(id, index, isResend, message.text, message.timestamp, localName, message.channelOccupantID),
         )
     }
 

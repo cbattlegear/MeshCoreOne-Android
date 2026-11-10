@@ -82,6 +82,7 @@ internal class FakeSendPort(val radio: RadioId) : ComposerSendPort {
     var createGate: CompletableDeferred<Unit>? = null
     var enqueueFailure: Throwable? = null
     var enqueueGate: CompletableDeferred<Unit>? = null
+    var channelOccupantID: UUID? = null
 
     private fun row(text: String, contactId: UUID?, channelIndex: UByte? = null) = MessageDTO(
         id = UUID.nameUUIDFromBytes("row-${calls.size}".toByteArray()), radioId = radio, contactID = contactId,
@@ -116,7 +117,7 @@ internal class FakeSendPort(val radio: RadioId) : ComposerSendPort {
         calls += "createPendingChannel:$channelIndex:$text"
         createGate?.await()
         createFailure?.let { throw it }
-        return row(text, null, channelIndex).also(pendingMessages::add)
+        return row(text, null, channelIndex).copy(channelOccupantID = channelOccupantID).also(pendingMessages::add)
     }
 
     override suspend fun enqueueChannel(envelope: ChannelMessageEnvelope) {

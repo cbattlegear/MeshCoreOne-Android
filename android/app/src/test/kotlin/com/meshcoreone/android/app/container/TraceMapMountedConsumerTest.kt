@@ -179,7 +179,7 @@ class TraceMapMountedConsumerTest {
 
         val error = text(L.commonErrorFailedToLoad)
         val retry = text(M.mapPreviewRetryButtonAccessibilityLabel)
-        compose.waitUntil(5_000) {
+        waitUntilAdvancingFrames {
             failures.size == 1 &&
                 compose.onAllNodesWithText(error).fetchSemanticsNodes().isNotEmpty() &&
                 compose.onAllNodesWithText(retry).fetchSemanticsNodes().isNotEmpty()
@@ -189,13 +189,13 @@ class TraceMapMountedConsumerTest {
         compose.onNodeWithTag("trace-map:preferences-loading").assertDoesNotExist()
 
         compose.onNodeWithText(retry).performClick()
-        compose.waitUntil(5_000) { retryStarted.isCompleted }
+        waitUntilAdvancingFrames { retryStarted.isCompleted }
         compose.onNodeWithText(error).assertIsDisplayed()
         compose.onNodeWithText(retry).assertIsDisplayed()
         compose.onNodeWithTag("trace-map:preferences-loading").assertDoesNotExist()
 
         retryResult.complete(MapPreferences(MapFilterState(), true, true, MapColorPreference.SYSTEM))
-        compose.waitUntil(5_000) {
+        waitUntilAdvancingFrames {
             compose.onAllNodesWithText(error).fetchSemanticsNodes().isEmpty() &&
                 compose.onAllNodesWithText(
                     text(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_pathedit_filter_favorites),

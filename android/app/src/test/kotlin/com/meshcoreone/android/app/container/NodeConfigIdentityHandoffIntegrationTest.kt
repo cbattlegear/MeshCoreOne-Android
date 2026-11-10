@@ -16,7 +16,6 @@ import com.meshcoreone.android.core.model.TextType
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.CommandCode
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
-import com.meshcoreone.android.core.runtime.RuntimeDiagnostic
 import com.meshcoreone.android.core.runtime.ProcessConnectionPreferences
 import com.meshcoreone.android.core.runtime.RuntimePreferenceSnapshot
 import com.meshcoreone.android.core.runtime.RuntimePreferenceValue
@@ -36,6 +35,7 @@ import org.junit.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertFails
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -175,38 +175,6 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
                 if (packet[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue) listOf(Bytes.of(1, 1)) else original(packet)
             }
 
-            @Test fun oldIdentityCannotQueueAChannelWriteBehindThePhysicalKeyMutation() = runTest {
-                withIdentityNode { h, node, radio, _ ->
-                    node.channelService.setChannelWithSecret(node.token.radioId, 0u, "Before", Bytes.fromHex(secret))
-                    val original = radio.respond
-                    var heldKeyWrite = false
-                    radio.respond = { packet ->
-                        if (packet[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue) {
-                            heldKeyWrite = true
-                            emptyList()
-                        } else if (packet[0] == CommandCode.SEND_CHANNEL_MESSAGE.rawValue) {
-                            listOf(Bytes.of(0))
-                        } else original(packet)
-                    }
-                    val identity = backgroundScope.async {
-                        runCatching { node.nodeConfigService.importConfig(config, ConfigSections(nodeIdentity = true), node.token.radioId) }
-                    }
-                    h.eventually("physical key mutation with old channel authority already paused") { heldKeyWrite }
-                    val oldSend = backgroundScope.async {
-                        assertFails { node.messageService.sendChannelMessage("Old identity", 0u, node.token.radioId, TextType.PLAIN) }
-                    }
-                    h.eventually("old-identity dispatch rejects before waiting behind the held key exchange") { oldSend.isCompleted }
-                    assertTrue(generateSequence(oldSend.await()) { it.cause }.any { it is ChannelDispatchFailure.RetiredSession })
-                    assertTrue(radio.sent.none { it[0] == CommandCode.SEND_CHANNEL_MESSAGE.rawValue })
-                    radio.push(Bytes.of(1, 1))
-                    h.eventually("rejected key mutation restores the original authority") { identity.isCompleted }
-                    assertTrue(identity.await().isFailure)
-                    assertSame(node, h.sessions.current)
-                    val resumed = node.messageService.sendChannelMessage("Original identity resumed", 0u, node.token.radioId, TextType.PLAIN)
-                    assertEquals(MessageStatus.SENT, store.fetchMessage(EntityKey(node.token.radioId, resumed.id))?.status)
-                    assertEquals(1, radio.sent.count { it[0] == CommandCode.SEND_CHANNEL_MESSAGE.rawValue })
-                }
-            }
             val work = backgroundScope.async {
                 runCatching { node.nodeConfigService.importConfig(config, sections, node.token.radioId) }
             }
@@ -218,6 +186,39 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
             assertTrue(node.messagePollingService.isAutoFetching)
             assertFalse(h.manager.shouldDeferOpportunisticReconnect)
             assertPathUpdateRefreshesTheRealContact(h, node, radio, contactKey)
+        }
+    }
+
+    @Test fun oldIdentityCannotQueueAChannelWriteBehindThePhysicalKeyMutation() = runTest {
+        withIdentityNode { h, node, radio, _ ->
+            node.channelService.setChannelWithSecret(node.token.radioId, 0u, "Before", Bytes.fromHex(secret))
+            val original = radio.respond
+            var heldKeyWrite = false
+            radio.respond = { packet ->
+                if (packet[0] == CommandCode.IMPORT_PRIVATE_KEY.rawValue) {
+                    heldKeyWrite = true
+                    emptyList()
+                } else if (packet[0] == CommandCode.SEND_CHANNEL_MESSAGE.rawValue) {
+                    listOf(Bytes.of(0))
+                } else original(packet)
+            }
+            val identity = backgroundScope.async {
+                runCatching { node.nodeConfigService.importConfig(config, ConfigSections(nodeIdentity = true), node.token.radioId) }
+            }
+            h.eventually("physical key mutation with old channel authority already paused") { heldKeyWrite }
+            val oldSend = backgroundScope.async {
+                assertFails { node.messageService.sendChannelMessage("Old identity", 0u, node.token.radioId, TextType.PLAIN) }
+            }
+            h.eventually("old-identity dispatch rejects before waiting behind the held key exchange") { oldSend.isCompleted }
+            assertTrue(generateSequence(oldSend.await()) { it.cause }.any { it is ChannelDispatchFailure.RetiredSession })
+            assertTrue(radio.sent.none { it[0] == CommandCode.SEND_CHANNEL_MESSAGE.rawValue })
+            radio.push(Bytes.of(1, 1))
+            h.eventually("rejected key mutation restores the original authority") { identity.isCompleted }
+            assertTrue(identity.await().isFailure)
+            assertSame(node, h.sessions.current)
+            val resumed = node.messageService.sendChannelMessage("Original identity resumed", 0u, node.token.radioId, TextType.PLAIN)
+            assertEquals(MessageStatus.SENT, store.fetchMessage(EntityKey(node.token.radioId, resumed.id))?.status)
+            assertEquals(1, radio.sent.count { it[0] == CommandCode.SEND_CHANNEL_MESSAGE.rawValue })
         }
     }
 
@@ -307,21 +308,20 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
             assertTrue(work.isCancelled)
             assertEquals(listOf(ImportStep.PrivateKey), progress.map { it.step })
             assertNull(store.fetchContact(effectiveId, contactKey))
-            h.eventually("partial import cannot reopen an uncertain effective identity", virtualBudgetMillis = 10_000) {
-                node.isTornDown && h.diagnostics.filterIsInstance<RuntimeDiagnostic.Failure>().any {
-                    it.operation == "identity.rebuild" && it.cause is ChannelDispatchFailure.UnsettledDispatch
-                }
+            h.eventually("uncertain partial import retires its captured graph") { node.isTornDown }
+            h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            val reconnect = backgroundScope.async {
+                assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> { h.manager.connect(h.target()) }
+            }
+            h.eventually("explicit reconnect cannot reopen the uncertain effective identity", virtualBudgetMillis = 30_000) {
+                reconnect.isCompleted
             }
             assertTrue(node.isTornDown)
             assertNull(h.sessions.current)
             assertEquals(1, h.sessions.created)
             assertEquals(0, h.sessions.outstanding)
             assertNull(store.fetchChannelOccupantSnapshot(effectiveId, 0u))
-            val blocked = h.diagnostics.filterIsInstance<RuntimeDiagnostic.Failure>()
-                .single { it.operation == "identity.rebuild" }
-            assertIs<kotlinx.coroutines.CancellationException>(
-                assertIs<ChannelDispatchFailure.UnsettledDispatch>(blocked.cause).cause,
-            )
+            assertIs<kotlinx.coroutines.CancellationException>(reconnect.await().cause)
         }
     }
 

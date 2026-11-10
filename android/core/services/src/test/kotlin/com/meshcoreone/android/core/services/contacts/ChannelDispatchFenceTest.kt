@@ -140,67 +140,67 @@ class ChannelDispatchFenceTest {
                 assertFailsWith<ChannelDispatchFailure.RetiredSession> {
                     f.fence.recordReconciled(f.lease, scope, listOf(7u))
                 }
-
-                @Test
-                fun identityMutationWaitsForTheActuallyAdmittedSendAndRejectsQueuedOldAuthority() = runTest {
-                    val f = preparedFixture()
-                    val entered = CompletableDeferred<Unit>()
-                    val release = CompletableDeferred<Unit>()
-                    val sending = launch {
-                        f.fence.dispatch(f.lease, 7u, f.intended, { _, _ -> f.occupant }) {
-                            entered.complete(Unit)
-                            release.await()
-                            f.effects += "accepted A"
-                        }
-                    }
-                    entered.await()
-                    f.admission.pause()
-                    val identity = launch {
-                        f.fence.awaitIdentityImportDrain(f.lease)
-                        f.effects += "key write"
-                    }
-                    val queuedOldSend = async {
-                        assertFailsWith<ChannelDispatchFailure.RetiredSession> { f.send() }
-                    }
-                    runCurrent()
-                    assertFalse(identity.isCompleted)
-                    assertFalse(queuedOldSend.isCompleted)
-                    assertEquals(1L, f.admission.inFlightCount)
-                    release.complete(Unit)
-                    sending.join()
-                    identity.join()
-                    queuedOldSend.await()
-                    assertEquals(listOf("accepted A", "key write"), f.effects)
-                    assertEquals(0L, f.admission.inFlightCount)
-                }
-
-                @Test
-                fun effectiveIdentityContinuationPreservesBothRadiosQuarantineAcrossReconnect() = runTest {
-                    val f = preparedFixture()
-                    val effective = RadioId(UUID(0, 20))
-                    f.admission.pause()
-                    f.fence.awaitIdentityImportDrain(f.lease)
-                    assertFailsWith<IllegalArgumentException> {
-                        f.fence.openIdentityImportSession(f.lease, ChannelDispatchAdmission(f.token(1, effective), Any()))
-                    }
-                    val admission = ChannelDispatchAdmission(f.token(1, effective), f.connection)
-                    val continuation = f.fence.openIdentityImportSession(f.lease, admission)
-                    assertEquals(effective, continuation.token.radioId)
-                    assertFailsWith<ChannelDispatchFailure.RetiredSession> { f.send() }
-                    val failure = MeshCoreException.Timeout()
-                    f.fence.withMutation(continuation) { f.fence.quarantine(continuation, failure) }
-                    f.fence.retire(continuation)
-                    for (radio in listOf(f.radio, effective)) {
-                        assertSame(failure, assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> {
-                            f.open(f.token(2, radio), Any())
-                        }.cause)
-                    }
-                }
             }
         }
         assertEquals(0L, f.admission.inFlightCount)
         assertEquals(listOf("persist admitted"), f.effects)
         assertFailsWith<ChannelDispatchFailure.RetiredSession> { f.send() }
+    }
+
+    @Test
+    fun identityMutationWaitsForTheActuallyAdmittedSendAndRejectsQueuedOldAuthority() = runTest {
+        val f = preparedFixture()
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val sending = launch {
+            f.fence.dispatch(f.lease, 7u, f.intended, { _, _ -> f.occupant }) {
+                entered.complete(Unit)
+                release.await()
+                f.effects += "accepted A"
+            }
+        }
+        entered.await()
+        f.admission.pause()
+        val identity = launch {
+            f.fence.awaitIdentityImportDrain(f.lease)
+            f.effects += "key write"
+        }
+        val queuedOldSend = async {
+            assertFailsWith<ChannelDispatchFailure.RetiredSession> { f.send() }
+        }
+        runCurrent()
+        assertFalse(identity.isCompleted)
+        assertFalse(queuedOldSend.isCompleted)
+        assertEquals(1L, f.admission.inFlightCount)
+        release.complete(Unit)
+        sending.join()
+        identity.join()
+        queuedOldSend.await()
+        assertEquals(listOf("accepted A", "key write"), f.effects)
+        assertEquals(0L, f.admission.inFlightCount)
+    }
+
+    @Test
+    fun effectiveIdentityContinuationPreservesBothRadiosQuarantineAcrossReconnect() = runTest {
+        val f = preparedFixture()
+        val effective = RadioId(UUID(0, 20))
+        f.admission.pause()
+        f.fence.awaitIdentityImportDrain(f.lease)
+        assertFailsWith<IllegalArgumentException> {
+            f.fence.openIdentityImportSession(f.lease, ChannelDispatchAdmission(f.token(1, effective), Any()))
+        }
+        val admission = ChannelDispatchAdmission(f.token(1, effective), f.connection)
+        val continuation = f.fence.openIdentityImportSession(f.lease, admission)
+        assertEquals(effective, continuation.token.radioId)
+        assertFailsWith<ChannelDispatchFailure.RetiredSession> { f.send() }
+        val failure = MeshCoreException.Timeout()
+        f.fence.withMutation(continuation) { f.fence.quarantine(continuation, failure) }
+        f.fence.retire(continuation)
+        for (radio in listOf(f.radio, effective)) {
+            assertSame(failure, assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> {
+                f.open(f.token(2, radio), Any())
+            }.cause)
+        }
     }
 
     @Test

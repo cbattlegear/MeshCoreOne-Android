@@ -434,13 +434,15 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                         firmwareChannels[frame[1]] = Bytes.of(0x12) + frame.slice(1, frame.size)
                         listOf(Bytes.of(0))
                     }
-                    0x1f -> firmwareChannels[frame[1]]?.let(::listOf)
+                    0x1f -> listOf(firmwareChannels[frame[1]] ?:
+                        (Bytes.of(0x12, frame[1].toInt()) + Bytes(ByteArray(48))))
                     else -> null
                 }
             }
         }
         try {
             val connectionTarget = h.target(UUID.fromString("30800000-0000-0000-0000-000000000524"))
+            h.container.foreground.activityStarted()
             h.manager.connect(connectionTarget)
             h.settle()
             h.assertReady()

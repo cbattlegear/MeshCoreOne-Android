@@ -28,6 +28,17 @@ class ComposerStateHolderTest {
     private val channel = Fixtures.channel("Ops", index = 2u)
 
     @Test
+    fun `channel enqueue preserves the original saved occupant without substituting the selected slot`() = scenario {
+        val rig = rig(ComposerTarget.Channel(channel))
+        val occupant = java.util.UUID.fromString("30800000-0000-0000-0000-000000000607")
+        rig.port.channelOccupantID = occupant
+        rig.holder.onDraftChanged("Original channel text")
+        assertTrue(rig.holder.send())
+        assertEquals(occupant, rig.port.pendingMessages.single().channelOccupantID)
+        assertEquals(occupant, rig.port.channelEnvelopes.single().channelOccupantID)
+    }
+
+    @Test
     fun `reconnect restores only an empty composer and never clobbers typing`() = scenario {
         val target = ComposerTarget.Direct(alice)
         val env = FakeEnvironment(connection = DeviceConnectionState.DISCONNECTED)

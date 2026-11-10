@@ -82,12 +82,14 @@ internal class FakeSendPort(val radio: RadioId) : ComposerSendPort {
     var createGate: CompletableDeferred<Unit>? = null
     var enqueueFailure: Throwable? = null
     var enqueueGate: CompletableDeferred<Unit>? = null
+    var channelOccupantID: UUID? = null
 
     private fun row(text: String, contactId: UUID?, channelIndex: UByte? = null) = MessageDTO(
         id = UUID.nameUUIDFromBytes("row-${calls.size}".toByteArray()), radioId = radio, contactID = contactId,
         channelIndex = channelIndex, text = text,
         timestamp = 1u, createdAt = Instant.EPOCH, sortDate = Instant.EPOCH, direction = MessageDirection.OUTGOING,
         status = MessageStatus.PENDING,
+        channelOccupantID = if (channelIndex != null) channelOccupantID else null,
     )
 
     override suspend fun createPendingDirect(text: String, contact: ContactDTO, textType: TextType, replyToId: UUID?): MessageDTO {

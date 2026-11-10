@@ -312,6 +312,7 @@ class ComposerStateHolder(
                     messageText = message.text,
                     messageTimestamp = message.timestamp,
                     localNodeName = environment.device.value?.nodeName,
+                    channelOccupantID = message.channelOccupantID,
                 ),
             )
         }

@@ -194,6 +194,8 @@ class TraceMapMountedConsumerTest {
         compose.onNodeWithTag("trace-map:preferences-loading").assertDoesNotExist()
 
         compose.onNodeWithText(retry).performClick()
+        compose.runOnUiThread { Shadows.shadowOf(Looper.getMainLooper()).idle() }
+        compose.waitForIdle()
         waitUntilAdvancingFrames { retryStarted.isCompleted }
         compose.onNodeWithText(error).assertIsDisplayed()
         compose.onNodeWithText(retry).assertIsDisplayed()

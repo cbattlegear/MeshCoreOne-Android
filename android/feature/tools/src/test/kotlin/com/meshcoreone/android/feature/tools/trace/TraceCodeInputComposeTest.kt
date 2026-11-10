@@ -1942,8 +1942,13 @@ class TraceCodeInputComposeTest {
         assertEquals(Bytes.of(0xA1, 0xB2, 0xC3), recorded.sent.single().path, "B retains the editable route")
         host.get().runOnUiThread { assertTrue((oldConfirm ?: assertNotNull(oldHop))()) }
         settle()
-        assertTrue(texts().contains(host.get().getString(C.contactsTraceListRunningTrace)),
-            "A's retained edit must not change B's route or cancel B's trace")
+        if (isMap) {
+            assertFalse(button(clearLabel).config.contains(SemanticsProperties.Disabled),
+                "A's retained confirmation must not clear B's map route")
+        } else {
+            assertTrue(texts().contains(host.get().getString(C.contactsTraceListRunningTrace)),
+                "A's retained edit must not change B's route or cancel B's trace")
+        }
         assertEquals(path, persistence.paths[path.id])
         if (isClear) {
             host.get().runOnUiThread { assertTrue(oldOpen()) }
@@ -1953,7 +1958,12 @@ class TraceCodeInputComposeTest {
             click(clearLabel)
             click(confirmLabel)
             if (!isMap) assertTrue(texts().contains(host.get().getString(C.contactsTraceListEmptyPath)))
-            assertFalse(texts().contains(host.get().getString(C.contactsTraceListRunningTrace)))
+            if (isMap) {
+                assertTrue(button(clearLabel).config.contains(SemanticsProperties.Disabled),
+                    "Fresh B confirmation clears the map route")
+            } else {
+                assertFalse(texts().contains(host.get().getString(C.contactsTraceListRunningTrace)))
+            }
         } else {
             val label = "${host.get().getString(resource)}: ${
                 C.contactsTraceListHopLabel(host.get().resources, if (action == "up") 2 else 1,

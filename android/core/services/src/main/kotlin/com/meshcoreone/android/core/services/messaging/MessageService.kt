@@ -530,11 +530,14 @@ class MessageService(
         id = newID(), radioId = token.radioId, contactID = contact.id, text = text, timestamp = timestamp(),
         createdAt = clock.wallClock.instant(), textType = type, replyToID = replyToID,
     )
-    private suspend fun savePendingCreation(message: MessageDTO) {
+    private suspend fun savePendingCreation(
+        message: MessageDTO,
+        save: suspend () -> MessageDTO = { dataStore.saveMessage(message); message },
+    ): MessageDTO {
         val receipt = currentCoroutineContext()[PendingMessageCreation]
         receipt?.writing(message)
-        try {
-            dataStore.saveMessage(message)
+        val saved = try {
+            save()
         } catch (failure: Exception) {
             // The write has settled, but a thrown return does not prove rollback. Only read this
             // operation's exact process-store key; no wire work or successor-generation mutation.
@@ -558,11 +561,20 @@ class MessageService(
             }
             throw failure
         }
-        if (receipt?.committed(message) == false) {
+        if (saved.id != message.id || saved.radioId != message.radioId ||
+            saved.channelIndex != message.channelIndex || saved.channelOccupantID != message.channelOccupantID
+        ) {
+            receipt?.settled(PendingMessageCreation.State.UNKNOWN)
             val failure = PersistenceStoreException(PersistenceStoreError.InvalidData)
             remember("pendingCreation.${message.id}.identity", failure)
             throw failure
         }
+        if (receipt?.committed(saved) == false) {
+            val failure = PersistenceStoreException(PersistenceStoreError.InvalidData)
+            remember("pendingCreation.${message.id}.identity", failure)
+            throw failure
+        }
+        return saved
     }
 
     private suspend fun <T> withFreshNotificationAction(operation: String, block: suspend () -> T): T {
@@ -976,9 +988,25 @@ class MessageService(
     override suspend fun createPendingChannelMessage(text: String, channelIndex: UByte, radioId: RadioId, textType: TextType): MessageDTO =
         owned("createPendingChannel", pendingOperations) {
             val dto = outgoingChannel(text, channelIndex, radioId, textType)
-            savePendingCreation(dto)
+            val snapshot = dataStore.fetchChannelOccupantSnapshot(radioId, channelIndex)
+                ?: throw MessageServiceException(MessageServiceError.ChannelNotFound)
+            ownership.check("createPendingChannel.origin")
+            val origin = ChannelHistoryScope.from(snapshot)
+            if (origin.radioId != radioId || origin.channelIndex != channelIndex) {
+                throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+            }
+            val history = dataStore as? ChannelHistoryPersisting
+                ?: throw PersistenceStoreException(PersistenceStoreError.InvalidData,
+                    UnsupportedOperationException("Origin-aware channel creation is not wired"))
+            val intended = dto.copy(channelOccupantID = origin.expectedOccupantID)
+            val saved = savePendingCreation(intended) {
+                history.createOrReconcileChannelMessage(
+                    ChannelMessageCreation(dto.id, origin, dto.text, dto.textType),
+                    dto.timestamp, dto.createdAt,
+                )
+            }
             ownership.check("createPendingChannel.saved")
-            dto
+            saved
         }
 
     override suspend fun sendChannelMessage(text: String, channelIndex: UByte, radioId: RadioId, textType: TextType): ChannelSendReceipt =

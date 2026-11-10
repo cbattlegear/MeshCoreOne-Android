@@ -209,6 +209,7 @@ class CommitRecoveryTest {
             },
             native("${destination}_receiptCannotCreateAnotherRow") {
                 val h = Harness(this); h.start()
+                h.store.seedChannelCreation()
                 val receipt = PendingMessageCreation()
                 val first = withContext(receipt) { destination.create(h.service) }
                 assertFailsWith<IllegalStateException> { withContext(receipt) { destination.create(h.service) } }
@@ -217,6 +218,7 @@ class CommitRecoveryTest {
             },
             native("${destination}_failedWriteWithAbsentReadbackIsUnknownWithoutOwnerBarrier") {
                 val h = Harness(this); h.start()
+                h.store.seedChannelCreation()
                 val failure = storageFailure()
                 h.store.faults["saveMessage"] = failure
                 val receipt = PendingMessageCreation()
@@ -667,7 +669,15 @@ class CommitRecoveryTest {
         h: Harness, store: PersistenceStoreProtocol, session: MeshCoreSessionProtocol = h.session,
         block: suspend (MessageService) -> Unit,
     ) {
-        val service = MessageService(h.token, SELF, session, store, h.signals, h.scope, clock = h.clock,
+        h.store.seedChannelCreation()
+        val creationStore = object : PersistenceStoreProtocol by store, ChannelHistoryPersisting by h.store {
+            override suspend fun createOrReconcileChannelMessage(
+                creation: ChannelMessageCreation, timestamp: UInt, createdAt: Instant,
+            ): MessageDTO = h.store.capturedChannelMessage(creation, timestamp, createdAt).also {
+                store.saveMessage(it)
+            }
+        }
+        val service = MessageService(h.token, SELF, session, creationStore, h.signals, h.scope, clock = h.clock,
             reporter = MessagingIssueReporter { h.diagnostics += it })
         try { block(service) } finally { service.close() }
     }

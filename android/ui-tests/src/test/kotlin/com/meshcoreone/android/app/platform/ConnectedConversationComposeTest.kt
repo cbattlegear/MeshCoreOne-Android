@@ -53,7 +53,7 @@ class ConnectedConversationComposeTest : RoomProcessTest() {
         rejectedSendAndRetry(this, channel = false)
     }
 
-    @Test fun rejectedNativeChannelSendAndMountedRetryExposeEachPersistedTerminalFailure() = runTest {
+    @Test fun rejectedNativeChannelSendRemainsUncertainWithoutMountedRetry() = runTest {
         rejectedSendAndRetry(this, channel = true)
     }
 
@@ -65,7 +65,7 @@ class ConnectedConversationComposeTest : RoomProcessTest() {
 
     @Test
     @Config(sdk = [31], qualifiers = "w1080dp-h1200dp-mdpi")
-    fun channelDraftAndTerminalFailureSurviveAdaptivePanesAndTabReturn() = runTest {
+    fun channelDraftAndUncertainStatusSurviveAdaptivePanesAndTabReturn() = runTest {
         rejectedSendAndRetry(this, channel = true, adaptive = true)
     }
 
@@ -86,8 +86,11 @@ class ConnectedConversationComposeTest : RoomProcessTest() {
             radio.respond = { request ->
                 if (request[0].toInt() == opcode) {
                     accepted += runBlocking { store.fetchPendingSends(requireNotNull(h.appState.currentRadioId)).single() }
-                    // Channel notFound is retryable; pinned illegalArgument (6) is terminal.
+                    // An uncorrelated channel error does not prove that the queued send was unsent.
                     listOf(Bytes.of(1, if (channel) 6 else 2))
+                } else if (channel && request[0].toInt() == 0x1f && request[1].toInt() == 0) {
+                    listOf(Bytes.of(0x12, 0) + Bytes.utf8("Synthetic mesh channel").paddedOrTruncated(32) +
+                        Bytes(ByteArray(16) { 0x11 }))
                 } else null
             }
         }
@@ -97,8 +100,8 @@ class ConnectedConversationComposeTest : RoomProcessTest() {
             h.assertReady()
             val radio = requireNotNull(h.appState.currentRadioId)
             val contact = requireNotNull(store.fetchContact(radio, contactKey))
-            val channelDTO = ChannelDTO(radioId = radio, index = 0u, name = "Synthetic mesh channel")
-            if (channel) store.saveChannel(channelDTO)
+            val channelDTO = if (channel) requireNotNull(store.fetchChannel(radio, 0u))
+                else ChannelDTO(radioId = radio, index = 0u, name = "Synthetic mesh channel")
             suspend fun messages() = if (channel) store.fetchMessages(radio, channelDTO.index, 10, 0)
                 else store.fetchMessages(EntityKey(radio, contact.id), 10, 0)
             compose.runOnUiThread {
@@ -131,19 +134,24 @@ class ConnectedConversationComposeTest : RoomProcessTest() {
             val retry = compose.activity.getString(C.chatsMessageStatusRetry)
             var messageID: UUID? = null
             var retryTimestamp: UInt? = null
-            repeat(2) { attempt ->
-                h.eventually("mounted queue attempt ${attempt + 1} persists and broadcasts its terminal failure") {
-                    failures.size == attempt + 1 && runBlocking {
-                        messages().singleOrNull()?.let {
-                            it.text == original && it.status == MessageStatus.FAILED &&
-                                store.fetchPendingSendsForMessage(EntityKey(radio, it.id)).isEmpty()
-                        } == true
+            val attempts = if (channel) 1 else 2
+            repeat(attempts) { attempt ->
+                h.eventually("mounted queue attempt ${attempt + 1} persists its expected outcome") {
+                    runBlocking {
+                        val persisted = messages().singleOrNull()
+                        val pending = persisted?.let { store.fetchPendingSendsForMessage(EntityKey(radio, it.id)).singleOrNull() }
+                        persisted?.text == original && if (channel) {
+                            persisted.status == MessageStatus.PENDING &&
+                                pending?.channelDispatchState == QueuedChannelDispatchState.UNCERTAIN
+                        } else {
+                            failures.size == attempt + 1 && persisted?.status == MessageStatus.FAILED && pending == null
+                        }
                     }
                 }
                 val persisted = messages().single()
                 if (attempt == 0) messageID = persisted.id else assertEquals(messageID, persisted.id)
                 assertEquals(original, persisted.text)
-                assertEquals(MessageStatus.FAILED, persisted.status)
+                assertEquals(if (channel) MessageStatus.PENDING else MessageStatus.FAILED, persisted.status)
                 assertEquals(radio, persisted.radioId)
                 val pending = accepted[attempt]
                 assertEquals(persisted.id, pending.messageID)
@@ -151,23 +159,29 @@ class ConnectedConversationComposeTest : RoomProcessTest() {
                 assertEquals(channel && attempt == 1, pending.isResend)
                 if (channel) {
                     assertEquals(original, pending.messageText)
+                    assertEquals(requireNotNull(persisted.channelOccupantID), pending.channelOccupantID)
                     // A resend may update the row timestamp after enqueue captured its previous value.
                     assertEquals(if (attempt == 0) persisted.timestamp else requireNotNull(retryTimestamp), pending.messageTimestamp)
                     assertEquals("TestNode", pending.localNodeName)
                 }
                 h.settle()
                 compose.waitForIdle()
-                compose.waitUntil(30_000) {
-                    h.settle()
-                    compose.onAllNodesWithContentDescription("$original. $failed").fetchSemanticsNodes().size == 1
+                if (channel) {
+                    compose.onNodeWithText(original).assertIsDisplayed()
+                    compose.onNodeWithText(retry).assertDoesNotExist()
+                } else {
+                    compose.waitUntil(30_000) {
+                        h.settle()
+                        compose.onAllNodesWithContentDescription("$original. $failed").fetchSemanticsNodes().size == 1
+                    }
+                    compose.onNodeWithContentDescription("$original. $failed").assertIsDisplayed()
+                    compose.onNodeWithText(retry).assertIsDisplayed()
                 }
-                compose.onNodeWithContentDescription("$original. $failed").assertIsDisplayed()
-                compose.onNodeWithText(retry).assertIsDisplayed()
                 assertNull(h.draftStore.draft(if (channel) ChatConversationID.channel(radio, channelDTO.index)
                     else ChatConversationID.dm(radio, contact.id)))
                 if (attempt == 0) {
                     retryTimestamp = requireNotNull(store.fetchMessage(EntityKey(radio, persisted.id))).timestamp
-                    compose.onNodeWithText(retry).performClick()
+                    if (!channel) compose.onNodeWithText(retry).performClick()
                 }
             }
             if (adaptive) {
@@ -196,8 +210,13 @@ class ConnectedConversationComposeTest : RoomProcessTest() {
                     field.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { assertTrue(it(layouts)) }
                     assertEquals(2f, layouts.single().layoutInput.density.fontScale, 0f)
                     assertFalse("The actual 200% draft must not clip vertically at width$value", layouts.single().didOverflowHeight)
-                    compose.onNodeWithContentDescription("$original. $failed").assertIsDisplayed()
-                    compose.onNodeWithText(retry).assertIsDisplayed().assertHasClickAction()
+                    if (channel) {
+                        compose.onNodeWithText(original).assertIsDisplayed()
+                        compose.onNodeWithText(retry).assertDoesNotExist()
+                    } else {
+                        compose.onNodeWithContentDescription("$original. $failed").assertIsDisplayed()
+                        compose.onNodeWithText(retry).assertIsDisplayed().assertHasClickAction()
+                    }
                     assertEquals(entry, h.container.navigation.state.value.activeStack.last())
                     assertEquals(value.toFloat(), h.container.navigation.state.value.widthDp, 0f)
                     assertEquals(retained, h.draftStore.draft(conversation))
@@ -215,20 +234,29 @@ class ConnectedConversationComposeTest : RoomProcessTest() {
                 h.settle()
                 compose.waitForIdle()
                 compose.onNode(fieldMatcher).assertIsDisplayed().assertTextContains(retained)
-                compose.onNodeWithContentDescription("$original. $failed").assertIsDisplayed()
-                compose.onNodeWithText(retry).assertIsDisplayed().assertHasClickAction()
+                if (channel) {
+                    compose.onNodeWithText(original).assertIsDisplayed()
+                    compose.onNodeWithText(retry).assertDoesNotExist()
+                } else {
+                    compose.onNodeWithContentDescription("$original. $failed").assertIsDisplayed()
+                    compose.onNodeWithText(retry).assertIsDisplayed().assertHasClickAction()
+                }
                 assertEquals(AppTab.CHATS, h.container.navigation.state.value.selectedTab)
                 assertEquals(entry, h.container.navigation.state.value.activeStack.last())
                 assertEquals(retained, h.draftStore.draft(conversation))
                 assertEquals(persisted, messages().single())
                 assertEquals(token, requireNotNull(h.sessions.current).token)
             }
-            assertEquals(listOf(messageID, messageID), failures.toList())
-            assertEquals(2, accepted.size)
+            assertEquals(if (channel) emptyList() else listOf(messageID, messageID), failures.toList())
+            assertEquals(attempts, accepted.size)
             assertEquals(1, h.lifecycle.created.size)
             assertEquals(1, h.links.radios.size)
-            assertEquals(2, h.links.radios.single().sent.count { it[0].toInt() == opcode })
-            assertEquals(0, requireNotNull(h.sessions.current).chatSendQueueService.queuedEnvelopeCount)
+            assertEquals(attempts, h.links.radios.single().sent.count { it[0].toInt() == opcode })
+            if (channel) {
+                val retained = store.fetchPendingSendsForMessage(EntityKey(radio, requireNotNull(messageID))).single()
+                assertEquals(QueuedChannelDispatchState.UNCERTAIN, retained.channelDispatchState)
+                assertNotNull(retained.channelAttemptID)
+            } else assertEquals(0, requireNotNull(h.sessions.current).chatSendQueueService.queuedEnvelopeCount)
         } finally {
             compose.runOnUiThread { compose.activity.setContent {} }
             h.container.close()

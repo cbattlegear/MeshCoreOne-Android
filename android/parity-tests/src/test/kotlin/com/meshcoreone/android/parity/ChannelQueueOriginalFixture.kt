@@ -4,8 +4,6 @@ package com.meshcoreone.android.parity
 import com.meshcoreone.android.app.container.FirmwareRadio
 import com.meshcoreone.android.app.container.openMemoryDatabase
 import com.meshcoreone.android.core.contracts.domain.*
-import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceError
-import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceException
 import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -16,10 +14,9 @@ import com.meshcoreone.android.core.protocol.event.ConnectionState
 import com.meshcoreone.android.core.protocol.model.SelfInfo
 import com.meshcoreone.android.core.protocol.session.MeshCoreSession
 import com.meshcoreone.android.core.protocol.session.SessionClock
-import com.meshcoreone.android.core.protocol.session.SessionCorrelationException
+import com.meshcoreone.android.core.services.contacts.ChannelDispatchFence
 import com.meshcoreone.android.core.services.contacts.ChannelService
 import com.meshcoreone.android.core.services.contacts.ChannelServiceClock
-import com.meshcoreone.android.core.services.contacts.ChannelServiceError
 import com.meshcoreone.android.core.services.messaging.ChatSendQueueConfig
 import com.meshcoreone.android.core.services.messaging.ChatSendQueueService
 import com.meshcoreone.android.core.services.messaging.MessageService
@@ -39,34 +36,20 @@ import kotlinx.coroutines.test.*
 import org.junit.Assert.*
 
 internal fun assertOriginalChannelDeviceError2(cause: Throwable) {
-    assertTrue(cause is MessageServiceException)
-    val failure = (cause as MessageServiceException).error
-    assertTrue(failure is MessageServiceError.SessionError)
-    val underlying = (failure as MessageServiceError.SessionError).underlying
-    assertTrue(underlying is MeshCoreException.DeviceError)
-    assertEquals(2.toUByte(), (underlying as MeshCoreException.DeviceError).code)
-}
-
-internal fun assertChannelQueryUnresolved(cause: Throwable, family: String) {
-    val chain = generateSequence(cause) { it.cause }.take(16).toList()
-    val shape = chain.joinToString(" -> ") { "${it.javaClass.name}(${it.message})" }
-    assertTrue("Expected ConnectionLost for $family; cause chain: $shape", cause is MeshCoreException.ConnectionLost)
-    val correlation = chain.dropWhile { it is MeshCoreException.ConnectionLost }.firstOrNull()
-    assertTrue("Expected UnresolvedReply after ConnectionLost/recovery copies for $family; cause chain: $shape",
-        correlation is SessionCorrelationException.UnresolvedReply)
-    assertEquals("Wrong unresolved family; cause chain: $shape",
-        family, (correlation as SessionCorrelationException.UnresolvedReply).responseFamily)
+    val error = generateSequence(cause) { it.cause }
+        .filterIsInstance<MeshCoreException.DeviceError>()
+        .firstOrNull()
+    assertNotNull("Expected raw DeviceError(2) in cause chain: ${cause.stackTraceToString()}", error)
+    assertEquals(2.toUByte(), error!!.code)
 }
 
 internal suspend fun TestScope.withChannelQueueFixture(
     attempts: Long,
     config: MessageServiceConfig = MessageServiceConfig(),
-    gone: Boolean = false,
     queueConfig: ChatSendQueueConfig = ChatSendQueueConfig(),
-    expectQueryIssue: Boolean = false,
     body: suspend (ChannelQueueOriginalFixture) -> Unit,
 ) {
-    val f = ChannelQueueOriginalFixture(this, attempts, config, gone, queueConfig)
+    val f = ChannelQueueOriginalFixture(this, attempts, config, queueConfig)
     var primaryFailure: Throwable? = null
     suspend fun retainFailure(action: suspend () -> Unit) {
         try { action() } catch (failure: Throwable) {
@@ -85,19 +68,11 @@ internal suspend fun TestScope.withChannelQueueFixture(
     withContext(NonCancellable) {
         retainFailure {
             val report = f.queue.shutdown()
-            if (expectQueryIssue) {
-                assertEquals(1, report.issues.size)
-                assertEquals(LifecycleStage.STOP_SERVICES, report.issues.single().stage)
-                val issue = report.issues.single().cause
-                assertSame("Shutdown must retain the original channel-query failure, not the later send failure",
-                    f.failures("channelQuery", f.messageA.id).single(), issue)
-                assertTrue("Expected retained ChannelService SessionError; got ${issue.stackTraceToString()}",
-                    issue is ChannelServiceError.SessionError)
-                assertChannelQueryUnresolved((issue as ChannelServiceError.SessionError).error, "channel:0")
-            } else assertTrue(report.isComplete)
+            assertTrue(report.isComplete)
         }
         retainFailure { assertTrue(f.messages.close().isComplete) }
         retainFailure { f.session.stop() }
+        retainFailure { f.channelDispatchFence.retire(f.channelDispatchLease) }
         retainFailure { f.store.close() }
         retainFailure { f.job.cancelAndJoin() }
         retainFailure { f.database.close() }
@@ -110,7 +85,6 @@ internal class ChannelQueueOriginalFixture(
     val test: TestScope,
     private val attempts: Long,
     config: MessageServiceConfig,
-    gone: Boolean,
     queueConfig: ChatSendQueueConfig,
 ) {
     val job = SupervisorJob(test.coroutineContext[Job])
@@ -139,25 +113,34 @@ internal class ChannelQueueOriginalFixture(
     private val token = SessionToken(ProcessEpoch(UUID.randomUUID()), Generation(1), radio)
     val channel = ChannelDTO(UUID.randomUUID(), radio, 0u, "Test Channel", Bytes(ByteArray(16) { 0xAA.toByte() }),
         true, null, 0, 0, NotificationLevel.ALL, false, "inherit", null)
+    private val channelInfoResponse =
+        Bytes.fromHex("1200" + "54657374204368616e6e656c" + "00".repeat(20) + "AA".repeat(16))
+    private val unconfiguredChannelInfoResponse = Bytes.fromHex("1200" + "00".repeat(48))
     val database = openMemoryDatabase()
     val store = RoomPersistenceStore(database, scope, clock.wallClock)
     private val signals = Signals(token)
     private val diagnostics = mutableListOf<Pair<Long, MessagingDiagnostic>>()
     private val reporter = MessagingIssueReporter { diagnostics += test.testScheduler.currentTime to it }
+    private var channelInfoReads = 0
+    val channelInfoReadCount: Int get() = channelInfoReads
     private val transport = FirmwareRadio(device.publicKey).also { radio ->
         radio.respond = { command ->
             when (command[0].toInt()) {
                 1 -> listOf(Bytes.fromHex("05001414" + "11".repeat(32) +
                     "00000000000000000200020038f60d0090d003000a05546573744e6f6465"))
                 3 -> listOf(Bytes.of(1, 2))
-                31 -> if (gone) listOf(Bytes.fromHex("1200" + "00".repeat(48))) else listOf(Bytes.of(1, 2))
+                31 -> listOf(if (channelInfoReads++ == 0) channelInfoResponse else unconfiguredChannelInfoResponse)
                 else -> error("Unexpected command in channel original: ${command.hexString}")
             }
         }
     }
     val session = MeshCoreSession(transport, SessionConfiguration(defaultTimeout = 0.2), clock, scope.coroutineContext)
+    val channelDispatchFence = ChannelDispatchFence(ChannelIdentityMutex.PROCESS)
+    val channelDispatchLease = channelDispatchFence.openSession(
+        token, session, ChannelDispatchAdmission(token, session),
+    )
     val messages = MessageService(token, device.publicKey, session, store, signals, scope,
-        config, clock, jitter = { 1.0 }, reporter = reporter)
+        config, clock, jitter = { 1.0 }, reporter = reporter, channelDispatchLease = channelDispatchLease)
     private val channelService = ChannelService(session, store, null, ChannelServiceClock { delay(it) }, Random(0))
     val queries = mutableListOf<UByte>()
     val queryResults = mutableListOf<ChannelInfo?>()
@@ -169,9 +152,9 @@ internal class ChannelQueueOriginalFixture(
     lateinit var messageA: MessageDTO
     lateinit var messageB: MessageDTO
     lateinit var pendingA: PendingSendDTO
-    lateinit var pendingB: PendingSendDTO
 
     suspend fun seed() {
+        require(attempts in 0..Int.MAX_VALUE.toLong())
         assertNotEquals(device.id, radio.value)
         store.saveDevice(device)
         store.saveChannel(channel)
@@ -180,53 +163,76 @@ internal class ChannelQueueOriginalFixture(
         session.start()
         assertEquals(SelfInfo(0u, 20, 20, device.publicKey, 0.0, 0.0, 2u, 0u, 0u, 0u, 2u,
             false, 915.0, 250.0, 10u, 5u, "TestNode"), session.currentSelfInfo)
-        val first = messages.createPendingChannelMessage("Hello channel", 0u, radio)
-        val second = messages.createPendingChannelMessage("Second message", 0u, radio)
-        messageA = literalMessage(first.id, "Hello channel")
-        messageB = literalMessage(second.id, "Second message")
+        val observed = checkNotNull(channelService.fetchChannel(channel.index))
+        check(observed == ChannelInfo(channel.index, channel.name, channel.secret)) {
+            "The active radio did not return the seeded channel occupant"
+        }
+        channelOccupantID = store.withChannelOperation { scoped, identity ->
+            val persisted = scoped.batchSaveChannels(radio, listOf(observed).snapshot(), SnapshotList.empty(), null)
+            check(persisted.any { it.index == channel.index })
+            val occupant = checkNotNull(scoped.fetchChannelOccupantID(radio, channel.index))
+            channelDispatchFence.recordReconciled(channelDispatchLease, identity, listOf(channel.index))
+            occupant
+        }
+        assertEquals(channel, store.fetchChannel(radio, channel.index))
+        messageA = channelMessage("Hello channel")
+        messageB = channelMessage("Second message")
         assertNotEquals(messageA.id, messageB.id)
-        assertEquals(messageA, first)
-        assertEquals(messageB, second)
         assertMessages(messageA, messageB)
-        pendingA = PendingSendDTO(UUID.randomUUID(), radio, messageA.id, PendingSendKind.CHANNEL,
-            null, 0u, true, "Hello channel", 1_704_067_200u, "Test Radio", 1, instant, attempts)
-        pendingB = PendingSendDTO(UUID.randomUUID(), radio, messageB.id, PendingSendKind.CHANNEL,
-            null, 0u, false, "Second message", 1_704_067_200u, "Test Radio", 2, instant, 2)
-        store.upsertPendingSend(pendingA)
+        val envelopeA = ChannelMessageEnvelope(messageA.id, 0u, true, "Hello channel",
+            1_704_067_200u, "Test Radio", channelOccupantID)
+        val pendingID = UUID.randomUUID()
+        store.insertPendingSendAssigningSequence(
+            PendingSendDTO.fromEnvelope(envelopeA, radio, id = pendingID, enqueuedAt = instant),
+        )
+        repeat(attempts.toInt()) {
+            store.incrementReadyQueuedChannelAttemptCount(EntityKey(radio, pendingID), messageA.id)
+        }
+        pendingA = checkNotNull(
+            store.fetchPendingSendsForMessage(EntityKey(radio, messageA.id)).singleOrNull { it.id == pendingID },
+        )
         assertRows(pendingA)
-        assertEquals(ChannelMessageEnvelope(messageA.id, 0u, true, "Hello channel", 1_704_067_200u, "Test Radio"),
-            pendingA.channelMessageEnvelope())
-        assertEquals(ChannelMessageEnvelope(messageB.id, 0u, false, "Second message", 1_704_067_200u, "Test Radio"),
-            pendingB.channelMessageEnvelope())
+        assertEquals(envelopeA, pendingA.channelMessageEnvelope())
+        val envelopeB = ChannelMessageEnvelope(messageB.id, 0u, false, "Second message",
+            1_704_067_200u, "Test Radio", channelOccupantID)
+        val pendingB = PendingSendDTO.fromEnvelope(envelopeB, radio, enqueuedAt = instant)
+        assertEquals(envelopeB, pendingB.channelMessageEnvelope())
     }
 
-    suspend fun persistB() { store.upsertPendingSend(pendingB); assertRows(pendingA, pendingB) }
     suspend fun startDrain() { queue.hydrate(); test.runCurrent(); signals.ready(); test.runCurrent() }
     suspend fun assertRows(vararg rows: PendingSendDTO) { assertEquals(rows.toList(), store.fetchPendingSends(radio)) }
     suspend fun assertMessages(a: MessageDTO, b: MessageDTO) {
         assertEquals(a, store.fetchMessage(EntityKey(radio, messageA.id)))
         assertEquals(b, store.fetchMessage(EntityKey(radio, messageB.id)))
     }
+    suspend fun assertUncertainAttempt(pending: PendingSendDTO, expectedAttemptCount: Long): QueuedChannelAttempt {
+        val attempts = store.fetchQueuedChannelAttempts(EntityKey(radio, pending.id))
+        assertEquals(1, attempts.size)
+        val attempt = attempts.single()
+        val expected = pending.copy(
+            attemptCount = expectedAttemptCount,
+            channelDispatchState = QueuedChannelDispatchState.UNCERTAIN,
+            channelAttemptID = attempt.key.attemptID,
+        )
+        assertRows(expected)
+        assertEquals(channelOccupantID, pending.channelOccupantID)
+        assertEquals(channelOccupantID, attempt.channelOccupantID)
+        assertEquals(pending.channelIndex, attempt.channelIndex)
+        assertEquals(QueuedChannelAttemptPhase.UNCERTAIN, attempt.phase)
+        assertFalse(attempt.isCompleted)
+        return attempt
+    }
     fun sends(command: Int) = transport.sent.filter { it[0].toInt() == command }
     fun failures(phase: String, id: UUID) = diagnostics.map { it.second }
         .filterIsInstance<MessagingDiagnostic.Failure>().filter { it.operation == "$phase.$id" }.map { it.cause }
-    fun timeOf(phase: String, id: UUID) = diagnostics.single {
-        (it.second as? MessagingDiagnostic.Failure)?.operation == "$phase.$id"
-    }.first
 
-    private fun literalMessage(id: UUID, text: String) = MessageDTO(
-        id = id, radioId = radio, contactID = null, channelIndex = 0u, text = text,
-        timestamp = 1_704_067_200u, createdAt = instant, sortDate = instant,
-        direction = MessageDirection.OUTGOING, status = MessageStatus.PENDING, textType = TextType.PLAIN,
-        ackCode = null, pathLength = 0u, snr = null, pathNodes = null, senderKeyPrefix = null,
-        senderNodeName = null, isRead = false, replyToID = null, roundTripTime = null,
-        heardRepeats = 0, sendCount = 1, retryAttempt = 0, maxRetryAttempts = 0,
-        deduplicationKey = null, linkPreviewURL = null, linkPreviewTitle = null,
-        linkPreviewImageData = null, linkPreviewIconData = null, linkPreviewFetched = false,
-        containsSelfMention = false, mentionSeen = false, failureSeen = false,
-        timestampCorrected = false, senderTimestamp = null, reactionSummary = null,
-        routeType = null, regionScope = null, regionScopeMatches = SnapshotList.empty(),
+    private suspend fun channelMessage(text: String) = store.createOrReconcileChannelMessage(
+        ChannelMessageCreation(UUID.randomUUID(), ChannelHistoryScope(radio, channel.index, channelOccupantID), text),
+        timestamp = 1_704_067_200u,
+        createdAt = instant,
     )
+
+    lateinit var channelOccupantID: UUID
 
     private class Signals(private val token: SessionToken) : ConnectionSignals {
         private val subscriptions = mutableSetOf<Channel<ConnectionSnapshot>>()

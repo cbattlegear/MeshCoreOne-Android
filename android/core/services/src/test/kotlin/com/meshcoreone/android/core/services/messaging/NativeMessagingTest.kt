@@ -83,6 +83,7 @@ class NativeMessagingTest {
         },
         native("channelMetadataBudgetCountsTheActualUnicodeNameBytesAndStoreFailureDoesNotBecomeAbsence") {
             val h = Harness(this); h.store.saveDevice(DeviceDTO(radioId = RADIO, publicKey = SELF, nodeName = "\u6F22\u5B57"))
+            h.store.seedChannelCreation()
             assertEquals(131, h.service.createPendingChannelMessage("a".repeat(131), 0u, RADIO).text.length)
             assertFailsWith<MessageServiceException> { h.service.createPendingChannelMessage("a".repeat(132), 0u, RADIO) }
             val fault = storageFailure(); h.store.faults["fetchDevice"] = fault

@@ -6,6 +6,7 @@ import com.meshcoreone.android.core.contracts.domain.ChannelSyncError
 import com.meshcoreone.android.core.contracts.domain.ChannelSyncErrorType
 import com.meshcoreone.android.core.contracts.domain.ChannelSyncResult
 import com.meshcoreone.android.core.contracts.domain.ChannelPersisting
+import com.meshcoreone.android.core.contracts.domain.ChannelIdentityWriteScope
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.model.RadioId
@@ -38,6 +39,14 @@ import org.junit.jupiter.api.DynamicTest
 import org.junit.jupiter.api.TestFactory
 
 class ChannelServiceNativeTest {
+    private fun decorateStore(
+        rows: ChannelPersisting, decorate: (ChannelPersisting) -> ChannelPersisting,
+    ): ChannelPersisting = object : ChannelPersisting by decorate(rows) {
+        override suspend fun <T> withChannelOperation(
+            block: suspend (ChannelPersisting, ChannelIdentityWriteScope) -> T,
+        ): T = rows.withChannelOperation { scoped, scope -> block(decorate(scoped), scope) }
+    }
+
     @TestFactory
     fun dispatchCancellationAccounting(): List<DynamicTest> = listOf(false, true).flatMap { clear ->
         channelsCases("WP-405 dispatch accounting ${if (clear) "clear" else "write"}",
@@ -178,12 +187,12 @@ class ChannelServiceNativeTest {
             val base = ChannelsMockSession()
             val rows = ChannelsInMemoryStore()
             val saved = CompletableDeferred<Unit>()
-            val store = object : ChannelPersisting by rows {
+            val store = decorateStore(rows) { scoped -> object : ChannelPersisting by scoped {
                 override suspend fun saveChannel(radioId: RadioId, info: ChannelInfo): java.util.UUID {
-                    rows.saveChannel(radioId, info)
+                    scoped.saveChannel(radioId, info)
                     saved.complete(Unit)
                     awaitCancellation()
-                }
+                } }
             }
             val service = initializedAllocationService(radio, base, store)
             val commits = mutableListOf<EntityKey>()
@@ -221,6 +230,34 @@ class ChannelServiceNativeTest {
             assertEquals(listOf<UByte>(1u, 2u), base.recordedSetChannels.map { it.index })
             assertEquals(listOf<UByte>(1u, 2u), cache.indexUpdates.last())
         },
+        "commit observer failure cannot replace the original post-save failure" to {
+            val radio = channelsRadioId()
+            val rows = ChannelsInMemoryStore()
+            val primary = IllegalStateException("post-save lookup failed")
+            val observerFailure = IllegalArgumentException("observer failed")
+            val store = decorateStore(rows) { scoped -> object : ChannelPersisting by scoped {
+                override suspend fun fetchChannel(radioId: RadioId, index: UByte): com.meshcoreone.android.core.model.ChannelDTO? {
+                    if (index == 1.toUByte() && rows.fetchChannel(radioId, index) != null) throw primary
+                    return scoped.fetchChannel(radioId, index)
+                }
+            } }
+            val service = initializedAllocationService(radio, ChannelsMockSession(), store)
+            var observed: EntityKey? = null
+            val failure = assertFailsWith<IllegalStateException> {
+                service.createChannelWithSecret(radio, 4u, "Saved", channelsSecret(0x11)) { key, _ ->
+                    observed = key
+                    val reentrant = async(start = CoroutineStart.UNDISPATCHED) {
+                        service.joinHashtagChannel(radio, 4u, "#nested")
+                    }
+                    assertTrue(reentrant.isCompleted, "Receipt publication must not hold the shared operation lane")
+                    throw observerFailure
+                }
+            }
+            assertTrue(failure === primary)
+            assertEquals(listOf(observerFailure), primary.suppressed.toList())
+            assertEquals(EntityKey(radio, rows.fetchChannels(radio).first().id), observed)
+            assertEquals(listOf<UByte>(1u, 2u), rows.fetchChannels(radio).map { it.index })
+        },
     )
 
     private suspend fun CoroutineScope.persistedWriteOutcome(inCache: Boolean, cancel: Boolean) {
@@ -238,15 +275,15 @@ class ChannelServiceNativeTest {
                 throw failure
             }
         }
-        val store = object : ChannelPersisting by rows {
+        val store = decorateStore(rows) { scoped -> object : ChannelPersisting by scoped {
             override suspend fun fetchChannel(radioId: RadioId, index: UByte): com.meshcoreone.android.core.model.ChannelDTO? {
                 if (!inCache) afterSaved()
-                return rows.fetchChannel(radioId, index)
+                return scoped.fetchChannel(radioId, index)
             }
             override suspend fun fetchChannels(radioId: RadioId): SnapshotList<com.meshcoreone.android.core.model.ChannelDTO> {
                 if (inCache) afterSaved()
-                return rows.fetchChannels(radioId)
-            }
+                return scoped.fetchChannels(radioId)
+            } }
         }
         val service = initializedAllocationService(radio, base, store, ChannelsDecryptionCapture())
         val commits = mutableListOf<Pair<EntityKey, UByte>>()
@@ -316,11 +353,11 @@ class ChannelServiceNativeTest {
             val base = ChannelsMockSession()
             val rows = ChannelsInMemoryStore()
             val save = CompletableDeferred<Unit>()
-            val store = object : ChannelPersisting by rows {
+            val store = decorateStore(rows) { scoped -> object : ChannelPersisting by scoped {
                 override suspend fun saveChannel(radioId: com.meshcoreone.android.core.model.RadioId, info: ChannelInfo): java.util.UUID {
                     if (info.name == "A") save.await()
-                    return rows.saveChannel(radioId, info)
-                }
+                    return scoped.saveChannel(radioId, info)
+                } }
             }
             val service = initializedAllocationService(radio, base, store)
             val first = async(start = CoroutineStart.UNDISPATCHED) {
@@ -450,10 +487,10 @@ class ChannelServiceNativeTest {
             val base = ChannelsMockSession()
             val rows = ChannelsInMemoryStore()
             val diskFailure = IllegalStateException("disk full")
-            val store = object : ChannelPersisting by rows {
+            val store = decorateStore(rows) { scoped -> object : ChannelPersisting by scoped {
                 override suspend fun saveChannel(radioId: com.meshcoreone.android.core.model.RadioId, info: ChannelInfo): java.util.UUID =
                     throw diskFailure
-            }
+            } }
             val service = initializedAllocationService(radio, base, store)
             assertEquals(diskFailure, assertFailsWith<IllegalStateException> { service.joinHashtagChannel(radio, 3u, "#test") })
             assertEquals(diskFailure, assertFailsWith<ChannelMutationError.ReconciliationRequired> {
@@ -521,7 +558,7 @@ class ChannelServiceNativeTest {
             val retryRead = CompletableDeferred<Unit>()
             val release = CompletableDeferred<Unit>()
             var holdRetry = false
-            val store = object : ChannelPersisting by rows {
+            val store = decorateStore(rows) { scoped -> object : ChannelPersisting by scoped {
                 override suspend fun batchSaveChannels(
                     radioId: RadioId, configured: SnapshotList<ChannelInfo>, unconfiguredIndices: SnapshotList<UByte>, pruneBeyond: UByte?,
                 ): SnapshotList<com.meshcoreone.android.core.model.ChannelDTO> {
@@ -529,8 +566,8 @@ class ChannelServiceNativeTest {
                         retryRead.complete(Unit)
                         release.await()
                     }
-                    return rows.batchSaveChannels(radioId, configured, unconfiguredIndices, pruneBeyond)
-                }
+                    return scoped.batchSaveChannels(radioId, configured, unconfiguredIndices, pruneBeyond)
+                } }
             }
             val service = ChannelService(base, store, null, ChannelsRecordingClock())
             assertEquals(listOf<UByte>(1u), service.syncChannels(radio, 4u, false).retryableIndices.toList())

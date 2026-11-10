@@ -20,10 +20,16 @@ import com.meshcoreone.android.core.contracts.domain.BluetoothAddress
 import com.meshcoreone.android.core.contracts.domain.BluetoothPairingHandle
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
+import com.meshcoreone.android.core.model.ChannelMessageEnvelope
+import com.meshcoreone.android.core.model.MessageDTO
+import com.meshcoreone.android.core.model.PendingSendDTO
+import com.meshcoreone.android.core.model.QueuedChannelDispatchState
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
+import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.runtime.ProcessConnectionPreferences
 import com.meshcoreone.android.core.runtime.RuntimeClock
 import com.meshcoreone.android.core.runtime.RuntimeDiagnostic
@@ -38,6 +44,7 @@ import com.meshcoreone.android.core.services.messaging.ChannelQueryAccountingEve
 import com.meshcoreone.android.core.services.messaging.MessageServiceConfig
 import com.meshcoreone.android.core.services.rendering.DraftDefaults
 import com.meshcoreone.android.core.services.rendering.DraftStore
+import java.time.Instant
 import java.util.UUID
 import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.test.TestCoroutineScheduler
@@ -244,6 +251,39 @@ internal class ContainerHarness(
     }
 }
 
+internal suspend fun RoomPersistenceStore.admitQueueChannelFixture(
+    message: MessageDTO,
+    pendingID: UUID,
+    isResend: Boolean,
+    localNodeName: String?,
+    initialAttemptCount: Long,
+): PendingSendDTO {
+    require(initialAttemptCount >= 0 && initialAttemptCount <= Int.MAX_VALUE.toLong())
+    val channelIndex = checkNotNull(message.channelIndex)
+    val occupantID = checkNotNull(message.channelOccupantID)
+    val messageKey = EntityKey(message.radioId, message.id)
+    check(fetchMessage(messageKey)?.channelOccupantID == occupantID)
+    val envelope = ChannelMessageEnvelope(
+        message.id, channelIndex, isResend, message.text, message.timestamp, localNodeName, occupantID,
+    )
+    val pendingKey = EntityKey(message.radioId, pendingID)
+    val sequence = insertPendingSendAssigningSequence(
+        PendingSendDTO.fromEnvelope(
+            envelope,
+            message.radioId,
+            id = pendingID,
+            enqueuedAt = message.createdAt,
+        ),
+    )
+    repeat(initialAttemptCount.toInt()) {
+        incrementReadyQueuedChannelAttemptCount(pendingKey, message.id)
+    }
+    return checkNotNull(fetchPendingSendsForMessage(messageKey).singleOrNull { it.id == pendingID }).also {
+        check(it.sequence == sequence)
+        check(it.channelDispatchState == QueuedChannelDispatchState.READY)
+    }
+}
+
 /** Robolectric base: an in-memory Room database and the production [RoomPersistenceStore] over it. */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31])
@@ -252,6 +292,14 @@ abstract class RoomProcessTest {
     internal lateinit var db: MeshCoreDatabase
     internal lateinit var store: RoomPersistenceStore
     private lateinit var owner: CoroutineScope
+
+    protected suspend fun seedReconciledChannel(
+        channel: com.meshcoreone.android.core.model.ChannelDTO,
+        backing: RoomPersistenceStore = store,
+    ) {
+        backing.saveChannel(channel)
+        backing.saveChannel(channel.radioId, ChannelInfo(channel.index, channel.name, channel.secret))
+    }
 
     @Before fun openStore() {
         reportPathRecencyPhase("room-open|START")

@@ -6,6 +6,9 @@ import android.database.sqlite.SQLiteException
 import android.util.Log
 import androidx.room.withTransaction
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.ChannelIdentityMutation
+import com.meshcoreone.android.core.contracts.domain.ChannelIdentityMutex
+import com.meshcoreone.android.core.contracts.domain.ChannelIdentityWriteScope
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.contracts.domain.RxLogRetention
@@ -19,6 +22,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.currentCoroutineContext
@@ -74,6 +78,7 @@ internal class RoomRepositoryContext(
     val clock: Clock,
     parentScope: CoroutineScope,
     val reporter: RepositoryIssueReporter,
+    private val channelIdentityMutation: ChannelIdentityMutation = ChannelIdentityMutex.PROCESS,
 ) {
     private val mutex = Mutex()
     private val flushOwner = SupervisorJob(parentScope.coroutineContext[Job])
@@ -117,6 +122,20 @@ internal class RoomRepositoryContext(
         }
     }
 
+    suspend fun <T> channelWrite(
+        operation: String,
+        flushBeforeRollback: Boolean = false,
+        identityScope: ChannelIdentityWriteScope? = null,
+        block: suspend RepositoryTransaction.() -> T,
+    ): T = if (identityScope == null) {
+        channelIdentityMutation.withChannelIdentityRestore { write(operation, flushBeforeRollback, block) }
+    } else {
+        identityScope.withChannelIdentityMutation { write(operation, flushBeforeRollback, block) }
+    }
+
+    suspend fun <T> channelOperation(block: suspend (ChannelIdentityWriteScope) -> T): T =
+        channelIdentityMutation.withChannelOperationScope(block)
+
     suspend fun <T> guardedWrite(
         operation: String,
         unchanged: T,
@@ -146,19 +165,26 @@ internal class RoomRepositoryContext(
     internal suspend fun <T> restoreBackup(
         afterCommit: () -> Unit,
         block: suspend RepositoryTransaction.() -> T,
-    ): T = access("importBackupDatabase", writing = true) {
-        mutex.withLock {
-            ensureOpen()
-            flushRxLocked()
-            val transaction = RepositoryTransaction(database, clock, pendingRx)
-            committedTransaction(
-                afterCommit = {
-                    transaction.complete()
-                    afterCommit()
-                },
-                returnCommittedOnCancellation = true,
-            ) { transaction.block() }
+    ): T {
+        var committed = false
+        val restored = channelIdentityMutation.withChannelIdentityRestore {
+            access("importBackupDatabase", writing = true) {
+                mutex.withLock {
+                    ensureOpen()
+                    flushRxLocked()
+                    val transaction = RepositoryTransaction(database, clock, pendingRx)
+                    committedTransaction(
+                        afterCommit = {
+                            transaction.complete()
+                            committed = true
+                        },
+                        returnCommittedOnCancellation = true,
+                    ) { transaction.block() }
+                }
+            }
         }
+        if (committed) withContext(NonCancellable) { afterCommit() }
+        return restored
     }
 
     suspend fun saveRx(row: RxLogEntryEntity) = access("saveRxLogEntry", writing = true) {

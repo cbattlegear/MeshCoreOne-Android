@@ -17,7 +17,6 @@ import org.robolectric.annotation.SQLiteMode
 import com.meshcoreone.android.core.contracts.domain.BluetoothAddress
 import com.meshcoreone.android.core.contracts.domain.BluetoothPairingHandle
 import com.meshcoreone.android.core.contracts.domain.ChannelHistoryScope
-import com.meshcoreone.android.core.contracts.domain.ChannelSubmission
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.EntityKey
@@ -255,12 +254,20 @@ internal suspend fun RoomPersistenceStore.admitQueueChannelFixture(
         message.id, channelIndex, isResend, message.text, message.timestamp, localNodeName, occupantID,
     )
     val pendingKey = EntityKey(message.radioId, pendingID)
-    admitChannelSubmission(ChannelSubmission(pendingID, origin, envelope), message.createdAt)
+    val sequence = insertPendingSendAssigningSequence(
+        PendingSendDTO.fromEnvelope(
+            envelope,
+            message.radioId,
+            id = pendingID,
+            enqueuedAt = message.createdAt,
+        ),
+    )
     repeat(initialAttemptCount.toInt()) {
         incrementReadyQueuedChannelAttemptCount(pendingKey, message.id)
     }
     val messageKey = EntityKey(message.radioId, message.id)
     return checkNotNull(fetchPendingSendsForMessage(messageKey).singleOrNull { it.id == pendingID }).also {
+        check(it.sequence == sequence)
         check(it.channelDispatchState == QueuedChannelDispatchState.READY)
     }
 }

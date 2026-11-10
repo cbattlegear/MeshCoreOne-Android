@@ -181,15 +181,15 @@ internal class ChannelQueueOriginalFixture(
         assertMessages(messageA, messageB)
         val envelopeA = ChannelMessageEnvelope(messageA.id, 0u, true, "Hello channel",
             1_704_067_200u, "Test Radio", channelOccupantID)
-        val submission = ChannelSubmission(
-            UUID.randomUUID(), ChannelHistoryScope(radio, channel.index, channelOccupantID), envelopeA,
+        val pendingID = UUID.randomUUID()
+        store.insertPendingSendAssigningSequence(
+            PendingSendDTO.fromEnvelope(envelopeA, radio, id = pendingID, enqueuedAt = instant),
         )
-        store.admitChannelSubmission(submission, instant)
         repeat(attempts.toInt()) {
-            store.incrementReadyQueuedChannelAttemptCount(EntityKey(radio, submission.pendingID), messageA.id)
+            store.incrementReadyQueuedChannelAttemptCount(EntityKey(radio, pendingID), messageA.id)
         }
         pendingA = checkNotNull(
-            store.fetchPendingSendsForMessage(EntityKey(radio, messageA.id)).singleOrNull { it.id == submission.pendingID },
+            store.fetchPendingSendsForMessage(EntityKey(radio, messageA.id)).singleOrNull { it.id == pendingID },
         )
         assertRows(pendingA)
         assertEquals(envelopeA, pendingA.channelMessageEnvelope())

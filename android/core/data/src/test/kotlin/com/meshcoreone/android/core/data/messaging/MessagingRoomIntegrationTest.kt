@@ -151,9 +151,13 @@ class MessagingRoomIntegrationTest {
             message.id, origin.channelIndex, isResend, message.text, message.timestamp, "Test Radio",
             origin.expectedOccupantID,
         )
-        store.admitChannelSubmission(
-            ChannelSubmission(pendingID, origin, envelope),
-            message.createdAt,
+        store.insertPendingSendAssigningSequence(
+            PendingSendDTO.fromEnvelope(
+                envelope,
+                message.radioId,
+                id = pendingID,
+                enqueuedAt = message.createdAt,
+            ),
         )
         val pendingKey = EntityKey(message.radioId, pendingID)
         repeat(initialAttemptCount.toInt()) {

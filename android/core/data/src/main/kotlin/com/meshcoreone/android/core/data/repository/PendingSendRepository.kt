@@ -9,7 +9,8 @@ import java.util.UUID
 import java.time.Instant
 
 internal class PendingSendRepository(private val context: RoomRepositoryContext) :
-    PendingSendPersisting, QueuedChannelTerminalPersisting, QueuedChannelReadinessPersisting, ChannelSubmissionPersisting {
+    PendingSendPersisting, QueuedChannelTerminalPersisting, QueuedChannelReadinessPersisting,
+    ChannelSubmissionPersisting, InlineChannelAttemptPersisting {
     override suspend fun upsertPendingSend(dto: PendingSendDTO) = context.write("upsertPendingSend") {
         val existing = database.pendingSends().byId(dto.radioId.value, dto.id)
         val candidate = dto.toEntity()
@@ -348,6 +349,37 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
         if (pending.channelDispatchStateRawValue != QueuedChannelDispatchState.READY.rawValue || pending.channelAttemptID != null) {
             reject(pending, QueuedChannelAttemptConflict.SUBMISSION_NOT_READY)
         }
+        val attempt = newChannelAttempt(key, pending, expectedOccupantID, wireTimestamp)
+        if (database.pendingSends().beginChannelAttempt(
+                key.radioId.value, key.pendingID, key.messageID, expectedOccupantID, key.attemptID,
+            ) != 1) reject(pending, QueuedChannelAttemptConflict.SUBMISSION_NOT_READY)
+        database.queuedChannelAttempts().insert(attempt)
+        save()
+        attempt.toDTO()
+    }
+
+    override suspend fun beginInlineChannelAttempt(
+        submission: PendingSendDTO, key: QueuedChannelAttemptKey, expectedOccupantID: UUID, wireTimestamp: UInt,
+    ): QueuedChannelAttempt = context.write("beginInlineChannelAttempt") {
+        if (submission.radioId != key.radioId || submission.id != key.pendingID || submission.messageID != key.messageID) {
+            reject(key, QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION)
+        }
+        val pending = newSubmission(submission)
+        val attempt = newChannelAttempt(key, pending, expectedOccupantID, wireTimestamp)
+        val sequence = checkedIncrement(database.pendingSends().maximumSequence(key.radioId.value) ?: 0)
+        database.pendingSends().insert(pending.copy(
+            sequence = sequence,
+            channelDispatchStateRawValue = QueuedChannelDispatchState.DISPATCHING.rawValue,
+            channelAttemptID = key.attemptID,
+        ))
+        database.queuedChannelAttempts().insert(attempt)
+        save()
+        attempt.toDTO()
+    }
+
+    private suspend fun RepositoryTransaction.newChannelAttempt(
+        key: QueuedChannelAttemptKey, pending: PendingSendEntity, expectedOccupantID: UUID, wireTimestamp: UInt,
+    ): QueuedChannelAttemptEntity {
         rejectConflictingSibling(pending)
         val index = pending.channelIndex
         val message = database.messages().byId(key.radioId.value, key.messageID)
@@ -360,16 +392,10 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
         if (database.queuedChannelAttempts().byId(key.radioId.value, key.attemptID) != null) {
             reject(pending, QueuedChannelAttemptConflict.ATTEMPT_ID_REUSED)
         }
-        val attempt = QueuedChannelAttemptEntity(
+        return QueuedChannelAttemptEntity(
             key.radioId.value, key.attemptID, key.pendingID, key.messageID, index,
             expectedOccupantID, wireTimestamp.toLong(), pending.isResend, QueuedChannelAttemptPhase.DISPATCHING.rawValue,
         )
-        if (database.pendingSends().beginChannelAttempt(
-                key.radioId.value, key.pendingID, key.messageID, expectedOccupantID, key.attemptID,
-            ) != 1) reject(pending, QueuedChannelAttemptConflict.SUBMISSION_NOT_READY)
-        database.queuedChannelAttempts().insert(attempt)
-        save()
-        attempt.toDTO()
     }
 
     override suspend fun settleQueuedChannelAttempt(

@@ -11,6 +11,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.ChannelHistoryPersisting
 import com.meshcoreone.android.core.contracts.domain.ChannelMessageCreation
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.InlineChannelAttemptPersisting
 import com.meshcoreone.android.core.contracts.domain.NotificationId
 import com.meshcoreone.android.core.contracts.domain.NotificationPostResult
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
@@ -89,7 +90,8 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
         val release = CompletableDeferred<Unit>()
         var hold = false
         val persistence = object : PersistenceStoreProtocol by store,
-            ChannelHistoryPersisting by store, QueuedChannelTerminalPersisting by store {
+            ChannelHistoryPersisting by store, QueuedChannelTerminalPersisting by store,
+            InlineChannelAttemptPersisting by store {
             override suspend fun clearUnreadCount(key: EntityKey) {
                 store.clearUnreadCount(key)
                 if (hold) {

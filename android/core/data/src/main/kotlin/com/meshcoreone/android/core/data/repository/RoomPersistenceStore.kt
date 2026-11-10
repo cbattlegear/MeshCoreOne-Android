@@ -40,6 +40,7 @@ class RoomPersistenceStore private constructor(
     TracePathPersisting by diagnostics, DebugLogPersisting by diagnostics, LinkPreviewPersisting by diagnostics,
     RxLogPersisting by diagnostics, NodeSnapshotPersisting by diagnostics, MetadataPersisting by metadata,
     QueuedChannelTerminalPersisting by pending, QueuedChannelReadinessPersisting by pending,
+    InlineChannelAttemptPersisting by pending,
     ChannelSubmissionPersisting by pending {
     constructor(
         database: MeshCoreDatabase,

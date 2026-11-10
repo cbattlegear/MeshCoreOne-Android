@@ -22,7 +22,24 @@ import com.meshcoreone.android.app.container.AppChatsFeature
 import com.meshcoreone.android.feature.chats.channels.*
 import com.meshcoreone.android.feature.chats.list.MeshCoreLinkParser
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
+import com.meshcoreone.android.core.l10n.generated.AppChatsStrings as C
+import com.meshcoreone.android.core.services.contacts.ChannelMutationError
+import com.meshcoreone.android.core.ui.UiErrorMapper
+import com.meshcoreone.android.core.ui.UiText
+import com.meshcoreone.android.core.ui.uiString
 import kotlinx.coroutines.launch
+
+internal fun channelFailureText(failure: Throwable): UiText = when (failure) {
+    is ChannelSheetError.AlreadyCommitted -> UiText.Resource(com.meshcoreone.android.app.R.string.platform_channel_already_saved)
+    is ChannelMutationError.SyncIncomplete -> UiText.Resource(com.meshcoreone.android.app.R.string.platform_channel_sync_incomplete)
+    is ChannelMutationError.ReconciliationRequired -> UiText.Resource(com.meshcoreone.android.app.R.string.platform_channel_reconciliation_required)
+    is ChannelSheetError.NoAvailableSlots, is ChannelMutationError.NoAvailableSlots -> UiText.Resource(C.chatsJoinFromMessageErrorNoSlots)
+    ChannelSheetError.NoDeviceConnected -> UiText.Resource(C.chatsInputRequiresConnection)
+    ChannelSheetError.InvalidName, ChannelSheetError.InvalidHashtag -> UiText.Resource(C.chatsJoinFromMessageErrorInvalidName)
+    ChannelSheetError.InvalidSecret -> UiText.Resource(C.chatsJoinPrivateErrorInvalidSecret)
+    ChannelSheetError.CreatedChannelMissing -> UiText.Resource(C.chatsJoinFromMessageErrorLoadFailed)
+    else -> UiErrorMapper().message(failure)
+}
 
 @Composable
 internal fun AppChannelsContent(feature: AppChatsFeature, coordinator: NavigationCoordinator, onDismiss: () -> Unit) {
@@ -67,6 +84,7 @@ internal fun AppChannelsContent(feature: AppChatsFeature, coordinator: Navigatio
             },
             onCopy = { clipboard.setText(AnnotatedString(it)) },
             qrCode = { text -> AppQrCode(text) },
+            failureText = { uiString(channelFailureText(it)) },
         )
     }
 }

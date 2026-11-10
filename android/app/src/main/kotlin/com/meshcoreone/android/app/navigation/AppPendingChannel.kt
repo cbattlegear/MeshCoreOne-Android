@@ -39,7 +39,7 @@ internal fun AppPendingChannel(feature: AppChatsFeature, navigation: NavigationC
                 if (link?.hasHashtagSecretMismatch == true) {
                     Text(stringResource(com.meshcoreone.android.core.l10n.R.string.l10n_app_chats_chats_joinfrommessage_hashtagsecretmismatch))
                 }
-                state.failure?.let { Text(com.meshcoreone.android.core.ui.uiString(com.meshcoreone.android.core.ui.UiErrorMapper().message(it))) }
+                state.failure?.let { Text(com.meshcoreone.android.core.ui.uiString(channelFailureText(it))) }
             }
         },
         confirmButton = {

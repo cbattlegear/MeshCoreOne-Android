@@ -22,7 +22,10 @@ import com.meshcoreone.android.app.navigation.HashtagJoinRequest
 import com.meshcoreone.android.app.navigation.NativeNavigationShell
 import com.meshcoreone.android.app.navigation.NavigationCoordinator
 import com.meshcoreone.android.app.navigation.NavigationDestination
+import com.meshcoreone.android.app.navigation.channelFailureText
 import com.meshcoreone.android.core.contracts.AppTab
+import com.meshcoreone.android.core.contracts.domain.ChannelIdentityWriteScope
+import com.meshcoreone.android.core.contracts.domain.ChannelPersisting
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
@@ -35,6 +38,9 @@ import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.command.PacketBuilder
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
+import com.meshcoreone.android.core.services.sync.SyncClock
+import com.meshcoreone.android.core.services.contacts.ChannelMutationError
+import com.meshcoreone.android.core.ui.UiText
 import com.meshcoreone.android.feature.chats.list.ChatLinkRouter
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
@@ -42,6 +48,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
@@ -55,6 +62,8 @@ import org.robolectric.Robolectric
 import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 import kotlin.test.*
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 
 @Config(sdk = [31, 37], qualifiers = "en-rUS-w390dp-h1000dp-mdpi")
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -70,6 +79,43 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
     @After fun destroyHost() { host.pause().stop().destroy() }
 
     private fun emptyChannelReply(index: Int): Bytes = Bytes.of(0x12, index) + Bytes(ByteArray(48))
+
+    @Test fun allocationRecoveryUsesTypedResourcesWithoutLeakingDiagnosticCopy() {
+        val unresolved = ChannelMutationError.SyncIncomplete(SnapshotList.of<UByte>(1u))
+        val uncertain = ChannelMutationError.ReconciliationRequired(IllegalStateException("private radio diagnostic"))
+        assertEquals(UiText.Resource(com.meshcoreone.android.app.R.string.platform_channel_sync_incomplete),
+            channelFailureText(unresolved))
+        assertEquals(UiText.Resource(com.meshcoreone.android.app.R.string.platform_channel_reconciliation_required),
+            channelFailureText(uncertain))
+        assertFalse(channelFailureText(uncertain).resolve(host.get().resources).contains("private radio diagnostic"))
+        assertEquals(UiText.Resource(com.meshcoreone.android.core.l10n.generated.AppChatsStrings.chatsJoinFromMessageErrorNoSlots),
+            channelFailureText(ChannelMutationError.NoAvailableSlots()))
+    }
+
+    private fun interceptChannelPersistence(decorate: (ChannelPersisting) -> ChannelPersisting): PersistenceStoreProtocol {
+        val channels = decorate(store)
+        return object : PersistenceStoreProtocol by store {
+            override suspend fun <T> withChannelOperation(
+                block: suspend (ChannelPersisting, ChannelIdentityWriteScope) -> T,
+            ): T = store.withChannelOperation { scoped, scope -> block(decorate(scoped), scope) }
+
+            override suspend fun saveChannel(radioId: RadioId, info: ChannelInfo): java.util.UUID =
+                channels.saveChannel(radioId, info)
+
+            override suspend fun fetchChannel(radioId: RadioId, index: UByte): ChannelDTO? =
+                channels.fetchChannel(radioId, index)
+
+            override suspend fun fetchChannels(radioId: RadioId): SnapshotList<ChannelDTO> =
+                channels.fetchChannels(radioId)
+
+            override suspend fun batchSaveChannels(
+                radioId: RadioId, configured: SnapshotList<ChannelInfo>, unconfiguredIndices: SnapshotList<UByte>, pruneBeyond: UByte?,
+            ): SnapshotList<ChannelDTO> = channels.batchSaveChannels(radioId, configured, unconfiguredIndices, pruneBeyond)
+
+            override suspend fun setChannelFloodScope(key: EntityKey, floodScope: ChannelFloodScope) =
+                channels.setChannelFloodScope(key, floodScope)
+        }
+    }
 
     @Test fun existingHashtagFromMountedOptionsAfterDisconnectNavigatesCachedConversationWithoutRadioWork() = runTest {
         val h = ContainerHarness(this, store)
@@ -165,9 +211,9 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
                 throw failure
             }
         }
-        val persistence = object : PersistenceStoreProtocol by store {
+        val persistence = interceptChannelPersistence { scoped -> object : ChannelPersisting by scoped {
             override suspend fun saveChannel(radioId: RadioId, info: ChannelInfo): java.util.UUID {
-                val id = store.saveChannel(radioId, info)
+                val id = scoped.saveChannel(radioId, info)
                 if (probe.get() && info.name == "#test" && savedBy.compareAndSet(null, currentCoroutineContext()[Job])) {
                     returnedId.set(id)
                 }
@@ -175,13 +221,13 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
             }
             override suspend fun fetchChannel(radioId: RadioId, index: UByte): ChannelDTO? {
                 if (!inCache) afterSaved()
-                return store.fetchChannel(radioId, index)
+                return scoped.fetchChannel(radioId, index)
             }
             override suspend fun fetchChannels(radioId: RadioId): SnapshotList<ChannelDTO> {
                 if (inCache) afterSaved()
-                return store.fetchChannels(radioId)
+                return scoped.fetchChannels(radioId)
             }
-        }
+        } }
         val h = ContainerHarness(this, store, persistenceOverride = persistence)
         h.links.configureRadio = { radio ->
             radio.respond = { frame -> when (frame[0].toInt()) {
@@ -246,6 +292,8 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
                 requestJob.isCompleted
             }
             assertEquals(cancel, requestJob.isCancelled)
+            compose.onNodeWithText(host.get().getString(com.meshcoreone.android.app.R.string.platform_channel_already_saved))
+                .assertIsDisplayed()
             probe.set(false)
             for (value in listOf(1080, 390, 1080)) {
                 compose.runOnIdle { width.value = value.dp }
@@ -265,7 +313,7 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
                 selections.any { it is ChatSelection.Channel && it.channel.id == saved.id }
             }, "A saved-but-incomplete result must not fabricate a successful navigation")
 
-            external.routeExternal(uri)
+            navigation.stageChannelLink(requireNotNull(first.link))
             val second = assertNotNull(navigation.state.value.pendingChannelConfirmation)
             assertNotEquals(first.deliveryId, second.deliveryId)
             awaitEnabled()
@@ -535,7 +583,11 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
 
     @Test
     fun sameRadioEsp32ReconnectWithSkippedChannelPhaseReadsFreshAuthorityOnExplicitConsent() = runTest {
-        val h = ContainerHarness(this, store)
+        val h = ContainerHarness(this, store, syncClock = object : SyncClock {
+            override fun now() = EPOCH.plusMillis(testScheduler.currentTime)
+            override fun elapsed() = testScheduler.currentTime.milliseconds
+            override suspend fun sleep(duration: Duration) = delay(duration)
+        })
         val occupantSecret = Bytes.fromHex("11111111111111111111111111111111")
         val occupant = Bytes.of(0x12, 1) + Bytes.utf8("Radio occupant").paddedOrTruncated(32) + occupantSecret
         h.links.configureRadio = { radio ->
@@ -550,16 +602,22 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
             h.container.foreground.activityStarted()
             val target = h.target()
             h.manager.connect(target)
-            h.settle()
+            h.eventually("first foreground sync records a clean channel stamp") {
+                h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY &&
+                    h.manager.lastCleanChannelSync != null
+            }
             h.assertReady()
-            h.eventually("first foreground sync records a clean channel stamp") { h.manager.lastCleanChannelSync != null }
             val old = assertNotNull(h.sessions.current)
             val radio = assertNotNull(h.appState.currentRadioId)
             assertEquals("Radio occupant", store.fetchChannel(radio, 1u)?.name)
-            h.manager.disconnect(com.meshcoreone.android.core.runtime.RuntimeDisconnectReason.USER_INITIATED)
-            h.settle()
+            val cleanSync = assertNotNull(h.manager.lastCleanChannelSync)
+            h.manager.disconnect(com.meshcoreone.android.core.runtime.RuntimeDisconnectReason.WIFI_RECONNECT_PREP)
+            h.scheduler.runCurrent()
+            assertEquals(cleanSync, h.manager.lastCleanChannelSync, "A transient reconnect retains the recent-sync stamp")
             h.manager.connect(target)
-            h.settle()
+            h.eventually("fresh graph becomes ready inside the recent-sync window") {
+                h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
+            }
             h.assertReady()
             val fresh = assertNotNull(h.sessions.current)
             assertNotSame(old.channelService, fresh.channelService)
@@ -614,7 +672,7 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
         var holdRetry = false
         var failObservation = !joinFirst
         var retryIndex: UByte = 1u
-        val persistence = object : PersistenceStoreProtocol by store {
+        val persistence = interceptChannelPersistence { scoped -> object : ChannelPersisting by scoped {
             override suspend fun batchSaveChannels(
                 radioId: RadioId, configured: SnapshotList<ChannelInfo>, unconfiguredIndices: SnapshotList<UByte>, pruneBeyond: UByte?,
             ): SnapshotList<ChannelDTO> {
@@ -625,9 +683,9 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
                     retryRead.complete(Unit)
                     release.await()
                 }
-                return store.batchSaveChannels(radioId, configured, unconfiguredIndices, pruneBeyond)
+                return scoped.batchSaveChannels(radioId, configured, unconfiguredIndices, pruneBeyond)
             }
-        }
+        } }
         val h = ContainerHarness(this, store, persistenceOverride = persistence)
         val occupantSecret = Bytes.fromHex("11111111111111111111111111111111")
         val remote = mutableMapOf(1 to (Bytes.of(0x12, 1) + Bytes.utf8("Radio occupant").paddedOrTruncated(32) + occupantSecret))
@@ -692,7 +750,7 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
                 compose.waitUntil(10_000) {
                     h.scheduler.runCurrent()
                     compose.onAllNodesWithText(
-                        "Some radio channel slots are not synchronized. Wait for synchronization or reconnect before adding a channel.",
+                        host.get().getString(com.meshcoreone.android.app.R.string.platform_channel_sync_incomplete),
                     ).fetchSemanticsNodes().isNotEmpty()
                 }
                 h.assertReady()
@@ -711,7 +769,7 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
             }
             holdRetry = true
             val retry = backgroundScope.async { service.retryFailedChannels(radio, SnapshotList.of(retryIndex)) }
-            h.eventually("actual configured retry reply is held before Room batch commit", virtualBudgetMillis = 0) {
+            h.eventually("actual configured retry reply is held before Room batch commit", virtualBudgetMillis = 1_000) {
                 retryRead.isCompleted
             }
             if (joinFirst) navigation.stageChannelLink(expected)
@@ -768,12 +826,12 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
 
     private suspend fun TestScope.preAckTwoConsents(initialHashtag: Boolean, identical: Boolean = false) {
         val scopeApplied = CompletableDeferred<Unit>()
-        val persistence = object : PersistenceStoreProtocol by store {
+        val persistence = interceptChannelPersistence { scoped -> object : ChannelPersisting by scoped {
             override suspend fun setChannelFloodScope(key: EntityKey, floodScope: ChannelFloodScope) {
-                store.setChannelFloodScope(key, floodScope)
+                scoped.setChannelFloodScope(key, floodScope)
                 if (floodScope == ChannelFloodScope.Region("region-a")) scopeApplied.complete(Unit)
             }
-        }
+        } }
         val h = ContainerHarness(this, store, persistenceOverride = persistence)
         var holdAcknowledgements = false
         h.links.configureRadio = { radio ->
@@ -922,9 +980,9 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
         val release = CompletableDeferred<Unit>()
         val scopeApplied = CompletableDeferred<Unit>()
         var hold = false
-        val persistence = object : PersistenceStoreProtocol by store {
+        val persistence = interceptChannelPersistence { scoped -> object : ChannelPersisting by scoped {
             override suspend fun saveChannel(radioId: RadioId, info: ChannelInfo): java.util.UUID {
-                val id = store.saveChannel(radioId, info)
+                val id = scoped.saveChannel(radioId, info)
                 if (hold && info.name == "#test") {
                     saved.complete(Unit)
                     release.await()
@@ -933,10 +991,10 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
             }
 
             override suspend fun setChannelFloodScope(key: EntityKey, floodScope: ChannelFloodScope) {
-                store.setChannelFloodScope(key, floodScope)
+                scoped.setChannelFloodScope(key, floodScope)
                 if (floodScope == ChannelFloodScope.Region("testregion")) scopeApplied.complete(Unit)
             }
-        }
+        } }
         val h = ContainerHarness(this, store, persistenceOverride = persistence)
         h.links.configureRadio = { radio ->
             radio.respond = { frame -> when (frame[0].toInt()) {

@@ -13,6 +13,8 @@ import com.meshcoreone.android.app.navigation.ContactLinkRequest
 import com.meshcoreone.android.app.navigation.ContactLinkResolvedCompletion
 import com.meshcoreone.android.app.navigation.ChatContactMount
 import com.meshcoreone.android.app.navigation.HashtagJoinRequest
+import com.meshcoreone.android.app.navigation.PendingChannelConfirmation
+import com.meshcoreone.android.app.navigation.NavigationCoordinator
 import com.meshcoreone.android.app.state.MessageEvent
 import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.core.contracts.domain.ChannelQuery
@@ -41,6 +43,7 @@ import com.meshcoreone.android.core.services.remote.stopSessionKeepAlive
 import java.time.Clock
 import java.time.Instant
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.logging.Level
 import java.util.logging.Logger
 import kotlinx.coroutines.flow.*
@@ -65,6 +68,7 @@ import com.meshcoreone.android.app.navigation.MessageBubbleConfiguration
 import com.meshcoreone.android.app.state.ChatConversationType
 import com.meshcoreone.android.app.state.*
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.Job
@@ -107,6 +111,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
     private val floodScopeMutex = Mutex()
     private var lastPushedScope: PushedFloodScope? = null
     private val visibleRoomKeepAlives = mutableMapOf<Pair<RadioSessionContainer, EntityKey>, Any>()
+    private val channelConfirmations = mutableMapOf<Pair<NavigationCoordinator, UUID>, ChannelConfirmationSubmission>()
     private val store get() = container.processStore
     private val scope get() = container.uiScope
     private val app get() = container.appState
@@ -149,6 +154,72 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
     }
 
     internal fun maximumChannels(): UByte = app.connectedDevice?.maxChannels ?: 0u
+
+    internal class ChannelConfirmationSubmission(
+        val radioId: RadioId?,
+        val maximumChannels: UByte,
+        val holder: ChannelSheetsStateHolder,
+    ) {
+        val loadStarted = AtomicBoolean(false)
+    }
+
+    internal fun releaseInactiveChannelConfirmations(navigation: NavigationCoordinator) {
+        val state = navigation.state.value
+        val active = listOfNotNull(state.pendingChannelConfirmation?.deliveryId, state.pendingHashtagConfirmation?.deliveryId)
+        synchronized(channelConfirmations) {
+            channelConfirmations.entries.removeAll { (key, submission) ->
+                key.first === navigation && key.second !in active && !submission.holder.state.value.isSubmitting
+            }
+        }
+    }
+
+    internal fun channelConfirmation(
+        navigation: NavigationCoordinator, deliveryId: UUID, radioId: RadioId?,
+    ): ChannelConfirmationSubmission {
+        val maximum = maximumChannels()
+        val key = navigation to deliveryId
+        return synchronized(channelConfirmations) {
+            val retained = channelConfirmations[key]
+            if (retained != null && (retained.radioId == radioId && retained.maximumChannels == maximum ||
+                    retained.holder.state.value.let { it.isSubmitting || it.committedWrite != null })) {
+                retained
+            } else {
+                ChannelConfirmationSubmission(radioId, maximum, ChannelSheetsStateHolder(radioId, maximum, channels))
+                    .also { channelConfirmations[key] = it }
+            }
+        }
+    }
+
+    internal fun loadChannelConfirmation(submission: ChannelConfirmationSubmission) {
+        if (submission.loadStarted.compareAndSet(false, true)) {
+            scope.launch(start = CoroutineStart.UNDISPATCHED) { submission.holder.load() }
+        }
+    }
+
+    internal fun confirmChannel(
+        navigation: NavigationCoordinator, request: PendingChannelConfirmation, submission: ChannelConfirmationSubmission,
+    ) {
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            val state = navigation.state.value
+            val current = state.pendingChannelConfirmation ?: state.pendingHashtagConfirmation
+            if (current?.deliveryId != request.deliveryId) return@launch
+            if (synchronized(channelConfirmations) { channelConfirmations[navigation to request.deliveryId] !== submission }) {
+                return@launch
+            }
+            try {
+                val link = request.link
+                val channel = if (link != null) {
+                    submission.holder.joinLink(ChannelLink(link.name, link.secret, link.regionScope, link.hasHashtagSecretMismatch))
+                } else {
+                    submission.holder.updateHashtag(requireNotNull(request.hashtag).id)
+                    submission.holder.joinHashtag()
+                }
+                channel?.let { navigation.completeChannelConfirmation(request.deliveryId, it) }
+            } finally {
+                releaseInactiveChannelConfirmations(navigation)
+            }
+        }
+    }
 
     internal fun pathDevice(radio: RadioId, screenScope: kotlinx.coroutines.CoroutineScope): StateFlow<DeviceDTO?> {
         fun current() = app.connectedDevice?.takeIf { it.radioId == radio }

@@ -7,6 +7,6 @@
     <string name="platform_system_language">System language</string>
     <string name="platform_chat_link_unavailable">This link could not be opened. Check that an app is installed and allowed to handle this link, then try again.</string>
     <string name="platform_channel_sync_incomplete">Some radio channel slots are not synchronized. Wait for synchronization or reconnect before adding a channel.</string>
-    <string name="platform_channel_reconciliation_required">The previous channel write could not be confirmed. Reconnect and synchronize the radio before adding another channel.</string>
+    <string name="platform_channel_reconciliation_required">The previous channel operation could not be confirmed. Further channel writes are blocked for this app session; reconnecting alone cannot clear this state.</string>
     <string name="platform_channel_already_saved">The channel was saved, but setup could not finish. Check it in Chats; this confirmation will not write it again.</string>
 </resources>

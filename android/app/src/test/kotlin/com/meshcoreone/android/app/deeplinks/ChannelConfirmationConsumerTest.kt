@@ -41,6 +41,7 @@ import com.meshcoreone.android.core.protocol.command.PacketBuilder
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.services.sync.SyncClock
 import com.meshcoreone.android.core.services.contacts.ChannelMutationError
+import com.meshcoreone.android.core.services.contacts.ChannelDispatchFailure
 import com.meshcoreone.android.core.ui.UiText
 import com.meshcoreone.android.feature.chats.list.ChatLinkRouter
 import kotlinx.coroutines.CompletableDeferred
@@ -88,9 +89,64 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
             channelFailureText(unresolved))
         assertEquals(UiText.Resource(com.meshcoreone.android.R.string.platform_channel_reconciliation_required),
             channelFailureText(uncertain))
+        val quarantined = ChannelDispatchFailure.UnsettledDispatch(IllegalStateException("private radio diagnostic"))
+        assertEquals(UiText.Resource(com.meshcoreone.android.R.string.platform_channel_reconciliation_required),
+            channelFailureText(quarantined))
+        assertFalse(channelFailureText(quarantined).resolve(host.get().resources).contains("private radio diagnostic"))
+        assertContains(channelFailureText(quarantined).resolve(host.get().resources), "reconnecting alone cannot clear")
         assertFalse(channelFailureText(uncertain).resolve(host.get().resources).contains("private radio diagnostic"))
         assertEquals(UiText.Resource(com.meshcoreone.android.core.l10n.generated.AppChatsStrings.chatsJoinFromMessageErrorNoSlots),
             channelFailureText(ChannelMutationError.NoAvailableSlots()))
+    }
+
+    @Test fun legacyUncertainSendThenMountedJoinShowsResourceGuidanceWithoutAnotherRadioWrite() = runTest {
+        val h = ContainerHarness(this, store)
+        h.links.configureRadio = { radio ->
+            radio.respond = { frame -> when (frame[0].toInt()) {
+                3 -> listOf(Bytes.of(1, 2))
+                0x1f -> listOf(emptyChannelReply(frame[1].toInt()))
+                0x20 -> listOf(Bytes.of(0))
+                else -> null
+            } }
+        }
+        try {
+            h.container.foreground.activityStarted()
+            h.manager.connect(h.target())
+            h.settle()
+            h.assertReady()
+            val node = assertNotNull(h.sessions.current)
+            assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> {
+                node.messageService.sendChannelMessage("uncertain original", 0u, node.token.radioId)
+            }
+            val firmware = h.links.radios.single()
+            val writes = firmware.sent.count { it[0].toInt() == 0x20 }
+            h.container.navigation.stageChannelLink(ChannelLinkRequest(
+                "#test", Bytes.fromHex("00112233445566778899AABBCCDDEEFF"),
+            ))
+            compose.runOnUiThread {
+                host.get().setContent { MeshCoreTheme(motionScale = 0f) {
+                    AppPendingChannel(h.container.chatsFeature, h.container.navigation)
+                } }
+            }
+            compose.waitUntil(10_000) {
+                h.scheduler.runCurrent()
+                !compose.onNodeWithText(host.get().getString(L.commonOk))
+                    .fetchSemanticsNode().config.contains(SemanticsProperties.Disabled)
+            }
+            compose.onNodeWithText(host.get().getString(L.commonOk)).performClick()
+            val recovery = host.get().getString(com.meshcoreone.android.R.string.platform_channel_reconciliation_required)
+            compose.waitUntil(10_000) {
+                h.scheduler.runCurrent()
+                compose.onAllNodesWithText(recovery).fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithText(recovery).assertIsDisplayed()
+            compose.onAllNodesWithText("Channel dispatch is uncertain; this radio remains quarantined.").assertCountEquals(0)
+            assertEquals(1, firmware.sent.count { it[0].toInt() == 3 })
+            assertEquals(writes, firmware.sent.count { it[0].toInt() == 0x20 })
+        } finally {
+            compose.runOnUiThread { host.get().setContent {} }
+            h.container.close()
+        }
     }
 
     private fun interceptChannelPersistence(decorate: (ChannelPersisting) -> ChannelPersisting): PersistenceStoreProtocol {
@@ -319,7 +375,37 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
         postSaveRetryControl(inCache = true, cancel = true)
     }
 
-    private suspend fun TestScope.postSaveRetryControl(inCache: Boolean, cancel: Boolean) {
+    @Test
+    @Config(qualifiers = "en-rUS-w1080dp-h1000dp-mdpi")
+    fun postSaveFetchFailureRetainsItsReceiptAcrossTabReturn() = runTest {
+        postSaveRetryControl(inCache = false, cancel = false, presentation = ConfirmationPresentation.TAB_RETURN)
+    }
+
+    @Test
+    @Config(qualifiers = "en-rUS-w1080dp-h1000dp-mdpi")
+    fun postSaveCacheCancellationRetainsItsReceiptAcrossActivityRecreation() = runTest {
+        postSaveRetryControl(inCache = true, cancel = true, presentation = ConfirmationPresentation.ACTIVITY_RECREATION)
+    }
+
+    @Test
+    @Config(qualifiers = "en-rUS-w1080dp-h1000dp-mdpi")
+    fun heldPostSaveFetchFailureSurvivesActualActivityRecreation() = runTest {
+        postSaveRetryControl(inCache = false, cancel = false, presentation = ConfirmationPresentation.HELD_ACTIVITY_RECREATION)
+    }
+
+    @Test
+    @Config(qualifiers = "en-rUS-w1080dp-h1000dp-mdpi")
+    fun heldPostSaveCacheFailureSurvivesTabReturn() = runTest {
+        postSaveRetryControl(inCache = true, cancel = false, presentation = ConfirmationPresentation.HELD_TAB_RETURN)
+    }
+
+    private enum class ConfirmationPresentation {
+        RESIZE, TAB_RETURN, ACTIVITY_RECREATION, HELD_TAB_RETURN, HELD_ACTIVITY_RECREATION,
+    }
+
+    private suspend fun TestScope.postSaveRetryControl(
+        inCache: Boolean, cancel: Boolean, presentation: ConfirmationPresentation = ConfirmationPresentation.RESIZE,
+    ) {
         val savedBy = java.util.concurrent.atomic.AtomicReference<Job?>(null)
         val returnedId = java.util.concurrent.atomic.AtomicReference<java.util.UUID?>(null)
         val probe = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -367,6 +453,32 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
         val observer = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
             navigation.state.collect { selections += it.chatsSelectedRoute }
         }
+        fun mount() {
+            host.get().setContent { Box(Modifier.width(width.value)) { MeshCoreTheme(motionScale = 0f) {
+                NativeNavigationShell(navigation, chats = h.container.chatsFeature)
+            } } }
+        }
+        fun changePresentation() {
+            when (presentation) {
+                ConfirmationPresentation.TAB_RETURN, ConfirmationPresentation.HELD_TAB_RETURN -> {
+                    compose.runOnIdle { navigation.selectTab(AppTab.MAP) }
+                    compose.onAllNodesWithText(host.get().getString(L.commonOk)).assertCountEquals(0)
+                    compose.runOnIdle { navigation.selectTab(AppTab.CHATS) }
+                }
+                ConfirmationPresentation.ACTIVITY_RECREATION, ConfirmationPresentation.HELD_ACTIVITY_RECREATION -> {
+                    val previous = host.get()
+                    host.windowFocusChanged(false)
+                    host.recreate().visible()
+                    host.get().actionBar?.hide()
+                    host.windowFocusChanged(true)
+                    assertNotSame(previous, host.get(), "Recreate the actual Activity, not only its content")
+                    compose.runOnUiThread { mount() }
+                }
+                ConfirmationPresentation.RESIZE -> Unit
+            }
+            h.scheduler.runCurrent()
+            compose.waitForIdle()
+        }
         try {
             h.container.foreground.activityStarted()
             h.manager.connect(h.target())
@@ -384,11 +496,7 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
             val initialStacks = navigation.state.value.stacks
             external.routeExternal(uri)
             val first = assertNotNull(navigation.state.value.pendingChannelConfirmation)
-            compose.runOnUiThread {
-                host.get().setContent { Box(Modifier.width(width.value)) { MeshCoreTheme(motionScale = 0f) {
-                    NativeNavigationShell(navigation, chats = h.container.chatsFeature)
-                } } }
-            }
+            compose.runOnUiThread { mount() }
             fun awaitEnabled() = compose.waitUntil(10_000) {
                 h.scheduler.runCurrent()
                 !compose.onNodeWithText(host.get().getString(L.commonOk))
@@ -408,6 +516,13 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
             assertEquals(first, navigation.state.value.pendingChannelConfirmation)
             compose.onNodeWithText(host.get().getString(L.commonOk)).assertIsNotEnabled()
             val requestJob = assertNotNull(savedBy.get())
+            val transitionWhileHeld = presentation == ConfirmationPresentation.HELD_TAB_RETURN ||
+                presentation == ConfirmationPresentation.HELD_ACTIVITY_RECREATION
+            if (transitionWhileHeld) {
+                changePresentation()
+                assertTrue(requestJob.isActive, "Presentation disposal must not cancel an already-consented write")
+                compose.onNodeWithText(host.get().getString(L.commonOk)).assertIsNotEnabled()
+            }
             if (cancel) requestJob.cancel(CancellationException("cancel after actual returned Room UUID"))
             else release.complete(Unit)
             compose.waitUntil(10_000) {
@@ -418,6 +533,19 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
             compose.onNodeWithText(host.get().getString(com.meshcoreone.android.R.string.platform_channel_already_saved))
                 .assertIsDisplayed()
             probe.set(false)
+            if (!transitionWhileHeld && presentation != ConfirmationPresentation.RESIZE) {
+                changePresentation()
+                compose.waitUntil(10_000) {
+                    h.scheduler.runCurrent()
+                    compose.onAllNodesWithText(host.get().getString(com.meshcoreone.android.R.string.platform_channel_already_saved))
+                        .fetchSemanticsNodes().isNotEmpty() ||
+                        !compose.onNodeWithText(host.get().getString(L.commonOk))
+                            .fetchSemanticsNode().config.contains(SemanticsProperties.Disabled)
+                }
+                compose.onNodeWithText(host.get().getString(com.meshcoreone.android.R.string.platform_channel_already_saved))
+                    .assertIsDisplayed()
+                compose.onNodeWithText(host.get().getString(L.commonOk)).assertIsNotEnabled()
+            }
             for (value in listOf(1080, 390, 1080)) {
                 compose.runOnIdle { width.value = value.dp }
                 h.scheduler.runCurrent()

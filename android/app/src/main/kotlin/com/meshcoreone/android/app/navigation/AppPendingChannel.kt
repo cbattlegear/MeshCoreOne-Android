@@ -7,28 +7,21 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.res.stringResource
 import com.meshcoreone.android.app.container.AppChatsFeature
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
-import com.meshcoreone.android.feature.chats.channels.ChannelLink
-import com.meshcoreone.android.feature.chats.channels.ChannelSheetsStateHolder
-import kotlinx.coroutines.launch
 
 @Composable
-internal fun AppPendingChannel(feature: AppChatsFeature, navigation: NavigationCoordinator) {
+internal fun AppPendingChannel(feature: AppChatsFeature, navigation: NavigationCoordinator, visible: Boolean = true) {
     val pending by navigation.state.collectAsState()
+    feature.releaseInactiveChannelConfirmations(navigation)
     val request = pending.pendingChannelConfirmation ?: pending.pendingHashtagConfirmation ?: return
     val link = request.link
     val hashtag = request.hashtag
     val radio by feature.currentRadioId.collectAsState()
-    val linkHolder = remember(feature, radio, pending.pendingChannelConfirmation?.deliveryId) {
-        ChannelSheetsStateHolder(radio, feature.maximumChannels(), feature.channels)
-    }
-    val hashtagHolder = remember(feature, radio, pending.pendingHashtagConfirmation?.deliveryId) {
-        ChannelSheetsStateHolder(radio, feature.maximumChannels(), feature.channels)
-    }
-    val holder = if (link != null) linkHolder else hashtagHolder
+    val submission = feature.channelConfirmation(navigation, request.deliveryId, radio)
+    val holder = submission.holder
     val state by holder.state.collectAsState()
-    val scope = rememberCoroutineScope()
     val clear: () -> Unit = { navigation.completeChannelConfirmation(request.deliveryId) }
-    LaunchedEffect(holder) { holder.load() }
+    LaunchedEffect(submission) { feature.loadChannelConfirmation(submission) }
+    if (!visible) return
     AlertDialog(onDismissRequest = clear,
         text = {
             Column {
@@ -46,16 +39,7 @@ internal fun AppPendingChannel(feature: AppChatsFeature, navigation: NavigationC
             val connection by feature.connectionState.collectAsState()
             TextButton(enabled = radio != null && connection == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY &&
                 !state.isLoading && !state.isSubmitting && state.committedWrite == null, onClick = {
-                scope.launch {
-                    val channel = if (link != null) holder.joinLink(ChannelLink(
-                        link.name, link.secret, link.regionScope, link.hasHashtagSecretMismatch,
-                    ))
-                    else {
-                        holder.updateHashtag(requireNotNull(hashtag).id)
-                        holder.joinHashtag()
-                    }
-                    channel?.let { navigation.completeChannelConfirmation(request.deliveryId, it) }
-                }
+                feature.confirmChannel(navigation, request, submission)
             }) { Text(stringResource(L.commonOk)) }
         },
         dismissButton = { TextButton(onClick = clear) { Text(stringResource(L.commonCancel)) } },

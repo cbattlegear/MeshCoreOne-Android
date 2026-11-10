@@ -1171,12 +1171,11 @@ class MessageService(
                         dataStore.beginQueuedChannelAttempt(attemptKey, occupantID, stamp)
                     } catch (failure: PersistenceStoreException) {
                         // A lost begin response may have committed DISPATCHING. Never infer READY or send.
-                        remember("channelBegin.$pendingID", failure)
                         try { dataStore.fetchQueuedChannelAttempt(attemptKey) }
                         catch (readFailure: PersistenceStoreException) {
                             if (readFailure !== failure) failure.addSuppressed(readFailure)
                         }
-                        throw retainedChannel(pendingID, failure)
+                        return@dispatch ChannelPrewireResult.Rejected(failure)
                     }
                     val dispatch = MessageWriteDispatch()
                     try {

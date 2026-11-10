@@ -16,7 +16,6 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.SQLiteMode
 import com.meshcoreone.android.core.contracts.domain.BluetoothAddress
 import com.meshcoreone.android.core.contracts.domain.BluetoothPairingHandle
-import com.meshcoreone.android.core.contracts.domain.ChannelHistoryScope
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.EntityKey
@@ -249,7 +248,6 @@ internal suspend fun RoomPersistenceStore.admitQueueChannelFixture(
     require(initialAttemptCount >= 0 && initialAttemptCount <= Int.MAX_VALUE.toLong())
     val channelIndex = checkNotNull(message.channelIndex)
     val occupantID = checkNotNull(message.channelOccupantID)
-    val origin = ChannelHistoryScope(message.radioId, channelIndex, occupantID)
     val envelope = ChannelMessageEnvelope(
         message.id, channelIndex, isResend, message.text, message.timestamp, localNodeName, occupantID,
     )

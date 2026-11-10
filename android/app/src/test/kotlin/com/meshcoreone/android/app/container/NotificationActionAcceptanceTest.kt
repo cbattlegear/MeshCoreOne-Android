@@ -8,10 +8,14 @@ import android.content.Intent
 import android.os.Bundle
 import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
+import com.meshcoreone.android.core.contracts.domain.ChannelHistoryPersisting
+import com.meshcoreone.android.core.contracts.domain.ChannelMessageCreation
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.InlineChannelAttemptPersisting
 import com.meshcoreone.android.core.contracts.domain.NotificationId
 import com.meshcoreone.android.core.contracts.domain.NotificationPostResult
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.contracts.domain.QueuedChannelTerminalPersisting
 import com.meshcoreone.android.core.contracts.notifications.NotificationAction
 import com.meshcoreone.android.core.contracts.notifications.NotificationActionDefinition
 import com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt
@@ -21,13 +25,13 @@ import com.meshcoreone.android.core.contracts.notifications.NotificationCategory
 import com.meshcoreone.android.core.contracts.notifications.NotificationCategoryDefinition
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.contracts.notifications.NotificationRequest
-import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.services.notifications.didReceive
 import com.meshcoreone.android.platform.notifications.messaging.AndroidMessagingNotificationDelivery
+import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -85,7 +89,9 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
         val reached = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         var hold = false
-        val persistence = object : PersistenceStoreProtocol by store {
+        val persistence = object : PersistenceStoreProtocol by store,
+            ChannelHistoryPersisting by store, QueuedChannelTerminalPersisting by store,
+            InlineChannelAttemptPersisting by store {
             override suspend fun clearUnreadCount(key: EntityKey) {
                 store.clearUnreadCount(key)
                 if (hold) {
@@ -224,6 +230,15 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
                 }
                 store.saveMessage(dto)
             }
+            override suspend fun createOrReconcileChannelMessage(
+                creation: ChannelMessageCreation, timestamp: UInt, createdAt: Instant,
+            ): MessageDTO {
+                if (holdBeforeWire) {
+                    entered.complete(Unit)
+                    awaitCancellation()
+                }
+                return store.createOrReconcileChannelMessage(creation, timestamp, createdAt)
+            }
         }
         val h = ContainerHarness(
             this, store, persistenceOverride = persistence,
@@ -236,6 +251,12 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
                 when (command[0].toInt()) {
                     2 -> if (unknown) emptyList() else listOf(sentReply(command, firmware.publicKey))
                     3 -> if (unknown) emptyList() else listOf(Bytes.of(0))
+                    31 -> if (channel && command[1] == 0.toUByte()) {
+                        listOf(Bytes.of(0x12, 0) + Bytes.utf8("Reply channel") +
+                            Bytes(ByteArray(32 - Bytes.utf8("Reply channel").size)) + Bytes(ByteArray(16) { 1 }))
+                    } else if (channel) {
+                        listOf(Bytes.of(0x12, command[1].toInt()) + Bytes(ByteArray(48)))
+                    } else null
                     else -> null
                 }
             }
@@ -253,7 +274,9 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
             val radio = session.token.radioId
             val contact = requireNotNull(store.fetchContact(radio, peerKey))
             val contactKey = EntityKey(radio, contact.id)
-            store.saveChannel(ChannelDTO(radioId = radio, index = 0u, name = "Reply channel"))
+            if (channel) {
+                assertNotNull(store.fetchChannelOccupantSnapshot(radio, 0u))
+            }
             var attempts = 0
             var receipt: NotificationActionReceipt? = null
             val adapter = AndroidMessagingNotificationDelivery(context, firstOwner) { response ->

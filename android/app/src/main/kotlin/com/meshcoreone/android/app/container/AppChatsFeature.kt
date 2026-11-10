@@ -1062,10 +1062,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         }
         val queue = sendQueue(radio)
         queue.enqueueChannel(
-            ChannelMessageEnvelope(
-                id, index, isResend, message.text, message.timestamp, localName,
-                channelOccupantID = message.channelOccupantID,
-            ),
+            ChannelMessageEnvelope(id, index, isResend, message.text, message.timestamp, localName, message.channelOccupantID),
         )
     }
 

@@ -118,7 +118,7 @@ internal class FakeSendPort(val radio: RadioId) : ComposerSendPort {
         calls += "createPendingChannel:$channelIndex:$text"
         createGate?.await()
         createFailure?.let { throw it }
-        return row(text, null, channelIndex).also(pendingMessages::add)
+        return row(text, null, channelIndex).copy(channelOccupantID = channelOccupantID).also(pendingMessages::add)
     }
 
     override suspend fun enqueueChannel(envelope: ChannelMessageEnvelope) {

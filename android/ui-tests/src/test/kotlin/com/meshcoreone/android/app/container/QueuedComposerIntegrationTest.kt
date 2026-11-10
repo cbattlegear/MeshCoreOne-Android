@@ -95,6 +95,47 @@ class QueuedComposerIntegrationTest : RoomProcessTest() {
         }
     }
 
+    @Test fun explicitChannelResendForwardsTheSavedOriginIntoTheRealQueueAndAttempt() = runTest {
+        val graph = graph(this)
+        val h = graph.harness
+        try {
+            val saved = pending(graph, Kind.CHANNEL)
+            val occupant = assertNotNull(saved.channelOccupantID)
+            val key = EntityKey(graph.radio, saved.id)
+            store.updateMessageStatus(key, MessageStatus.FAILED)
+            val failed = assertNotNull(store.fetchMessage(key))
+            val observed = Collections.synchronizedList(mutableListOf<PendingSendDTO>())
+            val firmware = h.links.radios.single()
+            firmware.respond = { command ->
+                if (command[0].toInt() == 3) {
+                    observed += runBlocking { store.fetchPendingSendsForMessage(key).single() }
+                    listOf(Bytes.of(1, 2))
+                } else null
+            }
+            graph.feature.sendAgain(failed.copy(channelOccupantID = UUID.randomUUID()), graph.conversation(Kind.CHANNEL))
+            h.eventually("explicit resend retains its exact saved origin and uncertain attempt") {
+                runBlocking {
+                    store.fetchPendingSendsForMessage(key).singleOrNull()?.channelDispatchState ==
+                        QueuedChannelDispatchState.UNCERTAIN
+                }
+            }
+            val retained = store.fetchPendingSendsForMessage(key).single()
+            val attempt = store.fetchQueuedChannelAttempts(EntityKey(graph.radio, retained.id)).single()
+            assertEquals(1, observed.size)
+            assertEquals(saved.id, retained.messageID)
+            assertEquals(occupant, retained.channelOccupantID)
+            assertEquals(occupant, observed.single().channelOccupantID)
+            assertEquals(occupant, attempt.channelOccupantID)
+            assertEquals(saved.text, retained.messageText)
+            assertEquals(saved.timestamp, retained.messageTimestamp)
+            assertTrue(retained.isResend)
+            assertTrue(attempt.isResend)
+            assertEquals(QueuedChannelAttemptPhase.UNCERTAIN, attempt.phase)
+            assertEquals(occupant, store.fetchMessage(key)?.channelOccupantID)
+            assertEquals(1, firmware.sent.count { it[0].toInt() == 3 })
+        } finally { h.container.close() }
+    }
+
     private suspend fun enqueue(graph: Graph, kind: Kind, message: MessageDTO) {
         val sender = graph.feature.sender(graph.radio)
         when (kind) {

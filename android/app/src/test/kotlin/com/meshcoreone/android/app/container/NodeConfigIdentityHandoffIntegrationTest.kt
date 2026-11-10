@@ -312,7 +312,8 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
             val reconnect = backgroundScope.async {
                 assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> { h.manager.connect(h.target()) }
             }
-            h.eventually("explicit reconnect cannot reopen the uncertain effective identity", virtualBudgetMillis = 30_000) {
+            h.eventually("explicit reconnect cannot reopen the uncertain effective identity",
+                virtualBudgetMillis = 30_000, virtualStepMillis = 100) {
                 reconnect.isCompleted
             }
             assertTrue(node.isTornDown)

@@ -51,8 +51,8 @@ class ChannelDispatchFenceTest {
                 occupant
             }) { effects += "send" }
 
-        suspend fun replace() = fence.withMutation(lease) {
-            gate.withChannelIdentityMutation {
+        suspend fun replace() = fence.withMutation(lease) { scope ->
+            scope.withChannelIdentityMutation {
                 occupant = UUID(0, 4)
                 effects += "replace"
             }
@@ -241,10 +241,10 @@ class ChannelDispatchFenceTest {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         val replace = launch {
-            f.fence.withMutation(f.lease) {
+            f.fence.withMutation(f.lease) { scope ->
                 entered.complete(Unit)
                 release.await()
-                f.gate.withChannelIdentityMutation { f.occupant = UUID(0, 4) }
+                scope.withChannelIdentityMutation { f.occupant = UUID(0, 4) }
             }
         }
         entered.await()
@@ -401,16 +401,16 @@ class ChannelDispatchFenceTest {
     @Test
     fun sameKeyRenamePreservesEpochButClearDifferentKeyAndAbaDoNot() = runTest {
         val f = preparedFixture()
-        f.fence.withMutation(f.lease) {
-            f.gate.withChannelIdentityMutation { f.effects += "rename" }
+        f.fence.withMutation(f.lease) { scope ->
+            scope.withChannelIdentityMutation { f.effects += "rename" }
         }
         f.send()
         f.replace()
         assertFailsWith<ChannelDispatchFailure.ReplacedOccupant> { f.send() }
-        f.fence.withMutation(f.lease) { f.gate.withChannelIdentityMutation { f.occupant = null } }
+        f.fence.withMutation(f.lease) { scope -> scope.withChannelIdentityMutation { f.occupant = null } }
         assertFailsWith<ChannelDispatchFailure.UnknownOccupant> { f.send() }
-        f.fence.withMutation(f.lease) {
-            f.gate.withChannelIdentityMutation { f.occupant = UUID(0, 5) }
+        f.fence.withMutation(f.lease) { scope ->
+            scope.withChannelIdentityMutation { f.occupant = UUID(0, 5) }
         }
         assertFailsWith<ChannelDispatchFailure.ReplacedOccupant> { f.send() }
         assertEquals(listOf("rename", "send", "replace"), f.effects)
@@ -422,11 +422,11 @@ class ChannelDispatchFenceTest {
         val radioAccepted = CompletableDeferred<Unit>()
         val persist = CompletableDeferred<Unit>()
         val mutation = launch {
-            f.fence.withMutation(f.lease) {
+            f.fence.withMutation(f.lease) { scope ->
                 f.effects += "SET accepted"
                 radioAccepted.complete(Unit)
                 persist.await()
-                f.gate.withChannelIdentityMutation { f.effects += "save" }
+                scope.withChannelIdentityMutation { f.effects += "save" }
             }
         }
         radioAccepted.await()

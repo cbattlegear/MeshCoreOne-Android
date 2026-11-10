@@ -3,7 +3,6 @@ package com.meshcoreone.android.parity
 
 import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.protocol.bytes.Bytes
-import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.services.messaging.MessageServiceConfig
 import com.meshcoreone.android.core.services.messaging.PoolBackoffConfig
 import kotlinx.coroutines.test.*
@@ -19,72 +18,71 @@ import org.robolectric.annotation.SQLiteMode
 @Config(sdk = [31])
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 class ChannelQueueOriginalPredicateTest {
-    @Test fun originalBelowThresholdRetainsTheCompleteFirstRowWithoutAChannelQuery() = runTest {
+    @Test fun rawErrorRetainsOneOccupantBoundAttemptWithoutAChannelQuery() = runTest {
         withChannelQueueFixture(0, MessageServiceConfig(
             poolBackoff = PoolBackoffConfig(attemptCap = 2, baseDelay = 0.01))) { f ->
             f.startDrain()
-            advanceTimeBy(300)
-            runCurrent()
+            f.queue.awaitDrainCompletion()
 
-            f.assertRows(f.pendingA.copy(attemptCount = 1))
+            f.assertUncertainAttempt(f.pendingA, expectedAttemptCount = 1)
             f.assertMessages(f.messageA, f.messageB)
             assertEquals(1, f.queue.queuedEnvelopeCount)
-            assertEquals(3, f.sends(3).size)
-            assertTrue(f.sends(31).isEmpty())
+            assertEquals(1, f.sends(3).size)
+            assertEquals(listOf(Bytes.of(31, 0)), f.sends(31))
             assertTrue(f.queries.isEmpty())
-            assertOriginalChannelDeviceError2(f.failures("park", f.messageA.id).single())
+            assertTrue(f.failures("park", f.messageA.id).isEmpty())
+            assertTrue(f.failures("terminal", f.messageA.id).isEmpty())
+            assertOriginalChannelDeviceError2(f.failures("channelRetained", f.pendingA.id).single())
         }
     }
 
-    @Test fun originalDefaultThirtySecondWaitReattemptsOnlyAtTheActualParkDeadline() = runTest {
+    @Test fun uncertainRawErrorDoesNotReplayAtTheParkDeadlineOrTransportWake() = runTest {
         withChannelQueueFixture(0) { f ->
             f.startDrain()
-            advanceTimeBy(3_600)
+            f.queue.awaitDrainCompletion()
+            val originalFailure = f.failures("channelRetained", f.pendingA.id).single()
+            assertOriginalChannelDeviceError2(originalFailure)
+
+            advanceTimeBy(31_000)
             runCurrent()
-            f.assertRows(f.pendingA.copy(attemptCount = 1))
+            f.assertUncertainAttempt(f.pendingA, expectedAttemptCount = 1)
             f.assertMessages(f.messageA, f.messageB)
-            assertEquals(4, f.sends(3).size)
-            val parkedAt = f.timeOf("park", f.messageA.id)
-            val remaining = parkedAt + 30_000 - testScheduler.currentTime
-            assertTrue(remaining > 1)
-
-            advanceTimeBy(remaining - 1)
-            runCurrent()
-            f.assertRows(f.pendingA.copy(attemptCount = 1))
-            assertEquals(4, f.sends(3).size)
-
-            advanceTimeBy(1)
-            runCurrent()
-            f.assertRows(f.pendingA.copy(attemptCount = 2))
-            assertEquals(5, f.sends(3).size)
-
-            advanceTimeBy(3_600)
-            runCurrent()
-            f.assertRows(f.pendingA.copy(attemptCount = 2))
-            f.assertMessages(f.messageA, f.messageB)
-            assertEquals(8, f.sends(3).size)
+            assertEquals(1, f.sends(3).size)
+            assertEquals(listOf(Bytes.of(31, 0)), f.sends(31))
             assertTrue(f.queries.isEmpty())
-            assertTrue(f.sends(31).isEmpty())
             assertEquals(1, f.queue.queuedEnvelopeCount)
-            val parks = f.failures("park", f.messageA.id)
-            assertEquals(2, parks.size)
-            parks.forEach(::assertOriginalChannelDeviceError2)
+            assertTrue(f.failures("park", f.messageA.id).isEmpty())
+
+            f.queue.transportDidOpen()
+            runCurrent()
+            f.queue.awaitDrainCompletion()
+
+            f.assertUncertainAttempt(f.pendingA, expectedAttemptCount = 1)
+            f.assertMessages(f.messageA, f.messageB)
+            assertEquals(1, f.sends(3).size)
+            assertEquals(listOf(Bytes.of(31, 0)), f.sends(31))
+            assertTrue(f.queries.isEmpty())
+            assertEquals(1, f.queue.queuedEnvelopeCount)
+            assertOriginalChannelDeviceError2(originalFailure)
         }
     }
 
-    @Test fun originalDisabledGoneChannelIntentUsesARealUnconfiguredChannelResponse() = runTest {
-        withChannelQueueFixture(7, gone = true) { f ->
+    @Test fun rawErrorDoesNotQueryOrRetireWhenALaterChannelReadWouldBeUnconfigured() = runTest {
+        withChannelQueueFixture(7) { f ->
             f.startDrain()
             f.queue.awaitDrainCompletion()
 
-            f.assertRows()
-            f.assertMessages(f.messageA.copy(status = MessageStatus.FAILED), f.messageB)
-            assertEquals(0, f.queue.queuedEnvelopeCount)
-            assertEquals(4, f.sends(3).size)
+            f.assertUncertainAttempt(f.pendingA, expectedAttemptCount = 8)
+            f.assertMessages(f.messageA, f.messageB)
+            assertEquals(MessageStatus.PENDING, f.messageA.status)
+            assertEquals(1, f.queue.queuedEnvelopeCount)
+            assertEquals(1, f.sends(3).size)
             assertEquals(listOf(Bytes.of(31, 0)), f.sends(31))
-            assertEquals(listOf(0.toUByte()), f.queries)
-            assertEquals(listOf<ChannelInfo?>(null), f.queryResults)
-            assertOriginalChannelDeviceError2(f.failures("terminal", f.messageA.id).single())
+            assertEquals(1, f.channelInfoReadCount)
+            assertTrue(f.queries.isEmpty())
+            assertTrue(f.queryResults.isEmpty())
+            assertTrue(f.failures("terminal", f.messageA.id).isEmpty())
+            assertOriginalChannelDeviceError2(f.failures("channelRetained", f.pendingA.id).single())
         }
     }
 }

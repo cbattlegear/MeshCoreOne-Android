@@ -42,6 +42,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -51,13 +52,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import androidx.lifecycle.Lifecycle
 import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.model.ContactDTO
@@ -73,6 +75,8 @@ import com.meshcoreone.android.feature.nodes.contacts.ContactsStateHolder
 import com.meshcoreone.android.feature.nodes.contacts.RowActionEdge
 import com.meshcoreone.android.feature.nodes.contacts.RowActionKind
 import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
+import com.meshcoreone.android.feature.nodes.deps.NodesConnectionSnapshot
+import com.meshcoreone.android.feature.nodes.deps.ensureContactConnection
 import com.meshcoreone.android.feature.nodes.model.NodeSegment
 import com.meshcoreone.android.feature.nodes.model.NodeSortOrder
 import com.meshcoreone.android.feature.nodes.model.localizedNameRes
@@ -88,25 +92,41 @@ internal fun NodesListScreen(
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
-    val holder = remember(dependencies) { ContactsStateHolder(dependencies, scope) }
+    val userLocation by dependencies.locations.collectAsStateWithLifecycle(
+        initialValue = null, minActiveState = Lifecycle.State.RESUMED,
+    )
+    val binding by remember(dependencies) { dependencies.session.connectionSnapshots() }
+        .collectAsStateWithLifecycle(
+            initialValue = NodesConnectionSnapshot(
+                dependencies.session.currentRadioId(), dependencies.session.connectionIdentity(),
+                dependencies.session.connectedDevice(), dependencies.session.connectionState(),
+            ),
+        )
+    val radioId = binding.radioId
+    val connection = binding.identity
+    val holder = remember(dependencies, radioId) { ContactsStateHolder(dependencies, scope) }
     val state by holder.state.collectAsStateWithLifecycle()
-    val radioId = dependencies.session.currentRadioId()
     var search by remember { mutableStateOf("") }
     var segment by remember { mutableStateOf(NodeSegment.CONTACTS) }
     var sort by remember { mutableStateOf(NodeSortOrder.LAST_HEARD) }
     var sortMenu by remember { mutableStateOf(false) }
-    var showAdd by remember { mutableStateOf(false) }
+    var showAdd by remember(dependencies, radioId) { mutableStateOf(false) }
     var showShare by remember { mutableStateOf(false) }
-    var pendingAction by remember { mutableStateOf<Pair<RowActionKind, ContactDTO>?>(null) }
+    var pendingAction by remember(dependencies, radioId, connection) { mutableStateOf<Pair<RowActionKind, ContactDTO>?>(null) }
 
-    LaunchedEffect(holder, radioId) {
-        if (radioId != null) holder.loadContacts(radioId)
+    LaunchedEffect(holder, connection, radioId) {
+        holder.onConnectionChanged()
+        if (radioId != null && !holder.state.value.hasLoadedOnce) holder.loadContacts(radioId)
+    }
+    LaunchedEffect(holder, state.errorConnection) {
+        holder.onConnectionChanged()
     }
     LaunchedEffect(state.hasLoadedOnce) {
         if (state.hasLoadedOnce && segment == NodeSegment.CONTACTS && state.hasFavorites) segment = NodeSegment.FAVORITES
     }
-    val contacts = remember(state.contacts, state.pendingRemovalIds, search, segment, sort) {
-        holder.filteredContacts(search, segment, sort, null)
+    val contacts = remember(state.contacts, state.pendingRemovalIds, state.inboundHopByKey, search, segment, sort, userLocation) {
+        val effectiveSort = if (sort == NodeSortOrder.DISTANCE && userLocation == null) NodeSortOrder.LAST_HEARD else sort
+        holder.filteredContacts(search, segment, effectiveSort, userLocation)
     }
 
     Column(modifier.fillMaxSize()) {
@@ -138,21 +158,21 @@ internal fun NodesListScreen(
             Button(onClick = { showAdd = true }) { Text(stringResource(C.contactsListAddContact)) }
             Button(
                 onClick = { showShare = true },
-                enabled = dependencies.session.connectedDevice() != null,
+                enabled = binding.device != null,
             ) { Text(stringResource(C.contactsListShareMyContact)) }
-            Button(
-                onClick = {
-                    if (radioId != null) scope.launch {
-                        if (dependencies.session.connectionState() == DeviceConnectionState.READY) holder.syncContacts(radioId)
-                        else holder.seed {
-                            it.copy(errorMessage = com.meshcoreone.android.feature.nodes.deps.NodesMessage.res(C.contactsListConnectToSync))
+            key(connection, radioId) {
+                val syncScope = rememberCoroutineScope()
+                Button(
+                    onClick = {
+                        if (radioId != null) syncScope.launch {
+                            holder.syncContacts(radioId, connection)
                         }
-                    }
-                },
-                enabled = !state.isSyncing,
-            ) {
-                if (state.isSyncing) CircularProgressIndicator(Modifier.sizeIn(maxWidth = 20.dp, maxHeight = 20.dp))
-                else Text(stringResource(C.contactsListSyncNodes))
+                    },
+                    enabled = !state.isSyncing,
+                ) {
+                    if (state.isSyncing) CircularProgressIndicator(Modifier.sizeIn(maxWidth = 20.dp, maxHeight = 20.dp))
+                    else Text(stringResource(C.contactsListSyncNodes))
+                }
             }
             Box {
                 Button(onClick = { sortMenu = true }) { Text(stringResource(C.contactsListSort)) }
@@ -167,25 +187,40 @@ internal fun NodesListScreen(
             }
         }
         when {
-            !state.hasLoadedOnce || state.isLoading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            (!state.hasLoadedOnce || state.isLoading) && contacts.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
             }
             contacts.isEmpty() -> NodesEmptyState(search, segment, Modifier.fillMaxSize())
             else -> LazyColumn(Modifier.fillMaxSize()) {
                 items(contacts, key = { it.id }) { contact ->
-                    ContactListRow(
-                        contact = contact,
-                        stateHolder = holder,
-                        dependencies = dependencies,
-                        onOpen = { navigation.openContact(contact) },
-                        onAction = { pendingAction = it to contact },
-                    )
+                    key(connection, contact.radioId) {
+                        ContactListRow(
+                            contact = contact,
+                            stateHolder = holder,
+                            dependencies = dependencies,
+                            connection = connection,
+                            onOpen = {
+                                scope.launch {
+                                    dependencies.session.ensureContactConnection(connection, radioId)
+                                    navigation.openContact(contact)
+                                }
+                            },
+                            onAction = { action ->
+                                scope.launch {
+                                    dependencies.session.ensureContactConnection(connection, radioId)
+                                    pendingAction = action to contact
+                                }
+                            },
+                        )
+                    }
                 }
             }
         }
     }
 
-    state.errorMessage?.let { error ->
+    state.errorMessage?.takeIf {
+        state.errorConnection?.let { owner -> owner.identity === connection && owner.radioId == radioId } != false
+    }?.let { error ->
         AlertDialog(
             onDismissRequest = holder::clearError,
             confirmButton = { TextButton(onClick = holder::clearError) { Text(stringResource(C.contactsCommonOk)) } },
@@ -201,10 +236,11 @@ internal fun NodesListScreen(
                 TextButton(onClick = {
                     pendingAction = null
                     scope.launch {
+                        dependencies.session.ensureContactConnection(connection, radioId)
                         when (action) {
-                            RowActionKind.DELETE -> holder.deleteContact(contact)
-                            RowActionKind.BLOCK, RowActionKind.UNBLOCK -> holder.toggleBlocked(contact)
-                            RowActionKind.FAVORITE, RowActionKind.UNFAVORITE -> holder.toggleFavorite(contact)
+                            RowActionKind.DELETE -> holder.deleteContact(contact, binding)
+                            RowActionKind.BLOCK, RowActionKind.UNBLOCK -> holder.toggleBlocked(contact, binding)
+                            RowActionKind.FAVORITE, RowActionKind.UNFAVORITE -> holder.toggleFavorite(contact, binding)
                             RowActionKind.SEND_MESSAGE -> navigation.openChat(contact)
                         }
                     }
@@ -232,15 +268,18 @@ internal fun NodesListScreen(
         )
     }
     if (showAdd) {
-        AddContactDialog(
-            dependencies = dependencies,
-            navigation = navigation,
-            onDismiss = { showAdd = false },
-            onAdded = {
-                showAdd = false
-                if (radioId != null) scope.launch { holder.loadContacts(radioId) }
-            },
-        )
+        key(dependencies, radioId, connection) {
+            AddContactDialog(
+                dependencies = dependencies,
+                owner = binding,
+                navigation = navigation,
+                onDismiss = { showAdd = false },
+                onAdded = { contact ->
+                    if (contact.radioId == dependencies.session.currentRadioId()) holder.upsert(contact)
+                    showAdd = false
+                },
+            )
+        }
     }
     if (showShare) {
         dependencies.session.connectedDevice()?.let { device ->
@@ -259,11 +298,13 @@ private fun ContactListRow(
     contact: ContactDTO,
     stateHolder: ContactsStateHolder,
     dependencies: NodesFeatureDependencies,
+    connection: Any?,
     onOpen: () -> Unit,
     onAction: (RowActionKind) -> Unit,
 ) {
     val state by stateHolder.state.collectAsStateWithLifecycle()
-    var menu by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    var menu by remember(contact.id, contact.radioId, connection) { mutableStateOf(false) }
     val route = nodesString(ContactRowPresentation.routeLabel(contact, state.inboundHopByKey[contact.publicKey]))
     val prefix = ContactRowPresentation.idPrefixHex(contact, dependencies.session.connectedDevice()?.hashSize)
     val actions = ContactRowActions.actions(
@@ -300,7 +341,12 @@ private fun ContactListRow(
             }
             Box {
                 TextButton(
-                    onClick = { menu = true },
+                    onClick = {
+                        scope.launch {
+                            dependencies.session.ensureContactConnection(connection, contact.radioId)
+                            menu = true
+                        }
+                    },
                     modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
                 ) { Text("⋮") }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
@@ -308,7 +354,13 @@ private fun ContactListRow(
                         DropdownMenuItem(
                             text = { Text(nodesString(action.label)) },
                             enabled = action.enabled,
-                            onClick = { menu = false; onAction(action.kind) },
+                            onClick = {
+                                scope.launch {
+                                    dependencies.session.ensureContactConnection(connection, contact.radioId)
+                                    menu = false
+                                    onAction(action.kind)
+                                }
+                            },
                         )
                     }
                 }
@@ -339,9 +391,10 @@ private fun NodesEmptyState(search: String, segment: NodeSegment, modifier: Modi
 @Composable
 private fun AddContactDialog(
     dependencies: NodesFeatureDependencies,
+    owner: NodesConnectionSnapshot,
     navigation: NodesNavigation,
     onDismiss: () -> Unit,
-    onAdded: () -> Unit,
+    onAdded: (ContactDTO) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     val holder = remember(dependencies) { AddContactStateHolder(dependencies) }
@@ -352,7 +405,7 @@ private fun AddContactDialog(
         confirmButton = {
             TextButton(
                 enabled = state.canAdd,
-                onClick = { scope.launch { if (holder.add()) onAdded() } },
+                onClick = { scope.launch { holder.addContact(owner.identity, owner.radioId)?.let(onAdded) } },
             ) { Text(stringResource(C.contactsAddAdd)) }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(C.contactsCommonCancel)) } },
@@ -424,21 +477,29 @@ private fun AddContactDialog(
             AlertDialog(
                 onDismissRequest = scanHolder::resetToScanner,
                 confirmButton = {
+                    val primaryLabel = nodesString(confirmation.primaryAccessibilityLabel)
                     TextButton(
+                        modifier = Modifier.semantics { contentDescription = primaryLabel },
                         enabled = confirmation.isPrimaryEnabled,
                         onClick = {
                             scope.launch {
                                 when (val result = scanHolder.confirm()) {
                                     is ScanConfirmOutcome.Completed -> {
                                         scanner = false
-                                        onDismiss()
+                                        onAdded(result.contact)
                                         navigation.openContact(result.contact)
                                     }
                                     ScanConfirmOutcome.Stay -> Unit
                                 }
                             }
                         },
-                    ) { Text(nodesString(confirmation.primaryButtonTitle)) }
+                    ) {
+                        if (confirmation.isAdding) {
+                            CircularProgressIndicator(Modifier.sizeIn(maxWidth = 20.dp, maxHeight = 20.dp))
+                        } else {
+                            Text(nodesString(confirmation.primaryButtonTitle))
+                        }
+                    }
                 },
                 dismissButton = {
                     TextButton(onClick = scanHolder::resetToScanner) { Text(stringResource(C.contactsScanScanAgain)) }

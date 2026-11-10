@@ -17,7 +17,7 @@ import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CompletableDeferred
 
-internal class ChatContactMount {
+internal class ChatContactMount(val entryId: Long?) {
     val id: UUID = UUID.randomUUID()
     // Prevent delayed effect registration from reviving a retired incarnation after its store row is collected.
     val registrationSealed = AtomicBoolean(false)
@@ -64,6 +64,7 @@ sealed interface ContactLinkResolvedCompletion {
 
 internal data class ContactLinkLookup(
     val owner: NavigationCoordinator,
+    val mount: ChatContactMount?,
     val generation: Long,
     val boundToken: SessionToken?,
     val navigationRadioId: RadioId?,

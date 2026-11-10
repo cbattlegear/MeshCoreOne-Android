@@ -43,6 +43,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.delay
@@ -320,7 +321,7 @@ class AppStateBehaviorTest {
 
     @Test fun initialCleanupCannotCancelFirstSessionWiredAfterItsCommit() = runTest {
         val state = appStateOf(backgroundScope)
-        val retiredJob = backgroundScope.launch { delay(60_000) }
+        val retiredJob = backgroundScope.launch { awaitCancellation() }
         state.installSettingsEventsJobForTesting(retiredJob)
         val navigation = state.navigation
         val committed = CountDownLatch(1)
@@ -347,7 +348,7 @@ class AppStateBehaviorTest {
             navigation.stageHashtag(HashtagJoinRequest("replacement"))
             navigation.setNavigationReady(true)
             val replacementNavigation = navigation.currentState
-            val replacementJob = backgroundScope.launch { delay(60_000) }
+            val replacementJob = backgroundScope.launch { awaitCancellation() }
             state.installSettingsEventsJobForTesting(replacementJob)
             assertTrue(retiredJob.isCancelled)
             release.countDown()

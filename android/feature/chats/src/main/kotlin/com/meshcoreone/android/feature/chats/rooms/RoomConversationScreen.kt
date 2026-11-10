@@ -60,6 +60,9 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.designsystem.AppColors
 import com.meshcoreone.android.core.designsystem.LocalMeshTheme
@@ -126,6 +129,12 @@ fun RoomConversationRoute(
     LaunchedEffect(holder) {
         holder.start()
         holder.load()
+    }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(holder, lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            holder.keepAliveWhileVisible()
+        }
     }
     RoomConversationContent(
         state = state,

@@ -7,11 +7,13 @@ import com.meshcoreone.android.app.navigation.ContactLinkLookupResolution
 import com.meshcoreone.android.app.navigation.ContactLinkRequest
 import com.meshcoreone.android.app.navigation.ContactLinkResolvedCompletion
 import com.meshcoreone.android.app.navigation.ChatContactMount
+import com.meshcoreone.android.app.navigation.MountedOnboardingProducer
 import com.meshcoreone.android.app.navigation.NavigationCleanupOwner
 import com.meshcoreone.android.app.navigation.NavigationCoordinator
 import com.meshcoreone.android.app.navigation.NavigationDestination
 import com.meshcoreone.android.app.navigation.NavigationFailure
 import com.meshcoreone.android.app.navigation.NavigationOutcome
+import com.meshcoreone.android.app.navigation.NavigationState
 import com.meshcoreone.android.app.navigation.NotificationNavigationBinding
 import com.meshcoreone.android.app.navigation.NotificationNavigationReceipt
 import com.meshcoreone.android.app.navigation.PersistenceNavigationLookup
@@ -56,6 +58,7 @@ import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.ContactDTO
+import com.meshcoreone.android.core.model.Coordinate
 import com.meshcoreone.android.core.maps.OfflineMapController
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
@@ -107,6 +110,8 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -166,6 +171,7 @@ class AppContainerDependencies(
     val onboardingPlatform: com.meshcoreone.android.app.container.onboarding.OnboardingPlatform? = null,
     /** Production pre-advert policy; an unbound composition must not silently skip an enabled refresh. */
     val advertLocation: AppAdvertLocation? = null,
+    val nodesLocations: Flow<Coordinate?> = flowOf(null),
     val offlineMaps: OfflineMapController? = null,
     val nodesMessages: UserFacingMessages = UserFacingMessages { it.message ?: "Operation failed" },
     val nodesAnnouncer: Announcer = Announcer {},
@@ -207,6 +213,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
     val sessions = SessionRegistry()
     val navigation = NavigationCoordinator().also { coordinator ->
         coordinator.installCommitBoundary { action -> withNavigationCommitBoundary(action) }
+        coordinator.installOnboardingSessionCapture(::captureOnboardingNavigationSession)
     }
     private val contactHandoffSettlement = processScope.launch(Dispatchers.Default) {
         navigation.contactHandoffUpdates.collect { navigation.settlePublishedChatContactReceipts() }
@@ -335,6 +342,62 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
                 connectionManager.isNavigationSessionCurrent(session.token)
         }
 
+    private data class OnboardingNavigationCapture(
+        val graph: RadioSessionContainer?,
+        val lifecycle: ConnectionManager.NavigationLifecycleStamp,
+        val aligned: Boolean,
+        val offline: ConnectionManager.OfflineNavigationLifecycle?,
+    )
+
+    private fun captureOnboardingNavigationSession(
+        source: NavigationState,
+    ): (MountedOnboardingProducer) -> Boolean {
+        val (initiating, lifecycle, aligned, offline) = withNavigationCommitBoundary {
+            val graph = sessions.current
+            val stamp = connectionManager.captureNavigationLifecycle()
+            val offline = connectionManager.captureOfflineNavigationLifecycle(stamp)
+            val current = if (graph != null) {
+                !graph.isTornDown &&
+                    (graph.token == source.boundSessionToken ||
+                        source.boundSessionToken == null) &&
+                    connectionManager.isInitialNavigationSession(stamp, graph.token, sessions.publicationIdentity, graph)
+            } else {
+                source.boundSessionToken == null && (
+                    connectionManager.isNavigationLifecycleCurrent(stamp) ||
+                        offline != null
+                    )
+            }
+            OnboardingNavigationCapture(graph, stamp, current, offline)
+        }
+        return { producer ->
+            withNavigationCommitBoundary {
+                val graph = sessions.current
+                val token = navigation.currentState.boundSessionToken
+                when {
+                    !aligned -> false
+                    producer is MountedOnboardingProducer.Preset && graph?.token != producer.token -> false
+                    producer is MountedOnboardingProducer.NoDeviceAtSession && graph?.token != producer.token -> false
+                    producer == MountedOnboardingProducer.NoDevice && graph !== initiating -> false
+                    graph == null -> initiating == null && token == null &&
+                        (connectionManager.isNavigationLifecycleCurrent(lifecycle) ||
+                            connectionManager.isOfflineNavigationLifecycleCurrent(lifecycle))
+                    graph.isTornDown || token != null && token != graph.token -> false
+                    initiating != null -> graph === initiating &&
+                        connectionManager.isInitialNavigationSession(
+                            lifecycle, graph.token, sessions.publicationIdentity, graph,
+                        )
+                    else -> source.boundSessionToken == null && (
+                        connectionManager.isInitialNavigationSession(
+                            lifecycle, graph.token, sessions.publicationIdentity, graph,
+                        ) || offline != null && connectionManager.isFirstNavigationSessionAfterOffline(
+                            offline, graph.token, sessions.publicationIdentity, graph,
+                        )
+                        )
+                }
+            }
+        }
+    }
+
     internal fun captureContactNavigationSession(generation: Long): () -> Boolean {
         val (initiating, stamp) = withNavigationCommitBoundary {
             sessions.current to connectionManager.captureNavigationLifecycle()
@@ -367,6 +430,49 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
         }
     }
 
+    internal data class ExternalChannelLinkSession(val radioId: RadioId?, val isCurrent: () -> Boolean)
+
+    private data class ExternalChannelLinkCapture(
+        val graph: RadioSessionContainer?,
+        val lifecycle: ConnectionManager.NavigationLifecycleStamp,
+        val radioId: RadioId?,
+        val generation: Long,
+        val entryEpoch: Long,
+        val quiescentOffline: Boolean,
+    )
+
+    internal fun captureExternalChannelLinkSession(): ExternalChannelLinkSession {
+        val captured = withNavigationCommitBoundary {
+            val lifecycle = connectionManager.captureNavigationLifecycle()
+            ExternalChannelLinkCapture(
+                sessions.current, lifecycle, appState.currentRadioId,
+                navigation.currentState.generation, navigation.currentEntryEpoch,
+                connectionManager.isOfflineNavigationLifecycleCurrent(lifecycle),
+            )
+        }
+        return ExternalChannelLinkSession(captured.radioId) {
+            withNavigationCommitBoundary {
+                val graph = sessions.current
+                if (navigation.currentState.generation != captured.generation ||
+                    navigation.currentEntryEpoch != captured.entryEpoch ||
+                    appState.currentRadioId != captured.radioId
+                ) false
+                else if (captured.graph == null) {
+                    graph == null && (
+                        if (captured.quiescentOffline) {
+                            connectionManager.isOfflineNavigationLifecycleCurrent(captured.lifecycle)
+                        } else connectionManager.isNavigationLifecycleCurrent(captured.lifecycle)
+                        )
+                } else {
+                    graph === captured.graph && !captured.graph.isTornDown &&
+                        connectionManager.isInitialNavigationSession(
+                            captured.lifecycle, captured.graph.token, sessions.publicationIdentity, captured.graph,
+                        )
+                }
+            }
+        }
+    }
+
     internal fun captureContactLinkSession(generation: Long): () -> Boolean {
         val lookupRevision = navigation.beginContactLinkLookup(generation)
         val isCurrentSession = captureContactNavigationSession(generation)
@@ -385,7 +491,8 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
         CapturedContactLinkContext(
             navigation.captureContactLinkLookup(
                 publicKey, radio, selfKey, graph?.token, connectionManager.snapshot.value.token,
-                if (graph == null) connectionManager.isNavigationLifecycleCurrent(lifecycle)
+                if (graph == null) connectionManager.isNavigationLifecycleCurrent(lifecycle) ||
+                    connectionManager.isOfflineNavigationLifecycleCurrent(lifecycle)
                 else !graph.isTornDown &&
                     connectionManager.isInitialNavigationSession(
                         lifecycle, graph.token, sessions.publicationIdentity, graph,
@@ -465,6 +572,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
     internal fun offerChatContact(
         mount: ChatContactMount, context: ContactLinkContext, target: ContactLinkLookupResolution.Current,
         link: ContactLinkRequest, contact: ContactDTO?, publications: ContactLinkPublications,
+        cancellation: ContactLinkCancellation,
     ): ContactLinkTargetCompletion {
         val offered = ContactLinkPublications()
         publications.defer(object : com.meshcoreone.android.feature.chats.list.ContactLinkPublication {
@@ -474,11 +582,12 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
             })
         })
         return withNavigationCommitBoundary {
+            cancellation.ensureActive()
             val resolved = resolveContactLinkContext(context, link.publicKey)
             if (resolved is ContactLinkLookupResolution.Current &&
                 (resolved.radioId != target.radioId || resolved.selfPublicKey != target.selfPublicKey)
             ) return@withNavigationCommitBoundary ContactLinkTargetCompletion.TargetChanged
-            navigation.offerChatContact(mount, context, target, link, contact, offered) {
+            navigation.offerChatContact(mount, context, target, link, contact, offered, cancellation) {
                 val current = resolveContactLinkContext(context, link.publicKey)
                 current is ContactLinkLookupResolution.Current &&
                     current.radioId == target.radioId && current.selfPublicKey == target.selfPublicKey
@@ -519,7 +628,8 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
             lookup.owner !== navigation -> false
             current != null && lookup.radioId != null && lookup.radioId != current.token.radioId -> false
             current == null -> captured.graph == null &&
-                connectionManager.isNavigationLifecycleCurrent(captured.lifecycle)
+                (connectionManager.isNavigationLifecycleCurrent(captured.lifecycle) ||
+                    connectionManager.isOfflineNavigationLifecycleCurrent(captured.lifecycle))
             current.isTornDown -> false
             captured.graph != null -> current === captured.graph &&
                 (lookup.boundToken == current.token || lookup.allowsInitialBinding) &&
@@ -578,6 +688,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
     internal val notificationPreferences get() = dependencies.notificationPreferences
     internal val settingsRegionResolver get() = dependencies.onboardingPlatform?.regionResolver
     internal val advertLocation get() = dependencies.advertLocation
+    internal val nodesLocations get() = dependencies.nodesLocations
     var settingsFeature: AppSettingsFeature? = null
         internal set
     internal val nodesMessages get() = dependencies.nodesMessages
@@ -779,6 +890,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
     /** Process shutdown: closes the runtime (tearing down any live graph), then every process resource. */
     suspend fun close() {
         withContext(NonCancellable) {
+            dependencies.onboardingPlatform?.flags?.shutdown()
             hostBinding?.close()
             appState.shutdown()
             statePlatform.close()

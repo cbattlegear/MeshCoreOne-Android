@@ -10,6 +10,8 @@ import com.meshcoreone.android.core.protocol.session.MeshCoreSessionProtocol
 import com.meshcoreone.android.core.protocol.session.SessionClock
 import com.meshcoreone.android.core.protocol.session.SystemSessionClock
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
+import java.lang.ref.ReferenceQueue
+import java.lang.ref.WeakReference
 import java.time.Duration
 import java.util.UUID
 import kotlin.coroutines.AbstractCoroutineContextElement
@@ -49,8 +51,8 @@ class MessagePollingService(
     private val pending = ArrayDeque<Delivery>()
     private val parked = ArrayDeque<Delivery>()
     private val observedDuringPoll = ArrayDeque<Delivery>()
-    private val expectedEchoes = mutableMapOf<MeshEvent, Long>()
-    private val expectedChannelEchoes = mutableMapOf<ChannelMessage, ArrayDeque<Delivery>>()
+    private val liveMessageOccurrences = WeakIdentitySet()
+    private val expectedEchoOccurrences = WeakIdentitySet()
     private var contactHandler: (suspend (ContactMessage, ContactDTO?, DeliveryContext) -> Unit)? = null
     private var channelHandler: (suspend (ChannelMessage, ChannelDTO?, DeliveryContext) -> Unit)? = null
     private var channelEnvelopeHandler: (suspend (ChannelReceiveEnvelope, ChannelDTO?) -> Unit)? = null
@@ -136,6 +138,7 @@ class MessagePollingService(
                         observedDuringPoll.addLast(delivery)
                         true
                     } else {
+                        messageOccurrence(event)?.let(liveMessageOccurrences::add)
                         pending.addLast(delivery)
                         false
                     }
@@ -159,7 +162,7 @@ class MessagePollingService(
         stopAutoLocked()
         val task = synchronized(lock) { monitorActive = false; listener.also { listener = null } }
         task?.cancelAndJoin()
-        synchronized(lock) { expectedEchoes.clear(); expectedChannelEchoes.clear() }
+        synchronized(lock) { expectedEchoOccurrences.clear() }
     }
 
     override suspend fun startAutoFetch(radioId: RadioId) {
@@ -290,6 +293,12 @@ class MessagePollingService(
                         return count
                     }
                 }
+                if (synchronized(lock) {
+                    messageOccurrence(event)?.let(liveMessageOccurrences::remove) == true
+                }) {
+                    count = Math.incrementExact(count)
+                    continue
+                }
                 synchronized(lock) {
                     var delivery = newDelivery(event, DeliveryContext.InitialSync(anchor))
                     val seen = matchingIndex(observedDuringPoll, delivery)
@@ -384,28 +393,11 @@ class MessagePollingService(
     }
 
     private fun expectEcho(delivery: Delivery) {
-        val envelope = delivery.channelEnvelope
-        if (envelope == null) {
-            expectedEchoes[delivery.event] = Math.incrementExact(expectedEchoes[delivery.event] ?: 0)
-        } else {
-            expectedChannelEchoes.getOrPut(envelope.message) { ArrayDeque() }.addLast(delivery)
-        }
+        messageOccurrence(delivery.event)?.let(expectedEchoOccurrences::add)
     }
 
-    private fun takeEcho(delivery: Delivery): Boolean {
-        val envelope = delivery.channelEnvelope
-        if (envelope != null) {
-            val echoes = expectedChannelEchoes[envelope.message] ?: return false
-            val index = matchingIndex(echoes, delivery)
-            if (index < 0) return false
-            echoes.removeAt(index)
-            if (echoes.isEmpty()) expectedChannelEchoes.remove(envelope.message)
-            return true
-        }
-        val count = expectedEchoes[delivery.event] ?: return false
-        if (count == 1L) expectedEchoes.remove(delivery.event) else expectedEchoes[delivery.event] = count - 1
-        return true
-    }
+    private fun takeEcho(delivery: Delivery): Boolean =
+        messageOccurrence(delivery.event)?.let(expectedEchoOccurrences::remove) == true
 
     private suspend fun deliverPending() = dispatch.withLock {
         var firstFailure: Exception? = null
@@ -541,13 +533,59 @@ class MessagePollingService(
             for ((task, invocation) in work) joinUnlessConsumerClosing(task, invocation)
             synchronized(lock) {
                 polling = null; listener = null; monitorActive = false
-                expectedEchoes.clear(); expectedChannelEchoes.clear()
+                expectedEchoOccurrences.clear()
+                liveMessageOccurrences.clear()
             }
             clearMessageHandlers()
             ownership.job.cancel()
             if (work.none { it.second?.closing?.isCompleted == true }) ownership.job.join()
             closeReport().also { receipt.complete(it) }
         }
+    }
+}
+
+private fun messageOccurrence(event: MeshEvent): Any? = when (event) {
+    is MeshEvent.ContactMessageReceived -> event.message
+    is MeshEvent.ChannelMessageReceived -> event.message
+    else -> null
+}
+
+// Weak identity keys preserve exact occurrences without retaining equal messages or their payloads.
+private class WeakIdentitySet {
+    private val queue = ReferenceQueue<Any>()
+    private val values = HashSet<WeakIdentityReference>()
+
+    fun add(value: Any) {
+        discardCollected()
+        values.add(WeakIdentityReference(value, queue))
+    }
+
+    fun remove(value: Any): Boolean {
+        discardCollected()
+        return values.remove(WeakIdentityReference(value))
+    }
+
+    fun clear() {
+        values.clear()
+        while (queue.poll() != null) Unit
+    }
+
+    private fun discardCollected() {
+        while (true) {
+            val collected = queue.poll() as? WeakIdentityReference ?: return
+            values.remove(collected)
+        }
+    }
+
+    private class WeakIdentityReference(value: Any, queue: ReferenceQueue<Any>? = null) :
+        WeakReference<Any>(value, queue) {
+        private val identityHash = System.identityHashCode(value)
+
+        override fun hashCode(): Int = identityHash
+
+        override fun equals(other: Any?): Boolean =
+            this === other || other is WeakIdentityReference &&
+                get()?.let { it === other.get() } == true
     }
 }
 

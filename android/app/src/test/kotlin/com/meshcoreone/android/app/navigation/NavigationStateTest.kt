@@ -66,13 +66,21 @@ class NavigationStateTest {
         override suspend fun channel(radioId: RadioId, index: UByte) = channel
         override suspend fun room(key: EntityKey) = room
     }
+    private fun NavigationCoordinator.completeOnboardingForTest(
+        presented: NavigationStateStore.PublishedSnapshot, entryId: Long,
+    ): Boolean {
+        installOnboardingSessionCapture { { true } }
+        return completeMountedOnboarding(
+            captureMountedOnboarding(presented, entryId), MountedOnboardingProducer.NoDevice,
+        )
+    }
 
     @Test fun metadataOnlyHandoffCommitsRetainEveryUnreleasedPredecessorGate() {
         val initial = NavigationState()
         val store = NavigationStateStore(initial)
         val first = NavigationStateStore.Publication()
         val second = NavigationStateStore.Publication()
-        val mount = ChatContactMount()
+        val mount = ChatContactMount(null)
         assertTrue(store.compareAndSet(store.snapshot(), initial.copy(selectedTab = AppTab.MAP), first))
         val captured = store.snapshot()
         assertTrue(store.compareAndSet(
@@ -105,6 +113,747 @@ class NavigationStateTest {
         store.release(first)
         assertEquals(AppTab.MAP, store.state.value.selectedTab)
         assertFalse(store.compareAndSet(original, initial.copy(selectedTab = AppTab.TOOLS)))
+    }
+
+    @Test fun backLeavesThePresentedChatInsteadOfAnUnpublishedNotificationDescendant() = runTest {
+        val n = NavigationCoordinator()
+        n.replaceRadio(radio)
+        n.setNavigationReady(true)
+        n.navigateToSetting(SettingsDetail.LANGUAGE)
+        val settings = n.currentState.stacks.getValue(AppTab.SETTINGS)
+        n.navigateToChat(contact)
+        val presented = n.publishedNavigation.value
+        val gate = n.registerChatContactMount(ChatContactMount(presented.value.activeStack.last().id))
+        try {
+            assertEquals(NavigationOutcome.Navigated, n.handleNotification(
+                NotificationPayload.ChannelMessage(radio, channel.index, message), lookup(),
+            ))
+            assertEquals(presented, n.publishedNavigation.value)
+            assertEquals(ChatSelection.Channel(channel), n.currentState.chatsSelectedRoute)
+            assertTrue(n.back())
+            assertEquals(1, n.currentState.activeStack.size)
+            assertNull(n.currentState.chatsSelectedRoute)
+            assertNull(n.currentState.pendingChannel)
+            assertNull(n.currentState.pendingMessageScroll)
+            assertEquals(settings, n.currentState.stacks.getValue(AppTab.SETTINGS))
+            assertFalse("The same presented entry cannot be popped twice", n.back())
+            assertEquals(presented, n.publishedNavigation.value)
+        } finally {
+            gate.release()
+        }
+        assertEquals(1, n.state.value.activeStack.size)
+        assertNull(n.state.value.chatsSelectedRoute)
+        assertEquals(settings, n.state.value.stacks.getValue(AppTab.SETTINGS))
+    }
+
+    @Test fun backKeepsItsPresentedEntryWhenANewerPublicationReachesTheFlowBeforeTheUi() = runTest {
+        val n = NavigationCoordinator()
+        n.replaceRadio(radio)
+        n.setNavigationReady(true)
+        n.navigateToChat(contact)
+        val presented = n.publishedNavigation.value
+        assertEquals(NavigationOutcome.Navigated, n.handleNotification(
+            NotificationPayload.ChannelMessage(radio, channel.index, message), lookup(),
+        ))
+        assertTrue(n.publishedNavigation.value.revision > presented.revision)
+        assertEquals(ChatSelection.Channel(channel), n.state.value.chatsSelectedRoute)
+        assertTrue(n.back(presented))
+        assertEquals(AppTab.CHATS, n.state.value.selectedTab)
+        assertEquals(1, n.state.value.activeStack.size)
+        assertNull(n.state.value.chatsSelectedRoute)
+    }
+
+    @Test fun backFromThePresentedChatsRootCannotPopAnUnpublishedNotification() = runTest {
+        val n = NavigationCoordinator()
+        n.replaceRadio(radio)
+        n.setNavigationReady(true)
+        val presented = n.publishedNavigation.value
+        val gate = n.registerChatContactMount(ChatContactMount(null))
+        try {
+            assertEquals(NavigationOutcome.Navigated, n.handleNotification(payload, lookup()))
+            val committed = n.currentState
+            assertFalse(n.back())
+            assertEquals(committed, n.currentState)
+            assertEquals(presented, n.publishedNavigation.value)
+        } finally {
+            gate.release()
+        }
+        assertEquals(ChatSelection.Direct(contact), n.state.value.chatsSelectedRoute)
+    }
+
+    @Test fun backFromAPresentedTabRootRetainsThatTabsUnseenDetail() {
+        val n = NavigationCoordinator()
+        n.selectTab(AppTab.NODES)
+        val presented = n.publishedNavigation.value
+        val gate = n.registerChatContactMount(ChatContactMount(null))
+        try {
+            n.navigateToContactDetail(contact)
+            val nodes = n.currentState.stacks.getValue(AppTab.NODES)
+            assertTrue(n.back(presented))
+            assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+            assertEquals(nodes, n.currentState.stacks.getValue(AppTab.NODES))
+            assertEquals(contact, n.currentState.selectedContact)
+            assertEquals(presented, n.publishedNavigation.value)
+        } finally {
+            gate.release()
+        }
+        assertEquals(AppTab.CHATS, n.state.value.selectedTab)
+        assertEquals(NavigationDestination.ContactDetail(contact), n.state.value.stacks.getValue(AppTab.NODES).last().destination)
+    }
+
+    @Test fun backDoesNotReinterpretAnAlreadyRemovedPresentedEntry() {
+        val n = NavigationCoordinator()
+        n.navigateToChat(contact)
+        val presented = n.publishedNavigation.value
+        assertTrue(n.back(presented))
+        n.navigateToChannel(channel)
+        val replacement = n.state.value
+        assertFalse(n.back(presented))
+        assertEquals(replacement, n.state.value)
+    }
+
+    @Test fun backCannotRebaseAPresentedEntryOntoARetiredGeneration() {
+        val n = NavigationCoordinator()
+        n.navigateToChat(contact)
+        val presented = n.publishedNavigation.value
+        n.manuallyDisconnect()
+        n.navigateToChannel(channel)
+        val replacement = n.state.value
+        assertFalse(n.back(presented))
+        assertEquals(replacement, n.state.value)
+    }
+
+    @Test fun onboardingCompletionPopsItsEntryAndSelectsChatsInOneRevision() {
+        val n = NavigationCoordinator()
+        n.navigateToChat(contact, message)
+        val chats = n.currentState.stacks.getValue(AppTab.CHATS)
+        val scroll = n.currentState.pendingMessageScroll
+        n.navigateToSetting(SettingsDetail.LANGUAGE)
+        val settings = n.currentState.stacks.getValue(AppTab.SETTINGS)
+        n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+        val presented = n.publishedNavigation.value
+        val entry = presented.value.activeStack.last()
+
+        assertTrue(n.completeOnboardingForTest(presented, entry.id))
+        assertEquals(presented.revision + 1, n.publishedNavigation.value.revision)
+        assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+        assertEquals(chats, n.currentState.stacks.getValue(AppTab.CHATS))
+        assertEquals(settings, n.currentState.stacks.getValue(AppTab.SETTINGS))
+        assertEquals(scroll, n.currentState.pendingMessageScroll)
+        assertEquals(SettingsDetail.LANGUAGE, n.currentState.selectedSetting)
+        assertFalse(n.completeOnboardingForTest(presented, entry.id))
+    }
+
+    @Test fun firstRunCompletionSelectsChatsWithoutPoppingTheHiddenStackAndRetiresEvenWhenUnchanged() {
+        for (alreadyChats in listOf(false, true)) {
+            val n = NavigationCoordinator()
+            n.installOnboardingSessionCapture { { true } }
+            if (alreadyChats) n.navigateToChat(contact) else n.navigateToSetting(SettingsDetail.LANGUAGE)
+            val presented = n.publishedNavigation.value
+            val hiddenStack = presented.value.activeStack
+            val completion = n.captureFirstRunOnboarding(presented)
+            assertNotNull(completion)
+
+            assertTrue(n.completeFirstRunOnboarding(completion, MountedOnboardingProducer.NoDevice))
+            assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+            assertEquals(hiddenStack, n.currentState.stacks.getValue(presented.value.selectedTab))
+            assertEquals(presented.revision + (if (alreadyChats) 0L else 1L), n.publishedNavigation.value.revision)
+            val committed = n.currentState
+            assertFalse(n.completeFirstRunOnboarding(completion, MountedOnboardingProducer.NoDevice))
+            assertEquals(committed, n.currentState)
+        }
+    }
+
+    @Test fun firstRunCompletionRejectsForeignAndReactivatedNavigationOwners() {
+        for (reactivate in listOf(false, true)) {
+            val n = NavigationCoordinator()
+            val foreign = NavigationCoordinator()
+            n.installOnboardingSessionCapture { { true } }
+            foreign.installOnboardingSessionCapture { { true } }
+            n.navigateToSetting(SettingsDetail.LANGUAGE)
+            foreign.navigateToSetting(SettingsDetail.LANGUAGE)
+            val presented = n.publishedNavigation.value
+            val completion = n.captureFirstRunOnboarding(presented)
+            assertNotNull(completion)
+            assertFalse(n.completeFirstRunOnboarding(null, MountedOnboardingProducer.NoDevice))
+            assertNull(foreign.captureFirstRunOnboarding(presented))
+            assertFalse(foreign.completeFirstRunOnboarding(completion, MountedOnboardingProducer.NoDevice))
+            n.selectTab(AppTab.MAP)
+            if (reactivate) n.selectTab(AppTab.SETTINGS)
+            val current = n.currentState
+            assertFalse(n.completeFirstRunOnboarding(completion, MountedOnboardingProducer.NoDevice))
+            assertFalse(n.reportFirstRunOnboardingFailure(completion))
+            assertEquals(current, n.currentState)
+        }
+    }
+
+    @Test fun firstRunCompletionChecksTheOriginalProducerInsideTheCommitBoundary() {
+        val first = SessionToken(ProcessEpoch(UUID(0, 86)), Generation(1), radio)
+        val second = first.copy(generation = Generation(2))
+        val n = NavigationCoordinator()
+        assertTrue(n.bindNotificationSession(radio, null, first))
+        n.selectTab(AppTab.SETTINGS)
+        var authority = first
+        n.installOnboardingSessionCapture { { it == MountedOnboardingProducer.Preset(authority) } }
+        val completion = n.captureFirstRunOnboarding(n.publishedNavigation.value)
+        assertNotNull(completion)
+        val before = n.currentState
+        n.installCommitBoundary { action -> authority = second; action() }
+
+        assertFalse(n.completeFirstRunOnboarding(completion, MountedOnboardingProducer.Preset(first)))
+        assertEquals(before, n.currentState)
+        n.installCommitBoundary { action -> authority = first; action() }
+        assertTrue(n.completeFirstRunOnboarding(completion, MountedOnboardingProducer.Preset(first)))
+        assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+    }
+
+    @Test fun firstRunRejectionRetainsAnOccupiedFailureAndRequiresANewAttemptAfterReporting() {
+        val n = NavigationCoordinator()
+        var valid = false
+        n.installOnboardingSessionCapture { { valid } }
+        n.selectTab(AppTab.SETTINGS)
+        val completion = n.captureFirstRunOnboarding(n.publishedNavigation.value)
+        assertNotNull(completion)
+        n.requestRoomAuthentication(room.copy(role = RemoteNodeRole.REPEATER))
+        val occupied = n.currentState
+        assertEquals(NavigationFailure.WrongTarget(NavigationTarget.ROOM), occupied.failure)
+        assertFalse(n.completeFirstRunOnboarding(completion, MountedOnboardingProducer.NoDevice))
+        assertFalse(n.reportFirstRunOnboardingFailure(completion))
+        assertEquals(occupied, n.currentState)
+
+        n.clearFailure()
+        assertTrue(n.reportFirstRunOnboardingFailure(completion))
+        assertTrue(n.currentState.failure is NavigationFailure.StaleOnboarding)
+        valid = true
+        assertFalse(n.completeFirstRunOnboarding(completion, MountedOnboardingProducer.NoDevice))
+        n.clearFailure()
+        val retry = n.captureFirstRunOnboarding(n.publishedNavigation.value)
+        assertNotNull(retry)
+        assertTrue(n.completeFirstRunOnboarding(retry, MountedOnboardingProducer.NoDevice))
+        assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+    }
+
+    @Test fun firstRunRetirementAndPublicationCannotReplayAnOldAttempt() {
+        val n = NavigationCoordinator()
+        n.installOnboardingSessionCapture { { true } }
+        n.selectTab(AppTab.SETTINGS)
+        val presented = n.publishedNavigation.value
+        val retired = n.captureFirstRunOnboarding(presented)
+        assertNotNull(retired)
+        val gate = n.registerChatContactMount(ChatContactMount(null))
+        var lateCompletion: Boolean? = null
+        n.installCommitBoundary { action ->
+            action()
+            if (lateCompletion == null) {
+                lateCompletion = false
+                lateCompletion = n.completeFirstRunOnboarding(retired, MountedOnboardingProducer.NoDevice)
+            }
+        }
+        try {
+            assertTrue(n.reportFirstRunOnboardingFailure(retired))
+            assertEquals(false, lateCompletion)
+            assertTrue(n.currentState.failure is NavigationFailure.StaleOnboarding)
+            assertEquals(presented, n.publishedNavigation.value)
+        } finally {
+            gate.release()
+        }
+        assertTrue(n.state.value.failure is NavigationFailure.StaleOnboarding)
+        n.clearFailure()
+        val cancelled = n.captureFirstRunOnboarding(n.publishedNavigation.value)
+        assertNotNull(cancelled)
+        n.retireFirstRunOnboarding(cancelled)
+        assertFalse(n.completeFirstRunOnboarding(cancelled, MountedOnboardingProducer.NoDevice))
+        assertFalse(n.reportFirstRunOnboardingFailure(cancelled))
+    }
+
+    @Test fun onboardingCompletionKeepsBackCleanupAndExpandedToolsSelectionSemantics() {
+        val chats = NavigationCoordinator()
+        chats.navigateToChat(contact, message)
+        chats.navigate(FeatureRoute(FeatureId.ONBOARDING))
+        val chatSource = chats.publishedNavigation.value
+        assertTrue(chats.completeOnboardingForTest(chatSource, chatSource.value.activeStack.last().id))
+        assertEquals(ChatSelection.Direct(contact), chats.currentState.chatsSelectedRoute)
+        assertNull(chats.currentState.pendingChatContact)
+        assertNull(chats.currentState.pendingMessageScroll)
+
+        val tools = NavigationCoordinator()
+        tools.measureWindow(834f)
+        tools.navigateToTool(ToolSelection.CLI)
+        tools.navigate(FeatureRoute(FeatureId.ONBOARDING))
+        val toolSource = tools.publishedNavigation.value
+        assertTrue(tools.completeOnboardingForTest(toolSource, toolSource.value.activeStack.last().id))
+        assertEquals(AppTab.CHATS, tools.currentState.selectedTab)
+        assertEquals(1, tools.currentState.stacks.getValue(AppTab.TOOLS).size)
+        assertNull(tools.currentState.selectedTool)
+    }
+
+    @Test fun onboardingCompletionRejectsAnInactiveOrReactivatedPresentedEntry() {
+        for (reactivate in listOf(false, true)) {
+            val n = NavigationCoordinator()
+            n.selectTab(AppTab.SETTINGS)
+            n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+            val presented = n.publishedNavigation.value
+            val entryId = presented.value.activeStack.last().id
+            val gate = n.registerChatContactMount(ChatContactMount(null))
+            try {
+                n.selectTab(AppTab.MAP)
+                if (reactivate) n.selectTab(AppTab.SETTINGS)
+                val current = n.currentState
+                assertEquals(presented, n.publishedNavigation.value)
+                assertFalse(n.completeOnboardingForTest(presented, entryId))
+                assertEquals(current, n.currentState)
+                assertEquals(presented, n.publishedNavigation.value)
+            } finally {
+                gate.release()
+            }
+        }
+    }
+
+    @Test fun onboardingCompletionRejectsAnIdenticalReplacementAndWrongMountedEntry() {
+        val n = NavigationCoordinator()
+        n.selectTab(AppTab.SETTINGS)
+        n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+        val original = n.publishedNavigation.value
+        val originalId = original.value.activeStack.last().id
+        assertTrue(n.back(original))
+        n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+        val replacement = n.publishedNavigation.value
+        val replacementId = replacement.value.activeStack.last().id
+        assertNotEquals(originalId, replacementId)
+        assertEquals(original.value.activeStack.last().destination, replacement.value.activeStack.last().destination)
+        val current = n.currentState
+
+        assertFalse(n.completeOnboardingForTest(original, originalId))
+        assertFalse(n.completeOnboardingForTest(replacement, originalId))
+        assertEquals(current, n.currentState)
+        assertTrue(n.completeOnboardingForTest(replacement, replacementId))
+    }
+
+    @Test fun onboardingCompletionRejectsASnapshotFromAnIdenticalReplacementCoordinator() {
+        fun coordinator() = NavigationCoordinator().also {
+            it.selectTab(AppTab.SETTINGS)
+            it.navigate(FeatureRoute(FeatureId.ONBOARDING))
+        }
+        val retired = coordinator()
+        val replacement = coordinator()
+        val source = retired.publishedNavigation.value
+        val current = replacement.publishedNavigation.value
+        assertEquals(source.revision, current.revision)
+        assertEquals(source.value, current.value)
+        val entryId = source.value.activeStack.last().id
+
+        assertFalse(replacement.completeOnboardingForTest(source, entryId))
+        retired.installOnboardingSessionCapture { { true } }
+        val retiredCompletion = retired.captureMountedOnboarding(source, entryId)
+        assertNotNull(retiredCompletion)
+        assertFalse(replacement.completeMountedOnboarding(retiredCompletion, MountedOnboardingProducer.NoDevice))
+        assertEquals(current.value, replacement.currentState)
+        assertTrue(replacement.completeOnboardingForTest(current, entryId))
+    }
+
+    @Test fun onboardingCompletionAcceptsFirstBindingButRejectsSameRadioSessionReplacement() {
+        val first = SessionToken(ProcessEpoch(UUID(0, 81)), Generation(1), radio)
+        val second = SessionToken(ProcessEpoch(UUID(0, 81)), Generation(2), radio)
+        for (alreadyBound in listOf(false, true)) {
+            val n = NavigationCoordinator()
+            if (alreadyBound) assertTrue(n.bindNotificationSession(radio, null, first))
+            n.selectTab(AppTab.SETTINGS)
+            n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+            val presented = n.publishedNavigation.value
+            assertTrue(n.bindNotificationSession(radio, null, if (alreadyBound) second else first))
+            val replacement = n.currentState
+
+            if (alreadyBound) {
+                assertFalse(n.completeOnboardingForTest(presented, presented.value.activeStack.last().id))
+                assertEquals(replacement, n.currentState)
+            } else {
+                assertTrue(n.completeOnboardingForTest(presented, presented.value.activeStack.last().id))
+                assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+                assertEquals(first, n.currentState.boundSessionToken)
+            }
+        }
+    }
+
+    @Test fun onboardingCompletionAcceptsTheFirstBindingAfterAnOfflineRetainedRadio() {
+        val epoch = ProcessEpoch(UUID(0, 85))
+        val first = SessionToken(epoch, Generation(1), radio)
+        for (nextRadio in listOf(radio, otherRadio)) {
+            val n = NavigationCoordinator()
+            assertTrue(n.bindNotificationSession(radio, null, first))
+            n.clearPendingLinks()
+            assertEquals(radio, n.currentState.radioId)
+            assertNull(n.currentState.boundSessionToken)
+            n.selectTab(AppTab.SETTINGS)
+            n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+            val presented = n.publishedNavigation.value
+            val successor = SessionToken(epoch, Generation(2), nextRadio)
+            n.installOnboardingSessionCapture { { it == MountedOnboardingProducer.Preset(successor) } }
+            val completion = n.captureMountedOnboarding(presented, presented.value.activeStack.last().id)
+            if (nextRadio != radio) {
+                assertTrue(n.clearPerRadioSelectionWhen { true })
+                val cleared = n.currentState
+                assertFalse(n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(successor)))
+                assertEquals(cleared, n.currentState)
+            }
+            assertTrue(n.bindNotificationSession(nextRadio, null, successor))
+            val bound = n.currentState
+            val wrong = successor.copy(generation = Generation(3))
+            assertFalse(n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(wrong)))
+            assertEquals(bound, n.currentState)
+            assertTrue(n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(successor)))
+            assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+            assertEquals(successor, n.currentState.boundSessionToken)
+        }
+        for (guardedCleanup in listOf(false, true)) {
+            val n = NavigationCoordinator()
+            assertTrue(n.bindNotificationSession(radio, null, first))
+            n.clearPendingLinks()
+            n.selectTab(AppTab.SETTINGS)
+            n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+            val presented = n.publishedNavigation.value
+            val successor = SessionToken(epoch, Generation(2), otherRadio)
+            n.installOnboardingSessionCapture { { it == MountedOnboardingProducer.Preset(successor) } }
+            val completion = n.captureMountedOnboarding(presented, presented.value.activeStack.last().id)
+            if (guardedCleanup) assertTrue(n.clearPerRadioSelectionWhen { true })
+            n.clearPendingLinks()
+            assertTrue(n.bindNotificationSession(otherRadio, null, successor))
+            val current = n.currentState
+            assertFalse(n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(successor)))
+            assertEquals(current, n.currentState)
+        }
+    }
+
+    @Test fun onboardingCompletionRequiresItsSessionWitnessAtTheCommitBoundary() {
+        val n = NavigationCoordinator()
+        n.selectTab(AppTab.SETTINGS)
+        n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+        val presented = n.publishedNavigation.value
+        val entryId = presented.value.activeStack.last().id
+        assertFalse(n.completeMountedOnboarding(
+            n.captureMountedOnboarding(presented, entryId), MountedOnboardingProducer.NoDevice,
+        ))
+
+        var current = true
+        n.installOnboardingSessionCapture { { current } }
+        val witness = n.captureMountedOnboarding(presented, entryId)
+        val before = n.currentState
+        n.installCommitBoundary { action -> current = false; action() }
+        assertFalse(n.completeMountedOnboarding(witness, MountedOnboardingProducer.NoDevice))
+        assertEquals(before, n.currentState)
+    }
+
+    @Test fun firstBindingCannotOverrideARejectedOnboardingSessionWitness() {
+        val token = SessionToken(ProcessEpoch(UUID(0, 83)), Generation(1), radio)
+        val n = NavigationCoordinator()
+        n.selectTab(AppTab.SETTINGS)
+        n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+        val presented = n.publishedNavigation.value
+        n.installOnboardingSessionCapture { { false } }
+        val completion = n.captureMountedOnboarding(presented, presented.value.activeStack.last().id)
+        assertTrue(n.bindNotificationSession(radio, null, token))
+        val current = n.currentState
+        assertFalse(n.completeMountedOnboarding(completion, MountedOnboardingProducer.NoDevice))
+        assertEquals(current, n.currentState)
+    }
+
+    @Test fun onboardingProducerIsValidatedInsideTheCommitBoundary() {
+        val first = SessionToken(ProcessEpoch(UUID(0, 84)), Generation(1), radio)
+        val second = first.copy(generation = Generation(2))
+        val n = NavigationCoordinator()
+        assertTrue(n.bindNotificationSession(radio, null, first))
+        n.selectTab(AppTab.SETTINGS)
+        n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+        val presented = n.publishedNavigation.value
+        var authority = first
+        var checks = 0
+        n.installOnboardingSessionCapture {
+            { producer ->
+                checks++
+                producer == MountedOnboardingProducer.Preset(authority)
+            }
+        }
+        val completion = n.captureMountedOnboarding(presented, presented.value.activeStack.last().id)
+        val before = n.currentState
+        n.installCommitBoundary { action -> authority = second; action() }
+
+        assertFalse(n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(first)))
+        assertEquals(before, n.currentState)
+        assertEquals(1, checks)
+        n.installCommitBoundary { action -> authority = first; action() }
+        assertTrue(n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(first)))
+        assertEquals(2, checks)
+        assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+    }
+
+    @Test fun retiredOnboardingAttemptCannotAuthorizeOrReportForItsReplacement() {
+        val n = NavigationCoordinator()
+        n.installOnboardingSessionCapture { { true } }
+        n.selectTab(AppTab.SETTINGS)
+        n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+        val presented = n.publishedNavigation.value
+        val entry = presented.value.activeStack.last()
+        val retired = n.captureMountedOnboarding(presented, entry.id)
+        val before = n.currentState
+        var injected = false
+        n.installCommitBoundary { action ->
+            if (!injected) {
+                injected = true
+                n.retireMountedOnboarding(retired)
+            }
+            action()
+        }
+
+        assertFalse(n.completeMountedOnboarding(retired, MountedOnboardingProducer.NoDevice))
+        assertTrue(injected)
+        assertFalse(n.reportMountedOnboardingFailure(retired))
+        assertEquals(before, n.currentState)
+        val replacement = n.captureMountedOnboarding(presented, entry.id)
+        assertTrue(n.completeMountedOnboarding(replacement, MountedOnboardingProducer.NoDevice))
+        assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+    }
+
+    @Test fun onboardingFailureIsReportedOnlyForTheStillActiveMountedEntry() {
+        for (replacement in listOf("none", "tab", "reactivated", "entry")) {
+            val n = NavigationCoordinator()
+            n.installOnboardingSessionCapture { { false } }
+            n.selectTab(AppTab.SETTINGS)
+            n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+            val presented = n.publishedNavigation.value
+            val completion = n.captureMountedOnboarding(presented, presented.value.activeStack.last().id)
+            when (replacement) {
+                "tab" -> n.selectTab(AppTab.MAP)
+                "reactivated" -> {
+                    n.selectTab(AppTab.MAP)
+                    n.selectTab(AppTab.SETTINGS)
+                }
+                "entry" -> {
+                    assertTrue(n.back(presented))
+                    n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+                }
+            }
+            val before = n.currentState
+            assertFalse(n.completeMountedOnboarding(completion, MountedOnboardingProducer.NoDevice))
+            if (replacement == "none") {
+                assertTrue(n.reportMountedOnboardingFailure(completion))
+                assertTrue(n.currentState.failure is NavigationFailure.StaleOnboarding)
+                assertEquals(before.copy(failure = n.currentState.failure), n.currentState)
+            } else {
+                assertFalse(n.reportMountedOnboardingFailure(completion))
+                assertEquals(before, n.currentState)
+            }
+        }
+    }
+
+    @Test fun onboardingFailureDoesNotOverwriteAnExistingUnrelatedFailure() {
+        val n = NavigationCoordinator()
+        var sessionCurrent = false
+        n.installOnboardingSessionCapture { { sessionCurrent } }
+        n.selectTab(AppTab.SETTINGS)
+        n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+        val presented = n.publishedNavigation.value
+        val completion = n.captureMountedOnboarding(presented, presented.value.activeStack.last().id)
+        n.requestRoomAuthentication(room.copy(role = RemoteNodeRole.REPEATER))
+        val before = n.currentState
+        assertEquals(NavigationFailure.WrongTarget(NavigationTarget.ROOM), before.failure)
+
+        assertFalse(n.completeMountedOnboarding(completion, MountedOnboardingProducer.NoDevice))
+        assertFalse(n.reportMountedOnboardingFailure(completion))
+        assertEquals(before, n.currentState)
+        n.clearFailure()
+        assertTrue(n.reportMountedOnboardingFailure(completion))
+        sessionCurrent = true
+        assertFalse(n.completeMountedOnboarding(completion, MountedOnboardingProducer.NoDevice))
+        val first = n.currentState.failure
+        assertTrue(first is NavigationFailure.StaleOnboarding)
+        n.clearFailure(first)
+        val replacement = n.captureMountedOnboarding(n.publishedNavigation.value, presented.value.activeStack.last().id)
+        assertTrue(n.reportMountedOnboardingFailure(replacement))
+        val second = n.currentState.failure
+        assertTrue(second is NavigationFailure.StaleOnboarding)
+        assertNotEquals(first, second)
+        n.clearFailure(first)
+        assertEquals(second, n.currentState.failure)
+    }
+
+    @Test fun onboardingRejectionPreservesAnUnreleasedPublicationPredecessor() {
+        val n = NavigationCoordinator()
+        n.installOnboardingSessionCapture { { true } }
+        n.selectTab(AppTab.SETTINGS)
+        n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+        val presented = n.publishedNavigation.value
+        val completion = n.captureMountedOnboarding(presented, presented.value.activeStack.last().id)
+        val gate = n.registerChatContactMount(ChatContactMount(null))
+        var interleave = true
+        var lateCompletion: Boolean? = null
+        n.installCommitBoundary { action ->
+            action()
+            if (interleave) {
+                interleave = false
+                lateCompletion = n.completeMountedOnboarding(completion, MountedOnboardingProducer.NoDevice)
+            }
+        }
+        try {
+            assertTrue(n.reportMountedOnboardingFailure(completion))
+            assertEquals(false, lateCompletion)
+            assertTrue(n.currentState.failure is NavigationFailure.StaleOnboarding)
+            assertEquals(AppTab.SETTINGS, n.currentState.selectedTab)
+            assertEquals(presented, n.publishedNavigation.value)
+        } finally {
+            gate.release()
+        }
+        assertTrue(n.state.value.failure is NavigationFailure.StaleOnboarding)
+    }
+
+    @Test fun onboardingCompletionRechecksSourceAfterCompetingLifecycleCommit() {
+        val first = SessionToken(ProcessEpoch(UUID(0, 82)), Generation(1), radio)
+        val second = SessionToken(ProcessEpoch(UUID(0, 82)), Generation(2), radio)
+        for (change in listOf("tab", "entry", "session")) {
+            val n = NavigationCoordinator()
+            assertTrue(n.bindNotificationSession(radio, null, first))
+            n.selectTab(AppTab.SETTINGS)
+            n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+            val presented = n.publishedNavigation.value
+            var injected = false
+            var competing: NavigationState? = null
+            n.installCommitBoundary { action ->
+                if (!injected) {
+                    injected = true
+                    when (change) {
+                        "tab" -> n.selectTab(AppTab.MAP)
+                        "entry" -> {
+                            assertTrue(n.back(presented))
+                            n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+                        }
+                        "session" -> assertTrue(n.bindNotificationSession(radio, null, second))
+                    }
+                    competing = n.currentState
+                }
+                action()
+            }
+
+            assertFalse(n.completeOnboardingForTest(presented, presented.value.activeStack.last().id))
+            assertTrue(injected)
+            assertEquals(competing, n.currentState)
+        }
+    }
+
+    @Test fun onboardingCompletionRetriesAnUnrelatedConcurrentWidthChange() {
+        val n = NavigationCoordinator()
+        n.selectTab(AppTab.SETTINGS)
+        n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+        val presented = n.publishedNavigation.value
+        var attempts = 0
+        n.installCommitBoundary { action ->
+            attempts++
+            if (attempts == 1) n.measureWindow(834f)
+            action()
+        }
+
+        assertTrue(n.completeOnboardingForTest(presented, presented.value.activeStack.last().id))
+        assertEquals(2, attempts)
+        assertEquals(834f, n.currentState.widthDp, 0f)
+        assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+    }
+
+    @Test fun onboardingCompletionPreservesAnUnreleasedPublicationPredecessor() {
+        val n = NavigationCoordinator()
+        n.selectTab(AppTab.SETTINGS)
+        n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+        val presented = n.publishedNavigation.value
+        val gate = n.registerChatContactMount(ChatContactMount(null))
+        try {
+            assertTrue(n.completeOnboardingForTest(presented, presented.value.activeStack.last().id))
+            assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+            assertEquals(presented, n.publishedNavigation.value)
+        } finally {
+            gate.release()
+        }
+        assertEquals(AppTab.CHATS, n.state.value.selectedTab)
+        assertEquals(n.currentState, n.state.value)
+    }
+
+    @Test fun finiteSnapshotWriterContentionCannotReopenASealedChatMountOrReleaseItsPredecessor() = runTest {
+        val coordinator = NavigationCoordinator()
+        coordinator.navigateToChat(contact)
+        val mount = ChatContactMount(coordinator.currentState.activeStack.last().id)
+        coordinator.registerChatContactMount(mount).release()
+        val held = ContactLinkPublications()
+        coordinator.captureContactLinkLookup(contact.publicKey, radio, null, null, null, true, held, mount)
+        val before = coordinator.state.value
+        val start = CompletableDeferred<Unit>()
+        val writers = List(4) { writer ->
+            async(Dispatchers.Default) {
+                start.await()
+                repeat(500) { turn ->
+                    coordinator.selectTab(AppTab.entries[(turn + writer) % AppTab.entries.size])
+                }
+            }
+        }
+        val sealing = async(Dispatchers.Default) {
+            start.await()
+            coordinator.sealChatContactMount(mount)
+        }
+        try {
+            start.complete(Unit)
+            // Finite writers permit eventual completion; this is not a wait-free latency assertion.
+            writers.forEach { it.await() }
+            sealing.await().release()
+            repeat(50) {
+                coordinator.registerChatContactMount(mount).release()
+                val revision = coordinator.currentState.contactLookupRevision
+                val capture = ContactLinkPublications().use { publications ->
+                    coordinator.captureContactLinkLookup(contact.publicKey, radio, null, null, null, true, publications, mount)
+                }
+                assertEquals(ContactLinkCaptureDisposition.StaleContext, capture.disposition)
+                assertEquals(revision, coordinator.currentState.contactLookupRevision)
+            }
+            assertEquals(before, coordinator.state.value)
+            held.release()
+            assertEquals(coordinator.currentState, coordinator.state.value)
+        } finally {
+            start.complete(Unit)
+            writers.forEach { it.cancelAndJoin() }
+            sealing.cancelAndJoin()
+            held.release()
+        }
+    }
+
+    @Test fun inactiveDirectChannelAndRoomMountsCannotCaptureOrResolveContactLookups() {
+        for (source in listOf(ChatSelection.Direct(contact), ChatSelection.Channel(channel), ChatSelection.Room(room))) {
+            for (switchTab in listOf(false, true)) {
+                val coordinator = NavigationCoordinator()
+                when (source) {
+                    is ChatSelection.Direct -> coordinator.navigateToChat(source.contact)
+                    is ChatSelection.Channel -> coordinator.navigateToChannel(source.channel)
+                    is ChatSelection.Room -> coordinator.navigateToRoom(source.session)
+                }
+                val mount = ChatContactMount(coordinator.currentState.activeStack.last().id)
+                coordinator.registerChatContactMount(mount).release()
+                val captured = ContactLinkPublications().use { publications ->
+                    coordinator.captureContactLinkLookup(contact.publicKey, radio, null, null, null, true, publications, mount)
+                }
+                assertEquals(ContactLinkCaptureDisposition.Lookup, captured.disposition)
+                val next = contact.copy(id = UUID.randomUUID(), publicKey = Bytes(ByteArray(32) { 0xCC.toByte() }))
+                if (switchTab) coordinator.selectTab(AppTab.MAP) else coordinator.navigateToChat(next)
+                assertFalse(mount.registrationSealed.get())
+                assertEquals(
+                    ContactLinkLookupResolution.Stale,
+                    coordinator.resolveCapturedContactLookup(captured, null, true, null),
+                )
+                val revision = coordinator.currentState.contactLookupRevision
+                val rejected = ContactLinkPublications().use { publications ->
+                    coordinator.captureContactLinkLookup(contact.publicKey, radio, null, null, null, true, publications, mount)
+                }
+                assertEquals(ContactLinkCaptureDisposition.StaleContext, rejected.disposition)
+                assertEquals(revision, coordinator.currentState.contactLookupRevision)
+                if (switchTab) {
+                    assertEquals(AppTab.MAP, coordinator.currentState.selectedTab)
+                    assertEquals(source, coordinator.currentState.chatsSelectedRoute)
+                } else {
+                    assertEquals(ChatSelection.Direct(next), coordinator.currentState.chatsSelectedRoute)
+                }
+            }
+        }
     }
 
     @Test fun publishedRevisionDoesNotExposeADeferredNavigationCommit() {
@@ -1254,7 +2003,7 @@ class NavigationStateTest {
         )
         for (tokens in malformed) assertEquals(NavigationFailure.InvalidSavedState, NavigationSavedState.restore(tokens).failure)
     }
-    @Test fun restorationCannotOverwriteLiveHostAndInvalidWindowWidthIsNotSilentlyAccepted() {
+    @Test fun restorationCannotOverwriteLiveHostAndInvalidWindowWidthIsNotSilentlyAccepted() = runTest {
         val cold = NavigationCoordinator()
         val restored = NavigationState(selectedTab = AppTab.NODES)
         cold.restoreHostState(restored)
@@ -1272,6 +2021,114 @@ class NavigationStateTest {
             assertThrows(IllegalArgumentException::class.java) { n.measureWindow(width) }
         }
         assertEquals(contact, n.state.value.pendingChatContact)
+
+        val process = NavigationCoordinator()
+        process.attachHostState(NavigationState())
+        process.installOnboardingSessionCapture { { true } }
+        process.navigate(FeatureRoute(FeatureId.ONBOARDING))
+        val original = process.publishedNavigation.value
+        val originalEntry = original.value.activeStack.last()
+        val witness = process.captureMountedOnboarding(original, originalEntry.id)
+        val saved = NavigationSavedState.restore(NavigationSavedState.encode(original.value))
+        assertTrue(process.back())
+        val afterBack = process.state.value
+        process.attachHostState(saved)
+        assertEquals(afterBack, process.state.value)
+        assertFalse(process.completeMountedOnboarding(witness, MountedOnboardingProducer.NoDevice))
+        process.navigate(FeatureRoute(FeatureId.ONBOARDING))
+        val replacement = process.publishedNavigation.value
+        assertNotEquals(originalEntry.id, replacement.value.activeStack.last().id)
+        assertTrue(process.completeOnboardingForTest(replacement, replacement.value.activeStack.last().id))
+
+        val issuedBeforeHost = NavigationCoordinator()
+        issuedBeforeHost.installOnboardingSessionCapture { { true } }
+        issuedBeforeHost.navigate(FeatureRoute(FeatureId.ONBOARDING))
+        val issuedSnapshot = issuedBeforeHost.publishedNavigation.value
+        val issued = issuedSnapshot.value
+        val issuedEntry = issued.activeStack.last()
+        val oldIdentity = checkNotNull(issuedSnapshot.entryIdentity(issuedEntry.id))
+        val oldWitness = checkNotNull(issuedBeforeHost.captureMountedOnboarding(issuedSnapshot, issuedEntry.id))
+        val separateCoordinator = NavigationCoordinator()
+        separateCoordinator.navigate(FeatureRoute(FeatureId.ONBOARDING))
+        val separateSnapshot = separateCoordinator.publishedNavigation.value
+        assertEquals(issuedEntry.id, separateSnapshot.value.activeStack.last().id)
+        assertNotEquals(oldIdentity, separateSnapshot.entryIdentity(issuedEntry.id))
+        assertTrue(issuedBeforeHost.back())
+        issuedBeforeHost.attachHostState(NavigationSavedState.restore(NavigationSavedState.encode(issued)))
+        val attached = issuedBeforeHost.publishedNavigation.value
+        assertEquals(issued.activeStack, attached.value.activeStack)
+        val newIdentity = checkNotNull(attached.entryIdentity(issuedEntry.id))
+        assertNotEquals(oldIdentity, newIdentity)
+        assertFalse(issuedBeforeHost.completeMountedOnboarding(oldWitness, MountedOnboardingProducer.NoDevice))
+        issuedBeforeHost.selectTab(AppTab.SETTINGS)
+        issuedBeforeHost.measureWindow(900f)
+        assertEquals(newIdentity, issuedBeforeHost.publishedNavigation.value.entryIdentity(issuedEntry.id))
+        issuedBeforeHost.selectTab(AppTab.CHATS)
+        val returned = issuedBeforeHost.publishedNavigation.value
+        assertEquals(newIdentity, returned.entryIdentity(issuedEntry.id))
+        assertTrue(issuedBeforeHost.completeOnboardingForTest(returned, issuedEntry.id))
+
+        val notificationBeforeHost = NavigationCoordinator()
+        notificationBeforeHost.replaceRadio(radio)
+        notificationBeforeHost.setNavigationReady(true)
+        val roomPayload = NotificationPayload.RoomMessage(room.name, EntityKey(radio, room.id), message)
+        assertEquals(
+            NavigationOutcome.Navigated,
+            notificationBeforeHost.handleNotification(roomPayload, lookup()),
+        )
+        assertEquals(issuedEntry.id, notificationBeforeHost.state.value.roomAuthenticationDeliveryId)
+        notificationBeforeHost.replaceRadio(otherRadio)
+        assertNull(notificationBeforeHost.state.value.pendingRoomAuthentication)
+        notificationBeforeHost.setNavigationReady(true)
+        val beforeNotificationRestore = notificationBeforeHost.state.value
+        notificationBeforeHost.attachHostState(NavigationSavedState.restore(NavigationSavedState.encode(issued)))
+        val afterNotificationRestore = notificationBeforeHost.state.value
+        assertEquals(issued.stacks, afterNotificationRestore.stacks)
+        assertEquals(beforeNotificationRestore.radioId, afterNotificationRestore.radioId)
+        assertEquals(beforeNotificationRestore.generation, afterNotificationRestore.generation)
+        assertEquals(beforeNotificationRestore.navigationReady, afterNotificationRestore.navigationReady)
+
+        val freshProcess = NavigationCoordinator()
+        freshProcess.navigate(FeatureRoute(FeatureId.ONBOARDING))
+        assertTrue(freshProcess.back())
+        val freshHost = NavigationCoordinator()
+        freshHost.navigate(FeatureRoute(FeatureId.ONBOARDING))
+        assertTrue(freshHost.back())
+        freshHost.navigate(FeatureRoute(FeatureId.ONBOARDING))
+        val freshSaved = NavigationSavedState.restore(NavigationSavedState.encode(freshHost.state.value))
+        freshProcess.attachHostState(freshSaved)
+        assertEquals(freshSaved.activeStack, freshProcess.state.value.activeStack)
+        assertEquals(freshSaved.nextEntryId, freshProcess.state.value.nextEntryId)
+
+        val noOpAttachment = NavigationStateStore(NavigationState())
+        noOpAttachment.attachHostOnce { it }
+        assertEquals(0L, noOpAttachment.snapshot().revision)
+        noOpAttachment.attachHostOnce { restored }
+        assertEquals(NavigationState(), noOpAttachment.value)
+
+        val competingHosts = NavigationStateStore(NavigationState())
+        val firstPrepared = CountDownLatch(1)
+        val releaseFirst = CountDownLatch(1)
+        val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
+        try {
+            val first = executor.submit {
+                competingHosts.attachHostOnce {
+                    firstPrepared.countDown()
+                    check(releaseFirst.await(5, TimeUnit.SECONDS))
+                    restored
+                }
+            }
+            assertTrue(firstPrepared.await(5, TimeUnit.SECONDS))
+            val winner = NavigationState(selectedTab = AppTab.MAP)
+            competingHosts.attachHostOnce { winner }
+            assertEquals(winner, competingHosts.value)
+            releaseFirst.countDown()
+            first.get(5, TimeUnit.SECONDS)
+            assertEquals(winner, competingHosts.value)
+        } finally {
+            releaseFirst.countDown()
+            executor.shutdownNow()
+        }
     }
     @Test fun unavailableMapConsumerAndOldErrorDismissalDoNotPretendSuccessOrLoseNewFailure() {
         assertEquals(MapNavigationOutcome.UNAVAILABLE, MapNavigationConsumer().navigateToMap(MapFocusRequest(1.0, 2.0)))

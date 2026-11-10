@@ -4,7 +4,6 @@ package com.meshcoreone.android.app.navigation
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.os.Build
-import androidx.activity.BackEventCompat
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
@@ -28,6 +27,11 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.navigationevent.DirectNavigationEventInput
+import androidx.navigationevent.NavigationEvent
+import androidx.navigationevent.NavigationEventDispatcher
+import androidx.navigationevent.NavigationEventTransitionState
+import androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner
 import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.core.designsystem.*
 import com.meshcoreone.android.core.model.ChannelDTO
@@ -69,6 +73,7 @@ class NavigationComposeTest {
     @get:Rule val compose = createEmptyComposeRule()
     @get:Rule val executionName = TestName()
     private lateinit var host: ActivityController<ComponentActivity>
+    private val backInput = DirectNavigationEventInput()
     private val width = mutableStateOf(360.dp)
     private val font = mutableFloatStateOf(1f)
     private val direction = mutableStateOf(LayoutDirection.Ltr)
@@ -81,6 +86,7 @@ class NavigationComposeTest {
         emitNavigationExecutionBinding(javaClass.name, executionName.methodName, Build.VERSION.SDK_INT.toString())
         host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
         host.get().actionBar?.hide()
+        host.get().navigationEventDispatcher.addInput(backInput)
         host.get().setContent {
             CompositionLocalProvider(
                 LocalDensity provides Density(1f, font.floatValue),
@@ -94,7 +100,10 @@ class NavigationComposeTest {
             }
         }
     }
-    @After fun disposeNativeHost() { host.pause().stop().destroy() }
+    @After fun disposeNativeHost() {
+        host.get().navigationEventDispatcher.removeInput(backInput)
+        host.pause().stop().destroy()
+    }
 
     @Composable private fun FixtureContent(destination: NavigationDestination) {
         val id = when (destination) {
@@ -126,6 +135,62 @@ class NavigationComposeTest {
             capture("width-$value")
         }
     }
+
+    @Test fun replacingCoordinatorAtTheSameWidthMeasuresOnlyTheNewOwner() {
+        for (windowWidth in listOf(390, 834)) {
+            val first = NavigationCoordinator()
+            val replacement = NavigationCoordinator()
+            val owner = mutableStateOf(first)
+            compose.runOnUiThread {
+                width.value = windowWidth.dp
+                host.get().setContent {
+                    Box(Modifier.width(width.value).height(900.dp)) {
+                        MeshCoreTheme(motionScale = 0f) {
+                            NativeNavigationShell(owner.value) { destination, _ -> FixtureContent(destination) }
+                        }
+                    }
+                }
+            }
+            compose.onNodeWithTag(if (windowWidth < 600) "bottom-navigation" else "navigation-rail")
+                .assertIsDisplayed()
+            compose.waitForIdle()
+            assertEquals(windowWidth.toFloat(), first.state.value.widthDp, 0f)
+            val retired = first.state.value
+
+            compose.runOnIdle { owner.value = replacement }
+            compose.waitForIdle()
+            assertEquals(windowWidth.toFloat(), replacement.state.value.widthDp, 0f)
+            assertEquals(retired, first.state.value)
+
+            compose.runOnIdle { width.value = (windowWidth + 1).dp }
+            compose.waitForIdle()
+            assertEquals((windowWidth + 1).toFloat(), replacement.state.value.widthDp, 0f)
+            assertEquals(retired, first.state.value)
+        }
+    }
+
+    @Test fun presentedNavigationFallbackTracksChangesWithoutOverridingTheMountedSnapshot() {
+        val n = NavigationCoordinator()
+        val mounted = n.publishedNavigation.value
+        val showMounted = mutableStateOf(false)
+        compose.runOnUiThread {
+            host.get().setContent {
+                CompositionLocalProvider(LocalPresentedNavigation provides if (showMounted.value) mounted else null) {
+                    Text(presentedNavigation(n).value.selectedTab.name, Modifier.testTag("presented-tab"))
+                }
+            }
+        }
+        compose.onNodeWithTag("presented-tab").assertTextEquals(AppTab.CHATS.name)
+        compose.runOnIdle { n.selectTab(AppTab.SETTINGS) }
+        compose.onNodeWithTag("presented-tab").assertTextEquals(AppTab.SETTINGS.name)
+        compose.runOnIdle { showMounted.value = true }
+        compose.onNodeWithTag("presented-tab").assertTextEquals(AppTab.CHATS.name)
+        compose.runOnIdle { n.selectTab(AppTab.MAP) }
+        compose.onNodeWithTag("presented-tab").assertTextEquals(AppTab.CHATS.name)
+        compose.runOnIdle { showMounted.value = false }
+        compose.onNodeWithTag("presented-tab").assertTextEquals(AppTab.MAP.name)
+    }
+
     @Test fun fiveNativeTabsExposeSelectionHeadingUnreadAndFortyEightDpTargets() {
         for (tab in AppTab.entries) {
             compose.onNodeWithTag("tab:${tab.name}").assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp).performClick()
@@ -185,19 +250,23 @@ class NavigationComposeTest {
             compose.onNodeWithTag("editor:setting-language").performClick().performTextInput("cancelled Back draft")
             val before = navigation.state.value
             compose.runOnUiThread {
-                host.get().onBackPressedDispatcher.dispatchOnBackStarted(BackEventCompat(0f, 100f, 0f, BackEventCompat.EDGE_LEFT))
-                host.get().onBackPressedDispatcher.dispatchOnBackProgressed(BackEventCompat(80f, 100f, 0.5f, BackEventCompat.EDGE_LEFT))
+                backInput.backStarted(NavigationEvent(swipeEdge = NavigationEvent.EDGE_LEFT, touchY = 100f))
+                backInput.backProgressed(NavigationEvent(
+                    swipeEdge = NavigationEvent.EDGE_LEFT, touchX = 80f, touchY = 100f, progress = 0.5f,
+                ))
             }
             compose.waitForIdle()
             assertEquals("Progress must not commit the stack", before, navigation.state.value)
-            compose.runOnUiThread { host.get().onBackPressedDispatcher.dispatchOnBackCancelled() }
+            compose.runOnUiThread { backInput.backCancelled() }
             compose.onNodeWithTag("editor:setting-language").assertTextContains("cancelled Back draft").assertIsFocused()
             assertEquals("Cancellation must preserve selection and entry identities", before, navigation.state.value)
             compose.runOnUiThread {
-                host.get().onBackPressedDispatcher.dispatchOnBackStarted(BackEventCompat(0f, 100f, 0f, BackEventCompat.EDGE_LEFT))
-                host.get().onBackPressedDispatcher.dispatchOnBackProgressed(BackEventCompat(120f, 100f, 0.8f, BackEventCompat.EDGE_LEFT))
+                backInput.backStarted(NavigationEvent(swipeEdge = NavigationEvent.EDGE_LEFT, touchY = 100f))
+                backInput.backProgressed(NavigationEvent(
+                    swipeEdge = NavigationEvent.EDGE_LEFT, touchX = 120f, touchY = 100f, progress = 0.8f,
+                ))
             }
-            compose.runOnUiThread { host.get().onBackPressedDispatcher.onBackPressed() }
+            compose.runOnUiThread { backInput.backCompleted() }
             compose.onNodeWithTag("fixture:root-SETTINGS").assertIsDisplayed()
             assertNull(navigation.state.value.selectedSetting)
             compose.runOnUiThread { host.get().onBackPressedDispatcher.onBackPressed() }
@@ -205,6 +274,49 @@ class NavigationComposeTest {
             assertEquals(AppTab.CHATS, navigation.state.value.selectedTab)
         }
         capture("native-back-root")
+    }
+
+    @Test fun mountedBackLeavesThePresentedEntryInsteadOfAConcurrentUnseenRoute() {
+        val radio = RadioId(UUID(0, 60))
+        val contact = ContactDTO(
+            radioId = radio, publicKey = Bytes(ByteArray(32) { 2 }), name = "Presented chat",
+            lastHeardTimestamp = null,
+        )
+        val channel = ChannelDTO(radioId = radio, index = 2u, name = "Unseen channel")
+        for (windowWidth in listOf(390, 834)) for (deferPublication in listOf(false, true)) {
+            compose.runOnIdle {
+                width.value = windowWidth.dp
+                navigation.navigateToSetting(SettingsDetail.LANGUAGE)
+                navigation.navigateToChat(contact)
+            }
+            compose.onNodeWithTag("fixture:private-detail").assertIsDisplayed()
+            val settings = navigation.state.value.stacks.getValue(AppTab.SETTINGS)
+            val presented = navigation.publishedNavigation.value
+            val gate = if (deferPublication) {
+                navigation.registerChatContactMount(ChatContactMount(presented.value.activeStack.last().id))
+            } else null
+            try {
+                compose.onNodeWithTag("navigation-back").performSemanticsAction(SemanticsActions.OnClick) { click ->
+                    navigation.navigateToChannel(channel)
+                    assertEquals(ChatSelection.Channel(channel), navigation.currentState.chatsSelectedRoute)
+                    if (deferPublication) assertEquals(presented, navigation.publishedNavigation.value)
+                    else assertEquals(ChatSelection.Channel(channel), navigation.state.value.chatsSelectedRoute)
+                    assertTrue(requireNotNull(click)())
+                }
+                assertEquals(1, navigation.currentState.activeStack.size)
+                assertNull(navigation.currentState.chatsSelectedRoute)
+                assertEquals(settings, navigation.currentState.stacks.getValue(AppTab.SETTINGS))
+                if (deferPublication) {
+                    assertEquals(presented, navigation.publishedNavigation.value)
+                    compose.onNodeWithTag("fixture:private-detail").assertIsDisplayed()
+                }
+            } finally {
+                compose.runOnUiThread { gate?.release() }
+            }
+            compose.onNodeWithTag("fixture:root-CHATS").assertIsDisplayed()
+            assertNull(navigation.state.value.chatsSelectedRoute)
+            assertEquals(settings, navigation.state.value.stacks.getValue(AppTab.SETTINGS))
+        }
     }
 
     @Test fun predictiveBackPreviewCannotConsumeTheCurrentChatMessageScroll() {
@@ -224,10 +336,13 @@ class NavigationComposeTest {
             val requestOwners = CopyOnWriteArrayList<Long>()
             val consumed = CopyOnWriteArrayList<Long>()
             val release = CompletableDeferred<Unit>()
+            var mountedDispatcher: NavigationEventDispatcher? = null
             try {
                 compose.runOnUiThread {
                     width.value = windowWidth.dp
                     host.get().setContent {
+                        mountedDispatcher = requireNotNull(LocalNavigationEventDispatcherOwner.current)
+                            .navigationEventDispatcher
                         Box(Modifier.width(width.value).height(900.dp)) {
                             MeshCoreTheme(motionScale = 1f) {
                                 NativeNavigationShell(n) { destination, _ ->
@@ -250,23 +365,32 @@ class NavigationComposeTest {
                         }
                     }
                 }
+                compose.waitForIdle()
+                val dispatcher = requireNotNull(mountedDispatcher)
+                assertSame("The input must target the mounted NavDisplay owner", host.get().navigationEventDispatcher, dispatcher)
+                assertTrue("The mounted dispatcher must expose Back history", dispatcher.history.value.currentIndex > 0)
                 compose.waitUntil(5_000) { requestOwners.contains(incoming.entryId) }
                 compose.waitForIdle()
                 assertFalse("The previous entry must not be mounted before the preview", renderedEntries.contains(previousEntry))
                 val before = n.state.value
                 compose.runOnUiThread {
-                    host.get().onBackPressedDispatcher.dispatchOnBackStarted(
-                        BackEventCompat(0f, 100f, 0f, BackEventCompat.EDGE_LEFT),
-                    )
-                    host.get().onBackPressedDispatcher.dispatchOnBackProgressed(
-                        BackEventCompat(120f, 100f, 0.6f, BackEventCompat.EDGE_LEFT),
-                    )
+                    backInput.backStarted(NavigationEvent(swipeEdge = NavigationEvent.EDGE_LEFT, touchY = 100f))
                 }
+                compose.waitForIdle()
+                compose.runOnUiThread {
+                    backInput.backProgressed(NavigationEvent(
+                        swipeEdge = NavigationEvent.EDGE_LEFT, touchX = 120f, touchY = 100f, progress = 0.6f,
+                    ))
+                }
+                val progress = dispatcher.transitionState.value
+                assertTrue("The mounted dispatcher must receive the predictive gesture: $progress",
+                    progress is NavigationEventTransitionState.InProgress)
+                assertEquals(0.6f, (progress as NavigationEventTransitionState.InProgress).latestEvent.progress, 0f)
                 compose.waitUntil(5_000) { renderedEntries.contains(previousEntry) }
                 assertEquals(before, n.state.value)
                 assertFalse(requestOwners.contains(previousEntry))
                 assertTrue(consumed.isEmpty())
-                compose.runOnUiThread { host.get().onBackPressedDispatcher.dispatchOnBackCancelled() }
+                compose.runOnUiThread { backInput.backCancelled() }
                 compose.waitForIdle()
                 assertEquals(before, n.state.value)
                 assertEquals(incoming, n.state.value.pendingMessageScroll)
@@ -328,6 +452,7 @@ class NavigationComposeTest {
                     }
                 }
             }
+            compose.waitForIdle()
             compose.waitUntil(5_000) { consumed.contains(1L) }
             val originalList = list
             compose.runOnIdle {

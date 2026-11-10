@@ -44,15 +44,26 @@ import java.util.UUID
 
 /** Confirms leaving onboarding for the empty main app; never unlocks demo mode or visits region/preset. */
 @Composable
-fun NoDeviceSheetContent(onConfirm: () -> Unit, onCancel: () -> Unit, modifier: Modifier = Modifier) {
+fun NoDeviceSheetContent(
+    onConfirm: () -> Unit,
+    onCancel: () -> Unit,
+    isCompleting: Boolean = false,
+    modifier: Modifier = Modifier,
+    canConfirm: Boolean = true,
+) {
     Column(
         modifier.fillMaxWidth().padding(horizontal = OnboardingMetrics.cardSpacing).padding(bottom = OnboardingMetrics.largeSpacing),
         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(OnboardingMetrics.largeSpacing),
     ) {
         Text(stringResource(O.noDeviceSheetTitle), Modifier.semantics { heading() }, style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center)
         Text(stringResource(O.noDeviceSheetBody), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
-        OnboardingPrimaryButton(stringResource(O.noDeviceSheetConfirm), onConfirm)
-        OutlinedButton(onCancel, Modifier.fillMaxWidth().heightIn(min = OnboardingMetrics.minHitTarget)) { Text(stringResource(O.noDeviceSheetCancel)) }
+        OnboardingPrimaryButton(
+            stringResource(O.noDeviceSheetConfirm), onConfirm,
+            enabled = canConfirm && !isCompleting, loading = isCompleting, loadingText = stringResource(O.noDeviceSheetConfirm),
+        )
+        OutlinedButton(
+            onCancel, Modifier.fillMaxWidth().heightIn(min = OnboardingMetrics.minHitTarget), enabled = !isCompleting,
+        ) { Text(stringResource(O.noDeviceSheetCancel)) }
     }
 }
 

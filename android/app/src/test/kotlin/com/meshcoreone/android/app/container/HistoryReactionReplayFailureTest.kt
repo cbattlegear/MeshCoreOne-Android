@@ -6,6 +6,7 @@ import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.MessageDTO
@@ -606,7 +607,8 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
     }
 
     /** All unselected operations delegate to the production Room store, including the actual writes. */
-    private class FaultStore(private val actual: PersistenceStoreProtocol) : PersistenceStoreProtocol by actual {
+    private class FaultStore(private val actual: RoomPersistenceStore) :
+        PersistenceStoreProtocol by actual {
         private var selected: Fault? = null
         private var occurrence = 0
         private var calls = 0

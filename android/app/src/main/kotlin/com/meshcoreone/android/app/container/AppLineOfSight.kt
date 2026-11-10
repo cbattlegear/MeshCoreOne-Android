@@ -83,7 +83,7 @@ private class AppLineOfSightElevationSource(
 
 private class AppElevationFailure(message: String, cause: Throwable) : Exception(message, cause)
 
-private object AppLineOfSightPathAnalyzer : LineOfSightPathAnalyzer {
+internal object AppLineOfSightPathAnalyzer : LineOfSightPathAnalyzer {
     override fun distanceMeters(
         from: com.meshcoreone.android.core.model.Coordinate,
         to: com.meshcoreone.android.core.model.Coordinate,

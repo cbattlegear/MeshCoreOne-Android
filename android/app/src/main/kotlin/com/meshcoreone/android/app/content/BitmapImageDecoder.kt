@@ -26,7 +26,6 @@ import com.meshcoreone.android.core.services.content.ImageDecoding
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.withContext
 import kotlin.coroutines.coroutineContext
 import java.io.IOException
 import java.util.logging.Logger
@@ -36,13 +35,8 @@ class BitmapDecodedImageHandle(val bitmap: Bitmap) : DecodedImageHandle {
     override val width: Int get() = bitmap.width
     override val height: Int get() = bitmap.height
 
-    /**
-     * Exact decoded pixel byte cost via the real backing store's row stride, matching
-     * `ImageByteCost.bytes(rowBytes, height)` -- the precise branch the pure-JVM original's
-     * `cgImage.bytesPerRow * cgImage.height` arithmetic models, now available for real because
-     * this handle holds an actual allocated bitmap.
-     */
-    override val costBytes: Int get() = Math.toIntExact(bitmap.rowBytes.toLong() * bitmap.height)
+    /** Android allocation capacity can exceed row stride times height after bitmap reuse. */
+    override val costBytes: Int get() = bitmap.allocationByteCount
 }
 
 /**
@@ -53,44 +47,44 @@ class BitmapDecodedImageHandle(val bitmap: Bitmap) : DecodedImageHandle {
 class BitmapImageDecoder(private val dispatcher: kotlinx.coroutines.CoroutineDispatcher = Dispatchers.Default) :
     ImageDecoding {
     override suspend fun decode(data: ByteArray, maxDimension: Int?): ImageDecodeOutcome =
-        withContext(dispatcher) {
-            var bitmap: Bitmap? = null
-            var delivered = false
+        decodeWithBitmapOwnership(dispatcher) {
             try {
-                if (data.isEmpty()) return@withContext ImageDecodeOutcome.Failed("empty payload")
+                if (data.isEmpty()) return@decodeWithBitmapOwnership ImageDecodeOutcome.Failed("empty payload")
                 if (maxDimension != null && maxDimension <= 0) {
-                    return@withContext ImageDecodeOutcome.Failed("maximum image dimension must be positive")
+                    return@decodeWithBitmapOwnership ImageDecodeOutcome.Failed("maximum image dimension must be positive")
                 }
                 val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                 BitmapFactory.decodeByteArray(data, 0, data.size, bounds)
                 coroutineContext.ensureActive()
                 if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
-                    return@withContext ImageDecodeOutcome.Failed("not a decodable image")
+                    return@decodeWithBitmapOwnership ImageDecodeOutcome.Failed("not a decodable image")
                 }
                 val sampleSize = maxDimension?.let { sampleSizeFor(bounds.outWidth, bounds.outHeight, it) } ?: 1
                 val width = (bounds.outWidth.toLong() + sampleSize - 1) / sampleSize
                 val height = (bounds.outHeight.toLong() + sampleSize - 1) / sampleSize
                 if (width * height > MAX_DECODED_BYTES / 4) {
-                    return@withContext ImageDecodeOutcome.Failed("decoded pixels exceed the image byte bound")
+                    return@decodeWithBitmapOwnership ImageDecodeOutcome.Failed("decoded pixels exceed the image byte bound")
                 }
                 val options = BitmapFactory.Options().apply {
                     inSampleSize = sampleSize
                     inPreferredConfig = Bitmap.Config.ARGB_8888
                 }
                 val decoded = BitmapFactory.decodeByteArray(data, 0, data.size, options)
-                    ?: return@withContext ImageDecodeOutcome.Failed("BitmapFactory could not decode the payload")
-                bitmap = decoded
+                    ?: return@decodeWithBitmapOwnership ImageDecodeOutcome.Failed("BitmapFactory could not decode the payload")
+                own(decoded)
                 coroutineContext.ensureActive()
-                if (decoded.rowBytes.toLong() * decoded.height > MAX_DECODED_BYTES) {
-                    return@withContext ImageDecodeOutcome.Failed("decoded allocation exceeds the image byte bound")
+                if (decoded.allocationByteCount.toLong() > MAX_DECODED_BYTES) {
+                    return@decodeWithBitmapOwnership ImageDecodeOutcome.Failed("decoded allocation exceeds the image byte bound")
                 }
                 val transformed = applyOrientation(decoded, data)
                 if (transformed !== decoded) {
-                    decoded.recycle()
-                    bitmap = transformed
+                    own(transformed)
+                    recycle(decoded)
                 }
                 coroutineContext.ensureActive()
-                delivered = true
+                if (transformed.allocationByteCount.toLong() > MAX_DECODED_BYTES) {
+                    return@decodeWithBitmapOwnership ImageDecodeOutcome.Failed("decoded allocation exceeds the image byte bound")
+                }
                 ImageDecodeOutcome.Decoded(BitmapDecodedImageHandle(transformed))
             } catch (cancellation: CancellationException) {
                 throw cancellation
@@ -100,8 +94,6 @@ class BitmapImageDecoder(private val dispatcher: kotlinx.coroutines.CoroutineDis
                 ImageDecodeOutcome.Failed(error.message ?: "invalid image payload")
             } catch (_: ArithmeticException) {
                 ImageDecodeOutcome.Failed("image dimensions exceed supported bounds")
-            } finally {
-                if (!delivered) bitmap?.recycle()
             }
         }
 

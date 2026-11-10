@@ -22,8 +22,10 @@ import kotlin.test.assertSame
 import kotlin.test.assertFailsWith
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.first
 import java.lang.management.ManagementFactory
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
@@ -133,16 +135,141 @@ class ChatLinkRouterTest {
         val failure = IllegalStateException("contact store unavailable")
         val diagnostics = mutableListOf<Pair<String, Throwable?>>()
         links.contactFetch = { _, _ -> throw failure }
-        assertTrue(ChatLinkRouter(links, scope, ChatListDiagnostics { message, cause ->
+        val router = ChatLinkRouter(links, scope, ChatListDiagnostics { message, cause ->
             diagnostics += message to cause
-        }).route("meshcore://contact/add?name=Unavailable&public_key=${"2b".repeat(32)}&type=1"))
+        })
+        assertTrue(router.route("meshcore://contact/add?name=Unavailable&public_key=${"2b".repeat(32)}&type=1"))
         settle()
         assertEquals(1, diagnostics.size)
         assertEquals("Contact-link lookup failed", diagnostics.single().first)
         assertSame(failure, diagnostics.single().second)
+        val visible = assertNotNull(router.contactLookupFailure.first())
+        assertSame(failure, (visible.issue as ContactLinkLookupIssue.Failed).cause)
+        assertEquals(0L, visible.attempt)
         assertTrue(links.contactCompletions.isEmpty())
         assertNull(links.pendingContact)
         assertNull(links.contactDetail)
+    }
+
+    @Test fun retryUsesTheOriginalCaptureAndRetainsContactMetadata() = scenario {
+        val publicKey = Bytes(ByteArray(32) { 0x2d })
+        val links = FakeLinks()
+        var captures = 0
+        links.afterContactCapture = { captures++ }
+        links.contactFetch = { _, _ -> throw IllegalStateException("first lookup failed") }
+        val router = ChatLinkRouter(links, scope)
+        assertTrue(router.route("meshcore://contact/add?name=Retry%20peer&public_key=${publicKey.hexString}&type=2"))
+        settle()
+        val failure = assertNotNull(router.contactLookupFailure.first())
+        assertEquals(listOf(Fixtures.radio), links.contactFetchRadios)
+        assertNull(links.pendingContact)
+
+        links.contactFetch = { _, _ -> null }
+        router.retryContactLookup(failure)
+        settle()
+        assertEquals(1, captures)
+        assertEquals(listOf(Fixtures.radio, Fixtures.radio), links.contactFetchRadios)
+        val pending = assertNotNull(links.pendingContact)
+        assertEquals("Retry peer", pending.name)
+        assertEquals(publicKey, pending.publicKey)
+        assertEquals(ContactType.REPEATER, pending.contactType)
+        assertNull(router.contactLookupFailure.first())
+    }
+
+    @Test fun retryOfRetiredContextNeverReadsTheReplacementRadio() = scenario {
+        val links = FakeLinks()
+        val replacement = RadioId(UUID.fromString("22222222-2222-2222-2222-222222222222"))
+        links.contactFetch = { _, _ -> throw IllegalStateException("lookup failed") }
+        val router = ChatLinkRouter(links, scope)
+        assertTrue(router.route("meshcore://contact/add?name=Retry&public_key=${"2e".repeat(32)}&type=1"))
+        settle()
+        val failure = assertNotNull(router.contactLookupFailure.first())
+        links.currentRadioId = replacement
+        links.contactLinkGeneration++
+        router.retryContactLookup(failure)
+        settle()
+        val retired = assertNotNull(router.contactLookupFailure.first())
+        assertEquals(failure.deliveryId, retired.deliveryId)
+        assertEquals(1L, retired.attempt)
+        assertEquals(ContactLinkLookupIssue.ContextRetired, retired.issue)
+        router.retryContactLookup(retired)
+        settle()
+        assertEquals(listOf(Fixtures.radio), links.contactFetchRadios)
+        assertTrue(links.contactCompletions.isEmpty())
+        assertNull(links.pendingContact)
+        assertNull(links.contactDetail)
+        router.dismissContactLookupFailure(retired)
+        assertNull(router.contactLookupFailure.first())
+    }
+
+    @Test fun identicalReplacementFailureCannotBeRetriedOrDismissedUsingTheOldDelivery() = scenario {
+        val links = FakeLinks()
+        links.contactFetch = { _, _ -> throw IllegalStateException("lookup failed") }
+        val router = ChatLinkRouter(links, scope)
+        val uri = "meshcore://contact/add?name=Same&public_key=${"2f".repeat(32)}&type=1"
+        assertTrue(router.route(uri))
+        settle()
+        val first = assertNotNull(router.contactLookupFailure.first())
+        assertTrue(router.route(uri))
+        settle()
+        val replacement = assertNotNull(router.contactLookupFailure.first())
+        assertNotEquals(first.deliveryId, replacement.deliveryId)
+        router.retryContactLookup(first)
+        router.dismissContactLookupFailure(first)
+        settle()
+        assertEquals(replacement, router.contactLookupFailure.first())
+        assertEquals(2, links.contactFetchRadios.size)
+
+        links.contactFetch = { _, _ -> null }
+        router.retryContactLookup(replacement)
+        settle()
+        assertNull(router.contactLookupFailure.first())
+        assertEquals("Same", assertNotNull(links.pendingContact).name)
+        assertEquals(3, links.contactFetchRadios.size)
+    }
+
+    @Test fun lateFailureCannotReplaceAnIdenticalNewDeliveryFailure() = scenario {
+        val links = FakeLinks()
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val latestCause = IllegalStateException("replacement failed")
+        var calls = 0
+        links.contactFetch = { _, _ ->
+            if (calls++ == 0) {
+                entered.complete(Unit)
+                release.await()
+                throw IllegalStateException("older failure")
+            }
+            throw latestCause
+        }
+        val router = ChatLinkRouter(links, scope)
+        val uri = "meshcore://contact/add?name=Same&public_key=${"30".repeat(32)}&type=1"
+        assertTrue(router.route(uri))
+        entered.await()
+        assertTrue(router.route(uri))
+        settle()
+        val replacement = assertNotNull(router.contactLookupFailure.first())
+        assertSame(latestCause, (replacement.issue as ContactLinkLookupIssue.Failed).cause)
+        release.complete(Unit)
+        settle()
+        assertEquals(replacement, router.contactLookupFailure.first())
+        assertNull(links.pendingContact)
+        assertNull(links.contactDetail)
+    }
+
+    @Test fun cancellationBeforeFailurePublicationDoesNotExposeARecoveryPrompt() = scenario {
+        val links = FakeLinks()
+        val parent = SupervisorJob(scope.coroutineContext[Job])
+        val routing = CoroutineScope(scope.coroutineContext + parent)
+        links.contactFetch = { _, _ -> throw IllegalStateException("lookup failed") }
+        val router = ChatLinkRouter(links, routing, ChatListDiagnostics { _, failure ->
+            if (failure != null) parent.cancel()
+        })
+        assertTrue(router.route("meshcore://contact/add?name=Cancel&public_key=${"31".repeat(32)}&type=1"))
+        settle()
+        assertNull(router.contactLookupFailure.first())
+        assertTrue(links.contactCompletions.isEmpty())
+        assertNull(links.pendingContact)
     }
 
     @Test fun repeatedTargetChangesStopAfterOneReresolution() = scenario {
@@ -365,10 +492,12 @@ class ChatLinkRouterTest {
     @Test fun contactLookupCancellationDoesNotStageAnAbsentResult() = scenario {
         val links = FakeLinks()
         links.contactFetch = { _, _ -> throw CancellationException("lookup cancelled") }
-        assertTrue(ChatLinkRouter(links, scope).route(
+        val router = ChatLinkRouter(links, scope)
+        assertTrue(router.route(
             "meshcore://contact/add?name=Cancelled&public_key=${"26".repeat(32)}&type=1",
         ))
         settle()
+        assertNull(router.contactLookupFailure.first())
         assertTrue(links.contactCompletions.isEmpty())
         assertNull(links.pendingContact)
         assertNull(links.contactDetail)

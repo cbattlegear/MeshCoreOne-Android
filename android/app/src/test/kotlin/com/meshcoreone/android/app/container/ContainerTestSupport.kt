@@ -275,7 +275,7 @@ internal object NoScanGateway : BleScanGateway {
 }
 
 /** Notification delivery that records posts and reports a denied permission (the WP-401 adapter is unmerged). */
-internal class RecordingDelivery : NotificationDeliveryPort {
+internal open class RecordingDelivery : NotificationDeliveryPort {
     val posted = mutableListOf<NotificationRequest>()
     var badge: Long = 0
     override suspend fun authorizationStatus(): NotificationAuthorizationStatus = NotificationAuthorizationStatus.DENIED
@@ -285,6 +285,10 @@ internal class RecordingDelivery : NotificationDeliveryPort {
     override suspend fun setBadgeCount(count: Long) { badge = count }
     override suspend fun deliveredNotifications(): SnapshotList<DeliveredNotification> = SnapshotList.empty()
     override suspend fun removeDelivered(ids: SnapshotList<NotificationId>) = Unit
+    override suspend fun removeDeliveredSnapshot(
+        selected: SnapshotList<DeliveredNotification>,
+    ): SnapshotList<com.meshcoreone.android.core.contracts.notifications.SnapshotRemovalOutcome> =
+        error("Recording delivery exposes no delivered snapshots")
 }
 
 internal class FixedNotificationPreferences : NotificationPreferencesPort {

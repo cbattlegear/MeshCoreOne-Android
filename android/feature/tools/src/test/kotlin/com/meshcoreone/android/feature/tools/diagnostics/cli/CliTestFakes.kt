@@ -215,7 +215,9 @@ internal class FakeRemoteNode(
     val logoutCalls = mutableListOf<EntityKey>()
     val storedPasswords = mutableListOf<String>()
     val deletedPasswords = mutableListOf<ContactDTO>()
+    val timeoutCallbacks = mutableListOf<suspend (Long) -> Unit>()
     var loginGate: CompletableDeferred<Unit>? = null
+    var holdLoginAfterCancellation = false
 
     override suspend fun createSession(radioId: RadioId, contact: ContactDTO): EntityKey = EntityKey(radioId, contact.id)
 
@@ -226,8 +228,14 @@ internal class FakeRemoteNode(
         onTimeoutKnown: suspend (Long) -> Unit,
     ): Boolean {
         loginCalls += session to password
+        timeoutCallbacks += onTimeoutKnown
         loginTimeoutSeconds?.let { onTimeoutKnown(it) }
-        loginGate?.await()
+        val gate = loginGate
+        if (holdLoginAfterCancellation) {
+            withContext(NonCancellable) { gate?.await() }
+        } else {
+            gate?.await()
+        }
         loginFailure?.let { throw it }
         return loginSuccess
     }

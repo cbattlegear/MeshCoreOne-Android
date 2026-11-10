@@ -3,17 +3,24 @@ package com.meshcoreone.android.app.container.onboarding
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import com.meshcoreone.android.app.navigation.NavigationCoordinator
+import com.meshcoreone.android.app.navigation.OnboardingCompletionRecovery
 import com.meshcoreone.android.core.contracts.FeatureId
 import com.meshcoreone.android.core.contracts.FeatureRoute
 import com.meshcoreone.android.feature.onboarding.OnboardingEntry
-import kotlinx.coroutines.flow.first
 
 /**
- * First-run gate: onboarding while the persisted completion flag is unset, the main shell afterwards. Completion
- * persists the flag (through the flag store, in the feature) and navigates to the Chats tab root here.
+ * First-run gate: an existing completed install opens the shell; an active flow stays mounted until its
+ * exact durable completion publication has navigated through its retained entry and session witness.
  * Without [onboarding] (container not built yet, or construction failed) the shell is shown, never a fake flow.
  */
 @Composable
@@ -23,26 +30,56 @@ fun OnboardingGate(
     shell: @Composable (AppOnboarding?) -> Unit,
 ) {
     onboarding?.pairingState?.let { SystemPairingSetupHost(it) }
-    val completed by (onboarding?.hasCompleted ?: ALWAYS_COMPLETED).collectAsState()
-    // Independent of the onboarding screens, which leave composition in the same frame the flag flips.
-    LaunchedEffect(onboarding) {
-        val flag = onboarding?.hasCompleted ?: return@LaunchedEffect
-        if (flag.value) return@LaunchedEffect
-        flag.first { it }
-        coordinator.navigate(FeatureRoute(FeatureId.CHATS))
+    val retention = remember(coordinator, onboarding) {
+        onboarding?.let(coordinator::onboardingRetention)
     }
-    if (onboarding == null || completed) {
+    val shellVisible = onboardingShellVisible(coordinator, onboarding)
+    LaunchedEffect(onboarding, retention) {
+        if (onboarding != null && retention != null) onboarding.observeNavigationEntries(retention)
+    }
+    if (shellVisible) {
         shell(onboarding)
     } else {
-        OnboardingEntry(
-            route = FeatureRoute(FeatureId.ONBOARDING),
-            onNavigate = coordinator::navigate,
-            dependencies = onboarding,
-        )
+        checkNotNull(onboarding)
+        checkNotNull(retention)
+        val presented by coordinator.publishedNavigation.collectAsState()
+        val entry by retention.firstRunEntry.collectAsState()
+        val decisionEpoch by retention.firstRunDecisionEpoch.collectAsState()
+        val revision by onboarding.flowCoordinatorRevision.collectAsState()
+        val availability by onboarding.firstRunAvailabilityRevision.collectAsState()
+        LaunchedEffect(retention, presented, revision, availability, decisionEpoch) {
+            retention.mountFirstRun(presented, decisionEpoch)
+        }
+        val current = entry
+        if (current == null) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+        } else {
+            val recovery by current.recovery.collectAsState()
+            OnboardingEntry(
+                route = FeatureRoute(FeatureId.ONBOARDING),
+                onNavigate = {},
+                dependencies = current.owner,
+                onCompletionPublication = { flow, completion, commit ->
+                    retention.deliver(current, flow, completion, commit)
+                },
+                completionDeliveryKey = presented.revision to recovery.deliveryRevision,
+                flowCoordinator = current.flow,
+            )
+            OnboardingCompletionRecovery(retention, current)
+        }
     }
 }
 
-private val ALWAYS_COMPLETED = kotlinx.coroutines.flow.MutableStateFlow(true)
+@Composable
+internal fun onboardingShellVisible(coordinator: NavigationCoordinator, onboarding: AppOnboarding?): Boolean {
+    if (onboarding == null) return true
+    val retention = remember(coordinator, onboarding) { coordinator.onboardingRetention(onboarding) }
+    val completed by onboarding.hasCompleted.collectAsState()
+    val pending by retention.firstRunPending.collectAsState()
+    val decisionEpoch by retention.firstRunDecisionEpoch.collectAsState()
+    if (!completed) SideEffect { retention.requireFirstRun(decisionEpoch) }
+    return completed && !pending
+}
 
 /** What the app root learned about onboarding bindings: [bindings] is null when none exist (shell only). */
 class OnboardingResolution(val bindings: AppOnboarding?)

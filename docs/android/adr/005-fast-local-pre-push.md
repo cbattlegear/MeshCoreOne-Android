@@ -1,5 +1,8 @@
 # ADR-005: Fast local checks do not gate feature-branch publication
 
+> **Superseded by [ADR-007](007-maintainer-directed-process-teardown.md).** The hook, shared Gradle lane and reservation
+> tooling this ADR refers to no longer exist. Kept as history.
+
 ## Decision
 
 Feature branches and pull requests may be published from every processor and host.

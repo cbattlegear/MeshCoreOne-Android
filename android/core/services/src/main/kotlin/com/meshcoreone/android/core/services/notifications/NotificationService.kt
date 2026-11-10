@@ -10,10 +10,12 @@ import com.meshcoreone.android.core.contracts.domain.NotificationPreferencesPort
 import com.meshcoreone.android.core.contracts.domain.NotificationStringProvider
 import com.meshcoreone.android.core.contracts.domain.UnreadCounts
 import com.meshcoreone.android.core.contracts.notifications.NotificationAuthorizationStatus
+import com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget
 import com.meshcoreone.android.core.contracts.notifications.NotificationCategory
 import com.meshcoreone.android.core.contracts.notifications.NotificationDeliveryPort
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.contracts.notifications.NotificationRequest
+import com.meshcoreone.android.core.contracts.notifications.SnapshotRemovalOutcome
 import com.meshcoreone.android.core.model.NotificationLevel
 import com.meshcoreone.android.core.model.NotificationPreferences
 import com.meshcoreone.android.core.model.RadioId
@@ -210,6 +212,7 @@ class NotificationService(
         messageID: UUID,
         notificationLevel: NotificationLevel,
         hasSelfMention: Boolean,
+        displayTarget: ChannelNotificationTarget = ChannelNotificationTarget.Unproved,
     ) {
         if (notificationLevel == NotificationLevel.MUTED) return
         if (notificationLevel == NotificationLevel.MENTIONS_ONLY && !hasSelfMention) return
@@ -221,7 +224,7 @@ class NotificationService(
                 id = NotificationId(messageID.canonicalString()), category = NotificationCategory.CHANNEL_MESSAGE,
                 title = channelName, body = senderBody(senderName, messageText), soundEnabled = prefs.soundEnabled,
                 badge = nextBadge(prefs), threadIdentifier = "channel-${radioId.canonicalString}-$channelIndex",
-                payload = NotificationPayload.ChannelMessage(radioId, channelIndex, messageID),
+                payload = NotificationPayload.ChannelMessage(radioId, channelIndex, messageID, displayTarget),
             ),
         )
         if (prefs.badgeEnabled) updateBadgeCount()
@@ -438,9 +441,16 @@ class NotificationService(
 
     private suspend fun removeDeliveredMatching(predicate: (PayloadKeys) -> Boolean) {
         val delivered = contained("deliveredNotifications", null) { delivery.deliveredNotifications() } ?: return
-        val ids = delivered.filter { notification -> notification.payload?.let { predicate(PayloadKeys.of(it)) } == true }
-            .map { it.id }
-        if (ids.isNotEmpty()) removeIds(ids)
+        val selected = delivered.filter { notification -> notification.payload?.let { predicate(PayloadKeys.of(it)) } == true }
+        if (selected.isNotEmpty()) {
+            contained("removeDeliveredSnapshot", Unit) {
+                val outcomes = delivery.removeDeliveredSnapshot(selected.snapshot())
+                check(outcomes.size == selected.size) { "Snapshot removal returned an incomplete outcome set" }
+                if (SnapshotRemovalOutcome.UNKNOWN_IDENTITY in outcomes) {
+                    logger.warning("Notification snapshot cleanup retained posts with unknown identity")
+                }
+            }
+        }
     }
 
     private suspend fun removeIds(ids: List<NotificationId>) {

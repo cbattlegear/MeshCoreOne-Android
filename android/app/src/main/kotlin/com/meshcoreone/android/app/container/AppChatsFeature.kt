@@ -1,3 +1,4 @@
+// PortedFrom: MC1/Views/RemoteNodes/Rooms/RoomConversationView.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Chats/ViewModel/ChatViewModel+SendQueues.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Chats/ViewModel/ChatViewModel+EventStream.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Chats/ViewModel/ChatViewModel+Messages.swift@db14559b39d32322b06477c6ae676112f583db50
@@ -35,6 +36,8 @@ import com.meshcoreone.android.feature.chats.channels.*
 import com.meshcoreone.android.core.services.contacts.ChannelService
 import com.meshcoreone.android.core.services.messaging.ChatSendQueueService
 import com.meshcoreone.android.core.services.notifications.NotificationService
+import com.meshcoreone.android.core.services.remote.startSessionKeepAlive
+import com.meshcoreone.android.core.services.remote.stopSessionKeepAlive
 import java.time.Clock
 import java.time.Instant
 import java.util.UUID
@@ -89,7 +92,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 }
                 return container.offerChatContact(
                     mount, context, target, ContactLinkRequest(link.name, link.publicKey, link.contactType),
-                    existing, publications,
+                    existing, publications, cancellation,
                 )
             }
         }
@@ -103,6 +106,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
     )
     private val floodScopeMutex = Mutex()
     private var lastPushedScope: PushedFloodScope? = null
+    private val visibleRoomKeepAlives = mutableMapOf<Pair<RadioSessionContainer, EntityKey>, Any>()
     private val store get() = container.processStore
     private val scope get() = container.uiScope
     private val app get() = container.appState
@@ -663,17 +667,12 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                     is TimelineConversation.Channel -> null
                 }
             override suspend fun clearUnread(conversation: TimelineConversation) {
+                // A mounted read is not a durable OPEN receipt, so retain content taps for retry.
                 when (conversation) {
-                    is TimelineConversation.Direct -> {
+                    is TimelineConversation.Direct ->
                         store.clearUnreadCount(EntityKey(radio, conversation.contact.id))
-                        container.sessions.current?.takeIf { it.token.radioId == radio }?.notificationService
-                            ?.removeDeliveredNotifications(conversation.contact.id)
-                    }
-                    is TimelineConversation.Channel -> {
+                    is TimelineConversation.Channel ->
                         store.clearChannelUnreadCount(radio, conversation.channel.index)
-                        container.sessions.current?.takeIf { it.token.radioId == radio }?.notificationService
-                            ?.removeDeliveredNotifications(conversation.channel.index, radio)
-                    }
                 }
                 container.sessions.current?.notificationService?.updateBadgeCount()
                 app.refreshConversations()
@@ -768,6 +767,29 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         )
     }
 
+    private fun acquireRoomKeepAlive(graph: RadioSessionContainer, room: RemoteNodeSessionDTO): AutoCloseable? =
+        synchronized(visibleRoomKeepAlives) {
+            val connection = container.connectionManager.snapshot.value
+            if (!room.isRoom || !room.isConnected || room.radioId != graph.token.radioId ||
+                container.sessions.current !== graph || connection.token != graph.token ||
+                connection.state != com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
+            ) return@synchronized null
+            val session = EntityKey(room.radioId, room.id)
+            val key = graph to session
+            val owner = Any()
+            graph.remoteNodeService.startSessionKeepAlive(session, room.publicKey)
+            visibleRoomKeepAlives[key] = owner
+            AutoCloseable {
+                synchronized(visibleRoomKeepAlives) {
+                    // Replacement mounts own the same service slot; an old disposal cannot stop them.
+                    if (visibleRoomKeepAlives[key] === owner) {
+                        visibleRoomKeepAlives.remove(key)
+                        graph.remoteNodeService.stopSessionKeepAlive(session)
+                    }
+                }
+            }
+        }
+
     internal fun captureNavigationSession(token: com.meshcoreone.android.core.contracts.domain.SessionToken?): () -> Boolean {
         val initiatingSession = token?.let { expected -> container.sessions.current?.takeIf { it.token == expected } }
         return { initiatingSession != null && container.isCurrentSession(initiatingSession) }
@@ -796,6 +818,16 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         joinSession: () -> RadioSessionContainer,
     ): RoomConversationDependencies = object : RoomConversationDependencies {
         private fun roomKey() = EntityKey(room.radioId, room.id)
+        override val keepAlive: Flow<RoomSessionKeepAlive?> = changes.onStart { emit(Unit) }
+            .map {
+                val connection = container.connectionManager.snapshot.value
+                container.sessions.current?.takeIf {
+                    it.token.radioId == room.radioId && connection.token == it.token &&
+                        connection.state == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY
+                }
+            }
+            .distinctUntilChanged()
+            .map { graph -> graph?.let { RoomSessionKeepAlive { session -> acquireRoomKeepAlive(it, session) } } }
         override val data = object : RoomConversationDataSource {
             override suspend fun fetchMessages(session: RemoteNodeSessionDTO) =
                 store.fetchRoomMessages(EntityKey(session.radioId, session.id))
@@ -864,17 +896,20 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         }
         override val service = object : ChannelSheetService {
             override suspend fun createChannelWithSecret(
-                radioId: RadioId, maxChannels: UByte, name: String, secret: Bytes, onCommitted: (ChannelWriteReceipt) -> Unit,
+                radioId: RadioId, maxChannels: UByte, name: String, secret: Bytes,
+                onCommitted: (ChannelWriteReceipt) -> Unit,
             ): ChannelDTO =
                 try {
                     session(radioId).channelService.createChannelWithSecret(radioId, maxChannels, name, secret) { key, index ->
                         onCommitted(ChannelWriteReceipt(key, index))
                     }
                 } catch (_: com.meshcoreone.android.core.services.contacts.ChannelMutationError.NoAvailableSlots) {
-                    throw com.meshcoreone.android.feature.chats.channels.ChannelSheetError.NoAvailableSlots
+                    throw ChannelSheetError.NoAvailableSlots
                 }
+
             override suspend fun joinHashtagChannel(
-                radioId: RadioId, maxChannels: UByte, name: String, onCommitted: (ChannelWriteReceipt) -> Unit,
+                radioId: RadioId, maxChannels: UByte, name: String,
+                onCommitted: (ChannelWriteReceipt) -> Unit,
             ): ChannelDTO {
                 if (app.connectionState != com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY) {
                     store.fetchChannels(radioId).firstOrNull { it.name.equals(name, ignoreCase = true) }?.let { return it }
@@ -884,9 +919,10 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                         onCommitted(ChannelWriteReceipt(key, index))
                     }
                 } catch (_: com.meshcoreone.android.core.services.contacts.ChannelMutationError.NoAvailableSlots) {
-                    throw com.meshcoreone.android.feature.chats.channels.ChannelSheetError.NoAvailableSlots
+                    throw ChannelSheetError.NoAvailableSlots
                 }
             }
+
             override suspend fun setChannelWithSecret(radioId: RadioId, index: UByte, name: String, secret: Bytes) =
                 session(radioId).channelService.setChannelWithSecret(radioId, index, name, secret)
             override suspend fun setChannel(radioId: RadioId, index: UByte, name: String, passphrase: String) =

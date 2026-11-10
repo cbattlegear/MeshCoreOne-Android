@@ -4,6 +4,10 @@ package com.meshcoreone.android.app.container
 
 import android.Manifest
 import android.app.NotificationManager
+import android.content.ComponentName
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.Intent
 import android.os.Build
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
@@ -11,17 +15,21 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.unit.dp
 import androidx.test.core.app.ApplicationProvider
+import com.meshcoreone.android.app.AppRootRecoveryDialogs
 import com.meshcoreone.android.app.deeplinks.AppDeepLinkRouter
 import com.meshcoreone.android.app.deeplinks.AppDeepLinkEnvironment
 import com.meshcoreone.android.app.deeplinks.ContainerDeepLinkEnvironment
@@ -33,11 +41,14 @@ import com.meshcoreone.android.app.state.AppSession
 import com.meshcoreone.android.app.state.AppStatePlatform
 import com.meshcoreone.android.app.state.MessageEvent
 import com.meshcoreone.android.core.contracts.AppTab
+import com.meshcoreone.android.core.contracts.FeatureId
+import com.meshcoreone.android.core.contracts.FeatureRoute
 import com.meshcoreone.android.core.contracts.domain.BluetoothAddress
 import com.meshcoreone.android.core.contracts.domain.BluetoothPairingHandle
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.Generation
 import com.meshcoreone.android.core.contracts.domain.MonitoringOptions
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.NotificationId
@@ -54,9 +65,16 @@ import com.meshcoreone.android.core.protocol.command.PacketBuilder
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.core.protocol.model.DeviceCapabilities
+import com.meshcoreone.android.core.protocol.model.MeshContact
+import com.meshcoreone.android.core.protocol.parser.Parsers
+import com.meshcoreone.android.core.protocol.session.ContactSessionOps
+import com.meshcoreone.android.core.protocol.session.ContactWriteDispatch
 import com.meshcoreone.android.core.protocol.session.MeshCoreSession
 import com.meshcoreone.android.core.runtime.*
 import com.meshcoreone.android.core.services.sync.SyncDataEvent
+import com.meshcoreone.android.core.services.contacts.ContactService
+import com.meshcoreone.android.core.services.contacts.ContactServiceError
+import com.meshcoreone.android.core.services.contacts.ContactWriteRecoveryState
 import com.meshcoreone.android.core.ui.UiText
 import com.meshcoreone.android.feature.chats.list.ChatLinkRouter
 import com.meshcoreone.android.feature.chats.list.ChatLinkEnvironment
@@ -68,13 +86,21 @@ import com.meshcoreone.android.feature.chats.list.ContactLinkPublications
 import com.meshcoreone.android.feature.chats.list.ContactLinkResolvedTarget
 import com.meshcoreone.android.feature.chats.list.ContactLinkResult
 import com.meshcoreone.android.feature.chats.list.ContactLinkTargetCompletion
+import com.meshcoreone.android.feature.chats.list.ContactLinkTargetResolution
 import com.meshcoreone.android.feature.chats.list.ContactLinkHandoffReceipt
 import com.meshcoreone.android.feature.chats.list.ContactLinkHandoffOutcome
+import com.meshcoreone.android.feature.chats.list.ContactLinkLookupFailure
+import com.meshcoreone.android.feature.chats.list.ContactLinkLookupIssue
 import com.meshcoreone.android.feature.nodes.deps.NodesDataStore
 import com.meshcoreone.android.feature.nodes.deps.NodesContactService
 import com.meshcoreone.android.feature.nodes.deps.NodesFeatureDependencies
 import com.meshcoreone.android.feature.nodes.deps.NodesSession
 import com.meshcoreone.android.platform.notifications.messaging.AndroidMessagingNotificationDelivery
+import com.meshcoreone.android.platform.notifications.messaging.NotificationActionRecovery
+import com.meshcoreone.android.platform.notifications.messaging.NotificationActionRecoveryStore
+import com.meshcoreone.android.platform.notifications.messaging.NotificationOpenActivity
+import com.meshcoreone.android.platform.notifications.messaging.NotificationRecoveryRead
+import com.meshcoreone.android.platform.notifications.messaging.NotificationRecoveryWrite
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
@@ -93,8 +119,10 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.runTest
@@ -105,6 +133,7 @@ import org.junit.After
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import org.junit.rules.TestName
 import org.robolectric.Robolectric
 import org.robolectric.Shadows.shadowOf
@@ -112,6 +141,7 @@ import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowDialog
 import java.lang.management.ManagementFactory
+import java.io.File
 import java.util.UUID
 import java.time.Instant
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -377,6 +407,23 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
 
     private fun unmount() = compose.runOnUiThread { host.get().setContent {} }
 
+    private fun tapNotification(manager: NotificationManager) {
+        val context = ApplicationProvider.getApplicationContext<android.app.Application>()
+        manager.activeNotifications.single().notification.contentIntent.send()
+        val intent = assertNotNull(shadowOf(context).nextStartedActivity)
+        assertEquals(ComponentName(context, NotificationOpenActivity::class.java), intent.component)
+        val activity = Robolectric.buildActivity(NotificationOpenActivity::class.java, intent).create()
+        try {
+            assertTrue(activity.get().isFinishing)
+            shadowOf(activity.get()).nextStartedActivity?.let { launcher ->
+                assertEquals(Intent.ACTION_MAIN, launcher.action)
+            }
+        } finally {
+            activity.destroy()
+        }
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+    }
+
     private suspend fun connect(h: ContainerHarness, target: ConnectionTarget = h.target()) {
         h.manager.connect(target)
         h.settle()
@@ -387,6 +434,761 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         }
     }
 
+    @Test fun offlineOnboardingRequiresAnExplicitNoDeviceProducer() = runTest {
+        val h = ContainerHarness(this, store)
+        try {
+            val n = h.container.navigation
+            n.selectTab(AppTab.SETTINGS)
+            n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+            val presented = n.publishedNavigation.value
+            val completion = n.captureMountedOnboarding(presented, presented.value.activeStack.last().id)
+            val fabricated = SessionToken(ProcessEpoch(UUID(0, 991)), Generation(1), RadioId(UUID(0, 992)))
+            assertFalse(n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(fabricated)))
+            assertEquals(presented.value, n.currentState)
+            assertTrue(n.completeMountedOnboarding(completion, MountedOnboardingProducer.NoDevice))
+            assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+        } finally {
+            h.container.close()
+        }
+    }
+
+    @Test fun noDeviceCompletionDoesNotFollowAFirstGraphThatAppearedAfterCapture() = runTest {
+        for (mounted in listOf(false, true)) {
+            val h = ContainerHarness(this, store)
+            try {
+                val n = h.container.navigation
+                n.selectTab(AppTab.SETTINGS)
+                if (mounted) n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+                val presented = n.publishedNavigation.value
+                val firstRun = if (mounted) null else n.captureFirstRunOnboarding(presented)
+                val mountedCompletion = if (mounted) {
+                    n.captureMountedOnboarding(presented, presented.value.activeStack.last().id)
+                } else null
+                connect(h)
+                val graph = assertNotNull(h.sessions.current)
+                val before = n.currentState
+                val rejected = if (mounted) {
+                    n.completeMountedOnboarding(mountedCompletion, MountedOnboardingProducer.NoDevice)
+                } else {
+                    n.completeFirstRunOnboarding(firstRun, MountedOnboardingProducer.NoDevice)
+                }
+                assertFalse(rejected)
+                assertEquals(before, n.currentState)
+                val accepted = if (mounted) {
+                    n.completeMountedOnboarding(mountedCompletion, MountedOnboardingProducer.Preset(graph.token))
+                } else {
+                    n.completeFirstRunOnboarding(firstRun, MountedOnboardingProducer.Preset(graph.token))
+                }
+                assertTrue(accepted)
+                assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+            } finally {
+                h.container.close()
+            }
+        }
+    }
+
+    @Test fun explicitNoDeviceCompletionAcceptsTheUnchangedCapturedGraph() = runTest {
+        for (mounted in listOf(false, true)) {
+            val h = ContainerHarness(this, store)
+            try {
+                connect(h)
+                val n = h.container.navigation
+                n.selectTab(AppTab.SETTINGS)
+                if (mounted) n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+                val presented = n.publishedNavigation.value
+                val accepted = if (mounted) {
+                    val completion = n.captureMountedOnboarding(presented, presented.value.activeStack.last().id)
+                    n.completeMountedOnboarding(completion, MountedOnboardingProducer.NoDevice)
+                } else {
+                    val completion = n.captureFirstRunOnboarding(presented)
+                    n.completeFirstRunOnboarding(completion, MountedOnboardingProducer.NoDevice)
+                }
+                assertTrue(accepted)
+                assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+            } finally {
+                h.container.close()
+            }
+        }
+    }
+
+    @Test fun noDeviceAttemptAcceptsItsExactReadyGraphIncludingTheFirstBinding() = runTest {
+        for (mounted in listOf(false, true)) {
+            for (readyAtCapture in listOf(false, true)) {
+                val h = ContainerHarness(this, store)
+                try {
+                    if (readyAtCapture) connect(h)
+                    val n = h.container.navigation
+                    n.selectTab(AppTab.SETTINGS)
+                    if (mounted) n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+                    val presented = n.publishedNavigation.value
+                    val firstRun = if (mounted) null else n.captureFirstRunOnboarding(presented)
+                    val mountedCompletion = if (mounted) {
+                        n.captureMountedOnboarding(presented, presented.value.activeStack.last().id)
+                    } else null
+                    if (!readyAtCapture) connect(h)
+                    val graph = assertNotNull(h.sessions.current)
+                    val wrongToken = graph.token.copy(generation = Generation(graph.token.generation.value + 1))
+                    val before = n.currentState
+                    val wrongAccepted = if (mounted) {
+                        n.completeMountedOnboarding(mountedCompletion, MountedOnboardingProducer.NoDeviceAtSession(wrongToken))
+                    } else {
+                        n.completeFirstRunOnboarding(firstRun, MountedOnboardingProducer.NoDeviceAtSession(wrongToken))
+                    }
+                    assertFalse(wrongAccepted)
+                    assertEquals(before, n.currentState)
+                    val accepted = if (mounted) {
+                        n.completeMountedOnboarding(mountedCompletion, MountedOnboardingProducer.NoDeviceAtSession(graph.token))
+                    } else {
+                        n.completeFirstRunOnboarding(firstRun, MountedOnboardingProducer.NoDeviceAtSession(graph.token))
+                    }
+                    assertTrue(accepted)
+                    assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+                    assertEquals(graph.token, n.currentState.boundSessionToken)
+                } finally {
+                    h.container.close()
+                }
+            }
+        }
+    }
+
+    @Test fun noDeviceAttemptRejectsAReplacementGraphUntilANewEntryWitnessIsCaptured() = runTest {
+        for (mounted in listOf(false, true)) {
+            for (differentRadio in listOf(false, true)) {
+                val deviceA = UUID(0, 1101)
+                val deviceB = UUID(0, 1102)
+                val h = ContainerHarness(
+                    this, store,
+                    identity = { target ->
+                        if ((target as? ConnectionTarget.Bluetooth)?.deviceId == deviceA) key(7) else key(8)
+                    },
+                )
+                try {
+                    connect(h, h.target(deviceA))
+                    val n = h.container.navigation
+                    n.selectTab(AppTab.SETTINGS)
+                    if (mounted) n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+                    val presented = n.publishedNavigation.value
+                    val firstRun = if (mounted) null else n.captureFirstRunOnboarding(presented)
+                    val mountedCompletion = if (mounted) {
+                        n.captureMountedOnboarding(presented, presented.value.activeStack.last().id)
+                    } else null
+                    val original = assertNotNull(h.sessions.current)
+                    h.manager.disconnect()
+                    h.settle()
+                    connect(h, h.target(if (differentRadio) deviceB else deviceA))
+                    val successor = assertNotNull(h.sessions.current)
+                    assertEquals(differentRadio, original.token.radioId != successor.token.radioId)
+                    assertTrue(original.token != successor.token)
+                    val before = n.currentState
+                    for (token in listOf(original.token, successor.token)) {
+                        val accepted = if (mounted) {
+                            n.completeMountedOnboarding(mountedCompletion, MountedOnboardingProducer.NoDeviceAtSession(token))
+                        } else {
+                            n.completeFirstRunOnboarding(firstRun, MountedOnboardingProducer.NoDeviceAtSession(token))
+                        }
+                        assertFalse(accepted)
+                        assertEquals(before, n.currentState)
+                    }
+                    val current = n.publishedNavigation.value
+                    val accepted = if (mounted) {
+                        val replacement = n.captureMountedOnboarding(current, current.value.activeStack.last().id)
+                        n.completeMountedOnboarding(replacement, MountedOnboardingProducer.NoDeviceAtSession(successor.token))
+                    } else {
+                        val replacement = n.captureFirstRunOnboarding(current)
+                        n.completeFirstRunOnboarding(replacement, MountedOnboardingProducer.NoDeviceAtSession(successor.token))
+                    }
+                    assertTrue(accepted)
+                    assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+                } finally {
+                    h.container.close()
+                }
+            }
+        }
+    }
+
+    @Test fun firstRunDelayedProducerCannotNavigateAReplacementGraphAndFreshAttemptCanRecover() = runTest {
+        val deviceA = UUID(0, 1021)
+        val deviceB = UUID(0, 1022)
+        val h = ContainerHarness(
+            this, store,
+            identity = { target ->
+                if ((target as? ConnectionTarget.Bluetooth)?.deviceId == deviceA) key(7) else key(8)
+            },
+        )
+        try {
+            connect(h, h.target(deviceA))
+            val n = h.container.navigation
+            n.navigateToSetting(SettingsDetail.LANGUAGE)
+            val first = assertNotNull(h.sessions.current)
+            val original = assertNotNull(n.captureFirstRunOnboarding(n.publishedNavigation.value))
+            h.manager.disconnect()
+            h.settle()
+            connect(h, h.target(deviceB))
+            val replacement = assertNotNull(h.sessions.current)
+            assertNotSame(first, replacement)
+            assertNotEquals(first.token.radioId, replacement.token.radioId)
+            val current = n.currentState
+            val settings = current.stacks.getValue(AppTab.SETTINGS)
+            assertFalse(n.completeFirstRunOnboarding(original, MountedOnboardingProducer.Preset(first.token)))
+            assertFalse(n.completeFirstRunOnboarding(original, MountedOnboardingProducer.NoDevice))
+            assertFalse(n.completeFirstRunOnboarding(original, MountedOnboardingProducer.NoDeviceAtSession(first.token)))
+            assertFalse(n.completeFirstRunOnboarding(original, MountedOnboardingProducer.NoDeviceAtSession(replacement.token)))
+            assertFalse(n.completeFirstRunOnboarding(original, MountedOnboardingProducer.Preset(replacement.token)))
+            assertEquals(current, n.currentState)
+            n.retireFirstRunOnboarding(original)
+
+            val retry = assertNotNull(n.captureFirstRunOnboarding(n.publishedNavigation.value))
+            assertTrue(n.completeFirstRunOnboarding(retry, MountedOnboardingProducer.Preset(replacement.token)))
+            assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+            assertEquals(settings, n.currentState.stacks.getValue(AppTab.SETTINGS))
+            assertEquals(replacement.token, n.currentState.boundSessionToken)
+        } finally {
+            h.container.close()
+        }
+    }
+
+    @Test fun onboardingCompletionAcceptsActualFirstBindingBehindHeldPublication() = runTest {
+        val h = ContainerHarness(this, store)
+        val n = h.container.navigation
+        n.selectTab(AppTab.SETTINGS)
+        n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+        val presented = n.publishedNavigation.value
+        val entry = presented.value.activeStack.last()
+        val completion = n.captureMountedOnboarding(presented, entry.id)
+        assertNotNull(completion)
+        val gate = n.registerChatContactMount(ChatContactMount(null))
+        try {
+            val connecting = async { h.manager.connect(h.target()) }
+            h.eventually("first real graph binds navigation while publication is held") {
+                connecting.isCompleted && h.sessions.current != null &&
+                    n.currentState.boundSessionToken == h.sessions.current?.token
+            }
+            connecting.await()
+            val graph = assertNotNull(h.sessions.current)
+            assertEquals(presented, n.publishedNavigation.value)
+            val before = n.currentState
+            val wrongToken = graph.token.copy(generation = Generation(graph.token.generation.value + 1))
+            assertFalse(n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(wrongToken)))
+            assertEquals(before, n.currentState)
+            assertTrue(n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(graph.token)))
+            assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+            assertEquals(graph.token, n.currentState.boundSessionToken)
+            assertEquals(presented, n.publishedNavigation.value)
+        } finally {
+            gate.release()
+            h.container.close()
+        }
+        assertEquals(AppTab.CHATS, n.state.value.selectedTab)
+    }
+
+    @Test fun onboardingFromAnOfflineRetainedRadioAcceptsItsFirstExplicitGraph() = runTest {
+        val deviceA = UUID(0, 1001)
+        val deviceB = UUID(0, 1002)
+        for (differentRadio in listOf(false, true)) {
+            for (afterBinding in listOf(false, true)) {
+                val uiScheduler = TestCoroutineScheduler()
+                val mainScope = CoroutineScope(backgroundScope.coroutineContext + uiScheduler + StandardTestDispatcher(uiScheduler))
+                val h = ContainerHarness(
+                    this, store, mainScope = mainScope,
+                    identity = { target ->
+                        if ((target as? ConnectionTarget.Bluetooth)?.deviceId == deviceA) key(7) else key(8)
+                    },
+                )
+                try {
+                    val started = h.container.start()
+                    h.eventually("production activation completes") { uiScheduler.runCurrent(); started.isCompleted }
+                    started.join()
+                    assertFalse(started.isCancelled)
+                    val firstConnect = async { h.manager.connect(h.target(deviceA)) }
+                    h.eventually("first graph binds") {
+                        uiScheduler.runCurrent()
+                        firstConnect.isCompleted && h.container.navigation.currentState.navigationReady
+                    }
+                    firstConnect.await()
+                    val n = h.container.navigation
+                    val first = assertNotNull(h.sessions.current)
+                    val disconnect = async { h.manager.disconnect() }
+                    h.eventually("the previous graph is withdrawn") {
+                        uiScheduler.runCurrent()
+                        disconnect.isCompleted && h.sessions.current == null
+                    }
+                    disconnect.await()
+                    val cleanup = async { h.appState.wireServicesIfConnected() }
+                    h.eventually("the previous radio is retained without a session") {
+                        uiScheduler.runCurrent()
+                        cleanup.isCompleted && n.currentState.radioId == first.token.radioId &&
+                            n.currentState.boundSessionToken == null
+                    }
+                    cleanup.await()
+                    n.selectTab(AppTab.SETTINGS)
+                    n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+                    val presented = n.publishedNavigation.value
+                    val entryId = presented.value.activeStack.last().id
+                    val offlineCompletion = n.captureMountedOnboarding(presented, entryId)
+                    val reconnect = async { h.manager.connect(h.target(if (differentRadio) deviceB else deviceA)) }
+                    h.eventually("the successor graph is exposed before navigation binds") {
+                        val graph = h.sessions.current
+                        graph != null && graph !== first && h.manager.snapshot.value.token == graph.token
+                    }
+                    val successor = assertNotNull(h.sessions.current)
+                    assertEquals(differentRadio, successor.token.radioId != first.token.radioId)
+                    assertNull(n.currentState.boundSessionToken)
+                    val before = n.currentState
+                    assertFalse(n.completeMountedOnboarding(offlineCompletion, MountedOnboardingProducer.Preset(first.token)))
+                    assertEquals(before, n.currentState)
+                    val completion = assertNotNull(offlineCompletion)
+                    if (afterBinding) {
+                        h.eventually("the successor navigation binds") {
+                            uiScheduler.runCurrent()
+                            reconnect.isCompleted && n.currentState.boundSessionToken == successor.token
+                        }
+                        reconnect.await()
+                    }
+                    assertTrue(
+                        n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(successor.token)),
+                        "differentRadio=$differentRadio afterBinding=$afterBinding " +
+                            "presented=${presented.value.generation} current=${n.currentState.generation}",
+                    )
+                    assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+                    h.eventually("the successor finishes binding") {
+                        uiScheduler.runCurrent()
+                        reconnect.isCompleted && n.currentState.boundSessionToken == successor.token
+                    }
+                    reconnect.await()
+                } finally {
+                    val closing = async { h.container.close() }
+                    h.eventually("process cleanup drains the controlled UI queue") {
+                        uiScheduler.runCurrent()
+                        closing.isCompleted
+                    }
+                    closing.await()
+                }
+            }
+        }
+    }
+
+    @Test fun offlineNavigationWitnessRejectsASecondExposedGraph() = runTest {
+        val f = PublicationTestFixture(this, store)
+        try {
+            val first = async { f.manager.connect(f.target) }
+            f.eventually("the first graph is ready") { first.isCompleted && f.slot.current != null }
+            first.await()
+            val retired = assertNotNull(f.slot.current)
+            val disconnect = async { f.manager.disconnect() }
+            f.eventually("the first graph is withdrawn") { disconnect.isCompleted && f.slot.current == null }
+            disconnect.await()
+            val stamp = f.manager.captureNavigationLifecycle()
+            val offline = assertNotNull(f.manager.captureOfflineNavigationLifecycle(stamp))
+            val connect = async { f.manager.connect(f.target) }
+            f.eventually("the first successor is exposed") { connect.isCompleted && f.slot.current != null }
+            connect.await()
+            val successor = assertNotNull(f.slot.current)
+            assertNotSame(retired, successor)
+            assertTrue(f.manager.isFirstNavigationSessionAfterOffline(
+                offline, successor.token, f.slot.identity, successor,
+            ))
+            assertFalse(f.manager.isFirstNavigationSessionAfterOffline(
+                offline, retired.token, f.slot.identity, successor,
+            ))
+            val rebuilding = async { f.manager.rebuildSession(assertNotNull(f.manager.connectedDevice).id) }
+            f.eventually("a second successor is exposed") {
+                rebuilding.isCompleted && f.slot.current != null && f.slot.current !== successor
+            }
+            rebuilding.await()
+            val replacement = assertNotNull(f.slot.current)
+            assertFalse(f.manager.isFirstNavigationSessionAfterOffline(
+                offline, replacement.token, f.slot.identity, replacement,
+            ))
+        } finally {
+            f.manager.close()
+        }
+    }
+
+    @Test fun offlineNavigationWitnessRejectsAReplacementAfterCancelledSubmission() = runTest {
+        val f = PublicationTestFixture(this, store)
+        val hold = CompletableDeferred<Unit>()
+        var holdFirst = true
+        f.links.configureRadio = { if (holdFirst) it.connectGate = hold }
+        try {
+            val stamp = f.manager.captureNavigationLifecycle()
+            val offline = assertNotNull(f.manager.captureOfflineNavigationLifecycle(stamp))
+            val cancelled = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) { f.manager.connect(f.target) }
+            f.eventually("the first submission is held before graph publication") {
+                f.links.radios.isNotEmpty() && f.slot.current == null
+            }
+            cancelled.cancelAndJoin()
+            holdFirst = false
+            hold.complete(Unit)
+            val replacement = async { f.manager.connect(f.target) }
+            f.eventually("the replacement submission publishes") {
+                replacement.isCompleted && f.slot.current != null
+            }
+            replacement.await()
+            val graph = assertNotNull(f.slot.current)
+            assertFalse(f.manager.isFirstNavigationSessionAfterOffline(
+                offline, graph.token, f.slot.identity, graph,
+            ))
+            assertTrue(f.manager.isInitialNavigationSession(
+                f.manager.captureNavigationLifecycle(), graph.token, f.slot.identity, graph,
+            ))
+        } finally {
+            hold.complete(Unit)
+            f.manager.close()
+        }
+    }
+
+    @Test fun onboardingAfterActualLossAcceptsItsFirstRebuildOrExplicitReplacement() = runTest {
+        val deviceA = UUID(0, 1003)
+        val deviceB = UUID(0, 1004)
+        for (rebuild in listOf(true, false)) {
+            val uiScheduler = TestCoroutineScheduler()
+            val mainScope = CoroutineScope(backgroundScope.coroutineContext + uiScheduler + StandardTestDispatcher(uiScheduler))
+            val h = ContainerHarness(
+                this, store, mainScope = mainScope,
+                identity = { target ->
+                    if ((target as? ConnectionTarget.Bluetooth)?.deviceId == deviceA) key(7) else key(8)
+                },
+            )
+            try {
+                val started = h.container.start()
+                h.eventually("production activation completes") { uiScheduler.runCurrent(); started.isCompleted }
+                started.join()
+                assertFalse(started.isCancelled)
+                val connecting = async { h.manager.connect(h.target(deviceA)) }
+                h.eventually("the first graph binds") {
+                    uiScheduler.runCurrent()
+                    connecting.isCompleted && h.container.navigation.currentState.navigationReady
+                }
+                connecting.await()
+                val n = h.container.navigation
+                val retired = assertNotNull(h.sessions.current)
+                val connectedDeviceId = assertNotNull(h.manager.connectedDevice).id
+                assertNotNull(h.links.links.last().callbacks).onDisconnected(IllegalStateException("actual link loss"))
+                h.eventually("actual loss retires the graph and its navigation binding", virtualBudgetMillis = 0) {
+                    uiScheduler.runCurrent()
+                    h.manager.connectionState == DeviceConnectionState.DISCONNECTED &&
+                        h.sessions.current == null && n.currentState.boundSessionToken == null
+                }
+                assertEquals(retired.token.radioId, n.currentState.radioId)
+                val stamp = h.manager.captureNavigationLifecycle()
+                assertFalse(h.manager.isNavigationLifecycleCurrent(stamp))
+                assertNotNull(h.manager.captureOfflineNavigationLifecycle(stamp))
+                n.selectTab(AppTab.SETTINGS)
+                n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+                val presented = n.publishedNavigation.value
+                val completion = n.captureMountedOnboarding(presented, presented.value.activeStack.last().id)
+                val reconnect = async {
+                    if (rebuild) h.manager.rebuildSession(connectedDeviceId)
+                    else h.manager.connect(h.target(deviceB))
+                }
+                h.eventually("the first post-loss graph is exposed before binding", virtualBudgetMillis = 0) {
+                    val graph = h.sessions.current
+                    graph != null && graph !== retired && h.manager.snapshot.value.token == graph.token
+                }
+                val successor = assertNotNull(h.sessions.current)
+                assertEquals(!rebuild, successor.token.radioId != retired.token.radioId)
+                assertNull(n.currentState.boundSessionToken)
+                assertFalse(n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(retired.token)))
+                if (!rebuild) {
+                    h.eventually("the explicit successor navigation binds") {
+                        uiScheduler.runCurrent()
+                        reconnect.isCompleted && n.currentState.boundSessionToken == successor.token
+                    }
+                    reconnect.await()
+                }
+                assertTrue(
+                    n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(successor.token)),
+                    "rebuild=$rebuild presented=${presented.value.generation} current=${n.currentState.generation}",
+                )
+                assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+                h.eventually("the post-loss graph finishes binding") {
+                    uiScheduler.runCurrent()
+                    reconnect.isCompleted && n.currentState.boundSessionToken == successor.token
+                }
+                reconnect.await()
+            } finally {
+                val closing = async { h.container.close() }
+                h.eventually("process cleanup drains the controlled UI queue") {
+                    uiScheduler.runCurrent()
+                    closing.isCompleted
+                }
+                closing.await()
+            }
+        }
+    }
+
+    @Test fun offlineOnboardingRejectsCancelledOrSupersededExposedSuccessors() = runTest {
+        for (mode in listOf("cancelled-rebuild", "superseded-rebuild", "cancelled-submission")) {
+            val uiScheduler = TestCoroutineScheduler()
+            val mainScope = CoroutineScope(backgroundScope.coroutineContext + uiScheduler + StandardTestDispatcher(uiScheduler))
+            val h = ContainerHarness(
+                this, store, mainScope = mainScope,
+                sessionConfiguration = SessionConfiguration(contactStreamInactivityTimeout = 60.0),
+            )
+            var worker: Thread? = null
+            try {
+                val started = h.container.start()
+                h.eventually("production activation completes") { uiScheduler.runCurrent(); started.isCompleted }
+                started.join()
+                assertFalse(started.isCancelled)
+                val connecting = async { h.manager.connect(h.target()) }
+                h.eventually("the first graph binds") {
+                    uiScheduler.runCurrent()
+                    connecting.isCompleted && h.container.navigation.currentState.navigationReady
+                }
+                connecting.await()
+                val n = h.container.navigation
+                val retired = assertNotNull(h.sessions.current)
+                val deviceId = assertNotNull(h.manager.connectedDevice).id
+                assertNotNull(h.links.links.last().callbacks).onDisconnected(IllegalStateException("actual link loss"))
+                h.eventually("actual loss retires the graph", virtualBudgetMillis = 0) {
+                    uiScheduler.runCurrent()
+                    h.manager.connectionState == DeviceConnectionState.DISCONNECTED &&
+                        h.sessions.current == null && n.currentState.boundSessionToken == null
+                }
+                val offline = assertNotNull(
+                    h.manager.captureOfflineNavigationLifecycle(h.manager.captureNavigationLifecycle()),
+                )
+                n.selectTab(AppTab.SETTINGS)
+                n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+                val presented = n.publishedNavigation.value
+                val completion = assertNotNull(
+                    n.captureMountedOnboarding(presented, presented.value.activeStack.last().id),
+                )
+                val syncRequested = CompletableDeferred<Unit>()
+                val heldSync = AtomicBoolean(false)
+                h.links.configureRadio = { radio ->
+                    radio.respond = { frame ->
+                        if (frame[0].toInt() == 0x04 && heldSync.compareAndSet(false, true)) {
+                            syncRequested.complete(Unit)
+                            listOf(Bytes.of(2) + le32(0))
+                        } else null
+                    }
+                }
+                val attempt = backgroundScope.async {
+                    if (mode == "cancelled-submission") h.manager.connect(h.target())
+                    else h.manager.rebuildSession(deviceId)
+                }
+                // Session wiring awaits a 100 ms badge debounce before starting the held contact sync.
+                // Advance short startup timers without reaching the stream's 60-second inactivity timeout.
+                h.eventually("the successor graph is exposed during held sync ($mode)", virtualBudgetMillis = 1_000) {
+                    uiScheduler.runCurrent()
+                    val graph = h.sessions.current
+                    syncRequested.isCompleted && !attempt.isCompleted && graph != null && graph !== retired &&
+                        h.manager.snapshot.value.token == graph.token &&
+                        h.manager.connectionState in listOf(DeviceConnectionState.CONNECTED, DeviceConnectionState.SYNCING)
+                }
+                val successor = assertNotNull(h.sessions.current)
+                assertTrue(h.manager.isFirstNavigationSessionAfterOffline(
+                    offline, successor.token, h.sessions.publicationIdentity, successor,
+                ))
+                val before = n.currentState
+                if (mode != "superseded-rebuild") {
+                    val cancellationReturned = CountDownLatch(1)
+                    val cancellationWorker = Thread {
+                        try { attempt.cancel() } finally { cancellationReturned.countDown() }
+                    }.apply { isDaemon = true }
+                    worker = cancellationWorker
+                    h.manager.withNavigationCommitBoundary {
+                        cancellationWorker.start()
+                        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+                        while (!attempt.isCancelled && System.nanoTime() < deadline) Thread.yield()
+                        assertTrue(attempt.isCancelled, "The attempt must be cancelled before the navigation commit")
+                        assertEquals(1L, cancellationReturned.count, "Cancellation must wait for the lifecycle boundary")
+                        assertSame(successor, h.sessions.current)
+                        assertFalse(n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(successor.token)))
+                        assertEquals(before, n.currentState)
+                    }
+                    assertTrue(cancellationReturned.await(5, TimeUnit.SECONDS))
+                } else {
+                    val cycleStarted = CountDownLatch(1)
+                    val cycleReturned = CountDownLatch(1)
+                    val initialGeneration = h.manager.reconnectionCoordinator.reconnectGeneration
+                    val cycleWorker = Thread {
+                        cycleStarted.countDown()
+                        try {
+                            h.manager.reconnectionCoordinator.restartTimeout(UUID(0, 9999))
+                        } finally {
+                            cycleReturned.countDown()
+                        }
+                    }.apply { isDaemon = true }
+                    worker = cycleWorker
+                    h.manager.withNavigationCommitBoundary {
+                        cycleWorker.start()
+                        assertTrue(cycleStarted.await(5, TimeUnit.SECONDS))
+                        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+                        while (cycleWorker.state != Thread.State.BLOCKED && cycleReturned.count != 0L &&
+                            System.nanoTime() < deadline
+                        ) Thread.yield()
+                        assertEquals(Thread.State.BLOCKED, cycleWorker.state, "Cycle changes must share the lifecycle boundary")
+                        assertEquals(initialGeneration, h.manager.reconnectionCoordinator.reconnectGeneration)
+                    }
+                    assertTrue(cycleReturned.await(5, TimeUnit.SECONDS))
+                    assertNotEquals(initialGeneration, h.manager.reconnectionCoordinator.reconnectGeneration)
+                    assertSame(successor, h.sessions.current)
+                    assertFalse(n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(successor.token)))
+                    assertEquals(before, n.currentState)
+                }
+                h.links.radios.last().push(Bytes.of(4) + le32(0))
+                h.eventually("the invalidated attempt settles") { uiScheduler.runCurrent(); attempt.isCompleted }
+                assertFailsWith<CancellationException> { attempt.await() }
+            } finally {
+                worker?.join(5_000)
+                val closing = async { h.container.close() }
+                h.eventually("process cleanup drains the controlled UI queue") {
+                    uiScheduler.runCurrent()
+                    closing.isCompleted
+                }
+                closing.await()
+            }
+        }
+    }
+
+    @Test fun newlyMountedOnboardingCanCaptureTheLiveGraphBeforeItsFirstNavigationBinding() = runTest {
+        val uiScheduler = TestCoroutineScheduler()
+        val mainScope = CoroutineScope(backgroundScope.coroutineContext + uiScheduler + StandardTestDispatcher(uiScheduler))
+        val h = ContainerHarness(this, store, mainScope = mainScope)
+        try {
+            val started = h.container.start()
+            h.eventually("production activation completes") {
+                uiScheduler.runCurrent()
+                started.isCompleted
+            }
+            val n = h.container.navigation
+            n.selectTab(AppTab.SETTINGS)
+            n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+            val presented = n.publishedNavigation.value
+            val entryId = presented.value.activeStack.last().id
+            val connecting = async { h.manager.connect(h.target()) }
+            h.eventually("first graph is exposed before the controlled UI binding") {
+                val graph = h.sessions.current
+                graph != null && h.manager.snapshot.value.token == graph.token
+            }
+            val graph = assertNotNull(h.sessions.current)
+            assertNull(n.currentState.boundSessionToken)
+            val completion = n.captureMountedOnboarding(presented, entryId)
+            assertNotNull(completion)
+            assertTrue(n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(graph.token)))
+            assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+            h.eventually("the same graph binds after completion") {
+                uiScheduler.runCurrent()
+                connecting.isCompleted && n.currentState.boundSessionToken == graph.token
+            }
+            connecting.await()
+            assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+        } finally {
+            val closing = async { h.container.close() }
+            h.eventually("process cleanup drains the controlled UI queue") {
+                uiScheduler.runCurrent()
+                closing.isCompleted
+            }
+            closing.await()
+        }
+    }
+
+    @Test fun onboardingCompletionRejectsAWithdrawnOrReplacedGraphBeforeNavigationBinding() = runTest {
+        val uiScheduler = TestCoroutineScheduler()
+        val mainScope = CoroutineScope(backgroundScope.coroutineContext + uiScheduler + StandardTestDispatcher(uiScheduler))
+        val h = ContainerHarness(this, store, mainScope = mainScope)
+        val retiredTransport = CompletableDeferred<Unit>()
+        val replacementHandshake = CompletableDeferred<Unit>()
+        var holdReplacement = false
+        h.links.configureRadio = { if (holdReplacement) it.connectGate = replacementHandshake }
+        try {
+            val started = h.container.start()
+            h.eventually("production activation completes") {
+                uiScheduler.runCurrent()
+                started.isCompleted
+            }
+            val connecting = async { h.manager.connect(h.target()) }
+            h.eventually("first graph and navigation binding become ready") {
+                uiScheduler.runCurrent()
+                connecting.isCompleted && h.manager.connectionState == DeviceConnectionState.READY &&
+                    h.container.navigation.currentState.navigationReady
+            }
+            connecting.await()
+            val n = h.container.navigation
+            val retired = assertNotNull(h.sessions.current)
+            n.selectTab(AppTab.SETTINGS)
+            n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+            val readyControl = n.publishedNavigation.value
+            assertTrue(n.completeMountedOnboarding(
+                n.captureMountedOnboarding(readyControl, readyControl.value.activeStack.last().id),
+                MountedOnboardingProducer.Preset(retired.token),
+            ))
+            assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+            n.selectTab(AppTab.SETTINGS)
+            n.navigate(FeatureRoute(FeatureId.ONBOARDING))
+            val presented = n.publishedNavigation.value
+            val entryId = presented.value.activeStack.last().id
+            val completion = n.captureMountedOnboarding(presented, entryId)
+            assertEquals(retired.token, presented.value.boundSessionToken)
+            assertNotNull(completion)
+            holdReplacement = true
+            h.links.radios.first().disconnectGate = retiredTransport
+            val rebuilding = async { h.manager.rebuildSession(assertNotNull(h.appState.connectedDevice).id) }
+            h.eventually("graph is withdrawn while its transport remains held", virtualBudgetMillis = 0) {
+                h.sessions.current == null && h.links.radios.first().disconnecting
+            }
+            val withdrawn = n.currentState
+            assertEquals(retired.token, withdrawn.boundSessionToken)
+            assertFalse(n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(retired.token)))
+            assertEquals(withdrawn, n.currentState)
+
+            uiScheduler.runCurrent()
+            h.eventually("the retired binding is detached") {
+                uiScheduler.runCurrent()
+                !n.currentState.navigationReady
+            }
+            retiredTransport.complete(Unit)
+            h.eventually("replacement handshake is held") { h.links.radios.size == 2 && h.sessions.current == null }
+            replacementHandshake.complete(Unit)
+            h.eventually("replacement graph is live before its navigation binding") {
+                val graph = h.sessions.current
+                graph != null && graph !== retired && h.manager.snapshot.value.token == graph.token
+            }
+            val replacement = assertNotNull(h.sessions.current)
+            assertNotEquals(replacement.token, n.currentState.boundSessionToken)
+            val beforeBinding = n.currentState
+            assertFalse(n.completeMountedOnboarding(completion, MountedOnboardingProducer.Preset(retired.token)))
+            assertEquals(beforeBinding, n.currentState)
+            h.eventually("replacement navigation binding becomes ready") {
+                uiScheduler.runCurrent()
+                rebuilding.isCompleted && n.currentState.boundSessionToken == replacement.token &&
+                    n.currentState.navigationReady
+            }
+            rebuilding.await()
+            val current = n.publishedNavigation.value
+            val replacementCompletion = n.captureMountedOnboarding(current, entryId)
+            assertFalse(n.completeMountedOnboarding(
+                replacementCompletion, MountedOnboardingProducer.Preset(retired.token),
+            ))
+            assertEquals(current.value, n.currentState)
+            assertTrue(n.completeMountedOnboarding(
+                replacementCompletion, MountedOnboardingProducer.Preset(replacement.token),
+            ))
+            assertEquals(AppTab.CHATS, n.currentState.selectedTab)
+        } finally {
+            retiredTransport.complete(Unit)
+            replacementHandshake.complete(Unit)
+            val closing = async { h.container.close() }
+            h.eventually("process cleanup drains the controlled UI queue") {
+                uiScheduler.runCurrent()
+                closing.isCompleted
+            }
+            closing.await()
+        }
+    }
+
+    private fun contactMount(h: ContainerHarness, source: ContactDTO? = null): ChatContactMount {
+        val radio = assertNotNull(h.appState.currentRadioId)
+        val contact = source ?: ContactDTO(
+            radioId = radio, publicKey = key(60), name = "Source conversation", lastHeardTimestamp = null,
+        )
+        h.container.navigation.navigateToChat(contact)
+        return ChatContactMount(h.container.navigation.currentState.activeStack.last().id)
+    }
+
     private fun await(h: ContainerHarness, condition: () -> Boolean) = compose.waitUntil(10_000) {
         h.settle()
         condition()
@@ -395,6 +1197,53 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
     private fun confirmationEnabled(): Boolean {
         val nodes = compose.onAllNodesWithTag("contact-link-confirm").fetchSemanticsNodes()
         return nodes.size == 1 && !nodes.single().config.contains(SemanticsProperties.Disabled)
+    }
+
+    private fun delayedContactRefresh(
+        actual: NodesFeatureDependencies,
+        targetKey: Bytes,
+        refreshGate: CompletableDeferred<Unit>,
+        emptyLookups: AtomicInteger,
+        blockedRefreshes: AtomicInteger,
+        cancelledWrites: ConcurrentLinkedQueue<Bytes>,
+    ): NodesFeatureDependencies {
+        val store = assertNotNull(actual.session.servicesDataStore())
+        val service = assertNotNull(actual.session.contactService())
+        val delayedStore = object : NodesDataStore by store {
+            override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                val found = store.fetchContact(radioId, publicKey)
+                if (publicKey == targetKey && found == null) emptyLookups.incrementAndGet()
+                return found
+            }
+        }
+        val observingService = object : NodesContactService by service {
+            override suspend fun addContactIfAbsent(radioId: RadioId, contact: ContactFrame) {
+                try {
+                    service.addContactIfAbsent(radioId, contact)
+                } catch (cancelled: CancellationException) {
+                    cancelledWrites.add(contact.publicKey)
+                    throw cancelled
+                }
+            }
+        }
+        return NodesFeatureDependencies(
+            object : NodesSession by actual.session {
+                override fun servicesDataStore() = delayedStore
+                override fun contactService() = observingService
+                override fun contactVersions() = flow {
+                    var first = true
+                    actual.session.contactVersions().collect { version ->
+                        if (first) first = false else {
+                            blockedRefreshes.incrementAndGet()
+                            refreshGate.await()
+                        }
+                        emit(version)
+                    }
+                }
+            },
+            actual.uriCodec, actual.timeouts, actual.messages, actual.announcer,
+            actual.preferences, actual.clock, actual.locale,
+        )
     }
 
     private suspend fun assertMountedDirectNotification(h: ContainerHarness, contact: ContactDTO) {
@@ -820,6 +1669,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
     @Test fun mountedRoomListAuthenticatesBeforeOpeningAndSurfacesLoginFailure() = runTest {
         val h = ContainerHarness(this, store)
         val roomKey = key(40)
+        val expectedKeepAlive = Bytes.of(0x32) + roomKey + Bytes.of(0x02) + le32(0)
         val allowLogin = java.util.concurrent.atomic.AtomicBoolean(false)
         h.links.configureRadio = { radio ->
             radio.knownContacts += contactFrame(key(20), "Prior peer")
@@ -830,6 +1680,10 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                         Bytes.of(if (allowLogin.get()) 0x85 else 0x86, 1) + roomKey.prefix(6),
                     )
                     0x1b -> listOf(Bytes.of(1, 2))
+                    0x32 -> {
+                        assertEquals(expectedKeepAlive, command)
+                        listOf(Bytes.of(0x06, 0, 1, 2, 3, 4) + le32(5_000))
+                    }
                     else -> null
                 }
             }
@@ -870,6 +1724,9 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             val roomEntry = n.state.value.activeStack.last()
             await(h) { compose.onAllNodesWithTag("entry:${roomEntry.id}").fetchSemanticsNodes().isNotEmpty() }
             compose.onNodeWithTag("entry:${roomEntry.id}").assertIsDisplayed()
+            h.eventually("mounted authenticated room sends its keepalive") {
+                h.links.radios.last().sent.any { it == expectedKeepAlive }
+            }
             h.eventually("mounted room detail marks messages read after authentication") {
                 kotlinx.coroutines.runBlocking { store.fetchRemoteNodeSession(EntityKey(radio, room.id))?.unreadCount == 0L }
             }
@@ -1118,8 +1975,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 NotificationId("wp302-committed-tap"), NotificationCategory.DIRECT_MESSAGE, contact.name, "Committed tap",
                 false, null, null, NotificationPayload.DirectMessage(EntityKey(radio, contact.id), UUID.randomUUID()),
             ))
-            manager.activeNotifications.single().notification.contentIntent.send()
-            shadowOf(android.os.Looper.getMainLooper()).idle()
+            tapNotification(manager)
             h.eventually("the real tap commits before the observer exits") {
                 if (observerCancels) cancellation.isCompleted else acknowledgement.isCompleted
             }
@@ -1381,8 +2237,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 NotificationId("wp302-cold"), NotificationCategory.DIRECT_MESSAGE, contact.name, "Cold tap",
                 false, null, null, NotificationPayload.DirectMessage(EntityKey(radio, contact.id), messageId),
             ))
-            manager.activeNotifications.single().notification.contentIntent.send()
-            shadowOf(android.os.Looper.getMainLooper()).idle()
+            tapNotification(manager)
             testScheduler.runCurrent()
             assertNull(h.sessions.current)
             assertEquals(1, h.container.navigation.state.value.activeStack.size, "No destination before real readiness")
@@ -1447,21 +2302,21 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         for (window in listOf(390.dp, 1080.dp)) {
             val h = ContainerHarness(this, store)
             val feature = h.container.chatsFeature
-            val origin = ChatContactMount()
             val parent = SupervisorJob(backgroundScope.coroutineContext[Job])
             val routingScope = CoroutineScope(backgroundScope.coroutineContext + parent)
             val offered = CompletableDeferred<ContactLinkHandoffReceipt>()
-            val underlying = feature.linksForMount(origin)
-            val environment = object : ChatLinkEnvironment by underlying {
-                override fun completeResolvedContactLookup(
-                    context: ContactLinkContext, target: ContactLinkResolvedTarget, link: ContactLinkResult,
-                    existing: ContactDTO?, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
-                ): ContactLinkTargetCompletion = underlying.completeResolvedContactLookup(
-                    context, target, link, existing, publications, cancellation,
-                ).also { if (it is ContactLinkTargetCompletion.Offered) offered.complete(it.receipt) }
-            }
             try {
                 connect(h)
+                val origin = contactMount(h)
+                val underlying = feature.linksForMount(origin)
+                val environment = object : ChatLinkEnvironment by underlying {
+                    override fun completeResolvedContactLookup(
+                        context: ContactLinkContext, target: ContactLinkResolvedTarget, link: ContactLinkResult,
+                        existing: ContactDTO?, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
+                    ): ContactLinkTargetCompletion = underlying.completeResolvedContactLookup(
+                        context, target, link, existing, publications, cancellation,
+                    ).also { if (it is ContactLinkTargetCompletion.Offered) offered.complete(it.receipt) }
+                }
                 feature.registerContactMount(origin)
                 val uri = h.container.nodesFeature.uriCodec.exportContactUri("Sealed delivery", key(30), ContactType.REPEATER)
                 assertTrue(ChatLinkRouter(environment, routingScope).route(uri))
@@ -1499,25 +2354,24 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         for (window in listOf(390.dp, 1080.dp)) {
             val h = ContainerHarness(this, store)
             h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Accepted destination") }
-            val origin = ChatContactMount()
             val disposed = AtomicBoolean()
             val offered = CompletableDeferred<ContactLinkHandoffReceipt>()
             val feature = h.container.chatsFeature
-            val underlying = feature.linksForMount(origin)
-            val environment = object : ChatLinkEnvironment by underlying {
-                override fun completeResolvedContactLookup(
-                    context: ContactLinkContext, target: ContactLinkResolvedTarget, link: ContactLinkResult,
-                    existing: ContactDTO?, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
-                ): ContactLinkTargetCompletion = underlying.completeResolvedContactLookup(
-                    context, target, link, existing, publications, cancellation,
-                ).also { if (it is ContactLinkTargetCompletion.Offered) offered.complete(it.receipt) }
-            }
             try {
                 connect(h)
                 val navigation = h.container.navigation
                 val radio = assertNotNull(h.appState.currentRadioId)
                 val saved = assertNotNull(store.fetchContact(radio, key(20)))
-                navigation.navigateToChat(saved)
+                val origin = contactMount(h, saved)
+                val underlying = feature.linksForMount(origin)
+                val environment = object : ChatLinkEnvironment by underlying {
+                    override fun completeResolvedContactLookup(
+                        context: ContactLinkContext, target: ContactLinkResolvedTarget, link: ContactLinkResult,
+                        existing: ContactDTO?, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
+                    ): ContactLinkTargetCompletion = underlying.completeResolvedContactLookup(
+                        context, target, link, existing, publications, cancellation,
+                    ).also { if (it is ContactLinkTargetCompletion.Offered) offered.complete(it.receipt) }
+                }
                 compose.runOnUiThread {
                     width.value = window
                     host.get().setContent {
@@ -1568,19 +2422,20 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
     @Test fun mountedConsumerAcceptsOnlyTheNewestIdenticalContactOfferAndRetainsItsMetadata() = runTest {
         val h = ContainerHarness(this, store)
         val feature = h.container.chatsFeature
-        val origin = ChatContactMount()
         val receipts = CopyOnWriteArrayList<ContactLinkHandoffReceipt>()
-        val underlying = feature.linksForMount(origin)
-        val environment = object : ChatLinkEnvironment by underlying {
-            override fun completeResolvedContactLookup(
-                context: ContactLinkContext, target: ContactLinkResolvedTarget, link: ContactLinkResult,
-                existing: ContactDTO?, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
-            ): ContactLinkTargetCompletion = underlying.completeResolvedContactLookup(
-                context, target, link, existing, publications, cancellation,
-            ).also { if (it is ContactLinkTargetCompletion.Offered) receipts += it.receipt }
-        }
+        var mountedOrigin: ChatContactMount? = null
         try {
             connect(h)
+            val origin = contactMount(h).also { mountedOrigin = it }
+            val underlying = feature.linksForMount(origin)
+            val environment = object : ChatLinkEnvironment by underlying {
+                override fun completeResolvedContactLookup(
+                    context: ContactLinkContext, target: ContactLinkResolvedTarget, link: ContactLinkResult,
+                    existing: ContactDTO?, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
+                ): ContactLinkTargetCompletion = underlying.completeResolvedContactLookup(
+                    context, target, link, existing, publications, cancellation,
+                ).also { if (it is ContactLinkTargetCompletion.Offered) receipts += it.receipt }
+            }
             feature.registerContactMount(origin)
             val uri = h.container.nodesFeature.uriCodec.exportContactUri("Identical replacement", key(30), ContactType.REPEATER)
             val router = ChatLinkRouter(environment, backgroundScope)
@@ -1608,8 +2463,450 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             assertEquals(accepted, h.container.navigation.currentState)
             assertTrue(h.links.radios.all { firmware -> firmware.sent.none { it[0].toInt() == 0x09 } })
         } finally {
-            feature.sealContactMount(origin)
+            mountedOrigin?.let(feature::sealContactMount)
             unmount()
+            h.container.close()
+        }
+    }
+
+    @Test fun actualAppChatsContentOwnerRegistersAndSealsRealMessageLinkDeliveriesAcrossMountedAcceptance() = runTest {
+        for (windowWidth in listOf(390, 834)) for (acceptFirst in listOf(false, true)) {
+            val h = ContainerHarness(this, store)
+            h.links.configureRadio = {
+                it.knownContacts += contactFrame(key(20), "Actual source conversation")
+                it.knownContacts += contactFrame(key(21), "Actual linked destination")
+            }
+            val consumerEnabled = mutableStateOf(false)
+            try {
+                connect(h)
+                val navigation = h.container.navigation
+                val feature = h.container.chatsFeature
+                val nodes = h.container.nodesFeature
+                val radio = assertNotNull(h.sessions.current).token.radioId
+                val source = assertNotNull(store.fetchContact(radio, key(20)))
+                val target = if (acceptFirst) key(21) else key(30)
+                val uri = nodes.uriCodec.exportContactUri("Actual body claim", target, ContactType.REPEATER)
+                val message = MessageDTO(
+                    radioId = radio, contactID = source.id, text = uri,
+                    timestamp = 100u, createdAt = EPOCH, direction = MessageDirection.INCOMING,
+                )
+                store.saveMessage(message)
+                navigation.navigateToChat(source)
+                compose.runOnUiThread {
+                    width.value = windowWidth.dp
+                    host.get().setContent {
+                        Box(Modifier.width(width.value).height(1000.dp)) {
+                            MeshCoreTheme(motionScale = 0f) {
+                                NativeNavigationShell(
+                                    navigation, chats = if (consumerEnabled.value) feature else null, nodes = nodes,
+                                    content = { destination, navigate ->
+                                        if (destination is NavigationDestination.Chat ||
+                                            destination == NavigationDestination.Root(AppTab.CHATS)
+                                        ) {
+                                            AppChatsContent(feature, destination, navigation)
+                                        } else {
+                                            com.meshcoreone.android.feature.nodes.NodesEntry(
+                                                com.meshcoreone.android.core.contracts.FeatureRoute(
+                                                    com.meshcoreone.android.core.contracts.FeatureId.NODES,
+                                                ),
+                                                navigate, nodes,
+                                                (destination as? NavigationDestination.ContactDetail)?.let {
+                                                    com.meshcoreone.android.feature.nodes.NodesDestination.Detail(it.contact)
+                                                } ?: com.meshcoreone.android.feature.nodes.NodesDestination.List,
+                                            )
+                                        }
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+                await(h) {
+                    compose.onAllNodesWithTag("timeline-bubble:${message.id}", useUnmergedTree = true)
+                        .fetchSemanticsNodes().isNotEmpty()
+                }
+                val body = compose.onNode(
+                    hasAnyAncestor(hasTestTag("timeline-bubble:${message.id}")) and
+                        SemanticsMatcher.keyIsDefined(SemanticsActions.CustomActions),
+                    useUnmergedTree = true,
+                )
+                val action = body.fetchSemanticsNode().config[SemanticsActions.CustomActions].single()
+                compose.runOnIdle { assertTrue(action.action()) }
+                h.eventually("actual AppChatsContent router offers its body link") {
+                    navigation.pendingChatContactOffers().size == 1
+                }
+                val offer = navigation.pendingChatContactOffers().single()
+                assertEquals(target, offer.link.publicKey)
+                assertEquals(ContactType.REPEATER, offer.link.type)
+                assertEquals(radio, offer.target.radioId)
+                assertFalse(offer.mount.registrationSealed.get())
+                val terminal = backgroundScope.async { offer.receipt.awaitOutcome() }
+                h.settle()
+                assertFalse(terminal.isCompleted, "The actual source must offer, not navigate before shell acceptance")
+                assertEquals(ChatSelection.Direct(source), navigation.currentState.chatsSelectedRoute)
+                assertNull(navigation.currentState.pendingContactLink)
+                assertNull(navigation.currentState.pendingContactDetail)
+
+                if (acceptFirst) {
+                    compose.runOnIdle { consumerEnabled.value = true }
+                    compose.waitForIdle()
+                    await(h) {
+                        terminal.isCompleted && offer.mount.registrationSealed.get()
+                    }
+                    assertEquals(
+                        ContactLinkHandoffOutcome.Accepted(ContactLinkCompletion.Navigated), terminal.await(),
+                    )
+                    val saved = assertNotNull(store.fetchContact(radio, target))
+                    assertEquals(saved.id, navigation.state.value.selectedContact?.id)
+                    assertEquals(AppTab.NODES, navigation.state.value.selectedTab)
+                    compose.onAllNodesWithText(saved.displayName).onFirst().assertIsDisplayed()
+                    compose.onNodeWithTag("navigation-back").performClick()
+                    compose.waitForIdle()
+                    assertEquals(1, navigation.state.value.activeStack.size)
+                    assertEquals(
+                        ContactLinkHandoffOutcome.Accepted(ContactLinkCompletion.Navigated),
+                        offer.receipt.awaitOutcome(),
+                    )
+                } else {
+                    compose.onNodeWithTag("navigation-back").performClick()
+                    compose.waitForIdle()
+                    h.eventually("actual source disposal seals its unaccepted exact offer") {
+                        terminal.isCompleted && offer.mount.registrationSealed.get()
+                    }
+                    assertEquals(ContactLinkHandoffOutcome.Superseded, terminal.await())
+                    val afterDisposal = navigation.currentState
+                    compose.runOnIdle { consumerEnabled.value = true }
+                    compose.waitForIdle()
+                    h.settle()
+                    assertEquals(afterDisposal, navigation.currentState)
+                    assertNull(navigation.state.value.pendingContactLink)
+                    assertNull(navigation.state.value.pendingContactDetail)
+                    assertNull(store.fetchContact(radio, target))
+                }
+                assertTrue(h.links.radios.all { it.sent.none { frame -> frame[0].toInt() == 0x09 } })
+            } finally {
+                unmount()
+                h.container.close()
+            }
+        }
+    }
+
+    @Test fun outgoingMountedChatCannotAcceptAnOfferAfterTheNextEntryCommits() = runTest {
+        for (known in listOf(false, true)) {
+            val h = ContainerHarness(this, store)
+            h.links.configureRadio = {
+                it.knownContacts += contactFrame(key(20), "Outgoing source")
+                it.knownContacts += contactFrame(key(21), "Linked destination")
+                it.knownContacts += contactFrame(key(22), "Next source")
+            }
+            try {
+                connect(h)
+                val navigation = h.container.navigation
+                val feature = h.container.chatsFeature
+                val radio = assertNotNull(h.appState.currentRadioId)
+                val first = assertNotNull(store.fetchContact(radio, key(20)))
+                val second = assertNotNull(store.fetchContact(radio, key(22)))
+                val target = if (known) key(21) else key(30)
+                val uri = h.container.nodesFeature.uriCodec.exportContactUri("Mounted claim", target, ContactType.REPEATER)
+                fun message(contact: ContactDTO) = MessageDTO(
+                    radioId = radio, contactID = contact.id, text = uri,
+                    timestamp = 100u, createdAt = EPOCH, direction = MessageDirection.INCOMING,
+                )
+                val firstMessage = message(first)
+                val secondMessage = message(second)
+                store.saveMessage(firstMessage)
+                store.saveMessage(secondMessage)
+                navigation.navigateToChat(first)
+                compose.runOnUiThread {
+                    host.get().setContent {
+                        Box(Modifier.width(width.value).height(1000.dp)) {
+                            MeshCoreTheme(motionScale = 1f) {
+                                NativeNavigationShell(navigation, chats = null, content = { destination, _ ->
+                                    if (destination is NavigationDestination.Chat ||
+                                        destination == NavigationDestination.Root(AppTab.CHATS)
+                                    ) AppChatsContent(feature, destination, navigation)
+                                })
+                            }
+                        }
+                    }
+                }
+                await(h) {
+                    compose.onAllNodesWithTag("timeline-bubble:${firstMessage.id}", useUnmergedTree = true)
+                        .fetchSemanticsNodes().isNotEmpty()
+                }
+                val firstBody = compose.onNode(
+                    hasAnyAncestor(hasTestTag("timeline-bubble:${firstMessage.id}")) and
+                        SemanticsMatcher.keyIsDefined(SemanticsActions.CustomActions),
+                    useUnmergedTree = true,
+                )
+                val firstAction = firstBody.fetchSemanticsNode().config[SemanticsActions.CustomActions].single()
+                compose.runOnIdle { assertTrue(firstAction.action()) }
+                h.eventually("outgoing source offers its exact link") {
+                    navigation.pendingChatContactOffers().size == 1
+                }
+                val oldOffer = navigation.pendingChatContactOffers().single()
+                val oldTerminal = backgroundScope.async { oldOffer.receipt.awaitOutcome() }
+                compose.runOnIdle {
+                    navigation.navigateToChat(second)
+                    assertFalse(oldOffer.mount.registrationSealed.get(), "Outgoing source is still mounted")
+                    val successor = navigation.currentState
+                    feature.acceptContactOffers()
+                    assertEquals(successor, navigation.currentState)
+                }
+                h.eventually("the outgoing offer is rejected") { oldTerminal.isCompleted }
+                assertEquals(ContactLinkHandoffOutcome.Superseded, oldTerminal.await())
+                assertEquals(ChatSelection.Direct(second), navigation.currentState.chatsSelectedRoute)
+                assertNull(navigation.currentState.pendingContactLink)
+                assertNull(navigation.currentState.pendingContactDetail)
+
+                await(h) {
+                    compose.onAllNodesWithTag("timeline-bubble:${secondMessage.id}", useUnmergedTree = true)
+                        .fetchSemanticsNodes().isNotEmpty()
+                }
+                val secondBody = compose.onNode(
+                    hasAnyAncestor(hasTestTag("timeline-bubble:${secondMessage.id}")) and
+                        SemanticsMatcher.keyIsDefined(SemanticsActions.CustomActions),
+                    useUnmergedTree = true,
+                )
+                val secondAction = secondBody.fetchSemanticsNode().config[SemanticsActions.CustomActions].single()
+                compose.runOnIdle { assertTrue(secondAction.action()) }
+                h.eventually("the active source offers its own link") {
+                    navigation.pendingChatContactOffers().size == 1
+                }
+                val activeOffer = navigation.pendingChatContactOffers().single()
+                feature.acceptContactOffers()
+                val outcome = activeOffer.receipt.awaitOutcome()
+                assertEquals(
+                    ContactLinkHandoffOutcome.Accepted(
+                        if (known) ContactLinkCompletion.Navigated else ContactLinkCompletion.ConfirmationStaged,
+                    ),
+                    outcome,
+                )
+                if (known) {
+                    assertEquals(key(21), navigation.currentState.pendingContactDetail?.publicKey)
+                } else {
+                    val pending = assertNotNull(navigation.currentState.pendingContactLink)
+                    assertEquals(target, pending.publicKey)
+                    assertEquals("Mounted claim", pending.name)
+                    assertEquals(ContactType.REPEATER, pending.type)
+                    assertEquals(radio, pending.targetRadioId)
+                }
+            } finally {
+                unmount()
+                h.container.close()
+            }
+        }
+    }
+
+    @Test fun suspendedOutgoingChatLookupCannotOfferAfterItsEntryIsSuperseded() = runTest {
+        for (known in listOf(false, true)) {
+            val h = ContainerHarness(this, store)
+            h.links.configureRadio = { it.knownContacts += contactFrame(key(21), "Linked destination") }
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val completed = CompletableDeferred<ContactLinkTargetCompletion>()
+            var mountedOrigin: ChatContactMount? = null
+            try {
+                connect(h)
+                val feature = h.container.chatsFeature
+                val navigation = h.container.navigation
+                val radio = assertNotNull(h.appState.currentRadioId)
+                val origin = contactMount(h).also { mountedOrigin = it }
+                feature.registerContactMount(origin)
+                val underlying = feature.linksForMount(origin)
+                val environment = object : ChatLinkEnvironment by underlying {
+                    override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                        entered.complete(Unit)
+                        release.await()
+                        return store.fetchContact(radioId, publicKey)
+                    }
+
+                    override fun completeResolvedContactLookup(
+                        context: ContactLinkContext, target: ContactLinkResolvedTarget, link: ContactLinkResult,
+                        existing: ContactDTO?, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
+                    ): ContactLinkTargetCompletion = underlying.completeResolvedContactLookup(
+                        context, target, link, existing, publications, cancellation,
+                    ).also { completed.complete(it) }
+                }
+                val target = if (known) key(21) else key(30)
+                val uri = h.container.nodesFeature.uriCodec.exportContactUri("Held lookup", target, ContactType.REPEATER)
+                assertTrue(ChatLinkRouter(environment, backgroundScope).route(uri))
+                entered.await()
+                val next = ContactDTO(
+                    radioId = radio, publicKey = key(61), name = "Successor", lastHeardTimestamp = null,
+                )
+                navigation.navigateToChat(next)
+                val successor = navigation.currentState
+                assertFalse(origin.registrationSealed.get())
+                release.complete(Unit)
+                h.eventually("outgoing lookup reaches its guarded completion") { completed.isCompleted }
+                assertEquals(
+                    ContactLinkTargetCompletion.Completed(ContactLinkCompletion.StaleContext),
+                    completed.await(),
+                )
+                feature.acceptContactOffers()
+                h.settle()
+                assertEquals(successor, navigation.currentState)
+                assertTrue(navigation.pendingChatContactOffers().isEmpty())
+                assertNull(navigation.currentState.pendingContactLink)
+                assertNull(navigation.currentState.pendingContactDetail)
+            } finally {
+                release.complete(Unit)
+                mountedOrigin?.let(h.container.chatsFeature::sealContactMount)
+                h.container.close()
+            }
+        }
+    }
+
+    @Test fun mountedContactLookupFailureOffersLocalizedRetryOrCancellation() = runTest {
+        for (retry in listOf(false, true)) {
+            val failing = AtomicBoolean(false)
+            val reads = CopyOnWriteArrayList<RadioId>()
+            val target = key(21)
+            val wrapped = object : PersistenceStoreProtocol by store {
+                override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                    if (publicKey == target) {
+                        reads += radioId
+                        if (failing.get()) throw IllegalStateException("contact lookup unavailable")
+                    }
+                    return store.fetchContact(radioId, publicKey)
+                }
+            }
+            val h = ContainerHarness(this, store, persistenceOverride = wrapped)
+            h.links.configureRadio = {
+                it.knownContacts += contactFrame(key(20), "Mounted source")
+                it.knownContacts += contactFrame(target, "Existing target")
+            }
+            try {
+                connect(h)
+                val radio = assertNotNull(h.appState.currentRadioId)
+                val source = assertNotNull(store.fetchContact(radio, key(20)))
+                val saved = assertNotNull(store.fetchContact(radio, target))
+                val uri = h.container.nodesFeature.uriCodec.exportContactUri("Untrusted alias", target, ContactType.REPEATER)
+                val message = MessageDTO(
+                    radioId = radio, contactID = source.id, text = uri,
+                    timestamp = 100u, createdAt = EPOCH, direction = MessageDirection.INCOMING,
+                )
+                store.saveMessage(message)
+                h.container.navigation.navigateToChat(source)
+                mount(h)
+                await(h) {
+                    compose.onAllNodesWithTag("timeline-bubble:${message.id}", useUnmergedTree = true)
+                        .fetchSemanticsNodes().isNotEmpty()
+                }
+                reads.clear()
+                failing.set(true)
+                val body = compose.onNode(
+                    hasAnyAncestor(hasTestTag("timeline-bubble:${message.id}")) and
+                        SemanticsMatcher.keyIsDefined(SemanticsActions.CustomActions),
+                    useUnmergedTree = true,
+                )
+                val action = body.fetchSemanticsNode().config[SemanticsActions.CustomActions].single()
+                compose.runOnIdle { assertTrue(action.action()) }
+                await(h) {
+                    compose.onAllNodesWithTag("chat-contact-link-failure").fetchSemanticsNodes().isNotEmpty()
+                }
+                compose.onNodeWithTag("chat-contact-link-failure").assertIsDisplayed()
+                val localized = host.get().getString(AppLocalizableStrings.commonErrorFailedToLoad)
+                compose.onNode(
+                    hasAnyAncestor(hasTestTag("chat-contact-link-failure")) and hasText(localized),
+                ).assertIsDisplayed()
+                compose.onNodeWithTag("chat-contact-link-retry").assertIsEnabled()
+                assertNull(h.container.navigation.currentState.pendingContactLink)
+                assertNull(h.container.navigation.currentState.pendingContactDetail)
+                assertEquals(listOf(radio), reads.toList())
+
+                if (retry) {
+                    failing.set(false)
+                    compose.onNodeWithTag("chat-contact-link-retry").performClick()
+                    await(h) { h.container.navigation.currentState.pendingContactDetail?.id == saved.id }
+                    assertEquals(saved, h.container.navigation.currentState.selectedContact)
+                    assertEquals(listOf(radio, radio), reads.toList())
+                } else {
+                    compose.onNodeWithTag("chat-contact-link-cancel").performClick()
+                    compose.waitForIdle()
+                    compose.onNodeWithTag("chat-contact-link-failure").assertDoesNotExist()
+                    assertEquals(ChatSelection.Direct(source), h.container.navigation.currentState.chatsSelectedRoute)
+                    assertNull(h.container.navigation.currentState.pendingContactLink)
+                    assertNull(h.container.navigation.currentState.pendingContactDetail)
+                    assertEquals(listOf(radio), reads.toList())
+                }
+            } finally {
+                unmount()
+                h.container.close()
+            }
+        }
+    }
+
+    @Test fun retryFromMountedSourceCannotReadOrNavigateAfterRealGraphReplacement() = runTest {
+        val target = key(30)
+        val failing = AtomicBoolean(false)
+        val reads = CopyOnWriteArrayList<RadioId>()
+        val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                if (publicKey == target) {
+                    reads += radioId
+                    if (failing.get()) throw IllegalStateException("contact lookup unavailable")
+                }
+                return store.fetchContact(radioId, publicKey)
+            }
+        }
+        val replacementHandshake = CompletableDeferred<Unit>()
+        var replacing = false
+        val h = ContainerHarness(this, store, persistenceOverride = persistence)
+        h.links.configureRadio = { firmware ->
+            firmware.knownContacts += contactFrame(key(20), "Mounted source")
+            if (replacing) firmware.connectGate = replacementHandshake
+        }
+        var mountedOrigin: ChatContactMount? = null
+        try {
+            connect(h)
+            val radio = assertNotNull(h.appState.currentRadioId)
+            val source = assertNotNull(store.fetchContact(radio, key(20)))
+            val mount = contactMount(h, source).also { mountedOrigin = it }
+            val feature = h.container.chatsFeature
+            feature.registerContactMount(mount)
+            val router = ChatLinkRouter(feature.linksForMount(mount), backgroundScope)
+            val visible = AtomicReference<ContactLinkLookupFailure?>()
+            backgroundScope.launch { router.contactLookupFailure.collect { visible.set(it) } }
+            failing.set(true)
+            val uri = h.container.nodesFeature.uriCodec.exportContactUri("Captured peer", target, ContactType.REPEATER)
+            assertTrue(router.route(uri))
+            h.eventually("mounted lookup failure is observable") {
+                visible.get()?.issue is ContactLinkLookupIssue.Failed
+            }
+            val failure = assertNotNull(visible.get())
+            assertEquals(listOf(radio), reads.toList())
+
+            replacing = true
+            val deviceId = assertNotNull(h.appState.connectedDevice).id
+            val rebuilding = async { h.manager.rebuildSession(deviceId) }
+            h.eventually("old graph is withdrawn before replacement handshake", virtualBudgetMillis = 100) {
+                h.links.radios.size == 2 && h.sessions.current == null
+            }
+            val priorReads = reads.toList()
+            router.retryContactLookup(failure)
+            h.eventually("retry reports its retired initiating context", virtualBudgetMillis = 100) {
+                visible.get()?.issue == ContactLinkLookupIssue.ContextRetired
+            }
+            assertEquals(failure.deliveryId, visible.get()?.deliveryId)
+            assertEquals(priorReads, reads.toList())
+            assertNotEquals(target, h.container.navigation.currentState.selectedContact?.publicKey)
+            assertNull(h.container.navigation.currentState.pendingContactLink)
+            assertNull(h.container.navigation.currentState.pendingContactDetail)
+
+            failing.set(false)
+            replacementHandshake.complete(Unit)
+            rebuilding.await()
+            h.settle()
+            h.assertReady()
+            assertEquals(priorReads, reads.toList())
+            assertNotEquals(target, h.container.navigation.currentState.selectedContact?.publicKey)
+            assertNull(h.container.navigation.currentState.pendingContactLink)
+            assertNull(h.container.navigation.currentState.pendingContactDetail)
+        } finally {
+            replacementHandshake.complete(Unit)
+            mountedOrigin?.let(h.container.chatsFeature::sealContactMount)
             h.container.close()
         }
     }
@@ -1619,21 +2916,22 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             val h = ContainerHarness(this, store)
             h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Published proof") }
             val feature = h.container.chatsFeature
-            val origin = ChatContactMount()
             val offered = CompletableDeferred<ContactLinkHandoffReceipt>()
             val held = ContactLinkPublications()
-            val underlying = feature.linksForMount(origin)
-            val environment = object : ChatLinkEnvironment by underlying {
-                override fun completeResolvedContactLookup(
-                    context: ContactLinkContext, target: ContactLinkResolvedTarget, link: ContactLinkResult,
-                    existing: ContactDTO?, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
-                ): ContactLinkTargetCompletion = underlying.completeResolvedContactLookup(
-                    context, target, link, existing, publications, cancellation,
-                ).also { if (it is ContactLinkTargetCompletion.Offered) offered.complete(it.receipt) }
-            }
+            var mountedOrigin: ChatContactMount? = null
             try {
                 connect(h)
                 val navigation = h.container.navigation
+                val origin = contactMount(h).also { mountedOrigin = it }
+                val underlying = feature.linksForMount(origin)
+                val environment = object : ChatLinkEnvironment by underlying {
+                    override fun completeResolvedContactLookup(
+                        context: ContactLinkContext, target: ContactLinkResolvedTarget, link: ContactLinkResult,
+                        existing: ContactDTO?, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
+                    ): ContactLinkTargetCompletion = underlying.completeResolvedContactLookup(
+                        context, target, link, existing, publications, cancellation,
+                    ).also { if (it is ContactLinkTargetCompletion.Offered) offered.complete(it.receipt) }
+                }
                 feature.registerContactMount(origin)
                 h.container.captureContactLinkContext(key(31), held)
                 val before = navigation.state.value
@@ -1644,6 +2942,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 val terminal = backgroundScope.async { receipt.awaitOutcome() }
                 if (acceptFirst) {
                     mount(h)
+                    compose.waitForIdle()
                     h.eventually("mounted consumer accepts the raw exact proposal") {
                         navigation.currentState.pendingContactDetail?.publicKey == key(20)
                     }
@@ -1651,7 +2950,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                     feature.sealContactMount(origin)
                 }
                 // Even another handoff release cannot make an unpublished terminal a receipt.
-                feature.registerContactMount(ChatContactMount())
+                feature.registerContactMount(ChatContactMount(origin.entryId))
                 navigation.navigateToMap(51.5, -0.1)
                 val latest = navigation.currentState
                 h.settle()
@@ -1672,7 +2971,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 assertEquals(terminal.await(), receipt.awaitOutcome())
             } finally {
                 held.release()
-                feature.sealContactMount(origin)
+                mountedOrigin?.let(feature::sealContactMount)
                 unmount()
                 h.container.close()
             }
@@ -1734,8 +3033,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 contact.name, "Queued tap", false, null, null,
                 NotificationPayload.DirectMessage(EntityKey(radio, contact.id), messageId),
             ))
-            manager.activeNotifications.single().notification.contentIntent.send()
-            shadowOf(android.os.Looper.getMainLooper()).idle()
+            tapNotification(manager)
             testScheduler.runCurrent()
             val connecting = async { h.manager.connect(h.target()) }
             h.eventually("navigation callbacks are installed while sync is held") {
@@ -1933,8 +3231,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 NotificationId("wp302-final-delay"), NotificationCategory.DIRECT_MESSAGE, contact.name, "Queued tap",
                 false, null, null, NotificationPayload.DirectMessage(EntityKey(radio, contact.id), UUID.randomUUID()),
             ))
-            manager.activeNotifications.single().notification.contentIntent.send()
-            shadowOf(android.os.Looper.getMainLooper()).idle()
+            tapNotification(manager)
             testScheduler.runCurrent()
             val firstAttempt = routeAttempts.single()
             val connecting = async { h.manager.connect(h.target()) }
@@ -2090,8 +3387,14 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
 
             val externalEnvironment = ContainerDeepLinkEnvironment(h.container, navigation)
             val chatEnvironment = h.container.chatsFeature.list.links
-            assertEquals(currentGeneration, externalEnvironment.contactLinkGeneration)
-            assertEquals(currentGeneration, chatEnvironment.contactLinkGeneration)
+            val externalCapture = ContactLinkPublications().use {
+                externalEnvironment.captureContactLinkContext(key(20), it)
+            }
+            assertEquals(currentGeneration, assertIs<CapturedContactLinkContext>(externalCapture).lookup.generation)
+            val chatCapture = ContactLinkPublications().use {
+                chatEnvironment.captureContactLinkContext(key(20), it)
+            }
+            assertEquals(currentGeneration, assertIs<CapturedContactLinkContext>(chatCapture).lookup.generation)
             val savedUri = h.container.nodesFeature.uriCodec.exportContactUri("Saved claim", key(20), ContactType.ROOM)
             val external = async(Dispatchers.IO) { AppDeepLinkRouter(externalEnvironment).routeExternal(savedUri) }
             assertEquals(DeepLinkRouteOutcome.Navigated, external.await())
@@ -2352,6 +3655,94 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         } finally { deferredChat.cancel(); unmount(); h.container.close() }
     }
 
+    @Test fun mountedContactConfirmationDefersRejectedNotificationRecoveryWithoutLosingEither() = runTest {
+        val folder = TemporaryFolder()
+        folder.create()
+        val recoveryContext = object : ContextWrapper(host.get()) {
+            override fun getApplicationContext(): Context = this
+            override fun getNoBackupFilesDir(): File = folder.root
+        }
+        val h = ContainerHarness(this, store)
+        try {
+            connect(h)
+            val radio = assertNotNull(h.appState.currentRadioId)
+            val navigation = h.container.navigation
+            NotificationActionRecovery.acknowledgeFailure(NotificationActionRecovery.load(recoveryContext).version)
+            val response = NotificationResponse(
+                NotificationPayload.DirectMessage(EntityKey(radio, UUID.randomUUID()), UUID.randomUUID()),
+                NotificationAction.REPLY,
+                " \trejected original\n ",
+            )
+            val original = (NotificationActionRecoveryStore(recoveryContext).retain(response)
+                as NotificationRecoveryWrite.Stored).entry
+            val router = AppDeepLinkRouter(ContainerDeepLinkEnvironment(h.container, navigation))
+            val pending = PendingExternalRoute(router::routeExternal)
+            val publicKey = key(30)
+            val uri = h.container.nodesFeature.uriCodec.exportContactUri(
+                "Contact awaiting consent", publicKey, ContactType.REPEATER,
+            )
+            pending.markReady()
+            assertEquals(
+                PendingExternalRoute.SubmitOutcome.Routed(DeepLinkRouteOutcome.ConfirmationStaged),
+                pending.submit(PendingExternalRoute.Delivery("recovery-contact", uri)),
+            )
+            val contact = assertNotNull(navigation.currentState.pendingContactLink)
+            assertEquals(radio, contact.targetRadioId)
+            assertEquals(navigation.currentState.generation, contact.generation)
+            assertEquals(publicKey, contact.publicKey)
+            assertEquals(ContactType.REPEATER, contact.type)
+            compose.runOnUiThread {
+                host.get().setContent {
+                    CompositionLocalProvider(LocalContext provides recoveryContext) {
+                        Box(Modifier.width(width.value).height(1000.dp)) {
+                            MeshCoreTheme(motionScale = 0f) {
+                                NativeNavigationShell(
+                                    navigation, chats = h.container.chatsFeature, nodes = h.container.nodesFeature,
+                                )
+                                AppRootRecoveryDialogs(
+                                    navigation = navigation,
+                                    pendingExternalRoute = pending,
+                                    showExternalLinkFailure = true,
+                                    shellVisible = true,
+                                    nodesAvailable = true,
+                                    connectionRecoveryVisible = false,
+                                    onRetryContactLink = { _, _ -> error("No lookup failure is expected") },
+                                    onCancelContactLink = { _, _ -> error("No lookup failure is expected") },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            await(h) { confirmationEnabled() }
+            compose.onNodeWithTag("contact-link-confirmation").assertIsDisplayed()
+            compose.onNodeWithTag("contact-link-name").assertTextEquals("Contact awaiting consent")
+            compose.onNodeWithText(" \trejected original\n ").assertDoesNotExist()
+            assertEquals(
+                original.id,
+                (NotificationActionRecoveryStore(recoveryContext).read() as NotificationRecoveryRead.Ready)
+                    .entries.single().id,
+            )
+            compose.onNodeWithTag("contact-link-cancel").performClick()
+            assertNull(navigation.currentState.pendingContactLink)
+            compose.waitUntil(10_000) {
+                compose.onAllNodesWithText(" \trejected original\n ").fetchSemanticsNodes().isNotEmpty()
+            }
+            compose.onNodeWithText(" \trejected original\n ").assertIsDisplayed()
+            val retained = (NotificationActionRecoveryStore(recoveryContext).read() as NotificationRecoveryRead.Ready)
+                .entries.single()
+            assertEquals(original.id, retained.id)
+            assertEquals(response, retained.response)
+            assertNull(store.fetchContact(radio, publicKey))
+            assertTrue(h.links.radios.all { it.sent.none { frame -> frame[0].toInt() == 0x09 } })
+        } finally {
+            unmount()
+            h.container.close()
+            NotificationActionRecovery.acknowledgeFailure(NotificationActionRecovery.load(recoveryContext).version)
+            folder.delete()
+        }
+    }
+
     @Test fun preConnectionContactLookupSurvivesRetryWithinTheFirstConnectionSubmission() = runTest {
         val h = ContainerHarness(this, store)
         val chatScheduler = TestCoroutineScheduler()
@@ -2392,10 +3783,10 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         val saving = CompletableDeferred<Unit>()
         val releaseSave = CompletableDeferred<Unit>()
         val persistence = object : PersistenceStoreProtocol by store {
-            override suspend fun saveDevice(device: DeviceDTO) {
+            override suspend fun activateDeviceIfCurrent(id: UUID, isCurrent: () -> Boolean): Boolean {
                 saving.complete(Unit)
                 releaseSave.await()
-                store.saveDevice(device)
+                return store.activateDeviceIfCurrent(id, isCurrent)
             }
         }
         val h = ContainerHarness(this, store, persistenceOverride = persistence)
@@ -2585,6 +3976,10 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             assertTrue(f.graphs.all { it.retirement == RuntimePublicationRetirement.NEVER_PUBLISHED })
             assertEquals(RuntimePublicationCounts(0, 0), f.slot.counts)
             assertFalse(f.manager.isNavigationLifecycleCurrent(failedStamp))
+            assertFalse(f.manager.shouldAllowConnection(force = false))
+            testScheduler.advanceTimeBy(30_000)
+            testScheduler.runCurrent()
+            assertTrue(f.manager.shouldAllowConnection(force = false))
 
             f.onFactory = { inputs, graph ->
                 assertEquals(RuntimePublicationOutcome.PUBLISHED, inputs.publication.publish(f.slot.target(graph)))
@@ -2789,13 +4184,28 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             throw CancellationException("Publication owner was cancelled")
         }
         val work = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) { f.manager.connect(f.target) }
+        val cancellationReturned = CountDownLatch(1)
+        val cancellationWorker = Thread {
+            try { work.cancel() } finally { cancellationReturned.countDown() }
+        }.apply { isDaemon = true }
         try {
             val pendingStamp = f.manager.captureNavigationLifecycle()
             f.eventually("the graph enters its factory") { entered.isCompleted }
             val graph = entered.await()
             awaitBlockedOnLock(publisherThread, holderThread, ConnectionManager::class.java, "publishNavigationService")
-            work.cancel()
+            cancellationWorker.start()
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while ((!work.isCancelled || cancellationWorker.state != Thread.State.BLOCKED) &&
+                System.nanoTime() < deadline
+            ) Thread.yield()
+            assertTrue(work.isCancelled, "Cancellation must precede publication")
+            assertEquals(Thread.State.BLOCKED, cancellationWorker.state)
+            val publisher = assertNotNull(publisherThread.get())
+            val blocked = assertNotNull(ManagementFactory.getThreadMXBean().getThreadInfo(cancellationWorker.id))
+            assertEquals(publisher.id, blocked.lockOwnerId)
+            assertEquals(1L, cancellationReturned.count)
             releaseSlot.countDown()
+            assertTrue(cancellationReturned.await(5, TimeUnit.SECONDS))
             f.eventually("the cancelled publication is rejected and retired") {
                 result.isCompleted && work.isCompleted && graph.retirement != null
             }
@@ -2806,6 +4216,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             assertFalse(f.manager.isNavigationLifecycleCurrent(pendingStamp))
         } finally {
             releaseSlot.countDown()
+            cancellationWorker.join(5_000)
             holder.cancelAndJoin()
             work.cancelAndJoin()
             f.manager.close()
@@ -3251,8 +4662,17 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             val urls = listOf(20, 30).map {
                 h.container.nodesFeature.uriCodec.exportContactUri("Retired contact lookup", key(it), ContactType.REPEATER)
             }
-            val externalRoutes = urls.map { url -> async { external.routeExternal(url) } }
-            urls.forEach { assertTrue(chat.route(it)) }
+            val externalRoutes = urls.mapIndexed { index, url ->
+                val route = async { external.routeExternal(url) }
+                h.eventually("external lookup $index enters the held store", virtualBudgetMillis = 0) {
+                    contactReads.get() == index * 2 + 1
+                }
+                assertTrue(chat.route(url))
+                h.eventually("chat lookup $index enters the held store", virtualBudgetMillis = 0) {
+                    contactReads.get() == index * 2 + 2
+                }
+                route
+            }
             h.eventually("both producers hold found and absent contact lookups") { contactReads.get() == 4 }
             hold = false
             holdReplacement = true
@@ -3544,6 +4964,167 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         }
     }
 
+    @Test fun cancelledMountedChatLookupWaitingForLifecycleBoundaryCannotOfferOrNavigate() = runTest {
+        for (known in listOf(false, true)) {
+            val h = ContainerHarness(this, store)
+            h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Mounted cancellation peer") }
+            val feature = h.container.chatsFeature
+            var mountedOrigin: ChatContactMount? = null
+            val fetchEntered = CompletableDeferred<Unit>()
+            val releaseFetch = CompletableDeferred<Unit>()
+            val boundaryHeld = CountDownLatch(1)
+            val releaseBoundary = CountDownLatch(1)
+            val holderThread = AtomicReference<Thread>()
+            val publisherThread = AtomicReference<Thread>()
+            val offered = AtomicInteger()
+            val diagnostics = CopyOnWriteArrayList<String>()
+            val failures = ConcurrentLinkedQueue<Throwable>()
+            val routingJob = SupervisorJob()
+            val controlJob = SupervisorJob()
+            val exceptionHandler = CoroutineExceptionHandler { _, failure -> failures.add(failure) }
+            val routingScope = CoroutineScope(routingJob + Dispatchers.IO + exceptionHandler)
+            val controlScope = CoroutineScope(controlJob + Dispatchers.IO + exceptionHandler)
+            var holder: Deferred<Unit>? = null
+            var failure: Throwable? = null
+            try {
+                connect(h)
+                val origin = contactMount(h).also { mountedOrigin = it }
+                feature.registerContactMount(origin)
+                val navigation = h.container.navigation
+                assertTrue(navigation.acknowledgePendingChatRoute(
+                    assertIs<ChatSelection.Direct>(navigation.currentState.chatsSelectedRoute).route(),
+                ))
+                mount(h)
+                shadowOf(android.os.Looper.getMainLooper()).idle()
+                compose.onNodeWithTag("entry:${origin.entryId}").assertIsDisplayed()
+                compose.waitForIdle()
+                await(h) {
+                    shadowOf(android.os.Looper.getMainLooper()).idle()
+                    navigation.currentState.widthDp == width.value.value &&
+                        navigation.currentState.pendingChatContact == null
+                }
+                assertEquals(width.value.value, navigation.currentState.widthDp)
+                assertNull(navigation.currentState.pendingChatContact)
+                val underlying = feature.linksForMount(origin)
+                val environment = object : ChatLinkEnvironment by underlying {
+                    override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                        fetchEntered.complete(Unit)
+                        releaseFetch.await()
+                        return store.fetchContact(radioId, publicKey)
+                    }
+
+                    override fun completeResolvedContactLookup(
+                        context: ContactLinkContext, target: ContactLinkResolvedTarget, link: ContactLinkResult,
+                        existing: ContactDTO?, publications: ContactLinkPublications, cancellation: ContactLinkCancellation,
+                    ): ContactLinkTargetCompletion {
+                        publisherThread.set(Thread.currentThread())
+                        return underlying.completeResolvedContactLookup(
+                            context, target, link, existing, publications, cancellation,
+                        ).also { if (it is ContactLinkTargetCompletion.Offered) offered.incrementAndGet() }
+                    }
+                }
+                val publicKey = if (known) key(20) else key(31)
+                val uri = h.container.nodesFeature.uriCodec.exportContactUri(
+                    "Mounted cancellation claim", publicKey, ContactType.REPEATER,
+                )
+                val router = ChatLinkRouter(environment, routingScope,
+                    com.meshcoreone.android.feature.chats.list.ChatListDiagnostics { message, _ -> diagnostics += message },
+                )
+                assertTrue(router.route(uri))
+                fetchEntered.await()
+                val before = navigation.currentState
+                val holding = async(Dispatchers.IO) {
+                    h.manager.withNavigationCommitBoundary {
+                        holderThread.set(Thread.currentThread())
+                        boundaryHeld.countDown()
+                        check(releaseBoundary.await(30, TimeUnit.SECONDS)) { "Lifecycle boundary was not released" }
+                    }
+                }
+                holder = holding
+                assertTrue(boundaryHeld.await(10, TimeUnit.SECONDS))
+                releaseFetch.complete(Unit)
+                awaitBlockedOnLock(
+                    publisherThread, holderThread, ConnectionManager::class.java, "withNavigationCommitBoundary",
+                )
+                routingJob.cancel()
+                releaseBoundary.countDown()
+                holding.await()
+                routingJob.join()
+                h.settle()
+                compose.waitForIdle()
+                assertEquals(0, offered.get(), "Cancellation before the offer commit cannot transfer ownership")
+                assertTrue(navigation.pendingChatContactOffers().isEmpty())
+                assertEquals(before, navigation.currentState)
+                assertNull(navigation.currentState.pendingContactLink)
+                assertNull(navigation.currentState.pendingContactDetail)
+                assertFalse(origin.registrationSealed.get(), "The source remains mounted throughout cancellation")
+                assertTrue(diagnostics.isEmpty())
+
+                val context = ContactLinkPublications().use { publications ->
+                    underlying.captureContactLinkContext(publicKey, publications)
+                }
+                val resolved = assertIs<ContactLinkTargetResolution.Current>(
+                    underlying.resolveContactLinkContext(context, publicKey),
+                )
+                val target = assertIs<ContactLinkLookupResolution.Current>(resolved.target)
+                val lateCancellation = Job()
+                val (cancellation, observation) = ContactLinkCancellation.observe(lateCancellation)
+                try {
+                    val beforeOffer = navigation.currentState
+                    var validated = false
+                    assertFailsWith<CancellationException> {
+                        ContactLinkPublications().use { publications ->
+                            navigation.offerChatContact(
+                                origin, context, target,
+                                ContactLinkRequest("Mounted cancellation claim", publicKey, ContactType.REPEATER),
+                                null, publications, cancellation,
+                            ) {
+                                validated = true
+                                lateCancellation.cancel()
+                                true
+                            }
+                        }
+                    }
+                    assertTrue(validated, "Cancellation must occur after the offer's current-context check")
+                    assertTrue(navigation.pendingChatContactOffers().isEmpty())
+                    assertEquals(beforeOffer, navigation.currentState)
+                } finally {
+                    observation.dispose()
+                    lateCancellation.cancel()
+                }
+
+                assertTrue(ChatLinkRouter(environment, controlScope).route(uri))
+                await(h) {
+                    if (known) navigation.state.value.pendingContactDetail?.publicKey == publicKey
+                    else navigation.state.value.pendingContactLink?.publicKey == publicKey
+                }
+                assertEquals(1, offered.get(), "A fresh active delivery still reaches the mounted consumer")
+                if (known) {
+                    assertEquals(store.fetchContact(assertNotNull(h.appState.currentRadioId), publicKey),
+                        navigation.state.value.pendingContactDetail)
+                } else {
+                    val pending = assertNotNull(navigation.state.value.pendingContactLink)
+                    assertEquals("Mounted cancellation claim", pending.name)
+                    assertEquals(ContactType.REPEATER, pending.type)
+                    assertEquals(h.appState.currentRadioId, pending.targetRadioId)
+                }
+                assertTrue(h.links.radios.all { radio -> radio.sent.none { it[0].toInt() == 0x09 } })
+            } catch (caught: Throwable) {
+                failure = caught
+                throw caught
+            } finally {
+                releaseFetch.complete(Unit)
+                releaseBoundary.countDown()
+                unmount()
+                mountedOrigin?.let(feature::sealContactMount)
+                finishContactCancellationTest(failure, routingJob, failures, h.container, extraCleanup = {
+                    controlJob.cancelAndJoin()
+                    holder?.let { work -> withContext(Dispatchers.IO) { withTimeout(10_000) { work.await() } } }
+                })
+            }
+        }
+    }
+
     @Test fun cancelledChatContactLookupWaitingForTheCommitBoundaryCannotMutateNavigation() = runTest {
         val h = ContainerHarness(this, store)
         val fetchEntered = CompletableDeferred<Unit>()
@@ -3800,10 +5381,10 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         val publication = CompletableDeferred<Unit>()
         val reads = CopyOnWriteArrayList<Pair<RadioId, Bytes>>()
         val persistence = object : PersistenceStoreProtocol by store {
-            override suspend fun saveDevice(device: DeviceDTO) {
+            override suspend fun activateDeviceIfCurrent(id: UUID, isCurrent: () -> Boolean): Boolean {
                 saving.complete(Unit)
                 publication.await()
-                store.saveDevice(device)
+                return store.activateDeviceIfCurrent(id, isCurrent)
             }
 
             override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
@@ -3858,7 +5439,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 assertEquals(AppTab.NODES, state.selectedTab)
                 assertEquals(NavigationDestination.ContactDetail(persisted), state.activeStack.last().destination)
                 assertNull(state.pendingContactLink)
-                assertEquals(accounted, pending.consumedDeliveryIds())
+                assertEquals<Set<String>>(accounted, pending.consumedDeliveryIds())
                 compose.waitForIdle()
                 compose.onNodeWithTag("entry:${state.activeStack.last().id}").assertIsDisplayed()
                 compose.onAllNodesWithText(persisted.displayName).onFirst().assertIsDisplayed()
@@ -3883,7 +5464,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                     ),
                     staged,
                 )
-                assertEquals(accounted, pending.consumedDeliveryIds())
+                assertEquals<Set<String>>(accounted, pending.consumedDeliveryIds())
                 compose.waitForIdle()
                 compose.onNodeWithTag("contact-link-confirmation").assertIsDisplayed()
                 compose.onNodeWithTag("contact-link-cancel").performClick()
@@ -3911,10 +5492,10 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         val publication = CompletableDeferred<Unit>()
         val saving = CompletableDeferred<Unit>()
         val persistence = object : PersistenceStoreProtocol by store {
-            override suspend fun saveDevice(device: DeviceDTO) {
+            override suspend fun activateDeviceIfCurrent(id: UUID, isCurrent: () -> Boolean): Boolean {
                 saving.complete(Unit)
                 publication.await()
-                store.saveDevice(device)
+                return store.activateDeviceIfCurrent(id, isCurrent)
             }
         }
         val h = ContainerHarness(this, store, persistenceOverride = persistence)
@@ -4081,8 +5662,8 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             val actual = h.container.nodesFeature
             val realService = assertNotNull(actual.session.contactService())
             val delayedService = object : NodesContactService by realService {
-                override suspend fun addOrUpdateContact(radioId: RadioId, contact: ContactFrame) {
-                    realService.addOrUpdateContact(radioId, contact)
+                override suspend fun addContactIfAbsent(radioId: RadioId, contact: ContactFrame) {
+                    realService.addContactIfAbsent(radioId, contact)
                     acknowledged.complete(Unit)
                     releaseAcknowledgement.await()
                 }
@@ -4123,6 +5704,93 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             replacementHandshake.complete(Unit)
             unmount()
             h.container.close()
+        }
+    }
+
+    @Test fun actualConnectionLossRejectsPreLossLookupButFreshOfflineLinksStillReachMountedDestinations() = runTest {
+        for (knownBeforeLoss in listOf(false, true)) {
+            val h = ContainerHarness(this, store)
+            h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Retained offline peer") }
+            val entered = CompletableDeferred<Unit>()
+            val releaseLookup = CompletableDeferred<Unit>()
+            var oldRoute: kotlinx.coroutines.Deferred<DeepLinkRouteOutcome>? = null
+            try {
+                connect(h)
+                val oldGraph = assertNotNull(h.sessions.current)
+                val radio = oldGraph.token.radioId
+                val saved = assertNotNull(store.fetchContact(radio, key(20)))
+                val navigation = h.container.navigation
+                val base = ContainerDeepLinkEnvironment(h.container, navigation)
+                val oldRouter = AppDeepLinkRouter(object : AppDeepLinkEnvironment by base {
+                    override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                        entered.complete(Unit)
+                        releaseLookup.await()
+                        return base.fetchContact(radioId, publicKey)
+                    }
+                })
+                val codec = h.container.nodesFeature.uriCodec
+                val oldUri = codec.exportContactUri(
+                    "Pre-loss claim", if (knownBeforeLoss) key(20) else key(30), ContactType.REPEATER,
+                )
+                val routing = backgroundScope.async(Dispatchers.Default) { oldRouter.routeExternal(oldUri) }
+                oldRoute = routing
+                h.eventually("initiating live graph lookup is suspended", virtualBudgetMillis = 0) { entered.isCompleted }
+                assertNotNull(h.links.links.last().callbacks).onDisconnected(IllegalStateException("actual link loss"))
+                h.eventually("actual loss retires both graph and navigation binding", virtualBudgetMillis = 0) {
+                    h.manager.connectionState == DeviceConnectionState.DISCONNECTED &&
+                        h.sessions.current == null && navigation.currentState.boundSessionToken == null
+                }
+                assertTrue(oldGraph.isTornDown)
+                val offline = h.manager.captureNavigationLifecycle()
+                assertFalse(h.manager.isNavigationLifecycleCurrent(offline), "Historical graph exposure is not first binding")
+                assertTrue(h.manager.isOfflineNavigationLifecycleCurrent(offline))
+                val afterLoss = navigation.currentState
+                releaseLookup.complete(Unit)
+                h.eventually("old lookup finishes without navigating or staging", virtualBudgetMillis = 0) {
+                    routing.isCompleted
+                }
+                assertEquals(DeepLinkRouteOutcome.ContactLookupRejected, routing.await())
+                assertEquals(afterLoss, navigation.currentState)
+
+                val fresh = AppDeepLinkRouter(base)
+                assertEquals(
+                    DeepLinkRouteOutcome.Navigated,
+                    fresh.routeExternal(codec.exportContactUri("Fresh alias", saved.publicKey, ContactType.ROOM)),
+                )
+                assertEquals(saved.id, navigation.state.value.selectedContact?.id)
+                assertEquals(radio, navigation.state.value.selectedContact?.radioId)
+                mount(h)
+                compose.waitForIdle()
+                compose.onAllNodesWithText(saved.displayName).onFirst().assertIsDisplayed()
+                val unknownUri = codec.exportContactUri("Fresh offline confirmation", key(31), ContactType.REPEATER)
+                assertEquals(DeepLinkRouteOutcome.ConfirmationStaged, fresh.routeExternal(unknownUri))
+                val pending = assertNotNull(navigation.state.value.pendingContactLink)
+                assertEquals(radio, pending.targetRadioId)
+                assertEquals(ContactType.REPEATER, pending.type)
+                compose.waitForIdle()
+                compose.onNodeWithTag("contact-link-confirmation").assertIsDisplayed()
+                compose.onNodeWithTag("contact-link-cancel").performClick()
+                assertNull(navigation.currentState.pendingContactLink)
+                assertNull(store.fetchContact(radio, key(31)))
+
+                navigation.clearPendingContactDetailNavigation()
+                assertNull(navigation.currentState.pendingContactDetail)
+                assertTrue(ChatLinkRouter(h.container.chatsFeature.list.links, backgroundScope).route(
+                    codec.exportContactUri("Fresh chat alias", saved.publicKey, ContactType.CHAT),
+                ))
+                h.eventually("fresh chat link resolves the cached contact after actual loss", virtualBudgetMillis = 0) {
+                    navigation.state.value.pendingContactDetail?.id == saved.id
+                }
+                assertNull(h.sessions.current)
+                assertTrue(h.links.radios.all { it.sent.none { frame -> frame[0].toInt() == 0x09 } })
+                connect(h)
+                assertFalse(h.manager.isOfflineNavigationLifecycleCurrent(offline), "Offline authority cannot follow reconnection")
+            } finally {
+                releaseLookup.complete(Unit)
+                oldRoute?.cancelAndJoin()
+                unmount()
+                h.container.close()
+            }
         }
     }
 
@@ -4425,6 +6093,350 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         } finally { unmount(); h.container.close() }
     }
 
+    @Test fun equalTimestampUpdateQueuedBehindCancelledImportPersistsInRealRoom() = runTest {
+        val publicKey = key(30)
+        val initialRead = CompletableDeferred<ContactDTO?>()
+        val observedStore = object : PersistenceStoreProtocol by store {
+            override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? =
+                store.fetchContact(radioId, publicKey).also { initialRead.complete(it) }
+        }
+        val h = ContainerHarness(this, store)
+        h.links.configureRadio = { radio ->
+            radio.respond = { frame -> if (frame[0].toInt() == 0x09) emptyList() else null }
+        }
+        try {
+            connect(h)
+            val radioId = assertNotNull(h.appState.currentRadioId)
+            val session = assertNotNull(h.sessions.current).publicationSession
+            val updateQueued = CompletableDeferred<Unit>()
+            val observedSession = object : ContactSessionOps by session {
+                override suspend fun addContact(
+                    contact: MeshContact,
+                    dispatch: ContactWriteDispatch,
+                    onCommitted: suspend () -> Unit,
+                ) {
+                    updateQueued.complete(Unit)
+                    session.addContact(contact, dispatch, onCommitted)
+                }
+            }
+            val flags = MemoryFlags()
+            val service = ContactService(session, store, store, null, null, flags)
+            val updater = ContactService(observedSession, observedStore, observedStore, null, null, flags)
+            val firmware = h.links.radios.last()
+            val importedFrame = ContactFrame(
+                publicKey, ContactType.REPEATER, 0u, PacketBuilder.FLOOD_PATH_SENTINEL, Bytes.EMPTY,
+                "Imported", 0u, 0.0, 0.0, 42u,
+            )
+            val imported = backgroundScope.async { service.addContactIfAbsent(radioId, importedFrame) }
+            h.eventually("link import reaches the radio", virtualBudgetMillis = 100) {
+                firmware.sent.count { it[0].toInt() == 0x09 } == 1
+            }
+            val update = backgroundScope.async {
+                try {
+                    updater.addOrUpdateContact(radioId, importedFrame.copy(name = "Intentional"))
+                    null
+                } catch (failure: Exception) {
+                    failure
+                }
+            }
+            h.eventually("queued update reads the absent Room row", virtualBudgetMillis = 0) {
+                initialRead.isCompleted && updateQueued.isCompleted
+            }
+            assertNull(initialRead.await())
+            assertFalse(update.isCompleted)
+            assertEquals(1, firmware.sent.count { it[0].toInt() == 0x09 })
+            imported.cancelAndJoin()
+            assertTrue(service.needsContactWriteReconciliation(radioId))
+
+            val first = firmware.sent.last { it[0].toInt() == 0x09 }
+            firmware.knownContacts += Bytes.of(3) + first.slice(1, 144) + le32(42)
+            firmware.push(Bytes.of(0))
+            h.eventually("late ACK persists before the queued update", virtualBudgetMillis = 100) {
+                firmware.sent.count { it[0].toInt() == 0x09 } == 2
+            }
+            assertEquals("Imported", store.fetchContact(radioId, publicKey)?.name)
+            assertFalse(service.needsContactWriteReconciliation(radioId))
+            val second = firmware.sent.last { it[0].toInt() == 0x09 }
+            assertEquals("Intentional", assertNotNull(Parsers.parseContactData(second.slice(1, 144) + le32(42))).advertisedName)
+            firmware.knownContacts.clear()
+            firmware.knownContacts += Bytes.of(3) + second.slice(1, 144) + le32(42)
+            firmware.push(Bytes.of(0))
+            h.eventually("intentional update commits in Room", virtualBudgetMillis = 100) { update.isCompleted }
+            assertNull(update.await())
+            val saved = assertNotNull(store.fetchContact(radioId, publicKey))
+            assertEquals("Intentional", saved.name)
+            assertEquals(42u, saved.lastModified)
+            assertEquals(2, firmware.sent.count { it[0].toInt() == 0x09 })
+            assertFalse(service.needsContactWriteReconciliation(radioId))
+        } finally {
+            h.container.close()
+        }
+    }
+
+    @Test fun recreatedConfirmationDoesNotRepeatAnAcceptedImportWhenRefreshIsDelayed() = runTest {
+        val h = ContainerHarness(this, store)
+        h.links.configureRadio = { radio ->
+            radio.respond = { frame -> if (frame[0].toInt() == 0x09) emptyList() else null }
+        }
+        val refreshGate = CompletableDeferred<Unit>()
+        val emptyLookups = AtomicInteger()
+        val blockedRefreshes = AtomicInteger()
+        val cancelledWrites = ConcurrentLinkedQueue<Bytes>()
+        try {
+            connect(h)
+            val radio = assertNotNull(h.appState.currentRadioId)
+            val publicKey = key(30)
+            val actual = h.container.nodesFeature
+            val dependencies = delayedContactRefresh(
+                actual, publicKey, refreshGate, emptyLookups, blockedRefreshes, cancelledWrites,
+            )
+            val navigation = h.container.navigation
+            val firmware = h.links.radios.last()
+            mount(h, dependencies)
+            navigation.stageContactLink(ContactLinkRequest("Recreated peer", publicKey, ContactType.REPEATER))
+            val pending = assertNotNull(navigation.state.value.pendingContactLink)
+            await(h) { confirmationEnabled() && emptyLookups.get() >= 1 }
+            compose.onNodeWithTag("contact-link-confirm").performClick()
+            h.eventually("first import reaches the radio", virtualBudgetMillis = 100) {
+                firmware.sent.count { it[0].toInt() == 0x09 } == 1
+            }
+            val previousActivity = host.get()
+            host.windowFocusChanged(false)
+            host.recreate().visible()
+            host.get().actionBar?.hide()
+            host.windowFocusChanged(true)
+            assertNotSame(previousActivity, host.get(), "The Activity must actually be recreated")
+            mount(h, dependencies)
+            h.eventually("old import is cancelled and recreated confirmation loaded an absent row", virtualBudgetMillis = 0) {
+                compose.waitForIdle()
+                confirmationEnabled() && publicKey in cancelledWrites && emptyLookups.get() >= 2
+            }
+            compose.onNodeWithTag("contact-link-confirm").assertTextEquals(
+                ApplicationProvider.getApplicationContext<Context>().getString(
+                    com.meshcoreone.android.core.l10n.generated.AppContactsStrings.contactsAddAdd,
+                ),
+            )
+            assertNull(store.fetchContact(radio, publicKey))
+            assertEquals(pending, navigation.state.value.pendingContactLink)
+            val versionBeforeAck = h.appState.contactsVersion.value
+            firmware.knownContacts += contactFrame(publicKey, "Recreated peer", actual.clock.wallNow.epochSecond)
+            firmware.push(Bytes.of(0))
+            val persisted = backgroundScope.async {
+                var row = store.fetchContact(radio, publicKey)
+                while (row == null) {
+                    delay(1)
+                    row = store.fetchContact(radio, publicKey)
+                }
+                row
+            }
+            val producer = assertNotNull(h.sessions.current).contactService
+            h.eventually("late ACK persists and settles while its UI refresh is held", virtualBudgetMillis = 100) {
+                persisted.isCompleted && producer.contactWriteRecoveryState(radio) is ContactWriteRecoveryState.Clear &&
+                    h.appState.contactsVersion.value > versionBeforeAck && blockedRefreshes.get() > 0
+            }
+            val saved = assertNotNull(persisted.await())
+            assertEquals(pending, navigation.state.value.pendingContactLink)
+            assertNull(navigation.state.value.pendingContactDetail)
+            compose.onNodeWithTag("contact-link-confirm").assertTextEquals(
+                ApplicationProvider.getApplicationContext<Context>().getString(
+                    com.meshcoreone.android.core.l10n.generated.AppContactsStrings.contactsAddAdd,
+                ),
+            )
+            compose.onNodeWithTag("contact-link-confirm").performClick()
+            h.eventually("recreated confirmation opens the accepted row without another write", virtualBudgetMillis = 100) {
+                navigation.state.value.pendingContactLink == null ||
+                    firmware.sent.count { it[0].toInt() == 0x09 } > 1
+            }
+            assertEquals(1, firmware.sent.count { it[0].toInt() == 0x09 })
+            assertNull(navigation.state.value.pendingContactLink)
+            assertEquals(saved.id, navigation.state.value.pendingContactDetail?.id)
+            assertEquals(publicKey, navigation.state.value.pendingContactDetail?.publicKey)
+            assertEquals(ContactType.REPEATER, saved.type)
+        } finally {
+            refreshGate.complete(Unit)
+            unmount()
+            h.container.close()
+        }
+    }
+
+    @Test fun identicalReplacementAfterSettlementDoesNotRepeatTheCancelledImport() = runTest {
+        val h = ContainerHarness(this, store)
+        h.links.configureRadio = { radio ->
+            radio.respond = { frame -> if (frame[0].toInt() == 0x09) emptyList() else null }
+        }
+        val refreshGate = CompletableDeferred<Unit>()
+        val emptyLookups = AtomicInteger()
+        val blockedRefreshes = AtomicInteger()
+        val cancelledWrites = ConcurrentLinkedQueue<Bytes>()
+        try {
+            connect(h)
+            val radio = assertNotNull(h.appState.currentRadioId)
+            val publicKey = key(30)
+            val actual = h.container.nodesFeature
+            val dependencies = delayedContactRefresh(
+                actual, publicKey, refreshGate, emptyLookups, blockedRefreshes, cancelledWrites,
+            )
+            val navigation = h.container.navigation
+            val firmware = h.links.radios.last()
+            val uri = actual.uriCodec.exportContactUri("Identical settled peer", publicKey, ContactType.ROOM)
+            val external = AppDeepLinkRouter(ContainerDeepLinkEnvironment(h.container, navigation))
+            val chat = ChatLinkRouter(h.container.chatsFeature.list.links, backgroundScope)
+            mount(h, dependencies)
+            assertEquals(DeepLinkRouteOutcome.ConfirmationStaged, external.routeExternal(uri))
+            val first = assertNotNull(navigation.state.value.pendingContactLink)
+            await(h) { confirmationEnabled() && emptyLookups.get() >= 1 }
+            compose.onNodeWithTag("contact-link-confirm").performClick()
+            h.eventually("first import reaches the radio", virtualBudgetMillis = 100) {
+                firmware.sent.count { it[0].toInt() == 0x09 } == 1
+            }
+            compose.onNodeWithTag("contact-link-cancel").performClick()
+            h.eventually("first delivery's import is cancelled", virtualBudgetMillis = 0) {
+                publicKey in cancelledWrites
+            }
+            assertNull(navigation.state.value.pendingContactLink)
+            assertTrue(chat.route(uri))
+            h.eventually("identical replacement loaded the still-absent row", virtualBudgetMillis = 0) {
+                compose.waitForIdle()
+                confirmationEnabled() && navigation.state.value.pendingContactLink?.publicKey == publicKey &&
+                    emptyLookups.get() >= 2
+            }
+            val replacement = assertNotNull(navigation.state.value.pendingContactLink)
+            assertNotEquals(first.deliveryId, replacement.deliveryId)
+            assertEquals(first.generation, replacement.generation)
+            assertEquals(radio, replacement.targetRadioId)
+            assertEquals(first.name, replacement.name)
+            assertEquals(first.type, replacement.type)
+            assertNull(store.fetchContact(radio, publicKey))
+            val versionBeforeAck = h.appState.contactsVersion.value
+            firmware.knownContacts += contactFrame(publicKey, first.name, actual.clock.wallNow.epochSecond)
+            firmware.push(Bytes.of(0))
+            val persisted = backgroundScope.async {
+                var row = store.fetchContact(radio, publicKey)
+                while (row == null) {
+                    delay(1)
+                    row = store.fetchContact(radio, publicKey)
+                }
+                row
+            }
+            val producer = assertNotNull(h.sessions.current).contactService
+            h.eventually("the first ACK settles before the replacement is confirmed", virtualBudgetMillis = 100) {
+                persisted.isCompleted && producer.contactWriteRecoveryState(radio) is ContactWriteRecoveryState.Clear &&
+                    h.appState.contactsVersion.value > versionBeforeAck && blockedRefreshes.get() > 0
+            }
+            val saved = assertNotNull(persisted.await())
+            assertFalse(navigation.completeContactLink(first))
+            assertEquals(replacement, navigation.state.value.pendingContactLink)
+            assertNull(navigation.state.value.pendingContactDetail)
+            compose.onNodeWithTag("contact-link-confirm").assertTextEquals(
+                ApplicationProvider.getApplicationContext<Context>().getString(
+                    com.meshcoreone.android.core.l10n.generated.AppContactsStrings.contactsAddAdd,
+                ),
+            )
+            compose.onNodeWithTag("contact-link-confirm").performClick()
+            h.eventually("replacement opens the accepted row without another write", virtualBudgetMillis = 100) {
+                navigation.state.value.pendingContactLink == null ||
+                    firmware.sent.count { it[0].toInt() == 0x09 } > 1
+            }
+            assertEquals(1, firmware.sent.count { it[0].toInt() == 0x09 })
+            assertNull(navigation.state.value.pendingContactLink)
+            assertEquals(saved.id, navigation.state.value.pendingContactDetail?.id)
+            assertEquals(first.name, saved.name)
+            assertEquals(first.type, saved.type)
+        } finally {
+            refreshGate.complete(Unit)
+            unmount()
+            h.container.close()
+        }
+    }
+
+    @Test fun mountedConfirmationRefreshesToViewWhenAnotherContactWriteCommits() = runTest {
+        val h = ContainerHarness(this, store)
+        h.links.configureRadio = { radio ->
+            radio.respond = { frame -> if (frame[0].toInt() == 0x09) listOf(Bytes.of(0)) else null }
+        }
+        try {
+            connect(h)
+            val radio = assertNotNull(h.appState.currentRadioId)
+            val publicKey = key(30)
+            val navigation = h.container.navigation
+            mount(h)
+            navigation.stageContactLink(ContactLinkRequest("Claimed alias", publicKey, ContactType.CHAT))
+            await(h) { confirmationEnabled() }
+            val versionBeforeWrite = h.appState.contactsVersion.value
+            val service = assertNotNull(h.container.nodesFeature.session.contactService())
+            val write = backgroundScope.async {
+                service.addOrUpdateContact(radio, ContactFrame(
+                    publicKey, ContactType.REPEATER, 0u, PacketBuilder.FLOOD_PATH_SENTINEL, Bytes.EMPTY,
+                    "Saved identity", 0u, 0.0, 0.0, 1u,
+                ))
+            }
+            h.eventually("another real contact write completes") {
+                write.isCompleted && h.appState.contactsVersion.value > versionBeforeWrite
+            }
+            write.await()
+            await(h) {
+                confirmationEnabled() && compose.onAllNodesWithTag("contact-link-name").fetchSemanticsNodes()
+                    .singleOrNull()?.config?.getOrNull(SemanticsProperties.Text)
+                    ?.any { it.text == "Saved identity" } == true
+            }
+            val saved = assertNotNull(store.fetchContact(radio, publicKey))
+            compose.onNodeWithTag("contact-link-confirm").assertTextEquals(
+                ApplicationProvider.getApplicationContext<Context>().getString(
+                    com.meshcoreone.android.core.l10n.generated.AppContactsStrings.contactsAddView,
+                ),
+            )
+            compose.onNodeWithTag("contact-link-confirm").performClick()
+            await(h) { navigation.state.value.pendingContactLink == null }
+            assertEquals(saved.id, navigation.state.value.pendingContactDetail?.id)
+            assertEquals(1, h.links.radios.last().sent.count { it[0].toInt() == 0x09 })
+        } finally { unmount(); h.container.close() }
+    }
+
+    @Test fun contactRefreshPreservesAnExistingFailureUntilExplicitRetry() = runTest {
+        val h = ContainerHarness(this, store)
+        h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Saved on retry") }
+        try {
+            connect(h)
+            val actual = h.container.nodesFeature
+            val radio = assertNotNull(h.appState.currentRadioId)
+            val saved = assertNotNull(store.fetchContact(radio, key(20)))
+            val versions = MutableStateFlow(0)
+            var reads = 0
+            val backing = assertNotNull(actual.session.servicesDataStore())
+            val checkingStore = object : NodesDataStore by backing {
+                override suspend fun fetchContact(radioId: RadioId, publicKey: Bytes): ContactDTO? {
+                    if (++reads == 1) throw IllegalStateException("Initial lookup failed")
+                    return backing.fetchContact(radioId, publicKey)
+                }
+            }
+            val dependencies = NodesFeatureDependencies(
+                object : NodesSession by actual.session {
+                    override fun servicesDataStore() = checkingStore
+                    override fun contactVersions() = versions
+                },
+                actual.uriCodec, actual.timeouts, actual.messages, actual.announcer,
+                actual.preferences, actual.clock, actual.locale,
+            )
+            val navigation = h.container.navigation
+            navigation.stageContactLink(ContactLinkRequest("Claim", saved.publicKey, ContactType.CHAT))
+            val holder = ContactLinkConfirmation(dependencies, navigation, assertNotNull(navigation.state.value.pendingContactLink))
+            val observing = backgroundScope.launch { holder.observeContacts() }
+            h.eventually("initial lookup reports failure") { holder.state.value.failure != null && !holder.state.value.loading }
+            val failure = holder.state.value.failure
+            versions.value++
+            h.eventually("contact change refreshes the saved row") {
+                holder.state.value.existing?.id == saved.id && !holder.state.value.loading
+            }
+            assertEquals(failure, holder.state.value.failure)
+            assertFalse(holder.confirm())
+            holder.load()
+            assertNull(holder.state.value.failure)
+            assertTrue(holder.confirm())
+            assertEquals(saved.id, navigation.state.value.pendingContactDetail?.id)
+            observing.cancelAndJoin()
+        } finally { h.container.close() }
+    }
+
     @Test fun cancelledContactImportDoesNotNavigateOrConsumeIdenticalReplacementWhenLateAckPersists() = runTest {
         val h = ContainerHarness(this, store)
         h.links.configureRadio = { radio ->
@@ -4438,9 +6450,9 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             val actual = h.container.nodesFeature
             val service = assertNotNull(actual.session.contactService())
             val observingService = object : NodesContactService by service {
-                override suspend fun addOrUpdateContact(radioId: RadioId, contact: ContactFrame) {
+                override suspend fun addContactIfAbsent(radioId: RadioId, contact: ContactFrame) {
                     try {
-                        service.addOrUpdateContact(radioId, contact)
+                        service.addContactIfAbsent(radioId, contact)
                     } catch (cancelled: CancellationException) {
                         cancelledWrites.add(contact.publicKey)
                         throw cancelled
@@ -4482,6 +6494,15 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             }
             assertNull(navigation.state.value.pendingContactLink)
             assertNull(store.fetchContact(radioId, publicKey))
+            val producer = assertNotNull(h.sessions.current).contactService
+            h.eventually("the canceled in-flight write requires recovery before its late ACK") {
+                producer.contactWriteRecoveryState(radioId) is ContactWriteRecoveryState.Required
+            }
+            val recovery = assertIs<ContactWriteRecoveryState.Required>(producer.contactWriteRecoveryState(radioId))
+            val syncRequests = firmware.sent.count { it[0].toInt() == 0x04 }
+            assertFailsWith<ContactServiceError.SyncInterrupted> { service.syncContactsForRefresh(radioId) }
+            assertEquals(syncRequests, firmware.sent.count { it[0].toInt() == 0x04 })
+            assertEquals(recovery, producer.contactWriteRecoveryState(radioId))
 
             assertTrue(chat.route(uri))
             h.eventually("identical chat link reaches a new confirmation", virtualBudgetMillis = 100) {
@@ -4524,9 +6545,15 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
 
             compose.onNodeWithTag("contact-link-cancel").performClick()
             assertNull(navigation.state.value.pendingContactLink)
-            val sync = backgroundScope.async { service.syncContactsForRefresh(radioId) }
-            h.eventually("complete radio contact sync finishes") { sync.isCompleted }
-            sync.await()
+            h.eventually("the accepted and locally persisted write settles its exact recovery obligation") {
+                producer.contactWriteRecoveryState(radioId) is ContactWriteRecoveryState.Clear
+            }
+            assertFalse(producer.needsContactWriteReconciliation(radioId))
+            val beforeRefresh = firmware.sent.count { it[0].toInt() == 0x04 }
+            val refresh = backgroundScope.async { service.syncContactsForRefresh(radioId) }
+            h.eventually("refresh succeeds after exact write settlement") { refresh.isCompleted }
+            refresh.await()
+            assertEquals(beforeRefresh + 1, firmware.sent.count { it[0].toInt() == 0x04 })
             val reloaded = assertNotNull(store.fetchContact(radioId, publicKey))
             assertEquals(added.id, reloaded.id)
             assertEquals(DeepLinkRouteOutcome.Navigated, external.routeExternal(uri))
@@ -4695,8 +6722,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                     NotificationId(id), NotificationCategory.DIRECT_MESSAGE, contact.name, "Queued tap",
                     false, null, null, NotificationPayload.DirectMessage(EntityKey(radio, contact.id), message),
                 ))
-                manager.activeNotifications.single().notification.contentIntent.send()
-                shadowOf(android.os.Looper.getMainLooper()).idle()
+                tapNotification(manager)
             }
             enqueue("wp302-retired-tap", first)
             assertTrue(entered.await(10, TimeUnit.SECONDS), "Tap must pause after its pre-commit validity check")

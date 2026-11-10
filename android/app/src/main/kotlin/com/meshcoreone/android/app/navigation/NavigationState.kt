@@ -63,7 +63,11 @@ sealed interface NavigationDestination {
         val action: com.meshcoreone.android.feature.nodes.RemoteNodeAction,
     ) : NavigationDestination
     data object Discovery : NavigationDestination
-    data class Tool(val selection: ToolSelection) : NavigationDestination
+    data class Tool(val selection: ToolSelection, val preselectedContact: ContactDTO? = null) : NavigationDestination {
+        init {
+            require(preselectedContact == null || selection == ToolSelection.LINE_OF_SIGHT)
+        }
+    }
     data class Setting(val selection: SettingsDetail) : NavigationDestination
     data class Auxiliary(val feature: FeatureId) : NavigationDestination {
         init {
@@ -266,6 +270,7 @@ sealed interface NavigationFailure {
     data class WrongTarget(val kind: NavigationTarget) : NavigationFailure
     data class WrongRadio(val expected: RadioId, val actual: RadioId) : NavigationFailure
     data object StaleGeneration : NavigationFailure
+    data class StaleOnboarding(val id: Long) : NavigationFailure
     data class Repository(val cause: com.meshcoreone.android.core.contracts.domain.PersistenceStoreError) : NavigationFailure
     data object UnsupportedNotification : NavigationFailure
     data object InvalidSavedState : NavigationFailure

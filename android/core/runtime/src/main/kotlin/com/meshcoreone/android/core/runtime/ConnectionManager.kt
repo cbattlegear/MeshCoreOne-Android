@@ -5,6 +5,7 @@ package com.meshcoreone.android.core.runtime
 
 import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.model.*
+import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
 import com.meshcoreone.android.core.protocol.event.ConnectionState

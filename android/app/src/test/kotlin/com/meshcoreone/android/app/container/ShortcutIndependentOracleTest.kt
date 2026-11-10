@@ -44,6 +44,8 @@ class ShortcutIndependentOracleTest : RoomProcessTest() {
             firmware.respond = { frame ->
                 when {
                     frame[0].toInt() in 2..3 -> emptyList()
+                    // Keep the budget oracle operational but not draining its durable submissions.
+                    channel && frame[0].toInt() == 4 -> listOf(Bytes.of(1, 2))
                     channel && frame[0].toInt() == 0x1f -> listOf(
                         if (frame[1].toInt() == 0) Bytes.of(0x12, 0) +
                             Bytes.utf8("Oracle").paddedOrTruncated(32) + Bytes(ByteArray(16) { 9 })
@@ -55,7 +57,8 @@ class ShortcutIndependentOracleTest : RoomProcessTest() {
         }
         if (channel) h.container.foreground.activityStarted()
         h.manager.connect(h.target())
-        h.eventually("independent shortcut oracle READY") { h.manager.connectionState == DeviceConnectionState.READY }
+        val expected = if (channel) DeviceConnectionState.SYNCING else DeviceConnectionState.READY
+        h.eventually("independent shortcut oracle $expected") { h.manager.connectionState == expected }
         h.settle()
         return h
     }
@@ -149,6 +152,8 @@ class ShortcutIndependentOracleTest : RoomProcessTest() {
                 assertEquals(occupant, it.channelOccupantID)
                 assertEquals(occupant, assertNotNull(it.channelMessageEnvelope()).channelOccupantID)
             }
+            assertEquals(DeviceConnectionState.SYNCING, h.manager.connectionState)
+            assertTrue(h.links.radios.single().sent.none { it[0].toInt() == 3 })
         } finally { h.container.close() }
     }
 

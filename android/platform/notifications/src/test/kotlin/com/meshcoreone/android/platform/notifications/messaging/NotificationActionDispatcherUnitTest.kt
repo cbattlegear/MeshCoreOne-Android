@@ -1,9 +1,12 @@
 // AndroidOnly: WP-302 Notification drain ownership across router replacement.
+// AndroidOnly: WP-215 Per-action navigation, send and read cancellation boundaries.
 package com.meshcoreone.android.platform.notifications.messaging
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.notifications.NotificationAction
+import com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
+import com.meshcoreone.android.core.contracts.notifications.NotificationReadReceipt
 import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
 import com.meshcoreone.android.core.model.RadioId
 import java.util.UUID
@@ -154,6 +157,51 @@ class NotificationActionDispatcherUnitTest {
             continuation?.resume(Unit)
             originalScope.cancel()
             replacementScope.cancel()
+            testScheduler.runCurrent()
+        }
+    }
+
+    @Test
+    fun navigationReplyAndReadCommitmentsStayBoundToTheirOwnQueuedActions() = runTest {
+        val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        val reply = response()
+        val open = reply.copy(action = null, userText = null)
+        val read = reply.copy(action = NotificationAction.MARK_READ, userText = null)
+        val attempts = mutableListOf<NotificationResponse>()
+        try {
+            NotificationActionDispatcher.install(scope) {
+                attempts += it
+                val context = currentCoroutineContext()
+                when (attempts.size) {
+                    1 -> checkNotNull(context[NotificationActionCommit]).navigationCommitted()
+                    2 -> checkNotNull(context[NotificationActionReceipt]).accepted()
+                    3 -> checkNotNull(context[NotificationReadReceipt]).apply {
+                        started()
+                        writeReturned()
+                        committed()
+                    }
+                    4 -> return@install false
+                    else -> return@install true
+                }
+                context.cancel()
+                true
+            }
+            listOf(open, reply, read, open).forEach {
+                assertEquals(EnqueueResult.DELIVERED_OR_QUEUED, NotificationActionDispatcher.enqueue(it))
+            }
+            testScheduler.runCurrent()
+            assertEquals(listOf(open, reply, read, open), attempts)
+
+            testScheduler.advanceTimeBy(250)
+            testScheduler.runCurrent()
+            assertEquals(listOf(open, reply, read, open, open), attempts)
+            assertTrue(NotificationActionDispatcher.drainOnce())
+
+            NotificationActionDispatcher.retry()
+            testScheduler.runCurrent()
+            assertEquals(5, attempts.size)
+        } finally {
+            scope.cancel()
             testScheduler.runCurrent()
         }
     }

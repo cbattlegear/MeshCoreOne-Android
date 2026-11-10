@@ -13,6 +13,7 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.meshcoreone.android.core.contracts.notifications.NotificationAction
+import com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
@@ -27,6 +28,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -95,14 +97,47 @@ class NotificationActionReceiverCapacityTest {
     }
 
     @Test
-    fun acceptedReplyKeepsExistingTrimAndNeverCreatesARecoveryDraft() = runTest {
+    fun acceptedReplyPreservesExactTextAndNeverCreatesARecoveryDraft() = runTest {
         receive(context, intent(5, NotificationAction.REPLY, " \taccepted\n "))
         assertTrue(entries().isEmpty())
         assertFalse(File(context.noBackupFilesDir, "notification-action-recovery.sqlite").exists())
         val delivered = mutableListOf<NotificationResponse>()
         NotificationActionDispatcher.install(this) { delivered += it; true }
         assertTrue(NotificationActionDispatcher.drainOnce())
-        assertEquals(listOf(response(5, NotificationAction.REPLY, "accepted")), delivered)
+        assertEquals(listOf(response(5, NotificationAction.REPLY, " \taccepted\n ")), delivered)
+    }
+
+    @Test
+    fun uncertainAdmittedActionsStillChargeCapacityAndRejectedReplyUsesSeparateRecovery() = runTest {
+        val admitted = (1..32).map {
+            response(it, NotificationAction.REPLY, "uncertain reply $it").also { reply ->
+                assertEquals(EnqueueResult.DELIVERED_OR_QUEUED, NotificationActionDispatcher.enqueue(reply))
+            }
+        }
+        val attempted = mutableListOf<NotificationResponse>()
+        NotificationActionDispatcher.install(this) {
+            attempted += it
+            requireNotNull(currentCoroutineContext()[NotificationActionReceipt]).apply {
+                wireStarted()
+                uncertain()
+            }
+            true
+        }
+        assertTrue(NotificationActionDispatcher.drainOnce())
+        assertEquals(admitted, attempted)
+        val original = " \tcapacity after uncertain acceptance\n "
+        receive(context, intent(999, NotificationAction.REPLY, original))
+        val saved = entries().single()
+        assertEquals(response(999, NotificationAction.REPLY, original), saved.response)
+
+        NotificationActionDispatcher.install(this) { attempted += it; true }
+        assertTrue(NotificationActionDispatcher.drainOnce())
+        assertEquals(admitted, attempted)
+        assertEquals(
+            EnqueueResult.REJECTED_CAPACITY,
+            NotificationActionDispatcher.enqueue(response(1000, NotificationAction.MARK_READ)),
+        )
+        assertEquals(saved.id, entries().single().id)
     }
 
     @Test

@@ -295,12 +295,19 @@ class CommitRecoveryTest {
                     }
                 }
                 val receipt = NotificationActionReceipt()
-                val call = backgroundScope.async(receipt) { destination.send(h.service) }
+                val call = backgroundScope.async(receipt) {
+                    if (destination == Destination.CHANNEL) {
+                        assertFailsWith<QueuedChannelRetainedException> { destination.send(h.service) }
+                    } else {
+                        destination.send(h.service)
+                        null
+                    }
+                }
                 firstAttempt.await()
                 runCurrent()
                 assertEquals(1, h.sends(destination.wire).size)
                 if (destination == Destination.CHANNEL) {
-                    assertFailsWith<QueuedChannelRetainedException> { call.await() }
+                    assertIs<QueuedChannelRetainedException>(call.await())
                     assertEquals(NotificationActionReceipt.State.UNCERTAIN, receipt.state)
                     assertEquals(MessageStatus.PENDING, h.store.messages.values.single().status)
                     advanceTimeBy(1_000); runCurrent()

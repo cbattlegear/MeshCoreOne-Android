@@ -189,13 +189,13 @@ class ChannelDispatchFence(
         expectedOccupantID: UUID?,
         currentOccupantID: suspend (RadioId, UByte) -> UUID?,
         operation: suspend () -> T,
-    ): T = identity.withChannelOperation {
+    ): T = identity.withChannelOperationScope { scope ->
         requireCurrent(lease)
         if (expectedOccupantID == null) throw ChannelDispatchFailure.UnknownOccupant()
         synchronized(stateLock) {
             if (index !in lease.reconciledSlots) throw ChannelDispatchFailure.UnreconciledSession()
         }
-        identity.withChannelIdentityMutation {
+        scope.withChannelIdentityMutation {
             val current = currentOccupantID(lease.token.radioId, index) ?: throw ChannelDispatchFailure.UnknownOccupant()
             if (current != expectedOccupantID) throw ChannelDispatchFailure.ReplacedOccupant()
             currentCoroutineContext().ensureActive()

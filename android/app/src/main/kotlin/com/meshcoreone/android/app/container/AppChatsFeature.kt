@@ -979,7 +979,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         queue.enqueueChannel(
             ChannelMessageEnvelope(
                 id, index, isResend, message.text, message.timestamp, localName,
-                channelOccupantID = origin.expectedOccupantID,
+                channelOccupantID = message.channelOccupantID,
             ),
         )
     }

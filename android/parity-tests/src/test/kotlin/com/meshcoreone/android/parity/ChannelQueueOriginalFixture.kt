@@ -68,7 +68,10 @@ internal suspend fun TestScope.withChannelQueueFixture(
     withContext(NonCancellable) {
         retainFailure {
             val report = f.queue.shutdown()
-            assertTrue(report.isComplete)
+            assertFalse(report.isComplete)
+            assertEquals(listOf(LifecycleStage.STOP_SERVICES), report.issues.map { it.stage })
+            assertSame(f.failures("channelRetained", f.pendingA.id).single(), report.issues.single().cause)
+            assertOriginalChannelDeviceError2(report.issues.single().cause)
         }
         retainFailure { assertTrue(f.messages.close().isComplete) }
         retainFailure { f.session.stop() }
@@ -111,8 +114,9 @@ internal class ChannelQueueOriginalFixture(
     )
     val radio = device.radioId
     private val token = SessionToken(ProcessEpoch(UUID.randomUUID()), Generation(1), radio)
-    val channel = ChannelDTO(UUID.randomUUID(), radio, 0u, "Test Channel", Bytes(ByteArray(16) { 0xAA.toByte() }),
+    var channel = ChannelDTO(UUID.randomUUID(), radio, 0u, "Test Channel", Bytes(ByteArray(16) { 0xAA.toByte() }),
         true, null, 0, 0, NotificationLevel.ALL, false, "inherit", null)
+        private set
     private val channelInfoResponse =
         Bytes.fromHex("1200" + "54657374204368616e6e656c" + "00".repeat(20) + "AA".repeat(16))
     private val unconfiguredChannelInfoResponse = Bytes.fromHex("1200" + "00".repeat(48))
@@ -174,6 +178,7 @@ internal class ChannelQueueOriginalFixture(
             channelDispatchFence.recordReconciled(channelDispatchLease, identity, listOf(channel.index))
             occupant
         }
+        channel = channel.copy(occupantID = channelOccupantID)
         assertEquals(channel, store.fetchChannel(radio, channel.index))
         messageA = channelMessage("Hello channel")
         messageB = channelMessage("Second message")

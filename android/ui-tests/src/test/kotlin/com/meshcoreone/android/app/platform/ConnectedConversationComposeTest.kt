@@ -88,13 +88,17 @@ class ConnectedConversationComposeTest : RoomProcessTest() {
                     accepted += runBlocking { store.fetchPendingSends(requireNotNull(h.appState.currentRadioId)).single() }
                     // An uncorrelated channel error does not prove that the queued send was unsent.
                     listOf(Bytes.of(1, if (channel) 6 else 2))
-                } else if (channel && request[0].toInt() == 0x1f && request[1].toInt() == 0) {
-                    listOf(Bytes.of(0x12, 0) + Bytes.utf8("Synthetic mesh channel").paddedOrTruncated(32) +
-                        Bytes(ByteArray(16) { 0x11 }))
+                } else if (channel && request[0].toInt() == 0x1f) {
+                    listOf(
+                        if (request[1].toInt() == 0) Bytes.of(0x12, 0) +
+                            Bytes.utf8("Synthetic mesh channel").paddedOrTruncated(32) + Bytes(ByteArray(16) { 0x11 })
+                        else Bytes.of(0x12, request[1].toInt()) + Bytes(ByteArray(48)),
+                    )
                 } else null
             }
         }
         try {
+            if (channel) h.container.foreground.activityStarted()
             h.manager.connect(h.target(UUID.fromString("50200000-0000-0000-0000-000000000099")))
             h.settle()
             h.assertReady()

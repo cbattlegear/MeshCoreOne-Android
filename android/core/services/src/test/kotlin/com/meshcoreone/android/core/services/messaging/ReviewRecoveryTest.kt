@@ -40,7 +40,9 @@ class ReviewRecoveryTest {
         },
         native("a durable inline DM or channel save completing at disconnect fails before any wire command") {
             for (channel in listOf(false, true)) {
-                val h = Harness(this); h.start(); val release = CompletableDeferred<Unit>()
+                val h = Harness(this)
+                if (channel) h.store.seedChannelCreation()
+                h.start(); val release = CompletableDeferred<Unit>()
                 h.store.before = { if (it == "saveMessage") release.await() }
                 val send = backgroundScope.async {
                     try {

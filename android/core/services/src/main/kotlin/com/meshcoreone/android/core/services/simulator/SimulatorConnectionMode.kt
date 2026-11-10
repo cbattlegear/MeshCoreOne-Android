@@ -54,27 +54,49 @@ class SimulatorConnectionMode(
     }
 
     /**
-     * Seeds the data store with mock data. Each message is saved before its link-preview, reaction, and repeat
-     * rows: `saveMessage` does not persist the link-preview or `reactionSummary` columns, and
-     * `saveMessageRepeat` needs the parent present. Re-seeding upserts on each row's unique `id`, so it is
-     * idempotent. Store failures and cancellation propagate unchanged.
+     * Seeds the data store with mock data. Reference stores replay messages before their dependent rows;
+     * the native store can atomically create complete conversations or preserve compatible existing ones.
+     * Seed IDs are fixture identities, not radio authority. Store failures and cancellation propagate.
      */
     suspend fun seedDataStore(dataStore: SimulatorSeedStore) {
         seedMutex.withLock { seed(dataStore, clock.instant()) }
     }
 
     private suspend fun seed(dataStore: SimulatorSeedStore, now: Instant) {
-        val radioId = MockDataProvider.simulatorRadioId
         dataStore.saveDevice(MockDataProvider.simulatorDevice(now))
 
-        // Mock contacts omit avatarImageData; copy any existing value onto the upsert so saveContact does not
-        // apply null.
-        val contacts = MockDataProvider.contacts(now)
-        for (contact in contacts) {
-            val existingAvatar = dataStore.fetchContact(EntityKey(radioId, contact.id))?.avatarImageData
-            dataStore.saveContact(if (existingAvatar != null) contact.withAvatar(existingAvatar) else contact)
+        val plan by lazy { simulatorDeferredFixturePlan(now) }
+        val result = dataStore.seedConversations({ plan }) {
+            replayReference(dataStore, now)
+        }
+        when (result) {
+            SimulatorFixtureSeedResult.ReferenceReplay -> Unit
+            is SimulatorFixtureSeedResult.Durable -> check(
+                result.created >= 0 && result.preservedExisting >= 0 &&
+                    result.created.toLong() + result.preservedExisting.toLong() == plan.families.size.toLong(),
+            ) { "Simulator seed result does not account for every conversation" }
         }
 
+        seedRxLogEntries(dataStore, now)
+        seedNodeStatusSnapshots(dataStore, now)
+
+        when (result) {
+            SimulatorFixtureSeedResult.ReferenceReplay ->
+                logger.info("Simulator: replayed fixture contacts and channels")
+            is SimulatorFixtureSeedResult.Durable -> logger.info(
+                "Simulator: created ${result.created} complete fixture conversations; " +
+                    "preserved ${result.preservedExisting} existing conversations, which may be incomplete",
+            )
+        }
+    }
+
+    private suspend fun replayReference(
+        dataStore: SimulatorSeedStore,
+        now: Instant,
+    ) {
+        val radioId = MockDataProvider.simulatorRadioId
+        val contacts = MockDataProvider.contacts(now)
+        for (contact in contacts) dataStore.seedContact(contact)
         val channels = MockDataProvider.channels(now)
         for (channel in channels) dataStore.saveChannel(channel)
 
@@ -101,14 +123,9 @@ class SimulatorConnectionMode(
         for (messageID in MockDataProvider.messagesWithRepeats) {
             for (repeatRow in MockDataProvider.messageRepeats(messageID, now)) dataStore.saveMessageRepeat(radioId, repeatRow)
         }
-
-        seedRxLogEntries(dataStore, now)
-        seedNodeStatusSnapshots(dataStore, now)
-
-        logger.info("Simulator: seeded ${contacts.size} contacts and ${channels.size} channels with messages")
     }
 
-    /** Inserts the two flood-region RX-log fixtures when they are missing. `saveRxLogEntry` is insert-only. */
+    /** Checks the recent RX-log page before buffering the two flood-region fixtures. */
     private suspend fun seedRxLogEntries(dataStore: SimulatorSeedStore, now: Instant) {
         val existingIDs = dataStore.fetchRxLogEntries(MockDataProvider.simulatorRadioId).map { it.id }.toSet()
         for (entry in MockDataProvider.rxLogEntries(now)) {

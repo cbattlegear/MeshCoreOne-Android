@@ -36,6 +36,10 @@ interface DeviceDao : RowWriter<DeviceEntity> {
 
 @Dao
 interface ContactDao : RowWriter<ContactEntity> {
+    @Query("SELECT COUNT(*) FROM contacts WHERE radioId >= upper(:radioId) AND radioId <= lower(:radioId) AND radioId = :radioId COLLATE NOCASE AND id = :id COLLATE NOCASE")
+    suspend fun countSimulatorIdentity(radioId: UUID, id: UUID): Long
+    @Query("SELECT * FROM contacts WHERE radioId >= upper(:radioId) AND radioId <= lower(:radioId) AND radioId = :radioId COLLATE NOCASE AND publicKey = :key")
+    suspend fun simulatorPublicKeyCohort(radioId: UUID, key: Bytes): List<ContactEntity>
     @Query("SELECT * FROM contacts") suspend fun backupAll(): List<ContactEntity>
     @Query("SELECT * FROM contacts WHERE radioId = :radioId ORDER BY name")
     suspend fun forRadio(radioId: UUID): List<ContactEntity>
@@ -43,6 +47,14 @@ interface ContactDao : RowWriter<ContactEntity> {
     fun observe(radioId: UUID): Flow<List<ContactEntity>>
     @Query("SELECT * FROM contacts WHERE radioId = :radioId AND id = :id")
     suspend fun byId(radioId: UUID, id: UUID): ContactEntity?
+    @Query("""
+        UPDATE contacts SET lastModified = :timestamp
+        WHERE radioId = :radioId AND id = :id AND publicKey = :expectedPublicKey
+            AND lastModified = :expectedLastModified AND lastModified < :timestamp
+    """)
+    suspend fun advanceSimulatorLastModified(
+        radioId: UUID, id: UUID, expectedPublicKey: Bytes, expectedLastModified: Long, timestamp: Long,
+    ): Int
     @Query("UPDATE contacts SET avatarImageData = :imageData WHERE radioId = :radioId AND id = :id AND publicKey = :expectedPublicKey")
     suspend fun updateAvatar(radioId: UUID, id: UUID, expectedPublicKey: Bytes, imageData: Bytes?): Int
     @Query("UPDATE contacts SET isFavorite = :isFavorite, flags = (flags & 254) | :favoriteBit WHERE radioId = :radioId AND id = :id AND publicKey = :expectedPublicKey")
@@ -85,6 +97,10 @@ interface ChannelDao : RowWriter<ChannelEntity> {
     @Query("SELECT * FROM channels WHERE radioId = :radioId ORDER BY `index`") fun observe(radioId: UUID): Flow<List<ChannelEntity>>
     @Query("SELECT * FROM channels WHERE radioId = :radioId AND id = :id") suspend fun byId(radioId: UUID, id: UUID): ChannelEntity?
     @Query("SELECT * FROM channels WHERE radioId = :radioId AND `index` = :index") suspend fun forIndex(radioId: UUID, index: Long): List<ChannelEntity>
+    @Query("SELECT * FROM channels WHERE radioId >= upper(:radioId) AND radioId <= lower(:radioId) AND radioId COLLATE NOCASE = :radioId AND id COLLATE NOCASE = :id")
+    suspend fun simulatorIdentityCohort(radioId: UUID, id: UUID): List<ChannelEntity>
+    @Query("SELECT * FROM channels WHERE radioId >= upper(:radioId) AND radioId <= lower(:radioId) AND radioId COLLATE NOCASE = :radioId AND `index` = :index")
+    suspend fun simulatorSlotCohort(radioId: UUID, index: Long): List<ChannelEntity>
     @Query("UPDATE channels SET floodScopeModeRawValue = :mode, regionScope = :region WHERE radioId = :radioId AND id = :id")
     suspend fun setFloodScope(radioId: UUID, id: UUID, mode: String, region: String?): Int
     @Query("DELETE FROM channels WHERE radioId = :radioId AND id = :id") suspend fun delete(radioId: UUID, id: UUID): Int

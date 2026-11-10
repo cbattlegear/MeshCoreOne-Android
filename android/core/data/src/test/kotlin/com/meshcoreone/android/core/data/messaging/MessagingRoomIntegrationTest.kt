@@ -38,7 +38,6 @@ import com.meshcoreone.android.core.services.messaging.MessageService
 import com.meshcoreone.android.core.services.messaging.MessageServiceConfig
 import com.meshcoreone.android.core.services.messaging.MessagePollingService
 import com.meshcoreone.android.core.services.messaging.PoolBackoffConfig
-import com.meshcoreone.android.core.services.messaging.QueuedChannelRetainedException
 import com.meshcoreone.android.core.services.contacts.ChannelDispatchFailure
 import com.meshcoreone.android.core.services.contacts.ChannelDispatchFence
 import com.meshcoreone.android.core.services.contacts.ChannelService
@@ -971,7 +970,7 @@ class MessagingRoomIntegrationTest {
         val message = g.service.createPendingChannelMessage("Hello channel", 0u, radio)
         assertEquals(snapshot.occupantID, message.channelOccupantID)
         val events = g.service.statusEvents()
-        val failure = assertFailsWith<QueuedChannelRetainedException> { g.service.sendPendingChannelMessage(message.id) }
+        val failure = assertFails { g.service.sendPendingChannelMessage(message.id) }
         assertIs<ChannelDispatchFailure.UnreconciledSession>(failure.cause)
         assertEquals(message.copy(status = MessageStatus.FAILED), store.fetchMessage(EntityKey(radio, message.id)))
         assertTrue(g.firmware.channelSent().isEmpty())

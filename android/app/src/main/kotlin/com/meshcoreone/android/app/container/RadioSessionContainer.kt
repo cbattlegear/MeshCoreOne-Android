@@ -31,6 +31,7 @@ import com.meshcoreone.android.core.runtime.RuntimeServiceInputs
 import com.meshcoreone.android.core.runtime.RuntimeSyncResult
 import com.meshcoreone.android.core.services.contacts.AdvertisementService
 import com.meshcoreone.android.core.services.contacts.ChannelService
+import com.meshcoreone.android.core.services.contacts.ChannelDispatchFence
 import com.meshcoreone.android.core.services.contacts.ContactCleanupCoordinator
 import com.meshcoreone.android.core.services.contacts.ContactService
 import com.meshcoreone.android.core.services.contacts.ResolvedFloodScope
@@ -213,8 +214,12 @@ class RadioSessionContainer private constructor(
     val messagePollingService = MessagePollingService(token, session, dataStore, inputs.connection.signals, scope)
     val binaryProtocolService = BinaryProtocolService(session.asBinaryProtocolSessionPort(), scope)
     val debugLogBuffer = DebugLogBuffer(dataStore, scope)
+    private var identityImportLease: ChannelDispatchFence.Lease? = null
+    private var identityImportChannels: ChannelService? = null
     val nodeConfigService = NodeConfigService(
-        session, NodeConfigSettingsAdapter { settingsService }, NodeConfigChannelAdapter(channelService), dataStore,
+        session, NodeConfigSettingsAdapter { settingsService }, NodeConfigChannelAdapter {
+            synchronized(publicationFence.monitor) { identityImportChannels ?: channelService }
+        }, dataStore,
         coordinatorAdapter,
     )
     val nodeSnapshotService = NodeSnapshotService(dataStore)
@@ -322,12 +327,14 @@ class RadioSessionContainer private constructor(
             inputs.callbacks.beginIdentityImport(handoff)
             synchronized(publicationFence.monitor) { identityIngestionQuiesced = true }
             try {
+                env.channelDispatchFence.awaitIdentityImportDrain(channelDispatchLease)
                 messagePollingService.pauseAutoFetch()
                 messagePollingService.pollAllMessages()
                 stopEventMonitoring(keepAcknowledgements = true)
             } catch (failure: Throwable) {
                 synchronized(publicationFence.monitor) { identityIngestionQuiesced = false }
                 try {
+                    inputs.callbacks.finishIdentityImport(true)
                     if (!isClosed) withContext(NonCancellable) {
                         stopEventMonitoring(keepAcknowledgements = true)
                         messagePollingService.resumeAutoFetch()
@@ -340,12 +347,33 @@ class RadioSessionContainer private constructor(
             }
         }
         nodeConfigService.setOnIdentityImportFinished { unchanged ->
+            val continuation = synchronized(publicationFence.monitor) {
+                identityImportChannels = null
+                identityImportLease.also { identityImportLease = null }
+            }
+            continuation?.let(env.channelDispatchFence::retire)
+            inputs.callbacks.finishIdentityImport(unchanged)
             if (unchanged && !isClosed) {
                 synchronized(publicationFence.monitor) { identityIngestionQuiesced = false }
                 ensureListeners()
             }
         }
-        nodeConfigService.setOnPostIdentityImport { handoff -> inputs.callbacks.reconcileIdentity(handoff) }
+        nodeConfigService.setOnPostIdentityImport { handoff ->
+            val effective = inputs.callbacks.reconcileIdentity(handoff)
+            val admission = inputs.callbacks.identityImportAdmission(handoff)
+            if (admission !== inputs.connection.channelDispatchAdmission) {
+                val lease = env.channelDispatchFence.openIdentityImportSession(channelDispatchLease, admission)
+                val channels = ChannelService(
+                    session, dataStore, null, dispatchFence = env.channelDispatchFence, dispatchLease = lease,
+                )
+                synchronized(publicationFence.monitor) {
+                    check(!isClosed) { "Identity import graph retired before continuation" }
+                    identityImportLease = lease
+                    identityImportChannels = channels
+                }
+            }
+            effective
+        }
         nodeConfigService.setOnIdentityRecovery { handoff -> inputs.callbacks.recoverIdentity(handoff) }
     }
 
@@ -492,6 +520,7 @@ class RadioSessionContainer private constructor(
 
     override suspend fun tearDown(): TeardownReport {
         env.channelDispatchFence.retire(channelDispatchLease)
+        synchronized(publicationFence.monitor) { identityImportLease }?.let(env.channelDispatchFence::retire)
         val (receipt, claimed) = synchronized(publicationFence.monitor) {
             teardown?.let { it to false } ?: CompletableDeferred<TeardownReport>().also {
                 teardown = it

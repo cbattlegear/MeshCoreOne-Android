@@ -49,6 +49,7 @@ class ChannelDispatchFence(
     ) {
         internal var retired = false
         internal val reconciledSlots = mutableSetOf<UByte>()
+        internal var radioAliases: Set<RadioId> = setOf(token.radioId)
     }
 
     private val stateLock = Any()
@@ -95,6 +96,44 @@ class ChannelDispatchFence(
         require(lease.owner === this) { "A channel lease belongs to its issuing fence" }
         lease.admission.revoke()
         lease.retired = true
+    }
+
+    /** The runtime paused admission before this barrier; never wait for it under the runtime monitor. */
+    suspend fun awaitIdentityImportDrain(lease: Lease) = identity.withChannelOperationScope {
+        requireCurrent(lease)
+        check(lease.admission.isPaused && lease.admission.inFlightCount == 0L) {
+            "Identity mutation requires paused, drained channel authority"
+        }
+    }
+
+    /** Only the connection manager supplies admission for the confirmed effective identity. */
+    fun openIdentityImportSession(previous: Lease, admission: ChannelDispatchAdmission): Lease = synchronized(stateLock) {
+        requireCurrent(previous)
+        check(previous.admission.isPaused && previous.admission.inFlightCount == 0L)
+        require(admission.connectionIdentity === previous.connection &&
+            admission.token.epoch == previous.token.epoch &&
+            admission.token.generation == previous.token.generation &&
+            admission !== previous.admission)
+        val aliases = previous.radioAliases + admission.token.radioId
+        aliases.firstNotNullOfOrNull { uncertainRadios[it] }?.let {
+            aliases.forEach { id -> uncertainRadios.putIfAbsent(id, it) }
+            throw ChannelDispatchFailure.UnsettledDispatch(it)
+        }
+        val occupant = sessions[admission.token.radioId]
+        check(occupant == null || occupant === previous || occupant.retired || occupant.admission.isRevoked) {
+            "The effective identity still has another live connection"
+        }
+        val permit = admission.tryAcquire(admission.token, previous.connection)
+            ?: throw ChannelDispatchFailure.RetiredSession()
+        try {
+            previous.retired = true
+            Lease(this, admission.token, previous.connection, admission).also {
+                it.radioAliases = aliases
+                sessions[it.token.radioId] = it
+            }
+        } finally {
+            permit.complete()
+        }
     }
 
     /**
@@ -148,7 +187,7 @@ class ChannelDispatchFence(
 
     fun quarantine(lease: Lease, failure: Throwable) = synchronized(stateLock) {
         require(lease.owner === this) { "A channel lease belongs to its issuing fence" }
-        uncertainRadios.putIfAbsent(lease.token.radioId, failure)
+        lease.radioAliases.forEach { uncertainRadios.putIfAbsent(it, failure) }
         Unit
     }
 

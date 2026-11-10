@@ -413,6 +413,33 @@ internal class RecordingStore : PersistenceStoreProtocol by unsupportedRole(Pers
         channelAttempts[key] = attempt.copy(isCompleted = true)
         after?.invoke("completeAcceptedQueuedChannelAttempt")
     }
+    override suspend fun settleAndRetireDefinitelyUnsentQueuedChannelAttempt(
+        key: QueuedChannelAttemptKey,
+    ): QueuedChannelRetirement {
+        access("settleAndRetireDefinitelyUnsentQueuedChannelAttempt")
+        val row = pending[EntityKey(key.radioId, key.pendingID)]
+            ?: reject(key, QueuedChannelAttemptConflict.MISSING_SUBMISSION)
+        val latest = channelAttempts.values.lastOrNull { it.key.radioId == key.radioId && it.key.pendingID == key.pendingID }
+        if (row.channelDispatchState != QueuedChannelDispatchState.DISPATCHING || row.channelAttemptID != key.attemptID ||
+            latest?.key != key || latest.phase != QueuedChannelAttemptPhase.DISPATCHING || latest.isCompleted ||
+            pending.values.any { it.radioId == key.radioId && it.messageID == key.messageID && it.id != key.pendingID }
+        ) reject(row, QueuedChannelAttemptConflict.RETAINED_SUBMISSION)
+        val messageKey = EntityKey(key.radioId, key.messageID)
+        val message = messages.getValue(messageKey)
+        if (row.messageID != key.messageID || row.kind != PendingSendKind.CHANNEL || row.contactID != null ||
+            row.channelOccupantID != latest.channelOccupantID || row.channelIndex != latest.channelIndex ||
+            row.isResend != latest.isResend || message.direction != MessageDirection.OUTGOING || message.contactID != null ||
+            message.channelOccupantID != latest.channelOccupantID || message.channelIndex != latest.channelIndex ||
+            message.text != row.messageText
+        ) reject(row, QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION)
+        val status = if (message.status == MessageStatus.DELIVERED) message.status else MessageStatus.FAILED
+        pending.remove(EntityKey(key.radioId, key.pendingID))
+        messages[messageKey] = message.copy(status = status)
+        channelAttempts[key] = latest.copy(phase = QueuedChannelAttemptPhase.DEFINITELY_UNSENT)
+        after?.invoke("settleAndRetireDefinitelyUnsentQueuedChannelAttempt")
+        return QueuedChannelRetirement(status, status != message.status)
+    }
+
     override suspend fun retireDefinitelyUnsentQueuedChannelAttempt(key: QueuedChannelAttemptKey): QueuedChannelRetirement {
         access("retireDefinitelyUnsentQueuedChannelAttempt")
         val row = pending[EntityKey(key.radioId, key.pendingID)]

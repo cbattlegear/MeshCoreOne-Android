@@ -99,8 +99,10 @@ class ShortcutIndependentOracleTest : RoomProcessTest() {
         try {
             val adapter = AppShortcutRadio(h.container)
             val radio = assertNotNull(adapter.currentRadioId)
-            val channel = ChannelDTO(radioId = radio, index = 0u, name = "Oracle", secret = Bytes(ByteArray(16) { 9 }))
-            store.saveChannel(channel)
+            val channel = store.fetchChannel(radio, 0u)
+                ?: ChannelDTO(radioId = radio, index = 0u, name = "Oracle", secret = Bytes(ByteArray(16) { 9 }))
+            seedReconciledChannel(channel)
+            val occupant = assertNotNull(store.fetchChannelOccupantSnapshot(radio, channel.index)).occupantID
             val device = assertNotNull(h.appState.connectedDevice)
             suspend fun setNodeName(name: String) {
                 val updated = device.copy(nodeName = name)
@@ -131,7 +133,14 @@ class ShortcutIndependentOracleTest : RoomProcessTest() {
             adapter.queueMessage(ShortcutRecipient.Channel(channel), exact)
             val messages = store.fetchMessages(radio, 0u, 100, 0)
             assertEquals(setOf("x".repeat(137), exact), messages.map { it.text }.toSet())
-            assertEquals(2, store.fetchPendingSends(radio).size)
+            assertTrue(messages.all { it.channelOccupantID == occupant })
+            val pending = store.fetchPendingSends(radio)
+            assertEquals(2, pending.size)
+            assertEquals(messages.map { it.id }.toSet(), pending.map { it.messageID }.toSet())
+            pending.forEach {
+                assertEquals(occupant, it.channelOccupantID)
+                assertEquals(occupant, assertNotNull(it.channelMessageEnvelope()).channelOccupantID)
+            }
         } finally { h.container.close() }
     }
 

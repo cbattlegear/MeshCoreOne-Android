@@ -14,8 +14,10 @@ import com.meshcoreone.android.app.navigation.AppChatConversationScreen
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.ChannelHistoryRejected
 import com.meshcoreone.android.core.contracts.domain.ChannelHistoryPersisting
+import com.meshcoreone.android.core.contracts.domain.ChannelIdentityWriteScope
 import com.meshcoreone.android.core.contracts.domain.ChannelMessageCreation
 import com.meshcoreone.android.core.contracts.domain.ChannelOccupantSnapshot
+import com.meshcoreone.android.core.contracts.domain.ChannelPersisting
 import com.meshcoreone.android.core.contracts.domain.ChannelSubmissionPersisting
 import com.meshcoreone.android.core.contracts.domain.QueuedChannelReadinessPersisting
 import com.meshcoreone.android.core.contracts.domain.QueuedChannelTerminalPersisting
@@ -33,6 +35,7 @@ import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
+import com.meshcoreone.android.core.services.messaging.PendingMessageCreation
 import com.meshcoreone.android.feature.chats.composer.*
 import com.meshcoreone.android.feature.chats.composer.ui.ConversationLinkActions
 import com.meshcoreone.android.feature.chats.timeline.ChatViewModel
@@ -45,7 +48,9 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -314,7 +319,10 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
         var initialContainerClosed = false
         val peerKey = key(4)
         val gate = CompletableDeferred<Unit>()
+        val creationReturn = CompletableDeferred<Unit>()
         val reached = CompletableDeferred<Unit>()
+        val holdCreationReturn = channel && replaceSlot &&
+            boundary in listOf(Boundary.BEFORE_CREATE, Boundary.AFTER_CREATE)
         val mounted = mutableStateOf(true)
         var creations = 0
         var enqueues = 0
@@ -340,6 +348,17 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
         val persistence = object : PersistenceStoreProtocol by store, ChannelHistoryPersisting by store,
             QueuedChannelReadinessPersisting by store, QueuedChannelTerminalPersisting by store,
             ChannelSubmissionPersisting by store {
+            override suspend fun <T> withChannelOperation(
+                block: suspend (ChannelPersisting, ChannelIdentityWriteScope) -> T,
+            ): T {
+                val heldCreation = holdCreationReturn && currentCoroutineContext()[PendingMessageCreation] != null
+                try {
+                    return store.withChannelOperation(block)
+                } finally {
+                    // Replacement must acquire the real lane, but precede the public creation outcome.
+                    if (heldCreation) creationReturn.await()
+                }
+            }
             override suspend fun fetchChannelOccupantSnapshot(radioId: RadioId, index: UByte): ChannelOccupantSnapshot? {
                 if (unreadableChannel) {
                     failedChannelReads++
@@ -593,23 +612,40 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
             }
             if (replaceSlot) {
                 val secret = Bytes(ByteArray(16) { 9 })
-                if (successfulReplacedSave) {
-                    val writesBefore = h.links.radios.single().sent.count { it[0].toInt() == 0x20 }
-                    initiating.channelService.setChannelWithSecret(radio, slot.index, slot.name, secret)
-                    assertEquals(writesBefore + 1,
-                        h.links.radios.single().sent.count { it[0].toInt() == 0x20 })
-                    assertEquals(secret, requireNotNull(store.fetchChannel(radio, slot.index)).secret)
-                } else {
-                    store.saveChannel(slot.copy(secret = secret))
-                    h.appState.handleChannelSlotOccupantChanged(radio, setOf(slot.index))
-                }
                 abortSlotWrite = boundary == Boundary.BEFORE_CREATE && !successfulReplacedSave
+                val replacementWrite = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) {
+                    if (successfulReplacedSave) {
+                        val writesBefore = h.links.radios.single().sent.count { it[0].toInt() == 0x20 }
+                        initiating.channelService.setChannelWithSecret(radio, slot.index, slot.name, secret)
+                        assertEquals(writesBefore + 1,
+                            h.links.radios.single().sent.count { it[0].toInt() == 0x20 })
+                        assertEquals(secret, requireNotNull(store.fetchChannel(radio, slot.index)).secret)
+                    } else {
+                        store.saveChannel(slot.copy(secret = secret))
+                        h.appState.handleChannelSlotOccupantChanged(radio, setOf(slot.index))
+                    }
+                }
+                if (holdCreationReturn) {
+                    assertFalse("Replacement waits for the admitted creation's real operation lane",
+                        replacementWrite.isCompleted)
+                    gate.complete(Unit)
+                }
+                replacementWrite.await()
+                if (successfulReplacedSave) {
+                    val saved = requireNotNull(captured)
+                    val retained = requireNotNull(store.fetchMessage(EntityKey(radio, saved.id)))
+                    assertEquals("Real SET retains the committed old-origin row as failed",
+                        MessageStatus.FAILED, retained.status)
+                    assertEquals(saved.channelOccupantID, retained.channelOccupantID)
+                    assertEquals(original, retained.text)
+                }
                 val replacementSlot = requireNotNull(store.fetchChannel(radio, slot.index))
                 replacementConversation = TimelineConversation.Channel(replacementSlot)
                 val replacementFeed = feature.timeline(requireNotNull(replacementConversation))
                 backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
                     replacementFeed.events.collect { replacementEvents += it }
                 }
+                creationReturn.complete(Unit)
             }
             if (lookupFailure) {
                 h.eventually("creation and recovery report unreadable channel without losing custody") {
@@ -678,7 +714,8 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                 assertEquals(if (localEnqueueFailure) 1 else 0, enqueues)
                 assertEquals(if (committed) 1 else 0, rows.size)
                 if (committed) {
-                    assertEquals(MessageStatus.PENDING, rows.single().status)
+                    assertEquals(if (successfulReplacedSave) MessageStatus.FAILED else MessageStatus.PENDING,
+                        rows.single().status)
                     val replacementTarget = requireNotNull(replacementConversation)
                     try {
                         feature.timeline(replacementTarget).retryService.retry(rows.single(), replacementTarget)
@@ -869,6 +906,7 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
             throw AssertionError("${failure.message}; pending=$pending; messaging=$diagnostics", failure)
         } finally {
             gate.complete(Unit)
+            creationReturn.complete(Unit)
             replacement?.close()
             compose.runOnUiThread { host.get().setContent {} }
             compose.waitForIdle()

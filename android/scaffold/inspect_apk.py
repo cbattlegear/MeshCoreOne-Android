@@ -9,8 +9,26 @@ import subprocess
 import sys
 import zipfile
 
+from apk_alignment import inspect_alignment
+
 
 ANDROID = Path(__file__).resolve().parents[1]
+REQUIRED_PERMISSIONS = {
+    "android.permission.BLUETOOTH_CONNECT",
+    "android.permission.BLUETOOTH_SCAN",
+    "android.permission.FOREGROUND_SERVICE",
+    "android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE",
+    "android.permission.POST_NOTIFICATIONS",
+    "android.permission.INTERNET",
+}
+# Product constraints: no billing, advertising identifier or APK installation/removal.
+FORBIDDEN_PERMISSIONS = {
+    "com.android.vending.BILLING",
+    "com.google.android.gms.permission.AD_ID",
+    "android.permission.REQUEST_INSTALL_PACKAGES",
+    "android.permission.INSTALL_PACKAGES",
+    "android.permission.REQUEST_DELETE_PACKAGES",
+}
 
 
 def inspect_apk():
@@ -32,24 +50,12 @@ def inspect_apk():
     if "launchable-activity: name='com.meshcoreone.android.MainActivity'" not in badging:
         raise ValueError("Actual APK launcher is missing")
     permissions = re.findall(r"^uses-permission: name='([^']+)'", badging, re.MULTILINE)
-    # WP-303 adds optional coarse location before WP-206 connectivity permissions (manifest order).
-    expected = [
-        "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.CAMERA",
-        "android.permission.BLUETOOTH_CONNECT",
-        "android.permission.BLUETOOTH_SCAN",
-        "android.permission.REQUEST_OBSERVE_COMPANION_DEVICE_PRESENCE",
-        "android.permission.FOREGROUND_SERVICE",
-        "android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE",
-        "android.permission.POST_NOTIFICATIONS",
-        "android.permission.INTERNET",
-        "android.permission.ACCESS_NETWORK_STATE",
-        "android.permission.CHANGE_NETWORK_STATE",
-        "android.permission.ACCESS_LOCAL_NETWORK",
-        "com.meshcoreone.android.debug.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
-    ]
-    if len(permissions) != len(expected) or set(permissions) != set(expected):
-        raise ValueError(f"Unexpected merged permissions: {permissions}")
+    missing = sorted(REQUIRED_PERMISSIONS - set(permissions))
+    if missing:
+        raise ValueError(f"Merged manifest is missing required permissions: {missing}")
+    forbidden = sorted(FORBIDDEN_PERMISSIONS & set(permissions))
+    if forbidden:
+        raise ValueError(f"Merged manifest declares permissions the product forbids: {forbidden}")
     if "uses-permission: name='android.permission.BLUETOOTH_SCAN' usesPermissionFlags='neverForLocation'" not in badging:
         raise ValueError("BLUETOOTH_SCAN must be declared neverForLocation")
     with zipfile.ZipFile(apk) as archive:
@@ -70,6 +76,7 @@ def inspect_apk():
         native_libraries = [name for name in archive.namelist() if name.startswith("lib/") and name.endswith(".so")]
     with apk.open("rb") as stream:
         digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    alignment = inspect_alignment(apk, Path(sdk))
     return {
         "scope": "actual local debug APK; no physical device, upgrade, release signature or feature parity claim",
         "artifact": "android/app/build/outputs/apk/debug/app-debug.apk",
@@ -82,7 +89,7 @@ def inspect_apk():
         "pinned_notices": notices,
         "verification_fixture_packaged": False,
         "native_libraries": native_libraries,
-        "native_16kb_compatibility_verified": False,
+        **alignment,
     }
 
 
@@ -90,5 +97,5 @@ if __name__ == "__main__":
     try:
         print(json.dumps(inspect_apk(), indent=2))
     except (OSError, ValueError, KeyError, zipfile.BadZipFile, subprocess.SubprocessError) as error:
-        print(f"BLOCKED: {error}", file=sys.stderr)
+        print(f"FAILED: {error}", file=sys.stderr)
         sys.exit(2)

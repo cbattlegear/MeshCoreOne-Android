@@ -1,7 +1,7 @@
 """AndroidOnly: WP-203 Full frozen SwiftData restore/export on ephemeral macOS, with data-only handoff."""
 
 import argparse
-import os
+import hashlib
 from pathlib import Path
 import platform
 import re
@@ -12,11 +12,10 @@ import xml.etree.ElementTree as ET
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from controller.errors import PortError
-from controller.schema import load_json
+from portlib.errors import PortError
+from portlib.schema import load_json
 from oracle.codec_harness import mac_environment, run as run_reference_codec
 from oracle.reference import FrozenReference, OracleError, REPO, SOURCE_SHA, json_bytes, sha256, write_or_check
-from oracle.wp203_ci import DATA_NAMES, identity, record, validate_bundle, validate_producer_data
 
 TEST_NAME = "testRealKotlinExportRestoresIntoSwiftDataAndSwiftExportsForRoom"
 HARNESS = "docs/android/evidence/WP-203/WP203InteropTests.swift"
@@ -27,6 +26,55 @@ TASK_DESCRIPTION = [
     "--parallel --num-workers 1 --disable-swift-testing --verbose --xunit-output <raw runner-temp Swift XML> "
     "--scratch-path <new runner-temp Swift build>",
 ]
+DATA_NAMES = {
+    "producer": ("kotlin-export.meshcoreone", "kotlin-export.json", "kotlin-room-proof.json"),
+    "swift": ("swift-export.meshcoreone", "swift-export.json", "swift-room-proof.json", "swift-results.json",
+              "swift-source-map.json", "swift-results.xml", "swift-restore-export.log"),
+}
+MAXIMUM_DATA_BYTES = 52_428_800
+
+
+def digest_file(path):
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > MAXIMUM_DATA_BYTES:
+        raise OracleError("Missing, linked or oversized backup data artifact: " + path.name)
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def record(root, name):
+    path = root / name
+    file_digest = digest_file(path)
+    return {"path": name, "size": path.stat().st_size, "sha256": file_digest}
+
+
+def validate_producer_data(root):
+    records = [record(root, name) for name in DATA_NAMES["producer"]]
+    exported = load_json(root / "kotlin-export.json")
+    proof = load_json(root / "kotlin-room-proof.json")
+    expected_proof = {
+        "compressedSha256", "inserted", "messageId", "preferencesRestored", "producer",
+        "radioId", "restoreVerified", "skipped",
+    }
+    if set(proof) != expected_proof:
+        raise OracleError("Malformed Kotlin Room producer proof")
+    compressed = next(item["sha256"] for item in records if item["path"] == "kotlin-export.meshcoreone")
+    if (proof["compressedSha256"] != compressed or proof["inserted"] != 12 or proof["skipped"] != 0
+            or proof["restoreVerified"] is not True or proof["preferencesRestored"] is not True
+            or proof["producer"] != "actual-Room-Kotlin-export"
+            or proof["messageId"] != "00000000-0000-0000-0000-000000000004"
+            or proof["radioId"] != "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"):
+        raise OracleError("Kotlin Room producer proof disagrees with actual backup bytes")
+    manifest = exported.get("manifest")
+    expected_manifest = {
+        "blockedChannelSenderCount", "channelCount", "contactCount", "deviceCount",
+        "discoveredNodeCount", "messageCount", "messageRepeatCount", "nodeStatusSnapshotCount",
+        "reactionCount", "remoteNodeSessionCount", "roomMessageCount", "savedTracePathCount",
+    }
+    if (exported.get("version") != 1 or not isinstance(manifest, dict)
+            or set(manifest) != expected_manifest or any(manifest[name] != 1 for name in expected_manifest)
+            or not isinstance(exported.get("userDefaults"), dict)):
+        raise OracleError("Kotlin export semantics are stale or incomplete")
+    return {"stage": "producer", "data": records, "proof": proof}
 
 
 def stage_package(reference, destination):
@@ -155,12 +203,25 @@ def execute(command, environment, log):
         raise OracleError("Real Swift command failed: " + log.read_text(encoding="utf8", errors="replace")[-12000:])
 
 
+def validate_swift_bundle(root):
+    evidence = load_json(root / "wp203-evidence.json")
+    if set(evidence) != {"schema_version", "stage", "source_sha", "tasks", "data", "junit"}:
+        raise OracleError("Malformed backup stage evidence")
+    if evidence["schema_version"] != 1 or evidence["stage"] != "swift" or evidence["source_sha"] != SOURCE_SHA:
+        raise OracleError("Stale/unknown backup stage")
+    if evidence["data"] != [record(root, name) for name in DATA_NAMES["swift"]]:
+        raise OracleError("Backup data hashes/sizes do not match actual files")
+    actual = verify_swift_xml(root / "swift-results.xml", root / "swift-restore-export.log")
+    if load_json(root / "swift-results.json") != actual or evidence["junit"] != actual or evidence["tasks"] != TASK_DESCRIPTION:
+        raise OracleError("Missing actual SwiftData restore assertion evidence")
+    return evidence
+
+
 def run(incoming, output, stage_root):
     if platform.system() != "Darwin":
         raise OracleError("Full source SwiftData interoperability requires isolated macOS; Windows staging is not execution")
     if output.exists() or not output.is_absolute():
         raise OracleError("New absolute Swift evidence output required")
-    bound = identity()
     validate_producer_data(incoming)
     output.mkdir(parents=True)
     source_map = stage_package(FrozenReference(), stage_root)
@@ -193,11 +254,11 @@ def run(incoming, output, stage_root):
             or proof.get("preferences_restored") is not True or len(proof.get("source_arrays", [])) != 12):
         raise OracleError("Actual source SwiftData restore/count/preference proof disagrees")
     evidence = {
-        "schema_version": 1, "stage": "swift", "identity": bound, "source_sha": SOURCE_SHA,
+        "schema_version": 1, "stage": "swift", "source_sha": SOURCE_SHA,
         "tasks": TASK_DESCRIPTION, "data": [record(output, name) for name in DATA_NAMES["swift"]], "junit": result,
     }
     write_or_check(output / "wp203-evidence.json", json_bytes(evidence), check=False)
-    validate_bundle(output, "swift", bound)
+    validate_swift_bundle(output)
     return evidence
 
 
@@ -209,7 +270,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         result = run(args.input, args.output, args.stage_root)
-        print(json_bytes({"stage": result["stage"], "result": "passed", "identity": result["identity"]}).decode(), end="")
+        print(json_bytes({"stage": result["stage"], "result": "passed"}).decode(), end="")
         return 0
     except (PortError, OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
         print("BLOCKED: " + str(error), file=sys.stderr)

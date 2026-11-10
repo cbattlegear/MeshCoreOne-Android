@@ -26,7 +26,7 @@ private val CHANNELS_CASE_TIMEOUT = 60.seconds
 
 internal typealias ChannelsCaseBody = suspend CoroutineScope.() -> Unit
 
-/** One dynamic test per source case, named `Suite::name()` as in test-cases.json. */
+/** One dynamic test per source case, named `Suite::name()` as in the frozen Swift sources. */
 internal fun channelsCases(suite: String, vararg cases: Pair<String, ChannelsCaseBody>): List<DynamicTest> =
     cases.map { (name, body) -> channelsCase("$suite::$name()", body) }
 

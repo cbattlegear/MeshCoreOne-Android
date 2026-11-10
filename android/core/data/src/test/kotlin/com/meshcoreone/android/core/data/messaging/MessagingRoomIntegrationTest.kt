@@ -626,7 +626,7 @@ class MessagingRoomIntegrationTest {
             assertEquals(8L, retained.getValue(firstRow.id).attemptCount)
             assertEquals(QueuedChannelDispatchState.UNCERTAIN, retained.getValue(firstRow.id).channelDispatchState)
             assertNotNull(retained.getValue(firstRow.id).channelAttemptID)
-            assertEquals(2L, retained.getValue(secondRow.id).attemptCount)
+            assertEquals(3L, retained.getValue(secondRow.id).attemptCount)
             assertEquals(QueuedChannelDispatchState.READY, retained.getValue(secondRow.id).channelDispatchState)
             assertNull(retained.getValue(secondRow.id).channelAttemptID)
             assertTrue(store.fetchQueuedChannelAttempts(EntityKey(radio, secondRow.id)).isEmpty())

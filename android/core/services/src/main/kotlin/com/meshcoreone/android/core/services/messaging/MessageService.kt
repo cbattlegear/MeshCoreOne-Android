@@ -992,14 +992,37 @@ class MessageService(
             }
         }
 
+    suspend fun createPendingChannelMessage(
+        text: String, channel: ChannelDTO, textType: TextType = TextType.PLAIN,
+    ): MessageDTO = owned("createPendingDisplayedChannel", pendingOperations) {
+        fun reject(reason: ChannelHistoryConflict): Nothing = throw PersistenceStoreException(
+            PersistenceStoreError.InvalidData, ChannelHistoryRejected(reason),
+        )
+        val occupant = channel.occupantID ?: reject(ChannelHistoryConflict.UNKNOWN_AUTHORITY)
+        if (channel.radioId != token.radioId) reject(ChannelHistoryConflict.STALE_OCCUPANT)
+        dataStore.withChannelOperation { store, _ ->
+            val current = store.fetchChannelOccupantSnapshot(channel.radioId, channel.index)
+                ?: reject(ChannelHistoryConflict.UNKNOWN_AUTHORITY)
+            if (current.occupantID != occupant || current.channel.id != channel.id ||
+                current.channel.secret != channel.secret
+            ) reject(ChannelHistoryConflict.STALE_OCCUPANT)
+            saveOutgoingChannel(text, channel.index, channel.radioId, textType,
+                ChannelHistoryScope(channel.radioId, channel.index, occupant)).also {
+                ownership.check("createPendingDisplayedChannel.saved")
+            }
+        }
+    }
+
     private suspend fun saveOutgoingChannel(
         text: String, channelIndex: UByte, radioId: RadioId, textType: TextType,
+        capturedOrigin: ChannelHistoryScope? = null,
     ): MessageDTO {
         val dto = outgoingChannel(text, channelIndex, radioId, textType)
-        val snapshot = dataStore.fetchChannelOccupantSnapshot(radioId, channelIndex)
-            ?: throw MessageServiceException(MessageServiceError.ChannelNotFound)
+        val origin = capturedOrigin ?: ChannelHistoryScope.from(
+            dataStore.fetchChannelOccupantSnapshot(radioId, channelIndex)
+                ?: throw MessageServiceException(MessageServiceError.ChannelNotFound),
+        )
         ownership.check("createPendingChannel.origin")
-        val origin = ChannelHistoryScope.from(snapshot)
         if (origin.radioId != radioId || origin.channelIndex != channelIndex) {
             throw PersistenceStoreException(PersistenceStoreError.InvalidData)
         }

@@ -4,6 +4,7 @@ package com.meshcoreone.android.core.model
 import com.meshcoreone.android.core.contracts.domain.ChannelHistoryScope
 import com.meshcoreone.android.core.contracts.domain.ChannelMessageCreation
 import com.meshcoreone.android.core.contracts.domain.ChannelSubmission
+import com.meshcoreone.android.core.protocol.bytes.Bytes
 import java.time.Instant
 import java.util.UUID
 import kotlin.test.*
@@ -15,6 +16,19 @@ class ChannelSubmissionContractTest {
     private val messageID = UUID(0, 3)
     private val pendingID = UUID(0, 4)
     private val text = "original \uD83D\uDC4B e\u0301\n"
+
+    @Test fun displayedWitnessSurvivesOnlyIdentityPreservingUpdatesAndParticipatesInEquality() {
+        val channel = ChannelDTO(radioId = radio, index = 7u, name = "shown",
+            secret = Bytes(ByteArray(16) { 1 }), occupantID = origin.expectedOccupantID)
+        assertEquals(channel.occupantID, channel.withFloodScope(ChannelFloodScope.AllRegions).occupantID)
+        assertEquals(channel.occupantID, channel.withFavorite(true).occupantID)
+        assertEquals(channel.occupantID, channel.withNotificationLevel(NotificationLevel.MUTED).occupantID)
+        assertEquals(channel.occupantID, channel.updating(channel.toChannelInfo().copy(name = "renamed")).occupantID)
+        assertNull(channel.updating(channel.toChannelInfo().copy(secret = Bytes(ByteArray(16) { 2 }))).occupantID)
+        assertNull(channel.updating(channel.toChannelInfo().copy(index = 8u)).occupantID)
+        assertNotEquals(channel, channel.copy(occupantID = UUID(0, 9)))
+        assertNotEquals(channel, channel.copy(occupantID = null))
+    }
 
     @Test fun creationKeepsCallerIdentityOriginAndExactTextWithoutMintingMetadata() {
         for (type in TextType.entries) {

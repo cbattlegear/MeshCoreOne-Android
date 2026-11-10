@@ -751,6 +751,24 @@ internal fun TracePathMapContent(
         }
     }
     val loaded = settings
+    val requestClear = { if (canEdit()) confirmClear = true }
+    val clearPath = {
+        if (canEdit()) {
+            map.clearPath()
+            refresh()
+        }
+        confirmClear = false
+    }
+    val canRunTrace = {
+        loaded != null && state.canRunTraceWhenConnected &&
+            holder.deps.connectedDevice() != null && canEdit()
+    }
+    val runTrace = {
+        if (canRunTrace()) {
+            requestCamera(map.pathCamera())
+            scope.launch { if (canRunTrace()) map.runTrace() }
+        }
+    }
     Column(Modifier.fillMaxSize()) {
         if (loaded == null) CircularProgressIndicator(Modifier.padding(16.dp))
         if (preferenceError) {
@@ -815,24 +833,6 @@ internal fun TracePathMapContent(
             )
         }
         state.errorMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-        val requestClear = { if (canEdit()) confirmClear = true }
-        val clearPath = {
-            if (canEdit()) {
-                map.clearPath()
-                refresh()
-            }
-            confirmClear = false
-        }
-        val canRunTrace = {
-            loaded != null && state.canRunTraceWhenConnected &&
-                holder.deps.connectedDevice() != null && canEdit()
-        }
-        val runTrace = {
-            if (canRunTrace()) {
-                requestCamera(map.pathCamera())
-                scope.launch { if (canRunTrace()) map.runTrace() }
-            }
-        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TextButton(
                 onClick = requestClear,

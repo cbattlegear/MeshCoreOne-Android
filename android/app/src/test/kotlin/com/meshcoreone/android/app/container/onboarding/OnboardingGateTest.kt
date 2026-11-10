@@ -88,6 +88,11 @@ import org.robolectric.annotation.Config
 class OnboardingGateTest {
     @get:Rule val compose = createEmptyComposeRule()
     private val host = Robolectric.buildActivity(ComponentActivity::class.java)
+    private val defaultPresetTarget = OnboardingPresetTarget(
+        java.util.UUID.fromString("00000000-0000-0000-0000-000000000001"),
+        1,
+        java.util.UUID.fromString("00000000-0000-0000-0000-000000000002"),
+    )
 
     /** Reduce-motion (animator scale 0) stops the welcome mesh animation, which would keep Compose from idling. */
     @Before fun reduceMotion() {
@@ -1010,6 +1015,7 @@ class OnboardingGateTest {
             host.setup().visible()
             val presets = object : OnboardingPresetPort {
                 override val canApply = MutableStateFlow(true)
+                override fun currentTarget() = defaultPresetTarget
                 override suspend fun apply(presetId: String): OnboardingPresetOutcome {
                     release.await()
                     return OnboardingPresetOutcome.Applied
@@ -1048,6 +1054,7 @@ class OnboardingGateTest {
             )
             val presets = object : OnboardingPresetPort {
                 override val canApply = MutableStateFlow(true)
+                override fun currentTarget() = defaultPresetTarget
                 override suspend fun apply(presetId: String): OnboardingPresetOutcome {
                     when (++applies) {
                         1 -> oldRelease.await()
@@ -1078,7 +1085,7 @@ class OnboardingGateTest {
             assertTrue(flow.preset.state.value.isCompleted)
             assertEquals(1, flow.preset.state.value.commitTick)
             assertEquals(
-                com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt.Preset(id, null),
+                com.meshcoreone.android.feature.onboarding.OnboardingCompletionReceipt.Preset(id, defaultPresetTarget),
                 flow.onboarding.completionReceipt,
             )
             assertEquals(listOf(false, true), durable)
@@ -1098,6 +1105,7 @@ class OnboardingGateTest {
             )
             val presets = object : OnboardingPresetPort {
                 override val canApply = MutableStateFlow(true)
+                override fun currentTarget() = defaultPresetTarget
                 override suspend fun apply(presetId: String): OnboardingPresetOutcome {
                     applies++
                     return OnboardingPresetOutcome.Applied

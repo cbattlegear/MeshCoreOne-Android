@@ -51,12 +51,7 @@ class ChannelDispatchFenceTest {
                 occupant
             }) { effects += "send" }
 
-        suspend fun <T> mutate(block: suspend (ChannelIdentityWriteScope) -> T): T =
-            gate.withChannelOperationScope { scope ->
-                fence.withScopedMutation(lease, scope) { block(scope) }
-            }
-
-        suspend fun replace() = mutate { scope ->
+        suspend fun replace() = fence.withMutation(lease) { scope ->
             scope.withChannelIdentityMutation {
                 occupant = UUID(0, 4)
                 effects += "replace"
@@ -246,7 +241,7 @@ class ChannelDispatchFenceTest {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         val replace = launch {
-            f.mutate { scope ->
+            f.fence.withMutation(f.lease) { scope ->
                 entered.complete(Unit)
                 release.await()
                 scope.withChannelIdentityMutation { f.occupant = UUID(0, 4) }
@@ -406,15 +401,15 @@ class ChannelDispatchFenceTest {
     @Test
     fun sameKeyRenamePreservesEpochButClearDifferentKeyAndAbaDoNot() = runTest {
         val f = preparedFixture()
-        f.mutate { scope ->
+        f.fence.withMutation(f.lease) { scope ->
             scope.withChannelIdentityMutation { f.effects += "rename" }
         }
         f.send()
         f.replace()
         assertFailsWith<ChannelDispatchFailure.ReplacedOccupant> { f.send() }
-        f.mutate { scope -> scope.withChannelIdentityMutation { f.occupant = null } }
+        f.fence.withMutation(f.lease) { scope -> scope.withChannelIdentityMutation { f.occupant = null } }
         assertFailsWith<ChannelDispatchFailure.UnknownOccupant> { f.send() }
-        f.mutate { scope ->
+        f.fence.withMutation(f.lease) { scope ->
             scope.withChannelIdentityMutation { f.occupant = UUID(0, 5) }
         }
         assertFailsWith<ChannelDispatchFailure.ReplacedOccupant> { f.send() }
@@ -427,7 +422,7 @@ class ChannelDispatchFenceTest {
         val radioAccepted = CompletableDeferred<Unit>()
         val persist = CompletableDeferred<Unit>()
         val mutation = launch {
-            f.mutate { scope ->
+            f.fence.withMutation(f.lease) { scope ->
                 f.effects += "SET accepted"
                 radioAccepted.complete(Unit)
                 persist.await()

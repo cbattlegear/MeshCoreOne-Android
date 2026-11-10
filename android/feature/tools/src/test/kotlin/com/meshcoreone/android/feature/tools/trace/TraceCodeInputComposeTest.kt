@@ -3,6 +3,7 @@
 // AndroidOnly: WP-314 TS-13 Mounted Save/name actions persist through the real holder.
 // AndroidOnly: WP-314 TS-14 Mounted comparisons consume actual saved history and trace responses.
 // AndroidOnly: WP-314 TS-19 Mounted hash-width actions respect the live radio's firmware capability.
+// AndroidOnly: WP-314 Mounted trace-map controls expose real preferences and trace state.
 package com.meshcoreone.android.feature.tools.trace
 
 import android.app.Activity
@@ -54,6 +55,8 @@ import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.meshcoreone.android.core.maps.MapColorPreference
 import com.meshcoreone.android.core.maps.MapFilterHost
 import com.meshcoreone.android.core.maps.MapFilterState
+import com.meshcoreone.android.core.maps.MapMarker
+import com.meshcoreone.android.core.maps.MapPinStyle
 import com.meshcoreone.android.core.maps.MapPreferenceStore
 import com.meshcoreone.android.core.maps.MapPreferences
 import com.meshcoreone.android.core.model.DeviceDTO
@@ -64,6 +67,7 @@ import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.TracePathPersisting
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
+import com.meshcoreone.android.core.l10n.generated.AppMapStrings as M
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.MessageSentInfo
 import com.meshcoreone.android.core.protocol.event.TraceNode
@@ -163,6 +167,194 @@ class TraceCodeInputComposeTest {
         assertEquals(Bytes.of(0xAA, 0x00, 0x00, 0x00), newerFirmware.state.outboundPath.single().hashBytes)
         assertNull(newerFirmware.state.activeSavedPath)
         assertNull(newerFirmware.state.result)
+    }
+
+    @Test fun missingMapPreferencesShowAnErrorAndLeaveListNavigationUsable() {
+        val h = configured()
+        content.setContent {
+            MaterialTheme {
+                TracePathScreen(
+                    TracePathScreen.Dependencies(h.deps, h.recents, h.diagnostics, RADIO, 1),
+                    mapSurface = host.get().mapSurface,
+                )
+            }
+        }
+        settle()
+        click(host.get().getString(C.contactsTraceModeMap))
+        assertTrue(texts().contains(host.get().getString(L.commonErrorFailedToLoad)))
+        click(host.get().getString(C.contactsTraceModeList))
+        assertTrue(texts().contains(host.get().getString(C.contactsTraceListRunTrace)))
+    }
+
+    @Test fun mapClusteringControlPersistsAndUpdatesTheMountedSurfaceAtLargeFont() {
+        for (fontScale in listOf(1f, 2f)) {
+            val h = connectedMapHarness()
+            val preferences = TraceCodeInputMapPreferences()
+            var renderedClustering: Boolean? = null
+            val surface: TraceMapSurface = { _, clustering, _, _, _, overlay ->
+                SideEffect { renderedClustering = clustering }
+                Box(Modifier.fillMaxSize(), content = overlay)
+            }
+            mountPathMap(h, preferences, fontScale, surface)
+            val label = host.get().getString(M.mapControlsClusterNodes)
+            assertTrue(preferences.observe(MapFilterHost.TRACE_PATH).value.clustering)
+            assertEquals(true, renderedClustering)
+            assertTrue(button(label).boundsInRoot.width > 0f)
+
+            click(label)
+            assertFalse(preferences.observe(MapFilterHost.TRACE_PATH).value.clustering)
+            assertEquals(false, renderedClustering)
+            click(label)
+            assertTrue(preferences.observe(MapFilterHost.TRACE_PATH).value.clustering)
+            assertEquals(true, renderedClustering)
+        }
+    }
+
+    @Test fun clusteringWriteFailureIsVisibleAndCanBeRetried() {
+        val h = connectedMapHarness()
+        val preferences = TraceCodeInputMapPreferences().apply {
+            clusteringFailure = IllegalStateException("preference write failed")
+        }
+        mountPathMap(h, preferences)
+        val label = host.get().getString(M.mapControlsClusterNodes)
+        click(label)
+        assertTrue(preferences.observe(MapFilterHost.TRACE_PATH).value.clustering)
+        assertTrue(texts().contains(host.get().getString(L.commonErrorFailedToLoad)))
+        assertEquals("trace-map-write-clustering", h.diagnostics.failures.single().first)
+
+        preferences.clusteringFailure = null
+        click(host.get().getString(M.mapPreviewRetryButtonAccessibilityLabel))
+        click(label)
+        assertFalse(preferences.observe(MapFilterHost.TRACE_PATH).value.clustering)
+    }
+
+    @Test fun rapidAndRetainedMapRunActionsDoNotReplaceAnActiveTrace() {
+        val h = connectedMapHarness()
+        val sender = FakeTraceSender()
+        h.deps.sender = sender
+        h.holder.addNode(contact(0xAA, name = "Tower"))
+        mountPathMap(h)
+        val runLabel = host.get().getString(C.contactsTraceListRunTrace)
+        val action = assertNotNull(button(runLabel).config[SemanticsActions.OnClick].action)
+        host.get().runOnUiThread {
+            assertTrue(action())
+            assertTrue(action())
+        }
+        settle()
+        h.main.runCurrent()
+        val tag = sender.sent.single().tag
+        assertEquals(tag, h.holder.pendingTag)
+        assertTrue(h.state.isRunning)
+        val running = actionButton(host.get().getString(C.contactsTraceListRunningLabel))
+        assertTrue(running.config.contains(SemanticsProperties.Disabled))
+        assertEquals(LiveRegionMode.Polite, running.config[SemanticsProperties.LiveRegion])
+        assertTrue(texts().contains(host.get().getString(C.contactsTraceListRunningTrace)))
+
+        host.get().runOnUiThread { assertTrue(action()) }
+        settle()
+        assertEquals(1, sender.sent.size)
+        assertEquals(tag, h.holder.pendingTag)
+        h.respond(tag, listOf(node(0xAA, 6.0), node(null, 3.0)), RADIO)
+        settle()
+        click(runLabel)
+        assertEquals(2, sender.sent.size)
+    }
+
+    @Test fun failedMapRunShowsTheFailureAndAllowsAnotherAttempt() {
+        val h = connectedMapHarness()
+        val sender = FakeTraceSender(failure = IllegalStateException("radio send failed"))
+        h.deps.sender = sender
+        h.holder.addNode(contact(0xAA, name = "Tower"))
+        mountPathMap(h)
+        val runLabel = host.get().getString(C.contactsTraceListRunTrace)
+
+        click(runLabel)
+        h.main.runCurrent()
+        settle()
+        assertFalse(h.state.isRunning)
+        assertEquals(EnglishTraceStrings.sendFailed, h.state.errorMessage)
+        assertTrue(texts().contains(EnglishTraceStrings.sendFailed))
+        assertEquals("sendTrace", h.diagnostics.failures.single().first)
+        assertFalse(texts().contains(host.get().getString(C.contactsTraceMapViewResults)))
+
+        sender.failure = null
+        click(runLabel)
+        assertEquals(2, sender.sent.size)
+        assertTrue(h.state.isRunning)
+    }
+
+    @Test fun mapResultsRetainCancelledBatchProgressAndSuccessfulHopDetails() {
+        val h = connectedMapHarness()
+        val sender = FakeTraceSender()
+        h.deps.sender = sender
+        h.holder.addNode(contact(0xAA, name = "Tower"))
+        h.holder.setBatchEnabled(true)
+        h.start { h.holder.runBatchTrace() }
+        h.respond(sender.sent.single().tag, listOf(node(0xAA, 6.0), node(null, 3.0)), RADIO)
+        h.holder.cancelBatchTrace()
+        assertFalse(h.state.isRunning)
+        assertEquals(1, h.state.successCount)
+        mountPathMap(h)
+
+        click(host.get().getString(C.contactsTraceMapViewResults))
+        val progress = C.contactsResultsBatchSuccess(host.get().resources, 1, 3, 33)
+        assertTrue(nodes().any {
+            progress in it.config.getOrElse(SemanticsProperties.ContentDescription) { emptyList() }
+        })
+        assertTrue(texts().contains("2. Tower"))
+        assertTrue(texts().contains("SNR: 6.0 dB"))
+    }
+
+    @Test fun mapResultsShowUnlocatedHopDetailsAndRejectAStaleAction() {
+        val h = connectedMapHarness()
+        val sender = FakeTraceSender()
+        h.deps.sender = sender
+        val unlocated = contact(0xAA, name = "Unlocated Ridge")
+        h.holder.setContactsForTesting(listOf(unlocated))
+        h.holder.addNode(unlocated)
+        var points: List<MapMarker> = emptyList()
+        val surface: TraceMapSurface = { presentation, _, _, _, _, overlay ->
+            SideEffect { points = presentation.points }
+            Box(Modifier.fillMaxSize(), content = overlay)
+        }
+        mountPathMap(h, fontScale = 2f, surface = surface)
+        click(host.get().getString(C.contactsTraceListRunTrace))
+        h.main.runCurrent()
+        h.time.advanceBy(437.milliseconds)
+        h.respond(sender.sent.single().tag, listOf(node(0xAA, -6.0), node(null, 3.0)), RADIO)
+        settle()
+        assertTrue(points.none { it.style == MapPinStyle.BADGE })
+        val resultsLabel = host.get().getString(C.contactsTraceMapViewResults)
+        val action = assertNotNull(button(resultsLabel).config[SemanticsActions.OnClick].action)
+        click(resultsLabel)
+        assertTrue(texts().contains("437 ms"))
+        assertTrue(texts().contains("2. Unlocated Ridge"))
+        assertTrue(texts().contains("SNR: -6.0 dB"))
+
+        host.get().runOnUiThread {
+            h.holder.clearPath()
+            assertTrue(action())
+        }
+        settle()
+        assertFalse(ShadowDialog.getLatestDialog()?.isShowing == true)
+        assertFalse(texts().contains(resultsLabel))
+
+        val next = contact(0xBB, name = "Next Ridge")
+        host.get().runOnUiThread {
+            h.holder.setContactsForTesting(listOf(next))
+            h.holder.addNode(next)
+        }
+        settle()
+        click(host.get().getString(C.contactsTraceListRunTrace))
+        h.main.runCurrent()
+        h.time.advanceBy(123.milliseconds)
+        h.respond(sender.sent.last().tag, listOf(node(0xBB, 2.0), node(null, 3.0)), RADIO)
+        settle()
+        assertFalse(ShadowDialog.getLatestDialog()?.isShowing == true)
+        click(resultsLabel)
+        assertTrue(texts().contains("123 ms"))
+        assertTrue(texts().contains("2. Next Ridge"))
+        assertFalse(texts().contains("2. Unlocated Ridge"))
     }
 
     @Test fun mountedTraceComparisonUsesAcceptanceOrderAtEqualTimestampsAndClockRollback() {
@@ -3121,6 +3313,33 @@ class TraceCodeInputComposeTest {
         settle()
     }
 
+    private fun connectedMapHarness() = configured().also {
+        it.holder.bindConnection(RADIO, 1)
+        it.holder.setContactsForTesting(listOf(contact(0xAA, name = "Tower")))
+    }
+
+    private fun mountPathMap(
+        harness: TraceHarness,
+        preferences: MapPreferenceStore = TraceCodeInputMapPreferences(),
+        fontScale: Float = 1f,
+        surface: TraceMapSurface = host.get().mapSurface,
+    ) {
+        val connection = TracePathScreen.Dependencies(
+            harness.deps, harness.recents, harness.diagnostics, RADIO, 1, preferences,
+        )
+        content.setContent {
+            key(harness) {
+                val state = harness.holder.state.collectAsStateWithLifecycle().value
+                CompositionLocalProvider(LocalDensity provides Density(1f, fontScale)) {
+                    MaterialTheme {
+                        TracePathMapContent(state, harness.holder, preferences, null, harness.diagnostics, surface, connection)
+                    }
+                }
+            }
+        }
+        settle()
+    }
+
     private fun paste(text: String) {
         val clipboard = host.get().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("trace codes", text))
@@ -3398,6 +3617,7 @@ class TraceCodeInputTestActivity : Activity(), SavedStateRegistryOwner {
 }
 
 private class TraceCodeInputMapPreferences : MapPreferenceStore {
+    var clusteringFailure: Exception? = null
     private val state = MutableStateFlow(
         MapPreferences(
             MapFilterState.seed(MapFilterHost.TRACE_PATH),
@@ -3418,6 +3638,7 @@ private class TraceCodeInputMapPreferences : MapPreferenceStore {
     }
 
     override suspend fun setClustering(enabled: Boolean) {
+        clusteringFailure?.let { throw it }
         state.update { it.copy(clustering = enabled) }
     }
 

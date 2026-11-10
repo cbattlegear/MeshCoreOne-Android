@@ -4,8 +4,11 @@
 // PortedFrom: MC1/Views/Tools/TracePath/SavePathRowView.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Tools/TracePath/ComparisonRowView.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Tools/TracePath/Map/PathActionsSectionView.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Tools/TracePath/Map/TracePathFloatingButtonsView.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.feature.tools.trace
 
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -15,6 +18,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -39,6 +43,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -52,6 +57,8 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -688,7 +695,15 @@ internal fun TracePathMapContent(
     },
     connection: TracePathScreen.Dependencies,
 ) {
-    val preferences = checkNotNull(preferenceStore) { "Trace map requires process preference wiring" }
+    if (preferenceStore == null) {
+        Text(
+            stringResource(L.commonErrorFailedToLoad),
+            modifier = Modifier.padding(16.dp),
+            color = MaterialTheme.colorScheme.error,
+        )
+        return
+    }
+    val preferences = preferenceStore
     val map = remember(holder) { TraceMapPathLogic(holder).also { it.configure(location) } }
     val radioId = connection.radioId
     val generation = connection.generation
@@ -705,8 +720,10 @@ internal fun TracePathMapContent(
     var cameraCommandRevision by remember(holder) { mutableLongStateOf(0L) }
     var presentation by remember(holder) { mutableStateOf(MapPresentationState()) }
     var confirmClear by remember(holder, radioId, generation, originatingToken) { mutableStateOf(false) }
+    var showResults by rememberSaveable(holder, radioId, generation, originatingToken) { mutableStateOf(false) }
     val locale = LocalConfiguration.current.locales[0]
     val unit = stringResource(com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings.remoteNodesStatusSnrBadgeUnit)
+    val runningDescription = stringResource(C.contactsTraceListRunningLabel)
     val badgeFormatter = remember(locale, unit) { TraceMapBadgeFormat(locale, unit) }
     val formatBadge: (Double, Double) -> String = remember(badgeFormatter) { badgeFormatter::format }
     val appIsDark = effectiveAppThemeIsDark()
@@ -767,13 +784,23 @@ internal fun TracePathMapContent(
         confirmClear = false
     }
     val canRunTrace = {
-        loaded != null && state.canRunTraceWhenConnected &&
+        loaded != null && holder.state.value.canRunTraceWhenConnected &&
             holder.deps.connectedDevice() != null && canEdit()
     }
     val runTrace = {
         if (canRunTrace()) {
             requestCamera(map.pathCamera())
             scope.launch { if (canRunTrace()) map.runTrace() }
+        }
+    }
+    val hasResults = state.displayedResult?.success == true || state.batchStatus != null
+    LaunchedEffect(hasResults) {
+        if (!hasResults) showResults = false
+    }
+    val viewResults = {
+        val current = holder.state.value
+        if (canEdit() && (current.displayedResult?.success == true || current.batchStatus != null)) {
+            showResults = true
         }
     }
     Column(Modifier.fillMaxSize()) {
@@ -812,6 +839,12 @@ internal fun TracePathMapContent(
                     label = { Text(stringResource(M.mapControlsShowLabels)) },
                     modifier = Modifier.sizeIn(minHeight = 48.dp),
                 )
+                FilterChip(
+                    selected = loaded.clustering,
+                    onClick = { write("trace-map-write-clustering") { preferences.setClustering(!loaded.clustering) } },
+                    label = { Text(stringResource(M.mapControlsClusterNodes)) },
+                    modifier = Modifier.sizeIn(minHeight = 48.dp),
+                )
             }
         }
         Box(Modifier.weight(1f)) {
@@ -842,7 +875,7 @@ internal fun TracePathMapContent(
             )
         }
         state.errorMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TextButton(
                 onClick = requestClear,
                 enabled = state.outboundPath.isNotEmpty() && canEdit(),
@@ -853,7 +886,30 @@ internal fun TracePathMapContent(
             Button(
                 onClick = runTrace,
                 enabled = canRunTrace(),
-            ) { Text(stringResource(C.contactsTraceListRunTrace)) }
+                modifier = Modifier.sizeIn(minHeight = 48.dp).semantics {
+                    if (state.isRunning) {
+                        liveRegion = LiveRegionMode.Polite
+                        contentDescription = runningDescription
+                    }
+                    onClick { runTrace(); true }
+                },
+            ) {
+                if (state.isRunning) {
+                    CircularProgressIndicator(
+                        Modifier.padding(end = 8.dp).size(18.dp).clearAndSetSemantics {},
+                        strokeWidth = 2.dp,
+                    )
+                    Text(stringResource(C.contactsTraceListRunningTrace))
+                } else {
+                    Text(stringResource(C.contactsTraceListRunTrace))
+                }
+            }
+            if (hasResults) {
+                TextButton(
+                    onClick = viewResults,
+                    modifier = Modifier.sizeIn(minHeight = 48.dp).semantics { onClick { viewResults(); true } },
+                ) { Text(stringResource(C.contactsTraceMapViewResults)) }
+            }
         }
     }
     if (confirmClear) AlertDialog(
@@ -870,6 +926,18 @@ internal fun TracePathMapContent(
             Text(stringResource(C.contactsTraceClearPath))
         } },
         dismissButton = { TextButton(onClick = { confirmClear = false }) { Text(stringResource(L.commonCancel)) } },
+    )
+    if (showResults && hasResults) AlertDialog(
+        onDismissRequest = { showResults = false },
+        title = { Text(stringResource(C.contactsTraceMapViewResults)) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                TraceResults(state)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { showResults = false }) { Text(stringResource(L.commonDone)) }
+        },
     )
 }
 

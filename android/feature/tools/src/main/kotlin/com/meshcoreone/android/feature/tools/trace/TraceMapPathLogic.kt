@@ -206,6 +206,7 @@ class TraceMapPathLogic(private val trace: TracePathStateHolder) {
 
     /** Map traces are always single traces. */
     suspend fun runTrace() {
+        if (!trace.current.canRunTraceWhenConnected) return
         trace.setBatchEnabled(false)
         trace.runTrace()
     }

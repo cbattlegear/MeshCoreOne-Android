@@ -225,6 +225,24 @@ class TraceMapAndNavigationTest {
     }
 
     @Test
+    fun `map run does not cancel an already running batch`() {
+        val sender = FakeTraceSender()
+        harness.deps.sender = sender
+        trace.configure(harness.deps)
+        trace.setBatchEnabled(true)
+        map.handleRepeaterTap(north)
+        harness.start { trace.runBatchTrace() }
+        val tag = sender.sent.single().tag
+
+        harness.complete { map.runTrace() }
+
+        assertTrue(harness.state.batchEnabled)
+        assertTrue(harness.state.isRunning)
+        assertEquals(tag, trace.pendingTag)
+        assertEquals(1, sender.sent.size)
+    }
+
+    @Test
     fun `tools keep source order and radio and sidebar rules`() {
         assertEquals(
             listOf("TRACE_PATH", "LINE_OF_SIGHT", "RX_LOG", "NOISE_FLOOR", "NODE_DISCOVERY", "CLI"),

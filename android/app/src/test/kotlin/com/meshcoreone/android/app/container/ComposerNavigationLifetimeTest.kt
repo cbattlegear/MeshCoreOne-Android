@@ -12,6 +12,7 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.app.navigation.AppChatConversationScreen
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.ChannelHistoryRejected
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
@@ -79,7 +80,12 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
     @Test fun currentPersistedOriginReachesConnectivityCheckWithoutBeingRelabeled() =
         channelSendAgainOrigin(unbound = false, replaced = false)
 
-    private fun channelSendAgainOrigin(unbound: Boolean, replaced: Boolean) = runTest {
+    @Test fun missingOriginValidationCannotAdmitSendAgainOrMasqueradeAsMissingChannel() =
+        channelSendAgainOrigin(unbound = false, replaced = false, hideHistoryRole = true)
+
+    private fun channelSendAgainOrigin(
+        unbound: Boolean, replaced: Boolean, hideHistoryRole: Boolean = false,
+    ) = runTest {
         val radio = RadioId(UUID(0, 710))
         val slot = com.meshcoreone.android.core.protocol.event.ChannelInfo(
             2u, "Original", Bytes(ByteArray(16) { 1 }),
@@ -89,12 +95,15 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
         val original = MessageDTO(
             id = UUID(0, 711), radioId = radio, channelIndex = slot.index,
             text = "  original channel text \u4e2d\uD83D\uDE80  ", timestamp = 100u,
-            status = MessageStatus.SENT, channelOccupantID = originalOccupant.takeUnless { unbound },
+            status = MessageStatus.FAILED, channelOccupantID = originalOccupant.takeUnless { unbound },
         )
         store.saveMessage(original)
         if (replaced) store.saveChannel(radio, slot.copy(name = "Replacement", secret = Bytes(ByteArray(16) { 2 })))
+        assertEquals(original, store.fetchMessage(EntityKey(radio, original.id)))
+        if (replaced) assertNotEquals(originalOccupant, store.fetchChannelOccupantID(radio, slot.index))
         val current = requireNotNull(store.fetchChannel(radio, slot.index))
-        val rig = ContainerHarness(this, store)
+        val processStore = if (hideHistoryRole) object : PersistenceStoreProtocol by store {} else store
+        val rig = ContainerHarness(this, store, persistenceOverride = processStore)
         try {
             try {
                 rig.container.chatsFeature.sendAgain(original, TimelineConversation.Channel(current))
@@ -102,9 +111,18 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
             } catch (rejected: MessageServiceException) {
                 assertTrue(unbound || replaced)
                 assertEquals(MessageServiceError.ChannelNotFound, rejected.error)
+                assertTrue(rejected.cause is PersistenceStoreException)
+                assertTrue(rejected.cause?.cause is ChannelHistoryRejected)
             } catch (offline: ChatSendQueueServiceException) {
+                assertFalse(hideHistoryRole)
                 assertFalse(unbound || replaced)
                 assertEquals(ChatSendQueueServiceError.NotConnected, offline.error)
+            } catch (unavailable: PersistenceStoreException) {
+                assertTrue(hideHistoryRole)
+                assertEquals(
+                    PersistenceStoreError.FetchFailed("Channel origin validation is unavailable"),
+                    unavailable.error,
+                )
             }
             assertEquals(original, store.fetchMessage(EntityKey(radio, original.id)))
             assertTrue(store.fetchPendingSendsForMessage(EntityKey(radio, original.id)).isEmpty())

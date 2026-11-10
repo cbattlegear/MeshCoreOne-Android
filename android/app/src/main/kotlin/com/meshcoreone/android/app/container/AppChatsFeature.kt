@@ -12,6 +12,7 @@ import com.meshcoreone.android.app.navigation.HashtagJoinRequest
 import com.meshcoreone.android.app.state.MessageEvent
 import com.meshcoreone.android.core.contracts.domain.ChannelQuery
 import com.meshcoreone.android.core.contracts.domain.ChannelHistoryRejected
+import com.meshcoreone.android.core.contracts.domain.ChannelHistoryPersisting
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
@@ -964,13 +965,15 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         unresolvedCreations[id]?.let { requireOriginalChannel(it.target, it.slotGeneration) }
         val index = message.channelIndex
             ?: throw MessageServiceException(MessageServiceError.ChannelNotFound)
+        val history = store as? ChannelHistoryPersisting
+            ?: throw PersistenceStoreException(
+                PersistenceStoreError.FetchFailed("Channel origin validation is unavailable"),
+            )
         val origin = try {
-            store.validateChannelMessageOrigin(EntityKey(radio, id))
+            history.validateChannelMessageOrigin(EntityKey(radio, id))
         } catch (failure: PersistenceStoreException) {
             if (failure.cause !is ChannelHistoryRejected) throw failure
-            throw MessageServiceException(MessageServiceError.ChannelNotFound).also {
-                it.initCause(failure)
-            }
+            throw MessageServiceException(MessageServiceError.ChannelNotFound, failure)
         }
         val queue = sendQueue(radio)
         queue.enqueueChannel(

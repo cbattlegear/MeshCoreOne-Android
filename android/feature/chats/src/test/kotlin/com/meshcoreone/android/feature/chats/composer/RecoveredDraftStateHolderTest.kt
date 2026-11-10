@@ -73,7 +73,7 @@ class RecoveredDraftStateHolderTest {
         assertEquals(port.rows, holder.state.value.messages)
         assertEquals(key, holder.state.value.selected)
         assertSame(failure, holder.state.value.failure)
-        assertEquals(listOf(failure), reported)
+        assertEquals(listOf<Throwable>(failure), reported)
         assertFalse(holder.state.value.loading)
         port.fetchFailure = null
         holder.refresh()
@@ -92,7 +92,7 @@ class RecoveredDraftStateHolderTest {
         val key = EntityKey(source.radioId, source.id)
         holder.select(key)
         assertTrue(holder.copySelectedTo(destination))
-        assertEquals(listOf(key to destination), port.copies)
+        assertEquals(listOf<Pair<EntityKey, ComposerTarget>>(key to destination), port.copies)
         assertEquals(listOf(source), holder.state.value.messages)
         assertEquals(listOf(source), port.rows)
         assertNull(holder.state.value.selected)
@@ -112,7 +112,7 @@ class RecoveredDraftStateHolderTest {
         port.copyFailure = failure
         assertFalse(holder.copySelectedTo(ComposerTarget.Channel(Fixtures.channel("B"))))
         assertSame(failure, holder.state.value.failure)
-        assertEquals(listOf(failure), reported)
+        assertEquals(listOf<Throwable>(failure), reported)
         assertEquals(key, holder.state.value.selected)
         assertEquals(port.rows, holder.state.value.messages)
         assertFalse(holder.state.value.copying)

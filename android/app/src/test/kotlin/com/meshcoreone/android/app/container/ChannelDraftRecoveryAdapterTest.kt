@@ -776,14 +776,14 @@ class ChannelDraftRecoveryAdapterTest : RoomProcessTest() {
         val changed = old.copy(text = "latest exact-key text", status = MessageStatus.SENT)
         store.saveMessage(changed)
         adapter.copyToDraft(EntityKey(radio, old.id), target)
-        assertEquals(listOf(changed to target), copies)
+        assertEquals(listOf<Pair<MessageDTO, ComposerTarget>>(changed to target), copies)
         assertEquals(changed, store.fetchMessage(EntityKey(radio, old.id)))
         assertEquals(unknown, store.fetchMessage(EntityKey(radio, unknown.id)))
         assertTrue(store.fetchPendingSends(radio).isEmpty())
         assertNotEquals(current.channelOccupantID, copies.single().first.channelOccupantID)
     }
 
-    @Test fun missingOrForeignSourceNeverInvokesDestinationCopy() = runBlocking {
+    @Test fun missingOrForeignSourceNeverInvokesDestinationCopy() = runBlocking<Unit> {
         val adapter = ChannelDraftRecoveryAdapter(radio, store, store) { _, _ ->
             fail("Invalid source must not reach destination copy")
         }
@@ -991,7 +991,7 @@ class ChannelDraftRecoveryAdapterTest : RoomProcessTest() {
                     node("The selected chat already has draft text. Nothing was replaced. Keep or clear that draft before copying.")
                         .assertIsDisplayed()
                     compose.onNodeWithText(copiedFeedback).assertDoesNotExist()
-                    assertEquals(listOf(conflict), failures)
+                    assertEquals(listOf<Throwable>(conflict), failures)
                 }
                 CopyOutcome.CANCELLED, CopyOutcome.CANCELLED_AFTER_WRITE -> {
                     if (outcome == CopyOutcome.CANCELLED_AFTER_WRITE) {

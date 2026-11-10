@@ -66,7 +66,10 @@ class BatchSlotHistoryOriginalPredicateTest : RoomProcessTest() {
         assertEquals("Replacement", row.name)
         assertEquals(0L, row.unreadCount)
         assertNull(row.lastMessageDate)
-        assertEquals(original.channel.copy(name = "Replacement", secret = secret(0x99), unreadCount = 0), row)
+        val replacement = requireNotNull(store.fetchChannelOccupantID(radio, 3u))
+        assertNotEquals(original.channel.occupantID, replacement)
+        assertEquals(original.channel.copy(name = "Replacement", secret = secret(0x99),
+            unreadCount = 0, occupantID = replacement), row)
         requireErased(original)
     }
 
@@ -100,8 +103,11 @@ class BatchSlotHistoryOriginalPredicateTest : RoomProcessTest() {
         assertEquals(3, store.fetchMessages(radio, 1u, limit = 10).size)
         requireUnchanged(kept, name = "Renamed")
         assertEquals(0L, requireNotNull(store.fetchChannel(radio, 2u)).unreadCount)
+        val replacement = requireNotNull(store.fetchChannelOccupantID(radio, 2u))
+        assertNotEquals(replaced.channel.occupantID, replacement)
         assertEquals(
-            replaced.channel.copy(name = "Taken over", secret = secret(0x99), unreadCount = 0),
+            replaced.channel.copy(name = "Taken over", secret = secret(0x99),
+                unreadCount = 0, occupantID = replacement),
             store.fetchChannel(radio, 2u),
         )
         for (slot in listOf(replaced, empty, pruned)) requireErased(slot)
@@ -181,7 +187,8 @@ class BatchSlotHistoryOriginalPredicateTest : RoomProcessTest() {
         }
         val slot = Slot(
             ChannelDTO(id = id, radioId = radio, index = index, name = "Slot$index",
-                secret = secret(byte), unreadCount = count.toLong()),
+                secret = secret(byte), unreadCount = count.toLong(),
+                occupantID = requireNotNull(store.fetchChannelOccupantID(radio, index))),
             messages, reactions,
         )
         requireUnchanged(slot)

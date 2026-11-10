@@ -10,16 +10,23 @@ import java.util.concurrent.atomic.AtomicLong
  */
 class ChannelDispatchAdmission(val token: SessionToken, val connectionIdentity: Any) {
     private val state = AtomicLong(0)
+    private val paused = AtomicBoolean(false)
 
     val isRevoked: Boolean get() = state.get() < 0
+    val isPaused: Boolean get() = paused.get()
     val inFlightCount: Long get() = state.get() and Long.MAX_VALUE
 
     fun tryAcquire(token: SessionToken, connectionIdentity: Any): Permit? {
         if (this.token != token || this.connectionIdentity !== connectionIdentity) return null
         while (true) {
             val current = state.get()
-            if (current < 0 || current == Long.MAX_VALUE) return null
-            if (state.compareAndSet(current, current + 1)) return Permit(this)
+            if (current < 0 || paused.get() || current == Long.MAX_VALUE) return null
+            if (state.compareAndSet(current, current + 1)) {
+                val permit = Permit(this)
+                if (!paused.get()) return permit
+                permit.complete()
+                return null
+            }
         }
     }
 
@@ -28,6 +35,14 @@ class ChannelDispatchAdmission(val token: SessionToken, val connectionIdentity: 
             val current = state.get()
             if (current < 0 || state.compareAndSet(current, current or Long.MIN_VALUE)) return
         }
+    }
+
+    fun pause() {
+        paused.set(true)
+    }
+
+    fun resume() {
+        paused.set(false)
     }
 
     private fun completeAdmission() {

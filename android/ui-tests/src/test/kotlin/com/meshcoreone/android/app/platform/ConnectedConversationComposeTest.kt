@@ -88,13 +88,17 @@ class ConnectedConversationComposeTest : RoomProcessTest() {
                     accepted += runBlocking { store.fetchPendingSends(requireNotNull(h.appState.currentRadioId)).single() }
                     // An uncorrelated channel error does not prove that the queued send was unsent.
                     listOf(Bytes.of(1, if (channel) 6 else 2))
-                } else if (channel && request[0].toInt() == 0x1f && request[1].toInt() == 0) {
-                    listOf(Bytes.of(0x12, 0) + Bytes.utf8("Synthetic mesh channel").paddedOrTruncated(32) +
-                        Bytes(ByteArray(16) { 0x11 }))
+                } else if (channel && request[0].toInt() == 0x1f) {
+                    listOf(
+                        if (request[1].toInt() == 0) Bytes.of(0x12, 0) +
+                            Bytes.utf8("Synthetic mesh channel").paddedOrTruncated(32) + Bytes(ByteArray(16) { 0x11 })
+                        else Bytes.of(0x12, request[1].toInt()) + Bytes(ByteArray(48)),
+                    )
                 } else null
             }
         }
         try {
+            if (channel) h.container.foreground.activityStarted()
             h.manager.connect(h.target(UUID.fromString("50200000-0000-0000-0000-000000000099")))
             h.settle()
             h.assertReady()
@@ -131,6 +135,7 @@ class ConnectedConversationComposeTest : RoomProcessTest() {
             val send = compose.onNodeWithContentDescription(compose.activity.getString(C.chatsInputSendMessage))
             send.assertIsEnabled().performClick()
             val failed = compose.activity.getString(C.chatsMessageStatusFailed)
+            val sending = compose.activity.getString(C.chatsMessageStatusSending)
             val retry = compose.activity.getString(C.chatsMessageStatusRetry)
             var messageID: UUID? = null
             var retryTimestamp: UInt? = null
@@ -167,7 +172,7 @@ class ConnectedConversationComposeTest : RoomProcessTest() {
                 h.settle()
                 compose.waitForIdle()
                 if (channel) {
-                    compose.onNodeWithText(original).assertIsDisplayed()
+                    compose.onNodeWithContentDescription("$original. $sending").assertIsDisplayed()
                     compose.onNodeWithText(retry).assertDoesNotExist()
                 } else {
                     compose.waitUntil(30_000) {
@@ -211,7 +216,7 @@ class ConnectedConversationComposeTest : RoomProcessTest() {
                     assertEquals(2f, layouts.single().layoutInput.density.fontScale, 0f)
                     assertFalse("The actual 200% draft must not clip vertically at width$value", layouts.single().didOverflowHeight)
                     if (channel) {
-                        compose.onNodeWithText(original).assertIsDisplayed()
+                        compose.onNodeWithContentDescription("$original. $sending").assertIsDisplayed()
                         compose.onNodeWithText(retry).assertDoesNotExist()
                     } else {
                         compose.onNodeWithContentDescription("$original. $failed").assertIsDisplayed()
@@ -235,7 +240,7 @@ class ConnectedConversationComposeTest : RoomProcessTest() {
                 compose.waitForIdle()
                 compose.onNode(fieldMatcher).assertIsDisplayed().assertTextContains(retained)
                 if (channel) {
-                    compose.onNodeWithText(original).assertIsDisplayed()
+                    compose.onNodeWithContentDescription("$original. $sending").assertIsDisplayed()
                     compose.onNodeWithText(retry).assertDoesNotExist()
                 } else {
                     compose.onNodeWithContentDescription("$original. $failed").assertIsDisplayed()

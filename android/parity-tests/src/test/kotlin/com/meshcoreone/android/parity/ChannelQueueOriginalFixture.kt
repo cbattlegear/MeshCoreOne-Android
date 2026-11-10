@@ -68,9 +68,18 @@ internal suspend fun TestScope.withChannelQueueFixture(
     withContext(NonCancellable) {
         retainFailure {
             val report = f.queue.shutdown()
-            assertTrue(report.isComplete)
+            assertFalse(report.isComplete)
+            assertEquals(listOf(LifecycleStage.STOP_SERVICES), report.issues.map { it.stage })
+            assertSame(f.retainedFailure(), report.issues.single().cause)
+            assertOriginalChannelDeviceError2(report.issues.single().cause)
         }
-        retainFailure { assertTrue(f.messages.close().isComplete) }
+        retainFailure {
+            val report = f.messages.close()
+            assertFalse(report.isComplete)
+            assertEquals(listOf(LifecycleStage.STOP_SERVICES), report.issues.map { it.stage })
+            assertSame(f.retainedFailure(), report.issues.single().cause)
+            assertOriginalChannelDeviceError2(report.issues.single().cause)
+        }
         retainFailure { f.session.stop() }
         retainFailure { f.channelDispatchFence.retire(f.channelDispatchLease) }
         retainFailure { f.store.close() }
@@ -111,8 +120,9 @@ internal class ChannelQueueOriginalFixture(
     )
     val radio = device.radioId
     private val token = SessionToken(ProcessEpoch(UUID.randomUUID()), Generation(1), radio)
-    val channel = ChannelDTO(UUID.randomUUID(), radio, 0u, "Test Channel", Bytes(ByteArray(16) { 0xAA.toByte() }),
+    var channel = ChannelDTO(UUID.randomUUID(), radio, 0u, "Test Channel", Bytes(ByteArray(16) { 0xAA.toByte() }),
         true, null, 0, 0, NotificationLevel.ALL, false, "inherit", null)
+        private set
     private val channelInfoResponse =
         Bytes.fromHex("1200" + "54657374204368616e6e656c" + "00".repeat(20) + "AA".repeat(16))
     private val unconfiguredChannelInfoResponse = Bytes.fromHex("1200" + "00".repeat(48))
@@ -174,6 +184,7 @@ internal class ChannelQueueOriginalFixture(
             channelDispatchFence.recordReconciled(channelDispatchLease, identity, listOf(channel.index))
             occupant
         }
+        channel = channel.copy(occupantID = channelOccupantID)
         assertEquals(channel, store.fetchChannel(radio, channel.index))
         messageA = channelMessage("Hello channel")
         messageB = channelMessage("Second message")
@@ -225,6 +236,9 @@ internal class ChannelQueueOriginalFixture(
     fun sends(command: Int) = transport.sent.filter { it[0].toInt() == command }
     fun failures(phase: String, id: UUID) = diagnostics.map { it.second }
         .filterIsInstance<MessagingDiagnostic.Failure>().filter { it.operation == "$phase.$id" }.map { it.cause }
+
+    // Both service owners report the same retained exception.
+    fun retainedFailure(): Throwable = failures("channelRetained", pendingA.id).distinct().single()
 
     private suspend fun channelMessage(text: String) = store.createOrReconcileChannelMessage(
         ChannelMessageCreation(UUID.randomUUID(), ChannelHistoryScope(radio, channel.index, channelOccupantID), text),

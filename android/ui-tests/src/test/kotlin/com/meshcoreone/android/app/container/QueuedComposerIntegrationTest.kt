@@ -58,7 +58,7 @@ class QueuedComposerIntegrationTest : RoomProcessTest() {
         h.links.configureRadio = { radio ->
             radio.knownContacts += contactFrame(peerKey, "Synthetic queue peer")
             radio.respond = { frame ->
-                // Pinned protocol: direct/channel commands 2/3; RESP_CODE_ERR=1, notFound=2.
+                // Pinned protocol: direct/channel commands 2/3; RESP_CODE_ERR=1.
                 if (frame[0].toInt() in 2..3) listOf(Bytes.of(1, 2)) else null
             }
         }
@@ -69,7 +69,7 @@ class QueuedComposerIntegrationTest : RoomProcessTest() {
         val radio = assertNotNull(h.appState.currentRadioId)
         val contact = assertNotNull(store.fetchContact(radio, peerKey))
         val channel = ChannelDTO(radioId = radio, index = 0u, name = "Synthetic local channel")
-        store.saveChannel(channel)
+        seedReconciledChannel(channel)
         return Graph(h, contact, channel)
     }
 
@@ -119,18 +119,47 @@ class QueuedComposerIntegrationTest : RoomProcessTest() {
         val h = graph.harness
         val failed = observeFailures(test, graph)
         val snapshots = Collections.synchronizedList(mutableListOf<PendingSendDTO>())
+        val queueQueries = Collections.synchronizedList(mutableListOf<Bytes>())
         val firmware = h.links.radios.single()
         val opcode = if (kind == Kind.DIRECT) 2 else 3
         firmware.respond = { frame ->
-            if (frame[0].toInt() == opcode) {
-                snapshots += runBlocking { store.fetchPendingSends(graph.radio).single() }
-                // Channel notFound is deliberately retryable; illegalArgument (6) is terminal.
-                listOf(Bytes.of(1, if (kind == Kind.DIRECT) 2 else 6))
-            } else null
+            when {
+                frame[0].toInt() == opcode -> {
+                    snapshots += runBlocking { store.fetchPendingSends(graph.radio).single() }
+                    listOf(Bytes.of(1, if (kind == Kind.DIRECT) 2 else 6))
+                }
+                kind == Kind.CHANNEL && frame[0].toInt() == 31 -> {
+                    queueQueries += frame
+                    emptyList()
+                }
+                else -> null
+            }
         }
         try {
             val message = pending(graph, kind)
             val key = EntityKey(graph.radio, message.id)
+            if (kind == Kind.CHANNEL) {
+                enqueue(graph, kind, message)
+                h.eventually("raw channel error is retained as uncertain without retry or terminal event") {
+                    runBlocking {
+                        store.fetchMessage(key)?.status == MessageStatus.PENDING &&
+                            store.fetchPendingSendsForMessage(key).singleOrNull()
+                                ?.channelDispatchState == QueuedChannelDispatchState.UNCERTAIN
+                    }
+                }
+                val retained = store.fetchPendingSendsForMessage(key).single()
+                assertEquals(1L, retained.attemptCount)
+                assertNotNull(retained.channelAttemptID)
+                assertEquals(original, assertNotNull(store.fetchMessage(key)).text)
+                assertEquals(1, snapshots.size)
+                assertEquals(message.id, snapshots.single().messageID)
+                assertFalse(snapshots.single().isResend)
+                assertTrue(failed.isEmpty())
+                assertTrue(queueQueries.isEmpty(), "Raw channel errors do not authorize GET_CHANNEL")
+                assertEquals(1, firmware.sent.count { it[0].toInt() == opcode })
+                assertEquals(1, h.lifecycle.created.size)
+                return
+            }
             repeat(3) { mode ->
                 val before = assertNotNull(store.fetchMessage(key))
                 when (mode) {
@@ -167,7 +196,7 @@ class QueuedComposerIntegrationTest : RoomProcessTest() {
         terminalModes(this, Kind.DIRECT)
     }
 
-    @Test fun channelPendingRetryAndSendAgainPreserveRealEnvelopeAndTerminalEvent() = runTest {
+    @Test fun channelPendingRawErrorRemainsUncertainWithoutRetryOrFailureEvent() = runTest {
         terminalModes(this, Kind.CHANNEL)
     }
 

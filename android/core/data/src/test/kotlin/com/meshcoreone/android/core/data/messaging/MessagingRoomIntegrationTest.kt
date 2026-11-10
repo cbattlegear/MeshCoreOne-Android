@@ -482,28 +482,18 @@ class MessagingRoomIntegrationTest {
         }
     }
 
-    private fun TestScope.advanceUntilParked(g: RadioGeneration, id: UUID) {
-        val deadline = scheduler.currentTime + 10_000
-        fun parked() = g.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any { it.operation == "park.$id" }
-        while (!parked() && scheduler.currentTime < deadline) {
-            advanceTimeBy(1)
-            runCurrent()
-        }
-        assertTrue(parked(), "The real drain must reach its reported park before assertions")
-    }
-
     @OriginalCase("ChatSendQueueServiceTests::channel drain parks deviceError(2) below disambiguateAfterAttempts()")
-    @Test fun theActualNotFoundChannelSendParksWithoutQueryingBeforeItsDisambiguationThreshold() = runTest(scheduler) {
+    @Test fun theActualNotFoundChannelSendRemainsUncertainBelowItsDisambiguationThreshold() = runTest(scheduler) {
         exerciseChannelNotFound(initialAttempts = 0, boundedWait = false)
     }
 
     @OriginalCase("ChatSendQueueServiceTests::channel drain treats deviceError(2) as terminal when fetchChannel confirms the channel is gone()")
-    @Test fun theActualChannelServiceUnconfiguredSlotTerminallyRetiresOnlyItsMissingSlotEnvelope() = runTest(scheduler) {
+    @Test fun theActualChannelServiceUnconfiguredSlotCannotAuthorizeRetirement() = runTest(scheduler) {
         exerciseChannelNotFound(initialAttempts = 7, boundedWait = false)
     }
 
     @OriginalCase("ChatSendQueueServiceTests::drain bounded wait re-attempts after transportWaitTimeout expires()")
-    @Test fun theRealThirtySecondChannelParkRetriesAtItsDeadlineWithoutAnyTransportWake() = runTest(scheduler) {
+    @Test fun theRealThirtySecondChannelWaitDoesNotRetryAnUncertainAttempt() = runTest(scheduler) {
         exerciseChannelNotFound(initialAttempts = 0, boundedWait = true)
     }
 
@@ -533,30 +523,20 @@ class MessagingRoomIntegrationTest {
         runCurrent()
         g.signals.set(DeviceConnectionState.READY)
         runCurrent()
-        if (initialAttempts >= 3) {
-            withTimeout(5_000) { g.queue.awaitDrainCompletion() }
-            assertTrue(store.fetchPendingSends(radio).isEmpty())
-            assertEquals(MessageStatus.FAILED, store.fetchMessage(EntityKey(radio, message.id))?.status)
-            assertEquals(1, g.firmware.channelQueries().size)
-            assertEquals(listOf(MessageStatusEvent.Failed(message.id)), completedStatuses(g, events))
-        } else {
-            advanceUntilParked(g, message.id)
-            assertEquals(listOf(row.copy(attemptCount = 1)), store.fetchPendingSends(radio))
-            assertEquals(MessageStatus.PENDING, store.fetchMessage(EntityKey(radio, message.id))?.status)
-            if (boundedWait) {
-                advanceTimeBy(29_999)
-                runCurrent()
-                assertEquals(listOf(row.copy(attemptCount = 1)), store.fetchPendingSends(radio))
-                advanceTimeBy(1)
-                runCurrent()
-                assertEquals(listOf(row.copy(attemptCount = 2)), store.fetchPendingSends(radio))
-                advanceTimeBy(300)
-                runCurrent()
-                assertEquals(listOf(row.copy(attemptCount = 2)), store.fetchPendingSends(radio))
-                assertEquals(MessageStatus.PENDING, store.fetchMessage(EntityKey(radio, message.id))?.status)
-            }
+        withTimeout(5_000) { g.queue.awaitDrainCompletion() }
+        val retained = store.fetchPendingSends(radio).single()
+        assertEquals(row.id, retained.id)
+        assertEquals(initialAttempts + 1, retained.attemptCount)
+        assertEquals(QueuedChannelDispatchState.UNCERTAIN, retained.channelDispatchState)
+        assertNotNull(retained.channelAttemptID)
+        assertEquals(MessageStatus.PENDING, store.fetchMessage(EntityKey(radio, message.id))?.status)
+        assertTrue(g.firmware.channelQueries().isEmpty())
+        assertTrue(completedStatuses(g, events).isEmpty())
+        if (boundedWait) {
+            advanceTimeBy(30_000)
+            runCurrent()
+            assertEquals(retained, store.fetchPendingSends(radio).single())
             assertTrue(g.firmware.channelQueries().isEmpty())
-            assertTrue(completedStatuses(g, events).isEmpty())
         }
         assertEquals(channel, store.fetchChannel(radio, 0u))
         assertEquals(listOf(foreign), store.fetchPendingSends(other))
@@ -564,7 +544,7 @@ class MessagingRoomIntegrationTest {
     }
 
     @OriginalCase("ChatSendQueueServiceTests::Channel fetchChannel failure counter is per-envelope and does not cascade()")
-    @Test fun channelQueryFailureCapRetiresOnlyItsEnvelopeAndPreservesTheNextActualRoomRow() = runTest(scheduler) {
+    @Test fun rawChannelSendErrorsRemainUncertainWithoutQueryingOrCascading() = runTest(scheduler) {
         seed()
         val snapshot = seedChannel(0u, "Test Channel", Bytes(ByteArray(16) { 0xAA.toByte() }))
         val origin = ChannelHistoryScope.from(snapshot)
@@ -607,38 +587,27 @@ class MessagingRoomIntegrationTest {
             runCurrent()
             g.signals.set(DeviceConnectionState.READY)
             runCurrent()
-            val deadline = scheduler.currentTime + 30_000
-            while (g.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>()
-                    .none { it.operation == "park.${first.id}" } && scheduler.currentTime < deadline) {
-                advanceTimeBy(50)
-                runCurrent()
-            }
-            assertEquals(listOf(firstRow.copy(attemptCount = 8), secondRow), store.fetchPendingSends(radio))
+            withTimeout(5_000) { g.queue.awaitDrainCompletion() }
+            val retained = store.fetchPendingSends(radio).associateBy { it.id }
+            assertEquals(setOf(firstRow.id, secondRow.id), retained.keys)
+            assertEquals(8L, retained.getValue(firstRow.id).attemptCount)
+            assertEquals(QueuedChannelDispatchState.UNCERTAIN, retained.getValue(firstRow.id).channelDispatchState)
+            assertNotNull(retained.getValue(firstRow.id).channelAttemptID)
+            assertEquals(3L, retained.getValue(secondRow.id).attemptCount)
+            assertEquals(QueuedChannelDispatchState.UNCERTAIN, retained.getValue(secondRow.id).channelDispatchState)
+            assertNotNull(retained.getValue(secondRow.id).channelAttemptID)
             assertEquals(first, store.fetchMessage(EntityKey(radio, first.id)))
-            g.queue.transportDidOpen()
-            runCurrent()
-            while (store.hasPendingSend(EntityKey(radio, first.id)) && scheduler.currentTime < deadline) {
-                advanceTimeBy(50)
-                runCurrent()
-            }
-            assertFalse(store.hasPendingSend(EntityKey(radio, first.id)))
-            assertEquals(first.copy(status = MessageStatus.FAILED), store.fetchMessage(EntityKey(radio, first.id)))
-            advanceTimeBy(3_000)
-            runCurrent()
-            val queries = g.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>()
-                .filter { it.operation.startsWith("channelQuery.") }
-            assertEquals(2, queries.count { it.operation == "channelQuery.${first.id}" })
-            assertEquals(1, queries.count { it.operation == "channelQuery.${second.id}" })
-            assertTrue(queries.all { it.cause === queryFailure })
-            assertEquals(listOf(secondRow.copy(attemptCount = 3)), store.fetchPendingSends(radio))
+            assertTrue(store.hasPendingSend(EntityKey(radio, first.id)))
+            assertTrue(store.hasPendingSend(EntityKey(radio, second.id)))
+            assertTrue(g.firmware.channelQueries().isEmpty())
             assertEquals(second, store.fetchMessage(EntityKey(radio, second.id)))
             assertEquals(foreignMessage, store.fetchMessage(EntityKey(other, first.id)))
             assertEquals(listOf(foreignRow), store.fetchPendingSends(other))
-            assertEquals(listOf<MessageStatusEvent>(MessageStatusEvent.Failed(first.id)), observed)
+            assertTrue(observed.isEmpty())
             assertEquals(channel, store.fetchChannel(radio, 0u))
             val report = g.queue.shutdown()
             assertTrue(report.isComplete, report.issues.toString())
-            assertEquals(listOf(secondRow.copy(attemptCount = 3)), store.fetchPendingSends(radio))
+            assertEquals(setOf(firstRow.id, secondRow.id), store.fetchPendingSends(radio).map { it.id }.toSet())
         } finally {
             listener.cancelAndJoin()
             status.close()

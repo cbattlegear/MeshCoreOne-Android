@@ -219,8 +219,8 @@ class ChannelOccupantPersistenceTest : RepositoryTest() {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         val dispatch = async(start = CoroutineStart.UNDISPATCHED) {
-            gate.withChannelOperation {
-                gate.withChannelIdentityMutation {
+            gate.withChannelOperationScope { scope ->
+                scope.withChannelIdentityMutation {
                     entered.complete(Unit)
                     release.await()
                 }

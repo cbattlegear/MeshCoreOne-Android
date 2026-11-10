@@ -67,6 +67,7 @@ class QueuedComposerIntegrationTest : RoomProcessTest() {
                 }
             }
         }
+        h.container.foreground.activityStarted()
         h.manager.connect(h.target(UUID.fromString("50200000-0000-0000-0000-000000000215")))
         h.eventually("queue graph ready") {
             h.manager.connectionState == com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY

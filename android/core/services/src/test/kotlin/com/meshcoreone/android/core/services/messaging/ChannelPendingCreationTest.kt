@@ -81,7 +81,7 @@ class ChannelPendingCreationTest {
             assertFalse("createOrReconcileChannelMessage" in h.store.calls)
             h.close()
         },
-        native("occupant replacement before the creation transaction rejects the captured intent instead of rebinding") {
+        native("occupant replacement before creation retains the captured old origin and fails later validation without rebinding") {
             val h = Harness(this)
             val original = h.store.seedChannelCreation()
             val replacement = UUID.randomUUID()
@@ -89,14 +89,17 @@ class ChannelPendingCreationTest {
                 if (operation == "createOrReconcileChannelMessage") h.store.channelOccupants[RADIO to 0u] = replacement
             }
             val receipt = PendingMessageCreation()
+            val message = withContext(receipt) { h.service.createPendingChannelMessage("original", 0u, RADIO) }
             val failure = assertFailsWith<PersistenceStoreException> {
-                withContext(receipt) { h.service.createPendingChannelMessage("original", 0u, RADIO) }
+                h.store.validateChannelMessageOrigin(EntityKey(RADIO, message.id))
             }
             assertEquals(ChannelHistoryConflict.STALE_OCCUPANT, assertIs<ChannelHistoryRejected>(failure.cause).reason)
-            assertEquals(PendingMessageCreation.State.UNKNOWN, receipt.snapshot.state)
+            assertEquals(PendingMessageCreation.State.COMMITTED, receipt.snapshot.state)
             assertEquals(original.occupantID, assertNotNull(receipt.snapshot.message).channelOccupantID)
+            assertEquals(original.occupantID, message.channelOccupantID)
+            assertEquals(message, h.stored(message.id))
+            assertEquals(1, h.store.messages.size)
             assertEquals(replacement, h.store.channelOccupants[RADIO to 0u])
-            assertTrue(h.store.messages.isEmpty())
             assertTrue(h.store.pending.isEmpty())
             assertTrue(h.sends(CommandCode.SEND_CHANNEL_MESSAGE).isEmpty())
             h.store.before = null

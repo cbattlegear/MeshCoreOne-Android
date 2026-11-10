@@ -5,6 +5,7 @@ import com.meshcoreone.android.app.state.MessageEvent
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.LifecycleStage
 import com.meshcoreone.android.core.contracts.domain.MessagingDiagnostic
 import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.model.ChannelDTO
@@ -16,14 +17,17 @@ import com.meshcoreone.android.core.model.QueuedChannelDispatchState
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
+import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.core.services.diagnostics.DebugLogBuffer
+import com.meshcoreone.android.core.services.contacts.ChannelDispatchFailure
 import com.meshcoreone.android.core.services.messaging.ChannelQueryAccountingEvent
 import java.util.UUID
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
@@ -210,7 +214,7 @@ class SessionLifecycleTest : RoomProcessTest() {
             messageB, pendingBId, isResend = false, localNodeName = "Stored Node", initialAttemptCount = 2,
         )
 
-        suspend fun assertUncertainRows() {
+        suspend fun assertRetainedRows() {
             val rows = store.fetchPendingSends(radioId).associateBy { it.id }
             assertEquals(setOf(pendingAId, pendingBId), rows.keys)
             for ((pendingID, messageID, attemptCount) in listOf(
@@ -220,8 +224,13 @@ class SessionLifecycleTest : RoomProcessTest() {
                 val row = rows.getValue(pendingID)
                 assertEquals(messageID, row.messageID)
                 assertEquals(attemptCount, row.attemptCount)
-                assertEquals(QueuedChannelDispatchState.UNCERTAIN, row.channelDispatchState)
-                assertNotNull(row.channelAttemptID)
+                if (pendingID == pendingAId) {
+                    assertEquals(QueuedChannelDispatchState.UNCERTAIN, row.channelDispatchState)
+                    assertNotNull(row.channelAttemptID)
+                } else {
+                    assertEquals(QueuedChannelDispatchState.READY, row.channelDispatchState)
+                    assertNull(row.channelAttemptID, "Quarantine rejects the sibling before any wire attempt")
+                }
                 assertEquals(MessageStatus.PENDING, store.fetchMessage(EntityKey(radioId, messageID))?.status)
             }
         }
@@ -237,15 +246,14 @@ class SessionLifecycleTest : RoomProcessTest() {
             assertEquals((0 until 8).map { it.toUByte() }.toSet(),
                 bootstrapRequests.filter { it.first == first.token }.map { it.second }.toSet(),
                 "Initial foreground sync still reads every advertised slot before queue dispatch")
-            h.eventually("both original rows retain their correlated raw ERROR2 attempts") {
-                h.links.radios.single().sent.count { it[0] == 3.toUByte() } == 2 && runBlocking {
-                    store.fetchPendingSends(radioId).size == 2 &&
-                        store.fetchPendingSends(radioId).all {
-                            it.channelDispatchState == QueuedChannelDispatchState.UNCERTAIN
-                        }
-                }
+            h.eventually("the first raw ERROR2 quarantines dispatch before the sibling can send") {
+                h.links.radios.single().sent.count { it[0] == 3.toUByte() } == 1 &&
+                    h.messagingDiagnostics.filterIsInstance<MessagingDiagnostic.Failure>()
+                        .filter { it.operation.startsWith("channelRetained.") }
+                        .map { it.operation.substringAfterLast('.') }.toSet() ==
+                        setOf(pendingAId.toString(), pendingBId.toString())
             }
-            assertUncertainRows()
+            assertRetainedRows()
             val retainedIDs = h.messagingDiagnostics.filterIsInstance<MessagingDiagnostic.Failure>()
                 .filter { it.operation.startsWith("channelRetained.") }
                 .map { UUID.fromString(it.operation.substringAfterLast('.')) }
@@ -260,25 +268,34 @@ class SessionLifecycleTest : RoomProcessTest() {
 
             first.chatSendQueueService.transportDidOpen()
             h.settle()
-            assertEquals(2, h.links.radios.single().sent.count { it[0] == 3.toUByte() },
+            assertEquals(1, h.links.radios.single().sent.count { it[0] == 3.toUByte() },
                 "A transport wake cannot automatically replay uncertain attempts")
-            assertUncertainRows()
+            assertRetainedRows()
 
             val report = h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
-            assertTrue(report.isComplete, "Explicit teardown after uncertainty is clean: ${report.issues}")
+            assertFalse(report.isComplete)
+            assertEquals(List(2) { LifecycleStage.STOP_SERVICES }, report.issues.map { it.stage })
+            val retainedCauses = report.issues.map { generateSequence(it.cause) { cause -> cause.cause }.toList() }
+            assertEquals(1, retainedCauses.count { causes -> causes.any { it is ChannelDispatchFailure.UnsettledDispatch } })
+            assertTrue(retainedCauses.all { causes -> causes.any { it is MeshCoreException.DeviceError && it.code == 2.toUByte() } })
             h.settle()
-            assertUncertainRows()
-            h.manager.connect(h.target(deviceId))
+            assertRetainedRows()
+            val blocked = assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> {
+                h.manager.connect(h.target(deviceId))
+            }
+            assertEquals(2.toUByte(), generateSequence<Throwable>(blocked) { it.cause }
+                .filterIsInstance<MeshCoreException.DeviceError>().single().code)
             h.settle()
-            h.assertReady()
-            assertEquals(2, h.lifecycle.created.size)
-            assertEquals(listOf(2, 0), h.links.radios.map { radio ->
+            assertNull(h.sessions.current)
+            assertEquals(1, h.lifecycle.created.size)
+            assertTrue(h.links.radios.size > 1)
+            assertEquals(listOf(1) + List(h.links.radios.size - 1) { 0 }, h.links.radios.map { radio ->
                 radio.sent.count { it[0] == 3.toUByte() }
             }, "A replacement graph must not replay retained uncertain rows")
             assertTrue(queueQueries.isEmpty())
             assertTrue(accounting.isEmpty())
             assertTrue(failedMessages.isEmpty())
-            assertUncertainRows()
+            assertRetainedRows()
         } finally {
             failuresObserver.cancelAndJoin()
             h.container.close()

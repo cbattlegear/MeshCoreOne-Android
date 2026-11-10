@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="com.meshcoreone.android.core.l10n.AirtimePercentLabelTest" tests="2" skipped="0" failures="0" errors="0" timestamp="2026-10-04T14:42:33.012Z" hostname="BATTLEGEAR" time="2.328">
-  <properties/>
-  <testcase name="airtimePercentRendersLiteralPercentSign" classname="com.meshcoreone.android.core.l10n.AirtimePercentLabelTest" time="1.498"/>
-  <testcase name="everyLocalizedLabelPreservesSourceCopyWithoutInventingAPercentSign" classname="com.meshcoreone.android.core.l10n.AirtimePercentLabelTest" time="0.266"/>
-  <system-out><![CDATA[]]></system-out>
-  <system-err><![CDATA[]]></system-err>
-</testsuite>

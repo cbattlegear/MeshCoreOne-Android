@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="com.meshcoreone.android.core.protocol.session.SessionRoleConsumerTest" tests="2" skipped="0" failures="0" errors="0" timestamp="2026-10-04T08:19:08.812Z" hostname="BATTLEGEAR" time="0.006">
-  <properties/>
-  <testcase name="WP-107::source mock recording seam is exercised through a real role-backed session" classname="com.meshcoreone.android.core.protocol.session.SessionRoleConsumerTest" time="0.001"/>
-  <testcase name="WP-107::all source role interfaces are actual API consumers of the concrete component" classname="com.meshcoreone.android.core.protocol.session.SessionRoleConsumerTest" time="0.004"/>
-  <system-out><![CDATA[]]></system-out>
-  <system-err><![CDATA[]]></system-err>
-</testsuite>

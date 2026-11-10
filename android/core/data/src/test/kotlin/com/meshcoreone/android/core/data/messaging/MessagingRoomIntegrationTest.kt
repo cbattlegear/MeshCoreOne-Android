@@ -347,7 +347,10 @@ class MessagingRoomIntegrationTest {
             runCurrent()
             g.signals.set(DeviceConnectionState.READY)
             runCurrent()
-            advanceUntilParked(g, original.id)
+            runCurrent()
+            assertTrue(g.diagnostics.any {
+                (it as? MessagingDiagnostic.Failure)?.operation == "park.${original.id}"
+            })
             assertEquals(listOf(row), store.fetchPendingSends(radio))
             assertEquals(original, store.fetchMessage(EntityKey(radio, original.id)))
             assertTrue(g.firmware.sent().isEmpty())
@@ -471,7 +474,11 @@ class MessagingRoomIntegrationTest {
             runCurrent()
             g.signals.set(DeviceConnectionState.READY)
             runCurrent()
-            advanceUntilParked(g, message.id)
+            advanceTimeBy(100)
+            runCurrent()
+            assertTrue(g.diagnostics.any {
+                (it as? MessagingDiagnostic.Failure)?.operation == "park.${message.id}"
+            })
             assertEquals(listOf(row.copy(attemptCount = 1)), store.fetchPendingSends(radio))
             block(g, message, row, events)
             assertEquals(foreignMessage, store.fetchMessage(EntityKey(other, message.id)))

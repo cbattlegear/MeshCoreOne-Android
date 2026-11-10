@@ -10,6 +10,7 @@ import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -180,6 +181,181 @@ class MapSnapshotStoreTest {
         gate.complete(Unit)
         yield()
         assertFalse(store.isResolved(request))
+    }
+
+    @Test
+    fun cachedRequestIsNotRenderedAgainAndKeepsTheSameValue() = runBlocking {
+        val renderer = RecordingRenderer()
+        val store = MapSnapshotStore(renderer, this, { it.length.toLong() })
+        try {
+            val request = MapSnapshotRequest(37.7749, -122.4194, false, false)
+            val resolved = async(start = CoroutineStart.UNDISPATCHED) { store.resolutions.first() }
+            store.request(request)
+            assertEquals(request, resolved.await())
+            val firstValue = store.value(request)
+            assertEquals(request.cacheKey, firstValue)
+            repeat(10) { store.request(request) }
+            yield()
+            assertEquals(1, renderer.renderCount)
+            assertEquals(firstValue, store.value(request))
+            assertTrue(store.isResolved(request))
+        } finally { store.close() }
+    }
+
+    @Test
+    fun concurrentRequestsForOneKeyEnqueueExactlyOneRenderAndResolveBothSubscribers() = runBlocking {
+        val gate = CompletableDeferred<Unit>()
+        val started = CompletableDeferred<Unit>()
+        var calls = 0
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String {
+                calls++
+                started.complete(Unit)
+                gate.await()
+                return "independent-image"
+            }
+        }, this, { it.length.toLong() })
+        try {
+            val request = MapSnapshotRequest(37.7749, -122.4194, false, false)
+            val first = async(start = CoroutineStart.UNDISPATCHED) { store.resolutions.first() }
+            val second = async(start = CoroutineStart.UNDISPATCHED) { store.resolutions.first() }
+            val requesters = List(20) { async { store.request(request) } }
+            requesters.forEach { it.await() }
+            started.await()
+            assertEquals(1, calls)
+            assertFalse(store.isResolved(request))
+            assertNull(store.value(request))
+            gate.complete(Unit)
+            assertEquals(request, first.await())
+            assertEquals(request, second.await())
+            assertEquals("independent-image", store.value(request))
+            assertTrue(store.isResolved(request))
+            assertEquals(1, calls)
+        } finally { store.close() }
+    }
+
+    @Test
+    fun onlineAndOfflineCoordinatesResolveDistinctKeysAndValues() = runBlocking {
+        val renderer = RecordingRenderer()
+        val store = MapSnapshotStore(renderer, this, { it.length.toLong() })
+        try {
+            val online = MapSnapshotRequest(51.5074, -0.1278, true, false)
+            val offline = MapSnapshotRequest(51.5074, -0.1278, true, true)
+            assertFalse(online == offline)
+            assertFalse(online.cacheKey == offline.cacheKey)
+            for (request in listOf(online, offline)) {
+                val resolved = async(start = CoroutineStart.UNDISPATCHED) { store.resolutions.first() }
+                store.request(request)
+                assertEquals(request, resolved.await())
+            }
+            assertEquals(2, renderer.renderCount)
+            assertEquals(online.cacheKey, store.value(online))
+            assertEquals(offline.cacheKey, store.value(offline))
+            assertTrue(store.isResolved(online))
+            assertTrue(store.isResolved(offline))
+        } finally { store.close() }
+    }
+
+    @Test
+    fun actualFailureCapRetainsExactlyTheNewestTwoHundredKeysAndEvictedKeysCanRetry() = runBlocking {
+        val renderer = RecordingRenderer(fail = true)
+        val store = MapSnapshotStore(renderer, this, { it.length.toLong() })
+        try {
+            val requests = (0..200).map { MapSnapshotRequest(1.0, it / 1000.0, false, false) }
+            for (request in requests) {
+                val resolved = async(start = CoroutineStart.UNDISPATCHED) {
+                    store.resolutions.first { it == request }
+                }
+                store.request(request)
+                assertEquals(request, resolved.await())
+            }
+            assertEquals(201, renderer.renderCount)
+            assertFalse(store.isResolved(requests.first()))
+            assertEquals(200, requests.count(store::isResolved))
+            assertTrue(requests.drop(1).all(store::isResolved))
+            assertTrue(requests.all { store.value(it) == null })
+            val resolved = async(start = CoroutineStart.UNDISPATCHED) {
+                store.resolutions.first { it == requests.first() }
+            }
+            store.request(requests.first())
+            assertEquals(requests.first(), resolved.await())
+            assertEquals(202, renderer.renderCount)
+            assertTrue(store.isResolved(requests.first()))
+            assertFalse(store.isResolved(requests[1]))
+            assertEquals(200, requests.count(store::isResolved))
+        } finally { store.close() }
+    }
+
+    @Test
+    fun clearNotifiesBothSubscribersForEveryPreviouslyResolvedImageAndFailure() = runBlocking {
+        val renderer = RecordingRenderer()
+        val store = MapSnapshotStore(renderer, this, { it.length.toLong() })
+        try {
+            val image = MapSnapshotRequest(1.0, 2.0, false, false)
+            val failure = MapSnapshotRequest(3.0, 4.0, false, false)
+            for (request in listOf(image, failure)) {
+                renderer.fail = request == failure
+                val resolved = async(start = CoroutineStart.UNDISPATCHED) { store.resolutions.first() }
+                store.request(request)
+                resolved.await()
+            }
+            assertNotNull(store.value(image))
+            assertNull(store.value(failure))
+            assertTrue(store.isResolved(image) && store.isResolved(failure))
+            suspend fun invalidations(): List<MapSnapshotRequest> {
+                val events = mutableListOf<MapSnapshotRequest>()
+                store.resolutions.first { events += it; events.size == 2 }
+                return events
+            }
+            val first = async(start = CoroutineStart.UNDISPATCHED) { invalidations() }
+            val second = async(start = CoroutineStart.UNDISPATCHED) { invalidations() }
+            store.clear()
+            assertEquals(listOf(image, failure), first.await())
+            assertEquals(listOf(image, failure), second.await())
+            assertFalse(store.isResolved(image) || store.isResolved(failure))
+            assertNull(store.value(image))
+            assertNull(store.value(failure))
+            assertEquals(2, renderer.renderCount)
+        } finally { store.close() }
+    }
+
+    @Test
+    fun slowDisplaySubscriberKeepsNewestSixtyFourNotificationsButStoreResolvesEveryKey() = runBlocking {
+        val releaseSubscriber = CompletableDeferred<Unit>()
+        val subscriberHeld = CompletableDeferred<Unit>()
+        val allRendered = CompletableDeferred<Unit>()
+        var renders = 0
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String? {
+                if (++renders == 70) allRendered.complete(Unit)
+                return null
+            }
+        }, this, { it.length.toLong() })
+        val requests = (0 until 70).map { MapSnapshotRequest(1.0, it / 1000.0, false, false) }
+        try {
+            val collected = async(start = CoroutineStart.UNDISPATCHED) {
+                val events = mutableListOf<MapSnapshotRequest>()
+                store.resolutions.first {
+                    events += it
+                    if (events.size == 1) {
+                        subscriberHeld.complete(Unit)
+                        releaseSubscriber.await()
+                    }
+                    events.size == 65
+                }
+                events
+            }
+            store.request(requests.first())
+            subscriberHeld.await()
+            requests.drop(1).forEach(store::request)
+            allRendered.await()
+            yield()
+            assertEquals(70, renders)
+            assertTrue(requests.all(store::isResolved))
+            assertTrue(requests.all { store.value(it) == null })
+            releaseSubscriber.complete(Unit)
+            assertEquals(listOf(requests.first()) + requests.takeLast(64), collected.await())
+        } finally { store.close() }
     }
 
     private class RecordingRenderer(

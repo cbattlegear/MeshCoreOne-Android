@@ -59,6 +59,7 @@ class NativeMapRuntimeAccessibilityTest : DeviceAccessibilityHarness() {
             OfflineMapController(UnavailableOfflineMapBackend, emptyMap(),
                 { error("No offline download requested") },
                 { error("No offline download requested") }),
+            preferences = AccessibilityMapPreferences(),
         )
         content {
             MeshCoreTheme(motionScale = 0f) {
@@ -106,6 +107,7 @@ class NativeMapRuntimeAccessibilityTest : DeviceAccessibilityHarness() {
             OfflineMapController(UnavailableOfflineMapBackend, emptyMap(),
                 { error("No offline download requested") },
                 { error("No offline download requested") }),
+            preferences = AccessibilityMapPreferences(),
         )
         content {
             MeshCoreTheme(motionScale = 0f) {

@@ -67,6 +67,7 @@ internal fun AppContainer.createMapFeatureDependencies(): MapFeatureDependencies
             MapFeatureContent(markers = contactMarkers + discoveredMarkers)
         },
         offlineMaps = offlineMaps,
+        preferences = mapPreferences,
         updates = combine(
             connectionManager.snapshot, appState.servicesVersion, appState.contactsVersion, appState.sessionStateChangeCount,
         ) { connection, services, _, _ ->

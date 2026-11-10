@@ -12,8 +12,6 @@ import com.meshcoreone.android.core.model.DeviceDTO
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.MessageStatus
-import com.meshcoreone.android.core.model.PendingSendDTO
-import com.meshcoreone.android.core.model.PendingSendKind
 import com.meshcoreone.android.core.model.QueuedChannelDispatchState
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -205,40 +203,12 @@ class SessionLifecycleTest : RoomProcessTest() {
         val messageB = messageA.copy(id = messageBId, text = "Second message")
         store.saveMessage(messageA)
         store.saveMessage(messageB)
-        store.upsertPendingSend(PendingSendDTO(
-            id = pendingAId,
-            radioId = radioId,
-            messageID = messageAId,
-            kind = PendingSendKind.CHANNEL,
-            contactID = null,
-            channelIndex = 0u,
-            isResend = true,
-            messageText = messageA.text,
-            messageTimestamp = messageA.timestamp,
-            localNodeName = "Stored Node",
-            sequence = 1,
-            enqueuedAt = EPOCH,
-            attemptCount = 7,
-            channelOccupantID = occupantID,
-            channelDispatchState = QueuedChannelDispatchState.READY,
-        ))
-        store.upsertPendingSend(PendingSendDTO(
-            id = pendingBId,
-            radioId = radioId,
-            messageID = messageBId,
-            kind = PendingSendKind.CHANNEL,
-            contactID = null,
-            channelIndex = 0u,
-            isResend = false,
-            messageText = messageB.text,
-            messageTimestamp = messageB.timestamp,
-            localNodeName = "Stored Node",
-            sequence = 2,
-            enqueuedAt = EPOCH,
-            attemptCount = 2,
-            channelOccupantID = occupantID,
-            channelDispatchState = QueuedChannelDispatchState.READY,
-        ))
+        store.admitQueueChannelFixture(
+            messageA, pendingAId, isResend = true, localNodeName = "Stored Node", initialAttemptCount = 7,
+        )
+        store.admitQueueChannelFixture(
+            messageB, pendingBId, isResend = false, localNodeName = "Stored Node", initialAttemptCount = 2,
+        )
 
         suspend fun assertUncertainRows() {
             val rows = store.fetchPendingSends(radioId).associateBy { it.id }

@@ -236,7 +236,10 @@ class ShortcutQueueIntegrationTest : RoomProcessTest() {
                         DirectMessageEnvelope(message.id, recipient.dto.id), pending.directMessageEnvelope(),
                     )
                     is ShortcutRecipient.Channel -> assertEquals(
-                        ChannelMessageEnvelope(message.id, recipient.dto.index, false, original, message.timestamp, "TestNode"),
+                        ChannelMessageEnvelope(
+                            message.id, recipient.dto.index, false, original, message.timestamp, "TestNode",
+                            checkNotNull(message.channelOccupantID),
+                        ),
                         pending.channelMessageEnvelope(),
                     )
                 }

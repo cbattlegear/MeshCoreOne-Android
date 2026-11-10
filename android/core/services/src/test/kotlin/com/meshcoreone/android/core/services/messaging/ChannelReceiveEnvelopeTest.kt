@@ -35,6 +35,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.transform
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import org.junit.jupiter.api.DynamicTest
 import org.junit.jupiter.api.TestFactory
@@ -199,6 +200,89 @@ class ChannelReceiveEnvelopeTest {
             assertSame(received[0], received[1])
             assertSame(ChannelReceiveOrigin.Unproved, received[1].origin)
             assertNotEquals(a.id, recreated.id)
+            assertTrue(p.close().isComplete)
+        },
+        case("an empty drain cannot prove a later occurrence after same-row replacement") {
+            val h = Harness(this)
+            h.start()
+            val p = h.poller()
+            val a = ChannelDTO(radioId = RADIO, index = 0u, name = "A", secret = Bytes(ByteArray(16) { 1 }))
+            val b = a.copy(name = "B", secret = Bytes(ByteArray(16) { 2 }))
+            val key = EntityKey(RADIO, a.id)
+            h.store.channels[key] = a
+            val delayedFrame = channelPacket()
+            val received = mutableListOf<Pair<ChannelReceiveEnvelope, ChannelDTO?>>()
+            p.setChannelReceiveEnvelopeHandler { envelope, metadata -> received += envelope to metadata }
+            p.startAutoFetch(RADIO)
+            runCurrent()
+            h.transport.afterNoMore = {
+                h.store.channels[key] = b
+                h.transport.incomingMessages += delayedFrame
+                h.transport.mock.simulateReceive(Bytes.of(ResponseCode.MESSAGES_WAITING.rawValue.toInt()))
+            }
+
+            assertEquals(0L, p.pollAllMessages())
+            advanceUntilIdle()
+
+            assertEquals(1, received.size)
+            val (envelope, metadata) = received.single()
+            assertEquals(b, metadata)
+            assertEquals(a.id, assertNotNull(metadata).id)
+            assertEquals(DeliveryContext.Live, envelope.context)
+            assertSame(ChannelReceiveOrigin.Unproved, envelope.origin)
+            assertTrue(h.transport.incomingMessages.isEmpty())
+            assertEquals(0, p.undeliveredCount)
+            assertTrue(p.close().isComplete)
+        },
+        case("duplicate-key slots cannot turn indexed metadata into receive proof") {
+            val h = Harness(this)
+            h.start()
+            val p = h.poller()
+            val sharedSecret = Bytes(ByteArray(16) { 1 })
+            val a = ChannelDTO(radioId = RADIO, index = 0u, name = "A", secret = sharedSecret)
+            val other = ChannelDTO(radioId = RADIO, index = 1u, name = "Other", secret = sharedSecret)
+            h.store.channels[EntityKey(RADIO, other.id)] = other
+            h.store.channels[EntityKey(RADIO, a.id)] = a
+            val received = mutableListOf<Pair<ChannelReceiveEnvelope, ChannelDTO?>>()
+            p.setChannelReceiveEnvelopeHandler { envelope, metadata -> received += envelope to metadata }
+            h.transport.incomingMessages += channelPacket()
+
+            assertEquals(1L, p.pollAllMessages())
+
+            val (envelope, metadata) = received.single()
+            assertEquals(a, metadata)
+            assertEquals(a.secret, other.secret)
+            assertEquals(h.token, envelope.session)
+            assertSame(ChannelReceiveOrigin.Unproved, envelope.origin)
+            assertEquals(0, p.undeliveredCount)
+            assertTrue(p.close().isComplete)
+        },
+        case("simulated firmware backlog across reconnect remains unproved after replacement") {
+            val previous = Harness(this)
+            previous.start()
+            val a = ChannelDTO(radioId = RADIO, index = 0u, name = "A", secret = Bytes(ByteArray(16) { 1 }))
+            val b = a.copy(name = "B", secret = Bytes(ByteArray(16) { 2 }))
+            val key = EntityKey(RADIO, a.id)
+            previous.store.channels[key] = a
+            previous.transport.incomingMessages += channelPacket()
+            previous.close()
+            previous.store.channels[key] = b
+            val successor = Harness(this, store = previous.store, generation = 2)
+            successor.start()
+            val p = successor.poller()
+            val received = mutableListOf<Pair<ChannelReceiveEnvelope, ChannelDTO?>>()
+            p.setChannelReceiveEnvelopeHandler { envelope, metadata -> received += envelope to metadata }
+            successor.transport.incomingMessages += previous.transport.incomingMessages.removeFirst()
+
+            assertEquals(1L, p.pollAllMessages())
+
+            val (envelope, metadata) = received.single()
+            assertNotEquals(previous.token, successor.token)
+            assertEquals(successor.token, envelope.session)
+            assertEquals(b, metadata)
+            assertEquals(a.id, assertNotNull(metadata).id)
+            assertSame(ChannelReceiveOrigin.Unproved, envelope.origin)
+            assertEquals(0, p.undeliveredCount)
             assertTrue(p.close().isComplete)
         },
         case("legacy registration replaces opt-in registration without calling both consumers") {

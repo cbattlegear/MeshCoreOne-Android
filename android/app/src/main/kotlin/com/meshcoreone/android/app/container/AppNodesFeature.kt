@@ -88,6 +88,13 @@ internal fun AppContainer.createNodesFeatureDependencies(): NodesFeatureDependen
 }
 
 private class AppNodesSession(private val container: AppContainer) : NodesSession {
+    override fun captureSessionValidity(): () -> Boolean {
+        val current = container.sessions.current
+        return { current != null && container.isCurrentSession(current) }
+    }
+    override fun captureContactNavigationValidity(generation: Long): () -> Boolean =
+        container.captureContactNavigationSession(generation)
+
     override fun connectionSnapshots() = combine(
         container.sessions.currentSessions,
         container.connectionManager.snapshot,
@@ -98,6 +105,7 @@ private class AppNodesSession(private val container: AppContainer) : NodesSessio
         NodesConnectionSnapshot(currentRadioId(), graph, connectedDevice(), connectionState())
     }.distinctUntilChanged()
 
+    override fun contactVersions() = container.appState.contactsVersion
     override fun connectionIdentity(): Any? = container.sessions.current
     override fun connectionState() = container.appState.connectionState
     override fun connectedDevice() = container.appState.connectedDevice
@@ -147,6 +155,9 @@ private class AppNodesContactService(private val service: ContactService) : Node
     override suspend fun getContact(radioId: RadioId, publicKey: Bytes) = service.getContact(radioId, publicKey)
     override suspend fun addOrUpdateContact(radioId: RadioId, contact: ContactFrame) =
         mapContactFailure { service.addOrUpdateContact(radioId, contact) }
+
+    override suspend fun addContactIfAbsent(radioId: RadioId, contact: ContactFrame) =
+        mapContactFailure { service.addContactIfAbsent(radioId, contact) }
 
     override suspend fun removeContact(radioId: RadioId, publicKey: Bytes) =
         mapContactFailure { service.removeContact(radioId, publicKey) }

@@ -139,6 +139,35 @@ class MessagingRoomIntegrationTest {
             timestamp = 1u,
             createdAt = base,
         )
+    private suspend fun admitChannelQueueRow(
+        message: MessageDTO,
+        origin: ChannelHistoryScope,
+        isResend: Boolean,
+        initialAttemptCount: Long,
+    ): PendingSendDTO {
+        require(initialAttemptCount in 0..Int.MAX_VALUE.toLong())
+        val pendingID = UUID.randomUUID()
+        val envelope = ChannelMessageEnvelope(
+            message.id, origin.channelIndex, isResend, message.text, message.timestamp, "Test Radio",
+            origin.expectedOccupantID,
+        )
+        store.insertPendingSendAssigningSequence(
+            PendingSendDTO.fromEnvelope(
+                envelope,
+                message.radioId,
+                id = pendingID,
+                enqueuedAt = message.createdAt,
+            ),
+        )
+        val pendingKey = EntityKey(message.radioId, pendingID)
+        repeat(initialAttemptCount.toInt()) {
+            store.incrementReadyQueuedChannelAttemptCount(pendingKey, message.id)
+        }
+        return checkNotNull(
+            store.fetchPendingSendsForMessage(EntityKey(message.radioId, message.id))
+                .singleOrNull { it.id == pendingID },
+        )
+    }
     private suspend fun RadioGeneration.reconcileSeededChannel(
         channels: ChannelService, snapshot: ChannelOccupantSnapshot,
     ) = store.withChannelOperation { scoped, identity ->
@@ -519,11 +548,10 @@ class MessagingRoomIntegrationTest {
         g.firmware.error = 2u
         g.firmware.emptyChannelSlot = true
         val message = channelMessage("Hello channel", origin)
-        val row = PendingSendDTO.fromEnvelope(ChannelMessageEnvelope(message.id, 0u, true,
-            message.text, message.timestamp, "Test Radio", origin.expectedOccupantID), radio)
-            .copy(sequence = 1, attemptCount = initialAttempts)
-        store.upsertPendingSend(row)
-        val foreign = row.copy(radioId = other)
+        val row = admitChannelQueueRow(message, origin, isResend = true, initialAttemptCount = initialAttempts)
+        val foreign = row.copy(
+            id = UUID.randomUUID(), radioId = other, channelDispatchState = null, channelAttemptID = null,
+        )
         store.upsertPendingSend(foreign)
         val events = g.service.statusEvents()
         g.queue.hydrate()
@@ -572,16 +600,12 @@ class MessagingRoomIntegrationTest {
         g.firmware.error = 2u
         val first = channelMessage("Hello channel", origin)
         val second = channelMessage("Second message", origin)
-        val firstRow = PendingSendDTO.fromEnvelope(
-            ChannelMessageEnvelope(first.id, 0u, true, first.text, first.timestamp, "Test Radio", origin.expectedOccupantID), radio,
-        ).copy(sequence = 1, attemptCount = 7)
-        val secondRow = PendingSendDTO.fromEnvelope(
-            ChannelMessageEnvelope(second.id, 0u, false, second.text, second.timestamp, "Test Radio", origin.expectedOccupantID), radio,
-        ).copy(sequence = 2, attemptCount = 2)
-        store.upsertPendingSend(firstRow)
-        store.upsertPendingSend(secondRow)
+        val firstRow = admitChannelQueueRow(first, origin, isResend = true, initialAttemptCount = 7)
+        val secondRow = admitChannelQueueRow(second, origin, isResend = false, initialAttemptCount = 2)
         val foreignMessage = first.copy(radioId = other)
-        val foreignRow = firstRow.copy(radioId = other)
+        val foreignRow = firstRow.copy(
+            id = UUID.randomUUID(), radioId = other, channelDispatchState = null, channelAttemptID = null,
+        )
         store.saveMessage(foreignMessage)
         store.upsertPendingSend(foreignRow)
         val status = g.service.statusEvents()
@@ -844,11 +868,42 @@ class MessagingRoomIntegrationTest {
     @OriginalCase("MessageServiceSendTests::createPendingChannelMessage saves to dataStore with pending status()")
     @Test fun pendingChannelCreationCommitsItsOriginalFieldsWithoutSending() = runTest(scheduler) {
         seed()
+        val snapshot = seedChannel(0u, "Test Channel", Bytes(ByteArray(16) { 0xAA.toByte() }))
         val g = RadioGeneration(51)
         val message = g.service.createPendingChannelMessage("Hello channel", 0u, radio)
         assertEquals(MessageDTO(id = message.id, radioId = radio, channelIndex = 0u,
-            text = "Hello channel", timestamp = base.epochSecond.toUInt(), createdAt = base), message)
+            text = "Hello channel", timestamp = base.epochSecond.toUInt(), createdAt = base,
+            channelOccupantID = snapshot.occupantID), message)
         assertEquals(message, store.fetchMessages(radio, 0u).single())
+        assertTrue(g.firmware.channelSent().isEmpty())
+        g.stop()
+    }
+
+    @Test fun pendingChannelCreationRetainsCapturedOriginAcrossReplacementWithoutAdoptingTheNewSlot() = runTest(scheduler) {
+        seed()
+        val original = seedChannel(0u, "Original", Bytes(ByteArray(16) { 0x11 }))
+        var captured: ChannelHistoryScope? = null
+        val replacing = object : PersistenceStoreProtocol by store, ChannelHistoryPersisting by store {
+            override suspend fun createOrReconcileChannelMessage(
+                creation: ChannelMessageCreation, timestamp: UInt, createdAt: Instant,
+            ): MessageDTO {
+                captured = creation.origin
+                store.saveChannel(radio, ChannelInfo(0u, "Replacement", Bytes(ByteArray(16) { 0x22 })))
+                return store.createOrReconcileChannelMessage(creation, timestamp, createdAt)
+            }
+        }
+        val g = RadioGeneration(510, persistence = replacing)
+        val message = g.service.createPendingChannelMessage("Original intent", 0u, radio)
+        assertEquals(ChannelHistoryScope.from(original), captured)
+        assertEquals(original.occupantID, message.channelOccupantID)
+        assertEquals(message, store.fetchMessage(EntityKey(radio, message.id)))
+        val failure = assertFailsWith<PersistenceStoreException> {
+            store.validateChannelMessageOrigin(EntityKey(radio, message.id))
+        }
+        assertEquals(ChannelHistoryConflict.STALE_OCCUPANT, assertIs<ChannelHistoryRejected>(failure.cause).reason)
+        assertNotEquals(original.occupantID, assertNotNull(store.fetchChannelOccupantSnapshot(radio, 0u)).occupantID)
+        assertEquals(listOf(message), store.fetchMessages(radio, 0u).toList())
+        assertTrue(store.fetchPendingSends(radio).isEmpty())
         assertTrue(g.firmware.channelSent().isEmpty())
         g.stop()
     }
@@ -907,8 +962,10 @@ class MessagingRoomIntegrationTest {
     @OriginalCase("MessageServiceSendTests::sendPendingChannelMessage sets failed status on send error()")
     @Test fun disconnectedPendingChannelSendCommitsFailureInTheActualStore() = runTest(scheduler) {
         seed()
+        val snapshot = seedChannel(0u, "Test Channel", Bytes(ByteArray(16) { 0xAA.toByte() }))
         val g = RadioGeneration(54)
         val message = g.service.createPendingChannelMessage("Hello channel", 0u, radio)
+        assertEquals(snapshot.occupantID, message.channelOccupantID)
         val events = g.service.statusEvents()
         assertFailsWith<MessageServiceException> { g.service.sendPendingChannelMessage(message.id) }
         assertEquals(message.copy(status = MessageStatus.FAILED), store.fetchMessage(EntityKey(radio, message.id)))

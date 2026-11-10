@@ -70,6 +70,7 @@ internal class AppShortcutRadio(private val container: AppContainer) : ShortcutR
                 is ShortcutRecipient.Channel -> session.chatSendQueueService.enqueueChannel(
                     ChannelMessageEnvelope(
                         pending.id, recipient.dto.index, false, pending.text, pending.timestamp, localNodeName,
+                        channelOccupantID = pending.channelOccupantID,
                     ),
                 )
             }

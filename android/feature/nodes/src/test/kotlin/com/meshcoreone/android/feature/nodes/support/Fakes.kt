@@ -152,6 +152,9 @@ internal class FakeContactService(private val store: FakeDataStore? = null) : No
     override suspend fun syncContactsForRefresh(radioId: RadioId) { calls += "sync"; sync(radioId) }
     override suspend fun getContact(radioId: RadioId, publicKey: Bytes): ContactDTO? { calls += "getContact"; return getContactBehavior(radioId, publicKey) }
     override suspend fun addOrUpdateContact(radioId: RadioId, contact: ContactFrame) { calls += "add:${contact.name}"; addBehavior(radioId, contact) }
+    override suspend fun addContactIfAbsent(radioId: RadioId, contact: ContactFrame) {
+        throw UnsupportedOperationException("This fake does not provide serialized conditional imports")
+    }
     override suspend fun removeContact(radioId: RadioId, publicKey: Bytes) { calls += "remove"; removeContact.invoke(radioId, publicKey) }
     override suspend fun removeLocalContact(contact: EntityKey, publicKey: Bytes) { calls += "removeLocal"; removeLocal(contact) }
     override suspend fun clearContactMessages(contact: EntityKey) { calls += "clearMessages"; clearMessagesBehavior() }

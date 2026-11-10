@@ -21,15 +21,22 @@ import java.net.URISyntaxException
 import java.util.ArrayDeque
 import java.util.UUID
 import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.CancellationException
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.logging.Level
 import java.util.logging.Logger
+import kotlin.coroutines.AbstractCoroutineContextElement
+import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -179,6 +186,31 @@ internal class NotificationRecoveryBroadcastQueue(
         worker.shutdown()
         deadlines.shutdown()
     }
+}
+
+enum class NotificationContentTapResult { NOT_NOTIFICATION, ENQUEUED, MALFORMED, QUEUE_FULL }
+
+object NotificationContentTap {
+    fun enqueue(intent: Intent): NotificationContentTapResult {
+        if (intent.action != AndroidMessagingNotificationDelivery.ACTION_PREFIX + AndroidMessagingNotificationDelivery.ACTION_OPEN) {
+            return NotificationContentTapResult.NOT_NOTIFICATION
+        }
+        val payload = NotificationPayloadCodec.read(intent) ?: return NotificationContentTapResult.MALFORMED
+        return when (NotificationActionDispatcher.enqueue(NotificationResponse(payload, null, null))) {
+            EnqueueResult.DELIVERED_OR_QUEUED -> NotificationContentTapResult.ENQUEUED
+            EnqueueResult.REJECTED_CAPACITY -> NotificationContentTapResult.QUEUE_FULL
+        }
+    }
+}
+
+class NotificationActionCommit internal constructor() : AbstractCoroutineContextElement(Key) {
+    companion object Key : CoroutineContext.Key<NotificationActionCommit>
+
+    @Volatile private var committed = false
+
+    fun navigationCommitted() { committed = true }
+    internal fun reset() { committed = false }
+    internal fun isCommitted() = committed
 }
 
 internal enum class EnqueueResult { DELIVERED_OR_QUEUED, REJECTED_CAPACITY }
@@ -561,12 +593,15 @@ internal object NotificationActionDispatcher {
     private val pending = ArrayDeque<NotificationResponse>()
     private var scope: CoroutineScope? = null
     private var router: (suspend (NotificationResponse) -> Boolean)? = null
+    private var installation: Any? = null
     private var drainJob: Job? = null
+    private var retryRequested = false
 
     fun install(scope: CoroutineScope, router: suspend (NotificationResponse) -> Boolean) {
         synchronized(lock) {
             this.scope = scope
             this.router = router
+            installation = Any()
         }
         retry()
     }
@@ -587,37 +622,80 @@ internal object NotificationActionDispatcher {
     }
 
     fun retry() {
-        val owner = synchronized(lock) {
-            if (drainJob?.isActive == true) return
-            scope
-        } ?: return
-        val job = owner.launch {
+        val job = synchronized(lock) {
+            retryRequested = true
+            prepareDrainLocked()
+        }
+        job?.start()
+    }
+
+    private fun prepareDrainLocked(): Job? {
+        val owner = scope ?: return null
+        if (drainJob != null || owner.coroutineContext[Job]?.isActive == false) return null
+        val installed = installation
+        val job = owner.launch(context = NotificationActionCommit(), start = CoroutineStart.LAZY) {
             repeat(RETRY_COUNT) {
+                synchronized(lock) { retryRequested = false }
                 if (drainOnce()) return@launch
                 delay(RETRY_DELAY_MILLIS)
             }
         }
-        synchronized(lock) { drainJob = job }
+        drainJob = job
+        job.invokeOnCompletion { failure ->
+            if (failure != null && failure !is CancellationException) {
+                logger.log(Level.WARNING, "Notification action drain failed", failure)
+            }
+            val next = synchronized(lock) {
+                if (drainJob !== job) return@invokeOnCompletion
+                drainJob = null
+                // An old drain can consume a replacement installation's retry before it stops.
+                if (retryRequested || installation !== installed) prepareDrainLocked() else null
+            }
+            next?.start()
+        }
+        return job
     }
 
     internal suspend fun drainOnce(): Boolean {
         while (true) {
-            val next = synchronized(lock) { pending.firstOrNull() } ?: return true
+            currentCoroutineContext().ensureActive()
+            val next = synchronized(lock) {
+                retryRequested = false
+                pending.firstOrNull()
+            } ?: return true
             val target = synchronized(lock) { router } ?: return false
-            if (!target(next)) return false
-            synchronized(lock) {
-                if (pending.firstOrNull() === next) pending.removeFirst()
+            val commit = currentCoroutineContext()[NotificationActionCommit]
+            commit?.reset()
+            var returned = false
+            val accepted = try {
+                target(next).also { returned = true }
+            } finally {
+                if (!returned && commit?.isCommitted() == true) removeCurrent(next)
             }
+            if (!accepted && commit?.isCommitted() != true) return false
+            if (!accepted) logger.severe("Notification handler rejected an already committed navigation")
+            removeCurrent(next)
+        }
+    }
+
+    private fun removeCurrent(response: NotificationResponse) = synchronized(lock) {
+        if (pending.firstOrNull() === response) {
+            pending.removeFirst()
+            if (pending.isNotEmpty()) retryRequested = true
         }
     }
 
     internal fun resetForTesting() {
-        synchronized(lock) {
-            drainJob?.cancel()
+        val job = synchronized(lock) {
+            val previous = drainJob
             drainJob = null
             pending.clear()
             scope = null
             router = null
+            installation = null
+            retryRequested = false
+            previous
         }
+        job?.cancel()
     }
 }

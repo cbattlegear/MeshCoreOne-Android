@@ -100,11 +100,31 @@ class ProcessContainerTest : RoomProcessTest() {
             val version = h.appState.servicesVersion.value
             val sessionJobs = h.appState.activeSessionJobCount
             val dispatcherJobs = h.appState.messageEventDispatcher.activeJobCount
+            val live = assertNotNull(h.sessions.current)
+            val subscribers = live.syncCoordinator.dataEventBroadcaster.subscriberCount
+            assertEquals(4, sessionJobs)
+            assertEquals(6, dispatcherJobs)
             repeat(3) { h.appState.wireServicesIfConnected() }
+            h.settle()
+            val concurrentRewires = List(3) { async { h.appState.wireServicesIfConnected() } }
+            concurrentRewires.forEach { it.await() }
             h.settle()
             assertEquals(version, h.appState.servicesVersion.value, "a rewire of the same container is not a services change")
             assertEquals(sessionJobs, h.appState.activeSessionJobCount)
             assertEquals(dispatcherJobs, h.appState.messageEventDispatcher.activeJobCount)
+            assertEquals(subscribers, live.syncCoordinator.dataEventBroadcaster.subscriberCount)
+
+            val radio = h.links.radios.last()
+            val updated = FirmwareRadio(key(7), "Rewired settings")
+            radio.respond = { command ->
+                if (command[0].toInt() == 0x01) listOf(updated.selfPacket()) else null
+            }
+            val refresh = async { live.settingsService.refreshDeviceInfo() }
+            h.eventually("settings refresh completes after rewiring") { refresh.isCompleted }
+            refresh.await()
+            h.eventually("the retained settings collector updates the connected device") {
+                h.manager.connectedDevice?.nodeName == "Rewired settings"
+            }
         } finally { h.container.close() }
     }
 

@@ -65,3 +65,46 @@ class NotificationActionReceipt : AbstractCoroutineContextElement(Key) {
 
 class NotificationReplyOutcomeUncertain(cause: Throwable) :
     Exception("Notification reply acceptance is unknown; automatic retransmission is unsafe", cause)
+
+/**
+ * Process-memory local-write observation, never wire evidence. A failed write may have committed
+ * before throwing; completedWrites counts returned calls, not the full set of possible effects.
+ */
+class NotificationReadReceipt : AbstractCoroutineContextElement(Key) {
+    companion object Key : CoroutineContext.Key<NotificationReadReceipt>
+
+    enum class State { READY, STARTED, COMMITTED, UNCERTAIN }
+
+    @Volatile
+    var state: State = State.READY
+        private set
+
+    @Volatile
+    var completedWrites: Int = 0
+        private set
+
+    val preventsReplay: Boolean get() = state != State.READY
+
+    @Synchronized
+    fun started() {
+        check(state == State.READY)
+        state = State.STARTED
+    }
+
+    @Synchronized
+    fun writeReturned() {
+        check(state == State.STARTED)
+        completedWrites++
+    }
+
+    @Synchronized
+    fun committed() {
+        check(state == State.STARTED)
+        state = State.COMMITTED
+    }
+
+    @Synchronized
+    fun uncertain() {
+        if (state == State.STARTED) state = State.UNCERTAIN
+    }
+}

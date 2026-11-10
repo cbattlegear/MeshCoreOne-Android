@@ -28,8 +28,7 @@ val verifyBenchmarkMeasurements by tasks.registering(Exec::class) {
     description = "Run synthetic raw-measurement reader assertions; never generate performance data."
     val repository = rootProject.projectDir.parentFile
     workingDir(repository)
-    commandLine("python", repository.resolve("tools/android-port/controller/test_runner.py").absolutePath,
-        "--tests", projectDir.resolve("tests").absolutePath)
+    commandLine("python", "-m", "unittest", "discover", "-s", projectDir.resolve("tests").absolutePath, "-p", "test_*.py")
 }
 
 tasks.register("verifyBenchmarkDataset") {

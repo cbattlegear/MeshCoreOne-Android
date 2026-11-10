@@ -97,11 +97,18 @@ internal class ChannelRepository(
             row.id
         }
 
-    override suspend fun saveChannel(dto: ChannelDTO) = context.channelWrite("saveChannel", identityScope = identityScope) {
-        val existing = database.channels().byId(dto.radioId.value, dto.id)
-        val row = existing?.applying(dto) ?: dto.toEntity()
-        database.channels().upsert(row)
-        updateOccupant(existing, row, authoritative = false)
+    override suspend fun saveChannel(dto: ChannelDTO) = context.write("saveChannel") {
+        val identified = database.channels().byId(dto.radioId.value, dto.id)
+        val occupants = database.channels().forIndex(dto.radioId.value, identified?.index ?: dto.index.toLong())
+        if (occupants.size > 1) throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+        // A replayed seed can have a different UUID after restore; it must not replace imported state.
+        val existing = identified ?: occupants.singleOrNull()
+        if (identified == null && existing != null &&
+            (existing.secret != dto.secret || existing.isEnabled != dto.isEnabled)) {
+            throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+        }
+        if (identified == null && existing != null) return@write
+        database.channels().upsert(identified?.applying(dto) ?: dto.toEntity())
         save()
     }
 

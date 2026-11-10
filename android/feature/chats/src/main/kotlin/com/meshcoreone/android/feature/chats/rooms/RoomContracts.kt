@@ -1,3 +1,4 @@
+// PortedFrom: MC1/Views/RemoteNodes/Rooms/RoomConversationView.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/RemoteNodes/Rooms/RoomConversationViewModel.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Chats/Room/RoomAuthenticationSheet.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.feature.chats.rooms
@@ -7,6 +8,11 @@ import com.meshcoreone.android.core.model.RemoteNodeSessionDTO
 import com.meshcoreone.android.core.model.RoomMessageDTO
 import java.util.UUID
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
+
+fun interface RoomSessionKeepAlive {
+    fun acquire(session: RemoteNodeSessionDTO): AutoCloseable?
+}
 
 interface RoomConversationDataSource {
     suspend fun fetchMessages(session: RemoteNodeSessionDTO): List<RoomMessageDTO>
@@ -55,6 +61,7 @@ interface RoomConversationDependencies {
     val data: RoomConversationDataSource
     val service: RoomConversationService
     val events: Flow<RoomConversationEvent>
+    val keepAlive: Flow<RoomSessionKeepAlive?> get() = flowOf(null)
     val diagnostics: RoomConversationDiagnostics get() = RoomConversationDiagnostics { _, _ -> }
     suspend fun removeDeliveredNotifications(session: RemoteNodeSessionDTO) = Unit
     suspend fun updateBadgeCount() = Unit

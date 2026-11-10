@@ -2,9 +2,18 @@
 package com.meshcoreone.android.feature.onboarding
 
 import com.meshcoreone.android.core.contracts.AppTab
+import com.meshcoreone.android.core.contracts.domain.OnboardingCompletionAttempt
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Test
 
@@ -16,7 +25,7 @@ class OnboardingStateTests : SourceCaseProof() {
     @Test fun completeSetsFlag() = prove {
         val onboarding = OnboardingState(store())
         onboarding.hasCompletedOnboarding = false
-        onboarding.completeOnboarding()
+        runBlocking { onboarding.completeOnboarding() }
         assertTrue(onboarding.hasCompletedOnboarding)
     }
 
@@ -25,7 +34,7 @@ class OnboardingStateTests : SourceCaseProof() {
         val flags = store()
         val onboarding = OnboardingState(flags)
         onboarding.hasCompletedOnboarding = false
-        onboarding.completeOnboarding()
+        runBlocking { onboarding.completeOnboarding() }
         assertTrue(flags.getBoolean(key))
     }
 
@@ -33,7 +42,7 @@ class OnboardingStateTests : SourceCaseProof() {
     @Test fun resetClearsFlag() = prove {
         val onboarding = OnboardingState(store())
         onboarding.hasCompletedOnboarding = true
-        onboarding.resetOnboarding()
+        runBlocking { onboarding.resetOnboarding() }
         assertFalse(onboarding.hasCompletedOnboarding)
     }
 
@@ -41,7 +50,7 @@ class OnboardingStateTests : SourceCaseProof() {
     @Test fun resetClearsPath() = prove {
         val onboarding = OnboardingState(store())
         onboarding.replacePath(listOf(OnboardingStep.WELCOME, OnboardingStep.PERMISSIONS))
-        onboarding.resetOnboarding()
+        runBlocking { onboarding.resetOnboarding() }
         assertTrue(onboarding.onboardingPath.isEmpty())
     }
 
@@ -50,7 +59,7 @@ class OnboardingStateTests : SourceCaseProof() {
         val flags = store()
         val onboarding = OnboardingState(flags)
         onboarding.hasCompletedOnboarding = true
-        onboarding.resetOnboarding()
+        runBlocking { onboarding.resetOnboarding() }
         assertFalse(flags.getBoolean(key))
     }
 
@@ -150,5 +159,85 @@ class OnboardingStateTests : SourceCaseProof() {
         onboarding.append(OnboardingStep.PERMISSIONS); onboarding.append(OnboardingStep.PAIR)
         assertTrue(onboarding.pop())
         assertEquals(listOf(OnboardingStep.PERMISSIONS), onboarding.onboardingPath)
+    }
+
+    @Test fun completionWaitsForPersistenceAndPropagatesWriteFailure() = runBlocking {
+        var stored = false
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val flags = object : OnboardingFlagStore {
+            override fun getBoolean(key: String) = stored
+            override fun setBoolean(key: String, value: Boolean) { stored = value }
+            override suspend fun persistBoolean(key: String, value: Boolean) {
+                started.complete(Unit)
+                release.await()
+                stored = value
+            }
+        }
+        val onboarding = OnboardingState(flags)
+        val completing = async { onboarding.completeOnboarding() }
+        started.await()
+        assertFalse(onboarding.hasCompletedOnboarding)
+        release.complete(Unit)
+        completing.await()
+        assertTrue(onboarding.hasCompletedOnboarding)
+
+        val failing = object : OnboardingFlagStore {
+            override fun getBoolean(key: String) = false
+            override fun setBoolean(key: String, value: Boolean) = Unit
+            override suspend fun persistBoolean(key: String, value: Boolean): Unit = error("write failed")
+        }
+        val failedOnboarding = OnboardingState(failing)
+        assertFailsWith<IllegalStateException> { failedOnboarding.completeOnboarding() }
+        assertFalse(failedOnboarding.hasCompletedOnboarding)
+    }
+
+    @Test fun settledCompletionEmissionFollowsClearingTheSynchronousRetryGuard() = runBlocking {
+        val failure = IllegalStateException("write failed")
+        val flags = object : OnboardingFlagStore {
+            override fun getBoolean(key: String) = false
+            override fun setBoolean(key: String, value: Boolean) = Unit
+            override suspend fun persistBoolean(
+                key: String,
+                value: Boolean,
+                requireCurrent: () -> Unit,
+                seal: (OnboardingCompletionAttempt) -> Boolean,
+                attempt: OnboardingCompletionAttempt,
+                onFinished: (Result<Unit>) -> Unit,
+            ) {
+                onFinished(Result.failure(failure))
+                throw failure
+            }
+        }
+        val onboarding = OnboardingState(flags)
+        var observedSettling = false
+        var retryReadyWhenSettled: Boolean? = null
+        val collector = CoroutineScope(Dispatchers.Unconfined).launch {
+            onboarding.unsettledCompletionFlow.collect { unsettled ->
+                if (unsettled) observedSettling = true
+                else if (observedSettling) retryReadyWhenSettled = onboarding.canStartCompletion()
+            }
+        }
+
+        try {
+            assertFailsWith<IllegalStateException> { onboarding.completeOnboarding() }
+            assertEquals(true, retryReadyWhenSettled)
+        } finally {
+            collector.cancel()
+        }
+    }
+
+    @Test fun failedTipDonationRetainsPendingStateForRetry() = runBlocking {
+        var attempts = 0
+        val coordinator = DeviceMenuTipCoordinator({ AppTab.CHATS }) {
+            attempts += 1
+            if (attempts == 1) throw IllegalStateException("preference write failed")
+        }
+        coordinator.markPending(true)
+        assertFailsWith<IllegalStateException> { coordinator.donateIfOnValidTab() }
+        assertTrue(coordinator.pendingDonation.value)
+        coordinator.donateIfOnValidTab()
+        assertFalse(coordinator.pendingDonation.value)
+        assertEquals(2, attempts)
     }
 }

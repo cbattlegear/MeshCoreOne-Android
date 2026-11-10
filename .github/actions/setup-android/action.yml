@@ -1,0 +1,64 @@
+name: Set up Android build
+description: JDK 21, Python 3.12, the Android SDK packages the build needs, and a Gradle cache. Run after actions/checkout.
+
+inputs:
+  save-cache:
+    description: Save the Gradle cache when the job succeeds on main. Other refs only restore.
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+      with:
+        distribution: temurin
+        java-version: "21"
+
+    - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      with:
+        python-version: "3.12"
+
+    - name: Ensure Android SDK packages
+      shell: bash
+      run: |
+        sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+        missing=()
+        for package in "platforms;android-37.2" "build-tools;37.0.0"; do
+          [ -d "$sdk/${package//;//}" ] || missing+=("$package")
+        done
+        if [ "${#missing[@]}" -gt 0 ]; then
+          echo "Installing missing SDK packages: ${missing[*]}"
+          yes | "$sdk/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$sdk" --licenses > /dev/null || true
+          "$sdk/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$sdk" "${missing[@]}"
+        fi
+        echo "ANDROID_HOME=$sdk" >> "$GITHUB_ENV"
+        echo "ANDROID_SDK_ROOT=$sdk" >> "$GITHUB_ENV"
+
+    - id: inputs
+      name: Hash Gradle inputs
+      shell: bash
+      run: echo "hash=${{ hashFiles('android/gradle/wrapper/gradle-wrapper.properties', 'android/gradle/libs.versions.toml', 'android/gradle/verification-metadata.xml', 'android/gradle/dependency-locks/*.lockfile', 'android/**/gradle.lockfile') }}" >> "$GITHUB_OUTPUT"
+
+    - name: Restore Gradle cache
+      if: ${{ github.ref != 'refs/heads/main' || inputs.save-cache != 'true' }}
+      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+      with:
+        path: |
+          ~/.gradle/caches
+          ~/.gradle/wrapper
+        key: gradle-${{ runner.os }}-${{ steps.inputs.outputs.hash }}-${{ github.run_id }}
+        restore-keys: |
+          gradle-${{ runner.os }}-${{ steps.inputs.outputs.hash }}-
+          gradle-${{ runner.os }}-
+
+    - name: Restore Gradle cache and save it when the job succeeds
+      if: ${{ github.ref == 'refs/heads/main' && inputs.save-cache == 'true' }}
+      uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+      with:
+        path: |
+          ~/.gradle/caches
+          ~/.gradle/wrapper
+        key: gradle-${{ runner.os }}-${{ steps.inputs.outputs.hash }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: |
+          gradle-${{ runner.os }}-${{ steps.inputs.outputs.hash }}-
+          gradle-${{ runner.os }}-

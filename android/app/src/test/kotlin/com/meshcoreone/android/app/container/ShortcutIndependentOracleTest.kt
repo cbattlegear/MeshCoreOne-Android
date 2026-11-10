@@ -21,14 +21,19 @@ import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.model.BatteryInfo
 import com.meshcoreone.android.core.services.contacts.AdvertisementError
 import com.meshcoreone.android.core.services.contacts.ChannelServiceError
+import com.meshcoreone.android.core.services.sync.SyncClock
 import com.meshcoreone.android.platform.shortcuts.*
 import java.util.Locale
 import kotlin.test.*
+import kotlin.time.Duration
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import org.junit.Test
 
 class ShortcutIndependentOracleTest : RoomProcessTest() {
@@ -38,7 +43,11 @@ class ShortcutIndependentOracleTest : RoomProcessTest() {
     private val text = AndroidShortcutText(context)
 
     private suspend fun connected(test: TestScope, channel: Boolean = false): ContainerHarness {
-        val h = ContainerHarness(test, store)
+        val syncClock = if (channel) object : SyncClock by SyncClock.SYSTEM {
+            override suspend fun sleep(duration: Duration) =
+                withContext(Dispatchers.Default) { delay(duration) }
+        } else SyncClock.SYSTEM
+        val h = ContainerHarness(test, store, syncClock = syncClock)
         h.links.configureRadio = { firmware ->
             firmware.knownContacts += contactFrame(key(4), "Independent peer")
             firmware.respond = { frame ->

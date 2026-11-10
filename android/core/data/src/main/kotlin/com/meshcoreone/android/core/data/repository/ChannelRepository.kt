@@ -90,7 +90,7 @@ internal class ChannelRepository(
         database.channels().byId(key.radioId.value, key.id)?.let { channelWithOrigin(it) }
     }
 
-    private suspend fun RepositoryTransaction.channelWithOrigin(row: ChannelEntity): ChannelDTO {
+    internal suspend fun RepositoryTransaction.channelWithOrigin(row: ChannelEntity): ChannelDTO {
         val occupant = if (row.isEnabled &&
             database.channels().forIndex(row.radioId, row.index).singleOrNull()?.id == row.id
         ) database.channelOccupants().forIndex(row.radioId, row.index) else null
@@ -248,7 +248,7 @@ internal class ChannelRepository(
         }
 
     /** Simulator fixtures may insert an empty slot but must never replace a persisted occupant. */
-    suspend fun saveSimulatorChannel(dto: ChannelDTO): Unit = context.write("saveSimulatorChannel") {
+    suspend fun saveSimulatorChannel(dto: ChannelDTO): Unit = context.channelWrite("saveSimulatorChannel", identityScope = identityScope) {
         applySimulatorChannel(prepareSimulatorChannel(dto))
         Unit
     }
@@ -350,6 +350,7 @@ internal class ChannelRepository(
             )
         }
         coroutine.ensureActive()
+        updateOccupant(null, stored, authoritative = false)
         save()
         return stored
     }

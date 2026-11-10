@@ -309,20 +309,25 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
             assertNull(store.fetchContact(effectiveId, contactKey))
             h.eventually("uncertain partial import retires its captured graph") { node.isTornDown }
             h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
-            val reconnect = backgroundScope.async {
-                assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> { h.manager.connect(h.target()) }
-            }
-            h.eventually("explicit reconnect cannot reopen the uncertain effective identity", virtualBudgetMillis = 30_000) {
-                reconnect.isCompleted
+            val previousAttempts = h.links.radios.size
+            val reconnectFailure = assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> {
+                h.manager.connect(h.target())
             }
             assertTrue(node.isTornDown)
             assertNull(h.sessions.current)
             assertEquals(1, h.sessions.created)
             assertEquals(0, h.sessions.outstanding)
             assertNull(store.fetchChannelOccupantSnapshot(effectiveId, 0u))
-            val retainedCauses = generateSequence<Throwable>(reconnect.await()) { it.cause }.toList()
+            val retainedCauses = generateSequence<Throwable>(reconnectFailure) { it.cause }.toList()
             assertTrue(retainedCauses.any { it is kotlinx.coroutines.CancellationException },
                 "The quarantine must retain the cancelled exchange: ${retainedCauses.map { it.javaClass.name }}")
+            val successors = h.links.radios.drop(previousAttempts)
+            assertTrue(successors.isNotEmpty())
+            successors.forEach { successor ->
+                assertEquals(newKey, successor.publicKey)
+                assertTrue(successor.sent.none { it[0] == CommandCode.GET_CHANNEL.rawValue })
+                assertTrue(successor.sent.none { it[0] == CommandCode.SEND_CHANNEL_MESSAGE.rawValue })
+            }
         }
     }
 

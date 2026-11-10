@@ -15,6 +15,8 @@ CLASS = "com.meshcoreone.android.app.navigation.NavigationStateTest"
 IDENTITY = (CLASS, "realCase", "jvm")
 BINDING = {"nonce": "nonce", "head": "head", "tree": "tree", "inputs_sha256": "digest"}
 MARKER = "WP302_EXECUTION|nonce|head|tree|digest|" + CLASS + "|realCase|jvm"
+FLOW_CLASS = "com.meshcoreone.android.app.container.NavigationFlowIntegrationTest"
+FLOW_EXPECTED = {(FLOW_CLASS, "mounted", sdk) for sdk in ("31", "37")}
 
 
 class ReaderTest(unittest.TestCase):
@@ -36,6 +38,35 @@ class ReaderTest(unittest.TestCase):
         )
         return root
 
+    def full_render_markers(self):
+        data = self.png()
+        checksum = EVIDENCE.digest(data)
+        encoded = base64.b64encode(data).decode()
+        states = {f"width-{width}" for width in (360, 599, 600, 744, 779, 780, 834, 1080)} | {
+            "tabs-selected-settings", "resize-expanded-draft", "resize-compact-draft", "collapse-tracepath",
+            "collapse-lineofsight", "native-back-root", "font200-rtl-cjk", "font200-rtl-rail",
+        }
+        states |= {
+            f"theme-{theme}-{scheme}-{contrast}"
+            for theme in ("default", "ember", "fern", "marine", "olive", "lavender", "sakura", "solarized", "nord", "catppuccin")
+            for scheme in (("dark",) if theme == "ember" else ("light", "dark"))
+            for contrast in ("standard", "hc")
+        }
+        names = {f"sdk-{sdk}-{state}" for sdk in ("31", "37") for state in states}
+        self.assertEqual(108, len(names))
+        return "\n".join(f"WP302_RENDER|{name}|1|1|{checksum}|{encoded}" for name in sorted(names))
+
+    @staticmethod
+    def flow_marker(name, sdk):
+        return f"WP302_EXECUTION|nonce|head|tree|digest|{FLOW_CLASS}|{name}|{sdk}"
+
+    @staticmethod
+    def flow_nodes():
+        return (
+            f'<testcase classname="{FLOW_CLASS}" name="mounted[31]"/>'
+            f'<testcase classname="{FLOW_CLASS}" name="mounted"/>'
+        )
+
     def rejects(self, directory):
         with self.assertRaises(EVIDENCE.PortError):
             EVIDENCE.native_reports(directory, BINDING, {IDENTITY})
@@ -43,7 +74,76 @@ class ReaderTest(unittest.TestCase):
     def test_actual_static_inventory_maps_all_fifty_but_is_not_execution(self):
         _, source, originals, mapped, expected = EVIDENCE.inventory()
         self.assertEqual(10, len(source)); self.assertEqual(50, len(originals)); self.assertEqual(50, len(mapped))
-        self.assertEqual(140, len(expected))
+        self.assertEqual(set(EVIDENCE.SOURCE_CASE_METHODS), set(mapped))
+        for case, method in EVIDENCE.SOURCE_CASE_METHODS.items():
+            self.assertEqual(method, mapped[case]["method"])
+            for sdk in ("31", "37"):
+                self.assertIn((mapped[case]["class"], method, sdk), expected)
+        self.assertEqual(325, len(expected))
+        flow = {node for node in expected if node[0] == FLOW_CLASS}
+        self.assertEqual(148, len(flow))
+        self.assertEqual({"31", "37"}, {node[2] for node in flow})
+        for unrelated in ("MessageBubbleConfigurationTest", "ChannelAvatarConsumerTest", "ComposerPromptComposeTest"):
+            self.assertFalse(any(node[0].endswith("." + unrelated) for node in expected))
+
+    def test_inventory_rejects_missing_mandatory_suite_or_execution_hook(self):
+        navigation = EVIDENCE.APP / "src/test" / EVIDENCE.NAV
+        original_glob = Path.glob
+
+        def missing(path, pattern):
+            entries = original_glob(path, pattern)
+            if path == navigation and pattern == "*Test.kt":
+                return (entry for entry in entries if entry.name != "NavigationFlowIntegrationTest.kt")
+            return entries
+
+        with patch.object(Path, "glob", new=missing):
+            with self.assertRaisesRegex(EVIDENCE.PortError, "missing mandatory native suites"):
+                EVIDENCE.inventory()
+
+        original_read = Path.read_text
+
+        def unbound(path, *args, **kwargs):
+            content = original_read(path, *args, **kwargs)
+            if path == navigation / "NavigationFlowIntegrationTest.kt":
+                return content.replace("emitNavigationExecutionBinding(", "missingExecutionBinding(")
+            return content
+
+        with patch.object(Path, "read_text", new=unbound):
+            with self.assertRaisesRegex(EVIDENCE.PortError, "missing native execution binding"):
+                EVIDENCE.inventory()
+
+    def test_original_family_mapping_rejects_missing_extra_or_duplicate_entries(self):
+        complete = EVIDENCE.SOURCE_CASE_METHODS
+        first, second = list(complete)[:2]
+        missing = dict(complete)
+        del missing[first]
+        extra = dict(complete, **{"ExtraSuite::untracked case()": "untrackedCase"})
+        duplicate = dict(complete)
+        duplicate[second] = duplicate[first]
+        for label, mapping in (("missing", missing), ("extra", extra), ("duplicate", duplicate)):
+            with self.subTest(label=label), patch.object(EVIDENCE, "SOURCE_CASE_METHODS", mapping):
+                with self.assertRaisesRegex(EVIDENCE.PortError, "missing, extra or non-bijective"):
+                    EVIDENCE.inventory()
+
+    def test_original_family_mapping_rejects_missing_native_assertion(self):
+        mapping = dict(EVIDENCE.SOURCE_CASE_METHODS)
+        mapping[next(iter(mapping))] = "missingNativeAssertion"
+        with patch.object(EVIDENCE, "SOURCE_CASE_METHODS", mapping):
+            with self.assertRaisesRegex(EVIDENCE.PortError, "missing/duplicate original assertion body"):
+                EVIDENCE.inventory()
+
+    def test_original_family_mapping_rejects_duplicate_native_assertion(self):
+        shared = EVIDENCE.APP / "src/androidTest" / EVIDENCE.NAV / "cases/OriginalNavigationCases.kt"
+        read_text = Path.read_text
+        method = next(iter(EVIDENCE.SOURCE_CASE_METHODS.values()))
+
+        def duplicate(path, *args, **kwargs):
+            content = read_text(path, *args, **kwargs)
+            return content + f"\n@Test fun {method}() {{}}\n" if path == shared else content
+
+        with patch.object(Path, "read_text", new=duplicate):
+            with self.assertRaisesRegex(EVIDENCE.PortError, "missing/duplicate original assertion body"):
+                EVIDENCE.inventory()
 
     def test_missing_directory_fails(self):
         self.rejects(Path("nonexistent-wp302-test-reports"))
@@ -73,6 +173,56 @@ class ReaderTest(unittest.TestCase):
 
     def test_missing_native_screens_fails_even_with_valid_bound_node(self):
         self.rejects(self.reports(MARKER))
+
+    def test_mounted_suite_in_container_package_binds_both_actual_sdk_nodes(self):
+        output = "\n".join((
+            self.flow_marker("mounted[31]", "31"),
+            self.flow_marker("mounted", "37"),
+            self.full_render_markers(),
+        ))
+        counts, _, renders = EVIDENCE.native_reports(
+            self.reports(output, self.flow_nodes(), tests=2), BINDING, FLOW_EXPECTED,
+        )
+        self.assertEqual(2, counts["passed"])
+        self.assertEqual(108, len(renders))
+
+    def test_unrelated_junit_cases_are_checked_without_receiving_wp302_credit(self):
+        nodes = self.flow_nodes() + '<testcase classname="other.FeatureTest" name="unrelated"/>'
+        output = "\n".join((
+            self.flow_marker("mounted[31]", "31"),
+            self.flow_marker("mounted", "37"),
+            self.full_render_markers(),
+        ))
+        counts, _, _ = EVIDENCE.native_reports(self.reports(output, nodes, tests=3), BINDING, FLOW_EXPECTED)
+        self.assertEqual(3, counts["passed"])
+        failed = nodes.replace('name="unrelated"/>', 'name="unrelated"><failure/></testcase>')
+        with self.assertRaises(EVIDENCE.PortError):
+            EVIDENCE.native_reports(self.reports(output, failed, tests=3), BINDING, FLOW_EXPECTED)
+
+    def test_two_sdk31_xml_nodes_cannot_stand_in_for_sdk37(self):
+        nodes = (
+            f'<testcase classname="{FLOW_CLASS}" name="mounted[31]"/>'
+            f'<testcase classname="{FLOW_CLASS}" name="mounted[31]()"/>'
+        )
+        output = "\n".join((
+            self.flow_marker("mounted[31]", "31"),
+            self.flow_marker("mounted", "37"),
+            self.full_render_markers(),
+        ))
+        with self.assertRaisesRegex(EVIDENCE.PortError, "duplicate native XML assertion"):
+            EVIDENCE.native_reports(self.reports(output, nodes, tests=2), BINDING, FLOW_EXPECTED)
+
+    def test_execution_marker_must_match_its_sdk_label(self):
+        output = self.flow_marker("mounted[31]", "37")
+        with self.assertRaisesRegex(EVIDENCE.PortError, "SDK label and execution binding disagree"):
+            EVIDENCE.native_reports(self.reports(output, self.flow_nodes(), tests=2), BINDING, FLOW_EXPECTED)
+
+    def test_mounted_sdk_node_without_its_binding_is_rejected(self):
+        with self.assertRaisesRegex(EVIDENCE.PortError, "missing current assertions"):
+            EVIDENCE.native_reports(
+                self.reports(self.flow_marker("mounted[31]", "31"), self.flow_nodes(), tests=2),
+                BINDING, FLOW_EXPECTED,
+            )
 
     def test_wrong_or_unknown_sdk_fails(self):
         self.rejects(self.reports(MARKER.removesuffix("jvm") + "30"))

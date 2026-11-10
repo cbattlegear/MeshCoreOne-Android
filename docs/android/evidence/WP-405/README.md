@@ -43,7 +43,28 @@ the lifecycle boundary and arbitrates it with the non-publishing CAS.
 No new cancellation mutator, runtime owner, or local-lock bypass is introduced.
 WP-302 owns the public factory visibility and guarded producer implementation;
 its `3128b251caf51b0c1e0b56e787330856f8ce9866` signature was inspected, with
-public factory visibility confirmed for its upcoming successor.
+public factory visibility committed in
+`e3f1aba1f84bed241a829724b947ecfa1ba54099`. This is an API source pin,
+not evidence of a coherent channel-prerequisite composition or a passing build.
+
+The owned cancellation/relookup slice is committed in
+`e6ba76f1c86edf9daa0676bbca133a1bd07f9c4d`. A normal merge of the producer
+API pin remains pending: owned external conflicts preserve that exact slice;
+shared `AppChatsContent.kt`, `NativeNavigationShell.kt` and
+`NavigationCoordinator.kt` conflicts remain unresolved for the active WP-302
+producer to compose with the channel-service prerequisites. No shared conflict
+was independently resolved, and no legacy generation compatibility getter was
+added. The pending merge is not a publishable or verified candidate.
+
+WP-302 published the contact-only composition in
+`da0dfd94c93de50f8cc41af723b928d5eb15fd3f` (implementation
+`b356d0301`). Immutable comparison against the owned slice found only two
+contact call-site adaptations: the adapter and pure replacement fixture name
+`targetRadioId = currentRadioId` and `selectChats` explicitly for the shared
+producer's existing `stageContactLink` signature. Both adaptations are retained
+here without importing or independently resolving the shared channel mounts.
+The producer also adapts its own legacy generation test to inspect the actual
+opaque capture. Publication of that source is not hosted execution evidence.
 
 The reactivated owner also requested bounded preservation of legitimate
 first-binding target changes. A first `TargetChanged` now re-resolves the same
@@ -62,11 +83,186 @@ no state/effect/consumption after release, and same-origin retry for existing an
 absent contacts. Unit controls enforce one automatic re-read and a bounded
 two-resolution failure rather than an infinite retry loop. Existing cancellation,
 replacement and published-rejection controls are preserved. These new Kotlin
-controls are not yet compiled/run; source validators alone do not verify them.
+controls first compiled and executed in the contact-only composition described
+below; that run failed and does not establish overall acceptance.
+
+### First hosted contact-only composition result
+
+[Run 41870548909](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41870548909),
+Android job `126717734229`, executed producer head
+`da0dfd94c93de50f8cc41af723b928d5eb15fd3f` with the exact seven owned
+contact source/test paths and their two target-argument adaptations. The
+authoritative App result reports 2,214 discovered/run, 2,196 passed, 18 failed,
+zero errors and zero skipped. ExternalRouteReplacementTest reports END SUCCESS;
+AppDeepLinkRouterTest and LinkConsumerIntegrationTest report END FAILURE.
+This is not a #508 channel-composition run or an accepted final candidate.
+
+The same authoritative log's method inventory explicitly reports four passed
+controls, not merely an absence of failure markers:
+`canceledExternalCompletionWaitingForActualLifecycleMonitorHasNoEffectAndRetainsOrigin`,
+`externalFirstBindingReresolvesOriginalCaptureAndReadsSavedPeerBeforeConsuming`,
+`canceledUnboundContactCaptureResolvesOnlyItsPermittedFirstGraph` and
+`unboundResolvedCompletionCannotTreatFirstGraphSavedContactAsAbsent`.
+These establish execution of those specific contact schedules on that producer
+head, not acceptance of the other failing cases or the unpublished channel batch.
+
+Actual owned failure diagnostics identify four fixture assumptions, repaired
+locally without changing production failure/commit policy:
+
+- Exception identity assertions crossed a coroutine stack-recovery boundary.
+  The tests now follow the existing ProcessContainerTest convention: require
+  identical exception class/message and the exact original object either as the
+  thrown exception or its direct recovery-copy cause. The original cancellation
+  must still retain exactly the cleanup failure as suppressed; release counts,
+  no-effect assertions and terminal consumed-ID checks are unchanged.
+- Process-store adapter equality compared a pre-persistence null heard timestamp
+  with Room's zero-valued representation. Both explicit fixture DTOs now use zero
+  and retain exact whole-DTO equality, foreign-partition and absence assertions.
+- The different-radio replacement family changed a firmware key while rebuilding
+  the same Bluetooth device identity, which retains its existing partition.
+  That family now connects a fresh target; the identical-radio family still
+  rebuilds the existing device. Both retain token inequality, the intended
+  radio equality/inequality, original-capture rejection without replacement
+  reads/effects, and the fresh-delivery positive control.
+
+The two repaired test files are immutable Git blobs
+`94c4514b2e55a1b05fd0a5edcb069b6dc765fcae` (AppDeepLinkRouterTest) and
+`853e0abc50c5ae7baeec2e86d5922728fc2a60e3` (LinkConsumerIntegrationTest).
+The active producer composed those exact blobs in immutable commit
+`4a532db83143019e52233b0336ad6172c8a9748c`; both committed blob identities
+were checked against the handoff. This was not yet published or rerun when
+inspected, and the shared-conflict merge remains pending. These corrections have scoped
+`git diff --check` success but no passing Kotlin rerun yet. Shared lifecycle,
+navigation receipt and Compose failures in the same log remain with WP-302,
+not silently attributed to these fixture corrections. No CI-result bundle was
+committed, hashed or revalidated.
+
+### Corrected fixture compilation follow-up
+
+[Run 41881409450](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41881409450),
+Android job `126754681545`, on producer
+`ee6ddc0cf3ce59cf3944e04f581fdc192bf27c29` failed App test compilation.
+The preceding fixture correction introduced two signed `0` literals where
+ContactDTO.lastHeardTimestamp requires `UInt?`; both are now explicitly `0u`.
+This was an introduced test-code type error, not a failed product assertion.
+The App tests did not execute on that candidate, and the earlier da0 results
+do not validate these successor bytes.
+
+The exact corrected LinkConsumerIntegrationTest source is Git blob
+`6444454729e4471995c7e56e9f4ac532ffb701cb`, differing from the handed-off
+`853e0abc50c5ae7baeec2e86d5922728fc2a60e3` only in those two unsigned suffixes.
+It was sent to WP-302 with the exact compiler diagnostics; the router fixture
+blob remains unchanged. Scoped `git diff --check` passes, but a corrected hosted
+compile/test result is still required.
+
+The producer applied those two corrections exactly and published successor
+`a2bb0fa651463cc0016120db013061200e0987f0`. Inspection of the committed
+LinkConsumerIntegrationTest blob confirms the exact `64444547` identity above.
+[Run 41885099356](https://github.com/cbattlegear/MeshCoreOne-Android/actions/runs/41885099356),
+Linux Android job `126767440737`, completed with overall FAILURE for that exact
+head. The authoritative App report records 2,241 discovered/run, 2,190 passed,
+51 failed, zero errors and zero skipped. App compilation succeeded and tests
+executed; this is no longer the preceding signed-literal compilation blocker.
+
+All three owned contact suites explicitly report END SUCCESS. The authoritative
+method inventory records AppDeepLinkRouterTest 18/18,
+ExternalRouteReplacementTest 20/20 and LinkConsumerIntegrationTest 15/15 passed:
+53 executed methods, not an inference from absent failure markers. Comparison
+of all seven owned contact source/test paths against the exact candidate has no
+differences. This verifies the bounded contact fixture corrections on that head.
+
+The overall failed run still includes shared mounted lifecycle cancellation,
+late contact-import ACK/replacement, actual AppChatsContent source-owner,
+notification delivery, predictive-Back and room consumer failures. These were
+reported to the producer/coordinator, without weakening their assertions or
+independently editing shared mounts. The retained shared-navigation merge
+remains unresolved and unpublished. These contact results do not establish
+channel acceptance, a passing combined candidate or permission to merge #508.
+
+More precise shared-control diagnostics were transferred without test edits:
+the mounted cancellation control's printed whole-state mismatch is shell
+settlement (`widthDp` 0 to 390 and pendingChatContact cleared), while route
+stacks, selected conversation, lookup revision and pendingContactLink remain
+unchanged. This failure alone is not proof of an unauthorized contact offer.
+The actual source-owner control times out awaiting shell acceptance/source
+disposal on API 31; its unsuffixed method explicitly passes. The producer owns
+repairing these controls while preserving their cancellation/ownership checks.
+
+### Channel producer traceability handoff
+
+The channel producer reported hosted run `41875400938` on
+`a8c99f452a92a93f476806b056ae08330d24aba0` stopped before queue validation:
+its imported ChannelServiceSupport.kt combined the original file-level
+`PortedFrom` with an inline `AndroidOnly: WP-405` declaration.
+The retained WP-405 file already has a neutral native-adaptation comment and
+no competing staged or unstaged edit at that path. The exact one-line marker
+repair was transferred to the active WP-208 producer, preserving the original
+header, all type behavior and WP-405 evidence; no concurrent edit was made here.
+
+The actual read-only trusted admission command
+`python tools\android-port\local\reserve.py admit --wp WP-208 --path android/core/services/src/main/kotlin/com/meshcoreone/android/core/services/contacts/ChannelServiceSupport.kt --operation modify-related-consumer`
+returned exit 0 and capability `reviewed-support-consumer`. This establishes
+path/operation admission and the no-overlap handoff, not a fabricated lease
+receipt, a policy amendment, a product test result or channel acceptance.
+
+The producer completed the exact marker-only source correction in local
+`e604452c5ed6920900ac2f84eeb5e6bb49a7dad8`, parent `a8c99f452a92a93f476806b056ae08330d24aba0`.
+Immutable inspection confirms the sole declaration change is the inline comment;
+the same commit separately changes the WP-208 ChannelQueryAccountingTest
+readiness fixture. Its existing local/unpublished instruction is not overridden:
+there is no e604452 hosted result. The producer routed its minimal deltas to the
+active #550 integrator, and WP-302 received the exact source pin for the shared
+composition. No whole-tree transplant or duplicate service implementation was
+performed here.
+
+Subsequent exact-consumer correction: #495
+`ee6ddc0cf3ce59cf3944e04f581fdc192bf27c29` and #550
+`7ac961f153f05958a602e8f76e7b846d274ffcec` do not reference or declare
+ChannelMutationError. The marker-only delta is inapplicable there and must not
+be added standalone. Retained WP-405 ChannelService does require the declaration
+at its three allocation/quarantine failure sites, with thirteen native typed
+assertions. Its minimal dependencies are SnapshotList and Kotlin Exception/
+Throwable, but that is a dependency of the actual allocator implementation,
+not of the current notification consumer.
+
+WP-302 identified a separate semantic defect in the proposed e604 container
+union: an already displayed channel A can sample a fresh slot scope for B after
+reuse, while a reused row UUID does not distinguish the occupants. A carried
+display scope plus invalidation and conditional authority is required before
+activating that union; a provenance-only correction does not fix it. That
+producer union's three container conflicts are distinct from this worktree's
+retained e6/e3 three navigation conflicts. Neither set was independently
+resolved here, and current notification/contact integration must not wait for
+an irrelevant standalone declaration.
+
+The shared producer subsequently confirmed the exact missing contract:
+an immutable display DTO paired with its occupant incarnation must be captured
+by the producing lookup/poller and carried into route, selection and consumer;
+pending and prepublication invalidation must serialize with replacement.
+Post hoc fetchChannelOccupantSnapshot cannot prove identity with a previously
+displayed DTO, reused ChannelDTO.id cannot witness that identity, and a
+null-origin history route must not fall back to the current slot occupant.
+No coherent three-file resolved snapshot is available yet. The producer
+explicitly directs retaining the channel mounts and held merge rather than
+taking the contact-only shared files.
+
+Both active producers independently confirm that no completed prerequisite
+exists in their supplied snapshots. At e604 the poller still performs a
+separate ChannelDTO lookup, creates Unproved and resamples the current channel
+at delivery. Implementing the missing producer/invalidation boundary is distinct
+from the admitted marker/two-envelope repair, not an already available minimal
+patch. The coordinator received this ownership gap for assignment to the
+current semantic producer; it is not represented as waiting for an existing
+verified implementation.
 
 ## Issue #544: first-graph process-store contact lookup
 
-### Origin-bound resolution and completion (source only)
+### Historical origin-bound resolution and completion (source only)
+
+The explicit-retry-only behavior and execution/publication disposition in this
+subsection describe the earlier source snapshot. The resumed integration and
+bounded first-binding follow-up above supersede them; they are not current
+administrative holds or current first-target-change behavior.
 
 The Boolean retry precheck in `620ee9fb9e7d24d2eaea985e1f589245f089e633`
 did not resolve a retained null-radio capture's permitted first graph. It

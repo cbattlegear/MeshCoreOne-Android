@@ -511,5 +511,58 @@ class NotificationPolicyNativeTests {
             h.service.didReceive(NotificationResponse(dm, NotificationAction.REPLY, "boom"))
             assertEquals(emptyList(), h.store.calls)
         },
+        nativeCase("action dispatch distinguishes missing forwarders from handled actions") {
+            val h = NotificationHarness(this)
+            val contact = EntityKey(RADIO_A, contactID)
+            val session = EntityKey(RADIO_A, UUID.randomUUID())
+            val direct = NotificationPayload.DirectMessage(contact, messageID)
+            val channel = NotificationPayload.ChannelMessage(RADIO_A, 3u, messageID)
+            val room = NotificationPayload.RoomMessage("Room", session, messageID)
+            val responses = listOf(
+                NotificationResponse(direct, NotificationAction.REPLY, "direct"),
+                NotificationResponse(channel, NotificationAction.REPLY, "channel"),
+                NotificationResponse(direct, NotificationAction.MARK_READ, null),
+                NotificationResponse(channel, NotificationAction.MARK_READ, null),
+                NotificationResponse(room, NotificationAction.MARK_READ, null),
+            )
+            responses.forEach {
+                assertEquals(NotificationResponseDispatch.ACTION_CALLBACK_MISSING, h.service.didReceiveWithResult(it))
+            }
+            val calls = mutableListOf<String>()
+            h.service.onQuickReply = { _, _ -> calls += "direct reply" }
+            h.service.onChannelQuickReply = { _, _, _ -> calls += "channel reply" }
+            h.service.onMarkAsRead = { _, _ -> calls += "direct read" }
+            h.service.onChannelMarkAsRead = { _, _, _ -> calls += "channel read" }
+            h.service.onRoomMarkAsRead = { _, _ -> calls += "room read" }
+            responses.forEach {
+                assertEquals(NotificationResponseDispatch.ACTION_HANDLED, h.service.didReceiveWithResult(it))
+            }
+            assertEquals(listOf("direct reply", "channel reply", "direct read", "channel read", "room read"), calls)
+            assertEquals(
+                NotificationResponseDispatch.ACTION_HANDLED,
+                h.service.didReceiveWithResult(NotificationResponse(direct, NotificationAction.REPLY, null)),
+            )
+        },
+        nativeCase("tap dispatch reports optional and invoked callbacks without changing cancellation") {
+            val h = NotificationHarness(this)
+            val contact = EntityKey(RADIO_A, contactID)
+            val response = NotificationResponse(NotificationPayload.DirectMessage(contact, messageID), null, null)
+            assertEquals(NotificationResponseDispatch.TAP_CALLBACK_MISSING, h.service.didReceiveWithResult(response))
+            var calls = 0
+            h.service.onNotificationTapped = {
+                assertEquals(contact, it)
+                calls++
+            }
+            assertEquals(NotificationResponseDispatch.TAP_CALLBACK_INVOKED, h.service.didReceiveWithResult(response))
+            assertEquals(1, calls)
+            h.service.onNotificationTapped = { throw IllegalStateException("callback failed") }
+            assertEquals(NotificationResponseDispatch.TAP_CALLBACK_INVOKED, h.service.didReceiveWithResult(response))
+            h.service.onNotificationTapped = { throw CancellationException("cancelled") }
+            assertFailsWith<CancellationException> { h.service.didReceiveWithResult(response) }
+            assertEquals(
+                NotificationResponseDispatch.ACTION_HANDLED,
+                h.service.didReceiveWithResult(NotificationResponse(response.payload, NotificationAction.REPLY, null)),
+            )
+        },
     )
 }

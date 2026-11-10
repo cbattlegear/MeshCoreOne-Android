@@ -6,7 +6,10 @@ import java.net.URI
 import java.net.URISyntaxException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 
 /**
  * Shared routing for chat-content URLs. Returns true for any URL whose scheme (and host, for
@@ -69,11 +72,73 @@ class ChatLinkRouter(
     private fun redacted(url: String): String = url.substringBefore('?')
 
     private fun handleContactLink(link: ContactLinkResult) {
+        val context = ContactLinkPublications().use { publications ->
+            environment.captureContactLinkContext(link.publicKey, publications)
+        }
+        when (context.disposition) {
+            ContactLinkCaptureDisposition.IgnoredSelfContact -> return
+            ContactLinkCaptureDisposition.StaleContext -> {
+                diagnostics.report("Contact-link initiating context is not current", null)
+                return
+            }
+            ContactLinkCaptureDisposition.Lookup -> Unit
+        }
         launchLookup {
-            if (link.publicKey == environment.connectedDevicePublicKey) return@launchLookup
-            val radioId = environment.currentRadioId
-            val existing = radioId?.let { runCatchingNonCancellation { environment.fetchContact(it, link.publicKey) } }
-            if (existing != null) environment.navigateToContactDetail(existing) else environment.stageContactLink(link)
+            val job = checkNotNull(currentCoroutineContext()[Job])
+            val (cancellation, observation) = ContactLinkCancellation.observe(job)
+            try {
+                var targetChanges = 0
+                while (true) {
+                    currentCoroutineContext().ensureActive()
+                    val target = when (val resolution = environment.resolveContactLinkContext(context, link.publicKey)) {
+                        ContactLinkTargetResolution.Stale -> {
+                            diagnostics.report("Contact-link lookup context is no longer current", null)
+                            return@launchLookup
+                        }
+                        is ContactLinkTargetResolution.Current -> resolution.target
+                    }
+                    val existing = if (target.selfPublicKey == link.publicKey) null else target.radioId?.let { radio ->
+                        try {
+                            environment.fetchContact(radio, link.publicKey)
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (failure: Exception) {
+                            diagnostics.report("Contact-link lookup failed", failure)
+                            return@launchLookup
+                        }
+                    }
+                    currentCoroutineContext().ensureActive()
+                    when (val completion = ContactLinkPublications().use { publications ->
+                        environment.completeResolvedContactLookup(context, target, link, existing, publications, cancellation)
+                    }) {
+                        ContactLinkTargetCompletion.TargetChanged -> {
+                            if (targetChanges++ == 0) continue
+                            diagnostics.report("Contact-link target changed repeatedly", null)
+                            return@launchLookup
+                        }
+                        is ContactLinkTargetCompletion.Completed -> reportContactCompletion(completion.outcome)
+                        is ContactLinkTargetCompletion.Offered -> when (val handoff = completion.receipt.awaitOutcome()) {
+                            is ContactLinkHandoffOutcome.Accepted -> reportContactCompletion(handoff.outcome)
+                            ContactLinkHandoffOutcome.Superseded ->
+                                diagnostics.report("Contact-link delivery was superseded before navigation accepted it", null)
+                        }
+                    }
+                    return@launchLookup
+                }
+            } finally {
+                observation.dispose()
+            }
+        }
+    }
+
+    private fun reportContactCompletion(outcome: ContactLinkCompletion) {
+        when (outcome) {
+            ContactLinkCompletion.StaleContext ->
+                diagnostics.report("Contact-link lookup context is no longer current", null)
+            ContactLinkCompletion.WrongTarget ->
+                diagnostics.report("Contact-link lookup returned the wrong target", null)
+            ContactLinkCompletion.Navigated, ContactLinkCompletion.ConfirmationStaged,
+            ContactLinkCompletion.IgnoredSelfContact -> Unit
         }
     }
 

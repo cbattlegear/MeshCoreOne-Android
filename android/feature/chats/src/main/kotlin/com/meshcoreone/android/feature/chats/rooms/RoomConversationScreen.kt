@@ -7,7 +7,9 @@ package com.meshcoreone.android.feature.chats.rooms
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -45,11 +47,13 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -69,7 +73,9 @@ import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
 import com.meshcoreone.android.feature.chats.actions.MessageAction
 import com.meshcoreone.android.feature.chats.composer.MentionUtilities
 import com.meshcoreone.android.core.ui.ContactAvatar
+import com.meshcoreone.android.core.ui.UiErrorMapper
 import com.meshcoreone.android.core.ui.sharedTouchTarget
+import com.meshcoreone.android.core.ui.uiString
 import com.meshcoreone.android.feature.chats.composer.MentionPickerContext
 import com.meshcoreone.android.feature.chats.composer.MentionTapEvaluator
 import com.meshcoreone.android.feature.chats.composer.MessageLinkAccessibility
@@ -84,19 +90,21 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 
 @Composable
 fun RoomConversationRoute(
     holder: RoomConversationStateHolder,
     links: ConversationLinkActions,
     modifier: Modifier = Modifier,
-    failureText: @Composable (Throwable) -> String = { it.message ?: it.javaClass.simpleName },
+    failureText: @Composable (Throwable) -> String = { uiString(UiErrorMapper().message(it)) },
     replyWithQuote: Boolean = false,
     onSendDirectMessage: (ContactDTO) -> Unit = { error("Room direct-message navigation is not registered") },
 ) {
     val state by holder.state.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     var authenticate by remember { mutableStateOf(false) }
+    var authenticationJob by remember(holder) { mutableStateOf<Job?>(null) }
     var pickerContext by remember { mutableStateOf<MentionPickerContext?>(null) }
     var selectedMessage by remember(holder) { mutableStateOf<RoomMessageDTO?>(null) }
     var sendDirectMessage by remember(holder) { mutableStateOf<RoomMessageDTO?>(null) }
@@ -125,7 +133,11 @@ fun RoomConversationRoute(
         onSend = { scope.launch { holder.send() } },
         onRetry = { scope.launch { holder.retry(it) } },
         onLink = dispatcher::dispatch,
-        onReconnect = { authenticate = true; scope.launch { holder.prepareAuthentication() } },
+        onReconnect = {
+            authenticate = true
+            authenticationJob?.cancel()
+            authenticationJob = scope.launch { holder.prepareAuthentication() }
+        },
         onDismissError = holder::clearFailure,
         failureText = failureText,
         modifier = modifier,
@@ -177,11 +189,18 @@ fun RoomConversationRoute(
     if (authenticate) {
         RoomAuthenticationSheet(
             state,
-            onDismiss = { authenticate = false },
+            onDismiss = { authenticationJob?.cancel(); authenticate = false },
             onAuthenticate = { password, remember ->
-                scope.launch {
-                    holder.authenticate(password, remember)
-                    if (holder.state.value.session.isConnected) authenticate = false
+                if (authenticationJob?.isActive != true) {
+                    authenticationJob = scope.launch {
+                        if (holder.authenticate(password, remember)) authenticate = false
+                    }
+                }
+            },
+            failureText = failureText,
+            onRetryLookup = {
+                if (authenticationJob?.isActive != true) {
+                    authenticationJob = scope.launch { holder.prepareAuthentication() }
                 }
             },
         )
@@ -411,17 +430,34 @@ fun RoomAuthenticationSheet(
     state: RoomConversationState,
     onDismiss: () -> Unit,
     onAuthenticate: (String, Boolean) -> Unit,
+    failureText: @Composable (Throwable) -> String = { uiString(UiErrorMapper().message(it)) },
+    onRetryLookup: (() -> Unit)? = null,
 ) {
     var password by remember { mutableStateOf("") }
     var rememberPassword by remember { mutableStateOf(true) }
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
-            Modifier.fillMaxWidth().padding(16.dp).imePadding(),
+            Modifier.fillMaxWidth().imePadding().verticalScroll(rememberScrollState()).padding(16.dp)
+                .testTag("room-authentication-sheet"),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(state.session.name, style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
+            state.failure?.let { failure ->
+                Text(
+                    failureText(failure),
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.testTag("room-authentication-error").semantics { liveRegion = LiveRegionMode.Polite },
+                )
+            }
             when {
                 !state.authenticationLookupComplete -> CircularProgressIndicator(Modifier.align(Alignment.CenterHorizontally))
+                state.authenticationContact == null && state.failure != null -> {
+                    onRetryLookup?.let { retry ->
+                        TextButton(retry, Modifier.sharedTouchTarget().testTag("room-authentication-retry")) {
+                            Text(stringResource(com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings.commonTryAgain))
+                        }
+                    }
+                }
                 state.authenticationContact == null -> {
                     Text(androidx.compose.ui.res.stringResource(R.string.l10n_app_chats_chats_roomauth_notfound_title))
                     Text(androidx.compose.ui.res.stringResource(R.string.l10n_app_chats_chats_roomauth_notfound_description))
@@ -430,7 +466,7 @@ fun RoomAuthenticationSheet(
                     OutlinedTextField(
                         password,
                         { password = it },
-                        Modifier.fillMaxWidth().sharedTouchTarget(),
+                        Modifier.fillMaxWidth().sharedTouchTarget().testTag("room-authentication-password"),
                         visualTransformation = PasswordVisualTransformation(),
                         singleLine = true,
                         label = { Text(androidx.compose.ui.res.stringResource(R.string.l10n_app_remotenodes_remotenodes_auth_password)) },
@@ -449,13 +485,13 @@ fun RoomAuthenticationSheet(
                     Button(
                         { onAuthenticate(password, rememberPassword) },
                         enabled = !state.isAuthenticating,
-                        modifier = Modifier.fillMaxWidth().sharedTouchTarget(),
+                        modifier = Modifier.fillMaxWidth().sharedTouchTarget().testTag("room-authentication-submit"),
                     ) {
                         Text(androidx.compose.ui.res.stringResource(R.string.l10n_app_remotenodes_remotenodes_auth_joinroom))
                     }
                 }
             }
-            TextButton(onDismiss, Modifier.align(Alignment.End).sharedTouchTarget()) {
+            TextButton(onDismiss, Modifier.align(Alignment.End).sharedTouchTarget().testTag("room-authentication-cancel")) {
                 Text(androidx.compose.ui.res.stringResource(R.string.l10n_app_chats_chats_common_cancel))
             }
         }

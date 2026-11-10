@@ -369,8 +369,8 @@ class AppDeepLinkRouterTest {
             val thrown = assertFailsWith<CancellationException> {
                 withContext(guard) { AppDeepLinkRouter(environment).routeExternal(contactUri()) }
             }
-            assertSame(cancellation, thrown)
-            assertEquals(listOf(cleanup), thrown.suppressed.toList())
+            assertCoroutineFailureIdentity(cancellation, thrown)
+            assertEquals(listOf(cleanup), cancellation.suppressed.toList())
             assertEquals(if (phase == "capture") listOf("capture") else listOf("capture", "completion"), releases)
             assertNull(environment.pendingContact)
             assertFalse(guard.wasCommitted())
@@ -386,11 +386,18 @@ class AppDeepLinkRouterTest {
         val pending = PendingExternalRoute(AppDeepLinkRouter(environment)::routeExternal)
         pending.markReady()
         val delivery = PendingExternalRoute.Delivery("committed-before-release", contactUri())
-        assertSame(cleanup, assertFailsWith<IllegalStateException> { pending.submit(delivery) })
+        assertCoroutineFailureIdentity(cleanup, assertFailsWith<IllegalStateException> { pending.submit(delivery) })
         assertEquals("Alice", environment.pendingContact?.name)
         assertNull(pending.snapshot())
         assertEquals(setOf(delivery.id), pending.consumedDeliveryIds())
         assertIs<PendingExternalRoute.SubmitOutcome.Duplicate>(pending.submit(delivery))
+    }
+
+    private fun assertCoroutineFailureIdentity(expected: Throwable, actual: Throwable) {
+        assertEquals(expected.javaClass, actual.javaClass)
+        assertEquals(expected.message, actual.message)
+        assertSame(expected, if (actual === expected) actual else actual.cause,
+            "only the original failure or its direct coroutine recovery copy is accepted")
     }
 
     private fun contactUri(key: Bytes = Bytes(ByteArray(32) { 0xAB.toByte() })) =

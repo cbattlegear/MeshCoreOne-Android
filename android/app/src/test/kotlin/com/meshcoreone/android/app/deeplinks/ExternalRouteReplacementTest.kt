@@ -826,7 +826,10 @@ class ExternalRouteReplacementTest {
         override fun navigateToChannel(channel: ChannelDTO) = navigation.navigateToChannel(channel)
         override fun stageContactConfirmation(link: MeshCoreDeepLink.Contact, selectChats: Boolean) {
             beforeContactCommit()
-            navigation.stageContactLink(ContactLinkRequest(link.name, link.publicKey, link.contactType), selectChats)
+            navigation.stageContactLink(
+                ContactLinkRequest(link.name, link.publicKey, link.contactType),
+                targetRadioId = currentRadioId, selectChats = selectChats,
+            )
             afterContactCommit()
         }
         override fun stageChannelConfirmation(link: MeshCoreDeepLink.Channel, selectChats: Boolean) =

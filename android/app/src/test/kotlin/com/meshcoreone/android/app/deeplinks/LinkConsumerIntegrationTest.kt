@@ -386,8 +386,8 @@ class LinkConsumerIntegrationTest : RoomProcessTest() {
         val foreignRadio = RadioId(java.util.UUID.fromString("547175B7-557D-4F48-B671-4B2CEE2DC932"))
         store.saveDevice(DeviceDTO(radioId = radio, publicKey = key(7), nodeName = "Restored"))
         store.saveDevice(DeviceDTO(radioId = foreignRadio, publicKey = key(8), nodeName = "Other"))
-        val saved = ContactDTO(radioId = radio, publicKey = key(20), name = "Restored peer", lastHeardTimestamp = null)
-        val foreign = ContactDTO(radioId = foreignRadio, publicKey = key(21), name = "Other peer", lastHeardTimestamp = null)
+        val saved = ContactDTO(radioId = radio, publicKey = key(20), name = "Restored peer", lastHeardTimestamp = 0u)
+        val foreign = ContactDTO(radioId = foreignRadio, publicKey = key(21), name = "Other peer", lastHeardTimestamp = 0u)
         store.saveContact(saved)
         store.saveContact(foreign)
         val h = ContainerHarness(this, store)
@@ -535,7 +535,8 @@ class LinkConsumerIntegrationTest : RoomProcessTest() {
                 failLookup = false
                 if (!sameRadio) identity = key(8)
                 val rebuilding = async {
-                    h.manager.rebuildSession(assertNotNull(h.appState.connectedDevice).id)
+                    if (sameRadio) h.manager.rebuildSession(assertNotNull(h.appState.connectedDevice).id)
+                    else h.manager.connect(h.target())
                 }
                 h.eventually("replacement graph binds") {
                     val next = h.sessions.current

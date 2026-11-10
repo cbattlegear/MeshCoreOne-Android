@@ -78,6 +78,12 @@ internal fun AppContainer.createNodesFeatureDependencies(): NodesFeatureDependen
     )
 
 private class AppNodesSession(private val container: AppContainer) : NodesSession {
+    override fun captureSessionValidity(): () -> Boolean {
+        val current = container.sessions.current
+        return { current != null && container.isCurrentSession(current) }
+    }
+    override fun captureContactNavigationValidity(generation: Long): () -> Boolean =
+        container.captureContactNavigationSession(generation)
     override fun connectionState() = container.appState.connectionState
     override fun connectedDevice() = container.appState.connectedDevice
     override fun currentRadioId() = container.appState.currentRadioId

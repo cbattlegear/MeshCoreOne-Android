@@ -33,7 +33,10 @@ class ContainerDeepLinkEnvironment(
     override fun navigateToChannel(channel: ChannelDTO) = navigation.navigateToChannel(channel)
 
     override fun stageContactConfirmation(link: MeshCoreDeepLink.Contact, selectChats: Boolean) =
-        navigation.stageContactLink(ContactLinkRequest(link.name, link.publicKey, link.contactType), selectChats)
+        navigation.stageContactLink(
+            ContactLinkRequest(link.name, link.publicKey, link.contactType),
+            targetRadioId = currentRadioId, selectChats = selectChats,
+        )
 
     override fun captureContactLinkContext(
         publicKey: Bytes, publications: ContactLinkPublications,

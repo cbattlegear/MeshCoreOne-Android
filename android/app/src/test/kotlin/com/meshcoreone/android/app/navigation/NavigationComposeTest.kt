@@ -8,6 +8,8 @@ import androidx.activity.BackEventCompat
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.OutlinedTextField
@@ -28,6 +30,18 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.core.designsystem.*
+import com.meshcoreone.android.core.model.ChannelDTO
+import com.meshcoreone.android.core.model.ContactDTO
+import com.meshcoreone.android.core.model.MessageDTO
+import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.feature.chats.timeline.ChatTimelineState
+import com.meshcoreone.android.feature.chats.timeline.InitialTimelineAnchor
+import com.meshcoreone.android.feature.chats.timeline.TimelineRow
+import com.meshcoreone.android.feature.chats.timeline.ui.ChatTimeline
+import com.meshcoreone.android.feature.chats.timeline.ui.ChatTimelineCallbacks
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
@@ -43,7 +57,10 @@ import org.robolectric.annotation.GraphicsMode
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.security.MessageDigest
+import java.time.Instant
 import java.util.Base64
+import java.util.UUID
+import java.util.concurrent.CopyOnWriteArrayList
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31, 37], qualifiers = "w1080dp-h900dp-mdpi")
@@ -189,6 +206,146 @@ class NavigationComposeTest {
         }
         capture("native-back-root")
     }
+
+    @Test fun predictiveBackPreviewCannotConsumeTheCurrentChatMessageScroll() {
+        for (windowWidth in listOf(390, 834)) {
+            val n = NavigationCoordinator()
+            val radio = RadioId(UUID(0, 40))
+            val contact = ContactDTO(
+                radioId = radio, publicKey = Bytes(ByteArray(32) { 1 }), name = "Previous chat",
+                lastHeardTimestamp = null,
+            )
+            val channel = ChannelDTO(radioId = radio, index = 1u, name = "Current channel")
+            n.navigateToChat(contact)
+            val previousEntry = n.state.value.activeStack.last().id
+            n.navigateToChannel(channel, UUID(0, 41))
+            val incoming = requireNotNull(n.state.value.pendingMessageScroll)
+            val renderedEntries = CopyOnWriteArrayList<Long>()
+            val requestOwners = CopyOnWriteArrayList<Long>()
+            val consumed = CopyOnWriteArrayList<Long>()
+            val release = CompletableDeferred<Unit>()
+            try {
+                compose.runOnUiThread {
+                    width.value = windowWidth.dp
+                    host.get().setContent {
+                        Box(Modifier.width(width.value).height(900.dp)) {
+                            MeshCoreTheme(motionScale = 1f) {
+                                NativeNavigationShell(n) { destination, _ ->
+                                    val entryId = requireNotNull(LocalNavigationEntryId.current)
+                                    val state by n.state.collectAsState()
+                                    val request = state.pendingMessageScrollFor(entryId)
+                                    if (destination is NavigationDestination.Chat) {
+                                        SideEffect { renderedEntries += entryId }
+                                        LaunchedEffect(request) {
+                                            if (request != null) {
+                                                requestOwners += entryId
+                                                release.await()
+                                                if (n.consumePendingMessageScroll(entryId, request)) consumed += entryId
+                                            }
+                                        }
+                                        Text("Chat $entryId")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                compose.waitUntil(5_000) { requestOwners.contains(incoming.entryId) }
+                compose.waitForIdle()
+                assertFalse("The previous entry must not be mounted before the preview", renderedEntries.contains(previousEntry))
+                val before = n.state.value
+                compose.runOnUiThread {
+                    host.get().onBackPressedDispatcher.dispatchOnBackStarted(
+                        BackEventCompat(0f, 100f, 0f, BackEventCompat.EDGE_LEFT),
+                    )
+                    host.get().onBackPressedDispatcher.dispatchOnBackProgressed(
+                        BackEventCompat(120f, 100f, 0.6f, BackEventCompat.EDGE_LEFT),
+                    )
+                }
+                compose.waitUntil(5_000) { renderedEntries.contains(previousEntry) }
+                assertEquals(before, n.state.value)
+                assertFalse(requestOwners.contains(previousEntry))
+                assertTrue(consumed.isEmpty())
+                compose.runOnUiThread { host.get().onBackPressedDispatcher.dispatchOnBackCancelled() }
+                compose.waitForIdle()
+                assertEquals(before, n.state.value)
+                assertEquals(incoming, n.state.value.pendingMessageScroll)
+                assertFalse(requestOwners.contains(previousEntry))
+                release.complete(Unit)
+                compose.waitUntil(5_000) { n.state.value.pendingMessageScroll == null }
+                compose.waitForIdle()
+                assertEquals(listOf(incoming.entryId), consumed)
+                assertEquals(before.activeStack, n.state.value.activeStack)
+            } finally {
+                release.complete(Unit)
+                compose.runOnUiThread { host.get().setContent {} }
+            }
+        }
+    }
+
+    @Test fun identicalTimelineAnchorsRestartForANewDeliveryWithoutReplacingTheViewport() {
+        val radio = RadioId(UUID(0, 50))
+        val messages = (0 until 24).map { index ->
+            val time = Instant.ofEpochSecond(1_000L + index)
+            MessageDTO(
+                id = UUID(0, 100L + index), radioId = radio, text = "Anchor message $index",
+                timestamp = (1_000 + index).toUInt(), createdAt = time, sortDate = time,
+            )
+        }
+        val target = messages[10]
+        val rows = messages.map { TimelineRow.Message(it, startsGroup = true, endsGroup = true) }
+        val timeline = ChatTimelineState(
+            messages = messages, rows = rows, hasLoadedOnce = true, hasMoreMessages = false,
+            initialAnchor = InitialTimelineAnchor.Message(target.id), initialAnchorConsumed = false,
+        )
+        val requestId = mutableLongStateOf(1)
+        val consumed = CopyOnWriteArrayList<Long>()
+        lateinit var list: LazyListState
+        try {
+            compose.runOnUiThread {
+                host.get().setContent {
+                    MeshCoreTheme(motionScale = 0f) {
+                        val currentId = requestId.longValue
+                        val currentList = rememberLazyListState()
+                        SideEffect { list = currentList }
+                        ChatTimeline(
+                            timeline,
+                            ChatTimelineCallbacks(
+                                onLoadOlder = { error("The fixture has no older page") },
+                                onRetry = { error("The fixture has no failed send") },
+                                onInitialAnchorConsumed = { consumed += currentId },
+                                onScrollPositionChanged = { _, _ -> },
+                                onJumpToLatest = { error("The fixture does not jump to latest") },
+                                onRetryLoad = { error("The fixture does not retry loading") },
+                            ),
+                            Modifier.size(width = 320.dp, height = 300.dp),
+                            listState = currentList,
+                            showSenderName = false,
+                            showsIncomingAvatars = false,
+                            initialAnchorRequestId = currentId,
+                            messageBody = { message, _ -> Box(Modifier.height(100.dp)) { Text(message.text) } },
+                        )
+                    }
+                }
+            }
+            compose.waitUntil(5_000) { consumed.contains(1L) }
+            val originalList = list
+            compose.runOnIdle {
+                runBlocking { originalList.scrollToItem(0) }
+                assertEquals(0, originalList.firstVisibleItemIndex)
+                requestId.longValue = 2
+            }
+            compose.waitUntil(5_000) { consumed.contains(2L) }
+            compose.runOnIdle {
+                assertEquals(listOf(1L, 2L), consumed)
+                assertSame(originalList, list)
+                assertEquals(rows.asReversed().indexOfFirst { it.message.id == target.id }, list.firstVisibleItemIndex)
+            }
+        } finally {
+            compose.runOnUiThread { host.get().setContent {} }
+        }
+    }
+
     @Test fun twoHundredPercentFontRtlCjkAndShortRailKeepActionsAndTextAccessible() {
         compose.runOnIdle { font.floatValue = 2f; direction.value = LayoutDirection.Rtl }
         for (tab in AppTab.entries) {

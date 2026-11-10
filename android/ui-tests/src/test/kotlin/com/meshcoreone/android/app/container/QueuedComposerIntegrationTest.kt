@@ -58,8 +58,13 @@ class QueuedComposerIntegrationTest : RoomProcessTest() {
         h.links.configureRadio = { radio ->
             radio.knownContacts += contactFrame(peerKey, "Synthetic queue peer")
             radio.respond = { frame ->
-                // Pinned protocol: direct/channel commands 2/3; RESP_CODE_ERR=1.
-                if (frame[0].toInt() in 2..3) listOf(Bytes.of(1, 2)) else null
+                when {
+                    frame[0].toInt() in 2..3 -> listOf(Bytes.of(1, 2))
+                    frame[0].toInt() == 0x1f && frame[1].toInt() == 0 ->
+                        listOf(Bytes.of(0x12, 0) + Bytes.utf8("Synthetic local channel").paddedOrTruncated(32) +
+                            Bytes(ByteArray(16) { 0x11 }))
+                    else -> null
+                }
             }
         }
         h.manager.connect(h.target(UUID.fromString("50200000-0000-0000-0000-000000000215")))
@@ -68,8 +73,7 @@ class QueuedComposerIntegrationTest : RoomProcessTest() {
         }
         val radio = assertNotNull(h.appState.currentRadioId)
         val contact = assertNotNull(store.fetchContact(radio, peerKey))
-        val channel = ChannelDTO(radioId = radio, index = 0u, name = "Synthetic local channel")
-        seedReconciledChannel(channel)
+        val channel = assertNotNull(store.fetchChannel(radio, 0u))
         return Graph(h, contact, channel)
     }
 

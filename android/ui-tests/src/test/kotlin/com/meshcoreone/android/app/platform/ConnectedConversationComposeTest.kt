@@ -86,8 +86,11 @@ class ConnectedConversationComposeTest : RoomProcessTest() {
             radio.respond = { request ->
                 if (request[0].toInt() == opcode) {
                     accepted += runBlocking { store.fetchPendingSends(requireNotNull(h.appState.currentRadioId)).single() }
-                    // Channel notFound is retryable; pinned illegalArgument (6) is terminal.
+                    // An uncorrelated channel error does not prove that the queued send was unsent.
                     listOf(Bytes.of(1, if (channel) 6 else 2))
+                } else if (channel && request[0].toInt() == 0x1f && request[1].toInt() == 0) {
+                    listOf(Bytes.of(0x12, 0) + Bytes.utf8("Synthetic mesh channel").paddedOrTruncated(32) +
+                        Bytes(ByteArray(16) { 0x11 }))
                 } else null
             }
         }
@@ -97,8 +100,8 @@ class ConnectedConversationComposeTest : RoomProcessTest() {
             h.assertReady()
             val radio = requireNotNull(h.appState.currentRadioId)
             val contact = requireNotNull(store.fetchContact(radio, contactKey))
-            val channelDTO = ChannelDTO(radioId = radio, index = 0u, name = "Synthetic mesh channel")
-            if (channel) seedReconciledChannel(channelDTO)
+            val channelDTO = if (channel) requireNotNull(store.fetchChannel(radio, 0u))
+                else ChannelDTO(radioId = radio, index = 0u, name = "Synthetic mesh channel")
             suspend fun messages() = if (channel) store.fetchMessages(radio, channelDTO.index, 10, 0)
                 else store.fetchMessages(EntityKey(radio, contact.id), 10, 0)
             compose.runOnUiThread {

@@ -18,9 +18,10 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
     private suspend fun <T> write(
         operation: String,
         changesAuthority: Boolean = true,
+        channelIdentity: Boolean = false,
         action: suspend RepositoryTransaction.() -> T,
-    ): T =
-        context.write(operation) {
+    ): T {
+        val block: suspend RepositoryTransaction.() -> T = {
             val nextRevision = Math.incrementExact(revision)
             val nextAuthority = if (changesAuthority) Math.incrementExact(authorityRevision) else authorityRevision
             afterCommit {
@@ -32,6 +33,9 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
             val result = action()
             result
         }
+        return if (channelIdentity) context.channelWrite(operation, block = block)
+        else context.write(operation, block = block)
+    }
 
     /** Shares this repository's post-commit revisions with related Room mutations. */
     internal suspend fun <T> writeWithDeviceAuthority(
@@ -257,12 +261,12 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
             RadioId(ghost.radioId)
         }
 
-    override suspend fun deleteDeviceData(id: UUID) = write("deleteDeviceData") {
+    override suspend fun deleteDeviceData(id: UUID) = write("deleteDeviceData", channelIdentity = true) {
         deleteAllDeviceData(id)
         save()
     }
 
-    override suspend fun deleteDeviceAndData(id: UUID) = write("deleteDeviceAndData") {
+    override suspend fun deleteDeviceAndData(id: UUID) = write("deleteDeviceAndData", channelIdentity = true) {
         deleteAllDeviceData(id)
         database.devices().delete(id)
         save()
@@ -272,6 +276,7 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
         val device = database.devices().byId(id) ?: return
         val radioId = RadioId(device.radioId)
         requireCanonicalRxKeys(radioId)
+        database.channelSubmissions().redactRadio(radioId.value)
         database.reactions().clearRadio(radioId.value)
         val sessions = database.sessions().forRadio(radioId.value)
         for (session in sessions) {

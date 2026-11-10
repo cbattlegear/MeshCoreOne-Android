@@ -80,7 +80,8 @@ class ChannelReseedRoomTest : BackupRoomTest() {
         assertEquals(listOf(queued), store.fetchPendingSendsForMessage(EntityKey(RADIO_A, sent.id)).toList())
         store.saveChannel(RADIO_A, ChannelInfo(2u, "actual radio replacement", Bytes(ByteArray(16) { 3 })))
         assertEquals(1, store.fetchChannels(RADIO_A).size)
-        assertNull(store.fetchMessage(EntityKey(RADIO_A, sent.id)))
+        assertEquals(sent, store.fetchMessage(EntityKey(RADIO_A, sent.id)))
+        assertEquals(listOf(queued), store.fetchPendingSendsForMessage(EntityKey(RADIO_A, sent.id)).toList())
     }
 
     @Test

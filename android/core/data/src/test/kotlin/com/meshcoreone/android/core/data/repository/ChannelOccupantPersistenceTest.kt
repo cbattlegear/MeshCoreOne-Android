@@ -6,6 +6,7 @@ import com.meshcoreone.android.core.contracts.domain.ChannelIdentityMutex
 import com.meshcoreone.android.core.contracts.domain.ChannelPersisting
 import com.meshcoreone.android.core.contracts.domain.ChannelIdentityWriteScope
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
+import com.meshcoreone.android.core.data.backup.ImportResult
 import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.database.toEntity
 import com.meshcoreone.android.core.model.*
@@ -218,8 +219,8 @@ class ChannelOccupantPersistenceTest : RepositoryTest() {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         val dispatch = async(start = CoroutineStart.UNDISPATCHED) {
-            gate.withChannelOperation {
-                gate.withChannelIdentityMutation {
+            gate.withChannelOperationScope { scope ->
+                scope.withChannelIdentityMutation {
                     entered.complete(Unit)
                     release.await()
                 }
@@ -258,6 +259,7 @@ class ChannelOccupantPersistenceTest : RepositoryTest() {
             }) { database, _ ->
                 restoring = true
                 database.channelOccupants().invalidate(RADIO_A.value, 5)
+                ImportResult()
             }
         }
         try {

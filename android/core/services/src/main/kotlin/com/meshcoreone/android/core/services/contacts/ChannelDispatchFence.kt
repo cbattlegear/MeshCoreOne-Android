@@ -100,18 +100,26 @@ class ChannelDispatchFence(
     /**
      * The channel producer owns its ACK/save and definite-unsent classification. It must call
      * [quarantine] INSIDE this block for any write it cannot prove settled, before releasing it.
-     * Publish collected completions only after this method returns or throws.
+     * Use the supplied scope for identity-protected persistence; the operation lane is already
+     * held. Publish collected completions only after this method returns or throws.
      */
-    suspend fun <T> withMutation(lease: Lease, operation: suspend () -> T): T =
-        identity.withChannelOperation {
-            requireCurrent(lease)
-            val permit = acquire(lease)
+    suspend fun <T> withMutation(
+        lease: Lease,
+        operation: suspend (ChannelIdentityWriteScope) -> T,
+    ): T = identity.withChannelOperationScope { scope ->
+        identity.requireChannelOperationScope(scope)
+        requireCurrent(lease)
+        val permit = acquire(lease)
+        try {
+            operation(scope)
+        } finally {
             try {
-                operation()
+                identity.requireChannelOperationScope(scope)
             } finally {
                 permit.complete()
             }
         }
+    }
 
     /**
      * The persistence producer already owns the outer lane and supplies its scoped facade.
@@ -189,13 +197,14 @@ class ChannelDispatchFence(
         expectedOccupantID: UUID?,
         currentOccupantID: suspend (RadioId, UByte) -> UUID?,
         operation: suspend () -> T,
-    ): T = identity.withChannelOperation {
+    ): T = identity.withChannelOperationScope { scope ->
+        identity.requireChannelOperationScope(scope)
         requireCurrent(lease)
         if (expectedOccupantID == null) throw ChannelDispatchFailure.UnknownOccupant()
         synchronized(stateLock) {
             if (index !in lease.reconciledSlots) throw ChannelDispatchFailure.UnreconciledSession()
         }
-        identity.withChannelIdentityMutation {
+        scope.withChannelIdentityMutation {
             val current = currentOccupantID(lease.token.radioId, index) ?: throw ChannelDispatchFailure.UnknownOccupant()
             if (current != expectedOccupantID) throw ChannelDispatchFailure.ReplacedOccupant()
             currentCoroutineContext().ensureActive()

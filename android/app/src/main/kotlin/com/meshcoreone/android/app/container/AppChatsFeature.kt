@@ -737,9 +737,9 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 app.messageEventStream.send(MessageEvent.DirectMessageReceived(it, contact))
                 app.refreshConversations()
             }
-        override suspend fun createPendingChannel(text: String, channelIndex: UByte, radioId: RadioId, textType: TextType) =
-            session(radio).messageService.createPendingChannelMessage(text, channelIndex, radioId, textType).also {
-                app.messageEventStream.send(MessageEvent.ChannelMessageReceived(it, channelIndex))
+        override suspend fun createPendingChannel(text: String, channel: ChannelDTO, textType: TextType) =
+            session(radio).messageService.createPendingChannelMessage(text, channel, textType).also {
+                app.messageEventStream.send(MessageEvent.ChannelMessageReceived(it, channel.index))
                 app.refreshConversations()
             }
         override suspend fun enqueueDM(envelope: DirectMessageEnvelope) =

@@ -27,7 +27,7 @@ internal class ChannelRepository(
             val channel = database.channels().forIndex(radioId.value, index.toLong()).singleOrNull()
             if (channel == null || !channel.isEnabled) null
             else database.channelOccupants().forIndex(radioId.value, index.toLong())
-                ?.let { ChannelOccupantSnapshot(channel.toDTO(), it) }
+                ?.let { ChannelOccupantSnapshot(channel.toDTO().copy(occupantID = it), it) }
         }
 
     override suspend fun applyChannelMessageMetadataIfCurrentOccupant(
@@ -76,15 +76,22 @@ internal class ChannelRepository(
     }
 
     override suspend fun fetchChannels(radioId: RadioId): SnapshotList<ChannelDTO> = context.read("fetchChannels") {
-        database.channels().forRadio(radioId.value).map { it.toDTO() }.snapshot()
+        database.channels().forRadio(radioId.value).map { channelWithOrigin(it) }.snapshot()
     }
 
     override suspend fun fetchChannel(radioId: RadioId, index: UByte): ChannelDTO? = context.read("fetchChannelByIndex") {
-        database.channels().forIndex(radioId.value, index.toLong()).firstOrNull()?.toDTO()
+        database.channels().forIndex(radioId.value, index.toLong()).firstOrNull()?.let { channelWithOrigin(it) }
     }
 
     override suspend fun fetchChannel(key: EntityKey): ChannelDTO? = context.read("fetchChannelById") {
-        database.channels().byId(key.radioId.value, key.id)?.toDTO()
+        database.channels().byId(key.radioId.value, key.id)?.let { channelWithOrigin(it) }
+    }
+
+    private suspend fun RepositoryTransaction.channelWithOrigin(row: ChannelEntity): ChannelDTO {
+        val occupant = if (row.isEnabled &&
+            database.channels().forIndex(row.radioId, row.index).singleOrNull()?.id == row.id
+        ) database.channelOccupants().forIndex(row.radioId, row.index) else null
+        return row.toDTO().copy(occupantID = occupant)
     }
 
     override suspend fun saveChannel(radioId: RadioId, info: ChannelInfo): UUID =
@@ -147,7 +154,7 @@ internal class ChannelRepository(
             }
         }
         save()
-        database.channels().forRadio(radioId.value).map { it.toDTO() }.snapshot()
+        database.channels().forRadio(radioId.value).map { channelWithOrigin(it) }.snapshot()
     }
 
     private suspend fun RepositoryTransaction.applyingRadioInfo(row: ChannelEntity, info: ChannelInfo): ChannelEntity {

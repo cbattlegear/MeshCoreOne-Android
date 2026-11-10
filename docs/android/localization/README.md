@@ -73,8 +73,10 @@ Generation is deterministic; generated XML/Kotlin/oracles must not be hand-edite
 
 `preBuild` runs `--check --self-test`, so assembly, tests and CI fail on drift.
 The module extends the existing `verifyScaffoldTests` aggregate with
-`verifyL10nTests`, which requires the four nonempty localization JUnit suites,
-minimum family counts, the two original test methods, and no failure/error/skip.
+`verifyL10nTests`, which requires the five nonempty localization JUnit suites,
+minimum family counts, the two original test methods and both recovered-draft
+resource methods, and no failure/error/skip. The native recovery suite verifies
+compiled English fallback and keeps unknown delivery distinct from explicit copy.
 The original four scaffold suites are not counted as localization coverage.
 After Gradle, `android-ci` runs `l10n_convert.py --check --verify-android-tests` on the module's JUnit results to
 prove the localization suites were discovered and passed.

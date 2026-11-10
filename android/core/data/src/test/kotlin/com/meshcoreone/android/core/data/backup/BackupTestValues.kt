@@ -1,5 +1,6 @@
 // PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/AppBackupEnvelope+Testing.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1Services/Tests/MC1ServicesTests/Helpers/ImportResult+Testing.swift@db14559b39d32322b06477c6ae676112f583db50
+// AndroidOnly: WP-308 Reuse isolated database paths for real backup/reopen transactions.
 // Real Room, independent destination lifetimes and process DataStore; no persistence surrogate.
 package com.meshcoreone.android.core.data.backup
 
@@ -9,6 +10,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.database.*
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
+import com.meshcoreone.android.core.data.repository.DatabaseTestContext
 import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -28,6 +30,8 @@ import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.serialization.json.*
 import org.junit.After
 import org.junit.Before
+import org.junit.Rule
+import org.junit.rules.TemporaryFolder
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -115,13 +119,16 @@ internal fun ImportResult.count(kind: BackupModelKind): PerTypeCounts = counts.g
 @Config(sdk = [31])
 @SQLiteMode(SQLiteMode.Mode.NATIVE)
 abstract class BackupRoomTest {
+    @get:Rule val databaseDirectory = TemporaryFolder()
     protected lateinit var db: MeshCoreDatabase
     protected lateinit var store: RoomPersistenceStore
     protected lateinit var storage: MeshCoreStorage
     protected lateinit var service: AppBackupService
     protected val clock: Clock = Clock.fixed(AT.plusSeconds(20_000), ZoneOffset.UTC)
     protected val owner = CoroutineScope(SupervisorJob() + StandardTestDispatcher(TestCoroutineScheduler()))
-    protected val context: Context get() = ApplicationProvider.getApplicationContext()
+    protected val context: Context by lazy {
+        DatabaseTestContext(ApplicationProvider.getApplicationContext(), databaseDirectory.root)
+    }
     protected val immediate = Executor { it.run() }
 
     @Before fun openStores() {

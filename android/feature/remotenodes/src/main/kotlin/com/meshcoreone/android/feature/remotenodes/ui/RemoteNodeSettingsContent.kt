@@ -100,6 +100,7 @@ internal fun RemoteNodeSettingsContent(
                     emptyList(), initialRegion,
                     surface = mapSurface,
                     onCameraChanged = { picked = Coordinate(it.center.latitude, it.center.longitude) },
+                    saveCameraState = false,
                 )
                 RemoteValue(stringResource(L.remoteNodesSettingsLatitude), coordinate.latitude.toString())
                 RemoteValue(stringResource(L.remoteNodesSettingsLongitude), coordinate.longitude.toString())

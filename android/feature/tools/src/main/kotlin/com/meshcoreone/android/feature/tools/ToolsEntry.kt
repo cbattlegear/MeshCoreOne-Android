@@ -40,6 +40,7 @@ import com.meshcoreone.android.feature.tools.trace.RecentHopsStorage
 import com.meshcoreone.android.feature.tools.trace.TraceDiagnostics
 import com.meshcoreone.android.feature.tools.trace.TracePathFeatureDependencies
 import com.meshcoreone.android.feature.tools.trace.TracePathScreen
+import com.meshcoreone.android.core.maps.MapPreferenceStore
 import kotlinx.coroutines.flow.StateFlow
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
@@ -51,6 +52,8 @@ data class ToolsFeatureDependencies(
     val radioId: () -> com.meshcoreone.android.core.model.RadioId?,
     val generation: StateFlow<Int>,
     val toolsDiagnostics: ToolsDiagnosticsDependencies,
+    val mapPreferences: MapPreferenceStore? = null,
+    val nodeTableVersion: StateFlow<Int>? = null,
     val sessionToken: StateFlow<com.meshcoreone.android.core.contracts.domain.SessionToken?>? = null,
 )
 
@@ -64,13 +67,18 @@ fun ToolsEntry(
 ) {
     val generation by dependencies?.generation?.collectAsStateWithLifecycle()
         ?: androidx.compose.runtime.remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    val nodeTableVersion by dependencies?.nodeTableVersion?.collectAsStateWithLifecycle()
+        ?: androidx.compose.runtime.remember { androidx.compose.runtime.mutableIntStateOf(0) }
     val sessionToken = dependencies?.sessionToken?.collectAsStateWithLifecycle()?.value
     when (selection) {
         null -> ToolsHome(onSelect)
         ToolSelection.TRACE_PATH -> TracePathScreen(
             dependencies?.let {
                 val radioId = if (it.sessionToken == null) it.radioId() else sessionToken?.radioId
-                TracePathScreen.Dependencies(it.trace, it.recentHops, it.diagnostics, radioId, generation)
+                TracePathScreen.Dependencies(
+                    it.trace, it.recentHops, it.diagnostics, radioId, generation,
+                    it.mapPreferences, nodeTableVersion,
+                )
             },
         )
         ToolSelection.NODE_DISCOVERY -> NodeDiscoveryRoute(

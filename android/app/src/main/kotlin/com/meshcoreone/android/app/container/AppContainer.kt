@@ -1,4 +1,5 @@
 // PortedFrom: MC1/MC1App.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/State/AppState.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.app.navigation.ChatSelection
@@ -173,6 +174,8 @@ class AppContainerDependencies(
     val advertLocation: AppAdvertLocation? = null,
     val nodesLocations: Flow<Coordinate?> = flowOf(null),
     val offlineMaps: OfflineMapController? = null,
+    val phoneLocation: () -> com.meshcoreone.android.core.model.Coordinate? = { null },
+    val mapPreferences: com.meshcoreone.android.core.maps.MapPreferenceStore? = null,
     val nodesMessages: UserFacingMessages = UserFacingMessages { it.message ?: "Operation failed" },
     val nodesAnnouncer: Announcer = Announcer {},
     val nodesPreferences: StringListPreferences = object : StringListPreferences {
@@ -224,6 +227,11 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
             (dependencies.linkFactory as? AndroidRuntimeLinkFactory)?.transportFor(it)
         }
     internal val processStore get() = dependencies.store
+    internal val mapPreferences get() = dependencies.mapPreferences
+    internal val bestAvailableLocation: com.meshcoreone.android.core.model.Coordinate?
+        get() = dependencies.phoneLocation() ?: appState.connectedDevice?.takeIf { it.hasLocation }?.let {
+            com.meshcoreone.android.core.model.Coordinate(it.latitude, it.longitude)
+        }
     internal val uiScope = CoroutineScope(dependencies.mainScope.coroutineContext + SupervisorJob(processJob))
     val foreground: ProcessForegroundState = dependencies.foreground
     val bootstrapDebugLog: DebugLogBuffer? = dependencies.newBootstrapDebugLog(processScope)

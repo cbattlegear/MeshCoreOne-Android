@@ -360,19 +360,15 @@ class NodeConfigIdentityHandoffIntegrationTest : RoomProcessTest() {
             h.eventually("uncertain partial import retires its captured graph") { node.isTornDown }
             h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
             val previousAttempts = h.links.radios.size
-            val reconnect = backgroundScope.async {
-                assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> { h.manager.connect(h.target()) }
-            }
-            h.eventually("explicit reconnect cannot reopen the uncertain effective identity",
-                virtualBudgetMillis = 30_000, virtualStepMillis = 100) {
-                reconnect.isCompleted
+            val reconnectFailure = assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> {
+                h.manager.connect(h.target())
             }
             assertTrue(node.isTornDown)
             assertNull(h.sessions.current)
             assertEquals(1, h.sessions.created)
             assertEquals(0, h.sessions.outstanding)
             assertNull(store.fetchChannelOccupantSnapshot(effectiveId, 0u))
-            val retainedCauses = generateSequence<Throwable>(reconnect.await()) { it.cause }.toList()
+            val retainedCauses = generateSequence<Throwable>(reconnectFailure) { it.cause }.toList()
             assertTrue(retainedCauses.any { it is kotlinx.coroutines.CancellationException },
                 "The quarantine must retain the cancelled exchange: ${retainedCauses.map { it.javaClass.name }}")
             val successors = h.links.radios.drop(previousAttempts)

@@ -57,6 +57,10 @@ internal class FakeConnectionPort : AppConnectionPort {
     var lastRemoved: UUID? = null
     var connectFailure: Exception? = null
     var beforePicker: suspend () -> Unit = {}
+    var disconnectAction: suspend () -> Unit = {
+        connectionState = DeviceConnectionState.DISCONNECTED
+        connectedDevice = null
+    }
 
     override suspend fun activate() { calls += "activate" }
     override suspend fun appDidEnterBackground() { calls += "background" }
@@ -66,8 +70,7 @@ internal class FakeConnectionPort : AppConnectionPort {
     override fun clearSurfacedAuthenticationFailure() { calls += "clearAuthLatch" }
     override suspend fun disconnect(reason: RuntimeDisconnectReason) {
         calls += "disconnect:$reason"
-        connectionState = DeviceConnectionState.DISCONNECTED
-        connectedDevice = null
+        disconnectAction()
     }
     override suspend fun connectViaWiFi(host: String, port: UShort, forceFullSync: Boolean) { calls += "wifi:$host:$port" }
     override suspend fun connect(deviceId: UUID, forceReconnect: Boolean) {

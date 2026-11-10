@@ -212,11 +212,41 @@ class MeshCoreSession private constructor(
     override suspend fun addContact(contact: MeshContact) = addContact(contact, ContactWriteDispatch()) {}
 
     override suspend fun addContact(contact: MeshContact, dispatch: ContactWriteDispatch, onCommitted: suspend () -> Unit) {
+        addContactConditionally(contact, dispatch, null, onCommitted)
+    }
+
+    override suspend fun addContactIf(
+        contact: MeshContact,
+        dispatch: ContactWriteDispatch,
+        shouldDispatch: suspend () -> Boolean,
+        onCommitted: suspend () -> Unit,
+    ) {
+        addContactConditionally(contact, dispatch, shouldDispatch, onCommitted)
+    }
+
+    private suspend fun addContactConditionally(
+        contact: MeshContact,
+        dispatch: ContactWriteDispatch,
+        shouldDispatch: (suspend () -> Boolean)?,
+        onCommitted: suspend () -> Unit,
+    ) {
         dispatch.exchangeDispatch.claim()
         requireFullPublicKey(contact.publicKey, "addContact")
         validateContactPath(contact.outPathLength, contact.outPath)
         core.exchange(dispatch.exchangeDispatch) {
             dispatch.beforeDispatch()
+            if (shouldDispatch != null) {
+                val needed = try {
+                    shouldDispatch()
+                } catch (failure: Exception) {
+                    dispatch.markDefinitelyUnsent(failure)
+                    throw failure
+                }
+                if (!needed) {
+                    dispatch.markDefinitelyUnsent()
+                    return@exchange
+                }
+            }
             try {
                 simple(PacketBuilder.updateContact(contact))
                 dispatch.markAccepted()

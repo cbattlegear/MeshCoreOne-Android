@@ -20,6 +20,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import com.meshcoreone.android.app.container.AppContainer
+import com.meshcoreone.android.app.navigation.OnboardingEntryRetention
 import com.meshcoreone.android.app.state.ConnectionUiSnapshot
 import com.meshcoreone.android.core.connectivity.ble.BleScanCoordinator
 import com.meshcoreone.android.core.connectivity.pairing.BluetoothScanPairingService
@@ -215,9 +216,15 @@ class AppOnboarding(
     private var retiringFirstRunFlow: OnboardingFlowCoordinator? = null
     private val firstRunRevision = MutableStateFlow(0L)
     override val flowCoordinatorRevision: StateFlow<Long> = firstRunRevision.asStateFlow()
+    private val firstRunAvailability = MutableStateFlow(0L)
+    internal val firstRunAvailabilityRevision: StateFlow<Long> = firstRunAvailability.asStateFlow()
     private val rerunDependencies by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { Rerun(this) }
 
     override fun openAppSettings() = settingsOpener()
+
+    internal fun observeNavigationEntries(retention: OnboardingEntryRetention) {
+        retention.observe(flowScope)
+    }
 
     @Synchronized
     override fun retainedFlowCoordinator(): OnboardingFlowCoordinator {
@@ -248,8 +255,8 @@ class AppOnboarding(
                         releaseRetiringCoordinator(coordinator)
                     }
                 }
-            } else if (!flags.getBoolean(com.meshcoreone.android.feature.onboarding.OnboardingState.KEY_HAS_COMPLETED)) {
-                firstRunRevision.value = Math.incrementExact(firstRunRevision.value)
+            } else {
+                notifyFirstRunAvailability()
             }
         }
     }
@@ -257,9 +264,14 @@ class AppOnboarding(
     private fun releaseRetiringCoordinator(coordinator: OnboardingFlowCoordinator) {
         if (retiringFirstRunFlow === coordinator) {
             retiringFirstRunFlow = null
-            if (!flags.getBoolean(com.meshcoreone.android.feature.onboarding.OnboardingState.KEY_HAS_COMPLETED)) {
-                firstRunRevision.value = Math.incrementExact(firstRunRevision.value)
-            }
+            notifyFirstRunAvailability()
+        }
+    }
+
+    private fun notifyFirstRunAvailability() {
+        firstRunAvailability.value = Math.incrementExact(firstRunAvailability.value)
+        if (!flags.getBoolean(com.meshcoreone.android.feature.onboarding.OnboardingState.KEY_HAS_COMPLETED)) {
+            firstRunRevision.value = Math.incrementExact(firstRunRevision.value)
         }
     }
 

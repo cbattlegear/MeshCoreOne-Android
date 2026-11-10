@@ -99,6 +99,7 @@ interface AppStatePlatform {
     suspend fun flushDebugLog() {}
     suspend fun onUnreadCountChanged(totalUnread: Int) {}
     suspend fun onConnectionLost() {}
+    suspend fun onConnectionLost(sessionToken: SessionToken?, navigationGeneration: Long) = onConnectionLost()
     suspend fun onConnectionReady(device: DeviceDTO, ocvArray: List<Long>, unreadCount: Int) {}
     suspend fun onAutoReconnectStarted() {}
     fun onEnterBackground() {}

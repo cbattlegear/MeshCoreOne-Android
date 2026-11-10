@@ -9,10 +9,12 @@ import android.Manifest
 import android.content.pm.PackageManager
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -28,6 +30,7 @@ import com.meshcoreone.android.feature.chats.composer.*
 import com.meshcoreone.android.feature.chats.composer.ui.ChatConversationScreen
 import com.meshcoreone.android.feature.chats.composer.ui.ConversationLinkActions
 import com.meshcoreone.android.feature.chats.list.ChatLinkRouter
+import com.meshcoreone.android.feature.chats.list.ContactLinkLookupIssue
 import com.meshcoreone.android.feature.chats.list.ChatRoute
 import com.meshcoreone.android.feature.chats.rooms.RoomConversationRoute
 import com.meshcoreone.android.feature.chats.rooms.RoomConversationStateHolder
@@ -48,7 +51,8 @@ internal fun ChatSelection.route(): ChatRoute = when (this) {
 
 internal fun NavigationCoordinator.openChat(route: ChatRoute) {
     if (state.value.chatsSelectedRoute?.route() == route &&
-        state.value.activeStack.last().destination is NavigationDestination.Chat
+        state.value.stacks.getValue(com.meshcoreone.android.core.contracts.AppTab.CHATS)
+            .last().destination is NavigationDestination.Chat
     ) return
     when (route) {
         is ChatRoute.Direct -> navigateToChat(route.contact)
@@ -64,6 +68,8 @@ internal fun AppChatsContent(
     coordinator: NavigationCoordinator,
 ) {
     val state by coordinator.state.collectAsState()
+    val presented = presentedNavigation(coordinator)
+    val entryId = LocalNavigationEntryId.current
     AppPendingChannel(feature, coordinator)
     var newChannel by remember { mutableStateOf(false) }
     if (newChannel) AppChannelsContent(feature, coordinator) { newChannel = false }
@@ -89,14 +95,15 @@ internal fun AppChatsContent(
             FeatureRoute(FeatureId.CHATS), coordinator::navigate, list,
             selectedRoute = state.chatsSelectedRoute?.route(),
             onOpenChat = coordinator::openChat,
-            onClearSelection = { coordinator.back() },
+            onClearSelection = { coordinator.back(presented) },
             onNewChannel = { newChannel = true },
-            onRoomAuthenticationRequested = { coordinator.openChat(ChatRoute.Room(it)) },
+            onRoomAuthenticationRequested = coordinator::requestRoomAuthentication,
             failureText = { UiErrorMapper().message(it) },
+            consumePendingRoomAuthentication = false,
         )
         return
     }
-    key(selected) { AppChatConversation(feature, selected, coordinator, state) }
+    key(selected) { AppChatConversation(feature, selected, coordinator, state, entryId) }
 }
 
 @Composable
@@ -105,6 +112,7 @@ private fun AppChatConversation(
     selected: ChatSelection,
     coordinator: NavigationCoordinator,
     state: NavigationState,
+    entryId: Long?,
 ) {
         val linkContext = LocalContext.current
         val webHandler = LocalUriHandler.current
@@ -127,6 +135,20 @@ private fun AppChatConversation(
             )
         }
         val scope = rememberCoroutineScope()
+        val contactMount = remember(feature, selected, entryId) { ChatContactMount(entryId) }
+        DisposableEffect(feature, contactMount) {
+            feature.registerContactMount(contactMount)
+            onDispose { feature.sealContactMount(contactMount) }
+        }
+        val linkEnvironment = remember(feature, contactMount) { feature.linksForMount(contactMount) }
+        val router = remember(feature, linkEnvironment, scope) {
+            ChatLinkRouter(linkEnvironment, scope, feature.list.diagnostics)
+        }
+        ContactLookupFailureDialog(
+            router,
+            entryId != null && state.selectedTab == com.meshcoreone.android.core.contracts.AppTab.CHATS &&
+                state.activeStack.last().id == entryId,
+        )
         val connection by feature.connectionState.collectAsState()
         LifecycleResumeEffect(feature, selected, connection) {
             val deactivate = feature.activate(selected)
@@ -151,7 +173,6 @@ private fun AppChatConversation(
                 }
             }
             val device = remember(feature, radio, scope) { feature.pathDevice(radio, scope) }
-            val router = remember(feature, scope) { ChatLinkRouter(feature.list.links, scope, feature.list.diagnostics) }
             val links = remember(contacts, device, radio, router, coordinator, externalLinks) {
                 ConversationLinkActions(
                     contacts = { contacts.value },
@@ -160,22 +181,6 @@ private fun AppChatConversation(
                     route = router::route,
                     openExternal = externalLinks::open,
                     navigateToContact = coordinator::navigateToContactDetail,
-                )
-            }
-            if (state.pendingRoomAuthentication?.id == selected.session.id &&
-                state.pendingRoomAuthentication?.radioId == selected.session.radioId
-            ) {
-                val roomState by holder.state.collectAsState()
-                LaunchedEffect(holder) { holder.prepareAuthentication() }
-                com.meshcoreone.android.feature.chats.rooms.RoomAuthenticationSheet(
-                    roomState,
-                    onDismiss = coordinator::clearPendingRoomAuthentication,
-                    onAuthenticate = { password, rememberPassword ->
-                        scope.launch {
-                            holder.authenticate(password, rememberPassword)
-                            if (holder.state.value.session.isConnected) coordinator.clearPendingRoomAuthentication()
-                        }
-                    },
                 )
             }
             val preferences = feature.content?.rendering?.collectAsState()?.value
@@ -291,7 +296,6 @@ private fun AppChatConversation(
                 onReply = { if (conversation is TimelineConversation.Direct) replyTo = it.id },
                 onDismiss = { actionMessage = null })
         }
-        val router = remember(feature, scope) { ChatLinkRouter(feature.list.links, scope, feature.list.diagnostics) }
         val links = remember(feature, router, coordinator, externalLinks) {
             ConversationLinkActions(
                 contacts = { environment.mentionContacts.value },
@@ -302,6 +306,7 @@ private fun AppChatConversation(
                 navigateToContact = coordinator::navigateToContactDetail,
             )
         }
+
         val placeholder = stringResource(when (conversation) {
             is TimelineConversation.Direct -> AppChatsStrings.chatsInputPlaceholderDirectMessage
             is TimelineConversation.Channel -> if (conversation.channel.isEncryptedChannel) {
@@ -316,10 +321,9 @@ private fun AppChatConversation(
             messageAccessibilityLabel = bubbleLabels,
             incomingAvatar = { message -> AppChannelAvatar(message, avatarTable, mentionContacts, avatarCache) },
             onPickContact = { pickContact = true },
-            scrollTo = state.pendingScrollToMessageID,
-            onScrollConsumed = { requested ->
-                if (coordinator.state.value.pendingScrollToMessageID == requested) coordinator.clearPendingScrollToMessage()
-            },
+            scrollTo = state.pendingMessageScrollFor(entryId),
+            isScrollCurrent = { request -> entryId != null && coordinator.isPendingMessageScroll(entryId, request) },
+            onScrollConsumed = { request -> entryId != null && coordinator.consumePendingMessageScroll(entryId, request) },
             report = feature::report,
             emojiPicker = emojiPicker,
             emojiStatus = {
@@ -347,4 +351,48 @@ private fun AppChatConversation(
                 }
             },
         )
+}
+
+@Composable
+private fun ContactLookupFailureDialog(router: ChatLinkRouter, active: Boolean) {
+    val failure by router.contactLookupFailure.collectAsState(initial = null)
+    val current = failure ?: return
+    if (!active) return
+    val dismiss = { router.dismissContactLookupFailure(current) }
+    androidx.compose.material3.AlertDialog(
+        modifier = Modifier.testTag("chat-contact-link-failure"),
+        onDismissRequest = dismiss,
+        title = {
+            androidx.compose.material3.Text(
+                stringResource(com.meshcoreone.android.core.l10n.R.string.l10n_app_contacts_contacts_nodekind_contact),
+            )
+        },
+        text = {
+            androidx.compose.material3.Text(stringResource(
+                com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings.commonErrorFailedToLoad,
+            ))
+        },
+        confirmButton = {
+            if (current.issue is ContactLinkLookupIssue.Failed) {
+                androidx.compose.material3.TextButton(
+                    onClick = { router.retryContactLookup(current) },
+                    modifier = Modifier.testTag("chat-contact-link-retry"),
+                ) {
+                    androidx.compose.material3.Text(stringResource(
+                        com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings.commonTryAgain,
+                    ))
+                }
+            }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(
+                onClick = dismiss,
+                modifier = Modifier.testTag("chat-contact-link-cancel"),
+            ) {
+                androidx.compose.material3.Text(stringResource(
+                    com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings.commonCancel,
+                ))
+            }
+        },
+    )
 }

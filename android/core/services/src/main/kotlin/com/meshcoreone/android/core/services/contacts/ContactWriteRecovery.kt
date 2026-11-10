@@ -186,9 +186,13 @@ internal object ContactWriteRecovery {
         }
     }
 
+    fun precheckWrite(preferences: ContactPreferenceFlags, radioId: RadioId) = mutate {
+        requireAdmission(preferences, radioId, state(preferences, radioId))
+    }
+
     fun registerWrite(preferences: ContactPreferenceFlags, radioId: RadioId, dispatch: ContactWriteDispatch) = mutate {
         val state = state(preferences, radioId)
-        blockReason(preferences, radioId, state)?.let { throw ContactWriteAdmissionBlocked(radioId, it) }
+        requireAdmission(preferences, radioId, state)
         state.writes += dispatch
     }
 
@@ -327,6 +331,10 @@ internal object ContactWriteRecovery {
         if (state.epoch !== epoch || hasUnresolvedWrite(state)) return@mutate false
         recordPendingMarker(preferences, radioId, state)
         clearMarker(preferences, radioId, state)
+    }
+
+    private fun requireAdmission(preferences: ContactPreferenceFlags, radioId: RadioId, state: RadioState) {
+        blockReason(preferences, radioId, state)?.let { throw ContactWriteAdmissionBlocked(radioId, it) }
     }
 
     private fun blockReason(

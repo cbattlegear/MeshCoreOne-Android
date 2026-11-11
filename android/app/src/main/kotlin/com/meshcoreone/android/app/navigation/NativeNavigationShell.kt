@@ -137,14 +137,10 @@ private data class ConversationNavigationHeader(val title: String, val subtitle:
 
 @Composable
 private fun conversationNavigationHeader(
-    selection: ChatSelection?,
+    conversation: FeatureChatConversationType?,
     deviceContext: AppChatsFeature.NavigationDeviceContext?,
 ): ConversationNavigationHeader? {
-    val conversation = when (selection) {
-        is ChatSelection.Direct -> FeatureChatConversationType.Dm(selection.contact)
-        is ChatSelection.Channel -> FeatureChatConversationType.Channel(selection.channel)
-        is ChatSelection.Room, null -> return null
-    }
+    if (conversation == null) return null
     val strings = rememberChatListStrings()
     val defaultScopeName = deviceContext
         ?.takeIf { it.radioId == conversation.radioId }
@@ -278,7 +274,11 @@ fun NativeNavigationShell(
         selectedChat?.let { chats?.navigationMetadata(it) }
     }
     val liveSelectedChat = metadata?.collectAsStateWithLifecycle(initialValue = null)?.value
-        ?: selectedChat.takeIf { chats == null }
+        ?: if (chats == null) when (selectedChat) {
+            is ChatSelection.Direct -> FeatureChatConversationType.Dm(selectedChat.contact)
+            is ChatSelection.Channel -> FeatureChatConversationType.Channel(selectedChat.channel)
+            is ChatSelection.Room, null -> null
+        } else null
     val navigationDeviceContext = chats?.navigationDeviceContext?.collectAsStateWithLifecycle()?.value
     val conversationHeader = conversationNavigationHeader(liveSelectedChat, navigationDeviceContext)
     val unreadDescription = if (unreadCount > 0) {

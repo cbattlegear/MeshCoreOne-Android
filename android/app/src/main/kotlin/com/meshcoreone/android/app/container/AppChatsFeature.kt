@@ -38,6 +38,7 @@ import com.meshcoreone.android.core.services.reactions.isHiddenOutgoingReaction
 import com.meshcoreone.android.feature.chats.composer.*
 import com.meshcoreone.android.feature.chats.actions.BlockedSenderHistoryDeletionException
 import com.meshcoreone.android.feature.chats.list.*
+import com.meshcoreone.android.feature.chats.list.ChatConversationType as NavigationConversation
 import com.meshcoreone.android.feature.chats.timeline.*
 import com.meshcoreone.android.feature.chats.rooms.*
 import com.meshcoreone.android.feature.chats.channels.*
@@ -180,11 +181,11 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         SharingStarted.Eagerly,
         app.connectedDevice?.let { NavigationDeviceContext(it.radioId, it.defaultFloodScopeName) },
     )
-    internal fun navigationMetadata(selection: ChatSelection): Flow<ChatSelection?> = changes.mapLatest {
+    internal fun navigationMetadata(selection: ChatSelection): Flow<NavigationConversation?> = changes.mapLatest {
         when (selection) {
             is ChatSelection.Direct -> store.fetchContact(EntityKey(selection.contact.radioId, selection.contact.id))
                 ?.takeIf { it.radioId == selection.contact.radioId && it.publicKey == selection.contact.publicKey }
-                ?.let { ChatSelection.Direct(it) }
+                ?.let { NavigationConversation.Dm(it) }
             is ChatSelection.Channel -> {
                 val selected = selection.channel
                 store.fetchChannelsForDisplay(selected.radioId).firstOrNull { current ->
@@ -196,9 +197,9 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                             selected.occupantID != null && current.occupantID == selected.occupantID ||
                                 selected.radioId == MockDataProvider.simulatorRadioId
                         }
-                }?.let { ChatSelection.Channel(it) }
+                }?.let { NavigationConversation.Channel(it) }
             }
-            is ChatSelection.Room -> selection
+            is ChatSelection.Room -> null
         }
     }.catch { failure -> report("Conversation navigation metadata could not load", failure); throw failure }
 

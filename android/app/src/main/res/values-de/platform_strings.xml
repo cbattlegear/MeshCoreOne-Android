@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-407 Native platform labels not present in the pinned Apple localization catalog. -->
+<!-- AndroidOnly: WP-306 Localizable native link-handler guidance; raw intent failures remain diagnostic-only. -->
+<!-- AndroidOnly: WP-405 Channel allocation and postcommit recovery guidance. -->
+<resources>
+    <string name="platform_open_source_licenses">Open-Source-Lizenzen</string>
+    <string name="platform_system_language">Systemsprache</string>
+    <string name="platform_chat_link_unavailable">Dieser Link konnte nicht geöffnet werden. Prüfe, ob eine App installiert ist und diesen Link öffnen darf, und versuche es erneut.</string>
+    <string name="platform_channel_sync_incomplete">Einige Funkkanalplätze sind nicht synchronisiert. Warte auf die Synchronisierung oder stelle die Verbindung erneut her, bevor du einen Kanal hinzufügst.</string>
+    <string name="platform_channel_reconciliation_required">Der vorherige Kanalvorgang konnte nicht bestätigt werden. Weitere Schreibvorgänge für Kanäle sind für diese App-Sitzung gesperrt; eine erneute Verbindung allein hebt diese Sperre nicht auf.</string>
+    <string name="platform_channel_already_saved">Der Kanal wurde gespeichert, aber die Einrichtung konnte nicht abgeschlossen werden. Prüfe ihn unter Chats; diese Bestätigung schreibt ihn nicht erneut.</string>
+    <string name="platform_channel_delete_stale">Dieser Kanal hat sich geändert oder seine Identität kann nicht bestätigt werden. Aktualisiere Chats und wähle den Kanal vor dem Löschen erneut aus.</string>
+    <string name="platform_channel_delete_unreconciled">Dieser Kanal wurde für die aktuelle Verbindung nicht bestätigt. Warte vor dem Löschen auf die Kanalsynchronisierung.</string>
+</resources>

@@ -13,6 +13,12 @@ sealed interface DirectPendingCompletionReason {
     data object AlreadyDeliveredSend : DirectPendingCompletionReason
 
     /**
+     * Cleanup only after a queued SEND's delivery committed before its pending row was removed.
+     * Storage must prove the delivery belongs to the exact surviving message and pending incarnations.
+     */
+    data object DeliveredQueuedRecovery : DirectPendingCompletionReason
+
+    /**
      * Configuration metadata, not delivery proof. Storage admits only exactly zero and verifies
      * the actual matching outgoing direct message and DM pending row.
      */
@@ -68,7 +74,8 @@ sealed interface DirectPendingCompletionObservation {
 }
 
 /**
- * Separate optional producer role for an already-delivered normal SEND or a zero-attempt drain.
+ * Separate optional producer role for an already-delivered normal SEND, recovery of its exact
+ * queued incarnation, or a zero-attempt drain.
  * It creates no ACK claim, predicted code, acceptance, delivery or sendCount update. An unavailable
  * implementation must be surfaced explicitly, not replaced by a generic delete or fake RESEND.
  *

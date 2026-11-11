@@ -458,6 +458,78 @@ class MessagingRoomIntegrationTest {
         next.stop()
     }
 
+    @Test fun deliveredQueueRecoveryReplaysLostCaptureWithoutDispatch() = runTest(scheduler) {
+        deliveredQueueRecoveryLostReturn(loseCapture = true, replaceAfterCompletion = false)
+    }
+
+    @Test fun deliveredQueueRecoveryReplaysLostCompletionWithoutDispatch() = runTest(scheduler) {
+        deliveredQueueRecoveryLostReturn(loseCapture = false, replaceAfterCompletion = false)
+    }
+
+    @Test fun deliveredQueueRecoveryLostCompletionCannotDeleteItsReplacement() = runTest(scheduler) {
+        deliveredQueueRecoveryLostReturn(loseCapture = false, replaceAfterCompletion = true)
+    }
+
+    private suspend fun TestScope.deliveredQueueRecoveryLostReturn(loseCapture: Boolean, replaceAfterCompletion: Boolean) {
+        seed()
+        val barrier = DirectCompletionBarrier()
+        val first = RadioGeneration(276, barrier, MessageServiceConfig(maxAttempts = 1, minTimeout = 0.0))
+        first.start(); first.service.startEventMonitoring()
+        val message = first.service.createPendingMessage("recover delivered result", contact)
+        store.upsertPendingSend(PendingSendDTO.fromEnvelope(DirectMessageEnvelope(message.id, contact.id), radio))
+        first.signals.set(DeviceConnectionState.READY); first.queue.hydrate(); runCurrent()
+        assertTrue(barrier.entered.isCompleted)
+        val delivered = assertNotNull(store.fetchMessage(EntityKey(radio, message.id)))
+        val original = store.fetchPendingSends(radio).single()
+        first.stop()
+
+        val captures = mutableListOf<UUID>()
+        val completions = mutableListOf<UUID>()
+        var lost = false
+        val fault = PersistenceStoreException(PersistenceStoreError.SaveFailed("lost recovery return"))
+        val racing = object : DirectRoles(store) {
+            override suspend fun captureDirectPendingCompletion(
+                lease: DirectAckLease, key: EntityKey, pendingSendId: UUID, captureRequestId: UUID,
+                reason: DirectPendingCompletionReason,
+            ): DirectPendingCaptureResult {
+                captures += captureRequestId
+                val result = super.captureDirectPendingCompletion(lease, key, pendingSendId, captureRequestId, reason)
+                if (loseCapture && !lost && result is DirectPendingCaptureResult.Captured) {
+                    lost = true
+                    throw fault
+                }
+                return result
+            }
+
+            override suspend fun completeDirectPendingWithoutDispatch(
+                completion: DirectPendingCompletion, completionRequestId: UUID,
+            ): DirectPendingCompletionResult {
+                completions += completionRequestId
+                val result = super.completeDirectPendingWithoutDispatch(completion, completionRequestId)
+                if (!loseCapture && !lost && result is DirectPendingCompletionResult.Applied) {
+                    lost = true
+                    throw fault
+                }
+                return result
+            }
+        }
+        val next = RadioGeneration(277, racing)
+        next.start(); next.signals.set(DeviceConnectionState.READY); next.queue.hydrate(); runCurrent()
+        assertTrue(lost)
+        assertEquals(if (loseCapture) listOf(original) else emptyList(), store.fetchPendingSends(radio))
+        assertTrue(next.firmware.sent().isEmpty())
+        if (replaceAfterCompletion) store.upsertPendingSend(original)
+        next.queue.transportDidOpen(); runCurrent(); next.queue.awaitDrainCompletion()
+        assertEquals(if (loseCapture) 2 else 1, captures.size)
+        assertEquals(1, captures.distinct().size)
+        assertEquals(if (loseCapture) 1 else 2, completions.size)
+        assertEquals(1, completions.distinct().size)
+        assertEquals(if (replaceAfterCompletion) listOf(original) else emptyList(), store.fetchPendingSends(radio))
+        assertEquals(delivered, store.fetchMessage(EntityKey(radio, message.id)))
+        assertTrue(next.firmware.sent().isEmpty())
+        next.stop()
+    }
+
     @Test fun noDispatchCaptureCannotDeleteSameIdPendingReplacementAfterSuspension() = runTest(scheduler) {
         seed()
         val barrier = DirectCompletionBarrier()

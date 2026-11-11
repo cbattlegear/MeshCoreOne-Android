@@ -757,7 +757,11 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         val dao = database.directAcks()
         val reasonName = when (reason) {
             DirectPendingCompletionReason.AlreadyDeliveredSend -> "DELIVERED"
+            DirectPendingCompletionReason.DeliveredQueuedRecovery -> "RECOVERED_DELIVERED"
             is DirectPendingCompletionReason.ZeroAttempts -> "ZERO"
+        }
+        if (selection != null && reason == DirectPendingCompletionReason.DeliveredQueuedRecovery) {
+            return DirectPendingCaptureResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
         }
         val storedReason = if (selection == null) reasonName else "QUEUE_$reasonName"
         val maximum = (reason as? DirectPendingCompletionReason.ZeroAttempts)?.configuredMaximumAttempts
@@ -785,8 +789,12 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
             ?: return DirectPendingCaptureResult.Rejected(DirectAckRejection.MISSING)
         if (row.directionRawValue != MessageDirection.OUTGOING.rawValue || row.channelIndex != null ||
             pending.kindRawValue != PendingSendKind.DM.rawValue ||
-            (reasonName == "DELIVERED" && (row.statusRawValue != 3L || pending.isResend)) ||
+            (reasonName in setOf("DELIVERED", "RECOVERED_DELIVERED") &&
+                (row.statusRawValue != MessageStatus.DELIVERED.rawValue || pending.isResend)) ||
             (reasonName == "ZERO" && maximum != 0L)
+        ) return DirectPendingCaptureResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
+        if (reason == DirectPendingCompletionReason.DeliveredQueuedRecovery &&
+            recoverableDeliveredQueueClaim(key.radioId.value, key.id, pendingSendId) == null
         ) return DirectPendingCaptureResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
         val messageIdentity = dao.incarnation(key.radioId.value, key.id, "message")
             ?: invalidData("Missing no-dispatch message incarnation")
@@ -828,12 +836,25 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         ) {
             return@transaction DirectPendingCompletionResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
         }
+        val recoveredClaim = if (capture.reason == "RECOVERED_DELIVERED") {
+            recoverableDeliveredQueueClaim(capture.radioId, capture.messageId, capture.pendingId)
+                ?: return@transaction DirectPendingCompletionResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
+        } else null
+        if (recoveredClaim != null && dao.operations(capture.radioId, recoveredClaim.requestId)
+                .any { it.requestId == completionRequestId }
+        ) return@transaction DirectPendingCompletionResult.Rejected(DirectAckRejection.CONFLICT)
         ownWrite(database.pendingSends().delete(capture.radioId, capture.pendingId))
         val identity = dao.incarnation(capture.radioId, capture.messageId, "message")
             ?: invalidData("No-dispatch completion lost its message")
         if (identity.incarnation != capture.messageIncarnation ||
             identity.revision != checkedIncrement(capture.messageRevision)
         ) invalidData("Independent mutation inside no-dispatch completion")
+        if (recoveredClaim != null) {
+            dao.operation(DirectAckOperationEntity(
+                capture.radioId, recoveredClaim.requestId, completionRequestId,
+                "PENDING", null, null, capture.pendingId,
+            ))
+        }
         val committed = capture.copy(completedRequestId = completionRequestId, current = false, pending = null)
         dao.pendingCompletion(committed)
         save()
@@ -876,6 +897,7 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         capture.captureRequestId, EntityKey(RadioId(capture.radioId), capture.messageId),
         when (capture.reason) {
             "DELIVERED", "QUEUE_DELIVERED" -> DirectPendingCompletionReason.AlreadyDeliveredSend
+            "RECOVERED_DELIVERED" -> DirectPendingCompletionReason.DeliveredQueuedRecovery
             "ZERO", "QUEUE_ZERO" -> DirectPendingCompletionReason.ZeroAttempts(
                 capture.maximumAttempts ?: invalidData("Missing no-dispatch maximum attempts"),
             )
@@ -1292,6 +1314,36 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         dao.unresolvedQueuedClaims(radio, message, pendingId) != 0 || dao.currentUnresolvedClaims(radio, message) != 0 ||
             if (exceptIntent == null) dao.currentIntents(radio, message) != 0
             else dao.otherCurrentIntents(radio, message, exceptIntent) != 0
+    }
+
+    private suspend fun RepositoryTransaction.recoverableDeliveredQueueClaim(
+        radio: UUID, message: UUID, pendingId: UUID,
+    ): DirectAckClaimEntity? {
+        val dao = database.directAcks()
+        val row = database.messages().byId(radio, message) ?: return null
+        val pending = database.pendingSends().byId(radio, pendingId) ?: return null
+        if (row.directionRawValue != MessageDirection.OUTGOING.rawValue || row.channelIndex != null ||
+            row.statusRawValue != MessageStatus.DELIVERED.rawValue || row.contactID == null ||
+            pending.messageID != message || pending.kindRawValue != PendingSendKind.DM.rawValue ||
+            pending.contactID != row.contactID || pending.channelIndex != null || pending.isResend
+        ) return null
+        requireDirectPendingIdentityAvailable(pending)
+        val messageIdentity = dao.incarnation(radio, message, "message") ?: return null
+        val pendingIdentity = dao.incarnation(radio, pendingId, "pending") ?: return null
+        if (dao.unresolvedQueuedClaims(radio, message, pendingId) != 1 ||
+            dao.currentUnresolvedClaims(radio, message) != 0 || dao.currentIntents(radio, message) != 0
+        ) return null
+        val delivered = dao.unresolvedQueuedClaimsForRetry(radio, message).mapNotNull { dao.claim(radio, it) }
+            .singleOrNull {
+                it.pendingId == pendingId && it.pendingIncarnation == pendingIdentity.incarnation &&
+                    it.incarnation == messageIdentity.incarnation && it.revision == messageIdentity.revision &&
+                    it.mode == DirectAckMode.SEND.name && it.phase == DirectAckPhase.DELIVERED.name
+            } ?: return null
+        val delivery = dao.delivery(radio, delivered.requestId) ?: return null
+        return delivered.takeIf {
+            delivery.messageId == message && delivery.ackCode == row.ackCode &&
+                delivery.roundTripTime == row.roundTripTime
+        }
     }
 
     private suspend fun RepositoryTransaction.permission(claim: DirectAckClaimEntity, lease: Lease): DirectAckPermission {

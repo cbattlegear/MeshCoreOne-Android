@@ -477,12 +477,21 @@ object DirectAckStorage {
                   AND pending.kind = 'pending' AND operation.kind = 'EXPLICIT_RETRY:' || pending.previous
             )
         """.trimIndent())
+        // Preserve only an exact surviving delivery revision; stale revisions must not match the reset zero.
         db.execSQL("""
-            UPDATE direct_ack_claims AS claim SET incarnation = (
-                SELECT message.next FROM direct_ack_restore_identities AS message
-                WHERE message.radioId = claim.radioId AND message.id = claim.messageId
-                  AND message.kind = 'message'
-            )
+            UPDATE direct_ack_claims AS claim SET
+                revision = CASE WHEN phase = 'DELIVERED' AND mode = 'SEND' THEN
+                    CASE WHEN revision = (
+                        SELECT identity.revision FROM $IDENTITIES AS identity
+                        WHERE identity.radioId = claim.radioId AND identity.id = claim.messageId
+                          AND identity.kind = 'message'
+                    ) THEN 0 ELSE -1 END
+                    ELSE revision END,
+                incarnation = (
+                    SELECT message.next FROM direct_ack_restore_identities AS message
+                    WHERE message.radioId = claim.radioId AND message.id = claim.messageId
+                      AND message.kind = 'message'
+                )
             WHERE EXISTS (
                 SELECT 1 FROM direct_ack_restore_identities AS message
                 WHERE message.radioId = claim.radioId AND message.id = claim.messageId

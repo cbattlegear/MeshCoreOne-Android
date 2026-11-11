@@ -555,6 +555,40 @@ class MessageService(
         ownership.check("completeDirectPending.saved")
     }
 
+    internal suspend fun recoverDeliveredQueuedPending(claimID: UUID, messageID: UUID, pendingSendID: UUID): Boolean {
+        val state = requireNotNull(rememberNoDispatch(
+            claimID, messageID, pendingSendID, DirectPendingCompletionReason.DeliveredQueuedRecovery,
+        ))
+        if (state.handle == null) {
+            val producer = directPendingCompletionAuthority
+                ?: throw authorityFailure("delivered queue recovery capability unavailable")
+            val (handle, receipt) = when (val result = producer.captureDirectPendingCompletion(
+                directLease(), key(messageID), pendingSendID, state.captureID, state.reason,
+            )) {
+                is DirectPendingCaptureResult.Captured -> result.completion to result.receipt
+                is DirectPendingCaptureResult.AlreadyCaptured -> result.completion to result.receipt
+                is DirectPendingCaptureResult.Rejected -> {
+                    if (result.reason == DirectAckRejection.NOT_ELIGIBLE ||
+                        result.reason == DirectAckRejection.UNRESOLVED_OUTCOME
+                    ) {
+                        synchronized(lock) {
+                            if (noDispatchCompletions[claimID] === state) noDispatchCompletions.remove(claimID)
+                        }
+                        return false
+                    }
+                    rejectStaleQueueCompletion(result.reason)
+                }
+            }
+            if (receipt.permission != DirectPendingCompletionPermission.CURRENT || receipt.key != key(messageID) ||
+                receipt.message == null || receipt.pendingSendId != pendingSendID ||
+                receipt.pending?.id != pendingSendID || receipt.reason != state.reason
+            ) throw authorityFailure("delivered queue recovery capture is not current or matching")
+            state.handle = handle
+        }
+        completeWithoutDispatch(claimID, messageID, pendingSendID)
+        return true
+    }
+
     private fun rememberNoDispatch(
         claimID: UUID, messageID: UUID, pendingID: UUID?, reason: DirectPendingCompletionReason,
     ): NoDispatchCompletion? {

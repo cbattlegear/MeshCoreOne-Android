@@ -2005,6 +2005,153 @@ class DirectAckAuthorityPersistenceTest {
         ).reason)
     }
 
+    @Test fun deliveredQueuedRecoveryRequiresTheExactRecordedDeliveryAndReplaysOnlyItsDeletion() = runTest {
+        val lease = activate()
+        val row = message(status = MessageStatus.PENDING)
+        val queued = pending(messageID = row.id)
+        store.upsertPendingSend(queued)
+        val claim = begin(row, pendingId = queued.id, lease = lease)
+        assertIs<DirectAckMutationResult.Applied>(store.recordDirectSendAccepted(claim.attempt, claim.wire, 123u))
+        assertIs<DirectAckMutationResult.Applied>(store.settleDirectAck(claim.attempt, 123u, 42u))
+        val delivered = assertNotNull(store.fetchMessage(entity(id = row.id)))
+        val next = activate(session = token.copy(generation = Generation(2)))
+        assertEquals(DirectAckRejection.UNRESOLVED_OUTCOME, assertIs<DirectQueueCaptureResult.Rejected>(
+            store.captureDirectQueueSelection(next, entity(id = row.id), queued.id),
+        ).reason)
+
+        val captureID = UUID.randomUUID()
+        val reason = DirectPendingCompletionReason.DeliveredQueuedRecovery
+        val captured = assertIs<DirectPendingCaptureResult.Captured>(
+            store.captureDirectPendingCompletion(next, entity(id = row.id), queued.id, captureID, reason),
+        )
+        assertEquals(delivered, captured.receipt.message)
+        assertIs<DirectPendingCaptureResult.AlreadyCaptured>(
+            store.captureDirectPendingCompletion(next, entity(id = row.id), queued.id, captureID, reason),
+        )
+        val completionID = UUID.randomUUID()
+        assertIs<DirectPendingCompletionResult.Applied>(
+            store.completeDirectPendingWithoutDispatch(captured.completion, completionID),
+        )
+        assertTrue(store.fetchPendingSendsForMessage(entity(id = row.id)).isEmpty())
+        assertEquals(delivered, store.fetchMessage(entity(id = row.id)))
+        assertEquals(0, db.directAcks().unresolvedQueuedClaims(RADIO_A.value, row.id, queued.id))
+        store.upsertPendingSend(queued)
+        assertIs<DirectPendingCompletionResult.AlreadyApplied>(
+            store.completeDirectPendingWithoutDispatch(captured.completion, completionID),
+        )
+        assertEquals(listOf(queued), store.fetchPendingSendsForMessage(entity(id = row.id)))
+        assertIs<DirectQueueCaptureResult.Captured>(
+            store.captureDirectQueueSelection(next, entity(id = row.id), queued.id),
+        )
+        assertIs<DirectAckObservation.Rejected>(store.inspectDirectAckAttempt(next, captureID))
+    }
+
+    @Test fun deliveredQueuedRecoverySurvivesRestoreOnlyForUnchangedMessageAndPendingIncarnations() = runTest {
+        val lease = activate()
+        for (mutation in listOf("none", "message-before", "pending-before", "message-during")) {
+            val row = message(status = MessageStatus.PENDING)
+            val queued = pending(messageID = row.id)
+            store.upsertPendingSend(queued)
+            val claim = begin(row, pendingId = queued.id, lease = lease)
+            store.recordDirectSendAccepted(claim.attempt, claim.wire, 123u)
+            store.settleDirectAck(claim.attempt, 123u, 42u)
+            val delivered = assertNotNull(store.fetchMessage(entity(id = row.id)))
+            if (mutation == "message-before") store.saveMessage(delivered)
+            if (mutation == "pending-before") store.upsertPendingSend(queued)
+            store.withBackupRestore { database, _ ->
+                if (mutation == "message-during") {
+                    database.messages().setStatus(RADIO_A.value, row.id, MessageStatus.DELIVERED.rawValue)
+                }
+                ImportResult()
+            }
+            val result = store.captureDirectPendingCompletion(
+                lease, entity(id = row.id), queued.id, UUID.randomUUID(),
+                DirectPendingCompletionReason.DeliveredQueuedRecovery,
+            )
+            if (mutation == "none") {
+                val captured = assertIs<DirectPendingCaptureResult.Captured>(result)
+                assertIs<DirectPendingCompletionResult.Applied>(
+                    store.completeDirectPendingWithoutDispatch(captured.completion, UUID.randomUUID()),
+                )
+                assertTrue(store.fetchPendingSendsForMessage(entity(id = row.id)).isEmpty())
+            } else {
+                assertEquals(DirectAckRejection.NOT_ELIGIBLE, assertIs<DirectPendingCaptureResult.Rejected>(result).reason)
+                assertEquals(listOf(queued), store.fetchPendingSendsForMessage(entity(id = row.id)))
+            }
+            assertEquals(delivered, store.fetchMessage(entity(id = row.id)))
+        }
+    }
+
+    @Test fun deliveredQueuedRecoveryRejectsMissingProofReplacementAndCompetingIntent() = runTest {
+        val lease = activate()
+        val unproven = message(status = MessageStatus.DELIVERED)
+        val unprovenPending = pending(messageID = unproven.id)
+        store.saveMessage(unproven)
+        store.upsertPendingSend(unprovenPending)
+        val reason = DirectPendingCompletionReason.DeliveredQueuedRecovery
+        assertEquals(DirectAckRejection.NOT_ELIGIBLE, assertIs<DirectPendingCaptureResult.Rejected>(
+            store.captureDirectPendingCompletion(lease, entity(id = unproven.id), unprovenPending.id, UUID.randomUUID(), reason),
+        ).reason)
+
+        val replaced = message(status = MessageStatus.PENDING)
+        val replacedPending = pending(messageID = replaced.id)
+        store.upsertPendingSend(replacedPending)
+        val replacedClaim = begin(replaced, pendingId = replacedPending.id, lease = lease)
+        store.recordDirectSendAccepted(replacedClaim.attempt, replacedClaim.wire, 123u)
+        store.settleDirectAck(replacedClaim.attempt, 123u, 42u)
+        store.upsertPendingSend(replacedPending)
+        assertEquals(DirectAckRejection.NOT_ELIGIBLE, assertIs<DirectPendingCaptureResult.Rejected>(
+            store.captureDirectPendingCompletion(lease, entity(id = replaced.id), replacedPending.id, UUID.randomUUID(), reason),
+        ).reason)
+        assertEquals(listOf(replacedPending), store.fetchPendingSendsForMessage(entity(id = replaced.id)))
+
+        val row = message(status = MessageStatus.PENDING)
+        val queued = pending(messageID = row.id)
+        store.upsertPendingSend(queued)
+        val claim = begin(row, pendingId = queued.id, lease = lease)
+        store.recordDirectSendAccepted(claim.attempt, claim.wire, 123u)
+        store.settleDirectAck(claim.attempt, 123u, 42u)
+        val captured = assertIs<DirectPendingCaptureResult.Captured>(
+            store.captureDirectPendingCompletion(lease, entity(id = row.id), queued.id, UUID.randomUUID(), reason),
+        )
+        val competingID = UUID.randomUUID()
+        assertIs<DirectAckIntentResult.Captured>(
+            store.captureDirectAckIntent(lease, entity(id = row.id), competingID, DirectAckMode.RESEND, queued.id),
+        )
+        val completionID = UUID.randomUUID()
+        assertEquals(DirectAckRejection.NOT_ELIGIBLE, assertIs<DirectPendingCompletionResult.Rejected>(
+            store.completeDirectPendingWithoutDispatch(captured.completion, completionID),
+        ).reason)
+        assertEquals(listOf(queued), store.fetchPendingSendsForMessage(entity(id = row.id)))
+        assertEquals(DirectAckIntentRetirement.Retired, store.retireDirectAckIntent(lease, competingID))
+        assertIs<DirectPendingCompletionResult.Applied>(
+            store.completeDirectPendingWithoutDispatch(captured.completion, completionID),
+        )
+    }
+
+    @Test fun deliveredQueuedRecoveryCannotDeleteAReplacementInsertedAfterCapture() = runTest {
+        val lease = activate()
+        val row = message(status = MessageStatus.PENDING)
+        val queued = pending(messageID = row.id)
+        store.upsertPendingSend(queued)
+        val claim = begin(row, pendingId = queued.id, lease = lease)
+        store.recordDirectSendAccepted(claim.attempt, claim.wire, 123u)
+        store.settleDirectAck(claim.attempt, 123u, 42u)
+        val delivered = assertNotNull(store.fetchMessage(entity(id = row.id)))
+        val captured = assertIs<DirectPendingCaptureResult.Captured>(
+            store.captureDirectPendingCompletion(
+                lease, entity(id = row.id), queued.id, UUID.randomUUID(),
+                DirectPendingCompletionReason.DeliveredQueuedRecovery,
+            ),
+        )
+        store.upsertPendingSend(queued)
+        assertEquals(DirectAckRejection.INVALIDATED, assertIs<DirectPendingCompletionResult.Rejected>(
+            store.completeDirectPendingWithoutDispatch(captured.completion, UUID.randomUUID()),
+        ).reason)
+        assertEquals(listOf(queued), store.fetchPendingSendsForMessage(entity(id = row.id)))
+        assertEquals(delivered, store.fetchMessage(entity(id = row.id)))
+    }
+
     @Test fun noDispatchCaptureCannotDeleteAfterRawDaoMessagePendingRestoreOrGenerationMutation() = runTest {
         var lease = activate()
         for (mutation in listOf<suspend (MessageDTO, PendingSendDTO) -> Unit>(

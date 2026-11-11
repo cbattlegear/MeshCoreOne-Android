@@ -58,6 +58,8 @@ class ChatSendQueueService(
     ) {
         val successorMessages = mutableSetOf<UUID>()
         @Volatile var uncertainCancellation = false
+        var deliveredRecovery = false
+        var transientRecovery: Exception? = null
         var claimID: UUID = UUID.randomUUID()
         var selection: DirectQueueSelection? = null
         var selectedPending: PendingSendDTO? = null
@@ -341,6 +343,10 @@ class ChatSendQueueService(
             }
             is DirectQueueCaptureResult.Rejected -> {
                 if (result.reason == DirectAckRejection.UNRESOLVED_OUTCOME) {
+                    if (!entry.envelope.isResend) {
+                        entry.deliveredRecovery = true
+                        if (recoverDeliveredDirect(entry)) return null
+                    }
                     throw UnresolvedDirectQueueException(result.reason.name)
                 }
                 if (result.reason !in listOf(DirectAckRejection.MISSING, DirectAckRejection.INVALIDATED)) {
@@ -438,6 +444,14 @@ class ChatSendQueueService(
         var completingPending = false
         var definitelyUndispatched = false
         try {
+            entry.transientRecovery?.let {
+                if (!recoverTransientDirect(entry, it, signalVersion)) return
+            }
+            if (entry.deliveredRecovery) {
+                completingPending = true
+                if (recoverDeliveredDirect(entry)) return
+                throw UnresolvedDirectQueueException("delivered queue recovery no longer matches")
+            }
             val retained = synchronized(lock) { directAttempts[entry.pendingID] }
             val attempt = if (synchronized(lock) { entry.pendingID in completedDMs }) {
                 retained ?: throw PersistenceStoreException(PersistenceStoreError.InvalidData)
@@ -583,7 +597,7 @@ class ChatSendQueueService(
             record("directUncertain.${entry.pendingID}", unresolved)
         }
         catch (stale: StaleDirectQueueSelectionException) {
-            if (completingPending) {
+            if (completingPending || entry.deliveredRecovery) {
                 record("directCompletionStale.${entry.pendingID}", stale)
                 val successors = completeDirect(entry, clearProgress = false)
                 if (definitelyUndispatched && successors.isNotEmpty()) handoffDefinitelyUnsent(id, successors)
@@ -602,20 +616,40 @@ class ChatSendQueueService(
         }
     }
 
+    private suspend fun recoverDeliveredDirect(entry: DirectEntry): Boolean {
+        val id = entry.envelope.messageID
+        if (!messageService.recoverDeliveredQueuedPending(entry.claimID, id, entry.pendingID)) {
+            entry.deliveredRecovery = false
+            return false
+        }
+        entry.deliveredRecovery = false
+        retainSignaledSuccessors(entry, completeDirect(entry))
+        return true
+    }
+
     private suspend fun handleTransientDirect(entry: DirectEntry, failure: Exception, signalVersion: Long) {
+        entry.transientRecovery = failure
+        if (!recoverTransientDirect(entry, failure, signalVersion)) return
+        park(entry.envelope.messageID, failure, signalVersion)
+    }
+
+    private suspend fun recoverTransientDirect(entry: DirectEntry, failure: Exception, signalVersion: Long): Boolean {
+        val claimID = entry.claimID
         try {
             remapDirect(entry)
             retireDirectAttempt(entry)
+            entry.transientRecovery = null
+            recovered("directIntentRetained.$claimID")
         } catch (unresolved: UnresolvedDirectQueueException) {
             unresolved.addSuppressed(failure)
             record("directUncertain.${entry.pendingID}", unresolved)
-            return
+            return false
         } catch (storage: PersistenceStoreException) {
             storage.addSuppressed(failure)
             record("directIntentRetained.${entry.claimID}", storage)
-            return
+            park(entry.envelope.messageID, storage, signalVersion)
         }
-        park(entry.envelope.messageID, failure, signalVersion)
+        return true
     }
 
     private suspend fun rescheduleDirect(messageID: UUID) {

@@ -312,6 +312,40 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
                 intentPermission(it) == DirectAckPermission.CURRENT
         }
 
+    private fun recoverableDeliveredQueueClaim(key: EntityKey, pendingID: UUID): Attempt? {
+        val message = store.messages[key] ?: return null
+        val pendingKey = EntityKey(key.radioId, pendingID)
+        val pending = store.pending[pendingKey] ?: return null
+        if (message.direction != MessageDirection.OUTGOING || message.channelIndex != null ||
+            message.status != MessageStatus.DELIVERED || message.contactID == null ||
+            pending.messageID != key.id || pending.kind != PendingSendKind.DM ||
+            pending.contactID != message.contactID || pending.channelIndex != null || pending.isResend
+        ) return null
+        if (current[key]?.let {
+                permission(it) == DirectAckPermission.CURRENT &&
+                    it.receipt.phase !in listOf(DirectAckPhase.FAILED, DirectAckPhase.DELIVERED)
+            } == true || intents.values.any {
+                it.receipt.key == key && intentPermission(it) == DirectAckPermission.CURRENT
+            }
+        ) return null
+        val unresolved = attempts.values.filter {
+            val retry = explicitRetries[it.receipt.requestId]
+            val authorized = retry == (pendingID to store.pendingRevision(pendingKey))
+            it.receipt.key == key && it.pendingID != null &&
+                it.messageIncarnation == store.messageIncarnation(key) &&
+                it.receipt.pendingCompletions.isEmpty() && it.receipt.definitelyUnsentWireRequestId == null &&
+                !authorized
+        }
+        val claim = unresolved.singleOrNull() ?: return null
+        val delivery = claim.receipt.delivery ?: return null
+        return claim.takeIf {
+            it.pendingID == pendingID && it.pendingRevision == store.pendingRevision(pendingKey) &&
+                it.revision == store.messageRevision(key) && it.receipt.mode == DirectAckMode.SEND &&
+                it.receipt.phase == DirectAckPhase.DELIVERED &&
+                delivery.ackCode == message.ackCode && delivery.roundTripTime == message.roundTripTime
+        }
+    }
+
     override suspend fun captureDirectAckIntent(
         lease: DirectAckLease, key: EntityKey, requestId: UUID, mode: DirectAckMode, pendingSendId: UUID?,
     ): DirectAckIntentResult {
@@ -685,12 +719,16 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
         if (queueScoped && hasCompetingQueueAuthority(key, pendingID = pendingSendId)) {
             return DirectPendingCaptureResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
         }
+        if (reason == DirectPendingCompletionReason.DeliveredQueuedRecovery &&
+            (queueScoped || recoverableDeliveredQueueClaim(key, pendingSendId) == null)
+        ) return DirectPendingCaptureResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
         val message = store.messages[key] ?: return DirectPendingCaptureResult.Rejected(DirectAckRejection.MISSING)
         val pendingKey = EntityKey(key.radioId, pendingSendId)
         val pending = store.pending[pendingKey] ?: return DirectPendingCaptureResult.Rejected(DirectAckRejection.MISSING)
         val eligible = message.direction == MessageDirection.OUTGOING && message.channelIndex == null &&
             pending.messageID == key.id && pending.kind == PendingSendKind.DM && when (reason) {
                 DirectPendingCompletionReason.AlreadyDeliveredSend -> message.status == MessageStatus.DELIVERED && !pending.isResend
+                DirectPendingCompletionReason.DeliveredQueuedRecovery -> message.status == MessageStatus.DELIVERED && !pending.isResend
                 is DirectPendingCompletionReason.ZeroAttempts -> reason.configuredMaximumAttempts == 0L
             }
         if (!eligible) return DirectPendingCaptureResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
@@ -717,6 +755,9 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
         if (value.queueScoped && hasCompetingQueueAuthority(value.receipt.key, pendingID = value.receipt.pendingSendId)) {
             return DirectPendingCompletionResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
         }
+        if (value.receipt.reason == DirectPendingCompletionReason.DeliveredQueuedRecovery &&
+            recoverableDeliveredQueueClaim(value.receipt.key, value.receipt.pendingSendId) == null
+        ) return DirectPendingCompletionResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
         store.authorityAccess("deletePendingSendsForMessage")
         if (completionPermission(value) != DirectPendingCompletionPermission.CURRENT) {
             return DirectPendingCompletionResult.Rejected(DirectAckRejection.INVALIDATED)
@@ -724,7 +765,15 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
         if (value.queueScoped && hasCompetingQueueAuthority(value.receipt.key, pendingID = value.receipt.pendingSendId)) {
             return DirectPendingCompletionResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
         }
+        val recoveredClaim = if (value.receipt.reason == DirectPendingCompletionReason.DeliveredQueuedRecovery) {
+            recoverableDeliveredQueueClaim(value.receipt.key, value.receipt.pendingSendId)
+                ?: return DirectPendingCompletionResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
+        } else null
         store.pending.remove(EntityKey(value.receipt.key.radioId, value.receipt.pendingSendId))
+        recoveredClaim?.let {
+            it.receipt = it.receipt.copy(pendingCompletions = (it.receipt.pendingCompletions +
+                DirectAckPendingReceipt(completionRequestId, value.receipt.pendingSendId)).snapshot())
+        }
         value.receipt = value.receipt.copy(completedRequestId = completionRequestId, pending = null)
         return DirectPendingCompletionResult.Applied(completionReceipt(value))
     }

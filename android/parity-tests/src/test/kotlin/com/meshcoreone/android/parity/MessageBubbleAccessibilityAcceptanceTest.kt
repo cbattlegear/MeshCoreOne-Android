@@ -357,8 +357,7 @@ class MessageBubbleAccessibilityAcceptanceTest : RoomProcessTest() {
 
         suspend fun mount(channel: Boolean, direct: ContactDTO? = null) {
             if (channel) {
-                val selected = ChannelDTO(radioId = radio, index = 1u, name = "Original bubble channel")
-                store.saveChannel(selected)
+                val selected = seedReconciledChannel(ChannelDTO(radioId = radio, index = 1u, name = "Original bubble channel"))
                 h.container.navigation.navigateToChannel(selected)
             } else h.container.navigation.navigateToChat(requireNotNull(direct))
             val destination = h.container.navigation.state.value.activeStack.last().destination

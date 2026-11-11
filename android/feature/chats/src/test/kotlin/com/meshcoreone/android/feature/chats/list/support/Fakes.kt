@@ -51,6 +51,7 @@ internal class FakeData : ChatListDataSource {
     var failFavoriteWrites: Exception? = null
     var conversationFetchGate: (suspend () -> Unit)? = null
     var roomFetchGate: (suspend () -> Unit)? = null
+    var channelPreviewGate: (suspend () -> Unit)? = null
     val calls = mutableListOf<String>()
 
     override suspend fun fetchConversations(radioId: RadioId): List<ContactDTO> {
@@ -68,8 +69,17 @@ internal class FakeData : ChatListDataSource {
     }
     override suspend fun fetchContacts(radioId: RadioId) = contacts
     override suspend fun fetchLastMessages(contactIds: List<UUID>, limit: Int) = contactMessages
-    override suspend fun fetchLastChannelMessages(channels: List<ChatChannelKey>, limit: Int) = channelMessages
-    override suspend fun fetchFailedSendConversationKeys(radioId: RadioId) = failedSend
+    override suspend fun fetchLastChannelMessages(channels: List<ChatChannelKey>, limit: Int): Map<UUID, List<MessageDTO>> {
+        val fetched = channelMessages
+        channelPreviewGate?.invoke()
+        return fetched
+    }
+    var failedSendGate: (suspend () -> Unit)? = null
+    override suspend fun fetchFailedSendConversationKeys(radioId: RadioId, channels: List<ChatChannelKey>): FailedSendConversationKeys {
+        val fetched = failedSend
+        failedSendGate?.invoke()
+        return fetched
+    }
     override suspend fun setContactMuted(contactId: UUID, isMuted: Boolean) { calls += "muted:$contactId:$isMuted" }
     override suspend fun setChannelNotificationLevel(channelId: UUID, level: NotificationLevel) { calls += "level:$channelId:$level" }
     override suspend fun setSessionNotificationLevel(sessionId: UUID, level: NotificationLevel) { calls += "slevel:$sessionId:$level" }

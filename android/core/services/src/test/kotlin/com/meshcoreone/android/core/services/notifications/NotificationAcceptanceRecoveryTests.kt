@@ -209,6 +209,7 @@ class NotificationAcceptanceRecoveryTests {
         val holding = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
         try {
+            if (channel) h.store.seedChannelCreation()
             h.start()
             n.store.contacts[h.contact.key] = h.contact
             h.transport.beforeReply = {
@@ -253,16 +254,17 @@ class NotificationAcceptanceRecoveryTests {
     private fun acceptedReply(channel: Boolean) = runTest {
         val h = Harness(this)
         val n = NotificationHarness(this, RADIO).authorize()
+        val reached = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
         try {
+            if (channel) h.store.seedChannelCreation()
             h.start()
             n.store.contacts[h.contact.key] = h.contact
             val handler = NotificationActionHandler(n.store, sender(h), n.service, n.rooms, n.sync)
             handler.configure({ true }, { "Me" })
             val receipt = NotificationActionReceipt()
-            val reached = CompletableDeferred<Unit>()
-            val release = CompletableDeferred<Unit>()
             h.store.before = { operation ->
-                if (operation == if (channel) "updateMessageStatus" else "updateMessageAck") {
+                if (operation == if (channel) "completeAcceptedQueuedChannelAttempt" else "updateMessageAck") {
                     reached.complete(Unit)
                     withContext(NonCancellable) { release.await() }
                 }
@@ -283,7 +285,10 @@ class NotificationAcceptanceRecoveryTests {
             assertTrue(n.delivery.posted.isEmpty())
             assertEquals(1, n.sync.notifications)
             assertTrue(receipt.preventsReplay)
-        } finally { h.close() }
+        } finally {
+            release.complete(Unit)
+            h.close()
+        }
     }
 
     @Test fun completedSessionChildCannotLoseItsAcceptanceReceiptAtAwaitHandoff() = runTest {
@@ -352,6 +357,7 @@ class NotificationAcceptanceRecoveryTests {
         val h = Harness(this)
         val n = NotificationHarness(this, RADIO).authorize()
         try {
+            h.store.seedChannelCreation()
             h.start()
             h.transport.beforeReply = {
                 if (it[0] == CommandCode.SEND_CHANNEL_MESSAGE.rawValue) awaitCancellation()

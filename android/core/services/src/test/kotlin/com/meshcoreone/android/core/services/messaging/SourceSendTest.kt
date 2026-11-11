@@ -137,10 +137,12 @@ class SourceSendTest {
             assertEquals(MessageDirection.OUTGOING, m.direction); assertEquals(MessageStatus.FAILED, m.status); h.close()
         },
         original("MessageServiceSendTests", "createPendingChannelMessage saves to dataStore with pending status") {
-            val h = Harness(this, sessionTimeout = 5.0); val m = h.service.createPendingChannelMessage("Hello channel", 0u, RADIO)
+            val h = Harness(this, sessionTimeout = 5.0); val origin = h.store.seedChannelCreation()
+            val m = h.service.createPendingChannelMessage("Hello channel", 0u, RADIO)
             assertEquals(MessageStatus.PENDING, m.status); assertEquals(MessageDirection.OUTGOING, m.direction)
             assertEquals("Hello channel", m.text); assertEquals(0.toUByte(), m.channelIndex); assertEquals(RADIO, m.radioId)
             assertNull(m.contactID)
+            assertEquals(origin.occupantID, m.channelOccupantID)
             val stored = assertNotNull(h.store.fetchMessage(EntityKey(RADIO, m.id)))
             assertEquals(MessageStatus.PENDING, stored.status)
             assertEquals(m, h.stored(m.id)); h.close()
@@ -153,6 +155,7 @@ class SourceSendTest {
         },
         original("MessageServiceSendTests", "createPendingChannelMessage accepts user text that fills the composed cap") {
             val h = Harness(this, sessionTimeout = 5.0); h.store.saveDevice(sourceDevice(h))
+            h.store.seedChannelCreation()
             val text = "a".repeat(ProtocolLimits.maxChannelMessageLength(4).toInt())
             val m = h.service.createPendingChannelMessage(text, 0u, RADIO); assertEquals(text, m.text)
             assertEquals(MessageStatus.PENDING, m.status); h.close()
@@ -171,7 +174,8 @@ class SourceSendTest {
             }.error); h.close()
         },
         original("MessageServiceSendTests", "sendPendingChannelMessage sets failed status on send error") {
-            val h = Harness(this, sessionTimeout = 5.0); val m = h.service.createPendingChannelMessage("Hello channel", 0u, RADIO)
+            val h = Harness(this, sessionTimeout = 5.0); h.store.seedChannelCreation()
+            val m = h.service.createPendingChannelMessage("Hello channel", 0u, RADIO)
             assertEquals(MessageStatus.PENDING, m.status)
             assertFailsWith<MessageServiceException> { h.service.sendPendingChannelMessage(m.id) }
             assertEquals(MessageStatus.FAILED, assertNotNull(h.store.fetchMessage(EntityKey(RADIO, m.id))).status); h.close()

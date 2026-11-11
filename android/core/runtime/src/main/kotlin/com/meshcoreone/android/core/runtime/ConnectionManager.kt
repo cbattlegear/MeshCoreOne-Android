@@ -5,6 +5,7 @@ package com.meshcoreone.android.core.runtime
 
 import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.model.*
+import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
 import com.meshcoreone.android.core.protocol.event.ConnectionState
@@ -131,6 +132,9 @@ class ConnectionManager(
         var callbacks: AutoCloseable? = null
         var session: MeshCoreSession? = null
         var token: SessionToken? = null
+        var channelDispatchAdmission: ChannelDispatchAdmission? = null
+        var identityContinuationAdmission: ChannelDispatchAdmission? = null
+        var identityImportOriginalKey: Bytes? = null
         var device: DeviceDTO? = null
         var deviceEditSequence = 0L
         var ownership: FactoryOwnership? = null
@@ -159,6 +163,11 @@ class ConnectionManager(
         var channelOperationsRetired = false
         var channelOperationsDrained: CompletableDeferred<Unit>? = null
         val registrationReady = CompletableDeferred<Unit>()
+
+        fun revokeChannelAdmissions() {
+            channelDispatchAdmission?.revoke()
+            identityContinuationAdmission?.revoke()
+        }
     }
 
     /**
@@ -559,6 +568,7 @@ class ConnectionManager(
             val owner = active
             check(owner != null && isCurrent(owner) && owner.job.isActive && hasLiveEstablishmentLocked(owner) &&
                 !owner.channelOperationsRetired && owner.target != ConnectionTarget.Simulator &&
+                owner.identityHandoff?.isCompleted != false &&
                 owner.token == token && owner.session === session && token.radioId == radioId &&
                 owner.device?.radioId == radioId &&
                 values.value.token == token && values.value.state.isConnected &&
@@ -611,6 +621,7 @@ class ConnectionManager(
     }
 
     private fun retireChannelOperationsLocked(owner: RadioGeneration): CompletableDeferred<Unit> {
+        owner.revokeChannelAdmissions()
         owner.channelOperationsRetired = true
         return owner.channelOperationsDrained ?: CompletableDeferred<Unit>().also { drained ->
             // This new deferred has no waiters until it is published below.
@@ -1164,6 +1175,7 @@ class ConnectionManager(
                     owner.sawConnected = true
                     publishFor(owner, DeviceConnectionState.CONNECTED, transport = state)
                 } else if (owner.sawConnected && (state == ConnectionState.Disconnected || state is ConnectionState.Failed)) {
+                    synchronized(lock) { owner.revokeChannelAdmissions() }
                     dispatch(owner, "session.terminal") {
                         if (isCurrent(owner)) handleConnectionLoss(owner, (state as? ConnectionState.Failed)?.error)
                     }
@@ -1211,7 +1223,11 @@ class ConnectionManager(
         val prior = existing ?: byKey
         val radioId = prior?.radioId ?: RadioId(DeviceIdentity.deriveUUID(info.publicKey))
         val token = SessionToken(processEpoch, Generation(owner.number), radioId)
-        synchronized(lock) { requireCurrent(owner); owner.token = token }
+        val channelAdmission = synchronized(lock) {
+            requireCurrent(owner)
+            owner.token = token
+            ChannelDispatchAdmission(token, session).also { owner.channelDispatchAdmission = it }
+        }
         // Swift: `(try? autoAddConfigResult) ?? AutoAddConfig(bitmask: 0)`. Older firmware reports a typed
         // DeviceError; any other failure is likewise non-fatal, but reported rather than silently defaulted (A-04).
         val autoAdd = bestEffort(
@@ -1230,7 +1246,7 @@ class ConnectionManager(
         // generation (requireCurrent throws before the factory allocates anything) or it sees and closes it.
         synchronized(lock) { requireCurrent(owner); owner.device = device; owner.ownership = ownership }
         val services = serviceFactory.create(RuntimeServiceInputs(
-            SessionInputs(token, session, this, owner.scope), device,
+            SessionInputs(token, session, this, owner.scope, channelAdmission), device,
             serviceCallbacks(owner, token),
             transportType = link.type,
             publication = RuntimePublicationAuthority(this, owner, session, token, ownership, publicationRegistry),
@@ -1333,15 +1349,17 @@ class ConnectionManager(
         if (device.publicKey.size != ProtocolLimits.PUBLIC_KEY_SIZE) throw ConnectionError.InvalidIdentity()
         val token = SessionToken(processEpoch, Generation(owner.number), device.radioId)
         val ownership = FactoryOwnership(token)
+        val channelAdmission = ChannelDispatchAdmission(token, session)
         synchronized(lock) {
             requireCurrent(owner)
             owner.token = token
+            owner.channelDispatchAdmission = channelAdmission
             owner.device = device
             owner.ownership = ownership
         }
         val services = serviceFactory.create(
             RuntimeServiceInputs(
-                SessionInputs(token, session, this, owner.scope), device, serviceCallbacks(owner, token),
+                SessionInputs(token, session, this, owner.scope, channelAdmission), device, serviceCallbacks(owner, token),
                 transportType = link.type,
                 publication = RuntimePublicationAuthority(this, owner, session, token, ownership, publicationRegistry),
             ),
@@ -1390,13 +1408,42 @@ class ConnectionManager(
                 check(owner.identityHandoff?.isCompleted != false || owner.identityHandoff === handoff) {
                     "An identity import already owns this connection"
                 }
+                check(owner.channelDispatchAdmission?.isPaused == false) { "An identity import already paused channel admission" }
                 owner.identityHandoff = handoff
+                owner.identityImportOriginalKey = checkNotNull(owner.device).publicKey
+                checkNotNull(owner.channelDispatchAdmission).pause()
             }
         },
         reconcileIdentity = { handoff -> reconcileIdentity(token, handoff) },
         recoverIdentity = { handoff ->
             val current = synchronized(lock) { (active ?: retained)?.takeIf { it.token == token && ownsIdentityRecovery(it) } }
             if (current != null) scheduleIdentityRebuild(current, handoff) else staleIdentity(token)
+        },
+        identityImportAdmission = { handoff ->
+            synchronized(lock) {
+                requireCurrent(owner)
+                check(owner.identityHandoff === handoff && !handoff.isCompleted)
+                val original = checkNotNull(owner.channelDispatchAdmission)
+                check(original.isPaused && original.inFlightCount == 0L && !original.isRevoked)
+                val info = checkNotNull(owner.session?.currentSelfInfo)
+                val effective = checkNotNull(owner.device)
+                check(effective.publicKey == info.publicKey) { "Identity continuation requires persisted self-info" }
+                if (owner.identityImportOriginalKey == info.publicKey && effective.radioId == token.radioId) {
+                    original.resume()
+                    original
+                } else {
+                    owner.identityContinuationAdmission ?: ChannelDispatchAdmission(
+                        token.copy(radioId = effective.radioId), checkNotNull(owner.session),
+                    ).also { owner.identityContinuationAdmission = it }
+                }
+            }
+        },
+        finishIdentityImport = { unchanged ->
+            synchronized(lock) {
+                owner.identityContinuationAdmission?.revoke()
+                owner.identityContinuationAdmission = null
+                if (unchanged && isCurrent(owner)) owner.channelDispatchAdmission?.resume()
+            }
         },
     )
 
@@ -1523,6 +1570,7 @@ class ConnectionManager(
         }
         val old = synchronized(lock) {
             active?.also {
+                it.revokeChannelAdmissions()
                 active = null
                 retained = it
                 deviceValue = null
@@ -1705,6 +1753,7 @@ class ConnectionManager(
         val owner = synchronized(lock) {
             if (connectionIntent.wantsConnection) rebuildFailures++
             (active ?: retained).also {
+                it?.revokeChannelAdmissions()
                 active = null
                 retained = it
                 deviceValue = null
@@ -1969,7 +2018,12 @@ class ConnectionManager(
 
     private fun startShutdown(cause: Throwable?, except: Job? = null): Deferred<TeardownReport> = synchronized(lock) {
         shutdown ?: cleanupScope.async(start = CoroutineStart.LAZY) {
-            synchronized(lock) { closed = true; revision++ }
+            synchronized(lock) {
+                closed = true
+                revision++
+                active?.revokeChannelAdmissions()
+                retained?.revokeChannelAdmissions()
+            }
             reconnectionCoordinator.close()
             stopReconnectionWatchdog()
             stopWiFiReconnection()
@@ -2256,6 +2310,7 @@ class ConnectionManager(
             if (!isRelevant(owner) || owner.lossHandled || disconnectPhysical && !isCurrent(owner)) null
             else {
                 val before = values.value
+                owner.revokeChannelAdmissions()
                 owner.lossHandled = true
                 owner.correlationAccounting?.cancel()
                 if (disconnectPhysical) owner.physicalEnding = true

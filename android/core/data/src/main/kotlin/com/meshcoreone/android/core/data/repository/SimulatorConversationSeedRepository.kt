@@ -99,12 +99,12 @@ internal suspend fun RepositoryTransaction.seedDeferredSimulatorConversation(
                 parents += SimulatorParentReadback.Channel(parent, applied)
                 if (contents == null) {
                     SimulatorConversationSeedResult.PreservedExisting(
-                        SimulatorConversationParent.Channel(applied.toDTO()),
+                        SimulatorConversationParent.Channel(with(channels) { transaction.channelWithOrigin(applied) }),
                     )
                 } else {
                     created = contents
                     val actualResult = SimulatorConversationSeedResult.Created(
-                        SimulatorConversationParent.Channel(applied.toDTO()),
+                        SimulatorConversationParent.Channel(with(channels) { transaction.channelWithOrigin(applied) }),
                         applySimulatorConversationContents(contents),
                     )
                     save()
@@ -290,7 +290,9 @@ internal suspend fun RepositoryTransaction.seedSimulatorConversation(
             val plan = with(channels) { transaction.prepareSimulatorChannel(parent.channel) }
             if (plan is ChannelRepository.SimulatorChannelSeedPlan.Existing) {
                 val actual = with(channels) { transaction.applySimulatorChannel(plan) }
-                SimulatorConversationSeedResult.PreservedExisting(SimulatorConversationParent.Channel(actual.toDTO()))
+                SimulatorConversationSeedResult.PreservedExisting(
+                    SimulatorConversationParent.Channel(with(channels) { transaction.channelWithOrigin(actual) }),
+                )
             } else {
                 val contents = prepareSimulatorConversationContents(seed)
                 val actual = with(channels) { transaction.applySimulatorChannel(plan) }
@@ -302,7 +304,9 @@ internal suspend fun RepositoryTransaction.seedSimulatorConversation(
                         database.channels().simulatorSlotCohort(actual.radioId, actual.index).singleOrNull() == actual,
                 )
                 save()
-                SimulatorConversationSeedResult.Created(SimulatorConversationParent.Channel(actual.toDTO()), messages)
+                SimulatorConversationSeedResult.Created(
+                    SimulatorConversationParent.Channel(with(channels) { transaction.channelWithOrigin(actual) }), messages,
+                )
             }
         }
     }

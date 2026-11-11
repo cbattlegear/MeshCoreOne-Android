@@ -46,6 +46,8 @@ data class ChannelDTO(
     val isFavorite: Boolean = false,
     val floodScopeModeRawValue: String = "inherit",
     val regionScope: String? = null,
+    // Android-only lookup witness; never inferred from the reusable row ID or backup data.
+    val occupantID: UUID? = null,
 ) {
     val floodScope: ChannelFloodScope get() = ChannelFloodScopeStorage(floodScopeModeRawValue, regionScope).scope
     val isMuted: Boolean get() = notificationLevel == NotificationLevel.MUTED
@@ -62,7 +64,10 @@ data class ChannelDTO(
         copy(notificationLevel = level).withFloodScope(floodScope)
 
     fun withFavorite(favorite: Boolean): ChannelDTO = copy(isFavorite = favorite).withFloodScope(floodScope)
-    fun updating(info: ChannelInfo): ChannelDTO = copy(name = info.name, secret = info.secret)
+    fun updating(info: ChannelInfo): ChannelDTO = copy(
+        name = info.name, secret = info.secret,
+        occupantID = occupantID.takeIf { info.index == index && info.secret == secret },
+    )
     fun toChannelInfo(): ChannelInfo = ChannelInfo(index, name, secret)
 
     companion object {

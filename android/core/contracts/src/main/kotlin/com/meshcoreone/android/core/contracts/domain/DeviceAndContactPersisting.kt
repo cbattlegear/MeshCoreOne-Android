@@ -250,6 +250,8 @@ interface ChannelPersisting {
     /** Scoped facade only: commit unresolved authority before SET; only authoritative radio reconciliation clears it. */
     suspend fun beginChannelMutation(radioId: RadioId, index: UByte)
     suspend fun fetchChannels(radioId: RadioId): SnapshotList<ChannelDTO>
+    /** Optional stable display provenance, never command authority or inferred from a row UUID. */
+    suspend fun fetchChannelsForDisplay(radioId: RadioId): SnapshotList<ChannelDTO>
     suspend fun fetchChannel(radioId: RadioId, index: UByte): ChannelDTO?
     suspend fun fetchChannel(key: EntityKey): ChannelDTO?
     suspend fun saveChannel(radioId: RadioId, info: ChannelInfo): UUID

@@ -311,6 +311,29 @@ class ChannelOccupantPersistenceTest : RepositoryTest() {
         assertNotEquals(original.occupantID, assertNotNull(store.fetchChannelOccupantID(RADIO_A, 5u)))
     }
 
+    @Test fun displayIncarnationSurvivesOnlyWitnessWithdrawalAndNeverReusedRowRecreation() = runTest {
+        store.saveChannel(RADIO_A, info())
+        val original = store.fetchChannelsForDisplay(RADIO_A).single()
+        val incarnation = assertNotNull(original.displayIncarnationID)
+        assertEquals(original.occupantID, incarnation)
+        store.withChannelOperation { scoped, _ ->
+            scoped.beginChannelMutation(RADIO_A, 5u)
+            val during = store.fetchChannelsForDisplay(RADIO_A).single()
+            assertNull(during.occupantID)
+            assertEquals(incarnation, during.displayIncarnationID)
+            assertNull(scoped.fetchChannelOccupantSnapshot(RADIO_A, 5u))
+            assertNull(scoped.fetchChannelOccupantID(RADIO_A, 5u))
+            scoped.deleteChannel(EntityKey(RADIO_A, original.id))
+        }
+        store.saveChannel(original)
+        val replacement = store.fetchChannelsForDisplay(RADIO_A).single()
+        assertEquals(original.id, replacement.id)
+        assertEquals(original.name, replacement.name)
+        assertEquals(original.secret, replacement.secret)
+        assertNull(replacement.occupantID, "Replayed display data must not restore command authority")
+        assertNotEquals(incarnation, assertNotNull(replacement.displayIncarnationID))
+    }
+
     @Test fun aDirectWriterCannotEnterBetweenRadioAcceptanceAndTheScopedPersistenceCommit() = runTest {
         val gate = ChannelIdentityMutex()
         val writer = RoomPersistenceStore(db, owner, clock, channelIdentityMutation = gate)

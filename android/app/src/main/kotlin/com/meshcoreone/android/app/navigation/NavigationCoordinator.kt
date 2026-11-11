@@ -313,6 +313,41 @@ class NavigationCoordinator(initial: NavigationState = NavigationState()) {
         it.withChannelSelection(channel, scrollToMessageID)
     }
 
+    internal fun captureChannelSelectionCleanup(channel: ChannelDTO): () -> Boolean {
+        val original = mutableState.snapshot()
+        val stack = original.value.stacks.getValue(AppTab.CHATS)
+        val entry = stack.last()
+        val selection = (entry.destination as? NavigationDestination.Chat)?.selection as? ChatSelection.Channel
+        val target = selection?.channel
+        val matches = target != null && channel.occupantID != null &&
+            target.radioId == channel.radioId && target.index == channel.index && target.id == channel.id &&
+            target.occupantID == channel.occupantID && target.secret == channel.secret &&
+            target.isEnabled == channel.isEnabled
+        return {
+            if (!matches) false else clearChannelSelectionIfExactOriginal(original, entry)
+        }
+    }
+
+    private fun clearChannelSelectionIfExactOriginal(
+        original: NavigationStateStore.Snapshot, entry: NavigationEntry,
+    ): Boolean {
+        val selection = (entry.destination as? NavigationDestination.Chat)?.selection ?: return false
+        while (true) {
+            val snapshot = mutableState.snapshot()
+            val current = snapshot.value
+            val stack = current.stacks.getValue(AppTab.CHATS)
+            if (current.generation != original.value.generation || current.radioId != original.value.radioId ||
+                current.boundSessionToken != original.value.boundSessionToken ||
+                snapshot.entryBirthRevisions[entry.id] != original.entryBirthRevisions[entry.id] ||
+                stack.last() != entry || current.chatsSelectedRoute != selection
+            ) return false
+            val retained = current.withRetainedStack(AppTab.CHATS, stack.dropLast(1))
+            val next = retained.copy(selectedTab = current.selectedTab,
+                tabBarVisible = if (current.selectedTab == AppTab.CHATS) retained.tabBarVisible else current.tabBarVisible)
+            if (mutableState.compareAndSet(snapshot, next)) return true
+        }
+    }
+
     internal fun navigateToChannelWhen(channel: ChannelDTO, isCurrent: () -> Boolean): Boolean =
         updateIfCurrent(isCurrent) { it.withChannelSelection(channel, null) }
 

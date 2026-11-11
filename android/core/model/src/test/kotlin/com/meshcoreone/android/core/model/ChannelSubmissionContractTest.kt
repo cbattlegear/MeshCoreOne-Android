@@ -17,6 +17,19 @@ class ChannelSubmissionContractTest {
     private val pendingID = UUID(0, 4)
     private val text = "original \uD83D\uDC4B e\u0301\n"
 
+    @Test fun displayIncarnationNeverCreatesCommandAuthorityAndCannotSurviveAKeyChange() {
+        val displayed = ChannelDTO(radioId = radio, index = 7u, name = "shown",
+            secret = Bytes(ByteArray(16) { 1 }), displayIncarnationID = origin.expectedOccupantID)
+        assertNull(displayed.occupantID)
+        assertEquals(displayed.displayIncarnationID, displayed.withFavorite(true).displayIncarnationID)
+        assertEquals(displayed.displayIncarnationID,
+            displayed.updating(displayed.toChannelInfo().copy(name = "renamed")).displayIncarnationID)
+        assertNull(displayed.updating(displayed.toChannelInfo().copy(secret = Bytes(ByteArray(16) { 2 }))).displayIncarnationID)
+        assertNull(displayed.updating(displayed.toChannelInfo().copy(index = 8u)).displayIncarnationID)
+        assertNotEquals(displayed, displayed.copy(displayIncarnationID = UUID(0, 9)))
+        assertNotEquals(displayed, displayed.copy(displayIncarnationID = null))
+    }
+
     @Test fun displayedWitnessSurvivesOnlyIdentityPreservingUpdatesAndParticipatesInEquality() {
         val channel = ChannelDTO(radioId = radio, index = 7u, name = "shown",
             secret = Bytes(ByteArray(16) { 1 }), occupantID = origin.expectedOccupantID)

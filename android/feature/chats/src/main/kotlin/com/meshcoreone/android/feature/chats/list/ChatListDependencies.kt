@@ -46,8 +46,9 @@ interface ChatListDataSource {
 interface ChatConversationServices {
     /** Pushes the favorite flag to the device and returns once it is confirmed. */
     suspend fun setContactFavorite(contactId: UUID, isFavorite: Boolean)
-    suspend fun clearChannel(radioId: RadioId, index: UByte)
-    suspend fun removeDeliveredNotifications(radioId: RadioId, channelIndex: UByte)
+    suspend fun clearChannel(channel: ChannelDTO)
+    /** Captures exact posts before clear; the returned cleanup must run only after clear succeeds. */
+    suspend fun captureChannelNotificationCleanup(channel: ChannelDTO): suspend () -> Unit
 
     /** Leaves the room session then removes its backing contact. */
     suspend fun leaveRoom(session: RemoteNodeSessionDTO)
@@ -75,6 +76,8 @@ interface ChatListNavigation {
     val pendingRoomAuthentication: StateFlow<RemoteNodeSessionDTO?>
     /** Acknowledges only when the shell still owns this route as its current pending hand-off. */
     fun acknowledgePendingRoute(route: ChatRoute): Boolean
+    /** Capture at action time; completion compares and clears inside the authoritative navigation owner. */
+    fun captureChannelSelectionCleanup(channel: ChannelDTO): () -> Boolean
     fun clearPendingRoomAuthentication()
 }
 

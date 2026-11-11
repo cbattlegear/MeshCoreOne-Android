@@ -394,8 +394,8 @@ class FailedSendBadgeRecoveryOriginalTest : RoomProcessTest() {
     }
 
     private suspend fun channel(index: Int): ChannelDTO =
-        ChannelDTO(radioId = radio, index = index.toUByte(), name = "General", secret = Bytes.EMPTY,
-            lastMessageDate = NOW).also { store.saveChannel(it) }
+        seedReconciledChannel(ChannelDTO(radioId = radio, index = index.toUByte(), name = "General", secret = Bytes.EMPTY,
+            lastMessageDate = NOW))
 
     private suspend fun room(): RemoteNodeSessionDTO {
         val id = UUID.randomUUID()
@@ -405,10 +405,11 @@ class FailedSendBadgeRecoveryOriginalTest : RoomProcessTest() {
         ).also { store.saveRemoteNodeSessionDTO(it) }
     }
 
-    private fun message(contactID: UUID? = null, channelIndex: UByte? = null) = MessageDTO(
+    private suspend fun message(contactID: UUID? = null, channelIndex: UByte? = null) = MessageDTO(
         radioId = radio, contactID = contactID, channelIndex = channelIndex, text = "hello",
         timestamp = 1_700_000_000u, createdAt = NOW, direction = MessageDirection.OUTGOING,
         status = MessageStatus.FAILED,
+        channelOccupantID = channelIndex?.let { store.fetchChannel(radio, it)?.occupantID },
     )
 
     private fun roomMessage(room: RemoteNodeSessionDTO) = RoomMessageDTO(

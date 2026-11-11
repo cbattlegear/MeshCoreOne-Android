@@ -185,7 +185,7 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
             compose.onNodeWithTag(spacerTag(direct), useUnmergedTree = true).assertDoesNotExist()
 
             val outgoing = f.message("Outgoing", 1).copy(
-                direction = MessageDirection.OUTGOING, status = MessageStatus.SENT,
+                direction = MessageDirection.OUTGOING, status = MessageStatus.SENT, channelOccupantID = f.channel.occupantID,
             )
             store.saveMessage(outgoing)
             f.mount()
@@ -300,6 +300,7 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
         private lateinit var content: AppChatContent
         private lateinit var renderedView: View
         lateinit var h: ContainerHarness
+        lateinit var channel: ChannelDTO
         val radio get() = requireNotNull(h.appState.currentRadioId)
 
         suspend fun start() {
@@ -324,6 +325,7 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
             h.manager.connect(h.target())
             h.settle()
             h.assertReady()
+            channel = seedReconciledChannel(ChannelDTO(radioId = radio, index = 1u, name = "Avatar channel"))
         }
 
         fun contact(name: String, seed: Int) = ContactDTO(
@@ -343,8 +345,6 @@ class ChannelAvatarConsumerTest : RoomProcessTest() {
             if (direct != null) {
                 h.container.navigation.navigateToChat(direct)
             } else {
-                val channel = ChannelDTO(radioId = radio, index = 1u, name = "Avatar channel")
-                store.saveChannel(channel)
                 h.container.navigation.navigateToChannel(channel)
             }
             val destination = h.container.navigation.state.value.activeStack.last().destination

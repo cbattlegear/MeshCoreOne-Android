@@ -391,15 +391,16 @@ class FailedSendThreadRecoveryOriginalTest : RoomProcessTest() {
         ).also { store.saveContact(it) }
     }
 
-    private suspend fun channel(index: Int) = ChannelDTO(
+    private suspend fun channel(index: Int) = seedReconciledChannel(ChannelDTO(
         radioId = radio, index = index.toUByte(), name = "General", secret = Bytes.EMPTY, lastMessageDate = NOW,
-    ).also { store.saveChannel(it) }
+    ))
 
     private suspend fun saveMessage(
         contactID: UUID? = null, channelIndex: UByte? = null, status: MessageStatus = MessageStatus.FAILED,
     ) = MessageDTO(
         radioId = radio, contactID = contactID, channelIndex = channelIndex, text = "hello",
         timestamp = 1_700_000_000u, createdAt = NOW, direction = MessageDirection.OUTGOING, status = status,
+        channelOccupantID = channelIndex?.let { store.fetchChannel(radio, it)?.occupantID },
     ).also { store.saveMessage(it) }
 
     private suspend fun saved(message: MessageDTO) =

@@ -39,9 +39,11 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [31, 37], qualifiers = "en-rUS-w1000dp-h1000dp-mdpi")
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 class MapAttributionLayoutTest {
     @get:Rule val compose = createEmptyComposeRule()
     private lateinit var host: ActivityController<ComponentActivity>
@@ -119,7 +121,13 @@ class MapAttributionLayoutTest {
                         it(layouts)
                     }
                 assertEquals(1, layouts.size)
-                assertFalse("Full credit must remain readable: ${provider.label}", layouts.single().hasVisualOverflow)
+                val layout = layouts.single()
+                assertFalse(
+                    "Full credit must remain readable: ${provider.label}, width=$newWidth font=$newFont " +
+                        "direction=$newDirection textSize=${layout.size} lines=${layout.lineCount} " +
+                        "constraints=${layout.layoutInput.constraints} bounds=$bounds viewport=$viewport",
+                    layout.hasVisualOverflow,
+                )
                 assertEquals(newFont, layouts.single().layoutInput.density.fontScale, 0f)
                 credit.performClick()
             }

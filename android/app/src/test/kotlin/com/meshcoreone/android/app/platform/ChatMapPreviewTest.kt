@@ -23,6 +23,7 @@ import com.meshcoreone.android.app.container.RoomProcessTest
 import com.meshcoreone.android.app.content.DataStoreLinkPreviewPreferencesSource
 import com.meshcoreone.android.app.navigation.AppMapSettings
 import com.meshcoreone.android.app.navigation.AppMessageContent
+import com.meshcoreone.android.app.navigation.AppChatMapPreview
 import com.meshcoreone.android.app.navigation.NativeNavigationShell
 import com.meshcoreone.android.app.navigation.chatMapPreviewCoordinate
 import com.meshcoreone.android.core.contracts.AppTab
@@ -74,6 +75,88 @@ class ChatMapPreviewTest : RoomProcessTest() {
     }
 
     @After fun disposeNativeHost() { controller.pause().stop().destroy() }
+
+    @Test fun mountedLoadingCardObservesItsImageAfterMoreThanSixtyFourUnrelatedResolutions() = runTest {
+        assertMountedBurstLiveness(succeeds = true)
+    }
+
+    @Test fun mountedCardObservesItsFailureAndRecoveryAfterMoreThanSixtyFourUnrelatedChanges() = runTest {
+        assertMountedBurstLiveness(succeeds = false)
+    }
+
+    private fun TestScope.assertMountedBurstLiveness(succeeds: Boolean) {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        val visible = MapSnapshotRequest(37.7749, -122.4194, false, false)
+        val release = CompletableDeferred<Unit>()
+        val replacement = CompletableDeferred<Unit>()
+        var calls = 0
+        var visibleCalls = 0
+        val previews = AppChatMapPreviews(context, scope, object : MapSnapshotRenderer<Bitmap> {
+            override suspend fun render(request: MapSnapshotRequest): Bitmap? {
+                calls++
+                if (request == visible) {
+                    if (++visibleCalls > 1) {
+                        replacement.await()
+                        return bitmap()
+                    }
+                    release.await()
+                    return if (succeeds) bitmap() else null
+                }
+                return null
+            }
+        }, online = { true })
+        try {
+            compose.runOnUiThread {
+                controller.get().setContent {
+                    MeshCoreTheme(colorSchemePreference = AppColorSchemePreference.LIGHT, motionScale = 0f) {
+                        AppChatMapPreview(previews, Coordinate(visible.latitude, visible.longitude), {})
+                    }
+                }
+            }
+            compose.onNodeWithTag("chat-map-loading", useUnmergedTree = true).assertIsDisplayed()
+            runCurrent()
+            assertEquals(1, calls)
+            val background = (0 until 70).map { MapSnapshotRequest(1.0, it / 1_000.0, false, false) }
+            background.forEach(previews::request)
+            // Drain the producer burst without pumping the main-thread Compose collector.
+            release.complete(Unit)
+            runCurrent()
+            assertEquals(71, calls)
+            assertTrue(previews.snapshots.isResolved(visible))
+            assertTrue(background.all(previews.snapshots::isResolved))
+            assertEquals(succeeds, previews.snapshots.value(visible) != null)
+            compose.waitUntil(5_000) {
+                compose.onAllNodesWithTag("chat-map-loading", useUnmergedTree = true).fetchSemanticsNodes().isEmpty()
+            }
+            if (succeeds) {
+                compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).assertIsDisplayed()
+                compose.onNodeWithContentDescription(context.getString(M.mapPreviewRetryButtonAccessibilityLabel)).assertDoesNotExist()
+            } else {
+                compose.onNodeWithContentDescription(context.getString(M.mapPreviewRetryButtonAccessibilityLabel)).assertIsDisplayed()
+                compose.onNodeWithTag("chat-map-pin", useUnmergedTree = true).assertDoesNotExist()
+            }
+            assertEquals("A dropped notification must not require another render or remount", 71, calls)
+            if (!succeeds) {
+                compose.runOnIdle { previews.snapshots.clearFailures() }
+                compose.onNodeWithTag("chat-map-loading", useUnmergedTree = true).assertIsDisplayed()
+                runCurrent()
+                assertEquals(2, visibleCalls)
+                assertEquals(72, calls)
+                replacement.complete(Unit)
+                runCurrent()
+                compose.waitUntil(5_000) {
+                    compose.onAllNodesWithTag("chat-map-pin", useUnmergedTree = true).fetchSemanticsNodes().size == 1
+                }
+                compose.onNodeWithTag("chat-map-loading", useUnmergedTree = true).assertDoesNotExist()
+                compose.onNodeWithContentDescription(context.getString(M.mapPreviewRetryButtonAccessibilityLabel)).assertDoesNotExist()
+            }
+        } finally {
+            compose.runOnUiThread { controller.get().setContent {} }
+            previews.close()
+            scope.cancel()
+        }
+    }
 
     @Test fun mountedConversationShowsTheCoordinateCardWithWebPreviewsDisabledAndRoutesToMaps() = runTest {
         assertMountedCoordinateRoutesToMaps(37.7749, -122.4194)

@@ -57,6 +57,7 @@ class AppRemoteNodeCliCompletionTest {
         val requests = mutableListOf<Request>()
         var enabled by mutableStateOf(true)
         var narrow by mutableStateOf(false)
+        var fontScale by mutableStateOf(1f)
     }
 
     private fun mounted(narrow: Boolean = false, test: (Harness) -> Unit) {
@@ -66,8 +67,9 @@ class AppRemoteNodeCliCompletionTest {
             host.get().actionBar?.hide()
             val harness = Harness(host.get(), scope)
             harness.narrow = narrow
+            harness.fontScale = if (narrow) 2f else 1f
             host.get().setContent {
-                CompositionLocalProvider(LocalDensity provides Density(1f, if (harness.narrow) 2f else 1f)) {
+                CompositionLocalProvider(LocalDensity provides Density(1f, harness.fontScale)) {
                     MeshCoreTheme(theme = ThemeRegistry.default, motionScale = 0f) {
                         Box(Modifier.width(if (harness.narrow) 320.dp else 1080.dp)) {
                             AppRemoteNodeCli(harness.fixture.session, { session, command, timeout ->
@@ -234,19 +236,24 @@ class AppRemoteNodeCliCompletionTest {
     }
 
     @Test fun windowAndFontChangesPreserveTheSelectedCandidateWithoutSending() = mounted { harness ->
-        type("log st")
-        repeat(3) { key(Key.Tab) }
-        for (narrow in listOf(true, false)) {
-            compose.runOnIdle { harness.narrow = narrow }
-            suggestion("stop").assertIsSelected().assertIsDisplayed()
-            assertInput("log st")
+        key(Key.Tab)
+        val count = compose.runOnIdle { harness.holder.state.value.terminal.tabSuggestions!!.size }
+        repeat(count) { key(Key.Tab) }
+        suggestion("ver").assertIsSelected().assertIsDisplayed()
+        for ((narrow, fontScale) in listOf(true to 1f, true to 2f, false to 2f, false to 1f)) {
+            compose.runOnIdle {
+                harness.narrow = narrow
+                harness.fontScale = fontScale
+            }
+            suggestion("ver").assertIsSelected().assertIsDisplayed()
+            assertInput("")
             assertNotSubmitted(harness)
         }
         key(Key.Enter)
-        assertInput("log stop ")
+        assertInput("ver ")
         assertNotSubmitted(harness)
         key(Key.Enter)
-        confirm(harness, "log stop")
+        confirm(harness, "ver")
     }
 
     @Test fun unselectedChoicesDoNotInventACandidateOrSurviveAConfirmedSend() = mounted { harness ->

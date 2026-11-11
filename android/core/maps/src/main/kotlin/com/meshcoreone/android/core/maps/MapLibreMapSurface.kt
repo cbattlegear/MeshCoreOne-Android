@@ -65,25 +65,21 @@ fun MapLibreMapSurface(
         MapLibreSurfaceController(context.applicationContext, accessibilityLabel, onCameraChanged, onMarkerSelected)
     }
 
-    Column(modifier.fillMaxSize()) {
-        Box(Modifier.weight(1f)) {
-            AndroidView(
-                factory = {
-                    controller.initialize()
-                    controller.mapView
-                },
-                update = {
-                    controller.callbacks = MapLibreSurfaceCallbacks(onCameraChanged, onMarkerSelected)
-                    controller.mapView.contentDescription = listOf(accessibilityLabel)
-                        .plus(presentation.points.map { it.semanticText }).filter(String::isNotBlank).joinToString("; ")
-                    controller.bindProjection(projection)
-                    controller.render(presentation, clusteringEnabled, labelsEnabled)
-                },
-                modifier = Modifier.fillMaxSize(),
-            )
-            overlay()
-        }
-        MapAttribution(presentation.attribution)
+    MapSurfaceLayout(presentation.attribution, modifier, overlay) {
+        AndroidView(
+            factory = {
+                controller.initialize()
+                controller.mapView
+            },
+            update = {
+                controller.callbacks = MapLibreSurfaceCallbacks(onCameraChanged, onMarkerSelected)
+                controller.mapView.contentDescription = listOf(accessibilityLabel)
+                    .plus(presentation.points.map { it.semanticText }).filter(String::isNotBlank).joinToString("; ")
+                controller.bindProjection(projection)
+                controller.render(presentation, clusteringEnabled, labelsEnabled)
+            },
+            modifier = Modifier.fillMaxSize(),
+        )
     }
 
     DisposableEffect(lifecycle, controller) {
@@ -105,6 +101,22 @@ fun MapLibreMapSurface(
             if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) controller.mapView.onStop()
             controller.destroy()
         }
+    }
+}
+
+@Composable
+fun MapSurfaceLayout(
+    attribution: List<MapProviderAttribution>,
+    modifier: Modifier = Modifier,
+    overlay: @Composable BoxScope.() -> Unit = {},
+    map: @Composable () -> Unit,
+) {
+    Column(modifier.fillMaxSize()) {
+        Box(Modifier.weight(1f)) {
+            map()
+            overlay()
+        }
+        MapAttribution(attribution)
     }
 }
 

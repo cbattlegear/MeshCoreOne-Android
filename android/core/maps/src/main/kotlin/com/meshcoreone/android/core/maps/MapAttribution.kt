@@ -2,7 +2,9 @@
 package com.meshcoreone.android.core.maps
 
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -20,7 +22,8 @@ fun MapAttribution(attribution: List<MapProviderAttribution>, modifier: Modifier
                 TextButton(
                     onClick = { links.openUri(provider.legalUri) },
                     modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp),
-                ) { Text(provider.label) }
+                    contentPadding = PaddingValues(horizontal = 4.dp),
+                ) { Text(provider.label, style = MaterialTheme.typography.labelSmall) }
             }
         }
     }

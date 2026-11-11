@@ -10,14 +10,67 @@ import com.meshcoreone.android.feature.chats.list.ChatChannelKey
 import com.meshcoreone.android.feature.chats.composer.ComposerLocationSource
 import com.meshcoreone.android.feature.chats.composer.ComposerTarget
 import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
+import com.meshcoreone.android.feature.chats.timeline.TimelineEvent
+import com.meshcoreone.android.app.state.MessageEvent
 import java.time.Instant
 import java.util.UUID
 import kotlin.test.*
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import org.junit.Test
 
 class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    @Test fun replacementLiveEventsExcludeOldAcceptedCompletionAndKeepReceivingCurrentMessages() = runTest {
+        val h = ContainerHarness(this, store)
+        val radio = RadioId(UUID.randomUUID())
+        try {
+            store.saveChannel(radio, ChannelInfo(0u, "A", Bytes(ByteArray(16) { 1 })))
+            val a = assertNotNull(store.fetchChannel(radio, 0u))
+            val old = MessageDTO(radioId = radio, channelIndex = 0u, text = "accepted A", timestamp = 100u,
+                status = MessageStatus.PENDING, channelOccupantID = a.occupantID)
+            store.saveChannelMessage(old, ChannelHistoryScope(radio, 0u, assertNotNull(a.occupantID)))
+            val pending = PendingSendDTO.fromEnvelope(
+                ChannelMessageEnvelope(old.id, 0u, false, old.text, old.timestamp, channelOccupantID = a.occupantID),
+                radio,
+            )
+            val attempt = QueuedChannelAttemptKey(radio, pending.id, old.id, UUID.randomUUID())
+            store.beginInlineChannelAttempt(pending, attempt, assertNotNull(a.occupantID), old.timestamp)
+            store.settleQueuedChannelAttempt(attempt, QueuedChannelAttemptOutcome.ACCEPTED)
+            store.saveChannel(radio, ChannelInfo(0u, "B", Bytes(ByteArray(16) { 2 })))
+            val b = assertNotNull(store.fetchChannel(radio, 0u))
+            val timeline = h.container.chatsFeature.timeline(TimelineConversation.Channel(b))
+            val observed = mutableListOf<UUID>()
+            val collector = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+                timeline.events.collect { event ->
+                    when (event) {
+                        is TimelineEvent.MessageReceived -> observed += event.message.id
+                        is TimelineEvent.MessageChanged -> observed += assertNotNull(timeline.data.fetchMessage(event.messageId)).id
+                        else -> Unit
+                    }
+                }
+            }
+            store.completeAcceptedQueuedChannelAttempt(attempt)
+            h.appState.messageEventStream.send(MessageEvent.MessageStatusResolved(old.id, MessageStatus.SENT, null))
+            h.appState.messageEventStream.send(MessageEvent.ChannelMessageReceived(old, 0u))
+            val current = old.copy(id = UUID.randomUUID(), text = "current B", channelOccupantID = b.occupantID)
+            store.saveChannelMessage(current, ChannelHistoryScope(radio, 0u, assertNotNull(b.occupantID)))
+            h.appState.messageEventStream.send(MessageEvent.ChannelMessageReceived(current, 0u))
+            h.appState.messageEventStream.send(MessageEvent.MessageStatusResolved(current.id, MessageStatus.SENT, null))
+            val incoming = current.copy(id = UUID.randomUUID(), text = "incoming B", direction = MessageDirection.INCOMING,
+                channelOccupantID = null)
+            store.saveMessage(incoming)
+            h.appState.messageEventStream.send(MessageEvent.ChannelMessageReceived(incoming, 0u))
+            testScheduler.runCurrent()
+            assertTrue(collector.isActive)
+            assertEquals(listOf(current.id, current.id, incoming.id), observed)
+            assertEquals(MessageStatus.SENT, store.fetchMessage(EntityKey(radio, old.id))?.status)
+        } finally { h.container.close() }
+    }
+
     @Test fun physicalTimelineWindowLookupAndSummaryCannotShowRetainedAAsReplacementB() = runTest {
         val h = ContainerHarness(this, store)
         val radio = RadioId(UUID.randomUUID())
@@ -52,6 +105,10 @@ class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
             assertEquals(0L, store.fetchChannel(radio, b.index)?.unreadCount)
             val summaries = h.container.chatsFeature.listFor(radio).data
             val key = ChatChannelKey(radio, b.index, b.id, b.occupantID)
+            assertEquals(a.id, b.id)
+            assertTrue(summaries.fetchFailedSendConversationKeys(radio,
+                listOf(ChatChannelKey(radio, a.index, a.id, a.occupantID))).channelIDs.isEmpty(),
+                "A still-displayed row cannot receive B's badge before the list refreshes")
             assertEquals(listOf(current), summaries.fetchLastChannelMessages(listOf(key), 3).getValue(b.id))
             val unbound = current.copy(id = UUID.randomUUID(), text = "unbound original", channelOccupantID = null)
             store.saveMessage(unbound)
@@ -67,9 +124,9 @@ class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
             assertEquals(listOf(current, incoming), data.fetchMessageWindow(conversation, at, 1).messages)
             assertEquals(incoming, data.fetchMessage(incoming.id))
             assertEquals(listOf(current, incoming), summaries.fetchLastChannelMessages(listOf(key), 3).getValue(b.id))
-            assertEquals(setOf(b.id), summaries.fetchFailedSendConversationKeys(radio).channelIDs.toSet())
+            assertEquals(setOf(b.id), summaries.fetchFailedSendConversationKeys(radio, listOf(key)).channelIDs.toSet())
             data.markFailedSendsSeen(conversation)
-            assertTrue(summaries.fetchFailedSendConversationKeys(radio).channelIDs.isEmpty())
+            assertTrue(summaries.fetchFailedSendConversationKeys(radio, listOf(key)).channelIDs.isEmpty())
             assertFalse(assertNotNull(store.fetchMessage(EntityKey(radio, old.id))).failureSeen)
             assertFalse(assertNotNull(store.fetchMessage(EntityKey(radio, unbound.id))).failureSeen)
             assertEquals(old.text, store.fetchMessage(EntityKey(radio, old.id))?.text)

@@ -318,7 +318,9 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                     }
                     channel.id to messages
                 }
-            override suspend fun fetchFailedSendConversationKeys(radioId: RadioId): FailedSendConversationKeys {
+            override suspend fun fetchFailedSendConversationKeys(
+                radioId: RadioId, channels: List<ChatChannelKey>,
+            ): FailedSendConversationKeys {
                 val failed = store.fetchFailedSendConversationKeys(radioId)
                 if (radioId == MockDataProvider.simulatorRadioId) return failed
                 val current = mutableSetOf<UUID>()

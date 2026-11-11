@@ -31,7 +31,7 @@ interface ChatListDataSource {
     suspend fun fetchContacts(radioId: RadioId): List<ContactDTO>
     suspend fun fetchLastMessages(contactIds: List<UUID>, limit: Int): Map<UUID, List<MessageDTO>>
     suspend fun fetchLastChannelMessages(channels: List<ChatChannelKey>, limit: Int): Map<UUID, List<MessageDTO>>
-    suspend fun fetchFailedSendConversationKeys(radioId: RadioId): FailedSendConversationKeys
+    suspend fun fetchFailedSendConversationKeys(radioId: RadioId, channels: List<ChatChannelKey>): FailedSendConversationKeys
     suspend fun setContactMuted(contactId: UUID, isMuted: Boolean)
     suspend fun setChannelNotificationLevel(channelId: UUID, level: NotificationLevel)
     suspend fun setSessionNotificationLevel(sessionId: UUID, level: NotificationLevel)

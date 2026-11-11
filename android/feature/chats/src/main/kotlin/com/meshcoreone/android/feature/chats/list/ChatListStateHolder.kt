@@ -459,7 +459,8 @@ class ChatListStateHolder(
         }
         val channels = mutableState.value.channels
         try {
-            val keys = data.fetchFailedSendConversationKeys(radioId)
+            val keys = data.fetchFailedSendConversationKeys(radioId,
+                channels.map { ChatChannelKey(it.radioId, it.index, it.id, it.occupantID) })
             if (generation != failedSendRefreshGeneration || !currentJobActive()) return
             mutableState.update { current ->
                 val latest = current.channels.associateBy { it.id }

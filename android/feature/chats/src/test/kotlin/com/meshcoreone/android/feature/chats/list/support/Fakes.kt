@@ -75,7 +75,7 @@ internal class FakeData : ChatListDataSource {
         return fetched
     }
     var failedSendGate: (suspend () -> Unit)? = null
-    override suspend fun fetchFailedSendConversationKeys(radioId: RadioId): FailedSendConversationKeys {
+    override suspend fun fetchFailedSendConversationKeys(radioId: RadioId, channels: List<ChatChannelKey>): FailedSendConversationKeys {
         val fetched = failedSend
         failedSendGate?.invoke()
         return fetched

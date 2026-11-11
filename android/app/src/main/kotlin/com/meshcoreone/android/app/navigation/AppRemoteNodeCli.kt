@@ -15,6 +15,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.*
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.testTag
@@ -33,6 +34,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntSize
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings as L
 import com.meshcoreone.android.core.model.RemoteNodeSessionDTO
@@ -125,31 +127,38 @@ internal fun AppRemoteNodeCli(
             }
         }
         state.terminal.tabSuggestions?.let { suggestions ->
-            Row(
-                Modifier.fillMaxWidth().horizontalScroll(androidx.compose.foundation.rememberScrollState())
-                    .testTag("remote-cli-suggestions"),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                suggestions.forEachIndexed { index, suggestion ->
-                    // The source vocabulary repeats labels; keyboard selection identifies the slot.
-                    key(index, suggestion) {
-                        val selected = index == state.terminal.tabSelectionIndex
-                        val bringIntoView = remember { BringIntoViewRequester() }
-                        LaunchedEffect(selected) {
-                            if (selected) bringIntoView.bringIntoView()
-                        }
-                        FilterChip(
-                            selected = selected,
-                            onClick = {
-                                if (canSend && !holder.isWaitingForResponse && holder.applySuggestion(suggestion)) {
-                                    controller.onSelectionChanged(holder.currentInput.length)
+            var viewportSize by remember { mutableStateOf(IntSize.Zero) }
+            Box(Modifier.fillMaxWidth().onGloballyPositioned { viewportSize = it.size }) {
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(androidx.compose.foundation.rememberScrollState())
+                        .testTag("remote-cli-suggestions"),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    suggestions.forEachIndexed { index, suggestion ->
+                        // The source vocabulary repeats labels; keyboard selection identifies the slot.
+                        key(index, suggestion) {
+                            val selected = index == state.terminal.tabSelectionIndex
+                            val bringIntoView = remember { BringIntoViewRequester() }
+                            var chipSize by remember { mutableStateOf(IntSize.Zero) }
+                            LaunchedEffect(selected, viewportSize, chipSize) {
+                                if (selected && viewportSize != IntSize.Zero && chipSize != IntSize.Zero) {
+                                    bringIntoView.bringIntoView()
                                 }
-                            },
-                            label = { Text(suggestion) },
-                            enabled = canSend && !state.isWaitingForResponse,
-                            modifier = Modifier.heightIn(min = 48.dp).bringIntoViewRequester(bringIntoView)
-                                .testTag("remote-cli-suggestion:$suggestion"),
-                        )
+                            }
+                            FilterChip(
+                                selected = selected,
+                                onClick = {
+                                    if (canSend && !holder.isWaitingForResponse && holder.applySuggestion(suggestion)) {
+                                        controller.onSelectionChanged(holder.currentInput.length)
+                                    }
+                                },
+                                label = { Text(suggestion) },
+                                enabled = canSend && !state.isWaitingForResponse,
+                                modifier = Modifier.heightIn(min = 48.dp).bringIntoViewRequester(bringIntoView)
+                                    .onGloballyPositioned { chipSize = it.size }
+                                    .testTag("remote-cli-suggestion:$suggestion"),
+                            )
+                        }
                     }
                 }
             }

@@ -227,9 +227,9 @@ class MountedPreviewNetworkConsentTest {
                             previewUrlSafety = safety,
                         )
                     }
-                    return content
                 }
             }
+            return content
         }
     }
 

@@ -7,11 +7,14 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.services.simulator.MockDataProvider
 import com.meshcoreone.android.feature.chats.list.ChatChannelKey
+import com.meshcoreone.android.feature.chats.composer.ComposerLocationSource
+import com.meshcoreone.android.feature.chats.composer.ComposerTarget
 import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
 import java.time.Instant
 import java.util.UUID
 import kotlin.test.*
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.flow.first
 import org.junit.Test
 
 class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
@@ -57,7 +60,7 @@ class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
             assertFailsWith<PersistenceStoreException> { data.fetchMessage(unbound.id) }
             val incoming = current.copy(id = UUID.randomUUID(), text = "original incoming semantics",
                 direction = MessageDirection.INCOMING, status = MessageStatus.SENT, channelOccupantID = null,
-                timestamp = 300u, createdAt = at.plusSeconds(20), sortDate = at.plusSeconds(20))
+                timestamp = 300u, createdAt = at.plusSeconds(20), sortDate = at.plusSeconds(20), senderNodeName = "B sender")
             store.saveMessage(incoming)
             assertEquals(listOf(current, incoming), data.fetchMessages(conversation, 50, 0))
             assertEquals(listOf(incoming), data.fetchMessages(conversation, 1, 0))
@@ -71,8 +74,19 @@ class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
             assertFalse(assertNotNull(store.fetchMessage(EntityKey(radio, unbound.id))).failureSeen)
             assertEquals(old.text, store.fetchMessage(EntityKey(radio, old.id))?.text)
             assertEquals(unbound, store.fetchMessage(EntityKey(radio, unbound.id)))
+            val hints = h.container.chatsFeature.environment(ComposerTarget.Channel(b), backgroundScope,
+                object : ComposerLocationSource {
+                    override val isAuthorized = false
+                    override val currentCoordinate: Coordinate? = null
+                    override suspend fun requestCurrentLocation(timeoutMillis: Long): Coordinate? = null
+                })
+            assertEquals(mapOf("B sender" to 300u), hints.recentSenderOrder.first { it.isNotEmpty() })
             store.saveChannel(radio, ChannelInfo(0u, "C", Bytes(ByteArray(16) { 3 })))
             assertFailsWith<PersistenceStoreException> { data.fetchMessage(incoming.id) }
+            val stale = assertFailsWith<PersistenceStoreException> { data.fetchMessages(conversation, 50, 0) }
+            assertEquals(ChannelHistoryConflict.STALE_OCCUPANT, assertIs<ChannelHistoryRejected>(stale.cause).reason)
+            h.appState.refreshConversations()
+            assertTrue(hints.recentSenderOrder.first { it.isEmpty() }.isEmpty())
         } finally {
             h.container.close()
         }

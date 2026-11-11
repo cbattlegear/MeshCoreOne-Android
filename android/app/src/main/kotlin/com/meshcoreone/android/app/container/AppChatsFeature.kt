@@ -1013,7 +1013,11 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                     .groupBy { checkNotNull(it.senderNodeName) }
                     .mapValues { (_, messages) -> messages.maxOf { it.timestamp } }
             }
-        }.catch { failure -> report("Load recent senders", failure); throw failure }
+        }.catch { failure ->
+            report("Load recent senders", failure)
+            if (failure is PersistenceStoreException && failure.cause is ChannelHistoryRejected) emit(emptyMap())
+            else throw failure
+        }
             .stateIn(screenScope, SharingStarted.Eagerly, emptyMap())
         override val location = location
     }

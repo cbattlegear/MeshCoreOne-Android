@@ -61,6 +61,8 @@ class FailedSendBadgeRecoveryOriginalTest : RoomProcessTest() {
         withRig {
             val channel = channel(4)
             val other = channel(7)
+            assertNotNull(holder.requestConversationReload()).join()
+            queriedRadios.clear()
             store.saveMessage(message(channelIndex = channel.index))
             holder.refreshFailedSendIndicators()
 
@@ -122,6 +124,8 @@ class FailedSendBadgeRecoveryOriginalTest : RoomProcessTest() {
             val contact = contact()
             val channel = channel(2)
             val room = room()
+            assertNotNull(holder.requestConversationReload()).join()
+            queriedRadios.clear()
             store.saveMessage(message(contactID = contact.id))
             store.saveMessage(message(channelIndex = channel.index))
             store.saveRoomMessage(radio, roomMessage(room))

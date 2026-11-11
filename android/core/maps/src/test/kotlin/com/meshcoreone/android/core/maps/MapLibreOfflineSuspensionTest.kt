@@ -123,6 +123,34 @@ class MapLibreOfflineSuspensionTest {
         assertEquals(failure.message, reported?.message)
         assertFalse(region.deleted)
         assertEquals(request.id, backend.packs.value.single().id)
+        region.deletion = null
+        backend.delete(request.id)
+        assertTrue(region.deleted)
+        assertTrue(backend.packs.value.isEmpty())
+    }
+
+    @Test fun repeatedConfirmationWaitsThenRechecksWithoutAnotherNativeDelete() = runBlocking<Unit> {
+        val region = Region(request.id)
+        val completion = CompletableDeferred<Unit>()
+        region.deletion = completion
+        val backend = MapLibreOfflineBackend(MapLibreOpenFreeMap.STYLE_URI, this, Regions(listOf(region)))
+        yield()
+        val first = launch { backend.delete(request.id) }
+        yield()
+        val second = launch { backend.delete(request.id) }
+        yield()
+        try {
+            assertEquals(1, region.deletionCalls)
+            assertFalse(first.isCompleted)
+            assertFalse(second.isCompleted)
+        } finally {
+            completion.complete(Unit)
+        }
+        first.join()
+        second.join()
+        assertEquals(1, region.deletionCalls)
+        assertTrue(region.deleted)
+        assertTrue(backend.packs.value.isEmpty())
     }
 
     @Test fun anotherProviderRetainsCreatePauseResumeDeleteAndCancellation() = runBlocking<Unit> {
@@ -164,12 +192,14 @@ class MapLibreOfflineSuspensionTest {
         val activations = mutableListOf<Boolean>()
         var deleted = false
         var deletionStarted = false
+        var deletionCalls = 0
         var deletion: CompletableDeferred<Unit>? = null
         private var progressListener: (OfflineRegionProgress) -> Unit = {}
         private var failureListener: () -> Unit = {}
         override fun setActive(active: Boolean) { activations += active }
         override suspend fun status() = progress
         override suspend fun delete() {
+            deletionCalls++
             deletionStarted = true
             deletion?.await()
             deleted = true

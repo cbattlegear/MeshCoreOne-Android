@@ -11,6 +11,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
@@ -23,6 +25,7 @@ class MapLibreOfflineBackend internal constructor(
         this(styleUri, scope, NativeMapLibreOfflineRegions(context))
 
     private val regions = mutableMapOf<UUID, MapLibreOfflineRegion>()
+    private val deletionMutex = Mutex()
     private val _packs = MutableStateFlow<List<OfflinePack>>(emptyList())
     override val packs: StateFlow<List<OfflinePack>> = _packs.asStateFlow()
     override val downloadError: OfflineMapError? get() = OpenFreeMapOfflineSuspension.errorFor(styleUri)
@@ -46,12 +49,14 @@ class MapLibreOfflineBackend internal constructor(
     }
 
     override suspend fun delete(packId: UUID) {
-        val region = synchronized(regions) { regions[packId] } ?: return
-        // Native deletion cannot be cancelled; finish its callback and bookkeeping after panel dismissal.
-        withContext(NonCancellable) {
-            region.delete()
-            synchronized(regions) { regions.remove(packId) }
-            _packs.update { current -> current.filterNot { it.id == packId } }
+        deletionMutex.withLock {
+            val region = synchronized(regions) { regions[packId] } ?: return@withLock
+            // Native deletion cannot be cancelled; finish its callback and bookkeeping after panel dismissal.
+            withContext(NonCancellable) {
+                region.delete()
+                synchronized(regions) { regions.remove(packId) }
+                _packs.update { current -> current.filterNot { it.id == packId } }
+            }
         }
     }
 

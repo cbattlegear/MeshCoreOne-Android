@@ -165,6 +165,7 @@ class AppRemoteNodeCliCompletionTest {
                 val before = harness.requests.size
                 suggestion(chosen).assertHeightIsAtLeast(48.dp).performScrollTo().performClick()
                 assertInput("log $chosen ")
+                input().assertIsFocused()
                 compose.onNodeWithTag("remote-cli-suggestions").assertDoesNotExist()
                 compose.onNode(isDialog()).assertDoesNotExist()
                 compose.runOnIdle { assertEquals(before, harness.requests.size) }

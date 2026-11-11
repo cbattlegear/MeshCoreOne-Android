@@ -14,6 +14,8 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalResources
@@ -70,6 +72,7 @@ internal fun AppRemoteNodeCli(
         }, errors = appCliErrors)
     }
     val controller = remember(holder) { CliTerminalController(holder, scope) }
+    val inputFocus = remember { FocusRequester() }
     val state by holder.state.collectAsStateWithLifecycle()
     val terminal by controller.state.collectAsStateWithLifecycle()
     var pending by remember { mutableStateOf<String?>(null) }
@@ -150,6 +153,7 @@ internal fun AppRemoteNodeCli(
                                 onClick = {
                                     if (canSend && !holder.isWaitingForResponse && holder.applySuggestion(suggestion)) {
                                         controller.onSelectionChanged(holder.currentInput.length)
+                                        inputFocus.requestFocus()
                                     }
                                 },
                                 label = { Text(suggestion) },
@@ -166,7 +170,7 @@ internal fun AppRemoteNodeCli(
         OutlinedTextField(
             TextFieldValue(state.terminal.currentInput, TextRange(terminal.cursorPosition)),
             { controller.onTextChanged(it.text.replace("\n", ""), it.selection.end) },
-            Modifier.fillMaxWidth().testTag("remote-cli-input").onPreviewKeyEvent { event ->
+            Modifier.fillMaxWidth().focusRequester(inputFocus).testTag("remote-cli-input").onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown || !canSend) false
                 else when (event.key) {
                     Key.DirectionUp -> { controller.onHistoryUp(); true }

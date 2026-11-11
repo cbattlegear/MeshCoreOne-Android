@@ -62,9 +62,9 @@ class ChannelAttemptRecoveryTest {
                 }
                 runCurrent()
                 assertFailsWith<CancellationException> { call.await() }
-                val cancelled = assertNotNull(observedCancellation)
-                val retained = generateSequence<Throwable>(cancelled) { it.cause }
-                    .flatMap { it.suppressed.asSequence() }.filterIsInstance<QueuedChannelRetainedException>().single()
+                assertNotNull(observedCancellation)
+                val retained = diagnostics.filterIsInstance<MessagingDiagnostic.Failure>()
+                    .map { it.cause }.filterIsInstance<QueuedChannelRetainedException>().single()
                 assertSame(failure, retained.cause)
                 if (lostReturn) assertTrue(readFailure in failure.suppressed)
                 assertTrue(diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any { it.cause === retained })

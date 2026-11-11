@@ -11,8 +11,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.InputMode
+import androidx.compose.ui.input.InputModeManager
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalInputModeManager
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
@@ -58,6 +61,7 @@ class AppRemoteNodeCliCompletionTest {
         var enabled by mutableStateOf(true)
         var narrow by mutableStateOf(false)
         var fontScale by mutableStateOf(1f)
+        lateinit var inputMode: InputModeManager
     }
 
     private fun mounted(narrow: Boolean = false, test: (Harness) -> Unit) {
@@ -69,6 +73,7 @@ class AppRemoteNodeCliCompletionTest {
             harness.narrow = narrow
             harness.fontScale = if (narrow) 2f else 1f
             host.get().setContent {
+                harness.inputMode = LocalInputModeManager.current
                 CompositionLocalProvider(LocalDensity provides Density(1f, harness.fontScale)) {
                     MeshCoreTheme(theme = ThemeRegistry.default, motionScale = 0f) {
                         Box(Modifier.width(if (harness.narrow) 320.dp else 1080.dp)) {
@@ -182,6 +187,28 @@ class AppRemoteNodeCliCompletionTest {
             compose.onNode(isDialog()).assertDoesNotExist()
             compose.runOnIdle { assertEquals(before, harness.requests.size) }
             submit()
+            confirm(harness, "log stop")
+        }
+    }
+
+    @Test fun keyboardAndMouseChipChoiceReturnFocusToTheEditorBeforeActualSubmit() = mounted { harness ->
+        for (mouse in listOf(false, true)) {
+            type("log st")
+            key(Key.Tab)
+            compose.runOnIdle { assertTrue(harness.inputMode.requestInputMode(InputMode.Keyboard)) }
+            val choice = suggestion("stop")
+            if (mouse) {
+                choice.performMouseInput { click() }
+            } else {
+                choice.performSemanticsAction(SemanticsActions.RequestFocus) { assertTrue(it()) }
+                choice.assertIsFocused().performKeyInput { pressKey(Key.Enter) }
+            }
+            assertInput("log stop ")
+            input().assertIsFocused()
+            compose.onNode(isDialog()).assertDoesNotExist()
+            val before = harness.requests.size
+            input().performKeyInput { pressKey(Key.Enter) }
+            compose.runOnIdle { assertEquals(before, harness.requests.size) }
             confirm(harness, "log stop")
         }
     }

@@ -1617,8 +1617,10 @@ class MessagingRoomIntegrationTest {
         })
         val expected = assertNotNull(delivered)
         assertEquals(expected, store.fetchMessage(EntityKey(radio, expected.id)))
-        assertEquals(0, g.service.pendingAckCount)
-        assertTrue(completedStatuses(g, events).isEmpty())
+        assertEquals(1, g.service.pendingAckCount)
+        advanceTimeBy(120_000); runCurrent(); g.service.checkExpiredAcks()
+        assertEquals(expected, store.fetchMessage(EntityKey(radio, expected.id)))
+        assertTrue(completedStatuses(g, events).none { it is MessageStatusEvent.Failed })
         g.stop()
     }
 
@@ -4313,10 +4315,19 @@ class MessagingRoomIntegrationTest {
         val sending = backgroundScope.async { g.service.sendDirectMessage("inline at disconnect", contact) }
         runCurrent()
         val inline = store.fetchMessages(EntityKey(radio, contact.id)).single { it.text == "inline at disconnect" }
+        assertEquals(1, db.directAcks().currentUnresolvedClaims(radio.value, inline.id))
         g.signals.set(DeviceConnectionState.DISCONNECTED); val report = withTimeout(2000) { g.service.close() }
         assertFailsWith<CancellationException> { sending.await() }
         assertEquals(MessageStatus.PENDING, store.fetchMessage(EntityKey(radio, inline.id))?.status)
-        assertEquals(1, db.directAcks().currentUnresolvedClaims(radio.value, inline.id))
+        db.openHelper.readableDatabase.query(
+            "SELECT COUNT(*) FROM direct_ack_claims AS claim JOIN direct_ack_wires AS wire " +
+                "ON wire.radioId = claim.radioId AND wire.claimId = claim.requestId " +
+                "WHERE claim.radioId = ? AND claim.messageId = ? AND wire.acceptedCode IS NULL",
+            arrayOf(radio.value.canonicalString(), inline.id.canonicalString()),
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(1, cursor.getInt(0))
+        }
         assertTrue(store.fetchPendingSendsForMessage(EntityKey(radio, inline.id)).isEmpty())
         assertFalse(report.isComplete)
         assertEquals(MessageStatus.SENT, store.fetchMessage(EntityKey(radio, settled.id))?.status)

@@ -127,6 +127,7 @@ class RoutingTransportFailureTest {
             fixture.transport.beforeReply = {
                 if (it[0] == CommandCode.RESET_PATH.rawValue) throw cause
             }
+            val events = fixture.service.statusEvents()
             val failure = assertFailsWith<MessageServiceException> {
                 fixture.service.sendMessageWithRetry("ambiguous path reset", fixture.contact)
             }
@@ -139,7 +140,12 @@ class RoutingTransportFailureTest {
             assertTrue(reset >= 0)
             assertEquals(2, fixture.transport.sentData.take(reset).count { it[0] == CommandCode.SEND_MESSAGE.rawValue })
             val result = fixture.store.messages.values.single()
-            assertEquals(MessageStatus.FAILED, result.status)
+            assertEquals(MessageStatus.PENDING, result.status)
+            assertTrue(fixture.store.fetchPendingSends(RADIO).isEmpty())
+            assertTrue(statuses(fixture.service, events).none { it is MessageStatusEvent.Failed })
+            assertTrue(fixture.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+                it.operation == "directUncertain.${result.id}"
+            })
             assertTrue(fixture.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
                 it.operation == "resetPath.${result.id}" && it.cause === cause
             })

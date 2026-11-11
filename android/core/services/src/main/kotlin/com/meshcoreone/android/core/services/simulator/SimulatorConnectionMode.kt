@@ -125,12 +125,9 @@ class SimulatorConnectionMode(
         }
     }
 
-    /** Checks the recent RX-log page before buffering the two flood-region fixtures. */
+    /** Delegates fixture identity decisions to the store's simulator-specific RX boundary. */
     private suspend fun seedRxLogEntries(dataStore: SimulatorSeedStore, now: Instant) {
-        val existingIDs = dataStore.fetchRxLogEntries(MockDataProvider.simulatorRadioId).map { it.id }.toSet()
-        for (entry in MockDataProvider.rxLogEntries(now)) {
-            if (entry.id !in existingIDs) dataStore.saveRxLogEntry(entry)
-        }
+        dataStore.seedRxLogEntries(MockDataProvider.simulatorRadioId) { MockDataProvider.rxLogEntries(now) }
     }
 
     /**

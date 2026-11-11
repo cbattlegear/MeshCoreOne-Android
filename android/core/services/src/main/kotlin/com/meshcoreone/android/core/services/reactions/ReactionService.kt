@@ -611,14 +611,14 @@ internal class PendingQueue<K, V> private constructor(
         return takeMatchingEntries(matchesKey, { true }, withOrder)
     }
 
-    fun takeMatchingEntries(
+    fun <R> takeMatchingEntries(
         matchesKey: (K) -> Boolean,
         matchesValue: (V) -> Boolean,
-        withOrder: (V, Long, Long) -> V,
-    ): Pair<PendingQueue<K, V>, List<V>> {
+        withOrder: (V, Long, Long) -> R,
+    ): Pair<PendingQueue<K, V>, List<R>> {
         var nextEntries = entries
         var nextKeyOrders = keyOrders
-        val matched = ArrayList<Triple<Long, Long, V>>()
+        val matched = ArrayList<Triple<Long, Long, R>>()
         for ((key, values) in entries) {
             if (!matchesKey(key)) continue
             val keyOrder = keyOrders.getValue(key)
@@ -634,7 +634,7 @@ internal class PendingQueue<K, V> private constructor(
             }
         }
         return PendingQueue(nextEntries, nextKeyOrders, nextOrder) to
-            matched.sortedWith(compareBy<Triple<Long, Long, V>> { it.first }.thenBy { it.second }).map { it.third }
+            matched.sortedWith(compareBy<Triple<Long, Long, R>> { it.first }.thenBy { it.second }).map { it.third }
     }
 
     /**

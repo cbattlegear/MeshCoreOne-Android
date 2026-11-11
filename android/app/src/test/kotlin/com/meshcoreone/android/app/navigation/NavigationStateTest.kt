@@ -42,6 +42,21 @@ import kotlin.coroutines.cancellation.CancellationException
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class NavigationStateTest {
+    @Test fun channelDeletionCleanupPreservesTheCurrentUnrelatedTabAndItsDetailChrome() {
+        val n = NavigationCoordinator()
+        val original = channel.copy(occupantID = UUID.randomUUID())
+        n.navigateToChannel(original)
+        val cleanup = n.captureChannelSelectionCleanup(original)
+        n.navigateToTool(ToolSelection.CLI)
+        val before = n.currentState
+        assertTrue(cleanup())
+        assertEquals(before.selectedTab, n.currentState.selectedTab)
+        assertEquals(before.activeStack, n.currentState.activeStack)
+        assertEquals(before.tabBarVisible, n.currentState.tabBarVisible)
+        assertEquals(before.selectedTool, n.currentState.selectedTool)
+        assertNull(n.currentState.chatsSelectedRoute)
+    }
+
     @Test fun channelDeletionCleanupCannotPopAnEqualValueReopenedEntry() {
         val n = NavigationCoordinator()
         val original = channel.copy(occupantID = UUID.randomUUID())

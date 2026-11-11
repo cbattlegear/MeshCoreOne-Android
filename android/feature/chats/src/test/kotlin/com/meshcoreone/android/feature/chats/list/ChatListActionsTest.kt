@@ -20,6 +20,7 @@ import com.meshcoreone.android.feature.chats.list.support.TestStrings
 import com.meshcoreone.android.feature.chats.list.support.scenario
 import com.meshcoreone.android.feature.chats.list.support.settle
 import java.util.UUID
+import kotlin.coroutines.CoroutineContext
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
@@ -27,6 +28,8 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelChildren
@@ -35,6 +38,37 @@ import kotlinx.coroutines.withTimeout
 import org.junit.Test
 
 class ChatListActionsTest {
+    @Test
+    fun `channel delete captures its initiating services before its coroutine can execute`() = scenario {
+        val originalServices = FakeServices()
+        val successorServices = FakeServices()
+        val base = FakeDependencies(services = originalServices)
+        var currentServices = originalServices
+        val dependencies = object : ChatListFeatureDependencies by base {
+            override fun conversationServices() = currentServices
+        }
+        val queued = ArrayDeque<Runnable>()
+        val dispatcher = object : CoroutineDispatcher() {
+            override fun dispatch(context: CoroutineContext, block: Runnable) { queued.addLast(block) }
+        }
+        val deferredScope = CoroutineScope(scope.coroutineContext + dispatcher)
+        val holder = ChatListStateHolder(dependencies, deferredScope)
+        val original = channel("A")
+        base.data.channels = listOf(original)
+        holder.setBuffers(channels = listOf(original))
+        holder.recomputeSnapshot()
+        val actions = ChatListActions(holder, dependencies, deferredScope, {}, {})
+        actions.deleteChannelConversation(original)
+        assertTrue(holder.isDeletePending(original.id))
+        assertTrue(originalServices.calls.isEmpty())
+        currentServices = successorServices
+        while (queued.isNotEmpty()) queued.removeFirst().run()
+        assertEquals(listOf("clear:1", "removeNotifications:1", "badge"), originalServices.calls)
+        assertTrue(successorServices.calls.isEmpty())
+        assertTrue(successorServices.capturedNotificationChannels.isEmpty())
+        assertFalse(holder.isDeletePending(original.id))
+    }
+
     @Test
     fun `late deletion preserves an unproved equal-value replacement with a new display incarnation`() = scenario {
         val entered = CompletableDeferred<Unit>()

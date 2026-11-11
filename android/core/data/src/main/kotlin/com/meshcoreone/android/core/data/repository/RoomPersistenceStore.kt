@@ -92,6 +92,11 @@ class RoomPersistenceStore private constructor(
 
     suspend fun saveSimulatorContact(dto: ContactDTO): Unit = contacts.saveSimulatorContact(dto)
 
+    suspend fun seedSimulatorRxBatchIfAbsent(
+        dtos: SnapshotList<RxLogEntryDTO>,
+    ): SnapshotList<SimulatorRxSeedOutcome> =
+        context.seedSimulatorRxBatch(dtos.map { it.toEntity() }).snapshot()
+
     suspend fun seedSimulatorConversation(
         plan: SimulatorConversationIdentityPlan,
         familyIndex: Int,

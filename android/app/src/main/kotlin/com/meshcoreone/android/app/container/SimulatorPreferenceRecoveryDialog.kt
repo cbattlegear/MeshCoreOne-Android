@@ -148,9 +148,9 @@ private fun SimulatorPreferenceSnapshot(
         isGroupingUsed = false
         maximumFractionDigits = 340
     }
-    val yes = stringResource(android.R.string.yes)
-    val no = stringResource(android.R.string.no)
-    fun boolean(value: Boolean) = if (value) yes else no
+    val on = stringResource(L.accessibilityOn)
+    val off = stringResource(L.accessibilityOff)
+    fun boolean(value: Boolean) = if (value) on else off
     val fields = listOf(
         Triple("flood-scope", stringResource(R.string.simulator_preference_recovery_flood_scope),
             preferenceText(device.defaultFloodScopeName, notSet, emptyText)),

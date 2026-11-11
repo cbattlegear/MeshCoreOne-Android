@@ -37,6 +37,7 @@ import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.data.repository.SimulatorDevicePreferenceConflict
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
+import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import com.meshcoreone.android.core.services.simulator.MockDataProvider
 import java.time.Instant
 import java.util.UUID
@@ -86,10 +87,12 @@ class SimulatorPreferenceRecoveryDialogTest {
     @Test fun localizedChoicesRemainDistinctAndSurviveRestorationAtDoubleFontScale() = runTest {
         val current = MockDataProvider.simulatorDevice(Instant.EPOCH).copy(
             latitude = 37.12345671, longitude = -122.12345671, defaultFloodScopeName = null,
+            clientRepeat = true, manualAddContacts = false,
         )
         val restored = current.copy(
             id = UUID.randomUUID(), isActive = false,
             latitude = 37.12345672, longitude = -122.12345672, defaultFloodScopeName = "",
+            clientRepeat = false, manualAddContacts = true,
         )
         val conflict = SimulatorDevicePreferenceConflict(current, restored)
         val recovery = SimulatorPreferenceRecovery(load = { conflict }, resolve = { _, _, _ -> })
@@ -142,6 +145,13 @@ class SimulatorPreferenceRecoveryDialogTest {
                 compose.onNodeWithTag("simulator-preference-cancel").assertIsDisplayed().assertHeightIsAtLeast(48.dp)
                 fun displayed(tag: String): String = compose.onNodeWithTag(tag).performScrollTo()
                     .fetchSemanticsNode().config[SemanticsProperties.Text].joinToString("") { it.text }
+                val on = resources.getString(L.accessibilityOn)
+                val off = resources.getString(L.accessibilityOff)
+                assertNotEquals(on, off, "$tag must distinguish enabled and disabled settings")
+                assertEquals(on, displayed("simulator-preference-current-repeat"), "$tag current repeat")
+                assertEquals(off, displayed("simulator-preference-recovered-repeat"), "$tag restored repeat")
+                assertEquals(off, displayed("simulator-preference-current-manual-add"), "$tag current manual add")
+                assertEquals(on, displayed("simulator-preference-recovered-manual-add"), "$tag restored manual add")
                 assertNotEquals(
                     displayed("simulator-preference-current-latitude"),
                     displayed("simulator-preference-recovered-latitude"),

@@ -2,6 +2,7 @@
 package com.meshcoreone.android.core.services.sync
 
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.toList
@@ -38,6 +39,11 @@ class SyncCoordinatorDataEventTests {
             assertTrue(consumerA.await())
             assertTrue(consumerB.await())
             assertEquals(0, coordinator.dataEventBroadcaster.subscriberCount)
+        },
+        syncCase(suite, "tryYield rejects events after finishDataEvents") {
+            val coordinator = coordinator()
+            coordinator.finishDataEvents()
+            assertFalse(coordinator.dataEventBroadcaster.tryYield(SyncDataEvent.ContactsChanged))
         },
     )
 }

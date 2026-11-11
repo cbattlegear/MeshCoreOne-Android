@@ -70,10 +70,15 @@ class SyncDataEventBroadcaster {
     }
 
     fun yield(event: SyncDataEvent) {
-        synchronized(lock) {
-            val closed = subscribers.filterValues { it.trySend(event).isClosed }.keys
-            closed.forEach(subscribers::remove)
-        }
+        tryYield(event)
+    }
+
+    /** Returns false when teardown has already finished this destination. */
+    fun tryYield(event: SyncDataEvent): Boolean = synchronized(lock) {
+        if (finished) return@synchronized false
+        val closed = subscribers.filterValues { it.trySend(event).isClosed }.keys
+        closed.forEach(subscribers::remove)
+        true
     }
 
     /** Ends every subscriber's collection after it drains what was already yielded. */

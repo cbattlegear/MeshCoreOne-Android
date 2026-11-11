@@ -1067,7 +1067,7 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
     override suspend fun bumpDirectQueueSelection(
         selection: DirectQueueSelection,
         requestId: UUID,
-    ): DirectQueueBumpResult = transaction("bumpDirectQueueSelection") {
+    ): DirectQueueBumpResult = transaction("incrementPendingSendAttemptCount") {
         val issued = selection as? QueueSelection
         if (issued == null || issuedLease(issued.lease) == null) {
             return@transaction DirectQueueBumpResult.Rejected(DirectAckRejection.INVALID_HANDLE)

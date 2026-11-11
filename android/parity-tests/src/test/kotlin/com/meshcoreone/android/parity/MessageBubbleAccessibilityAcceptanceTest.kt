@@ -20,6 +20,8 @@ import com.meshcoreone.android.app.content.DataStoreLinkPreviewPreferencesSource
 import com.meshcoreone.android.app.navigation.*
 import com.meshcoreone.android.app.state.MessageEvent
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceError
+import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceException
 import com.meshcoreone.android.core.datastore.AppStorageKey
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
@@ -255,8 +257,8 @@ class MessageBubbleAccessibilityAcceptanceTest : RoomProcessTest() {
         }
     }
 
-    @Test fun mountedAppPreservesRichLinkImageAndExactlyOneRealFailedSendRetry() = runTest {
-        withApp(this, images = true) { f ->
+    @Test fun mountedAppPreservesRichLinkImageAndExactlyOnePreWireFailedRetry() = runTest {
+        withApp(this, images = true, failBeforeWire = true) { f ->
             val contact = f.contact("Peer", 3)
             store.saveContact(contact)
             val message = outgoing("look $IMAGE", MessageStatus.FAILED).copy(radioId = f.radio, contactID = contact.id)
@@ -288,8 +290,8 @@ class MessageBubbleAccessibilityAcceptanceTest : RoomProcessTest() {
             assertEquals(listOf(IMAGE), f.opened.toList())
 
             compose.onNodeWithText(resources.getString(Chats.chatsMessageStatusRetry)).assertIsEnabled().performClick()
-            f.h.eventually("one actual retry reaches firmware, fails, and deletes its own pending send") {
-                f.h.links.radios.single().sent.count { it[0].toInt() == 2 } == 1 && runBlocking {
+            f.h.eventually("one actual retry fails before wire and deletes its own pending send") {
+                f.preWireFailures == 1 && runBlocking {
                     store.fetchMessage(EntityKey(f.radio, message.id))?.status == MessageStatus.FAILED &&
                         store.fetchPendingSendsForMessage(EntityKey(f.radio, message.id)).isEmpty()
                 }
@@ -297,7 +299,7 @@ class MessageBubbleAccessibilityAcceptanceTest : RoomProcessTest() {
             f.awaitLabel(label)
             f.assertSingleLabel(label)
             compose.waitForIdle()
-            assertEquals(1, f.h.links.radios.single().sent.count { it[0].toInt() == 2 })
+            assertEquals(0, f.h.links.radios.single().sent.count { it[0].toInt() == 2 })
             assertEquals(message.id, requireNotNull(store.fetchMessage(EntityKey(f.radio, message.id))).id)
             assertEquals(message.text, requireNotNull(store.fetchMessage(EntityKey(f.radio, message.id))).text)
             assertEquals(listOf(IMAGE), f.opened.toList())
@@ -307,8 +309,10 @@ class MessageBubbleAccessibilityAcceptanceTest : RoomProcessTest() {
 
     private fun bubble(label: String) = compose.onNodeWithContentDescription(label)
 
-    private suspend fun withApp(test: TestScope, images: Boolean = false, body: suspend (Fixture) -> Unit) {
-        val f = Fixture(test)
+    private suspend fun withApp(
+        test: TestScope, images: Boolean = false, failBeforeWire: Boolean = false, body: suspend (Fixture) -> Unit,
+    ) {
+        val f = Fixture(test, failBeforeWire)
         try { f.start(images); body(f) } finally {
             withContext(NonCancellable) {
                 compose.runOnUiThread { host.get().setContent {} }
@@ -318,7 +322,7 @@ class MessageBubbleAccessibilityAcceptanceTest : RoomProcessTest() {
         }
     }
 
-    private inner class Fixture(private val test: TestScope) {
+    private inner class Fixture(private val test: TestScope, private val failBeforeWire: Boolean) {
         val storage = MeshCoreStorage.get(host.get())
         val job = SupervisorJob(test.backgroundScope.coroutineContext[Job])
         private val scope = CoroutineScope(test.backgroundScope.coroutineContext + job)
@@ -326,6 +330,7 @@ class MessageBubbleAccessibilityAcceptanceTest : RoomProcessTest() {
         val opened = Collections.synchronizedList(mutableListOf<String>())
         lateinit var content: AppChatContent
         lateinit var h: ContainerHarness
+        @Volatile var preWireFailures = 0
         val radio get() = requireNotNull(h.appState.currentRadioId)
 
         suspend fun start(images: Boolean) {
@@ -340,7 +345,11 @@ class MessageBubbleAccessibilityAcceptanceTest : RoomProcessTest() {
             content = AppChatContent(host.get(), store, http,
                 DataStoreLinkPreviewPreferencesSource.create(storage.preferences, scope),
                 storage.preferences, storage.preferences.snapshot(), scope, imageSafety = { it == IMAGE })
-            h = ContainerHarness(test, store, chatContent = content)
+            val persistence = if (failBeforeWire) DirectQueuePreWireFaultStore(store) {
+                preWireFailures++
+                throw MessageServiceException(MessageServiceError.InvalidRecipient)
+            } else store
+            h = ContainerHarness(test, store, chatContent = content, persistenceOverride = persistence)
             h.links.configureRadio = { firmware ->
                 firmware.respond = { request -> if (request[0].toInt() == 2) listOf(Bytes.of(1, 2)) else null }
             }

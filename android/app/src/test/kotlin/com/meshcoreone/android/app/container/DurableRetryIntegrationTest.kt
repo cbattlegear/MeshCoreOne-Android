@@ -3,6 +3,7 @@ package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.MessagingDiagnostic
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueServiceException
@@ -200,7 +201,7 @@ class DurableRetryIntegrationTest : RoomProcessTest() {
         } finally { harness.container.close() }
     }
 
-    @Test fun joinedOldGenerationLeavesOneDurableIntentForReplacementHydration() = runTest {
+    @Test fun joinedOldGenerationRetainsUncertainIntentUntilExplicitSendAgain() = runTest {
         val (contact, message) = seed()
         val harness = ContainerHarness(this, store)
         configure(harness, deliver = false)
@@ -212,22 +213,47 @@ class DurableRetryIntegrationTest : RoomProcessTest() {
             val viewModel = timeline(harness, contact)
             viewModel.retry(message.id)
             harness.eventually("held first send") { harness.links.radios.first().sent.any(::isSend) }
-            assertEquals(1, store.fetchPendingSendsForMessage(messageKey(message)).size)
+            val originalPending = store.fetchPendingSendsForMessage(messageKey(message)).single()
             harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
             assertTrue(old.isTornDown)
             assertFalse(old.chatSendQueueService.isObservingConnection)
             assertEquals(0, harness.links.radios.first().readers)
-            assertEquals(1, store.fetchPendingSendsForMessage(messageKey(message)).size)
+            assertEquals(originalPending, store.fetchPendingSendsForMessage(messageKey(message)).single())
             configure(harness, deliver = true)
+            harness.messagingDiagnostics.clear()
             harness.manager.connect(target)
             harness.eventually("replacement ready") { harness.manager.connectionState == DeviceConnectionState.READY }
             val replacement = assertNotNull(harness.sessions.current)
             assertTrue(replacement.token != old.token)
-            harness.eventually("replacement delivered retained intent") {
+            harness.eventually("replacement retains the uncertain intent without replay") {
+                harness.messagingDiagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+                    it.operation == "directUncertain.${originalPending.id}"
+                }
+            }
+            assertEquals(originalPending, store.fetchPendingSendsForMessage(messageKey(message)).single())
+            assertEquals(MessageStatus.PENDING, store.fetchMessage(messageKey(message))?.status)
+            assertEquals(0, harness.links.radios.last().sent.count(::isSend))
+            var explicitPending: PendingSendDTO? = null
+            harness.links.radios.last().respond = { frame ->
+                if (isSend(frame)) {
+                    explicitPending = kotlinx.coroutines.runBlocking {
+                        store.fetchPendingSendsForMessage(messageKey(message)).single()
+                    }
+                    sentAndDelivered(frame, key(7))
+                } else null
+            }
+            harness.container.chatsFeature.sendAgain(
+                assertNotNull(store.fetchMessage(messageKey(message))), TimelineConversation.Direct(contact),
+            )
+            harness.eventually("explicit replacement is delivered") {
                 kotlinx.coroutines.runBlocking {
                     store.fetchMessage(messageKey(message))?.status == MessageStatus.DELIVERED &&
                         store.fetchPendingSendsForMessage(messageKey(message)).isEmpty()
                 }
+            }
+            assertNotNull(explicitPending).let {
+                assertTrue(it.isResend)
+                assertTrue(it.id != originalPending.id)
             }
             assertEquals(1, harness.links.radios.first().sent.count(::isSend))
             assertEquals(1, harness.links.radios.last().sent.count(::isSend))

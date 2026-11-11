@@ -375,7 +375,7 @@ class NotificationAcceptanceRecoveryTests {
         } finally { h.close() }
     }
 
-    @Test fun deviceRejectionStillReportsFailureAndRestoresDraft() = runTest {
+    @Test fun uncorrelatedDeviceErrorReportsUncertaintyWithoutRestoringAReplayableDraft() = runTest {
         val h = Harness(this)
         val n = NotificationHarness(this, RADIO).authorize()
         try {
@@ -385,10 +385,13 @@ class NotificationAcceptanceRecoveryTests {
             val handler = NotificationActionHandler(n.store, sender(h), n.service, n.rooms, n.sync)
             handler.configure({ true }, { "Me" })
             val receipt = NotificationActionReceipt()
-            withContext(receipt) { handler.handleQuickReply(h.contact.key, "rejected") }
-            assertEquals(NotificationActionReceipt.State.READY, receipt.state)
-            assertEquals("rejected", n.service.consumeDraft(h.contact.key))
-            assertEquals(1, n.delivery.posted.size)
+            assertFailsWith<NotificationReplyOutcomeUncertain> {
+                withContext(receipt) { handler.handleQuickReply(h.contact.key, "rejected") }
+            }
+            assertEquals(NotificationActionReceipt.State.UNCERTAIN, receipt.state)
+            assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+            assertNull(n.service.consumeDraft(h.contact.key))
+            assertTrue(n.delivery.posted.isEmpty())
         } finally { h.close() }
     }
 

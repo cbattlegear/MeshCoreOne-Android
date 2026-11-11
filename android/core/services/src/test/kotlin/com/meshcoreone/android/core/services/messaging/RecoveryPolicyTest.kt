@@ -776,7 +776,7 @@ class RecoveryPolicyTest {
             assertTrue(h.service.close().isComplete); h.close()
         }
     } + listOf(false, true).map { cancelSend ->
-        native("fail-all storage failure resolves through ${if (cancelSend) "send cancellation" else "terminal send error"}") {
+        native("fail-all storage failure and ${if (cancelSend) "post-dispatch cancellation" else "uncorrelated device error"} retain uncertainty") {
             val h = Harness(this); h.start(); h.transport.directError = 5u
             val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
             h.transport.beforeReply = {
@@ -813,11 +813,11 @@ class RecoveryPolicyTest {
                 release.complete(Unit)
             }
             runCurrent()
-            assertEquals(MessageStatus.FAILED, h.stored(message.id).status)
-            assertEquals(0, h.service.pendingAckCount)
-            assertEquals(listOf<MessageStatusEvent>(MessageStatusEvent.Failed(message.id)), observed)
+            assertEquals(MessageStatus.PENDING, h.stored(message.id).status)
+            assertEquals(1, h.service.pendingAckCount)
+            assertTrue(observed.isEmpty())
             assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
-            assertTrue(h.service.close().isComplete); h.close()
+            assertFalse(h.service.close().isComplete); h.close()
         }
     }
 

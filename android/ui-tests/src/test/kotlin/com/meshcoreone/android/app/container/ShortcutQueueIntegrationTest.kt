@@ -523,7 +523,7 @@ class ShortcutQueueIntegrationTest : RoomProcessTest() {
         }
     }
 
-    @Test fun cancellationAfterPendingPublicationPropagatesButAcceptedQueueSurvivesGenerationReplacement() = runTest {
+    @Test fun cancellationAfterPendingPublicationRetainsUncertainDirectSendAcrossReplacement() = runTest {
         cancelledAcceptedSend(this, channel = false)
     }
 
@@ -595,19 +595,22 @@ class ShortcutQueueIntegrationTest : RoomProcessTest() {
                 assertEquals(MessageStatus.PENDING, store.fetchMessage(key)?.status)
                 assertEquals(0, failures, "An uncertain channel attempt is not terminal failure")
             } else {
+                h.messagingDiagnostics.clear()
                 h.manager.connect(h.target(target))
-                h.eventually("replacement generation terminal status") {
-                    failures == 1 && h.sessions.current?.chatSendQueueService?.queuedEnvelopeCount == 0 && runBlocking {
-                        store.fetchPendingSendsForMessage(key).isEmpty() &&
-                            store.fetchMessage(key)?.status == MessageStatus.FAILED
+                h.eventually("replacement generation retains the uncertain direct attempt") {
+                    h.messagingDiagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+                        it.operation == "directUncertain.${beforeDisconnect.id}"
                     }
                 }
                 assertNotEquals(old.token, assertNotNull(h.sessions.current).token)
+                assertEquals(beforeDisconnect, store.fetchPendingSendsForMessage(key).single())
+                assertEquals(MessageStatus.PENDING, store.fetchMessage(key)?.status)
+                assertEquals(0, failures)
             }
             assertEquals(if (channel) 1 else 2, h.lifecycle.created.size)
             assertEquals(original, assertNotNull(store.fetchMessage(key)).text)
             assertEquals(1, messages(store, recipient).size)
-            val expectedWrites = if (channel) listOf(1) + List(h.links.radios.size - 1) { 0 } else listOf(1, 1)
+            val expectedWrites = listOf(1) + List(h.links.radios.size - 1) { 0 }
             assertEquals(expectedWrites, h.links.radios.map { firmware ->
                 firmware.sent.count { it[0].toInt() == opcode }
             })
@@ -646,12 +649,22 @@ class ShortcutQueueIntegrationTest : RoomProcessTest() {
             firmware.push(Bytes.of(2) + le32(1))
             firmware.push(contactFrame(peerKey, "Synthetic shortcut peer"))
             firmware.push(Bytes.of(4) + le32(0))
-            h.eventually("queued shortcut drains only after READY") {
+            h.eventually("queued shortcut reaches the radio only after READY") {
                 h.manager.connectionState == DeviceConnectionState.READY &&
-                    firmware.sent.any { it[0].toInt() == 2 } && runBlocking { store.fetchPendingSends(radio).isEmpty() }
+                    firmware.sent.count { it[0].toInt() == 2 } == 1 && runBlocking {
+                        store.fetchPendingSends(radio).singleOrNull()?.attemptCount == 1L
+                    }
+            }
+            val retained = store.fetchPendingSends(radio).single()
+            h.eventually("uncorrelated response retains the queued shortcut") {
+                h.messagingDiagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+                    it.operation == "directUncertain.${retained.id}"
+                }
             }
             connect.join()
             assertEquals(1, firmware.sent.count { it[0].toInt() == 2 })
+            assertEquals(MessageStatus.PENDING, store.fetchMessage(EntityKey(radio, retained.messageID))?.status)
+            assertEquals(retained, store.fetchPendingSends(radio).single())
         } finally {
             connect.cancel()
             h.container.close()

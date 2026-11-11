@@ -52,12 +52,19 @@ class ChannelAttemptRecoveryTest {
             } else h.store.faults["settleQueuedChannelAttempt"] = failure
             val receipt = com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt()
             try {
+                var observedCancellation: CancellationException? = null
                 val call = backgroundScope.async(receipt) {
-                    service.sendChannelMessage("accepted original", 0u, RADIO)
+                    try { service.sendChannelMessage("accepted original", 0u, RADIO) }
+                    catch (cancelled: CancellationException) {
+                        observedCancellation = cancelled
+                        throw cancelled
+                    }
                 }
                 runCurrent()
-                val cancelled = assertFailsWith<CancellationException> { call.await() }
-                val retained = cancelled.suppressed.filterIsInstance<QueuedChannelRetainedException>().single()
+                assertFailsWith<CancellationException> { call.await() }
+                val cancelled = assertNotNull(observedCancellation)
+                val retained = generateSequence<Throwable>(cancelled) { it.cause }
+                    .flatMap { it.suppressed.asSequence() }.filterIsInstance<QueuedChannelRetainedException>().single()
                 assertSame(failure, retained.cause)
                 if (lostReturn) assertTrue(readFailure in failure.suppressed)
                 assertTrue(diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any { it.cause === retained })

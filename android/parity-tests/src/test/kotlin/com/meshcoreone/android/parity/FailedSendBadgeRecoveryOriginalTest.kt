@@ -19,6 +19,7 @@ import com.meshcoreone.android.core.model.RoomMessageDTO
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.feature.chats.list.ChatListDataSource
+import com.meshcoreone.android.feature.chats.list.ChatChannelKey
 import com.meshcoreone.android.feature.chats.list.ChatListDiagnostics
 import com.meshcoreone.android.feature.chats.list.ChatListEvent
 import com.meshcoreone.android.feature.chats.list.ChatListFeatureDependencies
@@ -350,10 +351,12 @@ class FailedSendBadgeRecoveryOriginalTest : RoomProcessTest() {
         var fetchFailure: Exception? = null
         private val native = harness.container.chatsFeature.listFor(radio)
         private val data = object : ChatListDataSource by native.data {
-            override suspend fun fetchFailedSendConversationKeys(radioId: RadioId): FailedSendConversationKeys {
+            override suspend fun fetchFailedSendConversationKeys(
+                radioId: RadioId, channels: List<ChatChannelKey>,
+            ): FailedSendConversationKeys {
                 queriedRadios += radioId
                 fetchFailure?.let { throw it }
-                val keys = native.data.fetchFailedSendConversationKeys(radioId)
+                val keys = native.data.fetchFailedSendConversationKeys(radioId, channels)
                 afterFetch(keys)
                 return keys
             }

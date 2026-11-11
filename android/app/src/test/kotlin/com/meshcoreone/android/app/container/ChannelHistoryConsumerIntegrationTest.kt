@@ -34,7 +34,8 @@ class ChannelHistoryConsumerIntegrationTest : RoomProcessTest() {
                 status = MessageStatus.PENDING, channelOccupantID = a.occupantID)
             store.saveChannelMessage(old, ChannelHistoryScope(radio, 0u, assertNotNull(a.occupantID)))
             val pending = PendingSendDTO.fromEnvelope(
-                ChannelMessageEnvelope(old.id, 0u, false, old.text, old.timestamp, channelOccupantID = a.occupantID),
+                ChannelMessageEnvelope(old.id, 0u, false, old.text, old.timestamp,
+                    localNodeName = null, channelOccupantID = a.occupantID),
                 radio,
             )
             val attempt = QueuedChannelAttemptKey(radio, pending.id, old.id, UUID.randomUUID())

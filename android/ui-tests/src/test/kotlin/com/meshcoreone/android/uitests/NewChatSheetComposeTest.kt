@@ -378,7 +378,7 @@ class NewChatSheetComposeTest {
             override suspend fun fetchRemoteNodeSessions(radioId: RadioId): List<RemoteNodeSessionDTO> = unexpected("fetchRemoteNodeSessions")
             override suspend fun fetchLastMessages(contactIds: List<UUID>, limit: Int): Map<UUID, List<MessageDTO>> = unexpected("fetchLastMessages")
             override suspend fun fetchLastChannelMessages(channels: List<ChatChannelKey>, limit: Int): Map<UUID, List<MessageDTO>> = unexpected("fetchLastChannelMessages")
-            override suspend fun fetchFailedSendConversationKeys(radioId: RadioId): FailedSendConversationKeys = unexpected("fetchFailedSendConversationKeys")
+            override suspend fun fetchFailedSendConversationKeys(radioId: RadioId, channels: List<ChatChannelKey>): FailedSendConversationKeys = unexpected("fetchFailedSendConversationKeys")
             override suspend fun setContactMuted(contactId: UUID, isMuted: Boolean): Unit = unexpected("setContactMuted")
             override suspend fun setChannelNotificationLevel(channelId: UUID, level: NotificationLevel): Unit = unexpected("setChannelNotificationLevel")
             override suspend fun setSessionNotificationLevel(sessionId: UUID, level: NotificationLevel): Unit = unexpected("setSessionNotificationLevel")

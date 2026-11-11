@@ -31,6 +31,8 @@ import com.meshcoreone.android.core.model.QueuedChannelDispatchState
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
+import com.meshcoreone.android.core.protocol.session.SessionClock
+import com.meshcoreone.android.core.protocol.session.SystemSessionClock
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.runtime.ProcessConnectionPreferences
 import com.meshcoreone.android.core.runtime.RuntimeClock
@@ -126,6 +128,7 @@ internal class ContainerHarness(
     syncLogSink: com.meshcoreone.android.core.services.sync.SyncLogSink = com.meshcoreone.android.core.services.sync.SyncLogSink.NONE,
     recoveryDispatcher: kotlinx.coroutines.CoroutineDispatcher = kotlinx.coroutines.Dispatchers.Default,
     runtimeClock: RuntimeClock = SchedulerClock { test.testScheduler.currentTime },
+    sessionClock: SessionClock = SystemSessionClock(),
     runtimeContext: CoroutineContext = test.backgroundScope.coroutineContext,
     sessionConfiguration: SessionConfiguration = SessionConfiguration.DEFAULT,
     messageServiceConfig: MessageServiceConfig = MessageServiceConfig(),
@@ -194,6 +197,7 @@ internal class ContainerHarness(
             chatSendQueueProgress = chatSendQueueProgress,
             mainScope = mainScope,
             runtimeClock = runtimeClock,
+            sessionClock = sessionClock,
             syncClock = syncClock,
             logSink = syncLogSink,
             runtimeContext = runtimeContext,
@@ -314,6 +318,11 @@ abstract class RoomProcessTest {
         owner = CoroutineScope(SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
         store = RoomPersistenceStore(db, owner)
         reportPathRecencyPhase("room-open|END")
+    }
+
+    protected suspend fun restartProcessStore() {
+        store.close()
+        store = RoomPersistenceStore(db, owner)
     }
 
     @After fun closeStore() {

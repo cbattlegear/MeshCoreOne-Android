@@ -456,6 +456,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
 
     @Test fun noDeviceCompletionDoesNotFollowAFirstGraphThatAppearedAfterCapture() = runTest {
         for (mounted in listOf(false, true)) {
+            restartProcessStore()
             val h = ContainerHarness(this, store)
             try {
                 val n = h.container.navigation
@@ -491,6 +492,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
 
     @Test fun explicitNoDeviceCompletionAcceptsTheUnchangedCapturedGraph() = runTest {
         for (mounted in listOf(false, true)) {
+            restartProcessStore()
             val h = ContainerHarness(this, store)
             try {
                 connect(h)
@@ -516,6 +518,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
     @Test fun noDeviceAttemptAcceptsItsExactReadyGraphIncludingTheFirstBinding() = runTest {
         for (mounted in listOf(false, true)) {
             for (readyAtCapture in listOf(false, true)) {
+                restartProcessStore()
                 val h = ContainerHarness(this, store)
                 try {
                     if (readyAtCapture) connect(h)
@@ -556,6 +559,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
     @Test fun noDeviceAttemptRejectsAReplacementGraphUntilANewEntryWitnessIsCaptured() = runTest {
         for (mounted in listOf(false, true)) {
             for (differentRadio in listOf(false, true)) {
+                restartProcessStore()
                 val deviceA = UUID(0, 1101)
                 val deviceB = UUID(0, 1102)
                 val h = ContainerHarness(
@@ -688,6 +692,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         val deviceB = UUID(0, 1002)
         for (differentRadio in listOf(false, true)) {
             for (afterBinding in listOf(false, true)) {
+                restartProcessStore()
                 val uiScheduler = TestCoroutineScheduler()
                 val mainScope = CoroutineScope(backgroundScope.coroutineContext + uiScheduler + StandardTestDispatcher(uiScheduler))
                 val h = ContainerHarness(
@@ -843,6 +848,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         val deviceA = UUID(0, 1003)
         val deviceB = UUID(0, 1004)
         for (rebuild in listOf(true, false)) {
+            restartProcessStore()
             val uiScheduler = TestCoroutineScheduler()
             val mainScope = CoroutineScope(backgroundScope.coroutineContext + uiScheduler + StandardTestDispatcher(uiScheduler))
             val h = ContainerHarness(
@@ -921,6 +927,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
 
     @Test fun offlineOnboardingRejectsCancelledOrSupersededExposedSuccessors() = runTest {
         for (mode in listOf("cancelled-rebuild", "superseded-rebuild", "cancelled-submission")) {
+            restartProcessStore()
             val uiScheduler = TestCoroutineScheduler()
             val mainScope = CoroutineScope(backgroundScope.coroutineContext + uiScheduler + StandardTestDispatcher(uiScheduler))
             val h = ContainerHarness(
@@ -2304,6 +2311,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
 
     @Test fun sealedChatOfferIsSupersededBeforeMountedAcceptanceDespiteRepeatedParentCancellation() = runTest {
         for (window in listOf(390.dp, 1080.dp)) {
+            restartProcessStore()
             val h = ContainerHarness(this, store)
             val feature = h.container.chatsFeature
             val parent = SupervisorJob(backgroundScope.coroutineContext[Job])
@@ -2356,6 +2364,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
 
     @Test fun mountedChatAcceptanceSurvivesItsOwnDisposalAndLaterNavigationWithoutContradictoryReceipt() = runTest {
         for (window in listOf(390.dp, 1080.dp)) {
+            restartProcessStore()
             val h = ContainerHarness(this, store)
             h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Accepted destination") }
             val disposed = AtomicBoolean()
@@ -2475,6 +2484,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
 
     @Test fun actualAppChatsContentOwnerRegistersAndSealsRealMessageLinkDeliveriesAcrossMountedAcceptance() = runTest {
         for (windowWidth in listOf(390, 834)) for (acceptFirst in listOf(false, true)) {
+            restartProcessStore()
             val h = ContainerHarness(this, store)
             h.links.configureRadio = {
                 it.knownContacts += contactFrame(key(20), "Actual source conversation")
@@ -2597,6 +2607,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
 
     @Test fun outgoingMountedChatCannotAcceptAnOfferAfterTheNextEntryCommits() = runTest {
         for (known in listOf(false, true)) {
+            restartProcessStore()
             val h = ContainerHarness(this, store)
             h.links.configureRadio = {
                 it.knownContacts += contactFrame(key(20), "Outgoing source")
@@ -2704,6 +2715,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
 
     @Test fun suspendedOutgoingChatLookupCannotOfferAfterItsEntryIsSuperseded() = runTest {
         for (known in listOf(false, true)) {
+            restartProcessStore()
             val h = ContainerHarness(this, store)
             h.links.configureRadio = { it.knownContacts += contactFrame(key(21), "Linked destination") }
             val entered = CompletableDeferred<Unit>()
@@ -2917,6 +2929,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
 
     @Test fun exactChatTerminalReceiptWaitsForEveryPublicationGateAndSurvivesConflatedNavigation() = runTest {
         for (acceptFirst in listOf(false, true)) {
+            restartProcessStore()
             val h = ContainerHarness(this, store)
             h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Published proof") }
             val feature = h.container.chatsFeature
@@ -4878,6 +4891,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
     @Test fun chatContactLookupRereadsRealStoreWhenFirstGraphBindsBeforeCompletion() = runTest {
         val radio = RadioId(DeviceIdentity.deriveUUID(key(7)))
         for (found in listOf(false, true)) {
+            restartProcessStore()
             val h = ContainerHarness(this, store)
             val entered = CountDownLatch(1)
             val release = CountDownLatch(1)
@@ -4970,6 +4984,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
 
     @Test fun cancelledMountedChatLookupWaitingForLifecycleBoundaryCannotOfferOrNavigate() = runTest {
         for (known in listOf(false, true)) {
+            restartProcessStore()
             val h = ContainerHarness(this, store)
             h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Mounted cancellation peer") }
             val feature = h.container.chatsFeature
@@ -5204,6 +5219,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
 
     @Test fun parentCancelDuringSiblingTraversalDoesNotFenceRealContactPublication() = runTest {
         for (cancelChild in listOf(false, true)) {
+            restartProcessStore()
             val h = ContainerHarness(this, store)
             val completionEntered = CountDownLatch(1)
             val releaseCompletion = CountDownLatch(1)
@@ -5298,6 +5314,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
 
     @Test fun cancelledAfterContactCasStillPublishesTheDeferredDestination() = runTest {
         for (found in listOf(false, true)) {
+            restartProcessStore()
             val h = ContainerHarness(this, store)
             val committed = CountDownLatch(1)
             val releasePublication = CountDownLatch(1)
@@ -5713,6 +5730,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
 
     @Test fun actualConnectionLossRejectsPreLossLookupButFreshOfflineLinksStillReachMountedDestinations() = runTest {
         for (knownBeforeLoss in listOf(false, true)) {
+            restartProcessStore()
             val h = ContainerHarness(this, store)
             h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Retained offline peer") }
             val entered = CompletableDeferred<Unit>()

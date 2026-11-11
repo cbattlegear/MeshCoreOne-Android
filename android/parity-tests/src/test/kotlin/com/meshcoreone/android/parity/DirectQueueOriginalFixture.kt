@@ -33,16 +33,25 @@ internal suspend fun TestScope.withDirectQueueFixture(
     connected: Boolean,
     config: MessageServiceConfig = MessageServiceConfig(),
     firmwareError: Int = 3,
+    startSession: Boolean = connected,
     body: suspend (DirectQueueOriginalFixture) -> Unit,
 ) {
-    val f = DirectQueueOriginalFixture(this, connected, config, firmwareError)
+    val f = DirectQueueOriginalFixture(this, connected, config, firmwareError, startSession)
     try {
         f.seed()
         body(f)
         assertEquals(listOf(f.device), f.store.fetchDevices())
         assertEquals(listOf(f.contact.copy(lastMessageDate = f.message.createdAt)), f.store.fetchContacts(f.radio))
     } finally {
-        try { assertTrue(f.queue.shutdown().isComplete) } finally {
+        try {
+            val report = f.queue.shutdown()
+            val expected = f.expectedQueueIssue
+            if (expected == null) assertTrue(report.isComplete)
+            else {
+                assertFalse(report.isComplete)
+                assertTrue(report.issues.any { it.cause === expected })
+            }
+        } finally {
             try { assertTrue(f.messages.close().isComplete) } finally {
                 try { f.session.stop() } finally {
                     try { f.store.close() } finally {
@@ -60,7 +69,9 @@ internal class DirectQueueOriginalFixture(
     private val connected: Boolean,
     config: MessageServiceConfig,
     firmwareError: Int,
+    private val startSession: Boolean,
 ) {
+    init { require(!startSession || connected) }
     val job = SupervisorJob(test.coroutineContext[Job])
     private val scope = CoroutineScope(test.coroutineContext + job)
     private val instant = Instant.ofEpochSecond(1_704_067_200)
@@ -123,6 +134,7 @@ internal class DirectQueueOriginalFixture(
         signals, scope, clock = clock, reporter = reporter)
     lateinit var message: MessageDTO
     lateinit var pending: PendingSendDTO
+    var expectedQueueIssue: Throwable? = null
     val key get() = EntityKey(radio, message.id)
 
     suspend fun seed() {
@@ -131,7 +143,7 @@ internal class DirectQueueOriginalFixture(
         store.saveContact(contact)
         assertEquals(device, store.fetchDevice(device.id))
         assertEquals(contact, store.fetchContact(EntityKey(radio, contact.id)))
-        if (connected) {
+        if (startSession) {
             session.start()
             assertEquals(SelfInfo(0u, 20, 20, Bytes(ByteArray(32) { 0xAB.toByte() }),
                 0.0, 0.0, 2u, 0u, 0u, 0u, 2u, false, 915.0, 250.0, 10u, 5u, "TestNode"),
@@ -175,6 +187,8 @@ internal class DirectQueueOriginalFixture(
     fun failures(phase: String): List<Throwable> = diagnostics.filterIsInstance<MessagingDiagnostic.Failure>()
         .filter { it.operation == "$phase.${message.id}" }.map { it.cause }
     fun failure(phase: String): Throwable = failures(phase).single()
+    fun uncertainFailure(): Throwable = diagnostics.filterIsInstance<MessagingDiagnostic.Failure>()
+        .single { it.operation == "directUncertain.${pending.id}" }.cause
 
     suspend fun assertParked(attemptCount: Long = 1) {
         assertEquals(listOf(pending.copy(attemptCount = attemptCount)), store.fetchPendingSends(radio))

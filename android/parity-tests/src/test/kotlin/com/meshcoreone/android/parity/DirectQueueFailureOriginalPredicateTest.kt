@@ -5,7 +5,6 @@ package com.meshcoreone.android.parity
 import com.meshcoreone.android.core.contracts.domain.MessageStatusEvent
 import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceException
-import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.services.messaging.MessageServiceConfig
@@ -42,7 +41,7 @@ class DirectQueueFailureOriginalPredicateTest {
         }
     }
 
-    @Test fun originalTableFullExhaustsTwoPoolRetriesWithoutBroadcastingFailed() = runTest {
+    @Test fun uncorrelatedTableFullRetainsOneAttemptWithoutBroadcastingFailed() = runTest {
         val config = MessageServiceConfig(poolBackoff = PoolBackoffConfig(attemptCap = 2, baseDelay = 0.01))
         withDirectQueueFixture(connected = true, config = config, firmwareError = 3) { f ->
             val subscription = f.messages.statusEvents()
@@ -50,12 +49,18 @@ class DirectQueueFailureOriginalPredicateTest {
             advanceTimeBy(300)
             runCurrent()
 
-            val failure = (f.failure("park") as MessageServiceException).error
+            val retained = f.uncertainFailure()
+            f.expectedQueueIssue = retained
+            val failure = (retained.suppressed.single() as MessageServiceException).error
             assertTrue(failure is MessageServiceError.SessionError)
             val underlying = (failure as MessageServiceError.SessionError).underlying
             assertTrue(underlying is MeshCoreException.DeviceError)
             assertEquals(3.toUByte(), (underlying as MeshCoreException.DeviceError).code)
-            assertEquals(3, f.directSends().size)
+            assertEquals(1, f.directSends().size)
+            f.assertParked()
+            f.transition(com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY)
+            advanceTimeBy(1_000); runCurrent()
+            assertEquals(1, f.directSends().size)
             f.assertParked()
             f.messages.finishStatusEvents()
             val events = subscription.events.toList()
@@ -65,27 +70,26 @@ class DirectQueueFailureOriginalPredicateTest {
         }
     }
 
-    @Test fun originalIllegalArgumentBroadcastsExactlyOneFailureForTheOriginalMessageID() = runTest {
+    @Test fun uncorrelatedIllegalArgumentRetainsTheOriginalMessageWithoutBroadcastingFailed() = runTest {
         withDirectQueueFixture(connected = true, firmwareError = 6) { f ->
             val subscription = f.messages.statusEvents()
             f.startDrain()
             f.queue.awaitDrainCompletion()
 
+            val retained = f.uncertainFailure()
+            f.expectedQueueIssue = retained
             val failure = (f.failure("terminal") as MessageServiceException).error
+            assertSame(f.failure("terminal"), retained.suppressed.single())
             assertTrue(failure is MessageServiceError.SessionError)
             val underlying = (failure as MessageServiceError.SessionError).underlying
             assertTrue(underlying is MeshCoreException.DeviceError)
             assertEquals(6.toUByte(), (underlying as MeshCoreException.DeviceError).code)
             assertEquals(1, f.directSends().size)
-            assertEquals(f.message.copy(status = MessageStatus.FAILED), f.store.fetchMessage(f.key))
-            assertTrue(f.store.fetchPendingSends(f.radio).isEmpty())
-            assertFalse(f.store.hasPendingSend(f.key))
-            assertEquals(0, f.queue.queuedEnvelopeCount)
+            f.assertParked()
             f.messages.finishStatusEvents()
             val events = subscription.events.toList()
             assertTrue(events.all { it.token == f.token })
-            assertEquals(listOf(f.message.id),
-                events.map { it.event }.filterIsInstance<MessageStatusEvent.Failed>().map { it.messageID })
+            assertTrue(events.map { it.event }.filterIsInstance<MessageStatusEvent.Failed>().isEmpty())
             subscription.close()
         }
     }

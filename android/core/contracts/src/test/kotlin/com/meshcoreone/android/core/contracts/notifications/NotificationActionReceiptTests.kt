@@ -75,6 +75,21 @@ class NotificationActionReceiptTests {
     }
 
     @Test
+    fun missingDurableProofPreventsReplayWithoutDowngradingAcceptedOrCommittedActions() {
+        for (state in NotificationActionReceipt.State.entries) {
+            val receipt = receiptAt(state)
+            receipt.retainUncertain()
+            val expected = when (state) {
+                NotificationActionReceipt.State.READY, NotificationActionReceipt.State.IN_FLIGHT ->
+                    NotificationActionReceipt.State.UNCERTAIN
+                else -> state
+            }
+            assertEquals(expected, receipt.state)
+            assertTrue(receipt.preventsReplay)
+        }
+    }
+
+    @Test
     fun committedReadIsNotWireAcceptanceAndCannotBeDowngraded() {
         val receipt = NotificationActionReceipt()
         receipt.committed()

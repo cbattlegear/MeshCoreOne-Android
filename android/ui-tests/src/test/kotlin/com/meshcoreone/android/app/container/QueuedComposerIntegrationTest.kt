@@ -5,6 +5,7 @@ package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.app.state.MessageEvent
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.MessagingDiagnostic
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.contracts.domain.ChannelHistoryConflict
 import com.meshcoreone.android.core.contracts.domain.ChannelHistoryRejected
@@ -13,6 +14,8 @@ import com.meshcoreone.android.core.contracts.domain.ChannelMessageCreation
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueServiceException
+import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceError
+import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceException
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
@@ -270,10 +273,16 @@ class QueuedComposerIntegrationTest : RoomProcessTest() {
     }
 
     private suspend fun terminalModes(test: TestScope, kind: Kind) {
-        val graph = graph(test)
+        val snapshots = Collections.synchronizedList(mutableListOf<PendingSendDTO>())
+        var directRadio: RadioId? = null
+        val persistence = if (kind == Kind.DIRECT) DirectQueuePreWireFaultStore(store) {
+            snapshots += store.fetchPendingSends(requireNotNull(directRadio)).single()
+            throw MessageServiceException(MessageServiceError.InvalidRecipient)
+        } else store
+        val graph = graph(test, persistence)
+        directRadio = graph.radio
         val h = graph.harness
         val failed = observeFailures(test, graph)
-        val snapshots = Collections.synchronizedList(mutableListOf<PendingSendDTO>())
         val queueQueries = Collections.synchronizedList(mutableListOf<Bytes>())
         val firmware = h.links.radios.single()
         val opcode = if (kind == Kind.DIRECT) 2 else 3
@@ -341,13 +350,13 @@ class QueuedComposerIntegrationTest : RoomProcessTest() {
             }
             assertEquals(if (kind == Kind.DIRECT) listOf(false, false, true) else listOf(false, true, true), snapshots.map { it.isResend })
             assertEquals(List(3) { message.id }, failed.toList())
-            assertEquals(3, firmware.sent.count { it[0].toInt() == opcode })
+            assertEquals(0, firmware.sent.count { it[0].toInt() == opcode })
             assertEquals(1, h.lifecycle.created.size)
             assertEquals(0, assertNotNull(h.sessions.current).chatSendQueueService.queuedEnvelopeCount)
         } finally { h.container.close() }
     }
 
-    @Test fun directPendingRetryAndSendAgainHaveOneDurableOwnerAndTerminalEvent() = runTest {
+    @Test fun directPendingRetryAndSendAgainHaveOneDurableOwnerAndPreWireFailureEvent() = runTest {
         terminalModes(this, Kind.DIRECT)
     }
 
@@ -357,6 +366,7 @@ class QueuedComposerIntegrationTest : RoomProcessTest() {
 
     private suspend fun localFailure(test: TestScope, persistence: Boolean) {
         for (kind in Kind.entries) {
+            restartProcessStore()
             val graph = graph(test)
             val h = graph.harness
             val failed = observeFailures(test, graph)
@@ -423,6 +433,7 @@ class QueuedComposerIntegrationTest : RoomProcessTest() {
 
     @Test fun failedSeenBookkeepingCannotSuppressDurableFailureEventOrRefresh() = runTest {
         for (kind in Kind.entries) {
+            restartProcessStore()
             val graph = graph(this)
             val h = graph.harness
             val failed = observeFailures(this, graph)
@@ -464,7 +475,7 @@ class QueuedComposerIntegrationTest : RoomProcessTest() {
         }
     }
 
-    @Test fun cancelledComposerAcceptanceRemainsDurableForOneReplacementGeneration() = runTest {
+    @Test fun cancelledComposerAcceptanceRetainsItsUncertainSendAcrossReplacement() = runTest {
         val graph = graph(this)
         val h = graph.harness
         val failed = observeFailures(this, graph)
@@ -490,23 +501,29 @@ class QueuedComposerIntegrationTest : RoomProcessTest() {
             h.scheduler.runCurrent()
             assertTrue(diagnostics.isEmpty())
             assertTrue(failed.isEmpty())
-            assertEquals(1, store.fetchPendingSendsForMessage(key).size)
+            h.eventually("accepted direct attempt reaches the original radio", virtualBudgetMillis = 0) {
+                h.links.radios.single().sent.count { it[0].toInt() == 2 } == 1
+            }
+            val originalPending = store.fetchPendingSendsForMessage(key).single()
             assertNotEquals(MessageStatus.FAILED, assertNotNull(store.fetchMessage(key)).status)
             val old = assertNotNull(h.sessions.current)
             h.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
             assertTrue(old.isTornDown)
-            assertEquals(1, store.fetchPendingSendsForMessage(key).size)
+            assertEquals(originalPending, store.fetchPendingSendsForMessage(key).single())
+            h.messagingDiagnostics.clear()
             h.manager.connect(h.target(UUID.fromString("50200000-0000-0000-0000-000000000215")))
-            h.eventually("replacement generation owns terminal failure") {
-                failed.size == 1 && runBlocking {
-                    store.fetchMessage(key)?.status == MessageStatus.FAILED &&
-                        store.fetchPendingSendsForMessage(key).isEmpty()
+            h.eventually("replacement generation retains the uncertain attempt") {
+                h.messagingDiagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+                    it.operation == "directUncertain.${originalPending.id}"
                 }
             }
             assertNotEquals(old.token, assertNotNull(h.sessions.current).token)
             assertEquals(2, h.lifecycle.created.size)
             assertEquals(1, h.lifecycle.tornDown.size)
-            assertEquals(listOf(id), failed.toList())
+            assertTrue(failed.isEmpty())
+            assertEquals(MessageStatus.PENDING, store.fetchMessage(key)?.status)
+            assertEquals(originalPending, store.fetchPendingSendsForMessage(key).single())
+            assertEquals(listOf(1, 0), h.links.radios.map { radio -> radio.sent.count { it[0].toInt() == 2 } })
             assertEquals(original, assertNotNull(store.fetchMessage(key)).text)
         } finally {
             composer.close()

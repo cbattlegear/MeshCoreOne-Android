@@ -23,6 +23,7 @@ data class PendingDirectMessageIntent(
 interface PendingSendPersisting {
     suspend fun upsertPendingSend(dto: PendingSendDTO)
     suspend fun insertPendingSendAssigningSequence(dto: PendingSendDTO): Long
+    /** Replace a submission only for an explicit retry request, not automatic recovery. */
     suspend fun replacePendingSendForRetry(messageID: UUID, dto: PendingSendDTO): Long
     suspend fun fetchPendingSends(radioId: RadioId): SnapshotList<PendingSendDTO>
     suspend fun fetchPendingSendsForMessage(key: EntityKey): SnapshotList<PendingSendDTO>

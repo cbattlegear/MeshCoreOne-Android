@@ -84,6 +84,20 @@ internal class PendingSendRepository(private val context: RoomRepositoryContext)
             database.messages().setStatusUnlessDelivered(dto.radioId.value, messageID, MessageStatus.PENDING.rawValue)
             val next = checkedIncrement(database.pendingSends().maximumSequence(dto.radioId.value) ?: 0)
             database.pendingSends().upsert(replacement.copy(sequence = next))
+            if (replacement.isDirect) {
+                val dao = database.directAcks()
+                val claims = dao.unresolvedQueuedClaimsForRetry(dto.radioId.value, messageID)
+                if (claims.isNotEmpty()) {
+                    val incarnation = dao.incarnation(dto.radioId.value, dto.id, "pending")
+                        ?: invalidData("Explicit direct retry lost its pending incarnation")
+                    for (claim in claims) {
+                        dao.operation(DirectAckOperationEntity(
+                            dto.radioId.value, claim, UUID.randomUUID(),
+                            "EXPLICIT_RETRY:${incarnation.incarnation}", null, null, dto.id,
+                        ))
+                    }
+                }
+            }
             save()
             next
         }

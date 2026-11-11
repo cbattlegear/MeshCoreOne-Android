@@ -43,7 +43,8 @@ class ChannelQueryAccountingTest {
             val h = connection()
             val message = h.message(MessageStatus.PENDING)
             val pending = h.pending(message, 2)
-            h.transport.directError = 3u
+            val fault = storageFailure()
+            h.store.faults["incrementPendingSendAttemptCount"] = fault
             var parked = false
             val timerEntered = CompletableDeferred<Unit>()
             val timerCancelled = CompletableDeferred<Unit>()
@@ -98,7 +99,7 @@ class ChannelQueryAccountingTest {
                 assertTrue(timerEntered.isCompleted, "The real direct sender must park on its transport deadline")
                 val receipt = h.store.fetchPendingSendsForMessage(EntityKey(RADIO, message.id)).single()
                 assertEquals(pending.id, receipt.id)
-                assertEquals(3L, receipt.attemptCount)
+                assertEquals(2L, receipt.attemptCount)
                 assertEquals(MessageStatus.PENDING, h.stored(message.id).status)
                 queue.transportDidOpen()
                 runCurrent()
@@ -116,10 +117,10 @@ class ChannelQueryAccountingTest {
                 val failures = h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>()
                 assertTrue(failures.none { it.operation == "terminal.${message.id}" ||
                     it.operation == "dmQueueCallback" }, "Retirement must not terminalize a parked direct envelope: $failures")
-                assertTrue(report.issues.isEmpty(), "Retirement must not retain a direct queue failure: ${report.issues}")
+                assertTrue(report.issues.any { it.cause === fault }, "The injected prewire failure must remain visible")
                 val retained = h.store.fetchPendingSendsForMessage(EntityKey(RADIO, message.id)).single()
                 assertEquals(pending.id, retained.id)
-                assertEquals(3L, retained.attemptCount)
+                assertEquals(2L, retained.attemptCount)
                 assertEquals(MessageStatus.PENDING, h.stored(message.id).status)
             } finally {
                 releaseTimer.complete(Unit)

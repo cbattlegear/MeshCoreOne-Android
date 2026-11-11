@@ -17,6 +17,7 @@ import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.database.RxLogEntryEntity
 import com.meshcoreone.android.core.model.RadioId
 import java.time.Clock
+import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -83,6 +84,7 @@ internal class RoomRepositoryContext(
     val reporter: RepositoryIssueReporter,
     private val channelIdentityMutation: ChannelIdentityMutation = ChannelIdentityMutex.PROCESS,
 ) {
+    val directAckIssuer: UUID = UUID.randomUUID()
     private val mutex = Mutex()
     private val flushOwner = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + flushOwner)
@@ -243,6 +245,9 @@ internal class RoomRepositoryContext(
             mutex.withLock {
                 if (!closed) {
                     flushRxLocked()
+                    committedTransaction(afterCommit = {}) {
+                        database.directAcks().revokeIssuer(directAckIssuer)
+                    }
                     closed = true
                     closedSignal.complete(Unit)
                     flushTask?.cancel()

@@ -78,13 +78,25 @@ data class SyncPendingDMReaction(
 )
 
 /** WP-216 `reactions.ReactionPersistResult`. */
-data class SyncReactionPersistResult(val messageID: UUID, val summary: String)
+data class SyncReactionPersistResult(val messageID: UUID, val summary: String, val shouldNotify: Boolean = true)
 
 /** `ReactionService` (WP-216). Future implementer: `reactions.ReactionService`. */
 interface SyncReactionServicing {
     suspend fun indexDMMessage(id: UUID, contactID: UUID, text: String, timestamp: UInt): List<SyncPendingDMReaction>
     suspend fun indexMessage(id: UUID, channelIndex: UByte, senderName: String, text: String, timestamp: UInt): List<SyncPendingReaction>
-    suspend fun persistReactionAndUpdateSummary(reaction: ReactionDTO, dataStore: ReactionPersisting): SyncReactionPersistResult?
+    suspend fun persistIndexedDMMessage(
+        id: UUID, radioId: RadioId, contactID: UUID, text: String, timestamp: UInt, dataStore: ReactionPersisting,
+        onPersisted: suspend (SyncReactionPersistResult) -> Unit,
+    ): List<SyncReactionPersistResult>?
+    suspend fun persistIndexedChannelMessage(
+        id: UUID, radioId: RadioId, channelIndex: UByte, senderName: String, text: String, timestamp: UInt,
+        dataStore: ReactionPersisting, onPersisted: suspend (SyncReactionPersistResult) -> Unit,
+    ): List<SyncReactionPersistResult>?
+    suspend fun persistReactionAndUpdateSummary(
+        reaction: ReactionDTO,
+        dataStore: ReactionPersisting,
+        onPersisted: ((SyncReactionPersistResult) -> Unit)? = null,
+    ): SyncReactionPersistResult?
     suspend fun findDMTargetMessage(messageHash: String, contactID: UUID): UUID?
     suspend fun queuePendingDMReaction(parsed: SyncParsedDMReaction, contactID: UUID, senderName: String, rawText: String, radioId: RadioId)
 

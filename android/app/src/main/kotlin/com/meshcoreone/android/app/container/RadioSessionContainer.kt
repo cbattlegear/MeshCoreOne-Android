@@ -66,6 +66,7 @@ import com.meshcoreone.android.core.services.remote.asRemoteNodeSessionPort
 import com.meshcoreone.android.core.services.remote.remoteAdminStore
 import com.meshcoreone.android.core.services.remote.remoteNodeStore
 import com.meshcoreone.android.core.services.sync.SyncCoordinator
+import com.meshcoreone.android.core.services.sync.SyncDataEvent
 import com.meshcoreone.android.core.services.sync.SyncDependencies
 import com.meshcoreone.android.core.services.sync.SyncRetryController
 import com.meshcoreone.android.core.services.sync.SyncRetryServices
@@ -144,7 +145,10 @@ class RadioSessionContainer private constructor(
     // region Services (constructed in dependency order; every dependency exists before its consumer)
 
     override val syncCoordinator = SyncCoordinator(scope, env.syncClock, env.logSink)
-    override val reactionService = ReactionService(persistenceMutex = reactionPersistenceMutex)
+    override val reactionService = ReactionService(
+        persistenceMutex = reactionPersistenceMutex,
+        pendingReactionCustody = env.pendingReactionCustody,
+    )
     val heardRepeatsService = HeardRepeatsService(dataStore)
     override val rxLogService = RxLogService(
         session, RxLogServiceStore.from(dataStore), HeardRepeatProcessingAdapter(heardRepeatsService), scope,
@@ -231,7 +235,7 @@ class RadioSessionContainer private constructor(
     val chatSendQueueService = ChatSendQueueService(
         token, dataStore, messageService, MessagingChannelQuery { index -> channelService.fetchChannel(index) },
         OutgoingChannelReactionIndexer { id, channelIndex, senderName, text, timestamp ->
-            reactionService.indexMessage(id, channelIndex, senderName, text, timestamp)
+            indexOutgoingChannelReactions(id, channelIndex, senderName, text, timestamp)
         },
         inputs.connection.signals, scope,
         config = env.chatSendQueueConfig,
@@ -239,6 +243,23 @@ class RadioSessionContainer private constructor(
         progress = chatSendQueueProgress,
         onQueryAccounting = env.onChannelQueryAccounting,
     )
+
+    private suspend fun indexOutgoingChannelReactions(
+        messageID: UUID,
+        channelIndex: UByte,
+        senderName: String,
+        text: String,
+        timestamp: UInt,
+    ) {
+        reactionService.persistIndexedChannelMessage(
+            messageID, radioId, channelIndex, senderName, text, timestamp, dataStore,
+        ) { result ->
+            syncCoordinator.publishReactionPersisted(result)
+        } ?: throw IllegalStateException(
+            "Could not persist pending channel reaction(s) for message $messageID; restored them to process custody",
+        )
+    }
+
     override val notificationActionHandler = NotificationActionHandler(
         dataStore, NotificationMessageSender(messageService), notificationService,
         NotificationRoomReader(roomServerService), ConversationsNotifierAdapter(syncCoordinator),
@@ -263,7 +284,7 @@ class RadioSessionContainer private constructor(
         channelService = channelService,
         messagePollingService = messagePollingService,
         notificationService = SyncNotificationsAdapter(notificationService),
-        reactionService = SyncReactionAdapter(reactionService),
+        reactionService = SyncReactionAdapter(reactionService, radioId),
         advertisementService = syncAdvertisement,
         rxLogService = SyncRxLogAdapter(rxLogService),
         heardRepeatsService = SyncHeardRepeatsAdapter(heardRepeatsService),
@@ -564,6 +585,7 @@ class RadioSessionContainer private constructor(
             notificationService.onChannelMarkAsRead = null
             notificationService.onRoomMarkAsRead = null
             step(LifecycleStage.STOP_SERVICES) { chatSendQueueService.shutdown().issues.forEach { issues += it } }
+            step(LifecycleStage.STOP_SERVICES) { reactionService.clearPendingReactions() }
             step(LifecycleStage.STOP_SERVICES) { messageService.close().issues.forEach { issues += it } }
             step(LifecycleStage.STOP_SERVICES) { messagePollingService.close().issues.forEach { issues += it } }
             step(LifecycleStage.STOP_SERVICES) { binaryProtocolService.close() }

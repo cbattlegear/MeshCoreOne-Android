@@ -1,5 +1,6 @@
 // AndroidOnly: WP-501 Actual App/runtime/factory queue channel-query composition, not another frozen queue original.
 // AndroidOnly: WP-207 Supplemental deferred-recovery ordering, not ungated production acceptance.
+// AndroidOnly: WP-307 Accepted outgoing channel reaction replay and persistence regressions for #612.
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.contracts.domain.*
@@ -8,10 +9,15 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.core.services.contacts.ChannelDispatchFailure
+import com.meshcoreone.android.core.services.reactions.ReactionParser
+import com.meshcoreone.android.core.services.sync.SyncDataEvent
+import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
+import java.time.Instant
 import java.util.UUID
 import kotlin.coroutines.CoroutineContext
 import kotlin.test.*
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -20,6 +26,128 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
+    @Test fun actualFactorySuccessfulOutgoingChannelSendPersistsPendingReactionWithOriginalArrival() = runTest {
+        withFactoryQueue(QueryReply.SUCCESS) { f ->
+            f.awaitAcceptedAttempt()
+            f.assertStored(MessageStatus.SENT, pending = false, reactionSummary = "👍:2")
+            f.assertSuccessfulWire()
+            f.awaitReactionNotification()
+            assertEquals(
+                listOf(
+                    SyncDataEvent.ReactionReceived(f.message.id, "👍:1"),
+                    SyncDataEvent.ReactionReceived(f.message.id, "👍:2"),
+                ),
+                f.reactionNotifications(),
+            )
+
+            val reactions = store.fetchReactions(EntityKey(f.radioId, f.message.id))
+            assertEquals(2, reactions.size)
+            assertEquals(setOf("Remote Node", "Second Remote Node"), reactions.map { it.senderName }.toSet())
+            assertTrue(reactions.all { it.emoji == "👍" && it.rawText == f.pendingReactionRaw })
+            assertTrue(reactions.all { it.receivedAt in requireNotNull(f.pendingReactionArrivalRange) })
+            assertTrue(reactions.all { it.channelIndex == 0u.toUByte() && it.radioId == f.radioId })
+            assertEquals("👍:2", store.fetchMessage(EntityKey(f.radioId, f.message.id))?.reactionSummary)
+            assertTrue(f.pendingReactionSenders().isEmpty())
+            f.assertCurrentGraph()
+        }
+    }
+
+    @Test fun actualFactoryDuplicatePendingChannelReactionNotifiesOnlyOnce() = runTest {
+        withFactoryQueue(
+            QueryReply.SUCCESS,
+            reactionSenders = listOf("Remote Node", "Remote Node"),
+        ) { f ->
+            f.awaitAcceptedAttempt()
+            f.assertStored(MessageStatus.SENT, pending = false, reactionSummary = "👍:1")
+            f.awaitReactionNotification()
+            assertEquals(
+                listOf(SyncDataEvent.ReactionReceived(f.message.id, "👍:1")),
+                f.reactionNotifications(),
+            )
+            assertEquals(1, store.fetchReactions(EntityKey(f.radioId, f.message.id)).size)
+            assertTrue(f.pendingReactionSenders().isEmpty())
+            f.assertSuccessfulWire()
+        }
+    }
+
+    @Test fun actualFactoryAcceptedOutgoingChannelSendRequeuesReactionWhenPersistenceFails() = runTest {
+        val failingStore = FailOnceReactionLookupStore(store, failOnCall = 2)
+        withFactoryQueue(QueryReply.SUCCESS, persistenceOverride = failingStore) { f ->
+            f.awaitReactionPersistenceFailure(failingStore)
+            f.awaitPendingReactionSenders(listOf("Second Remote Node"))
+            assertEquals(
+                listOf("Remote Node"),
+                store.fetchReactions(EntityKey(f.radioId, f.message.id)).map { it.senderName },
+            )
+            assertEquals(listOf("Second Remote Node"), f.pendingReactionSenders())
+            assertTrue(f.indexFailures().isNotEmpty())
+
+            f.live.chatSendQueueService.transportDidOpen()
+            f.awaitAcceptedAttempt()
+            f.assertStored(MessageStatus.SENT, pending = false, reactionSummary = "👍:2")
+            assertEquals(
+                setOf("Remote Node", "Second Remote Node"),
+                store.fetchReactions(EntityKey(f.radioId, f.message.id)).map { it.senderName }.toSet(),
+            )
+            assertTrue(f.pendingReactionSenders().isEmpty())
+            assertEquals(
+                listOf(
+                    SyncDataEvent.ReactionReceived(f.message.id, "👍:1"),
+                    SyncDataEvent.ReactionReceived(f.message.id, "👍:2"),
+                ),
+                f.reactionNotifications(),
+            )
+            f.assertSuccessfulWire()
+        }
+    }
+
+    @Test fun actualFactoryOutgoingChannelSendRetriesReactionBatchAfterPersistenceCancellation() = runTest {
+        val cancelledStore = FailOnceReactionLookupStore(store, CancellationException("Injected cancellation"))
+        withFactoryQueue(QueryReply.SUCCESS, persistenceOverride = cancelledStore) { f ->
+            f.awaitReactionPersistenceFailure(cancelledStore)
+            f.awaitAcceptedAttempt()
+            f.assertStored(MessageStatus.SENT, pending = false, reactionSummary = "👍:2")
+            val reactions = store.fetchReactions(EntityKey(f.radioId, f.message.id))
+            assertEquals(2, reactions.size)
+            assertEquals(setOf("Remote Node", "Second Remote Node"), reactions.map { it.senderName }.toSet())
+            assertTrue(reactions.all { it.emoji == "👍" && it.rawText == f.pendingReactionRaw })
+            assertTrue(reactions.all { it.receivedAt in requireNotNull(f.pendingReactionArrivalRange) })
+            assertTrue(reactions.all { it.channelIndex == 0u.toUByte() && it.radioId == f.radioId })
+            assertEquals("👍:2", store.fetchMessage(EntityKey(f.radioId, f.message.id))?.reactionSummary)
+            assertTrue(f.pendingReactionSenders().isEmpty())
+            assertEquals(
+                listOf(
+                    SyncDataEvent.ReactionReceived(f.message.id, "👍:1"),
+                    SyncDataEvent.ReactionReceived(f.message.id, "👍:2"),
+                ),
+                f.reactionNotifications(),
+            )
+            f.assertSuccessfulWire()
+            f.assertCurrentGraph()
+        }
+    }
+
+    @Test fun actualFactoryOutgoingChannelSendPublishesAfterPostCommitReactionCancellation() = runTest {
+        val cancelledStore = SaveThenFailReactionStore(store, CancellationException("Committed then cancelled"))
+        withFactoryQueue(QueryReply.SUCCESS, persistenceOverride = cancelledStore) { f ->
+            f.harness.eventually("the committed reaction save is cancelled afterward") { cancelledStore.failed }
+            f.awaitAcceptedAttempt()
+            f.assertStored(MessageStatus.SENT, pending = false, reactionSummary = "👍:2")
+            assertEquals(
+                setOf("Remote Node", "Second Remote Node"),
+                store.fetchReactions(EntityKey(f.radioId, f.message.id)).map { it.senderName }.toSet(),
+            )
+            assertEquals(
+                listOf(
+                    SyncDataEvent.ReactionReceived(f.message.id, "👍:1"),
+                    SyncDataEvent.ReactionReceived(f.message.id, "👍:2"),
+                ),
+                f.reactionNotifications(),
+            )
+            f.assertSuccessfulWire()
+        }
+    }
+
     @Test fun actualFactoryConfiguredChannelRetainsTheOriginalEnvelopeAsUncertain() = runTest {
         withFactoryQueue(QueryReply.CONFIGURED) { f ->
             f.awaitUncertainAttempt()
@@ -105,10 +233,15 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
         }
     }
 
-    private enum class QueryReply { CONFIGURED, UNCONFIGURED, RAW_NOT_FOUND, HELD }
+    private enum class QueryReply { SUCCESS, CONFIGURED, UNCONFIGURED, RAW_NOT_FOUND, HELD }
 
-    private suspend fun TestScope.withFactoryQueue(reply: QueryReply, body: suspend (Fixture) -> Unit) {
-        val f = Fixture(this, reply)
+    private suspend fun TestScope.withFactoryQueue(
+        reply: QueryReply,
+        persistenceOverride: PersistenceStoreProtocol = store,
+        reactionSenders: List<String> = listOf("Remote Node", "Second Remote Node"),
+        body: suspend (Fixture) -> Unit,
+    ) {
+        val f = Fixture(this, reply, persistenceOverride, reactionSenders)
         var primary: Throwable? = null
         try {
             f.start()
@@ -167,10 +300,16 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
         }
     }
 
-    private inner class Fixture(test: TestScope, reply: QueryReply) {
+    private inner class Fixture(
+        private val test: TestScope,
+        private val reply: QueryReply,
+        private val persistenceOverride: PersistenceStoreProtocol,
+        private val reactionSenders: List<String>,
+    ) {
         private val recovery = RecoveryGate(StandardTestDispatcher(test.testScheduler))
         val harness = ContainerHarness(test, store,
-            recoveryDispatcher = if (reply == QueryReply.RAW_NOT_FOUND) recovery else Dispatchers.Default)
+            recoveryDispatcher = if (reply == QueryReply.RAW_NOT_FOUND) recovery else Dispatchers.Default,
+            persistenceOverride = persistenceOverride)
         val radioId = RadioId(UUID.fromString("A0000000-0000-0000-0000-000000000001"))
         private val foreignRadioId = RadioId(UUID.fromString("B0000000-0000-0000-0000-000000000001"))
         private val deviceID = UUID.fromString("A0000000-0000-0000-0000-000000000002")
@@ -188,8 +327,15 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
         private lateinit var firmware: FirmwareRadio
         lateinit var live: RadioSessionContainer
         private lateinit var statuses: SessionEventSubscription<MessageStatusEvent>
+        lateinit var pendingReactionRaw: String
+            private set
+        var pendingReactionArrivalRange: ClosedRange<Instant>? = null
+            private set
         private var holdContacts = true
         private var sending = false
+        private val observedReactionNotifications = java.util.Collections.synchronizedList(
+            mutableListOf<SyncDataEvent.ReactionReceived>(),
+        )
 
         init {
             harness.links.configureRadio = { radio ->
@@ -197,10 +343,11 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
                 radio.respond = { command ->
                     when (command[0].toInt()) {
                         4 -> if (holdContacts) emptyList() else null
-                        3 -> { sending = true; listOf(Bytes.of(1, 2)) }
+                        3 -> { sending = true; listOf(if (reply == QueryReply.SUCCESS) Bytes.of(0) else Bytes.of(1, 2)) }
                         31 -> when {
                             !sending -> listOf(if (command[1] == 0.toUByte()) configuredReply
                                 else Bytes.of(0x12, command[1].toInt()) + Bytes(ByteArray(48)))
+                            reply == QueryReply.SUCCESS -> listOf(configuredReply)
                             reply == QueryReply.CONFIGURED -> listOf(configuredReply)
                             reply == QueryReply.UNCONFIGURED -> listOf(Bytes.fromHex("1200" + "00".repeat(48)))
                             reply == QueryReply.RAW_NOT_FOUND -> listOf(Bytes.of(1, 2))
@@ -253,14 +400,20 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
             }
             live = assertNotNull(harness.sessions.current)
             assertSame(live, harness.lifecycle.created.single())
-            assertSame(store, live.dataStore)
+            assertSame(persistenceOverride, live.dataStore)
             assertEquals(radioId, live.token.radioId)
             assertEquals(live.token, live.messageService.token)
             assertEquals(live.token, live.chatSendQueueService.token)
+            test.backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+                live.syncCoordinator.dataEvents().collect { event ->
+                    if (event is SyncDataEvent.ReactionReceived) observedReactionNotifications += event
+                }
+            }
             statuses = live.messageService.statusEvents()
             assertEquals(listOf(pending), store.fetchPendingSends(radioId))
             assertEquals(message, store.fetchMessage(EntityKey(radioId, message.id)))
             assertTrue(firmware.sent.none { it[0] == 3.toUByte() }, "No channel write before actual runtime READY")
+            if (reply == QueryReply.SUCCESS) queuePendingChannelReaction(reactionSenders)
             holdContacts = false
             firmware.push(Bytes.of(2) + le32(0))
             firmware.push(Bytes.of(4) + le32(0))
@@ -282,6 +435,13 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
                 .map { it.cause }
         }
 
+        fun indexFailures(): List<Throwable> = synchronized(harness.messagingDiagnostics) {
+            harness.messagingDiagnostics.filterIsInstance<MessagingDiagnostic.Failure>()
+                .filter { it.operation == "index.${message.id}" }
+                .onEach { assertEquals(live.token, it.token) }
+                .map { it.cause }
+        }
+
         suspend fun awaitUncertainAttempt() {
             harness.eventually("actual factory persists the uncertain channel attempt",
                 virtualBudgetMillis = 20_000, virtualStepMillis = 25) {
@@ -293,16 +453,80 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
             }
         }
 
+        private fun queuePendingChannelReaction(senders: List<String>) {
+            val before = Instant.now()
+            pendingReactionRaw = live.reactionService.buildReactionText("👍", "Stored Node", message.text, message.timestamp)
+            val parsed = assertNotNull(ReactionParser.parse(pendingReactionRaw))
+            senders.forEach { sender ->
+                live.reactionService.queuePendingReaction(parsed, 0u, sender, pendingReactionRaw, radioId)
+            }
+            pendingReactionArrivalRange = before..Instant.now()
+            assertEquals(senders, pendingReactionSenders())
+        }
+
+        fun pendingReactionSenders(): List<String> =
+            live.reactionService.indexMessage(
+                message.id, 0u, "Stored Node", message.text, message.timestamp, radioId, includeCustody = true,
+            )
+                .also { matches -> matches.forEach(live.reactionService::requeuePendingReaction) }
+                .map { it.senderNodeName }
+
+        suspend fun awaitAcceptedAttempt() {
+            harness.eventually("actual factory accepts the channel send and persists its terminal state") {
+                runBlocking {
+                    store.fetchMessage(EntityKey(radioId, message.id))?.status == MessageStatus.SENT &&
+                        store.fetchPendingSendsForMessage(EntityKey(radioId, message.id)).isEmpty()
+                }
+            }
+        }
+
+        suspend fun awaitReactionPersistenceFailure(failingStore: FailOnceReactionLookupStore) {
+            try {
+                harness.eventually("the injected reaction persistence failure is reached") {
+                    failingStore.failed
+                }
+            } catch (timeout: AssertionError) {
+                throw AssertionError(
+                    "${timeout.message}; reactionExists calls=${failingStore.lookupCount}, " +
+                        "wire=${queueWire()}, indexFailures=${indexFailures()}, " +
+                        "pending=${pendingReactionSenders()}",
+                    timeout,
+                )
+            }
+        }
+
+        suspend fun awaitPendingReactionSenders(expected: List<String>) {
+            harness.eventually("the unprocessed reactions are restored to the pending queue") {
+                pendingReactionSenders() == expected
+            }
+        }
+
+        suspend fun awaitReactionNotification() {
+            harness.eventually("the persisted reaction summary is broadcast to timeline consumers") {
+                reactionNotifications().any { it.messageID == message.id }
+            }
+        }
+
+        fun reactionNotifications(): List<SyncDataEvent.ReactionReceived> =
+            synchronized(observedReactionNotifications) { observedReactionNotifications.toList() }
+
         fun queueWire(): List<Bytes> = firmware.sent.dropWhile { it[0] != 3.toUByte() }
             .filter { it[0] == 3.toUByte() || it[0] == 31.toUByte() }
+
+        fun assertSuccessfulWire() {
+            assertEquals(listOf(send), queueWire())
+        }
 
         fun assertWire() {
             assertEquals(listOf(send), queueWire(),
                 "The raw channel SEND error must not trigger GET_CHANNEL or another SEND")
         }
 
-        suspend fun assertStored(status: MessageStatus, pending: Boolean) {
-            assertEquals(message.copy(status = status), store.fetchMessage(EntityKey(radioId, message.id)))
+        suspend fun assertStored(status: MessageStatus, pending: Boolean, reactionSummary: String? = null) {
+            assertEquals(
+                message.copy(status = status, reactionSummary = reactionSummary),
+                store.fetchMessage(EntityKey(radioId, message.id)),
+            )
             val rows = store.fetchPendingSends(radioId)
             if (pending) {
                 val retained = rows.single()
@@ -311,7 +535,13 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
                 assertEquals(QueuedChannelDispatchState.UNCERTAIN, retained.channelDispatchState)
                 assertNotNull(retained.channelAttemptID)
             } else assertTrue(rows.isEmpty())
-            assertEquals(listOf(channel), store.fetchChannels(radioId))
+            val storedChannels = store.fetchChannels(radioId)
+            val expectedChannel = if (status == MessageStatus.SENT) {
+                channel.copy(lastMessageDate = assertNotNull(storedChannels.single().lastMessageDate))
+            } else {
+                channel
+            }
+            assertEquals(listOf(expectedChannel), storedChannels)
             assertEquals(foreignMessage, store.fetchMessage(EntityKey(foreignRadioId, foreignMessage.id)))
             assertEquals(listOf(foreignPending), store.fetchPendingSends(foreignRadioId))
         }
@@ -375,6 +605,42 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
             val events = statuses.events.toList()
             assertTrue(events.all { it.token == live.token })
             assertEquals(expected, events.map { it.event })
+        }
+    }
+
+    private class FailOnceReactionLookupStore(
+        private val delegate: RoomPersistenceStore,
+        private val failure: Exception = IllegalStateException("Injected reaction lookup failure"),
+        private val failOnCall: Int = 1,
+    ) : PersistenceStoreProtocol by delegate, QueuedChannelReadinessPersisting by delegate {
+        private val lookupCounter = java.util.concurrent.atomic.AtomicInteger()
+        val lookupCount: Int get() = lookupCounter.get()
+        @Volatile var failed = false
+            private set
+
+        override suspend fun reactionExists(message: EntityKey, senderName: String, emoji: String): Boolean {
+            if (lookupCounter.incrementAndGet() == failOnCall) {
+                failed = true
+                throw failure
+            }
+            return delegate.reactionExists(message, senderName, emoji)
+        }
+    }
+
+    private class SaveThenFailReactionStore(
+        private val delegate: RoomPersistenceStore,
+        private val failure: CancellationException,
+    ) : PersistenceStoreProtocol by delegate, QueuedChannelReadinessPersisting by delegate {
+        private val failedOnce = java.util.concurrent.atomic.AtomicBoolean()
+        @Volatile var failed = false
+            private set
+
+        override suspend fun saveReaction(reaction: ReactionDTO) {
+            delegate.saveReaction(reaction)
+            if (failedOnce.compareAndSet(false, true)) {
+                failed = true
+                throw failure
+            }
         }
     }
 }

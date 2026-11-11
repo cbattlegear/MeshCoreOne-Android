@@ -6,7 +6,9 @@ import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.model.DebugLogLevel
 import com.meshcoreone.android.core.model.DeliveryContext
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.services.reactions.ReactionPersistResult
 import java.time.Instant
+import java.util.UUID
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
@@ -172,6 +174,22 @@ class SyncCoordinator(
 
     /** A fresh multicast stream of data-change and incoming-message events, registered at call time. */
     fun dataEvents(): Flow<SyncDataEvent> = dataEventBroadcaster.subscribe()
+
+    /** Publishes a persisted reaction or rejects it so its caller can retain the notification obligation. */
+    fun publishReactionPersisted(result: ReactionPersistResult) {
+        publishReactionPersisted(result.messageID, result.summary, result.shouldNotify)
+    }
+
+    fun publishReactionPersisted(result: SyncReactionPersistResult) {
+        publishReactionPersisted(result.messageID, result.summary, result.shouldNotify)
+    }
+
+    private fun publishReactionPersisted(messageID: UUID, summary: String, shouldNotify: Boolean) {
+        if (!shouldNotify) return
+        check(dataEventBroadcaster.tryYield(SyncDataEvent.ReactionReceived(messageID, summary))) {
+            "Cannot publish reaction $messageID; the session data-event stream has finished"
+        }
+    }
 
     /** Ends every [dataEvents] subscriber's collection (`ServiceContainer.tearDown`). */
     fun finishDataEvents() = dataEventBroadcaster.finish()

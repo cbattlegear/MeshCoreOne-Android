@@ -8,6 +8,7 @@ import java.time.Instant
 import java.util.UUID
 
 sealed class OfflineMapError(message: String) : Exception(message) {
+    data object OpenFreeMapDownloadsSuspended : OfflineMapError("OpenFreeMap offline downloads are temporarily unavailable")
     data object InsufficientDiskSpace : OfflineMapError("At least 100 MB of free storage is required")
     data object EmptyLayerSelection : OfflineMapError("At least one offline layer is required")
     data class MissingLayerPolicy(val layer: OfflineLayer) : OfflineMapError("No approved policy exists for layer: $layer")
@@ -59,6 +60,8 @@ data class OfflinePackRequest(
 
 interface OfflineMapBackend {
     val packs: StateFlow<List<OfflinePack>>
+    val downloadError: OfflineMapError? get() = null
+    fun resumeError(packId: UUID): OfflineMapError? = downloadError
     suspend fun createAndStart(request: OfflinePackRequest)
     suspend fun delete(packId: UUID)
     suspend fun pause(packId: UUID)
@@ -84,6 +87,8 @@ class OfflineMapController(
     private val nextId: () -> UUID = UUID::randomUUID,
 ) {
     val packs: StateFlow<List<OfflinePack>> = backend.packs
+    val downloadError: OfflineMapError? get() = backend.downloadError
+    fun resumeError(pack: OfflinePack): OfflineMapError? = backend.resumeError(pack.id)
 
     suspend fun downloadRegion(
         name: String,
@@ -91,6 +96,7 @@ class OfflineMapController(
         layers: Set<OfflineLayer>,
         minZoom: Int = 10,
     ): Result<List<OfflinePack>> {
+        downloadError?.let { return Result.failure(it) }
         if (availableBytes() < MINIMUM_DISK_BYTES) return Result.failure(OfflineMapError.InsufficientDiskSpace)
         if (!networkAvailable()) return Result.failure(OfflineMapError.NetworkUnavailable)
         if (layers.isEmpty()) return Result.failure(OfflineMapError.EmptyLayerSelection)
@@ -140,7 +146,10 @@ class OfflineMapController(
 
     suspend fun pause(pack: OfflinePack) = backend.pause(pack.id)
 
-    suspend fun resume(pack: OfflinePack) = backend.resume(pack.id)
+    suspend fun resume(pack: OfflinePack) {
+        resumeError(pack)?.let { throw it }
+        backend.resume(pack.id)
+    }
 
     companion object { const val MINIMUM_DISK_BYTES = 100_000_000L }
 }

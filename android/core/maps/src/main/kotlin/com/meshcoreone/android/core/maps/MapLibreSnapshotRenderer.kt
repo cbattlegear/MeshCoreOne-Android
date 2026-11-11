@@ -29,6 +29,7 @@ class MapLibreSnapshotRenderer(
 
     override suspend fun render(request: MapSnapshotRequest): Bitmap? = withContext(Dispatchers.Main.immediate) {
         if (!MapLibreRuntime.isSupported || request.isOffline) return@withContext null
+        OpenFreeMapOfflineSuspension.install()
         MapLibre.getInstance(appContext)
         suspendCancellableCoroutine { continuation ->
             val options = MapSnapshotter.Options(widthPixels, heightPixels)

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-312 User-approved temporary provider download suspension. -->
+<resources>
+    <string name="map_offline_downloads_suspended">Новые и возобновляемые загрузки офлайн-карт OpenFreeMap временно недоступны, пока внедряются ограничения загрузки. Загруженные карты остаются доступны офлайн. Сохранённые карты по-прежнему можно удалить.</string>
+</resources>

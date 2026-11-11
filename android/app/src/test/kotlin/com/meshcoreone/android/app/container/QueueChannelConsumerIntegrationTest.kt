@@ -55,7 +55,7 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
     @Test fun actualFactoryAcceptedOutgoingChannelSendRequeuesReactionWhenPersistenceFails() = runTest {
         val failingStore = FailOnceReactionLookupStore(store, failOnCall = 2)
         withFactoryQueue(QueryReply.SUCCESS, persistenceOverride = failingStore) { f ->
-            f.awaitReactionPersistenceFailure(failingStore)
+            f.awaitReactionPersistenceFailure(failingStore, listOf("Second Remote Node"))
             assertEquals(
                 listOf("Remote Node"),
                 store.fetchReactions(EntityKey(f.radioId, f.message.id)).map { it.senderName },
@@ -85,7 +85,7 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
     @Test fun actualFactoryOutgoingChannelSendRequeuesReactionBatchAndPropagatesPersistenceCancellation() = runTest {
         val cancelledStore = FailOnceReactionLookupStore(store, CancellationException("Injected cancellation"))
         withFactoryQueue(QueryReply.SUCCESS, persistenceOverride = cancelledStore) { f ->
-            f.awaitReactionPersistenceFailure(cancelledStore)
+            f.awaitReactionPersistenceFailure(cancelledStore, listOf("Remote Node", "Second Remote Node"))
             assertEquals(listOf("Remote Node", "Second Remote Node"), f.pendingReactionSenders())
             assertTrue(f.reactionNotifications().isEmpty())
             val recovered = f.live.reactionService.indexMessage(
@@ -426,10 +426,13 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
             }
         }
 
-        suspend fun awaitReactionPersistenceFailure(failingStore: FailOnceReactionLookupStore) {
+        suspend fun awaitReactionPersistenceFailure(
+            failingStore: FailOnceReactionLookupStore,
+            expectedPendingSenders: List<String>,
+        ) {
             try {
-                harness.eventually("the injected reaction persistence failure is reached") {
-                    failingStore.failed
+                harness.eventually("the injected reaction persistence failure restores its unprocessed reactions") {
+                    failingStore.failed && pendingReactionSenders() == expectedPendingSenders
                 }
             } catch (timeout: AssertionError) {
                 throw AssertionError(

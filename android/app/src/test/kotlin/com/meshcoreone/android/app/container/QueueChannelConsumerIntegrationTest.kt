@@ -55,7 +55,8 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
     @Test fun actualFactoryAcceptedOutgoingChannelSendRequeuesReactionWhenPersistenceFails() = runTest {
         val failingStore = FailOnceReactionLookupStore(store, failOnCall = 2)
         withFactoryQueue(QueryReply.SUCCESS, persistenceOverride = failingStore) { f ->
-            f.awaitReactionPersistenceFailure(failingStore, listOf("Second Remote Node"))
+            f.awaitReactionPersistenceFailure(failingStore)
+            f.awaitPendingReactionSenders(listOf("Second Remote Node"))
             assertEquals(
                 listOf("Remote Node"),
                 store.fetchReactions(EntityKey(f.radioId, f.message.id)).map { it.senderName },
@@ -82,18 +83,28 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
         }
     }
 
-    @Test fun actualFactoryOutgoingChannelSendRequeuesReactionBatchAndPropagatesPersistenceCancellation() = runTest {
+    @Test fun actualFactoryOutgoingChannelSendRetriesReactionBatchAfterPersistenceCancellation() = runTest {
         val cancelledStore = FailOnceReactionLookupStore(store, CancellationException("Injected cancellation"))
         withFactoryQueue(QueryReply.SUCCESS, persistenceOverride = cancelledStore) { f ->
-            f.awaitReactionPersistenceFailure(cancelledStore, listOf("Remote Node", "Second Remote Node"))
-            assertEquals(listOf("Remote Node", "Second Remote Node"), f.pendingReactionSenders())
-            assertTrue(f.reactionNotifications().isEmpty())
-            val recovered = f.live.reactionService.indexMessage(
-                f.message.id, 0u, "Stored Node", f.message.text, f.message.timestamp,
+            f.awaitReactionPersistenceFailure(cancelledStore)
+            f.awaitAcceptedAttempt()
+            f.assertStored(MessageStatus.SENT, pending = false, reactionSummary = "👍:2")
+            val reactions = store.fetchReactions(EntityKey(f.radioId, f.message.id))
+            assertEquals(2, reactions.size)
+            assertEquals(setOf("Remote Node", "Second Remote Node"), reactions.map { it.senderName }.toSet())
+            assertTrue(reactions.all { it.emoji == "👍" && it.rawText == f.pendingReactionRaw })
+            assertTrue(reactions.all { it.receivedAt in requireNotNull(f.pendingReactionArrivalRange) })
+            assertTrue(reactions.all { it.channelIndex == 0u.toUByte() && it.radioId == f.radioId })
+            assertEquals("👍:2", store.fetchMessage(EntityKey(f.radioId, f.message.id))?.reactionSummary)
+            assertTrue(f.pendingReactionSenders().isEmpty())
+            assertEquals(
+                listOf(
+                    SyncDataEvent.ReactionReceived(f.message.id, "👍:1"),
+                    SyncDataEvent.ReactionReceived(f.message.id, "👍:2"),
+                ),
+                f.reactionNotifications(),
             )
-            assertEquals(listOf("Remote Node", "Second Remote Node"), recovered.map { it.senderNodeName })
-            assertTrue(recovered.all { it.rawText == f.pendingReactionRaw })
-            assertTrue(recovered.all { it.receivedAt in requireNotNull(f.pendingReactionArrivalRange) })
+            f.assertSuccessfulWire()
             f.assertCurrentGraph()
         }
     }
@@ -426,13 +437,10 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
             }
         }
 
-        suspend fun awaitReactionPersistenceFailure(
-            failingStore: FailOnceReactionLookupStore,
-            expectedPendingSenders: List<String>,
-        ) {
+        suspend fun awaitReactionPersistenceFailure(failingStore: FailOnceReactionLookupStore) {
             try {
-                harness.eventually("the injected reaction persistence failure restores its unprocessed reactions") {
-                    failingStore.failed && pendingReactionSenders() == expectedPendingSenders
+                harness.eventually("the injected reaction persistence failure is reached") {
+                    failingStore.failed
                 }
             } catch (timeout: AssertionError) {
                 throw AssertionError(
@@ -441,6 +449,12 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
                         "pending=${pendingReactionSenders()}",
                     timeout,
                 )
+            }
+        }
+
+        suspend fun awaitPendingReactionSenders(expected: List<String>) {
+            harness.eventually("the unprocessed reactions are restored to the pending queue") {
+                pendingReactionSenders() == expected
             }
         }
 

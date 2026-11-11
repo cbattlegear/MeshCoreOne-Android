@@ -1,4 +1,5 @@
 // AndroidOnly: WP-407 Settings adapters over the process preferences/store and current connection-owned services.
+// AndroidOnly: WP-312 Maps settings observe the shared preference migration and authoritative values.
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.datastore.*
@@ -41,6 +42,10 @@ class AppSettingsFeature private constructor(
     internal fun setPreference(key: PreferenceKey.BooleanKey, value: Boolean) {
         write { storage.preferences.set(key, value) }
     }
+    internal fun observeMapPreferences(legacy: android.content.SharedPreferences) =
+        AppMapPreferences(storage.preferences, legacy).observe(
+            com.meshcoreone.android.core.maps.MapFilterHost.MAIN_MAP,
+        )
     private val deviceValues = mutableMapOf<UUID, DevicePreferenceSnapshot>()
     val failure = MutableStateFlow<Throwable?>(null)
     private val changes = combine(

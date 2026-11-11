@@ -54,6 +54,12 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
     @Test fun liveRetryConsumesOldPendingWorkWithoutDuplicatePublication() = runTest {
         recover(this, Fault.SAVE_BEFORE, liveRetry = true)
     }
+    @Test fun consecutiveFailedSavesCreateOnlyOneNotificationObligation() = runTest {
+        recover(this, Fault.SAVE_BEFORE, consecutiveFailures = true)
+    }
+    @Test fun resolvedOutgoingTargetStillReplaysAfterLocalRename() = runTest {
+        recover(this, Fault.SAVE_BEFORE, renamed = true)
+    }
     @Test fun failedSaveAfterCommitReconcilesWithoutAnotherSave() = runTest { recover(this, Fault.SAVE_AFTER) }
     @Test fun cachedTargetFailedSaveAlsoSurvivesReconnect() = runTest { recover(this, Fault.SAVE_AFTER, cached = true) }
     @Test fun cancelledSaveAfterCommitReconcilesWithoutAnotherSave() = runTest { recover(this, Fault.SAVE_AFTER, cancel = true) }
@@ -62,8 +68,11 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
 
     private suspend fun recover(
         test: TestScope, fault: Fault, cancel: Boolean = false, cached: Boolean = false, retireMiss: Boolean = false,
-        liveRetry: Boolean = false,
+        liveRetry: Boolean = false, consecutiveFailures: Boolean = false, renamed: Boolean = false,
     ) {
+        val targetSender = if (renamed) "TestNode" else "Alice"
+        val wire = if (renamed) "@[$targetSender]$emoji\nb45pc4ek" else raw
+        var receiveTime = receivedAt
         var target: MessageDTO? = null
         var armed = false
         var saves = 0
@@ -115,7 +124,7 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
         val harness = ContainerHarness(
             test, store, persistenceOverride = persistence,
             syncClock = object : SyncClock {
-                override fun now() = receivedAt
+                override fun now() = receiveTime
                 override fun elapsed() = test.testScheduler.currentTime.milliseconds
                 override suspend fun sleep(duration: Duration) = delay(duration)
             },
@@ -133,11 +142,12 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
             target = MessageDTO(
                 radioId = live.token.radioId, channelIndex = 3u, text = "Hello",
                 timestamp = stamp + 10u, senderTimestamp = stamp, timestampCorrected = true,
-                direction = MessageDirection.INCOMING, senderNodeName = "Alice",
+                direction = if (renamed) MessageDirection.OUTGOING else MessageDirection.INCOMING,
+                senderNodeName = if (renamed) null else targetSender,
             )
             val originalTarget = assertNotNull(target)
             if (fault != Fault.MISS) store.saveMessage(originalTarget)
-            if (cached) live.reactionService.indexMessage(originalTarget.id, 3u, "Alice", "Hello", stamp)
+            if (cached) live.reactionService.indexMessage(originalTarget.id, 3u, targetSender, "Hello", stamp)
             val events = mutableListOf<SyncDataEvent.ReactionReceived>()
             val collector = test.backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
                 live.syncCoordinator.dataEventBroadcaster.subscribe().collect {
@@ -147,14 +157,18 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
             armed = true
             val beforePoll = Instant.now()
             if (cancel) {
-                val polling = test.backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { poll(harness, "Bob: $raw") }
+                val polling = test.backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { poll(harness, "Bob: $wire") }
                 entered.await()
                 polling.cancelAndJoin()
                 assertTrue(polling.isCancelled)
-            } else poll(harness, "Bob: $raw")
+            } else poll(harness, "Bob: $wire")
+            if (consecutiveFailures) {
+                receiveTime = receivedAt.plusSeconds(1)
+                poll(harness, "Bob: $wire")
+            }
             val afterPoll = Instant.now()
             test.runCurrent()
-            assertEquals(if (cached) 0 else 1, lookups)
+            assertEquals(if (cached) 0 else if (consecutiveFailures) 2 else 1, lookups)
             assertTrue(events.isEmpty())
             assertFalse(logs.any { it.startsWith("Saved reaction ") }, "failure/miss must not log success")
 
@@ -173,12 +187,14 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
             }
             val replacement = assertNotNull(harness.sessions.current)
             fun takePending() = replacement.reactionService.indexMessage(
-                originalTarget.id, 3u, "Alice", "Hello", stamp, originalTarget.radioId, includeCustody = true,
+                originalTarget.id, 3u, targetSender, "Hello", stamp, originalTarget.radioId, includeCustody = true,
             )
             if (!retireMiss && !liveRetry) {
                 // Inspect after actual retirement for failures: requeueing before it would mask wrong ownership.
-                val retained = takePending().single()
-                assertEquals(raw, retained.rawText)
+                val allRetained = takePending()
+                assertEquals(if (consecutiveFailures) 2 else 1, allRetained.size)
+                val retained = allRetained.first()
+                assertEquals(wire, retained.rawText)
                 assertEquals("Bob", retained.senderNodeName)
                 assertEquals(receivedAt, retained.receivedAt)
                 assertEquals("TestNode", retained.localNodeName)
@@ -186,8 +202,10 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
                 assertTrue(context.anchor in beforePoll..afterPoll, "the original drain context must survive replacement")
                 assertEquals(live.token.radioId, retained.radioId)
                 assertEquals(3u.toUByte(), retained.channelIndex)
-                if (fault == Fault.MISS) replacement.reactionService.queuePendingReaction(retained)
-                else replacement.reactionService.requeuePendingReaction(retained)
+                allRetained.forEach {
+                    if (fault == Fault.MISS) replacement.reactionService.queuePendingReaction(it)
+                    else replacement.reactionService.requeuePendingReaction(it)
+                }
             }
             val recoveryCollector = test.backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
                 replacement.syncCoordinator.dataEventBroadcaster.subscribe().collect {
@@ -195,9 +213,12 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
                 }
             }
             try {
-                if (liveRetry) poll(harness, "Bob: $raw")
+                if (liveRetry) {
+                    receiveTime = receivedAt.plusSeconds(60)
+                    poll(harness, "Bob: $wire")
+                }
                 val indexing = ReactionIndexing(
-                    replacement.reactionService, ReactionIndexScope.Channel(channel, "TestNode"),
+                    replacement.reactionService, ReactionIndexScope.Channel(channel, if (renamed) "RenamedNode" else "TestNode"),
                     onPersisted = { harness.appState.publishReactionPersisted(originalTarget.radioId, it) },
                 )
                 harness.container.chatsFeature.prepareTimelineMessages(listOf(originalTarget), indexing)
@@ -211,13 +232,13 @@ class IncomingChannelReactionRecoveryTest : RoomProcessTest() {
                     return
                 }
                 val saved = store.fetchReactions(EntityKey(originalTarget.radioId, originalTarget.id)).single()
-                assertEquals(raw, saved.rawText)
+                assertEquals(wire, saved.rawText)
                 assertEquals(receivedAt, saved.receivedAt)
                 assertEquals("Bob", saved.senderName)
                 assertEquals(emoji, saved.emoji)
                 assertEquals("$emoji:1", store.fetchMessage(EntityKey(originalTarget.radioId, originalTarget.id))?.reactionSummary)
                 assertEquals(listOf(SyncDataEvent.ReactionReceived(originalTarget.id, "$emoji:1")), events)
-                assertEquals(if (fault == Fault.SAVE_BEFORE) 2 else 1, saves)
+                assertEquals(if (consecutiveFailures) 3 else if (fault == Fault.SAVE_BEFORE) 2 else 1, saves)
                 assertTrue(takePending().isEmpty())
             } finally { recoveryCollector.cancelAndJoin() }
         } finally { harness.container.close() }

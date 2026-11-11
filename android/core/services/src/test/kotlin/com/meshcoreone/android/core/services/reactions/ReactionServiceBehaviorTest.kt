@@ -312,6 +312,39 @@ class ReactionServiceBehaviorTest {
                 }
             }
         },
+        test("resolved channel replay uses exact target identity after sender rename in local and shared custody") {
+            blocking {
+                for (shared in listOf(false, true)) {
+                    val radio = newRadioId()
+                    val target = EntityKey(radio, UUID.randomUUID())
+                    val service = ReactionService(
+                        ReactionsTickingClock(), pendingReactionCustody = if (shared) PendingReactionCustody() else null,
+                    )
+                    val raw = service.buildReactionText("👍", "OldName", "message", stamp)
+                    val pending = PendingReaction(
+                        requireNotNull(ReactionParser.parse(raw)), 0u, "Sender", raw, radio, Instant.EPOCH,
+                        localNodeName = "OldName",
+                    )
+                    val store = ReactionsInMemoryReactionStore().apply { failOn("reactionExists") }
+                    assertNull(service.persistIncomingChannelReaction(pending, target, store) {})
+                    store.clearFailures()
+                    assertTrue(service.persistIndexedChannelMessage(
+                        target.id, newRadioId(), 0u, "NewName", "message", stamp, store,
+                    ).orEmpty().isEmpty())
+                    assertTrue(service.persistIndexedChannelMessage(
+                        target.id, radio, 1u, "NewName", "message", stamp, store,
+                    ).orEmpty().isEmpty())
+                    assertTrue(service.persistIndexedChannelMessage(
+                        UUID.randomUUID(), radio, 0u, "NewName", "message", stamp, store,
+                    ).orEmpty().isEmpty())
+                    assertEquals(1, service.persistIndexedChannelMessage(
+                        target.id, radio, 0u, "NewName", "message", stamp, store,
+                    )?.size)
+                    assertEquals(raw, store.fetchReactions(target).single().rawText)
+                    assertEquals(Instant.EPOCH, store.fetchReactions(target).single().receivedAt)
+                }
+            }
+        },
         test("live publication claims an indexed reaction notification after its save failed") {
             blocking {
                 val custody = PendingReactionCustody()

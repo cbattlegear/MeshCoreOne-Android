@@ -109,13 +109,17 @@ class PendingReactionCustody {
         val (remaining, matched) = channel.takeMatchingEntries(
             { key ->
                 (radioId == null || key.radioId == radioId) &&
-                    key.channelIndex == channelIndex &&
-                    key.targetSender == SwiftText.canonical(targetSender) && key.messageHash == messageHash
+                    key.channelIndex == channelIndex
             },
             { owned ->
                 val pending = owned.value
                 (includeProcess || owned.sessionOwner == sessionOwner) &&
-                    (pending.targetEntity == null || pending.targetEntity == EntityKey(pending.radioId, messageID))
+                    if (pending.targetEntity != null) {
+                        pending.targetEntity == EntityKey(pending.radioId, messageID)
+                    } else {
+                        SwiftText.canonical(pending.parsed.targetSender) == SwiftText.canonical(targetSender) &&
+                            pending.parsed.messageHash == messageHash
+                    }
             },
         ) { owned, keyOrder, entryOrder ->
             val pending = owned.value.copy(queueKeyOrder = keyOrder, queueEntryOrder = entryOrder)
@@ -235,7 +239,17 @@ class ReactionService internal constructor(
     ): List<PendingReaction> {
         messageCache.index(messageID = id, channelIndex = channelIndex, senderName = senderName, text = text, timestamp = timestamp)
         val hash = ReactionParser.generateMessageHash(text, timestamp)
-        val key = PendingReactionKey.of(channelIndex, senderName, hash)
+        return takePendingChannel(id, channelIndex, senderName, hash, radioId, includeCustody)
+    }
+
+    private fun takePendingChannel(
+        id: UUID,
+        channelIndex: UByte,
+        senderName: String,
+        hash: String,
+        radioId: RadioId?,
+        includeCustody: Boolean,
+    ): List<PendingReaction> {
         val retained = if (includeCustody) {
             pendingReactionCustody?.takeChannel(radioId, channelIndex, senderName, hash, id, sessionOwner, true).orEmpty()
         } else {
@@ -243,9 +257,15 @@ class ReactionService internal constructor(
         }
         val matched = synchronized(lock) {
             val (remaining, taken) = pendingReactions.takeMatchingEntries(
-                matchesKey = { it == key },
+                matchesKey = { it.channelIndex == channelIndex },
                 matchesValue = { pending ->
-                    pending.targetEntity == null || pending.targetEntity == EntityKey(pending.radioId, id)
+                    (radioId == null || pending.radioId == radioId) &&
+                        if (pending.targetEntity != null) {
+                            pending.targetEntity == EntityKey(pending.radioId, id)
+                        } else {
+                            SwiftText.canonical(pending.parsed.targetSender) == SwiftText.canonical(senderName) &&
+                                pending.parsed.messageHash == hash
+                        }
                 },
             ) { value, keyOrder, entryOrder ->
                 val pending = value.copy(queueKeyOrder = keyOrder, queueEntryOrder = entryOrder)
@@ -334,24 +354,24 @@ class ReactionService internal constructor(
     ): ReactionPersistResult? {
         require(pending.radioId == target.radioId)
         val matched = pending.copy(targetEntity = target)
-        val dto = ReactionDTO(
-            messageID = target.id, emoji = matched.parsed.emoji, senderName = matched.senderNodeName,
-            messageHash = matched.parsed.messageHash, rawText = matched.rawText,
-            receivedAt = matched.receivedAt, channelIndex = matched.channelIndex, radioId = matched.radioId,
-        )
         var acquired = false
         try {
             return persistenceMutex.withLock {
                 acquired = true
+                val retained = takePendingChannel(
+                    target.id, pending.channelIndex, pending.parsed.targetSender, pending.parsed.messageHash,
+                    target.radioId, includeCustody = true,
+                )
                 persistMatched(
-                    listOf(matched), dataStore, ::requeuePendingReaction,
-                    { it.notificationPending }, { it.copy(notificationPending = true) },
-                    onPersisted = { result ->
-                        onPersisted(result)
-                        if (result.shouldNotify) acknowledgePendingNotification(dto)
-                    },
-                    toDTO = { dto },
-                )?.single()
+                    retained + matched, dataStore, ::requeuePendingReaction,
+                    { it.notificationPending }, { it.copy(notificationPending = true) }, onPersisted,
+                ) { reaction ->
+                    ReactionDTO(
+                        messageID = target.id, emoji = reaction.parsed.emoji, senderName = reaction.senderNodeName,
+                        messageHash = reaction.parsed.messageHash, rawText = reaction.rawText,
+                        receivedAt = reaction.receivedAt, channelIndex = reaction.channelIndex, radioId = reaction.radioId,
+                    )
+                }?.last()
             }
         } catch (cancelled: CancellationException) {
             if (!acquired) requeuePendingReaction(matched)

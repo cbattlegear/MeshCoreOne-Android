@@ -34,6 +34,7 @@ import com.meshcoreone.android.uitests.ConversationScreenCases
 import java.util.Collections
 import java.util.UUID
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -47,6 +48,7 @@ import org.robolectric.annotation.GraphicsMode
 
 @Config(sdk = [31], qualifiers = "w360dp-h1000dp-mdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
+@OptIn(ExperimentalCoroutinesApi::class)
 class ConnectedConversationComposeTest : RoomProcessTest() {
     @get:Rule val compose = createAndroidComposeRule<MainActivity>()
 
@@ -187,10 +189,16 @@ class ConnectedConversationComposeTest : RoomProcessTest() {
                     else ChatConversationID.dm(radio, contact.id)))
                 if (!channel && attempt == 0) {
                     assertEquals(1, h.links.radios.single().sent.count { it[0].toInt() == opcode })
+                    test.testScheduler.advanceTimeBy(1_100)
                     compose.onNodeWithText(compose.activity.getString(C.chatsMessageActionDetails)).performClick()
                     compose.onNodeWithText(compose.activity.getString(C.chatsMessageActionSendAgain))
                         .performScrollTo().assertIsEnabled().performClick()
                 }
+            }
+            if (!channel) {
+                val wires = h.links.radios.single().sent.filter { it[0].toInt() == opcode }
+                assertEquals(2, wires.size)
+                assertNotEquals(sentReply(wires[0], key(7)), sentReply(wires[1], key(7)))
             }
             if (adaptive) {
                 val retained = "Unsent draft: $original"

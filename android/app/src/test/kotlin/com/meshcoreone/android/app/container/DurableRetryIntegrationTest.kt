@@ -9,6 +9,7 @@ import com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueService
 import com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueServiceException
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.runtime.RuntimeClock
 import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.feature.chats.timeline.ChatViewModel
 import com.meshcoreone.android.feature.chats.timeline.ChatTimelineDependencies
@@ -19,14 +20,17 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
 
@@ -202,8 +206,23 @@ class DurableRetryIntegrationTest : RoomProcessTest() {
     }
 
     @Test fun joinedOldGenerationRetainsUncertainIntentUntilExplicitSendAgain() = runTest {
+        joinedOldGenerationExplicitRetry(this, sameSecond = false)
+    }
+
+    @Test fun sameSecondExplicitRetryWaitsForAnUnambiguousAckAfterReconnect() = runTest {
+        joinedOldGenerationExplicitRetry(this, sameSecond = true)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private suspend fun joinedOldGenerationExplicitRetry(test: TestScope, sameSecond: Boolean) {
         val (contact, message) = seed()
-        val harness = ContainerHarness(this, store)
+        val schedulerClock = SchedulerClock { test.testScheduler.currentTime }
+        val clock = if (sameSecond) object : RuntimeClock {
+            override val elapsed get() = schedulerClock.elapsed
+            override val instant get() = EPOCH
+            override suspend fun sleep(duration: kotlin.time.Duration) = schedulerClock.sleep(duration)
+        } else schedulerClock
+        val harness = ContainerHarness(test, store, runtimeClock = clock)
         configure(harness, deliver = false)
         val target = harness.target()
         try {
@@ -233,6 +252,7 @@ class DurableRetryIntegrationTest : RoomProcessTest() {
             assertEquals(originalPending, store.fetchPendingSendsForMessage(messageKey(message)).single())
             assertEquals(MessageStatus.PENDING, store.fetchMessage(messageKey(message))?.status)
             assertEquals(0, harness.links.radios.last().sent.count(::isSend))
+            val firstWire = harness.links.radios.first().sent.single(::isSend)
             var explicitPending: PendingSendDTO? = null
             harness.links.radios.last().respond = { frame ->
                 if (isSend(frame)) {
@@ -242,9 +262,22 @@ class DurableRetryIntegrationTest : RoomProcessTest() {
                     sentAndDelivered(frame, key(7))
                 } else null
             }
+            if (!sameSecond) test.testScheduler.advanceTimeBy(1_100)
             harness.container.chatsFeature.sendAgain(
                 assertNotNull(store.fetchMessage(messageKey(message))), TimelineConversation.Direct(contact),
             )
+            if (sameSecond) {
+                harness.eventually("same-second ACK is rejected as ambiguous") {
+                    harness.messagingDiagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+                        it.operation == "ambiguousAck.${message.id}"
+                    }
+                }
+                val collidingWire = harness.links.radios.last().sent.filter(::isSend).single()
+                assertEquals(sentReply(firstWire, key(7)), sentReply(collidingWire, key(7)))
+                assertNotEquals(MessageStatus.DELIVERED, store.fetchMessage(messageKey(message))?.status)
+                assertTrue(store.fetchPendingSendsForMessage(messageKey(message)).single().isResend)
+                test.testScheduler.advanceTimeBy(6_100)
+            }
             try {
                 harness.eventually("explicit replacement is delivered") {
                     kotlinx.coroutines.runBlocking {
@@ -266,7 +299,9 @@ class DurableRetryIntegrationTest : RoomProcessTest() {
                 assertTrue(it.id != originalPending.id)
             }
             assertEquals(1, harness.links.radios.first().sent.count(::isSend))
-            assertEquals(1, harness.links.radios.last().sent.count(::isSend))
+            val retryWires = harness.links.radios.last().sent.filter(::isSend)
+            assertEquals(if (sameSecond) 2 else 1, retryWires.size)
+            assertNotEquals(sentReply(firstWire, key(7)), sentReply(retryWires.last(), key(7)))
         } finally { harness.container.close() }
     }
 }

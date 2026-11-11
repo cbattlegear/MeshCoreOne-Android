@@ -6,6 +6,7 @@ import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.maps.GeoPoint
 import com.meshcoreone.android.core.maps.MapLineStyle
 import com.meshcoreone.android.core.maps.MapPinStyle
+import com.meshcoreone.android.core.maps.semanticText
 import com.meshcoreone.android.feature.tools.navigation.ToolSelection
 import com.meshcoreone.android.feature.tools.navigation.ToolsNavigationState
 import kotlin.test.Test
@@ -146,6 +147,29 @@ class TraceMapAndNavigationTest {
     }
 
     @Test
+    fun `hidden labels keep accessible contact and discovered names without showing them visually`() {
+        trace.setContactsForTesting(listOf(north.copy(nickname = "Summit"), south, unlocated))
+        map.rebuildPathState()
+        map.handleMapPointTap(north.id)
+        map.handleMapPointTap(hill.id)
+        map.setShowLabels(false)
+
+        val markers = map.mapMarkers { _, _ -> error("No badges before a trace") }.associateBy { it.id }
+        assertEquals("Summit, 1", markers.getValue(north.id).semanticText)
+        assertEquals("South", markers.getValue(south.id).semanticText)
+        assertEquals("Hill, 2", markers.getValue(hill.id).semanticText)
+        for (marker in markers.values) {
+            assertNull(marker.label)
+        }
+
+        map.setShowLabels(true)
+        val visible = map.mapMarkers { _, _ -> error("No badges before a trace") }.associateBy { it.id }
+        assertEquals("Summit", visible.getValue(north.id).label)
+        assertEquals("Hill", visible.getValue(hill.id).label)
+        assertEquals(markers.mapValues { it.value.semanticText }, visible.mapValues { it.value.semanticText })
+    }
+
+    @Test
     fun `tapping the last hop removes it, a middle hop is rejected and unknown pins are ignored`() {
         map.handleRepeaterTap(north)
         map.handleRepeaterTap(south)
@@ -222,6 +246,24 @@ class TraceMapAndNavigationTest {
         map.clearPath()
         assertTrue(map.pathState.values.none { it.inPath })
         assertFalse(map.hasPath)
+    }
+
+    @Test
+    fun `map run does not cancel an already running batch`() {
+        val sender = FakeTraceSender()
+        harness.deps.sender = sender
+        trace.configure(harness.deps)
+        trace.setBatchEnabled(true)
+        map.handleRepeaterTap(north)
+        harness.start { trace.runBatchTrace() }
+        val tag = sender.sent.single().tag
+
+        harness.complete { map.runTrace() }
+
+        assertTrue(harness.state.batchEnabled)
+        assertTrue(harness.state.isRunning)
+        assertEquals(tag, trace.pendingTag)
+        assertEquals(1, sender.sent.size)
     }
 
     @Test

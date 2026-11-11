@@ -57,6 +57,7 @@ import com.meshcoreone.android.core.contracts.domain.SessionToken
 import com.meshcoreone.android.core.contracts.notifications.NotificationDeliveryPort
 import com.meshcoreone.android.core.contracts.notifications.NotificationPayload
 import com.meshcoreone.android.core.contracts.notifications.NotificationResponse
+import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.Coordinate
@@ -227,6 +228,8 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
             (dependencies.linkFactory as? AndroidRuntimeLinkFactory)?.transportFor(it)
         }
     internal val processStore get() = dependencies.store
+    internal val simulatorPreferenceRecovery =
+        (dependencies.store as? RoomPersistenceStore)?.let(::SimulatorPreferenceRecovery)
     internal val mapPreferences get() = dependencies.mapPreferences
     internal val bestAvailableLocation: com.meshcoreone.android.core.model.Coordinate?
         get() = dependencies.phoneLocation() ?: appState.connectedDevice?.takeIf { it.hasLocation }?.let {
@@ -287,7 +290,14 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
         linkFactory = RuntimeLinkFactory { target ->
             if (target == ConnectionTarget.Simulator) {
                 val seed = checkNotNull(dependencies.simulatorSeedStore) { "Simulator seed store is not installed" }
-                SimulatorRuntimeLink(seed, finishSeed = {
+                val protectedSeed = object : SimulatorSeedStore by seed {
+                    override suspend fun saveDevice(dto: com.meshcoreone.android.core.model.DeviceDTO) {
+                        val recovery = simulatorPreferenceRecovery
+                        if (recovery == null) seed.saveDevice(dto)
+                        else recovery.seed(dto) { seed.saveDevice(dto) }
+                    }
+                }
+                SimulatorRuntimeLink(protectedSeed, finishSeed = {
                     dependencies.store.flushPendingRxLogEntries()
                     checkNotNull(dependencies.chatContent) { "Simulator chat content is not installed" }.seedDemoInlineImage()
                 })
@@ -898,6 +908,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
     /** Process shutdown: closes the runtime (tearing down any live graph), then every process resource. */
     suspend fun close() {
         withContext(NonCancellable) {
+            simulatorPreferenceRecovery?.close()
             dependencies.onboardingPlatform?.flags?.shutdown()
             hostBinding?.close()
             appState.shutdown()

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-217 Simulator preference conflict recovery copy. -->
+<resources>
+    <string name="simulator_preference_recovery_device_details">De keuze bevat alle hieronder getoonde apparaat- en radio-instellingen. De actieve status en het tijdstip van de laatste verbinding blijven gelijk.</string>
+    <string name="simulator_preference_recovery_title">Simulatorvoorkeuren kiezen</string>
+    <string name="simulator_preference_recovery_explanation">Er zijn twee sets simulatorvoorkeuren gevonden. Kies welke set je wilt behouden. De andere set wordt verwijderd. Berichten, kanalen, contacten en andere radiogegevens worden niet verwijderd. Bij annuleren blijven beide sets behouden.</string>
+    <string name="simulator_preference_recovery_current">Huidige voorkeuren behouden</string>
+    <string name="simulator_preference_recovery_recovered">Herstelde voorkeuren behouden</string>
+    <string name="simulator_preference_recovery_apply">Geselecteerde voorkeuren gebruiken</string>
+    <string name="simulator_preference_recovery_applying">Je keuze wordt opgeslagen...</string>
+    <string name="simulator_preference_recovery_retry">Je keuze kon niet worden toegepast. Controleer beide sets en kies opnieuw.</string>
+    <string name="simulator_preference_recovery_not_set">Niet ingesteld</string>
+    <string name="simulator_preference_recovery_empty_text">Lege tekst</string>
+    <string name="simulator_preference_recovery_no_regions">Geen opgeslagen regio’s</string>
+    <string name="simulator_preference_recovery_flood_scope">Standaardbereik voor flood-routing</string>
+    <string name="simulator_preference_recovery_repeat_frequency">Frequentie vóór de herhaalmodus (MHz)</string>
+    <string name="simulator_preference_recovery_repeat_bandwidth">Bandbreedte vóór de herhaalmodus (kHz)</string>
+    <string name="simulator_preference_recovery_repeat_spreading_factor">Spreidingsfactor vóór de herhaalmodus</string>
+    <string name="simulator_preference_recovery_repeat_coding_rate">Coderingsverhouding vóór de herhaalmodus</string>
+    <string name="simulator_preference_recovery_last_contact_sync">Laatste contactsynchronisatie (Unix-seconden)</string>
+    <string name="simulator_preference_recovery_ocv_preset">Voorinstelling voor batterijspanning</string>
+    <string name="simulator_preference_recovery_radio_preset">ID van toegepaste radiovoorinstelling</string>
+    <string name="simulator_preference_recovery_custom_ocv">Aangepaste batterijspanningswaarden</string>
+    <string name="simulator_preference_recovery_known_regions">Bekende regio’s</string>
+</resources>

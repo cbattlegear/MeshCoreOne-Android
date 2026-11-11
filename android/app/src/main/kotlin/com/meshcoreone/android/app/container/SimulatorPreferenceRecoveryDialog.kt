@@ -49,7 +49,14 @@ import java.util.Locale
 internal fun SimulatorPreferenceRecoveryDialog(recovery: SimulatorPreferenceRecovery) {
     val state by recovery.prompt.collectAsStateWithLifecycle()
     val prompt = state ?: return
-    var choice by rememberSaveable(prompt.id) { mutableStateOf<SimulatorPreferenceChoice?>(null) }
+    val promptId = prompt.id.toString()
+    var selectedPromptId by rememberSaveable(prompt.id) { mutableStateOf<String?>(null) }
+    var savedChoice by rememberSaveable(prompt.id) { mutableStateOf<SimulatorPreferenceChoice?>(null) }
+    val choice = savedChoice.takeIf { selectedPromptId == promptId }
+    fun select(value: SimulatorPreferenceChoice) {
+        selectedPromptId = promptId
+        savedChoice = value
+    }
     val cancel: () -> Unit = { if (!prompt.isApplying) recovery.cancel(prompt.id) }
     val locale = LocalConfiguration.current.locales[0] ?: Locale.getDefault()
     val notSet = stringResource(R.string.simulator_preference_recovery_not_set)
@@ -96,7 +103,7 @@ internal fun SimulatorPreferenceRecoveryDialog(recovery: SimulatorPreferenceReco
                         prompt.conflict.canonical,
                         choice == SimulatorPreferenceChoice.KEEP_CANONICAL,
                         !prompt.isApplying,
-                        { choice = SimulatorPreferenceChoice.KEEP_CANONICAL },
+                        { select(SimulatorPreferenceChoice.KEEP_CANONICAL) },
                         "simulator-preference-current", locale, notSet, emptyText, noRegions,
                     )
                     HorizontalDivider()
@@ -105,7 +112,7 @@ internal fun SimulatorPreferenceRecoveryDialog(recovery: SimulatorPreferenceReco
                         prompt.conflict.imported,
                         choice == SimulatorPreferenceChoice.KEEP_IMPORTED,
                         !prompt.isApplying,
-                        { choice = SimulatorPreferenceChoice.KEEP_IMPORTED },
+                        { select(SimulatorPreferenceChoice.KEEP_IMPORTED) },
                         "simulator-preference-recovered", locale, notSet, emptyText, noRegions,
                     )
                 }

@@ -9,6 +9,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalConfiguration
@@ -22,6 +23,7 @@ import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.ComposeContentTestRule
 import androidx.compose.ui.test.junit4.ComposeTestRule
 import androidx.compose.ui.test.junit4.StateRestorationTester
@@ -36,6 +38,7 @@ import com.meshcoreone.android.app.platform.AppLanguages
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.data.repository.SimulatorDevicePreferenceConflict
+import com.meshcoreone.android.core.data.repository.SimulatorPreferenceChoice
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import com.meshcoreone.android.core.services.simulator.MockDataProvider
@@ -44,9 +47,13 @@ import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -170,6 +177,65 @@ class SimulatorPreferenceRecoveryDialogTest {
         } finally {
             recovery.close()
             attempt.cancel()
+        }
+    }
+
+    @Test fun refreshedPromptDoesNotRestoreThePreviousPromptsChoice() {
+        val current = MockDataProvider.simulatorDevice(Instant.EPOCH)
+        val initial = SimulatorDevicePreferenceConflict(current, current.copy(id = UUID.randomUUID()))
+        val refreshed = initial.copy(imported = initial.imported.copy(defaultFloodScopeName = "refreshed"))
+        var conflict = initial
+        val recovery = SimulatorPreferenceRecovery(
+            load = { conflict },
+            resolve = { _, _, _ ->
+                conflict = refreshed
+                throw PersistenceStoreException(PersistenceStoreError.InvalidData)
+            },
+        )
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val attempt = scope.async(start = CoroutineStart.UNDISPATCHED) {
+            recovery.seed(current) { throw PersistenceStoreException(PersistenceStoreError.InvalidData) }
+        }
+        val originalId = requireNotNull(recovery.prompt.value).id
+        var refreshOnDispose = false
+        val restoration = StateRestorationTester(object : ComposeContentTestRule, ComposeTestRule by compose {
+            override fun setContent(composable: @Composable () -> Unit) {
+                host.get().setContent(content = composable)
+            }
+        })
+        try {
+            restoration.setContent {
+                DisposableEffect(Unit) {
+                    onDispose {
+                        if (refreshOnDispose) {
+                            refreshOnDispose = false
+                            check(recovery.choose(originalId, SimulatorPreferenceChoice.KEEP_IMPORTED))
+                        }
+                    }
+                }
+                MeshCoreTheme(motionScale = 0f) { SimulatorPreferenceRecoveryDialog(recovery) }
+            }
+            compose.onNodeWithTag("simulator-preference-recovered").performScrollTo().performClick()
+            compose.onNodeWithTag("simulator-preference-apply").assertIsEnabled()
+            compose.runOnIdle { refreshOnDispose = true }
+            restoration.emulateSavedInstanceStateRestore()
+            compose.waitForIdle()
+
+            val newPrompt = requireNotNull(recovery.prompt.value)
+            assertNotEquals(originalId, newPrompt.id)
+            assertEquals(refreshed, newPrompt.conflict)
+            compose.onNodeWithTag("simulator-preference-current").performScrollTo()
+                .assert(SemanticsMatcher.expectValue(SemanticsProperties.Selected, false))
+            compose.onNodeWithTag("simulator-preference-recovered").performScrollTo()
+                .assert(SemanticsMatcher.expectValue(SemanticsProperties.Selected, false))
+            compose.onNodeWithTag("simulator-preference-apply").assertIsNotEnabled()
+
+            compose.onNodeWithTag("simulator-preference-current").performScrollTo().performClick()
+            compose.onNodeWithTag("simulator-preference-apply").assertIsEnabled()
+        } finally {
+            recovery.close()
+            attempt.cancel()
+            scope.cancel()
         }
     }
 }

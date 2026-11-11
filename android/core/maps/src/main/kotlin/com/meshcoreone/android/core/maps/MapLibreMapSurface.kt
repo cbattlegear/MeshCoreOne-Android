@@ -61,6 +61,7 @@ fun MapLibreMapSurface(
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     val controller = remember(context) {
+        OpenFreeMapOfflineSuspension.install()
         MapLibre.getInstance(context.applicationContext)
         MapLibreSurfaceController(context.applicationContext, accessibilityLabel, onCameraChanged, onMarkerSelected)
     }

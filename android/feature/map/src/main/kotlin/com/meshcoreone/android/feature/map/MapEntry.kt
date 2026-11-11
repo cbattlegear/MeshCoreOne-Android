@@ -564,18 +564,24 @@ private fun OfflineMapsPanel(
                     }
                 }
             }
+            controller.downloadError?.let { unavailable ->
+                item {
+                    Text(offlineErrorMessage(unavailable), Modifier.testTag("map:offline-unavailable"))
+                }
+            }
             item {
                 OutlinedTextField(
                     value = regionName,
                     onValueChange = { regionName = it },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
+                    enabled = controller.downloadError == null,
                     label = { Text(stringResource(R.string.l10n_app_settings_offlinemaps_regionname)) },
                 )
             }
             item {
                 Button(
-                    enabled = regionName.isNotBlank() && camera != null,
+                    enabled = controller.downloadError == null && regionName.isNotBlank() && camera != null,
                     onClick = {
                         val bounds = camera?.toBounds() ?: return@Button
                         scope.launch {
@@ -590,7 +596,7 @@ private fun OfflineMapsPanel(
                             }
                         }
                     },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().testTag("map:offline-download"),
                 ) {
                     Text(stringResource(R.string.l10n_app_settings_offlinemaps_downloadregion))
                 }
@@ -601,10 +607,11 @@ private fun OfflineMapsPanel(
                 items(packs, key = { it.id }) { pack ->
                     OfflinePackRow(
                         pack = pack,
+                        resumeError = controller.resumeError(pack),
                         onPauseResume = {
                             scope.launch {
                                 try {
-                                    if (pack.state == OfflinePackState.PAUSED) controller.resume(pack) else controller.pause(pack)
+                                    if (pack.state == OfflinePackState.DOWNLOADING) controller.pause(pack) else controller.resume(pack)
                                 } catch (cancelled: CancellationException) {
                                     throw cancelled
                                 } catch (failure: Exception) {
@@ -664,10 +671,11 @@ private fun OfflineMapsPanel(
 @Composable
 private fun OfflinePackRow(
     pack: OfflinePack,
+    resumeError: OfflineMapError?,
     onPauseResume: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    Card {
+    Card(Modifier.testTag("map:offline-pack:${pack.id}")) {
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(pack.name, style = MaterialTheme.typography.titleSmall)
             Text(
@@ -679,16 +687,23 @@ private fun OfflinePackRow(
                     },
                 ),
             )
+            if (resumeError != null && pack.state != OfflinePackState.COMPLETE) {
+                Text(offlineErrorMessage(resumeError))
+            }
             LinearProgressIndicator(
                 progress = { pack.completedFraction },
                 modifier = Modifier.fillMaxWidth(),
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (pack.state != OfflinePackState.COMPLETE) {
-                    TextButton(onClick = onPauseResume) {
+                    TextButton(
+                        onClick = onPauseResume,
+                        enabled = pack.state == OfflinePackState.DOWNLOADING || resumeError == null,
+                        modifier = Modifier.testTag("map:offline-resume:${pack.id}"),
+                    ) {
                         Text(
                             stringResource(
-                                if (pack.state == OfflinePackState.PAUSED) {
+                                if (pack.state != OfflinePackState.DOWNLOADING) {
                                     R.string.l10n_app_settings_offlinemaps_resume
                                 } else {
                                     R.string.l10n_app_settings_offlinemaps_pause
@@ -697,7 +712,7 @@ private fun OfflinePackRow(
                         )
                     }
                 }
-                TextButton(onClick = onDelete) {
+                TextButton(onClick = onDelete, modifier = Modifier.testTag("map:offline-delete:${pack.id}")) {
                     Text(stringResource(R.string.l10n_app_localizable_common_delete))
                 }
             }
@@ -707,6 +722,8 @@ private fun OfflinePackRow(
 
 @Composable
 private fun offlineErrorMessage(failure: Throwable): String = when (failure) {
+    OfflineMapError.OpenFreeMapDownloadsSuspended ->
+        stringResource(R.string.map_offline_downloads_suspended)
     OfflineMapError.InsufficientDiskSpace ->
         stringResource(R.string.l10n_app_settings_offlinemaps_error_insufficientdiskspace)
     OfflineMapError.NetworkUnavailable ->

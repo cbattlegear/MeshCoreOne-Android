@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-312 User-approved temporary provider download suspension. -->
+<resources>
+    <string name="map_offline_downloads_suspended">다운로드 제한을 구현하는 동안 OpenFreeMap 오프라인 지도의 새 다운로드 및 재개를 일시적으로 사용할 수 없습니다. 완료된 지도는 오프라인에서 계속 사용할 수 있으며 저장된 지도는 삭제할 수 있습니다.</string>
+</resources>

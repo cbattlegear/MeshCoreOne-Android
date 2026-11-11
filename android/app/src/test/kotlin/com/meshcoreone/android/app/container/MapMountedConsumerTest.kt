@@ -384,6 +384,47 @@ class MapMountedConsumerTest {
         compose.onNodeWithText(text(R.string.l10n_app_map_map_controls_centerall)).assertIsNotEnabled()
     }
 
+    @Test
+    @Config(qualifiers = "de-rDE-w360dp-h1600dp-mdpi")
+    fun suspendedOfflinePanelExplainsLocalizedUnavailableActionsAndRetainsCompletedAndDelete() {
+        val complete = OfflinePack(
+            UUID(0, 100), "Completed region", OfflineLayer.BASE,
+            GeoBounds(GeoPoint(37.0, -123.0), GeoPoint(38.0, -122.0)),
+            10, 14, Instant.EPOCH, OfflinePackState.COMPLETE, 1f,
+        )
+        val partial = complete.copy(id = UUID(0, 101), name = "Partial region", state = OfflinePackState.PAUSED, completedFraction = 0.4f)
+        val saved = kotlinx.coroutines.flow.MutableStateFlow(listOf(complete, partial))
+        val deleted = mutableListOf<UUID>()
+        val backend = object : OfflineMapBackend {
+            override val packs = saved
+            override val downloadError = OfflineMapError.OpenFreeMapDownloadsSuspended
+            override suspend fun createAndStart(request: OfflinePackRequest) = error("Suspended creation")
+            override suspend fun resume(packId: UUID) = error("Suspended resume")
+            override suspend fun pause(packId: UUID) = error("Already paused")
+            override suspend fun delete(packId: UUID) {
+                deleted += packId
+                saved.value = saved.value.filterNot { it.id == packId }
+            }
+        }
+        val controller = OfflineMapController(backend, emptyMap(), { error("No disk probe") }, { error("No network probe") })
+        mount(MapFeatureDependencies(source { content() }, controller))
+        compose.onNodeWithText(text(R.string.l10n_app_settings_offlinemaps_title)).performClick()
+        val explanation = text(R.string.map_offline_downloads_suspended)
+        assertTrue("Must resolve the German Android resource", explanation.startsWith("Neue und fortgesetzte"))
+        compose.onNodeWithTag("map:offline-unavailable").assertTextEquals(explanation).assertIsDisplayed()
+        compose.onNodeWithTag("map:offline-download").performScrollTo().assertIsNotEnabled()
+        compose.onNodeWithTag("map:offline-pack:${complete.id}").performScrollTo().assertExists()
+        compose.onNodeWithTag("map:offline-resume:${complete.id}").assertDoesNotExist()
+        compose.onNodeWithTag("map:offline-resume:${partial.id}").performScrollTo().assertIsNotEnabled()
+        compose.onNodeWithTag("map:offline-delete:${partial.id}").performScrollTo().assertIsEnabled().performClick()
+        compose.onNode(hasText(partial.name) and hasAnyAncestor(isDialog())).assertIsDisplayed()
+        compose.onNode(hasText(text(R.string.l10n_app_localizable_common_delete)) and hasAnyAncestor(isDialog())).performClick()
+        compose.waitUntil(5_000) { deleted == listOf(partial.id) }
+        assertEquals(listOf(complete), saved.value)
+        compose.onNodeWithTag("map:offline-pack:${complete.id}").performScrollTo().assertExists()
+        compose.onNodeWithTag("map:offline-delete:${complete.id}").assertIsEnabled()
+    }
+
     @Test fun mountedHostObservesLegacyRestoreAndAppearanceWithoutARefetchOrPrivateStore() {
         var loads = 0
         var latest: MapPresentationState? = null

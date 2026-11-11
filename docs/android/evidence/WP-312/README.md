@@ -3,6 +3,8 @@
 **Status:** Historical MapLibre/OpenFreeMap candidate evidence. Current
 offline-download policy compliance is incomplete; see the
 [source-confirmed policy gap](../../deviations/WP-312.md#current-offline-download-policy-gap).
+New and resumed OpenFreeMap downloads are explicitly suspended; existing
+completed packs and deletion remain available.
 Hosted exact-head checks verify code, not provider permission or transfer limits.
 
 ## Revisions and scope
@@ -68,7 +70,8 @@ OfflineManager region requests.
 - Implemented offline lifecycle: MapLibre-managed base regions; satellite,
   topographic and arbitrary local-MBTiles mounting are not claimed. Current
   per-download budgets and four-request concurrency enforcement are missing;
-  lifecycle implementation/tests below do not establish provider compliance.
+  new/resumed provider downloads are therefore temporarily suspended.
+  Lifecycle implementation/tests below do not establish provider compliance.
 
 ## Actual local verification
 

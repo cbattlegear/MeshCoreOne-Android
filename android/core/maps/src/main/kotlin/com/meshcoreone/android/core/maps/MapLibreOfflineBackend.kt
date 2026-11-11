@@ -2,117 +2,72 @@
 package com.meshcoreone.android.core.maps
 
 import android.content.Context
-import android.util.DisplayMetrics
 import java.time.Instant
 import java.util.UUID
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
 import org.json.JSONObject
-import org.maplibre.android.MapLibre
-import org.maplibre.android.geometry.LatLngBounds
-import org.maplibre.android.offline.OfflineManager
-import org.maplibre.android.offline.OfflineRegion
-import org.maplibre.android.offline.OfflineRegionError
-import org.maplibre.android.offline.OfflineRegionStatus
-import org.maplibre.android.offline.OfflineTilePyramidRegionDefinition
 
-class MapLibreOfflineBackend(
-    context: Context,
+class MapLibreOfflineBackend internal constructor(
     private val styleUri: String,
     private val scope: CoroutineScope,
+    private val manager: MapLibreOfflineRegions,
 ) : OfflineMapBackend {
-    private val appContext = context.applicationContext
-    private val manager: OfflineManager
-    private val regions = mutableMapOf<UUID, OfflineRegion>()
+    constructor(context: Context, styleUri: String, scope: CoroutineScope) :
+        this(styleUri, scope, NativeMapLibreOfflineRegions(context))
+
+    private val regions = mutableMapOf<UUID, MapLibreOfflineRegion>()
     private val _packs = MutableStateFlow<List<OfflinePack>>(emptyList())
     override val packs: StateFlow<List<OfflinePack>> = _packs.asStateFlow()
+    override val downloadError: OfflineMapError? get() = OpenFreeMapOfflineSuspension.errorFor(styleUri)
+    override fun resumeError(packId: UUID): OfflineMapError? {
+        val region = synchronized(regions) { regions[packId] } ?: return downloadError
+        return OpenFreeMapOfflineSuspension.errorFor(region.styleUri)
+    }
 
     init {
         require(styleUri.startsWith("https://") || styleUri.startsWith("http://") || styleUri.startsWith("file://"))
-        MapLibre.getInstance(appContext)
-        manager = OfflineManager.getInstance(appContext)
         scope.launch { refresh() }
     }
 
     override suspend fun createAndStart(request: OfflinePackRequest) {
-        val definition = OfflineTilePyramidRegionDefinition(
-            styleUri,
-            request.bounds.toLatLngBounds(),
-            request.minZoom.toDouble(),
-            request.maxZoom.toDouble(),
-            appContext.resources.displayMetrics.density.coerceAtLeast(DisplayMetrics.DENSITY_DEFAULT / 160f),
-        )
-        val region = suspendCancellableCoroutine { continuation ->
-            manager.createOfflineRegion(
-                definition,
-                request.toMetadata(),
-                object : OfflineManager.CreateOfflineRegionCallback {
-                    override fun onCreate(offlineRegion: OfflineRegion) {
-                        if (continuation.isActive) continuation.resume(offlineRegion)
-                        else offlineRegion.delete(ignoringDeleteCallback)
-                    }
-
-                    override fun onError(error: String) {
-                        if (continuation.isActive) continuation.resumeWithException(IllegalStateException(error))
-                    }
-                },
-            )
-        }
+        downloadError?.let { throw it }
+        val region = manager.create(request, styleUri, request.toMetadata())
         synchronized(regions) { regions[request.id] = region }
         observe(request, region)
         publish(request.toPack(OfflinePackState.DOWNLOADING, 0f))
-        region.setDownloadState(OfflineRegion.STATE_ACTIVE)
+        region.setActive(true)
     }
 
     override suspend fun delete(packId: UUID) {
         val region = synchronized(regions) { regions[packId] } ?: return
-        suspendCancellableCoroutine { continuation ->
-            region.delete(object : OfflineRegion.OfflineRegionDeleteCallback {
-                override fun onDelete() {
-                    synchronized(regions) { regions.remove(packId) }
-                    _packs.update { current -> current.filterNot { it.id == packId } }
-                    if (continuation.isActive) continuation.resume(Unit)
-                }
-
-                override fun onError(error: String) {
-                    if (continuation.isActive) continuation.resumeWithException(IllegalStateException(error))
-                }
-            })
-        }
+        region.delete()
+        synchronized(regions) { regions.remove(packId) }
+        _packs.update { current -> current.filterNot { it.id == packId } }
     }
 
     override suspend fun pause(packId: UUID) {
         val region = synchronized(regions) { regions[packId] } ?: return
-        region.setDownloadState(OfflineRegion.STATE_INACTIVE)
-        mutate(packId) { it.copy(state = OfflinePackState.PAUSED) }
+        region.setActive(false)
+        mutate(packId) { if (it.state == OfflinePackState.COMPLETE) it else it.copy(state = OfflinePackState.PAUSED) }
     }
 
     override suspend fun resume(packId: UUID) {
         val region = synchronized(regions) { regions[packId] } ?: return
-        region.setDownloadState(OfflineRegion.STATE_ACTIVE)
+        OpenFreeMapOfflineSuspension.errorFor(region.styleUri)?.let { throw it }
+        region.setActive(true)
         mutate(packId) { it.copy(state = OfflinePackState.DOWNLOADING) }
     }
 
     private suspend fun refresh() {
-        val listed = suspendCancellableCoroutine { continuation ->
-            manager.listOfflineRegions(object : OfflineManager.ListOfflineRegionsCallback {
-                override fun onList(offlineRegions: Array<OfflineRegion>?) {
-                    if (continuation.isActive) continuation.resume(offlineRegions.orEmpty().toList())
-                }
-
-                override fun onError(error: String) {
-                    if (continuation.isActive) continuation.resumeWithException(IllegalStateException(error))
-                }
-            })
-        }
+        val listed = manager.list()
         val decoded = listed.mapNotNull { region ->
+            // Quarantine provider regions even if their app metadata is old or unreadable.
+            if (OpenFreeMapOfflineSuspension.appliesTo(region.styleUri)) region.setActive(false)
             decodeRequest(region.metadata)?.also { request ->
                 synchronized(regions) { regions[request.id] = region }
                 observe(request, region)
@@ -120,25 +75,27 @@ class MapLibreOfflineBackend(
         }
         val initial = decoded.map { (request, region) ->
             val status = region.status()
-            request.toPack(status.toPackState(), status.completedFraction())
+            request.toPack(status.toPackState(region), status.fraction)
         }
         _packs.value = initial.sortedBy { it.createdAt }
     }
 
-    private fun observe(request: OfflinePackRequest, region: OfflineRegion) {
-        region.setObserver(object : OfflineRegion.OfflineRegionObserver {
-            override fun onStatusChanged(status: OfflineRegionStatus) {
-                publish(request.toPack(status.toPackState(), status.completedFraction()))
-            }
-
-            override fun onError(error: OfflineRegionError) {
-                mutate(request.id) { it.copy(state = OfflinePackState.FAILED) }
-            }
-
-            override fun mapboxTileCountLimitExceeded(limit: Long) {
-                mutate(request.id) { it.copy(state = OfflinePackState.FAILED) }
-            }
-        })
+    private fun observe(request: OfflinePackRequest, region: MapLibreOfflineRegion) {
+        region.observe(
+            onProgress = { status ->
+                if (status.active && OpenFreeMapOfflineSuspension.appliesTo(region.styleUri)) region.setActive(false)
+                publish(request.toPack(status.toPackState(region), status.fraction))
+            },
+            onFailure = {
+                mutate(request.id) {
+                    when {
+                        it.state == OfflinePackState.COMPLETE -> it
+                        OpenFreeMapOfflineSuspension.appliesTo(region.styleUri) -> it.copy(state = OfflinePackState.PAUSED)
+                        else -> it.copy(state = OfflinePackState.FAILED)
+                    }
+                }
+            },
+        )
     }
 
     private fun publish(pack: OfflinePack) {
@@ -149,29 +106,11 @@ class MapLibreOfflineBackend(
         _packs.update { current -> current.map { if (it.id == id) transform(it) else it } }
     }
 
-    private suspend fun OfflineRegion.status(): OfflineRegionStatus = suspendCancellableCoroutine { continuation ->
-        getStatus(object : OfflineRegion.OfflineRegionStatusCallback {
-            override fun onStatus(status: OfflineRegionStatus?) {
-                if (status != null && continuation.isActive) continuation.resume(status)
-                else if (continuation.isActive) continuation.resumeWithException(IllegalStateException("Missing offline status"))
-            }
-
-            override fun onError(error: String?) {
-                if (continuation.isActive) continuation.resumeWithException(IllegalStateException(error ?: "Offline status failed"))
-            }
-        })
-    }
-
-    private fun OfflineRegionStatus.toPackState(): OfflinePackState = when {
-        isComplete -> OfflinePackState.COMPLETE
-        downloadState == OfflineRegion.STATE_ACTIVE -> OfflinePackState.DOWNLOADING
+    private fun OfflineRegionProgress.toPackState(region: MapLibreOfflineRegion): OfflinePackState = when {
+        complete -> OfflinePackState.COMPLETE
+        OpenFreeMapOfflineSuspension.appliesTo(region.styleUri) -> OfflinePackState.PAUSED
+        active -> OfflinePackState.DOWNLOADING
         else -> OfflinePackState.PAUSED
-    }
-
-    private fun OfflineRegionStatus.completedFraction(): Float = when {
-        isComplete -> 1f
-        !isRequiredResourceCountPrecise || requiredResourceCount <= 0L -> 0f
-        else -> (completedResourceCount.toDouble() / requiredResourceCount.toDouble()).toFloat().coerceIn(0f, 1f)
     }
 
     private fun OfflinePackRequest.toMetadata(): ByteArray = JSONObject()
@@ -192,15 +131,7 @@ class MapLibreOfflineBackend(
     private fun OfflinePackRequest.toPack(state: OfflinePackState, fraction: Float) =
         OfflinePack(id, name, layer, bounds, minZoom, maxZoom, createdAt, state, fraction)
 
-    private fun GeoBounds.toLatLngBounds(): LatLngBounds =
-        LatLngBounds.from(northeast.latitude, northeast.longitude, southwest.latitude, southwest.longitude)
-
     private companion object {
-        val ignoringDeleteCallback = object : OfflineRegion.OfflineRegionDeleteCallback {
-            override fun onDelete() = Unit
-            override fun onError(error: String) = Unit
-        }
-
         fun decodeRequest(bytes: ByteArray): OfflinePackRequest? = runCatching {
             val json = JSONObject(bytes.toString(Charsets.UTF_8))
             require(json.getInt("schema") == 1)

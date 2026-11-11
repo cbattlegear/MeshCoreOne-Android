@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-312 User-approved temporary provider download suspension. -->
+<resources>
+    <string name="map_offline_downloads_suspended">Les nouveaux téléchargements hors ligne OpenFreeMap et leur reprise sont temporairement indisponibles pendant la mise en place des limites de téléchargement. Les cartes terminées restent disponibles hors ligne. Vous pouvez toujours supprimer les cartes enregistrées.</string>
+</resources>

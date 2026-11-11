@@ -16,7 +16,6 @@ import com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueService
 import com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueServiceException
 import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceException
-import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.model.OCVPreset
 import com.meshcoreone.android.core.model.TextType
 import com.meshcoreone.android.core.model.PendingSendDTO
@@ -157,7 +156,6 @@ class ShortcutIndependentOracleTest : RoomProcessTest() {
             val exact = "\u6d4b".repeat(43) + "ab"
             assertEquals(131, exact.toByteArray(Charsets.UTF_8).size)
             adapter.queueMessage(ShortcutRecipient.Channel(channel), exact)
-            assertNotNull(h.sessions.current).chatSendQueueService.awaitDrainCompletion()
             val messages = store.fetchMessages(radio, 0u, 100, 0)
             assertEquals(setOf("x".repeat(137), exact), messages.map { it.text }.toSet())
             assertTrue(messages.all { it.channelOccupantID == occupant })

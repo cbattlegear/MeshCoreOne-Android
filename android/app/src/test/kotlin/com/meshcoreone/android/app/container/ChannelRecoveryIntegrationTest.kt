@@ -3,6 +3,8 @@
 package com.meshcoreone.android.app.container
 
 import com.meshcoreone.android.core.contracts.domain.ConnectionTarget
+import com.meshcoreone.android.core.contracts.domain.ChannelIdentityWriteScope
+import com.meshcoreone.android.core.contracts.domain.ChannelPersisting
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.model.ChannelDTO
@@ -193,21 +195,38 @@ class ChannelRecoveryIntegrationTest : RoomProcessTest() {
         lateinit var connecting: kotlinx.coroutines.Deferred<Unit>
         private var commits = 0
         private val persistence = object : PersistenceStoreProtocol by store {
+            override suspend fun <T> withChannelOperation(
+                block: suspend (ChannelPersisting, ChannelIdentityWriteScope) -> T,
+            ): T = store.withChannelOperation { scoped, scope ->
+                val held = object : ChannelPersisting by scoped {
+                    override suspend fun batchSaveChannels(
+                        radioId: RadioId, configured: SnapshotList<ChannelInfo>,
+                        unconfiguredIndices: SnapshotList<UByte>, pruneBeyond: UByte?,
+                    ) = saveBatch(scoped, radioId, configured, unconfiguredIndices, pruneBeyond)
+                }
+                block(held, scope)
+            }
+
             override suspend fun batchSaveChannels(
                 radioId: RadioId, configured: SnapshotList<ChannelInfo>,
                 unconfiguredIndices: SnapshotList<UByte>, pruneBeyond: UByte?,
-            ): SnapshotList<ChannelDTO> {
-                if (radioId == this@Fixture.radioId && commits++ == 0) {
-                    assertEquals(if (serial) listOf<UByte>(0u) else listOf<UByte>(0u, 3u), configured.map { it.index })
-                    assertEquals(listOf<UByte>(1u), unconfiguredIndices.toList())
-                    commitEntered.complete(Unit)
-                    commitGate.await()
-                    return store.batchSaveChannels(radioId, configured, unconfiguredIndices, pruneBeyond).also {
-                        partialRows += it
-                    }
+            ) = saveBatch(store, radioId, configured, unconfiguredIndices, pruneBeyond)
+        }
+
+        private suspend fun saveBatch(
+            scoped: ChannelPersisting, radioId: RadioId, configured: SnapshotList<ChannelInfo>,
+            unconfiguredIndices: SnapshotList<UByte>, pruneBeyond: UByte?,
+        ): SnapshotList<ChannelDTO> {
+            if (radioId == this.radioId && commits++ == 0) {
+                assertEquals(if (serial) listOf<UByte>(0u) else listOf<UByte>(0u, 3u), configured.map { it.index })
+                assertEquals(listOf<UByte>(1u), unconfiguredIndices.toList())
+                commitEntered.complete(Unit)
+                commitGate.await()
+                return scoped.batchSaveChannels(radioId, configured, unconfiguredIndices, pruneBeyond).also {
+                    partialRows += it
                 }
-                return store.batchSaveChannels(radioId, configured, unconfiguredIndices, pruneBeyond)
             }
+            return scoped.batchSaveChannels(radioId, configured, unconfiguredIndices, pruneBeyond)
         }
         val h = ContainerHarness(
             test, store,

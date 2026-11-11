@@ -32,16 +32,22 @@ class RoomPersistenceStore private constructor(
     private val metadata: MetadataRepository = MetadataRepository(context),
 ) : PersistenceStoreProtocol,
     DeviceSessionPersisting by devices, ContactPersisting by contacts, ChannelPersisting by channels,
-    MessagePersisting by messages, HeardRepeatPersisting by messages, ReactionPersisting by messages,
+    ChannelOccupantMetadataPersisting by channels,
+    MessagePersisting by messages, ChannelHistoryPersisting by messages,
+    ChannelDraftRecoveryPersisting by messages,
+    HeardRepeatPersisting by messages, ReactionPersisting by messages,
     FailedSendPersisting by messages, RoomPersisting by rooms, DiscoveredNodePersisting by discovered,
     TracePathPersisting by diagnostics, DebugLogPersisting by diagnostics, LinkPreviewPersisting by diagnostics,
-    RxLogPersisting by diagnostics, NodeSnapshotPersisting by diagnostics, MetadataPersisting by metadata {
+    RxLogPersisting by diagnostics, NodeSnapshotPersisting by diagnostics, MetadataPersisting by metadata,
+    QueuedChannelTerminalPersisting by pending, QueuedChannelReadinessPersisting by pending,
+    ChannelSubmissionPersisting by pending {
     constructor(
         database: MeshCoreDatabase,
         scope: CoroutineScope,
         clock: Clock = Clock.systemUTC(),
         reporter: RepositoryIssueReporter = AndroidRepositoryIssueReporter,
-    ) : this(RoomRepositoryContext(database, clock, scope, reporter))
+        channelIdentityMutation: ChannelIdentityMutation = ChannelIdentityMutex.PROCESS,
+    ) : this(RoomRepositoryContext(database, clock, scope, reporter, channelIdentityMutation))
 
     override suspend fun fetchMessage(deduplicationKey: String, radioId: RadioId): MessageDTO? =
         messages.fetchMessage(deduplicationKey, radioId)
@@ -90,7 +96,7 @@ class RoomPersistenceStore private constructor(
         plan: SimulatorConversationIdentityPlan,
         familyIndex: Int,
     ): SimulatorConversationSeedResult =
-        context.write("seedSimulatorConversation") { seedDeferredSimulatorConversation(plan, familyIndex, channels) }
+        context.channelWrite("seedSimulatorConversation") { seedDeferredSimulatorConversation(plan, familyIndex, channels) }
 
     override suspend fun warmUp() {
         context.read("warmUp") { database.devices().count() }

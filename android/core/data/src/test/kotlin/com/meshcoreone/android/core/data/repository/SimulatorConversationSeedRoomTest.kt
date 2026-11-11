@@ -11,6 +11,7 @@ import com.meshcoreone.android.core.database.*
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import java.util.UUID
 import kotlin.test.*
 import kotlinx.coroutines.CompletableDeferred
@@ -25,6 +26,23 @@ import kotlinx.coroutines.withTimeout
 import org.junit.Test
 
 class SimulatorConversationSeedRoomTest : RepositoryTest() {
+    @Test fun eagerChannelReadbackPreservesOnlyPreviouslyReconciledAuthority() = runTest {
+        val fixture = fixture(channel = true)
+        val channel = assertIs<SimulatorConversationParent.Channel>(fixture.parent).channel
+        val created = assertIs<SimulatorConversationSeedResult.Created>(seed(fixture))
+        assertNull(assertIs<SimulatorConversationParent.Channel>(created.parent).channel.occupantID)
+        assertTrue(assertNotNull(db.channelOccupants().stateForIndex(channel.radioId.value, channel.index.toLong())).unresolved)
+        assertNull(store.fetchChannelOccupantSnapshot(channel.radioId, channel.index))
+        store.saveChannel(channel.radioId, ChannelInfo(channel.index, channel.name, channel.secret))
+        val current = assertNotNull(store.fetchChannel(channel.radioId, channel.index))
+        assertNotNull(current.occupantID)
+        val before = rawRows()
+        val preserved = assertIs<SimulatorConversationSeedResult.PreservedExisting>(seed(fixture))
+        assertEquals(current, assertIs<SimulatorConversationParent.Channel>(preserved.parent).channel)
+        assertEquals(before, rawRows())
+        assertTrue(db.pendingSends().forRadio(channel.radioId.value).isEmpty())
+    }
+
     private fun fixture(channel: Boolean, radio: RadioId = RADIO_A): SimulatorConversationSeed {
         val parent = if (channel) {
             SimulatorConversationParent.Channel(ChannelDTO(

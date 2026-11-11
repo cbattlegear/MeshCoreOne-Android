@@ -45,8 +45,11 @@ sealed interface ChatSelection {
         override fun hashCode(): Int = 31 * contact.radioId.hashCode() + contact.id.hashCode()
     }
     data class Channel(val channel: ChannelDTO) : ChatSelection {
-        override fun equals(other: Any?): Boolean = other is Channel && channel.radioId == other.channel.radioId && channel.id == other.channel.id
-        override fun hashCode(): Int = 31 * channel.radioId.hashCode() + channel.id.hashCode()
+        override fun equals(other: Any?): Boolean = other is Channel &&
+            channel.radioId == other.channel.radioId && channel.id == other.channel.id &&
+            channel.occupantID == other.channel.occupantID
+        override fun hashCode(): Int =
+            31 * (31 * channel.radioId.hashCode() + channel.id.hashCode()) + (channel.occupantID?.hashCode() ?: 0)
     }
     data class Room(val session: RemoteNodeSessionDTO) : ChatSelection {
         override fun equals(other: Any?): Boolean = other is Room && session.radioId == other.session.radioId && session.id == other.session.id
@@ -99,6 +102,16 @@ data class ChannelLinkRequest(
 )
 // PortedFrom: MC1/Views/Chats/HashtagDeeplinkSupport.swift@db14559b39d32322b06477c6ae676112f583db50
 data class HashtagJoinRequest(val id: String)
+// Native adaptation: independent optional sheets retain distinct delivery identities, even for equal payloads.
+data class PendingChannelConfirmation(
+    val deliveryId: UUID,
+    val link: ChannelLinkRequest? = null,
+    val hashtag: HashtagJoinRequest? = null,
+) {
+    init {
+        require((link == null) != (hashtag == null)) { "A confirmation must contain exactly one request" }
+    }
+}
 data class PendingNotificationRoute(
     val id: Long, val generation: Long?, val request: NotificationNavigationRequest,
 )
@@ -149,8 +162,8 @@ data class NavigationState(
     val pendingDeviceMenuTipDonation: Boolean = false,
     val pendingMapFocus: MapFocusRequest? = null,
     val pendingContactLink: ContactLinkRequest? = null,
-    val pendingChannelLink: ChannelLinkRequest? = null,
-    val pendingHashtag: HashtagJoinRequest? = null,
+    val pendingChannelConfirmation: PendingChannelConfirmation? = null,
+    val pendingHashtagConfirmation: PendingChannelConfirmation? = null,
     val radioId: RadioId? = null,
     val generation: Long = 0,
     internal val boundSessionToken: SessionToken? = null,
@@ -160,6 +173,11 @@ data class NavigationState(
     val navigationReady: Boolean = false,
     val pendingNotifications: SnapshotList<PendingNotificationRoute> = SnapshotList.empty(),
 ) {
+    val pendingChannelLink: ChannelLinkRequest?
+        get() = pendingChannelConfirmation?.link
+    val pendingHashtag: HashtagJoinRequest?
+        get() = pendingHashtagConfirmation?.hashtag
+
     init {
         require(stacks.keys == AppTab.entries.toSet()) { "Every tab needs its own stack" }
         require(stacks.all { (tab, stack) ->

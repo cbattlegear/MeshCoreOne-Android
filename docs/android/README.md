@@ -45,9 +45,9 @@ the full run to CI. From `android/` (`gradlew.bat` on Windows):
 ./gradlew --dependency-verification strict :platform:notifications:testDebugUnitTest
 ```
 
-Notification SQLite tests and the file-backed Room UUID-alias regression use isolated JUnit temporary folders
-rather than Robolectric's long per-test application paths, which can exceed the Windows SQLite path limit.
-They still exercise real on-disk SQLite transactions.
+Notification SQLite tests and the file-backed Room UUID-alias, channel-occupant and shortcut-reopen regressions
+use isolated JUnit temporary folders rather than Robolectric's long per-test application paths, which can exceed
+the Windows SQLite path limit. They still exercise real on-disk SQLite transactions and database reopen.
 
 | Root task | What it checks |
 | --- | --- |

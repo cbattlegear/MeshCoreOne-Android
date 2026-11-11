@@ -3,16 +3,19 @@ package com.meshcoreone.android.core.data.repository
 
 import android.database.sqlite.SQLiteConstraintException
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
+import com.meshcoreone.android.core.contracts.domain.ChannelIdentityMutex
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.database.*
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
 import kotlin.test.*
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -29,6 +32,49 @@ import kotlinx.coroutines.withTimeout
 import org.junit.Test
 
 class DeferredSimulatorConversationRoomTest : RepositoryTest() {
+    @Test fun deferredFacadeWaitsForTheChannelLaneAndReturnsOnlyPairedExistingAuthority() = runTest {
+        val gate = ChannelIdentityMutex()
+        val writer = RoomPersistenceStore(db, owner, clock, channelIdentityMutation = gate)
+        val fixture = fixture(channel = true)
+        val channel = assertIs<SimulatorConversationParent.Channel>(fixture.parent).channel
+        var built = false
+        val planned = plan(family(fixture, build = { built = true; fixture }))
+        val release = CompletableDeferred<Unit>()
+        val operation = async(start = CoroutineStart.UNDISPATCHED) {
+            gate.withChannelOperation { release.await() }
+        }
+        val seed = async(start = CoroutineStart.UNDISPATCHED) { writer.seedSimulatorConversation(planned, 0) }
+        try {
+            assertFalse(seed.isCompleted)
+            assertFalse(built)
+            assertNull(db.channels().byId(channel.radioId.value, channel.id))
+            release.complete(Unit)
+            operation.await()
+            val created = assertIs<SimulatorConversationSeedResult.Created>(seed.await())
+            assertTrue(built)
+            assertNull(assertIs<SimulatorConversationParent.Channel>(created.parent).channel.occupantID)
+            val unresolved = assertNotNull(db.channelOccupants().stateForIndex(channel.radioId.value, channel.index.toLong()))
+            assertTrue(unresolved.unresolved)
+            assertNull(writer.fetchChannelOccupantSnapshot(channel.radioId, channel.index))
+            val before = rawRows()
+            val preserved = assertIs<SimulatorConversationSeedResult.PreservedExisting>(writer.seedSimulatorConversation(planned, 0))
+            assertNull(assertIs<SimulatorConversationParent.Channel>(preserved.parent).channel.occupantID)
+            assertEquals(before, rawRows())
+            assertEquals(unresolved, db.channelOccupants().stateForIndex(channel.radioId.value, channel.index.toLong()))
+
+            writer.saveChannel(channel.radioId, ChannelInfo(channel.index, channel.name, channel.secret))
+            val current = assertNotNull(writer.fetchChannel(channel.radioId, channel.index))
+            assertNotNull(current.occupantID)
+            val authoritative = assertIs<SimulatorConversationSeedResult.PreservedExisting>(
+                writer.seedSimulatorConversation(planned, 0),
+            )
+            assertEquals(current, assertIs<SimulatorConversationParent.Channel>(authoritative.parent).channel)
+        } finally {
+            release.complete(Unit)
+            writer.close()
+        }
+    }
+
     private fun id(number: Int): UUID =
         UUID.fromString("abcdefab-1111-2222-3333-${number.toString(16).padStart(12, '0')}")
 

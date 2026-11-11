@@ -79,41 +79,63 @@ class SourceChatQueueTest {
             assertFalse(ChatSendQueueService.isChannelMessageNotFound(MessageServiceException(MessageServiceError.SessionError(MeshCoreException.DeviceError(3u)))))
             assertFalse(ChatSendQueueService.isChannelMessageNotFound(MeshCoreException.Timeout()))
         },
-        original("ChatSendQueueServiceTests", "channel drain treats deviceError(2) as terminal when fetchChannel confirms the channel is gone") {
-            val h = failingChannel(this); val m = h.message(MessageStatus.PENDING, 0u); h.pending(m, 7, true)
+        native("Android adaptation: raw ERROR2 cannot query or terminalize even an unconfigured channel") {
+            val h = failingChannel(this); val m = h.message(MessageStatus.PENDING, 0u)
+            val pending = h.pending(m, 7, true)
             h.transport.channelReplies[0u] = ChannelInfo(0u, "", Bytes(ByteArray(16)))
-            val q = h.queue(query = MessagingChannelQuery { index ->
-                val info = h.session.getChannel(index)
-                if (info.name.isEmpty() && info.secret.all { it == 0.toUByte() }) null else info
-            })
-            startDrain(h, q); withTimeout(10_000) { q.awaitDrainCompletion() }
-            assertEquals(MessageStatus.FAILED, h.stored(m.id).status); assertTrue(h.store.fetchPendingSends(RADIO).isEmpty())
-            assertEquals(1, h.sends(CommandCode.GET_CHANNEL).size); q.shutdown(); h.close()
+            val q = h.queue(query = MessagingChannelQuery { fail("Uncertain send cannot query configuration") })
+            startDrain(h, q); q.awaitDrainCompletion()
+            assertEquals(MessageStatus.PENDING, h.stored(m.id).status)
+            val retained = h.store.fetchPendingSends(RADIO).single()
+            assertEquals(pending.id, retained.id)
+            assertEquals(QueuedChannelDispatchState.UNCERTAIN, retained.channelDispatchState)
+            assertEquals(QueuedChannelAttemptPhase.UNCERTAIN, h.store.channelAttempts.values.single().phase)
+            assertTrue(h.sends(CommandCode.GET_CHANNEL).isEmpty())
+            assertEquals(1, h.sends(CommandCode.SEND_CHANNEL_MESSAGE).size)
+            q.shutdown(); h.close()
         },
-        original("ChatSendQueueServiceTests", "channel drain parks deviceError(2) below disambiguateAfterAttempts") {
+        native("Android adaptation: raw ERROR2 remains uncertain below the source query threshold") {
             val h = failingChannel(this); val m = h.message(MessageStatus.PENDING, 0u); h.pending(m)
-            val q = h.queue(query = MessagingChannelQuery { fail("query below threshold") }); startDrain(h, q)
+            val q = h.queue(query = MessagingChannelQuery { fail("Uncertain send must not query") })
+            startDrain(h, q); q.awaitDrainCompletion()
             assertEquals(1L, h.store.fetchPendingSends(RADIO).single().attemptCount)
-            assertEquals(MessageStatus.PENDING, h.stored(m.id).status); q.shutdown(); h.close()
+            assertEquals(QueuedChannelDispatchState.UNCERTAIN, h.store.fetchPendingSends(RADIO).single().channelDispatchState)
+            assertEquals(MessageStatus.PENDING, h.stored(m.id).status)
+            assertTrue(h.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().none { it.operation == "park.${m.id}" })
+            q.shutdown(); h.close()
         },
-        original("ChatSendQueueServiceTests", "Channel fetchChannel failure counter is per-envelope and does not cascade") {
-            val h = failingChannel(this); val a = h.message(MessageStatus.PENDING, 0u); val b = h.message(MessageStatus.PENDING, 0u).copy(text = "second")
-            h.store.saveMessage(b); h.pending(a, 7, true)
+        native("Android adaptation: raw ERROR2 does not spend query budget or terminalize another envelope") {
+            val h = failingChannel(this)
+            val a = h.message(MessageStatus.PENDING, 0u)
+            val b = h.message(MessageStatus.PENDING, 0u, text = "second")
+            val rowA = h.pending(a, 7, true)
             val rowB = h.pending(b, 2); h.store.upsertPendingSend(rowB.copy(sequence = 2))
             val q = h.queue(ChatSendQueueConfig(maxConsecutiveFetchChannelFailures = 2),
-                MessagingChannelQuery { throw MeshCoreException.Timeout() })
-            startDrain(h, q); q.transportDidOpen(); runCurrent()
-            assertFalse(h.store.hasPendingSend(EntityKey(RADIO, a.id))); assertEquals(MessageStatus.FAILED, h.stored(a.id).status)
-            assertTrue(h.store.hasPendingSend(EntityKey(RADIO, b.id))); assertEquals(3L, h.store.fetchPendingSends(RADIO).single().attemptCount)
-            assertEquals(MessageStatus.PENDING, h.stored(b.id).status); q.shutdown(); h.close()
+                MessagingChannelQuery { fail("Raw ERROR2 must not spend any query failure") })
+            startDrain(h, q); q.awaitDrainCompletion()
+            q.transportDidOpen(); runCurrent(); q.awaitDrainCompletion()
+            assertEquals(QueuedChannelDispatchState.UNCERTAIN, h.store.pending.getValue(EntityKey(RADIO, rowA.id)).channelDispatchState)
+            assertEquals(QueuedChannelDispatchState.READY, h.store.pending.getValue(EntityKey(RADIO, rowB.id)).channelDispatchState)
+            assertEquals(MessageStatus.PENDING, h.stored(a.id).status)
+            assertEquals(MessageStatus.PENDING, h.stored(b.id).status)
+            assertEquals(1, h.sends(CommandCode.SEND_CHANNEL_MESSAGE).size)
+            assertTrue(h.sends(CommandCode.GET_CHANNEL).isEmpty())
+            q.shutdown(); h.close()
         },
-        original("ChatSendQueueServiceTests", "drain bounded wait re-attempts after transportWaitTimeout expires") {
+        native("Android adaptation: the thirty-second deadline cannot replay an uncertain channel send") {
             val h = failingChannel(this); val m = h.message(MessageStatus.PENDING, 0u); h.pending(m)
-            val q = h.queue(); startDrain(h, q); assertEquals(1L, h.store.fetchPendingSends(RADIO).single().attemptCount)
-            advanceTimeBy(29_999); runCurrent(); assertEquals(1L, h.store.fetchPendingSends(RADIO).single().attemptCount)
+            val q = h.queue(); startDrain(h, q); q.awaitDrainCompletion()
+            val retained = h.store.fetchPendingSends(RADIO).single()
+            advanceTimeBy(29_999); runCurrent()
+            assertEquals(retained, h.store.fetchPendingSends(RADIO).single())
             advanceTimeBy(2); runCurrent()
-            assertEquals(2L, h.store.fetchPendingSends(RADIO).single().attemptCount)
-            assertEquals(MessageStatus.PENDING, h.stored(m.id).status); q.shutdown(); h.close()
+            q.transportDidOpen(); runCurrent(); q.awaitDrainCompletion()
+            assertEquals(retained, h.store.fetchPendingSends(RADIO).single())
+            assertEquals(QueuedChannelDispatchState.UNCERTAIN, retained.channelDispatchState)
+            assertEquals(1, h.sends(CommandCode.SEND_CHANNEL_MESSAGE).size)
+            assertTrue(h.sends(CommandCode.GET_CHANNEL).isEmpty())
+            assertEquals(MessageStatus.PENDING, h.stored(m.id).status)
+            q.shutdown(); h.close()
         },
         original("ChatSendQueueServiceTests", "hydrate runs once per service instance") {
             val h = Harness(this); val q = h.queue()

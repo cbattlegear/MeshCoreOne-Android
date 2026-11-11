@@ -182,6 +182,12 @@ class NodeCliStateHolder(
         return applied
     }
 
+    fun applySuggestion(suggestion: String): Boolean {
+        val (next, applied) = state.value.terminal.applyingSuggestion(suggestion)
+        updateTerminal { next }
+        return applied
+    }
+
     override fun clearTabState() = updateTerminal { it.clearingTabState() }
 
     private fun suggestions(input: String): List<String> =

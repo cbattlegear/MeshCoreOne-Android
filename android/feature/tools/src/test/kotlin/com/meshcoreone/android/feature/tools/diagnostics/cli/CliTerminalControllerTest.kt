@@ -95,6 +95,52 @@ class CliTerminalControllerTest {
     }
 
     @Test
+    fun `a confirmation callback receives only a later submit after selection is accepted`() {
+        val candidates = mutableListOf<String>()
+        type("lo")
+        controller.onTabComplete()
+        controller.onTabComplete()
+        controller.onSubmit { candidates += it }
+        assertEquals("login ", terminal.currentInput)
+        assertEquals(6, cursor)
+        assertTrue(candidates.isEmpty())
+        assertTrue(terminal.commandHistory.isEmpty())
+        assertTrue(terminal.outputLines.isEmpty())
+        controller.onSubmit { candidates += it }
+        assertEquals(listOf("login "), candidates)
+        assertTrue(terminal.commandHistory.isEmpty())
+        assertTrue(terminal.outputLines.isEmpty())
+    }
+
+    @Test
+    fun `a confirmation callback does not implicitly select the first displayed match`() {
+        val candidates = mutableListOf<String>()
+        type("lo")
+        controller.onTabComplete()
+        assertNull(terminal.tabSelectionIndex)
+        controller.onSubmit { candidates += it }
+        assertEquals(listOf("lo"), candidates)
+        assertEquals("lo", terminal.currentInput)
+        assertTrue(terminal.commandHistory.isEmpty())
+        assertTrue(terminal.outputLines.isEmpty())
+    }
+
+    @Test
+    fun `confirmed execution clears surviving choices and resets the cursor using the captured command`() {
+        type("lo")
+        controller.onTabComplete()
+        assertTrue(terminal.tabSuggestions != null)
+        controller.onConfirmedCommand("help")
+        scheduler.runCurrent()
+        assertEquals("", terminal.currentInput)
+        assertEquals(0, cursor)
+        assertEquals("", terminal.ghostText)
+        assertNull(terminal.tabSuggestions)
+        assertEquals(listOf("help"), terminal.commandHistory)
+        assertTrue(terminal.outputLines.any { it.text == "Available commands:" })
+    }
+
+    @Test
     fun `editing the input clears tab selection`() {
         type("lo")
         controller.onTabComplete()

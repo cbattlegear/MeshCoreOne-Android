@@ -154,13 +154,20 @@ class MountedPreviewNetworkConsentTest {
             )
             val url = "https://private.example/article"
             val dns = AtomicInteger()
-            fixture.mount(url, UrlSafetyPort { requested ->
+            val owner = fixture.mount(url, UrlSafetyPort { requested ->
                 UrlSafetyChecker.isSafe(requested) {
                     dns.incrementAndGet()
                     listOf(InetAddress.getByAddress(byteArrayOf(10, 0, 0, 1)))
                 }
             })
-            compose.waitUntil(10_000) { dns.get() > 0 }
+            assertEquals(listOf(url), owner.media(url).map { it.url })
+            assertTrue(owner.rendering.value[
+                if (isChannel) AppStorageKey.linkPreviewsAutoResolveChannels else AppStorageKey.linkPreviewsAutoResolveDM
+            ], "automatic preference must be observed before mounting")
+            val tap = AppChatsStrings.chatsPreviewTapAccessibility(fixture.context.resources, "private.example")
+            compose.waitUntil(10_000) {
+                dns.get() > 0 || compose.onAllNodesWithContentDescription(tap).fetchSemanticsNodes().isNotEmpty()
+            }
             compose.waitForIdle()
             assertEquals(1, dns.get(), "one authorized safety lookup for channel=$isChannel")
             compose.onNodeWithContentDescription(
@@ -200,7 +207,7 @@ class MountedPreviewNetworkConsentTest {
             storage.preferences, storage.preferences.snapshot(), scope,
         ).also(owners::add)
 
-        suspend fun mount(url: String, safety: UrlSafetyPort, freshOwner: Boolean = false) {
+        suspend fun mount(url: String, safety: UrlSafetyPort, freshOwner: Boolean = false): AppChatContent {
             val content = if (freshOwner || owners.isEmpty()) owner() else owners.last()
             val message = MessageDTO(
                 radioId = RadioId(UUID.randomUUID()),
@@ -208,6 +215,7 @@ class MountedPreviewNetworkConsentTest {
                 channelIndex = if (isChannel) 1u.toUByte() else null,
                 timestamp = 1u,
             )
+            assertEquals(isChannel, message.isChannelMessage)
             compose.runOnUiThread {
                 activity.get().setContent {
                     MeshCoreTheme(motionScale = 0f) {
@@ -219,6 +227,7 @@ class MountedPreviewNetworkConsentTest {
                             previewUrlSafety = safety,
                         )
                     }
+                    return content
                 }
             }
         }

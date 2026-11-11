@@ -180,6 +180,28 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         SharingStarted.Eagerly,
         app.connectedDevice?.let { NavigationDeviceContext(it.radioId, it.defaultFloodScopeName) },
     )
+    internal fun navigationMetadata(selection: ChatSelection): Flow<ChatSelection?> = changes.mapLatest {
+        when (selection) {
+            is ChatSelection.Direct -> store.fetchContact(EntityKey(selection.contact.radioId, selection.contact.id))
+                ?.takeIf { it.radioId == selection.contact.radioId && it.publicKey == selection.contact.publicKey }
+                ?.let { ChatSelection.Direct(it) }
+            is ChatSelection.Channel -> {
+                val selected = selection.channel
+                store.fetchChannelsForDisplay(selected.radioId).firstOrNull { current ->
+                    current.radioId == selected.radioId && current.id == selected.id && current.index == selected.index &&
+                        current.secret == selected.secret &&
+                        if (selected.displayIncarnationID != null) {
+                            current.displayIncarnationID == selected.displayIncarnationID
+                        } else {
+                            selected.occupantID != null && current.occupantID == selected.occupantID ||
+                                selected.radioId == MockDataProvider.simulatorRadioId
+                        }
+                }?.let { ChatSelection.Channel(it) }
+            }
+            is ChatSelection.Room -> selection
+        }
+    }.catch { failure -> report("Conversation navigation metadata could not load", failure); throw failure }
+
     internal val notificationSource = app.servicesVersion.map { container.sessions.current?.notificationService }
         .stateIn(scope, SharingStarted.Eagerly, container.sessions.current?.notificationService)
     val unreadCount = merge(changes, events().map { Unit }).map {

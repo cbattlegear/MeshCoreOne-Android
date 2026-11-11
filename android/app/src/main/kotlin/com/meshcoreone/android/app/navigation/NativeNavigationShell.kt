@@ -274,8 +274,13 @@ fun NativeNavigationShell(
     val selectedChat = if (state.selectedTab == AppTab.CHATS) {
         (state.activeStack.lastOrNull()?.destination as? NavigationDestination.Chat)?.selection
     } else null
+    val metadata = remember(chats, selectedChat) {
+        selectedChat?.let { chats?.navigationMetadata(it) }
+    }
+    val liveSelectedChat = metadata?.collectAsStateWithLifecycle(initialValue = null)?.value
+        ?: selectedChat.takeIf { chats == null }
     val navigationDeviceContext = chats?.navigationDeviceContext?.collectAsStateWithLifecycle()?.value
-    val conversationHeader = conversationNavigationHeader(selectedChat, navigationDeviceContext)
+    val conversationHeader = conversationNavigationHeader(liveSelectedChat, navigationDeviceContext)
     val unreadDescription = if (unreadCount > 0) {
         stringResource(Strings.string.l10n_app_localizable_tabs_chatsunreadaccessibilityvalue, unreadCount)
     } else ""

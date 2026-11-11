@@ -200,6 +200,33 @@ class ReactionServiceBehaviorTest {
                 assertEquals(listOf("Sender"), store.fetchReactions(EntityKey(radio, messageID)).map { it.senderName })
             }
         },
+        test("disconnect clears session-owned reactions but retains unfinished process custody") {
+            blocking {
+                val custody = PendingReactionCustody()
+                val radio = newRadioId()
+                val service = ReactionService(ReactionsTickingClock(), kotlinx.coroutines.sync.Mutex(), custody)
+                val raw = service.buildReactionText("👍", "Target", "message", stamp)
+                val parsed = requireNotNull(ReactionParser.parse(raw))
+                service.queuePendingReaction(parsed, 0u, "Retained", raw, radio)
+                service.queuePendingReaction(parsed, 0u, "Cleared", raw, radio)
+
+                val unfinished = service.indexMessage(
+                    UUID.randomUUID(), 0u, "Target", "message", stamp, radio,
+                ).first()
+                service.requeuePendingReaction(unfinished)
+                service.clearPendingReactions()
+
+                assertEquals(1 to 0, service.pendingCounts)
+                val replacement = ReactionService(ReactionsTickingClock(), kotlinx.coroutines.sync.Mutex(), custody)
+                val restored = replacement.indexMessage(
+                    UUID.randomUUID(), 0u, "Target", "message", stamp, radio, includeCustody = true,
+                )
+                assertEquals(listOf("Retained"), restored.map { it.senderNodeName })
+                assertTrue(replacement.indexMessage(
+                    UUID.randomUUID(), 0u, "Other", "message", stamp, radio, includeCustody = true,
+                ).isEmpty())
+            }
+        },
         test("summary recovery preserves the unpublished reaction notification") {
             blocking {
                 val custody = PendingReactionCustody()
@@ -226,6 +253,82 @@ class ReactionServiceBehaviorTest {
                 assertEquals(listOf(true), retried?.map { it.shouldNotify })
                 assertEquals(listOf(true), notifications.map { it.shouldNotify })
                 assertEquals("👍:1", store.summary(EntityKey(radio, messageID)))
+            }
+        },
+        test("a reaction committed before a save failure retains its notification") {
+            blocking {
+                val custody = PendingReactionCustody()
+                val radio = newRadioId()
+                val messageID = UUID.randomUUID()
+                val store = ReactionsInMemoryReactionStore()
+                var failAfterCommit = true
+                val failing = object : ReactionPersisting by store {
+                    override suspend fun saveReaction(dto: ReactionDTO) {
+                        store.saveReaction(dto)
+                        if (failAfterCommit) {
+                            failAfterCommit = false
+                            throw IllegalStateException("Injected failure after commit")
+                        }
+                    }
+                }
+                val service = ReactionService(ReactionsTickingClock(), kotlinx.coroutines.sync.Mutex(), custody)
+                val raw = service.buildReactionText("👍", "Target", "message", stamp)
+                service.queuePendingReaction(
+                    requireNotNull(ReactionParser.parse(raw)), 0u, "Sender", raw, radio,
+                )
+
+                assertNull(service.persistIndexedChannelMessage(
+                    messageID, radio, 0u, "Target", "message", stamp, failing,
+                ))
+                assertEquals(1, store.fetchReactions(EntityKey(radio, messageID)).size)
+                val pending = service.indexMessage(
+                    messageID, 0u, "Target", "message", stamp, radio, includeCustody = true,
+                ).single()
+                assertTrue(pending.notificationPending)
+                service.requeuePendingReaction(pending)
+
+                val retried = service.persistIndexedChannelMessage(
+                    messageID, radio, 0u, "Target", "message", stamp, store,
+                )
+                assertEquals(listOf(true), retried?.map { it.shouldNotify })
+                assertEquals(1, store.fetchReactions(EntityKey(radio, messageID)).size)
+            }
+        },
+        test("cancellation after a reaction commit retains its notification") {
+            blocking {
+                val custody = PendingReactionCustody()
+                val radio = newRadioId()
+                val messageID = UUID.randomUUID()
+                val store = ReactionsInMemoryReactionStore()
+                val cancelling = object : ReactionPersisting by store {
+                    override suspend fun saveReaction(dto: ReactionDTO) {
+                        store.saveReaction(dto)
+                        throw CancellationException("Injected cancellation after commit")
+                    }
+                }
+                val service = ReactionService(ReactionsTickingClock(), kotlinx.coroutines.sync.Mutex(), custody)
+                val raw = service.buildReactionText("👍", "Target", "message", stamp)
+                service.queuePendingReaction(
+                    requireNotNull(ReactionParser.parse(raw)), 0u, "Sender", raw, radio,
+                )
+
+                assertFailsWith<CancellationException> {
+                    service.persistIndexedChannelMessage(
+                        messageID, radio, 0u, "Target", "message", stamp, cancelling,
+                    )
+                }
+                assertEquals(1, store.fetchReactions(EntityKey(radio, messageID)).size)
+                val pending = service.indexMessage(
+                    messageID, 0u, "Target", "message", stamp, radio, includeCustody = true,
+                ).single()
+                assertTrue(pending.notificationPending)
+                service.requeuePendingReaction(pending)
+
+                val retried = service.persistIndexedChannelMessage(
+                    messageID, radio, 0u, "Target", "message", stamp, store,
+                )
+                assertEquals(listOf(true), retried?.map { it.shouldNotify })
+                assertEquals(1, store.fetchReactions(EntityKey(radio, messageID)).size)
             }
         },
         test("history failure and accepted-send retry serialize around the same indexed batch") {

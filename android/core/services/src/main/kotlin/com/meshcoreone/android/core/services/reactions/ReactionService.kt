@@ -48,22 +48,48 @@ data class PendingDMReaction(
 data class ReactionPersistResult(val messageID: UUID, val summary: String, val shouldNotify: Boolean = true)
 
 /**
- * Process-owned custody for matched reactions whose persistence did not finish. Unlike ordinary unmatched
- * reactions, these must survive connection teardown so an accepted-send retry can finish the same work.
+ * Shared bounded reaction queues. Unmatched entries are session-owned and cleared on teardown; unfinished
+ * matched entries are requeued as process-owned so an accepted-send retry can finish them after reconnect.
  */
 class PendingReactionCustody {
     private val lock = Any()
-    private val channel = ArrayList<PendingReaction>()
-    private val direct = ArrayList<PendingDMReaction>()
+    private data class ChannelKey(
+        val radioId: RadioId,
+        val channelIndex: UByte,
+        val targetSender: String,
+        val messageHash: String,
+    )
+    private data class DirectKey(val radioId: RadioId, val contactID: UUID, val messageHash: String)
+    private data class Owned<out T>(val value: T, val sessionOwner: UUID?)
 
-    internal fun requeue(pending: PendingReaction) = synchronized(lock) {
-        channel += pending
-        if (channel.size > ReactionService.MAX_PENDING_REACTIONS) channel.removeAt(0)
+    private var channel = PendingQueue.empty<ChannelKey, Owned<PendingReaction>>()
+    private var direct = PendingQueue.empty<DirectKey, Owned<PendingDMReaction>>()
+
+    internal fun queue(pending: PendingReaction, sessionOwner: UUID) = enqueue(pending, sessionOwner)
+    internal fun queue(pending: PendingDMReaction, sessionOwner: UUID) = enqueue(pending, sessionOwner)
+
+    internal fun requeue(pending: PendingReaction) = enqueue(pending, null)
+    internal fun requeue(pending: PendingDMReaction) = enqueue(pending, null)
+
+    private fun enqueue(pending: PendingReaction, sessionOwner: UUID?) = synchronized(lock) {
+        val key = ChannelKey(
+            pending.radioId,
+            pending.channelIndex,
+            SwiftText.canonical(pending.parsed.targetSender),
+            pending.parsed.messageHash,
+        )
+        channel = channel.enqueue(
+            key, Owned(pending, sessionOwner), ReactionService.MAX_PENDING_REACTIONS,
+            pending.queueKeyOrder, pending.queueEntryOrder,
+        )
     }
 
-    internal fun requeue(pending: PendingDMReaction) = synchronized(lock) {
-        direct += pending
-        if (direct.size > ReactionService.MAX_PENDING_REACTIONS) direct.removeAt(0)
+    private fun enqueue(pending: PendingDMReaction, sessionOwner: UUID?) = synchronized(lock) {
+        val key = DirectKey(pending.radioId, pending.contactID, pending.parsed.messageHash)
+        direct = direct.enqueue(
+            key, Owned(pending, sessionOwner), ReactionService.MAX_PENDING_REACTIONS,
+            pending.queueKeyOrder, pending.queueEntryOrder,
+        )
     }
 
     internal fun takeChannel(
@@ -71,14 +97,20 @@ class PendingReactionCustody {
         channelIndex: UByte,
         targetSender: String,
         messageHash: String,
+        sessionOwner: UUID,
+        includeProcess: Boolean,
     ): List<PendingReaction> = synchronized(lock) {
-        val matched = channel.filter {
-            (radioId == null || it.radioId == radioId) &&
-                it.channelIndex == channelIndex &&
-                SwiftText.canonical(it.parsed.targetSender) == SwiftText.canonical(targetSender) &&
-                it.parsed.messageHash == messageHash
+        val (remaining, matched) = channel.takeMatchingEntries(
+            { key ->
+                (radioId == null || key.radioId == radioId) &&
+                    key.channelIndex == channelIndex &&
+                    key.targetSender == SwiftText.canonical(targetSender) && key.messageHash == messageHash
+            },
+            { value -> includeProcess || value.sessionOwner == sessionOwner },
+        ) { owned, keyOrder, entryOrder ->
+            owned.value.copy(queueKeyOrder = keyOrder, queueEntryOrder = entryOrder)
         }
-        channel.removeAll(matched.toSet())
+        channel = remaining
         matched
     }
 
@@ -86,16 +118,28 @@ class PendingReactionCustody {
         radioId: RadioId?,
         contactID: UUID,
         messageHash: String,
+        sessionOwner: UUID,
+        includeProcess: Boolean,
     ): List<PendingDMReaction> = synchronized(lock) {
-        val matched = direct.filter {
-            (radioId == null || it.radioId == radioId) &&
-                it.contactID == contactID && it.parsed.messageHash == messageHash
+        val (remaining, matched) = direct.takeMatchingEntries(
+            { key ->
+                (radioId == null || key.radioId == radioId) &&
+                    key.contactID == contactID && key.messageHash == messageHash
+            },
+            { value -> includeProcess || value.sessionOwner == sessionOwner },
+        ) { owned, keyOrder, entryOrder ->
+            owned.value.copy(queueKeyOrder = keyOrder, queueEntryOrder = entryOrder)
         }
-        direct.removeAll(matched.toSet())
+        direct = remaining
         matched
     }
 
-    internal val counts: Pair<Int, Int> get() = synchronized(lock) { channel.size to direct.size }
+    internal fun clearSession(sessionOwner: UUID) = synchronized(lock) {
+        channel = channel.removeMatchingValues { it.sessionOwner == sessionOwner }
+        direct = direct.removeMatchingValues { it.sessionOwner == sessionOwner }
+    }
+
+    internal val counts: Pair<Int, Int> get() = synchronized(lock) { channel.count to direct.count }
 }
 
 /**
@@ -123,6 +167,7 @@ class ReactionService internal constructor(
 
     private val logger: Logger = Logger.getLogger("ReactionService")
     private val lock = Any()
+    private val sessionOwner = UUID.randomUUID()
 
     // Pending reactions queues: no TTL, session lifetime. Guarded by [lock].
     private var pendingReactions = PendingQueue.empty<PendingReactionKey, PendingReaction>()
@@ -152,8 +197,10 @@ class ReactionService internal constructor(
         val hash = ReactionParser.generateMessageHash(text, timestamp)
         val key = PendingReactionKey.of(channelIndex, senderName, hash)
         val retained = if (includeCustody) {
-            pendingReactionCustody?.takeChannel(radioId, channelIndex, senderName, hash).orEmpty()
-        } else emptyList()
+            pendingReactionCustody?.takeChannel(radioId, channelIndex, senderName, hash, sessionOwner, true).orEmpty()
+        } else {
+            pendingReactionCustody?.takeChannel(radioId, channelIndex, senderName, hash, sessionOwner, false).orEmpty()
+        }
         val matched = synchronized(lock) {
             val (remaining, taken) = pendingReactions.take(key) { value, keyOrder, entryOrder ->
                 value.copy(queueKeyOrder = keyOrder, queueEntryOrder = entryOrder)
@@ -193,7 +240,10 @@ class ReactionService internal constructor(
     ) {
         val key = PendingReactionKey.of(channelIndex, parsed.targetSender, parsed.messageHash)
         val pending = PendingReaction(parsed, channelIndex, senderNodeName, rawText, radioId, clock.instant())
-        synchronized(lock) { pendingReactions = pendingReactions.enqueue(key, pending, MAX_PENDING_REACTIONS) }
+        val custody = pendingReactionCustody
+        if (custody == null) synchronized(lock) {
+            pendingReactions = pendingReactions.enqueue(key, pending, MAX_PENDING_REACTIONS)
+        } else custody.queue(pending, sessionOwner)
         logger.fine { "Queued pending reaction ${parsed.emoji} for ${parsed.targetSender}" }
     }
 
@@ -218,6 +268,7 @@ class ReactionService internal constructor(
             pendingDMReactions = pendingDMReactions.cleared()
             count
         }
+        pendingReactionCustody?.clearSession(sessionOwner)
         if (cleared > 0) logger.fine { "Cleared $cleared pending reaction(s)" }
     }
 
@@ -315,7 +366,7 @@ class ReactionService internal constructor(
     private suspend fun persistReactionAndUpdateSummaryLocked(
         reaction: ReactionDTO,
         dataStore: ReactionPersisting,
-        onSaved: () -> Unit = {},
+        onSaveAttempt: () -> Unit = {},
     ): ReactionPersistResult? {
         val message = EntityKey(reaction.radioId, reaction.messageID)
         val exists = try {
@@ -328,8 +379,8 @@ class ReactionService internal constructor(
         }
         try {
             if (!exists) {
+                onSaveAttempt()
                 dataStore.saveReaction(reaction)
-                onSaved()
             }
         } catch (error: CancellationException) {
             throw error
@@ -430,8 +481,10 @@ class ReactionService internal constructor(
         val hash = ReactionParser.generateMessageHash(text, timestamp)
         val key = PendingDMReactionKey(contactID, hash)
         val retained = if (includeCustody) {
-            pendingReactionCustody?.takeDirect(radioId, contactID, hash).orEmpty()
-        } else emptyList()
+            pendingReactionCustody?.takeDirect(radioId, contactID, hash, sessionOwner, true).orEmpty()
+        } else {
+            pendingReactionCustody?.takeDirect(radioId, contactID, hash, sessionOwner, false).orEmpty()
+        }
         val matched = synchronized(lock) {
             val (remaining, taken) = pendingDMReactions.take(key) { value, keyOrder, entryOrder ->
                 value.copy(queueKeyOrder = keyOrder, queueEntryOrder = entryOrder)
@@ -459,7 +512,10 @@ class ReactionService internal constructor(
     ) {
         val key = PendingDMReactionKey(contactID, parsed.messageHash)
         val pending = PendingDMReaction(parsed, contactID, senderName, rawText, radioId, clock.instant())
-        synchronized(lock) { pendingDMReactions = pendingDMReactions.enqueue(key, pending, MAX_PENDING_REACTIONS) }
+        val custody = pendingReactionCustody
+        if (custody == null) synchronized(lock) {
+            pendingDMReactions = pendingDMReactions.enqueue(key, pending, MAX_PENDING_REACTIONS)
+        } else custody.queue(pending, sessionOwner)
         logger.fine { "Queued pending DM reaction ${parsed.emoji}" }
     }
 
@@ -510,6 +566,23 @@ internal class PendingQueue<K, V> private constructor(
 
     fun cleared(): PendingQueue<K, V> = PendingQueue(emptyMap(), emptyMap(), nextOrder)
 
+    fun removeMatchingValues(matchesValue: (V) -> Boolean): PendingQueue<K, V> {
+        var nextEntries = entries
+        var nextKeyOrders = keyOrders
+        for ((key, values) in entries) {
+            val remaining = values.filterNot { matchesValue(it.value) }
+            if (remaining.size != values.size) {
+                if (remaining.isEmpty()) {
+                    nextEntries = nextEntries - key
+                    nextKeyOrders = nextKeyOrders - key
+                } else {
+                    nextEntries = nextEntries + (key to remaining)
+                }
+            }
+        }
+        return PendingQueue(nextEntries, nextKeyOrders, nextOrder)
+    }
+
     /** Appends [value] under [key] (a new key joins the end of the order), then evicts down to [maxCount]. */
     fun enqueue(
         key: K, value: V, maxCount: Int, restoredKeyOrder: Long? = null, restoredEntryOrder: Long? = null,
@@ -527,10 +600,41 @@ internal class PendingQueue<K, V> private constructor(
 
     /** Removes every value queued under [key]; returns the remaining queue and the values (null when none). */
     fun take(key: K, withOrder: (V, Long, Long) -> V): Pair<PendingQueue<K, V>, List<V>?> {
-        val matched = entries[key] ?: return this to null
-        val keyOrder = keyOrders.getValue(key)
-        return PendingQueue(entries - key, keyOrders - key, nextOrder) to
-            matched.map { withOrder(it.value, keyOrder, it.order) }
+        val (remaining, matched) = takeMatching({ it == key }, withOrder)
+        return remaining to matched.ifEmpty { null }
+    }
+
+    fun takeMatching(
+        matchesKey: (K) -> Boolean,
+        withOrder: (V, Long, Long) -> V,
+    ): Pair<PendingQueue<K, V>, List<V>> {
+        return takeMatchingEntries(matchesKey, { true }, withOrder)
+    }
+
+    fun takeMatchingEntries(
+        matchesKey: (K) -> Boolean,
+        matchesValue: (V) -> Boolean,
+        withOrder: (V, Long, Long) -> V,
+    ): Pair<PendingQueue<K, V>, List<V>> {
+        var nextEntries = entries
+        var nextKeyOrders = keyOrders
+        val matched = ArrayList<Triple<Long, Long, V>>()
+        for ((key, values) in entries) {
+            if (!matchesKey(key)) continue
+            val keyOrder = keyOrders.getValue(key)
+            val taking = values.filter { matchesValue(it.value) }
+            if (taking.isEmpty()) continue
+            matched += taking.map { Triple(keyOrder, it.order, withOrder(it.value, keyOrder, it.order)) }
+            val remaining = values.filterNot { matchesValue(it.value) }
+            if (remaining.isEmpty()) {
+                nextEntries = nextEntries - key
+                nextKeyOrders = nextKeyOrders - key
+            } else {
+                nextEntries = nextEntries + (key to remaining)
+            }
+        }
+        return PendingQueue(nextEntries, nextKeyOrders, nextOrder) to
+            matched.sortedWith(compareBy<Triple<Long, Long, V>> { it.first }.thenBy { it.second }).map { it.third }
     }
 
     /**

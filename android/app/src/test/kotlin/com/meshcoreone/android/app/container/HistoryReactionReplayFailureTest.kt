@@ -101,16 +101,12 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
     @Test fun directCancelledOldReplayWaiterRetainsItsPendingReaction() = runTest { interleave(this, true, false, true, true) }
     @Test fun channelCancelledOldReplayWaiterRetainsItsPendingReaction() = runTest { interleave(this, false, false, true, true) }
 
-    @Test fun directHistoryWinsTheSameReactionWithoutReplacingItsIdentity() = runTest { sameReaction(this, true, true) }
-    @Test fun channelHistoryWinsTheSameReactionWithoutReplacingItsIdentity() = runTest { sameReaction(this, false, true) }
-    @Test fun directLiveWinsAnOutdatedReplayExistenceCheck() = runTest { sameReaction(this, true, false) }
-    @Test fun channelLiveWinsAnOutdatedReplayExistenceCheck() = runTest { sameReaction(this, false, false) }
-    @Test fun directOldHistoryWinsTheSameReactionAcrossReconnect() = runTest { sameReaction(this, true, true, reconnect = true) }
-    @Test fun channelOldHistoryWinsTheSameReactionAcrossReconnect() = runTest { sameReaction(this, false, true, reconnect = true) }
-    @Test fun directReplacementSessionWinsAnOutdatedReplayExistenceCheck() = runTest { sameReaction(this, true, false, reconnect = true) }
-    @Test fun channelReplacementSessionWinsAnOutdatedReplayExistenceCheck() = runTest { sameReaction(this, false, false, reconnect = true) }
-    @Test fun directSameSenderCanStillAddADifferentEmoji() = runTest { sameReaction(this, true, true, distinctEmoji = true) }
-    @Test fun channelSameSenderCanStillAddADifferentEmoji() = runTest { sameReaction(this, false, true, distinctEmoji = true) }
+    @Test fun directHistorySerializesTheSameLiveReactionWithoutReplacingItsIdentity() = runTest { sameReaction(this, true) }
+    @Test fun channelHistorySerializesTheSameLiveReactionWithoutReplacingItsIdentity() = runTest { sameReaction(this, false) }
+    @Test fun directOldHistorySerializesTheSameReactionAcrossReconnect() = runTest { sameReaction(this, true, reconnect = true) }
+    @Test fun channelOldHistorySerializesTheSameReactionAcrossReconnect() = runTest { sameReaction(this, false, reconnect = true) }
+    @Test fun directSameSenderCanStillAddADifferentEmoji() = runTest { sameReaction(this, true, distinctEmoji = true) }
+    @Test fun channelSameSenderCanStillAddADifferentEmoji() = runTest { sameReaction(this, false, distinctEmoji = true) }
     @Test fun directLockedExistenceFailureRetainsTheUnfinishedBatch() = runTest { recover(this, true, Fault.EXISTS_LOCKED, false) }
     @Test fun channelLockedExistenceFailureRetainsTheUnfinishedBatch() = runTest { recover(this, false, Fault.EXISTS_LOCKED, false) }
     @Test fun directLockedExistenceCancellationRetainsTheUnfinishedBatch() = runTest { recover(this, true, Fault.EXISTS_LOCKED, true) }
@@ -302,18 +298,14 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
     private suspend fun sameReaction(
         test: TestScope,
         direct: Boolean,
-        historyFirst: Boolean,
         reconnect: Boolean = false,
         distinctEmoji: Boolean = false,
     ) {
         val historyChecked = CompletableDeferred<Unit>()
-        val bothChecked = CompletableDeferred<Unit>()
         val releaseHistoryCheck = CompletableDeferred<Unit>()
-        val releaseLiveCheck = CompletableDeferred<Unit>()
         val snapshotReady = CompletableDeferred<Unit>()
         val releaseSnapshot = CompletableDeferred<Unit>()
         val checkLock = Any()
-        val outsideResults = mutableListOf<Boolean>()
         var targetKey: EntityKey? = null
         var checks = 0
         var saves = 0
@@ -324,13 +316,11 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
                 val ordinal = synchronized(checkLock) {
                     if (message == targetKey && senderName == "Bob") {
                         checks++
-                        if (checks <= 2) outsideResults += exists
                         checks
                     } else 0
                 }
                 when (ordinal) {
                     1 -> { historyChecked.complete(Unit); releaseHistoryCheck.await() }
-                    2 -> { bothChecked.complete(Unit); releaseLiveCheck.await() }
                 }
                 return exists
             }
@@ -425,16 +415,13 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
                 if (command[0] == 0x0a.toUByte()) listOf(frames.poll() ?: Bytes.of(0x0a)) else prior(command)
             }
             val arrival = test.async { live.messagePollingService.pollAllMessages() }.also(jobs::add)
-            bothChecked.await()
-            assertEquals(listOf(false, false), synchronized(checkLock) { outsideResults.toList() },
-                "The actual App and SyncCoordinator existence checks both precede either insert")
-            if (historyFirst) releaseHistoryCheck.complete(Unit) else releaseLiveCheck.complete(Unit)
+            assertFalse(arrival.isCompleted, "The live reaction must wait for history's serialized persistence")
+            assertEquals(1, synchronized(checkLock) { checks })
+            releaseHistoryCheck.complete(Unit)
             snapshotReady.await()
             val first = store.fetchReactions(message).single()
             assertEquals(1, saves)
-            if (historyFirst) {
-                releaseLiveCheck.complete(Unit)
-            } else releaseHistoryCheck.complete(Unit)
+            assertFalse(arrival.isCompleted, "The live reaction must wait for history's summary reconciliation")
             releaseSnapshot.complete(Unit)
             history.await()
             assertEquals(1L, arrival.await())
@@ -451,7 +438,7 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
             }
             assertEquals(first, rows.single { it.id == first.id })
             assertTrue(rows.all { it.radioId == radio && it.messageID == target.id && it.senderName == "Bob" })
-            assertEquals(4, synchronized(checkLock) { checks }, "Both stale callers must recheck inside the shared boundary")
+            assertTrue(synchronized(checkLock) { checks } >= 2, "Both serialized operations must check existence")
             val summary = assertNotNull(assertNotNull(store.fetchMessage(message)).reactionSummary)
             val expectedCounts = if (distinctEmoji) setOf("$emoji:1", "$liveEmoji:1") else setOf("$emoji:1")
             assertEquals(expectedCounts, summary.split(",").toSet())
@@ -461,7 +448,6 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
             assertEquals(summary, viewModel.state.value.messages.single().reactionSummary)
         } finally {
             releaseHistoryCheck.complete(Unit)
-            releaseLiveCheck.complete(Unit)
             releaseSnapshot.complete(Unit)
             jobs.forEach { it.cancelAndJoin() }
             previousResponse?.let { firmware?.respond = it }
@@ -596,10 +582,12 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
                 val arrival = test.async(start = CoroutineStart.UNDISPATCHED) {
                     adapter.persistReactionAndUpdateSummary(carol, persistence)
                 }.also(jobs::add)
+                if (reconnect) releaseDuplicateCheck.complete(Unit)
                 snapshotReady.await()
                 val history = oldHistory ?: test.async(start = CoroutineStart.UNDISPATCHED) { viewModel.open() }.also(jobs::add)
-                releaseDuplicateCheck.complete(Unit)
-                duplicateChecked.await()
+                if (reconnect) {
+                    duplicateChecked.await()
+                }
                 assertEquals(1, fetches, "Duplicate reconciliation must wait for the complete live persistence operation")
                 assertFalse(history.isCompleted)
                 if (cancelWaiter) {
@@ -795,8 +783,19 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
                 assertIs<PersistenceStoreException>(viewModel.state.value.passiveError)
             }
             val unfinished = drain()
-            assertEquals(original.values.drop(1), unfinished.values,
-                "Only Bob completed: retain Carol and Dave, including parsed identity, radio, raw text and receivedAt")
+            fun metadata(pending: Any): List<Any?> = when (pending) {
+                is PendingReaction -> listOf(
+                    pending.parsed, pending.channelIndex, pending.senderNodeName, pending.rawText, pending.radioId,
+                    pending.receivedAt,
+                )
+                is PendingDMReaction -> listOf(
+                    pending.parsed, pending.contactID, pending.senderName, pending.rawText, pending.radioId,
+                    pending.receivedAt,
+                )
+                else -> error("Unexpected pending reaction type: ${pending::class}")
+            }
+            assertEquals(original.values.drop(1).map(::metadata), unfinished.values.map(::metadata),
+                "Only Bob completed; preserve Carol and Dave metadata")
             unfinished.restore()
             val partial = store.fetchReactions(key)
             val committed = fault !in setOf(Fault.EXISTS, Fault.EXISTS_LOCKED, Fault.SAVE_BEFORE)

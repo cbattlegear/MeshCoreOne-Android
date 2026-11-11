@@ -60,7 +60,9 @@ class ChannelServiceDispatchTest {
         f.store.saveChannel(f.radio, f.original)
         val snapshot = assertNotNull(f.store.fetchChannelOccupantSnapshot(f.radio, 0u))
         val original = snapshot.channel.copy(occupantID = snapshot.occupantID)
-        assertFailsWith<ChannelDispatchFailure.UnknownOccupant> { f.service().clearChannel(original.copy(occupantID = null)) }
+        assertFailsWith<ChannelDispatchFailure.UnknownOccupant> {
+            f.service().clearChannel(original.copy(occupantID = null, displayIncarnationID = original.occupantID))
+        }
         assertFailsWith<ChannelDispatchFailure.UnreconciledSession> { f.service().clearChannel(original) }
         assertFailsWith<ChannelDispatchFailure.RetiredSession> {
             ChannelService(f.session, f.store, null).clearChannel(original)

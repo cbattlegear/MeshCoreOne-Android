@@ -294,7 +294,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         )
         override val data = object : ChatListDataSource {
             override suspend fun fetchConversations(radioId: RadioId) = store.fetchConversations(radioId)
-            override suspend fun fetchChannels(radioId: RadioId) = store.fetchChannels(radioId)
+            override suspend fun fetchChannels(radioId: RadioId) = store.fetchChannelsForDisplay(radioId)
             override suspend fun fetchRemoteNodeSessions(radioId: RadioId) = store.fetchRemoteNodeSessions(radioId)
             override suspend fun fetchContacts(radioId: RadioId) = store.fetchContacts(radioId)
             override suspend fun fetchLastMessages(contactIds: List<UUID>, limit: Int) =

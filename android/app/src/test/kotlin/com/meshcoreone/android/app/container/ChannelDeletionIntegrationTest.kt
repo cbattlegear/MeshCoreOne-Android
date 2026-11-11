@@ -7,6 +7,8 @@ import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.services.contacts.ChannelDispatchFailure
 import com.meshcoreone.android.feature.chats.list.ChatListActions
+import com.meshcoreone.android.feature.chats.list.ChatListDataSource
+import com.meshcoreone.android.feature.chats.list.ChatListFeatureDependencies
 import com.meshcoreone.android.feature.chats.list.ChatListMessage
 import com.meshcoreone.android.feature.chats.list.ChatListStateHolder
 import kotlin.test.*
@@ -14,6 +16,59 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Test
 
 class ChannelDeletionIntegrationTest : RoomProcessTest() {
+    @Test fun successfulDeleteRemovesAWitnessWithdrawnDuringSetEvenWhenTheTrailingFetchFails() = runTest {
+        val h = ContainerHarness(this, store)
+        configure(h)
+        try {
+            h.container.foreground.activityStarted()
+            h.manager.connect(h.target())
+            h.settle()
+            h.assertReady()
+            val graph = assertNotNull(h.sessions.current)
+            val radio = graph.token.radioId
+            graph.channelService.setChannelWithSecret(radio, 1u, "A", secret(1))
+            val actual = h.container.chatsFeature.listFor(radio)
+            var failChannelFetch = false
+            var failedFetches = 0
+            val dependencies = object : ChatListFeatureDependencies by actual {
+                override val data = object : ChatListDataSource by actual.data {
+                    override suspend fun fetchChannels(radioId: com.meshcoreone.android.core.model.RadioId) =
+                        if (failChannelFetch) {
+                            failedFetches++
+                            throw IllegalStateException("post-delete channel read failed")
+                        } else actual.data.fetchChannels(radioId)
+                }
+            }
+            val holder = ChatListStateHolder(dependencies, backgroundScope)
+            holder.requestConversationReload()?.join()
+            val original = holder.state.value.channels.single { it.index == 1.toUByte() }
+            assertEquals(original.occupantID, assertNotNull(original.displayIncarnationID))
+            val firmware = h.links.radios.single()
+            var clearEntered = false
+            firmware.respond = { frame ->
+                if (frame[0].toInt() == 0x20) { clearEntered = true; emptyList() } else null
+            }
+            val actions = ChatListActions(holder, dependencies, backgroundScope, {},
+                { error("Cleanup must not use a rendered selection") })
+            actions.deleteChannelConversation(original)
+            h.eventually("held SET-empty") { clearEntered }
+            holder.requestConversationReload()?.join()
+            val pending = holder.state.value.channels.single { it.index == 1.toUByte() }
+            assertNull(pending.occupantID)
+            assertEquals(original.displayIncarnationID, pending.displayIncarnationID)
+            assertTrue(holder.isDeletePending(original.id))
+            failChannelFetch = true
+            firmware.push(Bytes.of(0))
+            h.eventually("successful clear and failed trailing channel read") {
+                !holder.isDeletePending(original.id) && failedFetches > 0 && !holder.state.value.isLoading
+            }
+            assertNull(holder.state.value.channelDeleteFailure)
+            assertNull(store.fetchChannel(radio, 1u))
+            assertTrue(holder.state.value.channels.none { it.index == 1.toUByte() })
+            assertTrue(holder.state.value.allConversations.none { it.id == original.id })
+        } finally { h.container.close() }
+    }
+
     @Test fun delayedOriginalDeleteRejectsReusedRowAndPreservesReplacementHistory() = runTest {
         val h = ContainerHarness(this, store)
         configure(h)
@@ -58,7 +113,8 @@ class ChannelDeletionIntegrationTest : RoomProcessTest() {
                 h.eventually("visible stale-delete failure") { !holder.isDeletePending(original.id) }
                 val failure = assertIs<ChatListMessage.Failure>(holder.state.value.channelDeleteFailure?.message)
                 assertIs<ChannelDispatchFailure.ReplacedOccupant>(failure.cause)
-                assertEquals(listOf(replacement), holder.state.value.channels.filter { it.index == 1.toUByte() })
+                assertEquals(listOf(replacement.copy(displayIncarnationID = replacement.occupantID)),
+                    holder.state.value.channels.filter { it.index == 1.toUByte() })
                 assertEquals(writes, firmware.sent.filter { it[0].toInt() == 0x20 })
                 assertEquals(replacement, store.fetchChannel(radio, 1u))
                 assertEquals(history, store.fetchMessage(EntityKey(radio, history.id)))

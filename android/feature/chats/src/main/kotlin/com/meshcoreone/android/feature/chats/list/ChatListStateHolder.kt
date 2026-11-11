@@ -221,7 +221,7 @@ class ChatListStateHolder(
             .map { Conversation.Direct(it) }
         val channelRows = current.channels
             .filter { row -> (row.name.isNotEmpty() || row.hasSecret) &&
-                current.pendingChannelRemovals.none { sameChannelHistory(it, row) } }
+                current.pendingChannelRemovals.none { sameChannelRemovalIncarnation(it, row) } }
             .map { Conversation.Channel(it) }
         val roomRows = current.roomSessions.filter { it.id !in current.pendingRemovalIds }.map { Conversation.Room(it) }
         val all = contactRows + channelRows + roomRows
@@ -241,6 +241,13 @@ class ChatListStateHolder(
         left.id == right.id && left.radioId == right.radioId && left.index == right.index &&
             left.occupantID == right.occupantID && left.secret == right.secret && left.isEnabled == right.isEnabled
 
+    private fun sameChannelRemovalIncarnation(left: ChannelDTO, right: ChannelDTO): Boolean {
+        val incarnation = left.occupantID ?: left.displayIncarnationID ?: return false
+        val other = right.occupantID ?: right.displayIncarnationID
+        return incarnation == other && left.id == right.id && left.radioId == right.radioId &&
+            left.index == right.index && left.secret == right.secret && left.isEnabled == right.isEnabled
+    }
+
     /** Most recent first; rows without a message date sort last; ties keep insertion order (stable). */
     fun sortedByLastMessage(items: List<Conversation>): List<Conversation> =
         items.sortedByDescending { it.lastMessageDate ?: NO_MESSAGE_SENTINEL }
@@ -251,7 +258,7 @@ class ChatListStateHolder(
         val present = current.contacts.map { it.id }.toSet() + current.channels.map { it.id } + current.roomSessions.map { it.id }
         return current.copy(pendingRemovalIds = current.pendingRemovalIds.intersect(present),
             pendingChannelRemovals = current.pendingChannelRemovals.filter { old ->
-                current.channels.any { sameChannelHistory(old, it) }
+                current.channels.any { sameChannelRemovalIncarnation(old, it) }
             })
     }
 
@@ -272,7 +279,7 @@ class ChatListStateHolder(
         recompute(
             when (conversation) {
                 is Conversation.Direct -> masked.copy(contacts = masked.contacts.filter { it.id != conversation.contact.id })
-                is Conversation.Channel -> masked.copy(channels = masked.channels.filterNot { sameChannelHistory(it, conversation.channel) })
+                is Conversation.Channel -> masked.copy(channels = masked.channels.filterNot { sameChannelRemovalIncarnation(it, conversation.channel) })
                 is Conversation.Room -> masked.copy(roomSessions = masked.roomSessions.filter { it.id != conversation.session.id })
             },
         )
@@ -282,7 +289,7 @@ class ChatListStateHolder(
     fun restoreConversation(conversation: Conversation) = mutableState.update { current ->
         val unmasked = current.copy(pendingRemovalIds = current.pendingRemovalIds - conversation.id,
             pendingChannelRemovals = if (conversation is Conversation.Channel)
-                current.pendingChannelRemovals.filterNot { sameChannelHistory(it, conversation.channel) }
+                current.pendingChannelRemovals.filterNot { sameChannelRemovalIncarnation(it, conversation.channel) }
                 else current.pendingChannelRemovals)
         recompute(
             when (conversation) {

@@ -36,6 +36,28 @@ import org.junit.Test
 
 class ChatListActionsTest {
     @Test
+    fun `late deletion preserves an unproved equal-value replacement with a new display incarnation`() = scenario {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val services = FakeServices().apply { clearChannelGate = { entered.complete(Unit); release.await() } }
+        val rig = Rig(this, FakeDependencies(services = services))
+        val original = channel("A").copy(occupantID = UUID.randomUUID())
+        val replacement = original.copy(occupantID = null, displayIncarnationID = UUID.randomUUID())
+        rig.deps.data.channels = listOf(original)
+        rig.holder.requestConversationReload()?.join()
+        rig.actions.deleteChannelConversation(original)
+        entered.await()
+        rig.deps.data.channels = listOf(replacement)
+        rig.holder.requestConversationReload()?.join()
+        release.complete(Unit)
+        settle()
+        assertEquals(listOf(replacement), rig.holder.state.value.channels)
+        assertEquals(listOf(Conversation.Channel(replacement)), rig.holder.state.value.allConversations)
+        rig.holder.requestConversationReload()?.join()
+        assertEquals(listOf(Conversation.Channel(replacement)), rig.holder.state.value.allConversations)
+    }
+
+    @Test
     fun `late channel deletion cannot hide or mask a same-ID replacement`() = scenario {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()

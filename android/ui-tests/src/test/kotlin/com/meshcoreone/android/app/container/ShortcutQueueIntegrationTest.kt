@@ -682,7 +682,11 @@ class ShortcutQueueIntegrationTest : RoomProcessTest() {
             }
             val originalAttemptID = assertNotNull(backing.fetchPendingSendsForMessage(keys.last()).single().channelAttemptID)
             val originalDirectPendingID = backing.fetchPendingSendsForMessage(keys.first()).single().id
+            assertEquals(0, h.links.radios.single().sent.count { it[0].toInt() == 2 })
             h.container.close()
+            assertEquals(0, h.links.radios.single().sent.count { it[0].toInt() == 2 })
+            val attemptsBeforeReopen = backing.fetchPendingSendsForMessage(keys.first()).single().attemptCount
+            assertTrue(attemptsBeforeReopen in 0L..1L)
             backing.close()
             owner.cancel()
             database.close()
@@ -714,7 +718,7 @@ class ShortcutQueueIntegrationTest : RoomProcessTest() {
             assertEquals(MessageStatus.PENDING, backing.fetchMessage(keys.first())?.status)
             val direct = backing.fetchPendingSendsForMessage(keys.first()).single()
             assertEquals(originalDirectPendingID, direct.id)
-            assertEquals(1L, direct.attemptCount)
+            assertEquals(attemptsBeforeReopen + 1L, direct.attemptCount)
             val channelMessage = assertNotNull(backing.fetchMessage(keys.last()))
             assertEquals(original, channelMessage.text)
             assertEquals(MessageStatus.PENDING, channelMessage.status)

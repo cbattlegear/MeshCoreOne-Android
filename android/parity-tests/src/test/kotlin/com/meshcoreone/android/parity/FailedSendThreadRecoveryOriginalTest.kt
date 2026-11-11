@@ -196,7 +196,7 @@ class FailedSendThreadRecoveryOriginalTest : RoomProcessTest() {
                         ComposerRoute(composer, "Message", onPickContact = {})
                     }
                 }
-                compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsErrorNoDeviceConnected))
+                compose.onNodeWithText(host.get().getString(AppChatsStrings.chatsAlertUnableToSendMessage))
                     .assertIsDisplayed()
             } finally {
                 composer.close()

@@ -321,6 +321,7 @@ internal fun openMemoryDatabase(): MeshCoreDatabase {
     val context = ApplicationProvider.getApplicationContext<Context>()
     val immediate = java.util.concurrent.Executor { it.run() }
     return Room.inMemoryDatabaseBuilder(context, MeshCoreDatabase::class.java)
+        .addCallback(com.meshcoreone.android.core.database.DirectAckStorage.callback)
         .allowMainThreadQueries().setQueryExecutor(immediate).setTransactionExecutor(immediate).build()
 }
 

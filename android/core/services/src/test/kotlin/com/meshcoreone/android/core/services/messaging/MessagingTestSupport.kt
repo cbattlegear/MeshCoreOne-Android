@@ -96,14 +96,53 @@ private fun <T> unsupportedRole(type: Class<T>): T = type.cast(
     },
 )
 
+private class RevisionedMap<K, V>(private val changed: (K, V?, V?) -> Unit) : LinkedHashMap<K, V>() {
+    override fun put(key: K, value: V): V? {
+        val old = super.put(key, value)
+        changed(key, old, value)
+        return old
+    }
+    override fun putAll(from: Map<out K, V>) { from.forEach { (key, value) -> put(key, value) } }
+    override fun remove(key: K): V? {
+        if (!containsKey(key)) return null
+        val old = super.remove(key)
+        changed(key, old, null)
+        return old
+    }
+    override fun clear() { keys.toList().forEach { remove(it) } }
+}
+
 internal class RecordingStore : PersistenceStoreProtocol by unsupportedRole(PersistenceStoreProtocol::class.java),
     ChannelHistoryPersisting by unsupportedRole(ChannelHistoryPersisting::class.java),
     QueuedChannelTerminalPersisting, QueuedChannelReadinessPersisting, InlineChannelAttemptPersisting {
-    val messages = linkedMapOf<EntityKey, MessageDTO>()
+    val directAckAuthority = RecordingDirectAckAuthority(this)
+    private val messageRevisions = mutableMapOf<EntityKey, Long>()
+    private val messageIncarnations = mutableMapOf<EntityKey, Long>()
+    private val pendingRevisions = mutableMapOf<EntityKey, Long>()
+    internal fun messageRevision(key: EntityKey) = messageRevisions[key] ?: 0L
+    internal fun messageIncarnation(key: EntityKey) = messageIncarnations[key] ?: 0L
+    internal fun pendingRevision(key: EntityKey) = pendingRevisions[key] ?: 0L
+    internal fun invalidateMessage(key: EntityKey) {
+        messageRevisions[key] = Math.incrementExact(messageRevision(key))
+    }
+    internal fun invalidatePending(key: EntityKey, invalidateMessage: Boolean = true) {
+        pendingRevisions[key] = Math.incrementExact(pendingRevision(key))
+        if (invalidateMessage) pending[key]?.let { this.invalidateMessage(EntityKey(it.radioId, it.messageID)) }
+    }
+    val messages: MutableMap<EntityKey, MessageDTO> = RevisionedMap { key, old, new ->
+        invalidateMessage(key)
+        if ((old == null) != (new == null)) {
+            messageIncarnations[key] = Math.incrementExact(messageIncarnation(key))
+        }
+    }
     val contacts = linkedMapOf<EntityKey, ContactDTO>()
     val channels = linkedMapOf<EntityKey, ChannelDTO>()
     val devices = linkedMapOf<RadioId, DeviceDTO>()
-    val pending = linkedMapOf<EntityKey, PendingSendDTO>()
+    val pending: MutableMap<EntityKey, PendingSendDTO> = RevisionedMap { key, old, new ->
+        invalidatePending(key, invalidateMessage = false)
+        old?.let { invalidateMessage(EntityKey(it.radioId, it.messageID)) }
+        new?.let { invalidateMessage(EntityKey(it.radioId, it.messageID)) }
+    }
     val channelAttempts = linkedMapOf<QueuedChannelAttemptKey, QueuedChannelAttempt>()
     val channelOccupants = mutableMapOf<Pair<RadioId, UByte>, UUID>()
     val calls = mutableListOf<String>()
@@ -115,7 +154,12 @@ internal class RecordingStore : PersistenceStoreProtocol by unsupportedRole(Pers
         before?.invoke(name)
         faults[name]?.let { throw it }
     }
-    override suspend fun saveMessage(dto: MessageDTO) { access("saveMessage"); messages[EntityKey(dto.radioId, dto.id)] = dto }
+    internal suspend fun authorityAccess(name: String) = access(name)
+    override suspend fun saveMessage(dto: MessageDTO) {
+        access("saveMessage")
+        val key = EntityKey(dto.radioId, dto.id)
+        invalidateMessage(key); messages[key] = dto
+    }
     fun seedChannelCreation(index: UByte = 0u, radio: RadioId = RADIO): ChannelOccupantSnapshot {
         val channel = ChannelDTO(radioId = radio, index = index, name = "Test", secret = Bytes(ByteArray(16) { 0x11 }))
         channels[EntityKey(radio, channel.id)] = channel
@@ -189,12 +233,13 @@ internal class RecordingStore : PersistenceStoreProtocol by unsupportedRole(Pers
     override suspend fun fetchMessages(radioId: RadioId, channelIndex: UByte, limit: Long, offset: Long): SnapshotList<MessageDTO> =
         messages.values.filter { it.radioId == radioId && it.channelIndex == channelIndex }.snapshot()
     override suspend fun updateMessageStatus(key: EntityKey, status: MessageStatus) {
-        access("updateMessageStatus"); messages[key]?.let { messages[key] = it.copy(status = status) }
+        access("updateMessageStatus"); messages[key]?.let { invalidateMessage(key); messages[key] = it.copy(status = status) }
     }
     override suspend fun updateMessageStatusUnlessDelivered(key: EntityKey, status: MessageStatus): Boolean {
         access("updateMessageStatusUnlessDelivered")
         val row = messages[key] ?: return false
         if (row.status == MessageStatus.DELIVERED) return false
+        invalidateMessage(key)
         messages[key] = row.copy(status = status)
         return true
     }
@@ -202,7 +247,8 @@ internal class RecordingStore : PersistenceStoreProtocol by unsupportedRole(Pers
         access("clearRetryingToSent")
         val row = messages[key] ?: return false
         if (row.status == MessageStatus.FAILED || row.status == MessageStatus.DELIVERED) return false
-        messages[key] = row.copy(status = MessageStatus.SENT, retryAttempt = 0, maxRetryAttempts = 0)
+        invalidateMessage(key)
+        messages[key] = row.copy(status = MessageStatus.SENT)
         return true
     }
     override suspend fun updateMessageAck(key: EntityKey, ackCode: UInt, status: MessageStatus, roundTripTime: UInt?) {
@@ -210,29 +256,34 @@ internal class RecordingStore : PersistenceStoreProtocol by unsupportedRole(Pers
         val row = messages[key] ?: return
         if (row.status == MessageStatus.DELIVERED && status != MessageStatus.DELIVERED ||
             row.status == MessageStatus.FAILED && status == MessageStatus.DELIVERED) return
+        invalidateMessage(key)
         messages[key] = row.copy(ackCode = ackCode, status = status, roundTripTime = roundTripTime ?: row.roundTripTime)
     }
     override suspend fun updateMessageRetryStatus(key: EntityKey, status: MessageStatus, retryAttempt: Long, maxRetryAttempts: Long) {
         access("updateMessageRetryStatus")
         messages[key]?.takeIf { it.status != MessageStatus.DELIVERED }?.let {
+            invalidateMessage(key)
             messages[key] = it.copy(status = status, retryAttempt = retryAttempt, maxRetryAttempts = maxRetryAttempts)
         }
     }
     override suspend fun updateMessageTimestamp(key: EntityKey, timestamp: UInt) {
-        access("updateMessageTimestamp"); messages[key]?.let { messages[key] = it.copy(timestamp = timestamp) }
+        access("updateMessageTimestamp"); messages[key]?.let { invalidateMessage(key); messages[key] = it.copy(timestamp = timestamp) }
     }
     override suspend fun incrementMessageSendCount(key: EntityKey): Long {
         access("incrementMessageSendCount")
         val row = messages[key] ?: return 0
         val count = Math.incrementExact(row.sendCount)
+        invalidateMessage(key)
         messages[key] = row.copy(sendCount = count)
         return count
     }
     override suspend fun updateMessageHeardRepeats(key: EntityKey, heardRepeats: Long) {
-        access("updateMessageHeardRepeats"); messages[key]?.let { messages[key] = it.copy(heardRepeats = heardRepeats) }
+        access("updateMessageHeardRepeats"); messages[key]?.let { invalidateMessage(key); messages[key] = it.copy(heardRepeats = heardRepeats) }
     }
     override suspend fun deleteMessageRepeats(message: EntityKey) { access("deleteMessageRepeats") }
-    override suspend fun deleteMessage(key: EntityKey) { messages.remove(key); deletePendingSendsForMessage(key) }
+    override suspend fun deleteMessage(key: EntityKey) {
+        invalidateMessage(key); messages.remove(key); deletePendingSendsForMessage(key)
+    }
     override suspend fun hasOutgoingSentDM(radioId: RadioId, ackCode: UInt): Boolean =
         messages.values.any { it.radioId == radioId && it.ackCode == ackCode && it.status == MessageStatus.SENT && it.channelIndex == null }
     override suspend fun fetchContact(key: EntityKey): ContactDTO? { access("fetchContact"); return contacts[key] }
@@ -280,6 +331,8 @@ internal class RecordingStore : PersistenceStoreProtocol by unsupportedRole(Pers
         access("insertPendingSendAssigningSequence")
         val sequence = Math.incrementExact(pending.values.filter { it.radioId == dto.radioId }.maxOfOrNull { it.sequence } ?: 0)
         val key = EntityKey(dto.radioId, dto.id)
+        invalidatePending(key)
+        invalidateMessage(EntityKey(dto.radioId, dto.messageID))
         if (dto.kind == PendingSendKind.CHANNEL) {
             if (key in pending || channelAttempts.keys.any { it.radioId == dto.radioId && it.pendingID == dto.id } ||
                 pending.values.any { it.radioId == dto.radioId && it.messageID == dto.messageID &&
@@ -295,7 +348,27 @@ internal class RecordingStore : PersistenceStoreProtocol by unsupportedRole(Pers
             })
         return sequence
     }
-    override suspend fun upsertPendingSend(dto: PendingSendDTO) { pending[EntityKey(dto.radioId, dto.id)] = dto }
+    override suspend fun upsertPendingSend(dto: PendingSendDTO) {
+        val key = EntityKey(dto.radioId, dto.id)
+        invalidatePending(key)
+        invalidateMessage(EntityKey(dto.radioId, dto.messageID))
+        pending[key] = dto
+    }
+    override suspend fun replacePendingSendForRetry(messageID: UUID, dto: PendingSendDTO): Long {
+        access("replacePendingSendForRetry")
+        require(dto.kind == PendingSendKind.DM && dto.messageID == messageID)
+        val key = EntityKey(dto.radioId, messageID)
+        pending.values.filter { it.radioId == dto.radioId && it.messageID == messageID }
+            .map { EntityKey(it.radioId, it.id) }.forEach { pending.remove(it) }
+        messages[key]?.takeIf { it.status != MessageStatus.DELIVERED }?.let {
+            messages[key] = it.copy(status = MessageStatus.PENDING)
+        }
+        val sequence = Math.incrementExact(pending.values.filter { it.radioId == dto.radioId }
+            .maxOfOrNull { it.sequence } ?: 0)
+        pending[EntityKey(dto.radioId, dto.id)] = dto.copy(sequence = sequence)
+        directAckAuthority.recordExplicitRetry(key, dto.id)
+        return sequence
+    }
     override suspend fun fetchPendingSends(radioId: RadioId): SnapshotList<PendingSendDTO> {
         access("fetchPendingSends"); return pending.values.filter { it.radioId == radioId }.sortedBy { it.sequence }.snapshot()
     }
@@ -310,7 +383,9 @@ internal class RecordingStore : PersistenceStoreProtocol by unsupportedRole(Pers
         access("incrementPendingSendAttemptCount")
         val row = pending.values.firstOrNull { it.radioId == key.radioId && it.messageID == key.id } ?: return null
         val next = Math.incrementExact(row.attemptCount ?: 0)
-        pending[EntityKey(row.radioId, row.id)] = row.copy(attemptCount = next)
+        val pendingKey = EntityKey(row.radioId, row.id)
+        invalidatePending(pendingKey)
+        pending[pendingKey] = row.copy(attemptCount = next)
         return next
     }
     override suspend fun incrementReadyQueuedChannelAttemptCount(pending: EntityKey, messageID: UUID): Long {
@@ -341,7 +416,12 @@ internal class RecordingStore : PersistenceStoreProtocol by unsupportedRole(Pers
     }
     override suspend fun deletePendingSendsForMessage(key: EntityKey) {
         access("deletePendingSendsForMessage")
-        pending.entries.removeIf { it.value.radioId == key.radioId && it.value.messageID == key.id }
+        pending.filterValues { it.radioId == key.radioId && it.messageID == key.id }.keys.forEach {
+            invalidatePending(it)
+        }
+        pending.filterValues { it.radioId == key.radioId && it.messageID == key.id }.keys.toList().forEach {
+            pending.remove(it)
+        }
     }
     override suspend fun beginQueuedChannelAttempt(
         key: QueuedChannelAttemptKey, expectedOccupantID: UUID, wireTimestamp: UInt,
@@ -630,7 +710,9 @@ internal class Harness(
     private val queues = mutableListOf<ChatSendQueueService>()
     private val pollers = mutableListOf<MessagePollingService>()
     val service = MessageService(token, localPublicKey, serviceSession, store, signals, scope, config, clock,
-        jitter = { 1.0 }, reporter = MessagingIssueReporter { diagnostics += it }, channelDispatchLease = channelLease)
+        jitter = { 1.0 }, reporter = MessagingIssueReporter { diagnostics += it },
+        directAckAuthority = store.directAckAuthority, directPendingCompletionAuthority = store.directAckAuthority,
+        channelDispatchLease = channelLease)
     init { synchronized(fixtures) { fixtures.getOrPut(test) { mutableListOf() } += this } }
     suspend fun start() {
         store.saveContact(contact)

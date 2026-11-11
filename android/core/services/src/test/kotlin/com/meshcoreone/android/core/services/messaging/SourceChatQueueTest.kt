@@ -25,7 +25,7 @@ class SourceChatQueueTest {
             q.hydrate(); runCurrent(); q.awaitDrainCompletion()
             assertTrue(h.store.fetchPendingSends(RADIO).isEmpty()); q.shutdown(); h.close()
         },
-        original("ChatSendQueueServiceTests", "transient send error preserves the persisted row while parked on the trigger") {
+        native("Android adaptation: raw transient direct error retains the row without replay") {
             val h = failingDM(this); val m = h.message(MessageStatus.PENDING); h.pending(m); val q = h.queue()
             startDrain(h, q)
             val before = h.store.fetchPendingSends(RADIO).single()
@@ -166,40 +166,59 @@ class SourceChatQueueTest {
             }
             val q = h.queue(); startDrain(h, q)
             advanceTimeBy(300); runCurrent()
-            assertEquals(3, h.sends(CommandCode.SEND_MESSAGE).size)
+            assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
             assertFalse(observed.any { it is MessageStatusEvent.Failed })
             assertEquals(1L, h.store.fetchPendingSends(RADIO).single().attemptCount)
             assertEquals(MessageStatus.PENDING, h.stored(m.id).status)
             consumer.cancelAndJoin(); q.shutdown(); h.close()
         },
-        original("ChatSendQueueServiceTests", "Terminal DM send error broadcasts .failed exactly once") {
+        native("Android adaptation: raw terminal direct error retains the unresolved row without false failure") {
             val h = failingDM(this); h.transport.directError = 5u
             val m = h.message(MessageStatus.PENDING); h.pending(m); val events = h.service.statusEvents()
             val q = h.queue(); startDrain(h, q); q.awaitDrainCompletion()
-            assertEquals(listOf(MessageStatusEvent.Failed(m.id)), statuses(h.service, events))
-            assertFalse(h.store.hasPendingSend(EntityKey(RADIO, m.id))); q.shutdown(); h.close()
+            assertTrue(statuses(h.service, events).none { it is MessageStatusEvent.Failed })
+            assertTrue(h.store.hasPendingSend(EntityKey(RADIO, m.id)))
+            assertEquals(MessageStatus.PENDING, h.stored(m.id).status)
+            q.shutdown(); h.close()
         },
         original("ChatSendQueueServiceTests", "observeConnectionState fires the trigger for an already-ready initial state") {
-            val h = failingDM(this); val m = h.message(MessageStatus.PENDING); h.pending(m); val q = h.queue()
-            startDrain(h, q); q.observeConnectionState(); runCurrent()
-            assertEquals(2L, h.store.fetchPendingSends(RADIO).single().attemptCount); q.shutdown(); h.close()
+            val h = failingDM(this); val m = h.message(MessageStatus.PENDING); h.pending(m)
+            h.store.faults["incrementPendingSendAttemptCount"] = storageFailure()
+            val q = h.queue(); startDrain(h, q)
+            assertEquals(0L, h.store.fetchPendingSends(RADIO).single().attemptCount)
+            h.store.faults.remove("incrementPendingSendAttemptCount")
+            h.transport.directError = null; h.transport.acknowledge = true
+            q.observeConnectionState(); runCurrent(); q.awaitDrainCompletion()
+            assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+            assertFalse(h.store.hasPendingSend(EntityKey(RADIO, m.id))); q.shutdown(); h.close()
         },
         original("ChatSendQueueServiceTests", "observeConnectionState keeps a drain parked through .connected and wakes it on .ready") {
-            val h = failingDM(this); val m = h.message(MessageStatus.PENDING); h.pending(m); val q = h.queue()
-            startDrain(h, q); h.signals.set(h.token, DeviceConnectionState.CONNECTED); runCurrent()
+            val h = failingDM(this); val m = h.message(MessageStatus.PENDING); h.pending(m)
+            h.store.faults["incrementPendingSendAttemptCount"] = storageFailure()
+            val q = h.queue(); startDrain(h, q)
+            h.store.faults.remove("incrementPendingSendAttemptCount")
+            h.transport.directError = null; h.transport.acknowledge = true
+            h.signals.set(h.token, DeviceConnectionState.CONNECTED); runCurrent()
             advanceTimeBy(1000); runCurrent()
+            assertTrue(h.sends(CommandCode.SEND_MESSAGE).isEmpty())
+            assertEquals(0L, h.store.fetchPendingSends(RADIO).single().attemptCount)
+            h.signals.set(h.token, DeviceConnectionState.READY); runCurrent(); q.awaitDrainCompletion()
             assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
-            assertEquals(1L, h.store.fetchPendingSends(RADIO).single().attemptCount)
-            h.signals.set(h.token, DeviceConnectionState.READY); runCurrent()
-            assertEquals(2L, h.store.fetchPendingSends(RADIO).single().attemptCount); q.shutdown(); h.close()
+            assertFalse(h.store.hasPendingSend(EntityKey(RADIO, m.id))); q.shutdown(); h.close()
         },
         original("ChatSendQueueServiceTests", "connection-state ramp fires the trigger exactly once") {
-            val h = failingDM(this); val m = h.message(MessageStatus.PENDING); h.pending(m); val q = h.queue()
+            val h = failingDM(this); val m = h.message(MessageStatus.PENDING); h.pending(m)
+            h.store.faults["incrementPendingSendAttemptCount"] = storageFailure()
+            val q = h.queue()
             startDrain(h, q)
+            h.store.faults.remove("incrementPendingSendAttemptCount")
+            h.transport.directError = null; h.transport.acknowledge = true
             h.signals.set(null, DeviceConnectionState.DISCONNECTED); h.signals.set(h.token, DeviceConnectionState.CONNECTED)
             h.signals.set(h.token, DeviceConnectionState.SYNCING); h.signals.set(h.token, DeviceConnectionState.READY)
-            runCurrent(); assertEquals(2L, h.store.fetchPendingSends(RADIO).single().attemptCount)
-            advanceTimeBy(1000); runCurrent(); assertEquals(2L, h.store.fetchPendingSends(RADIO).single().attemptCount)
+            runCurrent(); q.awaitDrainCompletion()
+            assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+            advanceTimeBy(1000); runCurrent(); assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
+            assertFalse(h.store.hasPendingSend(EntityKey(RADIO, m.id)))
             q.shutdown(); h.close()
         },
         original("ChatSendQueueServiceAttemptCountTests", "fresh send: row with attemptCount=0 first drain uses fresh timestamp") {

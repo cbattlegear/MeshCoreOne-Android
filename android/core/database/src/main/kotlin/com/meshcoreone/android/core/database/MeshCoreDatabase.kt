@@ -1,5 +1,5 @@
 // PortedFrom: MC1Services/Sources/MC1Services/Services/PersistenceStore.swift@db14559b39d32322b06477c6ae676112f583db50
-// Initial Android schema v1; no SwiftData files/numbering or destructive fallback.
+// Android schema; no SwiftData files/numbering or destructive fallback.
 package com.meshcoreone.android.core.database
 
 import android.content.Context
@@ -18,8 +18,12 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         LinkPreviewEntity::class, DiscoveredNodeEntity::class, NodeStatusSnapshotEntity::class,
         BlockedChannelSenderEntity::class, PendingSendEntity::class, ChannelOccupantEntity::class, QueuedChannelAttemptEntity::class,
         ChannelSubmissionEntity::class,
+        DirectAckIncarnationEntity::class, DirectAckLeaseEntity::class, DirectAckClaimEntity::class,
+        DirectAckDeliveryEntity::class, DirectAckWireEntity::class, DirectAckOperationEntity::class,
+        DirectPendingCompletionEntity::class,
+        DirectAckIntentEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = true,
 )
 @TypeConverters(ValueConverters::class)
@@ -41,12 +45,13 @@ abstract class MeshCoreDatabase : RoomDatabase() {
     abstract fun discoveredNodes(): DiscoveredNodeDao
     abstract fun nodeSnapshots(): NodeSnapshotDao
     abstract fun blockedSenders(): BlockedChannelSenderDao
+    abstract fun directAcks(): DirectAckDao
     abstract fun channelOccupants(): ChannelOccupantDao
     abstract fun queuedChannelAttempts(): QueuedChannelAttemptDao
     abstract fun channelSubmissions(): ChannelSubmissionDao
 
     companion object {
-        const val SCHEMA_VERSION = 4
+        const val SCHEMA_VERSION = 5
         val MIGRATION_1_2: Migration = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE messages ADD COLUMN channelOccupantID TEXT")
@@ -70,6 +75,8 @@ abstract class MeshCoreDatabase : RoomDatabase() {
         }
         fun open(context: Context, name: String = "meshcoreone.db"): MeshCoreDatabase =
             Room.databaseBuilder(context.applicationContext, MeshCoreDatabase::class.java, name)
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build()
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, DirectAckStorage.migration4To5)
+                .addCallback(DirectAckStorage.callback)
+                .build()
     }
 }

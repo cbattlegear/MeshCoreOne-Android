@@ -765,7 +765,9 @@ class CommitRecoveryTest {
             }
         }
         val service = MessageService(h.token, SELF, session, creationStore, h.signals, h.scope, clock = h.clock,
-            reporter = MessagingIssueReporter { h.diagnostics += it }, channelDispatchLease = lease)
+            reporter = MessagingIssueReporter { h.diagnostics += it }, channelDispatchLease = lease,
+            directAckAuthority = h.store.directAckAuthority,
+            directPendingCompletionAuthority = h.store.directAckAuthority)
         try { block(service) } finally {
             service.close()
             if (session !== h.session) lease.owner.retire(lease)

@@ -5,6 +5,7 @@ package com.meshcoreone.android.core.data.repository
 
 import com.meshcoreone.android.core.contracts.domain.*
 import com.meshcoreone.android.core.database.MeshCoreDatabase
+import com.meshcoreone.android.core.database.DirectAckStorage
 import com.meshcoreone.android.core.database.toDTO
 import com.meshcoreone.android.core.database.toEntity
 import com.meshcoreone.android.core.data.backup.BackupModelKind
@@ -30,7 +31,12 @@ class RoomPersistenceStore private constructor(
     private val messages: MessageRepository = MessageRepository(context, pending),
     private val diagnostics: DiagnosticRepository = DiagnosticRepository(context),
     private val metadata: MetadataRepository = MetadataRepository(context),
+    private val directAcks: DirectAckRepository = DirectAckRepository(context),
 ) : PersistenceStoreProtocol,
+    DirectAckAuthority by directAcks,
+    DirectPendingCompletionAuthority by directAcks,
+    DirectQueueAuthority by directAcks,
+    DirectMessageCreationAuthority by directAcks,
     DeviceSessionPersisting by devices, ContactPersisting by contacts, ChannelPersisting by channels,
     ChannelOccupantMetadataPersisting by channels,
     MessagePersisting by messages, ChannelHistoryPersisting by messages,
@@ -127,6 +133,7 @@ class RoomPersistenceStore private constructor(
         afterCommit: () -> Unit = {},
         block: suspend (MeshCoreDatabase, Clock) -> ImportResult,
     ): ImportResult = context.restoreBackup(afterCommit) {
+        DirectAckStorage.eraseRestorePayloads(database.openHelper.writableDatabase)
         val result = block(database, clock)
         if (result.counts.getValue(BackupModelKind.DEVICES).inserted > 0) {
             devices.stageDeviceAuthorityChange(this)

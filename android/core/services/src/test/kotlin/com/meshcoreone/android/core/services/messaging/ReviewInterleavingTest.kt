@@ -79,17 +79,20 @@ class ReviewInterleavingTest {
             val message = h.message(MessageStatus.SENT); h.pending(message, isResend = true)
             var failFinal = true
             h.store.before = {
-                if (it == "fetchMessage" && failFinal && "incrementMessageSendCount" in h.store.calls) {
+                if (it == "inspectDirectAckAttempt" && failFinal && "incrementMessageSendCount" in h.store.calls) {
                     failFinal = false; throw storageFailure()
                 }
             }
             val queue = h.queue(); h.signals.set(h.token, DeviceConnectionState.CONNECTED)
             queue.hydrate(); runCurrent(); h.signals.set(h.token, DeviceConnectionState.READY); runCurrent()
+            assertFalse(failFinal)
             assertEquals(2L, h.stored(message.id).sendCount); assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
             assertTrue(h.store.hasPendingSend(EntityKey(RADIO, message.id)))
             queue.transportDidOpen(); runCurrent(); queue.awaitDrainCompletion()
             assertEquals(2L, h.stored(message.id).sendCount); assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
             assertTrue(h.store.fetchPendingSends(RADIO).isEmpty())
+            // Same-second ACK-code reuse has separate ambiguity coverage.
+            advanceTimeBy(1_000)
             queue.enqueueDM(DirectMessageEnvelope(message.id, CONTACT, true)); runCurrent(); queue.awaitDrainCompletion()
             assertEquals(3L, h.stored(message.id).sendCount); assertEquals(2, h.sends(CommandCode.SEND_MESSAGE).size)
             queue.shutdown(); h.close()

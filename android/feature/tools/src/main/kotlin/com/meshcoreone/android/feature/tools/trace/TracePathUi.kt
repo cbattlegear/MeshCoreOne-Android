@@ -52,6 +52,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
@@ -61,6 +62,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.AnnotatedString
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
@@ -517,7 +519,11 @@ internal fun TracePathListContent(
         state.errorMessage?.let { error ->
             item { Text(error, color = MaterialTheme.colorScheme.error, modifier = Modifier.semantics { contentDescription = error }) }
         }
-        item { TraceResults(state) }
+        item {
+            TraceResults(state) { result ->
+                canEdit() && holder.state.value.displayedResult?.id == result.id
+            }
+        }
         item(key = "trace-save-path") { TraceSavePathAction(state, holder, connection, scope, savingPath) }
         item {
             val canExecute = { holder.deps.connectedDevice() != null && canEdit() }
@@ -793,13 +799,13 @@ internal fun TracePathMapContent(
             scope.launch { if (canRunTrace()) map.runTrace() }
         }
     }
-    val hasResults = state.displayedResult?.success == true || state.batchStatus != null
+    val hasResults = state.displayedResult != null || state.batchStatus != null
     LaunchedEffect(hasResults) {
         if (!hasResults) showResults = false
     }
     val viewResults = {
         val current = holder.state.value
-        if (canEdit() && (current.displayedResult?.success == true || current.batchStatus != null)) {
+        if (canEdit() && (current.displayedResult != null || current.batchStatus != null)) {
             showResults = true
         }
     }
@@ -932,7 +938,9 @@ internal fun TracePathMapContent(
         title = { Text(stringResource(C.contactsTraceMapViewResults)) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
-                TraceResults(state)
+                TraceResults(state) { result ->
+                    canEdit() && holder.state.value.displayedResult?.id == result.id
+                }
             }
         },
         confirmButton = {
@@ -957,15 +965,16 @@ private fun NativeTraceMapSurface(
 }
 
 @Composable
-internal fun TraceResults(state: TracePathState) {
+internal fun TraceResults(state: TracePathState, canCopyResult: (TraceResult) -> Boolean) {
     val result = state.displayedResult
-    if (result != null || state.batchStatus != null) TraceResultCard(result, state)
+    if (result != null || state.batchStatus != null) TraceResultCard(result, state, canCopyResult)
 }
 
 @Composable
-internal fun TraceResultCard(result: TraceResult?, state: TracePathState) {
+internal fun TraceResultCard(result: TraceResult?, state: TracePathState, canCopyResult: (TraceResult) -> Boolean) {
     val resources = LocalContext.current.resources
     val locale = LocalConfiguration.current.locales[0]
+    val clipboard = LocalClipboardManager.current
     val snrFormat = remember(locale) {
         NumberFormat.getNumberInstance(locale).apply {
             minimumFractionDigits = 1
@@ -1015,6 +1024,16 @@ internal fun TraceResultCard(result: TraceResult?, state: TracePathState) {
                     if (batchRunning) CircularProgressIndicator(Modifier.sizeIn(maxWidth = 16.dp, maxHeight = 16.dp), strokeWidth = 2.dp)
                     Text(text, style = MaterialTheme.typography.bodyMedium)
                 }
+            }
+            if (result != null && !result.success) {
+                Text(stringResource(C.contactsTraceListRoundTripPath), style = MaterialTheme.typography.bodySmall)
+                Text(result.tracedPathString, style = MaterialTheme.typography.bodyMedium)
+                TextButton(
+                    onClick = {
+                        if (canCopyResult(result)) clipboard.setText(AnnotatedString(result.tracedPathString))
+                    },
+                    modifier = Modifier.sizeIn(minHeight = 48.dp),
+                ) { Text(stringResource(C.contactsTraceListCopyPath)) }
             }
             val showBatchStats = state.batchEnabled && state.batchPresentationActive
             result?.takeIf { it.success }?.hops?.forEachIndexed { index, hop ->

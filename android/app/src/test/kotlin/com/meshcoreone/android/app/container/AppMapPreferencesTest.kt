@@ -175,6 +175,35 @@ class AppMapPreferencesTest {
         }
     }
 
+    @Test fun displayMigrationPreservesIndependentAppearancePrivacyAndHostFilters() = runBlocking {
+        val main = MapFilterState(favoritesOnly = true).encode()
+        val trace = MapFilterState(showChat = false, showDiscovered = true).encode()
+        storage.preferences.set(AppStorageKey.mapFilterMainMap, main)
+        storage.preferences.set(AppStorageKey.mapFilterTracePath, trace)
+        storage.preferences.set(AppStorageKey.mapColorSchemePreference, "dark")
+        storage.preferences.set(AppStorageKey.showMapPreviewThumbnails, false)
+        storage.preferences.set(AppStorageKey.linkPreviewsEnabled, false)
+        storage.preferences.set(AppStorageKey.mapShowLabels, true)
+        assertTrue(legacy.edit().putBoolean("cluster-v1", false)
+            .putBoolean("labels-v1", false).commit())
+
+        val migrated = adapter.observe(MapFilterHost.MAIN_MAP).first()
+        assertFalse(migrated.clustering)
+        assertTrue(migrated.labels)
+        assertEquals(MapColorPreference.DARK, migrated.appearance)
+        val values = storage.preferences.snapshot()
+        assertEquals(main, values.stored(AppStorageKey.mapFilterMainMap))
+        assertEquals(trace, values.stored(AppStorageKey.mapFilterTracePath))
+        assertFalse(values.contains(AppStorageKey.mapFilterNeighborSNR))
+        assertFalse(values[AppStorageKey.showMapPreviewThumbnails])
+        assertFalse(values[AppStorageKey.linkPreviewsEnabled])
+        val backup = storage.backupPreferences.snapshotForBackup().presentValues
+        assertEquals(PreferenceValue.BooleanValue(false), backup["mapClusteringEnabled"])
+        assertEquals(PreferenceValue.BooleanValue(true), backup["mapShowLabels"])
+        assertFalse(legacy.contains("cluster-v1"))
+        assertFalse(legacy.contains("labels-v1"))
+    }
+
     @Test fun hostWritesStayIndependentAndAppearanceUsesTheExistingProcessKey() = runBlocking {
         val trace = MapFilterState(favoritesOnly = true, showDiscovered = true)
         adapter.setFilter(MapFilterHost.TRACE_PATH, trace)

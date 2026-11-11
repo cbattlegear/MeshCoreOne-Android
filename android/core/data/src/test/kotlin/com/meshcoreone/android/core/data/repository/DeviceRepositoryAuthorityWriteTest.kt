@@ -6,6 +6,7 @@ import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.database.toEntity
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.ChannelFloodScope
+import com.meshcoreone.android.core.model.canonicalString
 import com.meshcoreone.android.core.model.snapshot
 import java.util.UUID
 import kotlin.test.assertEquals
@@ -23,6 +24,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
@@ -47,6 +49,233 @@ class DeviceRepositoryAuthorityWriteTest : RepositoryTest() {
 
     @After fun closeAuthorityRepository() {
         runBlocking { authorityContext.close() }
+    }
+
+    @Test fun simulatorRestoreRetainsWholeSnapshotAndInvalidatesOldAuthority() = runTest(scheduler) {
+        val restored = device(radio = RADIO_A, id = UUID.randomUUID()).copy(
+            publicKey = key(0x31),
+            defaultFloodScopeName = "US915",
+            knownRegions = listOf("US915", "EU868").snapshot(),
+            preRepeatFrequency = 123u,
+            ocvPreset = "user-preset",
+            isActive = false,
+        )
+        val fixture = restored.copy(
+            id = RADIO_A.value,
+            defaultFloodScopeName = null,
+            knownRegions = emptyList<String>().snapshot(),
+            preRepeatFrequency = null,
+            ocvPreset = null,
+        )
+        repository.saveDevice(restored)
+        val ticket = assertNotNull(repository.fetchDeviceWriteSnapshot(restored.id))
+
+        repository.saveSimulatorDevice(fixture)
+
+        assertNull(repository.fetchDevice(restored.id))
+        assertEquals(restored.copy(id = fixture.id), repository.fetchDevice(fixture.id))
+        assertFalse(repository.saveDeviceIfUnchanged(ticket.device.copy(nodeName = "stale"), ticket))
+        val beforeReseed = assertNotNull(repository.fetchDeviceWriteSnapshot(fixture.id))
+        repository.saveSimulatorDevice(fixture)
+        assertEquals(beforeReseed, repository.fetchDeviceWriteSnapshot(fixture.id))
+    }
+
+    @Test fun simulatorLegacyConflictDoesNotMergeOrDeleteEitherSnapshot() = runTest(scheduler) {
+        val fixture = device(radio = RADIO_A, id = RADIO_A.value).copy(
+            publicKey = key(0x32), defaultFloodScopeName = null, knownRegions = emptyList<String>().snapshot(),
+        )
+        val restored = fixture.copy(
+            id = UUID.randomUUID(), defaultFloodScopeName = "US915", knownRegions = listOf("US915").snapshot(),
+            isActive = false,
+        )
+        repository.saveDevice(fixture)
+        repository.saveDevice(restored)
+        val failure = assertFailsWith<PersistenceStoreException> { repository.saveSimulatorDevice(fixture) }
+        assertEquals(PersistenceStoreError.InvalidData, failure.error)
+        assertEquals(fixture, repository.fetchDevice(fixture.id))
+        assertEquals(restored, repository.fetchDevice(restored.id))
+    }
+
+    @Test fun simulatorRecoveryKeepsExactlyTheSelectedDeviceSnapshot() = runTest(scheduler) {
+        for ((radio, choice) in listOf(
+            RADIO_A to SimulatorPreferenceChoice.KEEP_CANONICAL,
+            RADIO_B to SimulatorPreferenceChoice.KEEP_IMPORTED,
+        )) {
+            val canonical = device(radio = radio, id = radio.value).copy(
+                publicKey = key(if (radio == RADIO_A) 0x41 else 0x42),
+                defaultFloodScopeName = null,
+                knownRegions = emptyList<String>().snapshot(),
+                frequency = 915_000u,
+                isActive = true,
+            )
+            val imported = canonical.copy(
+                id = UUID.randomUUID(), isActive = false, nodeName = "Restored device",
+                defaultFloodScopeName = "US915", knownRegions = listOf("US915").snapshot(),
+                frequency = 868_000u,
+            )
+            repository.saveDevice(canonical)
+            repository.saveDevice(imported)
+            val conflict = assertNotNull(repository.simulatorDevicePreferenceConflict(canonical))
+            val canonicalTicket = assertNotNull(repository.fetchDeviceWriteSnapshot(canonical.id))
+            repository.resolveSimulatorDevicePreferenceConflict(canonical, conflict, choice)
+            val selected = if (choice == SimulatorPreferenceChoice.KEEP_CANONICAL) canonical else imported
+            assertEquals(
+                selected.copy(id = canonical.id, isActive = canonical.isActive, lastConnected = canonical.lastConnected),
+                repository.fetchDevice(canonical.id),
+            )
+            assertNull(repository.fetchDevice(imported.id))
+            assertNull(repository.simulatorDevicePreferenceConflict(canonical))
+            assertFalse(repository.saveDeviceIfUnchanged(canonicalTicket.device.copy(nodeName = "stale"), canonicalTicket))
+        }
+    }
+
+    @Test fun simulatorRecoveryRejectsAStaleChoiceAndLeavesBothRows() = runTest(scheduler) {
+        val canonical = device(radio = RADIO_A, id = RADIO_A.value).copy(publicKey = key(0x43))
+        val imported = canonical.copy(id = UUID.randomUUID(), defaultFloodScopeName = "US915")
+        repository.saveDevice(canonical)
+        repository.saveDevice(imported)
+        val stale = assertNotNull(repository.simulatorDevicePreferenceConflict(canonical))
+        val edited = canonical.copy(defaultFloodScopeName = "EU868")
+        repository.saveDevice(edited)
+        val failure = assertFailsWith<PersistenceStoreException> {
+            repository.resolveSimulatorDevicePreferenceConflict(canonical, stale, SimulatorPreferenceChoice.KEEP_IMPORTED)
+        }
+        assertEquals(PersistenceStoreError.InvalidData, failure.error)
+        assertEquals(edited, repository.fetchDevice(canonical.id))
+        assertEquals(imported, repository.fetchDevice(imported.id))
+        val refreshed = assertNotNull(repository.simulatorDevicePreferenceConflict(canonical))
+        repository.resolveSimulatorDevicePreferenceConflict(canonical, refreshed, SimulatorPreferenceChoice.KEEP_CANONICAL)
+        assertEquals(edited, repository.fetchDevice(canonical.id))
+        assertNull(repository.fetchDevice(imported.id))
+    }
+
+    @Test fun cancelledSimulatorRecoveryWaitingForTheWriterLeavesBothSnapshotsAndAuthority() = runTest(scheduler) {
+        val canonical = device(radio = RADIO_A, id = RADIO_A.value).copy(publicKey = key(0x45))
+        val imported = canonical.copy(id = UUID.randomUUID(), defaultFloodScopeName = "US915")
+        repository.saveDevice(canonical)
+        repository.saveDevice(imported)
+        val conflict = assertNotNull(repository.simulatorDevicePreferenceConflict(canonical))
+        val ticket = assertNotNull(repository.fetchDeviceWriteSnapshot(canonical.id))
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val operations = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val writer = operations.async {
+            authorityContext.write("hold-simulator-recovery") {
+                entered.complete(Unit)
+                release.await()
+            }
+        }
+        try {
+            entered.await()
+            val resolving = async(start = CoroutineStart.UNDISPATCHED) {
+                repository.resolveSimulatorDevicePreferenceConflict(
+                    canonical, conflict, SimulatorPreferenceChoice.KEEP_IMPORTED,
+                )
+            }
+            resolving.cancelAndJoin()
+        } finally {
+            release.complete(Unit)
+            try {
+                writer.await()
+            } finally {
+                operations.cancel()
+            }
+        }
+        assertEquals(canonical, repository.fetchDevice(canonical.id))
+        assertEquals(imported, repository.fetchDevice(imported.id))
+        assertEquals(ticket, repository.fetchDeviceWriteSnapshot(canonical.id))
+        repository.resolveSimulatorDevicePreferenceConflict(canonical, conflict, SimulatorPreferenceChoice.KEEP_IMPORTED)
+        assertNull(repository.fetchDevice(imported.id))
+    }
+
+    @Test fun simulatorRecoveryChecksAfterPendingRxFlushAndRollsBackOnTriggerMutation() = runTest(scheduler) {
+        val canonical = device(radio = RADIO_A, id = RADIO_A.value).copy(publicKey = key(0x44))
+        val imported = canonical.copy(id = UUID.randomUUID(), defaultFloodScopeName = "US915")
+        repository.saveDevice(canonical)
+        repository.saveDevice(imported)
+        val conflict = assertNotNull(repository.simulatorDevicePreferenceConflict(canonical))
+        val pending = rx(radio = RADIO_A)
+        authorityContext.saveRx(pending.toEntity())
+        db.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER mutate_device_after_rx AFTER INSERT ON rx_log_entries " +
+                "BEGIN UPDATE devices SET nodeName = 'unexpected'; END",
+        )
+        try {
+            assertFailsWith<PersistenceStoreException> {
+                repository.resolveSimulatorDevicePreferenceConflict(
+                    canonical, conflict, SimulatorPreferenceChoice.KEEP_IMPORTED,
+                )
+            }
+            assertEquals(canonical, repository.fetchDevice(canonical.id))
+            assertEquals(imported, repository.fetchDevice(imported.id))
+            assertEquals(pending.toEntity(), authorityContext.read("pending-test") { pendingRx.values.single() })
+            assertNull(db.rxLogs().byId(RADIO_A.value, pending.id))
+        } finally {
+            db.openHelper.writableDatabase.execSQL("DROP TRIGGER mutate_device_after_rx")
+        }
+        repository.resolveSimulatorDevicePreferenceConflict(canonical, conflict, SimulatorPreferenceChoice.KEEP_IMPORTED)
+        assertNotNull(db.rxLogs().byId(RADIO_A.value, pending.id))
+        assertEquals(imported.copy(id = canonical.id, lastConnected = canonical.lastConnected), repository.fetchDevice(canonical.id))
+    }
+
+    @Test fun simulatorRestoreRollsBackWhenRetiringTheOldIdentityFails() = runTest(scheduler) {
+        val restored = device(radio = RADIO_A, id = UUID.randomUUID()).copy(
+            publicKey = key(0x33), isActive = false,
+        )
+        val fixture = restored.copy(id = RADIO_A.value)
+        repository.saveDevice(restored)
+        db.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER reject_device_retirement BEFORE DELETE ON devices " +
+                "BEGIN SELECT RAISE(ABORT, 'controlled retirement failure'); END",
+        )
+        try {
+            assertFailsWith<PersistenceStoreException> { repository.saveSimulatorDevice(fixture) }
+            assertEquals(restored, repository.fetchDevice(restored.id))
+            assertNull(repository.fetchDevice(fixture.id))
+        } finally {
+            db.openHelper.writableDatabase.execSQL("DROP TRIGGER reject_device_retirement")
+        }
+        repository.saveSimulatorDevice(fixture)
+        assertEquals(restored.copy(id = fixture.id), repository.fetchDevice(fixture.id))
+    }
+
+    @Test fun simulatorDoesNotOverwriteAnOccupiedCanonicalIdentity() = runTest(scheduler) {
+        val fixture = device(radio = RADIO_A, id = RADIO_A.value).copy(publicKey = key(0x35))
+        val occupied = fixture.copy(publicKey = key(0x36), nodeName = "Other radio")
+        repository.saveDevice(occupied)
+        val failure = assertFailsWith<PersistenceStoreException> { repository.saveSimulatorDevice(fixture) }
+        assertEquals(PersistenceStoreError.InvalidData, failure.error)
+        assertEquals(occupied, repository.fetchDevice(fixture.id))
+    }
+
+    @Test fun simulatorRefusesAnAliasInsteadOfCreatingAnotherIdentity() = runTest(scheduler) {
+        val restored = device(
+            radio = RADIO_A,
+            id = UUID.fromString("AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"),
+        ).copy(publicKey = key(0x37))
+        val fixture = restored.copy(id = RADIO_A.value)
+        repository.saveDevice(restored)
+        db.openHelper.writableDatabase.execSQL("UPDATE devices SET id = lower(id)")
+        val failure = assertFailsWith<PersistenceStoreException> { repository.saveSimulatorDevice(fixture) }
+        assertEquals(PersistenceStoreError.InvalidData, failure.error)
+        assertEquals(listOf(restored), repository.fetchDevices())
+    }
+
+    @Test fun simulatorReconciliationDoesNotReadOrModifyUnrelatedMalformedDevices() = runTest(scheduler) {
+        val fixture = device(radio = RADIO_A, id = RADIO_A.value).copy(publicKey = key(0x38))
+        val unrelated = device(radio = RADIO_B, id = UUID.randomUUID()).copy(publicKey = key(0x39))
+        repository.saveDevice(unrelated)
+        db.openHelper.writableDatabase.execSQL(
+            "UPDATE devices SET id = ? WHERE id = ?", arrayOf("NOT-A-UUID", unrelated.id.canonicalString()),
+        )
+
+        repository.saveSimulatorDevice(fixture)
+
+        assertEquals(fixture.copy(isActive = false), repository.fetchDevice(fixture.id))
+        db.openHelper.readableDatabase.query("SELECT COUNT(*) FROM devices WHERE id = 'NOT-A-UUID'").use {
+            assertTrue(it.moveToFirst())
+            assertEquals(1, it.getInt(0))
+        }
     }
 
     @Test fun committedGhostRetirementRejectsTicketCapturedBeforeKeepCanonical() = runTest(scheduler) {

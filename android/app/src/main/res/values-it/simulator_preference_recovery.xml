@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-217 Simulator preference conflict recovery copy. -->
+<resources>
+    <string name="simulator_preference_recovery_device_details">La scelta include tutte le impostazioni del dispositivo e della radio mostrate sotto. Lo stato attivo e la data di ultima connessione restano invariati.</string>
+    <string name="simulator_preference_recovery_title">Seleziona le preferenze del simulatore</string>
+    <string name="simulator_preference_recovery_explanation">Sono stati trovati due insiemi di preferenze del simulatore. Scegli quale insieme conservare. L’altro insieme verrà rimosso. Messaggi, canali, contatti e altri dati radio non verranno eliminati. Annullando, conserverai entrambi gli insiemi.</string>
+    <string name="simulator_preference_recovery_current">Conserva le preferenze attuali</string>
+    <string name="simulator_preference_recovery_recovered">Conserva le preferenze recuperate</string>
+    <string name="simulator_preference_recovery_apply">Usa le preferenze selezionate</string>
+    <string name="simulator_preference_recovery_applying">Salvataggio della scelta...</string>
+    <string name="simulator_preference_recovery_retry">Impossibile applicare la scelta. Controlla entrambi gli insiemi e scegli di nuovo.</string>
+    <string name="simulator_preference_recovery_not_set">Non impostato</string>
+    <string name="simulator_preference_recovery_empty_text">Testo vuoto</string>
+    <string name="simulator_preference_recovery_no_regions">Nessuna regione salvata</string>
+    <string name="simulator_preference_recovery_flood_scope">Ambito di diffusione predefinito</string>
+    <string name="simulator_preference_recovery_repeat_frequency">Frequenza prima della modalità ripetizione (MHz)</string>
+    <string name="simulator_preference_recovery_repeat_bandwidth">Larghezza di banda prima della modalità ripetizione (kHz)</string>
+    <string name="simulator_preference_recovery_repeat_spreading_factor">Fattore di diffusione prima della modalità ripetizione</string>
+    <string name="simulator_preference_recovery_repeat_coding_rate">Tasso di codifica prima della modalità ripetizione</string>
+    <string name="simulator_preference_recovery_last_contact_sync">Ultima sincronizzazione dei contatti (secondi Unix)</string>
+    <string name="simulator_preference_recovery_ocv_preset">Preimpostazione della tensione della batteria</string>
+    <string name="simulator_preference_recovery_radio_preset">ID della preimpostazione radio applicata</string>
+    <string name="simulator_preference_recovery_custom_ocv">Valori personalizzati della tensione della batteria</string>
+    <string name="simulator_preference_recovery_known_regions">Regioni conosciute</string>
+</resources>

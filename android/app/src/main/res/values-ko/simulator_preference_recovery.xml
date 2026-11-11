@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-217 Simulator preference conflict recovery copy. -->
+<resources>
+    <string name="simulator_preference_recovery_device_details">선택한 항목에는 아래에 표시된 모든 기기 및 무선 설정이 포함됩니다. 활성 상태와 마지막 연결 시간은 유지됩니다.</string>
+    <string name="simulator_preference_recovery_title">시뮬레이터 설정 선택</string>
+    <string name="simulator_preference_recovery_explanation">시뮬레이터 설정 두 개가 발견되었습니다. 유지할 설정을 하나 선택하세요. 다른 설정은 제거됩니다. 메시지, 채널, 연락처 및 기타 무선 기기 데이터는 삭제되지 않습니다. 취소하면 두 설정이 모두 유지됩니다.</string>
+    <string name="simulator_preference_recovery_current">현재 설정 유지</string>
+    <string name="simulator_preference_recovery_recovered">복구된 설정 유지</string>
+    <string name="simulator_preference_recovery_apply">선택한 설정 사용</string>
+    <string name="simulator_preference_recovery_applying">선택 사항 저장 중...</string>
+    <string name="simulator_preference_recovery_retry">선택 사항을 적용하지 못했습니다. 두 설정을 확인하고 다시 선택하세요.</string>
+    <string name="simulator_preference_recovery_not_set">설정되지 않음</string>
+    <string name="simulator_preference_recovery_empty_text">빈 텍스트</string>
+    <string name="simulator_preference_recovery_no_regions">저장된 지역 없음</string>
+    <string name="simulator_preference_recovery_flood_scope">기본 플러드 범위</string>
+    <string name="simulator_preference_recovery_repeat_frequency">반복 모드 사용 전 주파수 (MHz)</string>
+    <string name="simulator_preference_recovery_repeat_bandwidth">반복 모드 사용 전 대역폭 (kHz)</string>
+    <string name="simulator_preference_recovery_repeat_spreading_factor">반복 모드 사용 전 확산 계수</string>
+    <string name="simulator_preference_recovery_repeat_coding_rate">반복 모드 사용 전 코딩률</string>
+    <string name="simulator_preference_recovery_last_contact_sync">마지막 연락처 동기화 (Unix 초)</string>
+    <string name="simulator_preference_recovery_ocv_preset">배터리 전압 사전 설정</string>
+    <string name="simulator_preference_recovery_radio_preset">적용된 무선 설정 ID</string>
+    <string name="simulator_preference_recovery_custom_ocv">사용자 지정 배터리 전압 값</string>
+    <string name="simulator_preference_recovery_known_regions">알려진 지역</string>
+</resources>

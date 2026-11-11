@@ -68,6 +68,7 @@ import com.meshcoreone.android.core.services.sync.onDisconnected
 import java.util.UUID
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
 import com.meshcoreone.android.feature.tools.diagnostics.ToolsDiagnosticsDependencies
 import com.meshcoreone.android.feature.tools.diagnostics.cli.CliNodeDirectory
 import com.meshcoreone.android.feature.tools.diagnostics.cli.CliRemoteNodePort
@@ -279,6 +280,7 @@ fun AppContainer.createToolsDiagnosticsDependencies(): ToolsDiagnosticsDependenc
         isConnected = { session() != null },
         localPublicKeyPrefix = { appState.connectedDevice?.publicKey },
         connectionVersion = appState.servicesVersion,
+        connectionState = connectionManager.snapshot.map { it.state }.distinctUntilChanged(),
     )
 }
 
@@ -326,6 +328,7 @@ private class ToolsRxLogFeedAdapter(private val resolve: () -> RadioSessionConta
     private val service get() = checkNotNull(resolve()).rxLogService
     override suspend fun loadExistingEntries() = service.loadExistingEntries()
     override fun entryStream() = service.entryStream()
+    override fun packetRates() = service.packetRates()
     override suspend fun clearEntries() = service.clearEntries()
 }
 

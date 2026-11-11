@@ -16,6 +16,7 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onLast
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
@@ -107,6 +108,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
@@ -140,6 +142,240 @@ class SimulatorOnboardingIntegrationTest : RoomProcessTest() {
     @After fun closeHost() {
         host.windowFocusChanged(false)
         host.pause().stop().destroy()
+    }
+
+    @Test fun freshBackupSimulatorDeviceReconcilesWithoutLosingRestoredData() = runTest {
+        val fixture = fixture(this)
+        try {
+            val harness = fixture.harness
+            val now = Instant.ofEpochSecond(1_700_000_000)
+            val seedDevice = MockDataProvider.simulatorDevice(now)
+            val radio = seedDevice.radioId
+            val restoredContact = ContactDTO(
+                radioId = radio,
+                publicKey = Bytes(ByteArray(32) { 0xDD.toByte() }),
+                name = "Restored contact",
+                lastHeardTimestamp = null,
+            )
+            val restoredMessage = MessageDTO(
+                radioId = radio,
+                contactID = restoredContact.id,
+                text = "Restored simulator conversation",
+                timestamp = 1_700_000_000u,
+                createdAt = now,
+                direction = MessageDirection.INCOMING,
+                status = MessageStatus.DELIVERED,
+            )
+            assertTrue(store.fetchDevices().isEmpty())
+            val backup = com.meshcoreone.android.core.data.backup.AppBackupEnvelope(
+                exportDate = now,
+                appVersion = "simulator-device-regression",
+                appBuild = "1",
+                devices = SnapshotList(listOf(seedDevice.copy(
+                    knownRegions = SnapshotList.of("US915"),
+                    defaultFloodScopeName = "US915",
+                ))),
+                contacts = SnapshotList(listOf(restoredContact)),
+                messages = SnapshotList(listOf(restoredMessage)),
+            ).withActualManifest()
+            com.meshcoreone.android.core.data.backup.AppBackupService(
+                fixture.storage.backupPreferences, "simulator-device-regression", "1",
+            ).importBackup(backup, store)
+
+            val imported = store.fetchDevices().single()
+            assertNotEquals(seedDevice.id, imported.id)
+            assertEquals(radio, imported.radioId)
+            assertEquals(seedDevice.publicKey, imported.publicKey)
+            assertEquals(listOf("US915"), imported.knownRegions)
+            assertFalse(imported.isActive)
+            assertTrue(store.fetchChannels(radio).isEmpty())
+            val unrelated = seedDevice.copy(
+                id = UUID.randomUUID(),
+                radioId = RadioId(UUID.randomUUID()),
+                publicKey = Bytes(ByteArray(32) { 0xEE.toByte() }),
+                nodeName = "Unrelated device",
+                isActive = false,
+            )
+            store.saveDevice(unrelated)
+
+            repeat(3) {
+                assertEquals(OnboardingConnectOutcome.Connected, fixture.onboarding.demo.connectDemo())
+                harness.settle()
+                assertEquals(DeviceConnectionState.READY, harness.manager.connectionState)
+                val matching = store.fetchDevices().filter { it.publicKey == seedDevice.publicKey }
+                assertEquals(1, matching.size, "simulator reconnect must reconcile the imported device")
+                val active = matching.single()
+                assertEquals(seedDevice.id, active.id)
+                assertEquals(radio, active.radioId)
+                assertTrue(active.isActive)
+                assertEquals(listOf("US915"), active.knownRegions)
+                assertEquals("US915", active.defaultFloodScopeName)
+                assertEquals(seedDevice.id, store.fetchActiveDevice()?.id)
+                assertEquals(active, harness.manager.connectedDevice)
+                assertEquals(active, harness.container.appState.connectedDevice)
+                assertNull(store.fetchDevice(imported.id))
+                assertEquals(restoredContact.name, assertNotNull(store.fetchContact(EntityKey(radio, restoredContact.id))).name)
+                assertEquals(restoredMessage.text, assertNotNull(store.fetchMessage(EntityKey(radio, restoredMessage.id))).text)
+                assertEquals(unrelated.radioId, assertNotNull(store.fetchDevice(unrelated.id)).radioId)
+                assertEquals(4, store.fetchChannels(radio).size)
+                assertTrue(harness.links.radios.isEmpty())
+                assertTrue(fixture.httpRequests.isEmpty())
+                harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            }
+        } finally {
+            fixture.close()
+        }
+    }
+
+    @Test fun legacySimulatorChoiceCanBeCancelledThenKeptWithoutResurrectingPreferences() = runTest {
+        val fixture = fixture(this)
+        try {
+            val harness = fixture.harness
+            val device = MockDataProvider.simulatorDevice(Instant.ofEpochSecond(1_700_000_000))
+            val canonical = device.copy(defaultFloodScopeName = null, knownRegions = SnapshotList.empty())
+            val restored = device.copy(
+                id = UUID.randomUUID(), isActive = false,
+                defaultFloodScopeName = "US915", knownRegions = SnapshotList.of("US915"),
+            )
+            store.saveDevice(canonical)
+            store.saveDevice(restored)
+            val contact = ContactDTO(
+                radioId = device.radioId, publicKey = Bytes(ByteArray(32) { 0xD5.toByte() }),
+                name = "Preserved contact", lastHeardTimestamp = null,
+            )
+            val message = MessageDTO(
+                radioId = device.radioId, contactID = contact.id, text = "Preserved history",
+                timestamp = 1u, direction = MessageDirection.INCOMING, status = MessageStatus.DELIVERED,
+            )
+            store.saveContact(contact)
+            store.saveMessage(message)
+            val recovery = assertNotNull(harness.container.simulatorPreferenceRecovery)
+            host.get().setContent { MeshCoreTheme(motionScale = 0f) { SimulatorPreferenceRecoveryDialog(recovery) } }
+
+            val cancelled = async { fixture.onboarding.demo.connectDemo() }
+            awaitSimulatorPrompt(fixture, cancelled)
+            compose.onNodeWithTag("simulator-preference-cancel").performClick()
+            harness.eventually("cancelled simulator recovery") { cancelled.isCompleted }
+            assertEquals(OnboardingConnectOutcome.Cancelled, cancelled.await())
+            assertEquals(canonical, store.fetchDevice(canonical.id))
+            assertEquals(restored, store.fetchDevice(restored.id))
+
+            val retried = async { fixture.onboarding.demo.connectDemo() }
+            awaitSimulatorPrompt(fixture, retried)
+            compose.onNodeWithTag("simulator-preference-current").performScrollTo().performClick()
+            compose.onNodeWithTag("simulator-preference-apply").performClick()
+            harness.eventually("simulator recovery retry", virtualBudgetMillis = 2_000, virtualStepMillis = 5) {
+                retried.isCompleted
+            }
+            assertEquals(OnboardingConnectOutcome.Connected, retried.await())
+            val active = assertNotNull(store.fetchDevice(canonical.id))
+            assertNull(active.defaultFloodScopeName)
+            assertTrue(active.knownRegions.isEmpty())
+            assertNull(store.fetchDevice(restored.id))
+            assertEquals(contact.name, assertNotNull(store.fetchContact(EntityKey(device.radioId, contact.id))).name)
+            assertEquals(message.text, assertNotNull(store.fetchMessage(EntityKey(device.radioId, message.id))).text)
+            harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            assertEquals(OnboardingConnectOutcome.Connected, fixture.onboarding.demo.connectDemo())
+            assertTrue(assertNotNull(store.fetchDevice(canonical.id)).knownRegions.isEmpty())
+        } finally {
+            fixture.close()
+        }
+    }
+
+    @Test fun previousSeedBehaviorCreatesTheLegacyConflictThatRecoveryResolves() = runTest {
+        var previousSeed = true
+        val fixture = fixture(this, wrapSeed = { backing ->
+            object : SimulatorSeedStore by backing {
+                override suspend fun saveDevice(dto: DeviceDTO) {
+                    if (previousSeed) store.insertDeviceIfAbsent(dto) else backing.saveDevice(dto)
+                }
+            }
+        })
+        try {
+            val now = Instant.ofEpochSecond(1_700_000_000)
+            val device = MockDataProvider.simulatorDevice(now).copy(
+                defaultFloodScopeName = "US915", knownRegions = SnapshotList.of("US915"),
+            )
+            val backup = com.meshcoreone.android.core.data.backup.AppBackupEnvelope(
+                exportDate = now, appVersion = "simulator-device-regression", appBuild = "1",
+                devices = SnapshotList.of(device),
+            ).withActualManifest()
+            com.meshcoreone.android.core.data.backup.AppBackupService(
+                fixture.storage.backupPreferences, "simulator-device-regression", "1",
+            ).importBackup(backup, store)
+            val restored = store.fetchDevices().single()
+            assertNotEquals(device.id, restored.id)
+
+            assertEquals(OnboardingConnectOutcome.Connected, fixture.onboarding.demo.connectDemo())
+            val duplicates = store.fetchDevices().filter { it.publicKey == device.publicKey }
+            assertEquals(setOf(device.id, restored.id), duplicates.map { it.id }.toSet())
+            assertTrue(assertNotNull(store.fetchDevice(device.id)).isActive)
+            fixture.harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+
+            previousSeed = false
+            val recovery = assertNotNull(fixture.harness.container.simulatorPreferenceRecovery)
+            host.get().setContent { MeshCoreTheme(motionScale = 0f) { SimulatorPreferenceRecoveryDialog(recovery) } }
+            val retry = async { fixture.onboarding.demo.connectDemo() }
+            awaitSimulatorPrompt(fixture, retry)
+            compose.onNodeWithTag("simulator-preference-recovered").performScrollTo().performClick()
+            compose.onNodeWithTag("simulator-preference-apply").performClick()
+            fixture.harness.eventually("recover legacy duplicate", virtualBudgetMillis = 2_000, virtualStepMillis = 5) {
+                retry.isCompleted
+            }
+            assertEquals(OnboardingConnectOutcome.Connected, retry.await())
+            val survivor = store.fetchDevices().single { it.publicKey == device.publicKey }
+            assertEquals(device.id, survivor.id)
+            assertEquals("US915", survivor.defaultFloodScopeName)
+            assertEquals(listOf("US915"), survivor.knownRegions)
+            assertTrue(survivor.isActive)
+            assertNull(store.fetchDevice(restored.id))
+        } finally {
+            fixture.close()
+        }
+    }
+
+    @Test fun legacySimulatorChoiceRefreshesStaleSnapshotsBeforeRestoringTheSelectedDevice() = runTest {
+        val fixture = fixture(this)
+        try {
+            val harness = fixture.harness
+            val device = MockDataProvider.simulatorDevice(Instant.ofEpochSecond(1_700_000_000))
+            val canonical = device.copy(defaultFloodScopeName = null, knownRegions = SnapshotList.empty())
+            val restored = device.copy(
+                id = UUID.randomUUID(), isActive = false, nodeName = "Restored simulator",
+                defaultFloodScopeName = "US915", knownRegions = SnapshotList.of("US915"), frequency = 868_000u,
+            )
+            store.saveDevice(canonical)
+            store.saveDevice(restored)
+            val recovery = assertNotNull(harness.container.simulatorPreferenceRecovery)
+            host.get().setContent { MeshCoreTheme(motionScale = 0f) { SimulatorPreferenceRecoveryDialog(recovery) } }
+            val connecting = async { fixture.onboarding.demo.connectDemo() }
+            awaitSimulatorPrompt(fixture, connecting)
+            val first = assertNotNull(recovery.prompt.value)
+            val edited = canonical.copy(defaultFloodScopeName = "EU868")
+            store.saveDevice(edited)
+            assertEquals(edited, store.fetchDevice(canonical.id))
+            compose.onNodeWithTag("simulator-preference-recovered").performScrollTo().performClick()
+            compose.onNodeWithTag("simulator-preference-apply").performClick()
+            awaitSimulatorPrompt(fixture, connecting, previousId = first.id, requireFailure = true)
+            assertEquals(edited, store.fetchDevice(canonical.id))
+            assertEquals(restored, store.fetchDevice(restored.id))
+            compose.onNodeWithTag("simulator-preference-recovered").performScrollTo().performClick()
+            compose.onNodeWithTag("simulator-preference-apply").performClick()
+            harness.eventually("selected restored simulator", virtualBudgetMillis = 2_000, virtualStepMillis = 5) {
+                connecting.isCompleted
+            }
+            assertEquals(OnboardingConnectOutcome.Connected, connecting.await())
+            val active = assertNotNull(store.fetchDevice(canonical.id))
+            assertEquals("Restored simulator", active.nodeName)
+            assertEquals(868_000u, active.frequency)
+            assertEquals("US915", active.defaultFloodScopeName)
+            assertEquals(listOf("US915"), active.knownRegions)
+            assertEquals(active, harness.manager.connectedDevice)
+            assertEquals(active, harness.container.appState.connectedDevice)
+            assertNull(store.fetchDevice(restored.id))
+        } finally {
+            fixture.close()
+        }
     }
 
     @Test fun freshStoreBackupImportPreservesChannelRowsAcrossSimulatorReconnects() = runTest {
@@ -1795,6 +2031,23 @@ class SimulatorOnboardingIntegrationTest : RoomProcessTest() {
     private fun uuid(value: String): UUID = UUID.fromString(value)
     private fun text(id: Int) = host.get().getString(id)
     private fun button(id: Int) = compose.onNode(hasText(text(id)) and hasClickAction())
+
+    private suspend fun awaitSimulatorPrompt(
+        fixture: Fixture,
+        attempt: Deferred<OnboardingConnectOutcome>,
+        previousId: UUID? = null,
+        requireFailure: Boolean = false,
+    ) {
+        val recovery = assertNotNull(fixture.harness.container.simulatorPreferenceRecovery)
+        fixture.harness.eventually("simulator preference recovery prompt") {
+            attempt.isCompleted || recovery.prompt.value?.let {
+                it.id != previousId && (!requireFailure || it.failure != null)
+            } == true
+        }
+        if (attempt.isCompleted) {
+            error("Simulator connection ended before recovery: ${attempt.await()}; diagnostics=${fixture.harness.diagnostics}")
+        }
+    }
 
     private suspend fun fixture(
         test: TestScope,

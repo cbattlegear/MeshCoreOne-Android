@@ -97,7 +97,7 @@ internal fun AppChatsContent(
             onClearSelection = { coordinator.back(presented) },
             onNewChannel = { newChannel = true },
             onRoomAuthenticationRequested = coordinator::requestRoomAuthentication,
-            failureText = { UiErrorMapper().message(it) },
+            failureText = { channelFailureText(it) },
             consumePendingRoomAuthentication = false,
         )
         return

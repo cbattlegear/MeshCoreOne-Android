@@ -475,19 +475,30 @@ class NotificationService(
     suspend fun removeDeliveredNotifications(channelIndex: UByte, radioId: RadioId) =
         removeDeliveredMatching { it.channelIndex == channelIndex && it.channelRadioId == radioId }
 
+    /** Capture before a destructive channel action; invoke only after its successful completion. */
+    suspend fun captureDeliveredChannelCleanup(channelIndex: UByte, radioId: RadioId): suspend () -> Unit =
+        captureDeliveredMatching { it.channelIndex == channelIndex && it.channelRadioId == radioId }
+
     /** Removes every delivered notification for the room session [sessionID]. */
     suspend fun removeDeliveredNotificationsForRoom(sessionID: UUID) =
         removeDeliveredMatching { it.session?.id == sessionID }
 
-    private suspend fun removeDeliveredMatching(predicate: (PayloadKeys) -> Boolean) {
-        val delivered = contained("deliveredNotifications", null) { delivery.deliveredNotifications() } ?: return
-        val selected = delivered.filter { notification -> notification.payload?.let { predicate(PayloadKeys.of(it)) } == true }
-        if (selected.isNotEmpty()) {
-            contained("removeDeliveredSnapshot", Unit) {
-                val outcomes = delivery.removeDeliveredSnapshot(selected.snapshot())
-                check(outcomes.size == selected.size) { "Snapshot removal returned an incomplete outcome set" }
-                if (SnapshotRemovalOutcome.UNKNOWN_IDENTITY in outcomes) {
-                    logger.warning("Notification snapshot cleanup retained posts with unknown identity")
+    private suspend fun removeDeliveredMatching(predicate: (PayloadKeys) -> Boolean) =
+        captureDeliveredMatching(predicate).invoke()
+
+    private suspend fun captureDeliveredMatching(predicate: (PayloadKeys) -> Boolean): suspend () -> Unit {
+        val delivered = contained("deliveredNotifications", null) { delivery.deliveredNotifications() }
+        val selected = delivered?.filter { notification ->
+            notification.payload?.let { predicate(PayloadKeys.of(it)) } == true
+        }?.snapshot()
+        return {
+            if (selected != null && selected.isNotEmpty()) {
+                contained("removeDeliveredSnapshot", Unit) {
+                    val outcomes = delivery.removeDeliveredSnapshot(selected)
+                    check(outcomes.size == selected.size) { "Snapshot removal returned an incomplete outcome set" }
+                    if (SnapshotRemovalOutcome.UNKNOWN_IDENTITY in outcomes) {
+                        logger.warning("Notification snapshot cleanup retained posts with unknown identity")
+                    }
                 }
             }
         }

@@ -112,8 +112,16 @@ class CliTerminalController(
 
     fun onSubmit() = reacting { submit() }
 
-    private fun submit() {
-        if (host.applySelectedSuggestion()) moveCursorToEnd() else host.executeCommand(host.currentInput)
+    /** Keeps completion acceptance ahead of a native confirmation or other command boundary. */
+    fun onSubmit(onCommand: (String) -> Unit) = reacting { submit(onCommand) }
+
+    fun onConfirmedCommand(command: String) = reacting {
+        host.executeCommand(command)
+        moveCursorToEnd()
+    }
+
+    private fun submit(onCommand: (String) -> Unit = host::executeCommand) {
+        if (host.applySelectedSuggestion()) moveCursorToEnd() else onCommand(host.currentInput)
     }
 
     fun onHistoryUp() = reacting {

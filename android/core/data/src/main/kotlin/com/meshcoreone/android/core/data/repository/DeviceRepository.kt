@@ -2,6 +2,7 @@
 // PortedFrom: MC1Services/Sources/MC1Services/Services/PersistenceStore+Devices.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.core.data.repository
 
+import androidx.sqlite.db.SimpleSQLiteQuery
 import com.meshcoreone.android.core.contracts.domain.DeviceSessionPersisting
 import com.meshcoreone.android.core.contracts.domain.DeviceWriteSnapshot
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
@@ -10,6 +11,10 @@ import com.meshcoreone.android.core.database.*
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import java.util.UUID
+
+data class SimulatorDevicePreferenceConflict(val canonical: DeviceDTO, val imported: DeviceDTO)
+
+enum class SimulatorPreferenceChoice { KEEP_CANONICAL, KEEP_IMPORTED }
 
 internal class DeviceRepository(private val context: RoomRepositoryContext) : DeviceSessionPersisting {
     private var revision = 0L
@@ -61,6 +66,104 @@ internal class DeviceRepository(private val context: RoomRepositoryContext) : De
         database.devices().upsert(dto.copy(isActive = false).toEntity())
         save()
         true
+    }
+
+    private fun RepositoryTransaction.requireSimulatorIdentity(dto: DeviceDTO) {
+        if (dto.id != dto.radioId.value || dto.connectionMethods.isNotEmpty()) {
+            invalidData("Simulator identity is not valid")
+        }
+        database.query(SimpleSQLiteQuery(
+            "SELECT 1 FROM devices WHERE " +
+                "(id COLLATE NOCASE = ? OR radioId COLLATE NOCASE = ? OR publicKey = ?) AND " +
+                "(id COLLATE BINARY != UPPER(id) OR radioId COLLATE BINARY != UPPER(radioId)) LIMIT 1",
+            arrayOf(dto.id.canonicalString(), dto.radioId.canonicalString, dto.publicKey.toByteArray()),
+        )).use { rows ->
+            if (rows.moveToFirst()) invalidData("Simulator device identity has a noncanonical UUID")
+        }
+    }
+
+    private suspend fun RepositoryTransaction.simulatorRows(dto: DeviceDTO): List<DeviceEntity> {
+        requireSimulatorIdentity(dto)
+        val devices = database.devices()
+        val rows = buildList {
+            devices.byId(dto.id)?.let(::add)
+            addAll(devices.forRadio(dto.radioId.value))
+            addAll(devices.forPublicKey(dto.publicKey))
+        }.distinctBy { it.id }
+        if (rows.any {
+                it.radioId != dto.radioId.value || it.publicKey != dto.publicKey || it.connectionMethods.isNotEmpty()
+            }) {
+            invalidData("Simulator device identity is occupied by a different device")
+        }
+        return rows
+    }
+
+    private suspend fun RepositoryTransaction.expectSimulatorRow(dto: DeviceDTO, expected: DeviceEntity) {
+        if (simulatorRows(dto).singleOrNull() != expected) {
+            invalidData("Simulator device reconciliation did not persist the expected identity")
+        }
+    }
+
+    internal suspend fun saveSimulatorDevice(dto: DeviceDTO) = write("saveSimulatorDevice") {
+        val related = simulatorRows(dto)
+        if (related.size > 1) {
+            invalidData("Simulator device preferences require an explicit recovery choice")
+        }
+        val existing = related.singleOrNull()
+        if (existing?.id == dto.id) return@write
+        if (existing?.isActive == true) invalidData("Cannot replace an active restored simulator identity")
+
+        val replacement = existing?.copy(id = dto.id) ?: dto.copy(isActive = false).toEntity()
+        database.devices().insert(replacement)
+        if (existing != null) {
+            if (database.devices().byId(existing.id) != existing || database.devices().delete(existing.id) != 1) {
+                invalidData("Restored simulator device changed during reconciliation")
+            }
+        }
+        expectSimulatorRow(dto, replacement)
+        beforeCommit { expectSimulatorRow(dto, replacement) }
+        save()
+    }
+
+    private suspend fun RepositoryTransaction.simulatorConflict(dto: DeviceDTO): SimulatorDevicePreferenceConflict? {
+        val rows = simulatorRows(dto)
+        if (rows.size <= 1) return null
+        if (rows.size != 2) invalidData("Simulator identity has multiple restored devices")
+        val canonical = rows.singleOrNull { it.id == dto.id }
+            ?: invalidData("Simulator identity has multiple restored devices")
+        val imported = rows.single { it.id != dto.id }
+        if (imported.isActive) invalidData("Cannot retire an active restored simulator identity")
+        return SimulatorDevicePreferenceConflict(canonical.toDTO(), imported.toDTO())
+    }
+
+    internal suspend fun simulatorDevicePreferenceConflict(dto: DeviceDTO): SimulatorDevicePreferenceConflict? =
+        context.read("simulatorDevicePreferenceConflict") { simulatorConflict(dto) }
+
+    internal suspend fun resolveSimulatorDevicePreferenceConflict(
+        dto: DeviceDTO,
+        expected: SimulatorDevicePreferenceConflict,
+        choice: SimulatorPreferenceChoice,
+    ) = write("resolveSimulatorDevicePreferenceConflict") {
+        val current = simulatorConflict(dto)
+        if (current != expected) invalidData("Simulator preference choice is stale")
+        val canonical = checkNotNull(current).canonical
+        val imported = current.imported
+        val selected = when (choice) {
+            SimulatorPreferenceChoice.KEEP_CANONICAL -> canonical
+            SimulatorPreferenceChoice.KEEP_IMPORTED -> imported
+        }
+        val replacement = selected.copy(
+            id = canonical.id,
+            isActive = canonical.isActive,
+            lastConnected = canonical.lastConnected,
+        ).toEntity()
+        database.devices().upsert(replacement)
+        if (database.devices().byId(imported.id)?.toDTO() != imported ||
+            database.devices().delete(imported.id) != 1
+        ) invalidData("Restored simulator device changed during recovery")
+        expectSimulatorRow(dto, replacement)
+        beforeCommit { expectSimulatorRow(dto, replacement) }
+        save()
     }
 
     override suspend fun saveDeviceIfUnchanged(dto: DeviceDTO, expected: DeviceWriteSnapshot): Boolean =

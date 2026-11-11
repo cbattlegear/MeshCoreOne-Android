@@ -44,7 +44,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 
 class RoomSimulatorSeedStore(private val store: RoomPersistenceStore) : SimulatorSeedStore {
-    override suspend fun saveDevice(dto: DeviceDTO) { store.insertDeviceIfAbsent(dto) }
+    override suspend fun saveDevice(dto: DeviceDTO) = store.saveSimulatorDevice(dto)
     override suspend fun fetchContact(key: EntityKey): ContactDTO? = store.fetchContact(key)
     override suspend fun saveContact(dto: ContactDTO) = store.saveContact(dto)
     override suspend fun seedContact(dto: ContactDTO) = store.saveSimulatorContact(dto)

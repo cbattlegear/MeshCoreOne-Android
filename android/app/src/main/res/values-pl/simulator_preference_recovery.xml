@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-217 Simulator preference conflict recovery copy. -->
+<resources>
+    <string name="simulator_preference_recovery_device_details">Wybrany zestaw obejmuje wszystkie ustawienia urządzenia i radia pokazane poniżej. Stan aktywności i czas ostatniego połączenia pozostaną bez zmian.</string>
+    <string name="simulator_preference_recovery_title">Wybierz ustawienia symulatora</string>
+    <string name="simulator_preference_recovery_explanation">Znaleziono dwa zestawy ustawień symulatora. Wybierz zestaw, który chcesz zachować. Drugi zestaw zostanie usunięty. Wiadomości, kanały, kontakty i pozostałe dane radia nie zostaną usunięte. Anulowanie zachowa oba zestawy.</string>
+    <string name="simulator_preference_recovery_current">Zachowaj bieżące ustawienia</string>
+    <string name="simulator_preference_recovery_recovered">Zachowaj odzyskane ustawienia</string>
+    <string name="simulator_preference_recovery_apply">Użyj wybranych ustawień</string>
+    <string name="simulator_preference_recovery_applying">Zapisywanie wyboru...</string>
+    <string name="simulator_preference_recovery_retry">Nie udało się zastosować wyboru. Sprawdź oba zestawy i wybierz ponownie.</string>
+    <string name="simulator_preference_recovery_not_set">Nie ustawiono</string>
+    <string name="simulator_preference_recovery_empty_text">Pusty tekst</string>
+    <string name="simulator_preference_recovery_no_regions">Brak zapisanych regionów</string>
+    <string name="simulator_preference_recovery_flood_scope">Domyślny zasięg rozgłaszania</string>
+    <string name="simulator_preference_recovery_repeat_frequency">Częstotliwość przed trybem powtarzania (MHz)</string>
+    <string name="simulator_preference_recovery_repeat_bandwidth">Szerokość pasma przed trybem powtarzania (kHz)</string>
+    <string name="simulator_preference_recovery_repeat_spreading_factor">Współczynnik rozpraszania przed trybem powtarzania</string>
+    <string name="simulator_preference_recovery_repeat_coding_rate">Współczynnik kodowania przed trybem powtarzania</string>
+    <string name="simulator_preference_recovery_last_contact_sync">Ostatnia synchronizacja kontaktów (sekundy Unix)</string>
+    <string name="simulator_preference_recovery_ocv_preset">Ustawienie napięcia akumulatora</string>
+    <string name="simulator_preference_recovery_radio_preset">ID zastosowanego ustawienia radia</string>
+    <string name="simulator_preference_recovery_custom_ocv">Własne wartości napięcia akumulatora</string>
+    <string name="simulator_preference_recovery_known_regions">Znane regiony</string>
+</resources>

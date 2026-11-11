@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-407 Native platform labels not present in the pinned Apple localization catalog. -->
+<!-- AndroidOnly: WP-306 Localizable native link-handler guidance; raw intent failures remain diagnostic-only. -->
+<!-- AndroidOnly: WP-405 Channel allocation and postcommit recovery guidance. -->
+<resources>
+    <string name="platform_open_source_licenses">Licencias de código abierto</string>
+    <string name="platform_system_language">Idioma del sistema</string>
+    <string name="platform_chat_link_unavailable">No se pudo abrir este enlace. Comprueba que haya una aplicación instalada y autorizada para abrirlo, y vuelve a intentarlo.</string>
+    <string name="platform_channel_sync_incomplete">Algunas ranuras de canal de la radio no están sincronizadas. Espera a que se sincronicen o vuelve a conectar antes de añadir un canal.</string>
+    <string name="platform_channel_reconciliation_required">No se pudo confirmar la operación anterior del canal. Las escrituras adicionales de canales están bloqueadas durante esta sesión de la aplicación; volver a conectar por sí solo no elimina este estado.</string>
+    <string name="platform_channel_already_saved">El canal se guardó, pero no se pudo completar la configuración. Compruébalo en Chats; esta confirmación no volverá a escribirlo.</string>
+    <string name="platform_channel_delete_stale">Este canal ha cambiado o no se puede confirmar su identidad. Actualiza Chats y vuelve a seleccionar el canal antes de eliminarlo.</string>
+    <string name="platform_channel_delete_unreconciled">Este canal no se ha confirmado en la conexión actual. Espera a que se sincronicen los canales antes de eliminarlo.</string>
+</resources>

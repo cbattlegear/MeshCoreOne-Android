@@ -66,6 +66,19 @@ interface SimulatorSeedStore {
     suspend fun saveMessageRepeat(radioId: RadioId, dto: MessageRepeatDTO)
     suspend fun fetchRxLogEntries(radioId: RadioId, limit: Long = 500): SnapshotList<RxLogEntryDTO>
     suspend fun saveRxLogEntry(dto: RxLogEntryDTO)
+
+    /**
+     * Reference replay fetches before building the fixtures. Durable adapters override this hook when
+     * ordinary RX saves can replace existing rows. Pending preservation is not itself durable, and
+     * normal retention may evict an existing fixture; the runtime must still finish its pending flush.
+     */
+    suspend fun seedRxLogEntries(radioId: RadioId, buildEntries: () -> SnapshotList<RxLogEntryDTO>) {
+        val existingIDs = fetchRxLogEntries(radioId).map { it.id }.toSet()
+        for (entry in buildEntries()) {
+            if (entry.id !in existingIDs) saveRxLogEntry(entry)
+        }
+    }
+
     suspend fun fetchLatestNodeStatusSnapshot(nodePublicKey: Bytes): NodeStatusSnapshotDTO?
     suspend fun existingNodeStatusSnapshotKeys(): SnapshotSet<NodeStatusSnapshotKey>
     suspend fun batchInsertNodeStatusSnapshots(

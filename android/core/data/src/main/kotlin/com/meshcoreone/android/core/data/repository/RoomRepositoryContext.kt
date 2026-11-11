@@ -202,6 +202,34 @@ internal class RoomRepositoryContext(
         }
     }
 
+    internal suspend fun seedSimulatorRxBatch(rows: List<RxLogEntryEntity>): List<SimulatorRxSeedOutcome> =
+        access("seedSimulatorRxBatch", writing = true) {
+            mutex.withLock {
+                ensureOpen()
+                val dirty = rxInsertsSinceFlush != 0L || pendingRx.isNotEmpty()
+                var inserted = false
+                var nextSaveCount = rxInitiatedSaveCount
+                committedTransaction(
+                    afterCommit = {
+                        if (inserted) {
+                            pendingRx.clear()
+                            rxInsertsSinceFlush = 0L
+                            rxRetentionRadios.clear()
+                            rxInitiatedSaveCount = nextSaveCount
+                            flushTask?.cancel()
+                            flushTask = null
+                        }
+                    },
+                ) {
+                    val result = RepositoryTransaction(database, clock, pendingRx)
+                        .insertSimulatorRxBatchIfAbsent(rows, rxRetentionRadios.toSet())
+                    inserted = result.inserted
+                    if (inserted && dirty) nextSaveCount = checkedIncrement(rxInitiatedSaveCount)
+                    result.outcomes
+                }
+            }
+        }
+
     suspend fun flushRx() = access("flushPendingRxLogEntries", writing = true) {
         mutex.withLock { ensureOpen(); flushRxLocked() }
     }

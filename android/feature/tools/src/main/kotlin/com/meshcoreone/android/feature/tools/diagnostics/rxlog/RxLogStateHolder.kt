@@ -24,6 +24,7 @@ interface RxLogFeed {
 
     /** Live entries; each collector gets its own subscription, as `entryStream()` does. */
     fun entryStream(): Flow<RxLogEntryDTO>
+    fun packetRates(): Flow<Long>
     suspend fun clearEntries()
 }
 
@@ -59,6 +60,7 @@ data class RxLogState(
     val decryptFilter: RxLogDecryptFilter = RxLogDecryptFilter.ALL,
     /** Public-key prefixes (1-3 bytes) that uniquely identify one contact, to its display name. */
     val nodeNames: Map<Bytes, String> = emptyMap(),
+    val packetsPerMinute: Long? = null,
 ) {
     val isFiltering: Boolean get() = routeFilter != RxLogRouteFilter.ALL || decryptFilter != RxLogDecryptFilter.ALL
 
@@ -110,6 +112,7 @@ class RxLogStateHolder(private val scope: CoroutineScope) {
     val state: StateFlow<RxLogState> = mutableState.asStateFlow()
     private var dependencies: RxLogFeatureDependencies? = null
     private var streamJob: Job? = null
+    private var rateJob: Job? = null
 
     /** Change detection for re-subscribes; weak, so a torn-down service reads as a change. */
     private var subscribedService: WeakReference<RxLogFeed>? = null
@@ -137,11 +140,19 @@ class RxLogStateHolder(private val scope: CoroutineScope) {
         streamJob = scope.launch {
             service.entryStream().collect(::appendEntry)
         }
+        rateJob = scope.launch {
+            service.packetRates().collect { rate ->
+                mutableState.update { it.copy(packetsPerMinute = rate) }
+            }
+        }
     }
 
     fun unsubscribe() {
         streamJob?.cancel()
         streamJob = null
+        rateJob?.cancel()
+        rateJob = null
+        mutableState.update { it.copy(packetsPerMinute = null) }
     }
 
     suspend fun clearLog() {

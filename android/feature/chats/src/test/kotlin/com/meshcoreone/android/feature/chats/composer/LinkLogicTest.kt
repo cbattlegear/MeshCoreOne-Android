@@ -169,6 +169,40 @@ class LinkLogicTest {
     }
 
     @Test
+    fun `automatic consent is checked after cache rehydration but before DNS for both conversation types`() = scenario {
+        for (isChannel in listOf(false, true)) {
+            val port = FakePreviewPort().apply {
+                auto = LinkPreviewOutcome.Loaded(data)
+                manual = LinkPreviewOutcome.Loaded(data)
+            }
+            var safetyCalls = 0
+            val holder = LinkPreviewStateHolder(
+                data.url, isChannel, port, { safetyCalls++; true }, { false }, scope,
+                autoResolve = false,
+            )
+            holder.start()
+            assertEquals(LinkPreviewCardState.TapToLoad(data.url), holder.state.value)
+            assertEquals(0, safetyCalls)
+            assertTrue(port.calls.isEmpty())
+            holder.manualLoad()
+            assertEquals(LinkPreviewCardState.Loaded(data), holder.state.value)
+            assertEquals(1, safetyCalls)
+            assertEquals(listOf("manual"), port.calls)
+
+            port.cached = data
+            val rehydrated = LinkPreviewStateHolder(
+                data.url, isChannel, port, { error("Cached data requires no DNS") }, { false }, scope,
+                autoResolve = false,
+            )
+            rehydrated.start()
+            assertEquals(LinkPreviewCardState.Loaded(data), rehydrated.state.value)
+            assertEquals(listOf("manual"), port.calls)
+            holder.close()
+            rehydrated.close()
+        }
+    }
+
+    @Test
     fun `auto-resolve disabled shows tap to load and a tap fetches once`() = scenario {
         val port = FakePreviewPort().apply { manual = LinkPreviewOutcome.Loaded(data); gate = CompletableDeferred() }
         val holder = LinkPreviewStateHolder(data.url, false, port, { true }, { false }, scope).also { it.start() }
@@ -180,6 +214,43 @@ class LinkLogicTest {
         port.gate!!.complete(Unit)
         assertEquals(LinkPreviewCardState.Loaded(data), holder.state.value)
         assertEquals(listOf("preview:false", "manual"), port.calls)
+    }
+
+    @Test
+    fun `manual consent enters loading before suspended DNS so a second tap cannot restart it`() = scenario {
+        val port = FakePreviewPort().apply { manual = LinkPreviewOutcome.Loaded(data) }
+        val safetyResult = CompletableDeferred<Boolean>()
+        var safetyCalls = 0
+        val holder = LinkPreviewStateHolder(
+            data.url, false, port, { safetyCalls++; safetyResult.await() }, { false }, scope,
+            autoResolve = false,
+        )
+        holder.start()
+        holder.manualLoad()
+        assertEquals(LinkPreviewCardState.Loading(data.url), holder.state.value)
+        assertNull(holder.manualLoad())
+        assertEquals(1, safetyCalls)
+        assertTrue(port.calls.isEmpty())
+        safetyResult.complete(true)
+        assertEquals(LinkPreviewCardState.Loaded(data), holder.state.value)
+        assertEquals(listOf("manual"), port.calls)
+        holder.close()
+    }
+
+    @Test
+    fun `manual load rechecks a newly populated cache before DNS or a fetch`() = scenario {
+        val port = FakePreviewPort()
+        val holder = LinkPreviewStateHolder(
+            data.url, false, port, { error("Newly cached data requires no DNS") }, { false }, scope,
+            autoResolve = false,
+        )
+        holder.start()
+        assertEquals(LinkPreviewCardState.TapToLoad(data.url), holder.state.value)
+        port.cached = data
+        holder.manualLoad()
+        assertEquals(LinkPreviewCardState.Loaded(data), holder.state.value)
+        assertTrue(port.calls.isEmpty())
+        holder.close()
     }
 
     @Test

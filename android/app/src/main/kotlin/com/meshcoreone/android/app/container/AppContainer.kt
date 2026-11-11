@@ -64,6 +64,8 @@ import com.meshcoreone.android.core.model.Coordinate
 import com.meshcoreone.android.core.maps.OfflineMapController
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.SessionConfiguration
+import com.meshcoreone.android.core.protocol.session.SessionClock
+import com.meshcoreone.android.core.protocol.session.SystemSessionClock
 import com.meshcoreone.android.core.runtime.ConnectionManager
 import com.meshcoreone.android.core.runtime.ConnectionObserver
 import com.meshcoreone.android.core.runtime.LastConnectionStore
@@ -153,6 +155,7 @@ class AppContainerDependencies(
     val stalePreferences: StaleCleanupPreferences? = null,
     val primerFactory: ChatPrimerFactory? = null,
     val syncClock: SyncClock = SyncClock.SYSTEM,
+    val sessionClock: SessionClock = SystemSessionClock(),
     val logSink: SyncLogSink = SyncLogSink.NONE,
     val messagingReporter: MessagingIssueReporter = LoggingMessagingIssueReporter,
     val runtimeReporter: RuntimeIssueReporter = RuntimeIssueReporter {},
@@ -258,6 +261,7 @@ class AppContainer(private val dependencies: AppContainerDependencies) {
         runtimeState = runtimeState,
         resyncFailure = resyncFailureHub,
         syncClock = dependencies.syncClock,
+        sessionClock = dependencies.sessionClock,
         logSink = dependencies.logSink,
         messagingReporter = dependencies.messagingReporter,
         onChannelQueryAccounting = dependencies.onChannelQueryAccounting,

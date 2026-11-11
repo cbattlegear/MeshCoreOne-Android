@@ -73,7 +73,8 @@ class ConnectedConversationComposeTest : RoomProcessTest() {
     }
 
     private suspend fun rejectedSendAndRetry(test: TestScope, channel: Boolean, adaptive: Boolean = false) {
-        val h = ContainerHarness(test, store)
+        val clock = SchedulerClock { test.testScheduler.currentTime }
+        val h = ContainerHarness(test, store, runtimeClock = clock, sessionClock = sessionClock(clock))
         val width = mutableStateOf(360)
         val contactKey = Bytes(ByteArray(32) { 4 })
         val opcode = if (channel) 3 else 2

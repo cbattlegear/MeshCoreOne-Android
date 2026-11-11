@@ -222,7 +222,7 @@ class DurableRetryIntegrationTest : RoomProcessTest() {
             override val instant get() = EPOCH
             override suspend fun sleep(duration: kotlin.time.Duration) = schedulerClock.sleep(duration)
         } else schedulerClock
-        val harness = ContainerHarness(test, store, runtimeClock = clock)
+        val harness = ContainerHarness(test, store, runtimeClock = clock, sessionClock = sessionClock(clock))
         configure(harness, deliver = false)
         val target = harness.target()
         try {

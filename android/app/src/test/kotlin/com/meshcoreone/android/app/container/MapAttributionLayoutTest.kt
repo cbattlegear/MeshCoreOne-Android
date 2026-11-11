@@ -23,6 +23,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
@@ -54,6 +55,19 @@ class MapAttributionLayoutTest {
     }
 
     @After fun destroyHost() { host.pause().stop().destroy() }
+
+    @Test fun creditReadabilityOracleRejectsActuallyClippedText() {
+        host.get().setContent {
+            MeshCoreTheme(motionScale = 0f) {
+                Text("OpenFreeMap", Modifier.requiredSize(32.dp, 4.dp).testTag("clipped-credit"))
+            }
+        }
+        val layouts = mutableListOf<TextLayoutResult>()
+        compose.onNodeWithTag("clipped-credit")
+            .performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) { it(layouts) }
+        assertEquals(1, layouts.size)
+        assertThrows(AssertionError::class.java) { assertReadable(layouts.single()) }
+    }
 
     @Test fun inlineFooterKeepsEveryCreditReadableAndClickableAcrossResizeFontAndDirectionChanges() {
         val width = mutableStateOf(320)
@@ -122,13 +136,16 @@ class MapAttributionLayoutTest {
                     }
                 assertEquals(1, layouts.size)
                 val layout = layouts.single()
-                assertFalse(
-                    "Full credit must remain readable: ${provider.label}, width=$newWidth font=$newFont " +
-                        "direction=$newDirection textSize=${layout.size} lines=${layout.lineCount} " +
-                        "constraints=${layout.layoutInput.constraints} bounds=$bounds viewport=$viewport",
-                    layout.hasVisualOverflow,
-                )
-                assertEquals(newFont, layouts.single().layoutInput.density.fontScale, 0f)
+                assertEquals(provider.label, layout.layoutInput.text.text)
+                assertEquals(newFont, layout.layoutInput.density.fontScale, 0f)
+                assertEquals(newDirection, layout.layoutInput.layoutDirection)
+                assertReadable(layout)
+                val textNode = compose.onNodeWithText(provider.label, useUnmergedTree = true).fetchSemanticsNode()
+                val fullTextBounds = androidx.compose.ui.geometry.Rect(textNode.positionInRoot,
+                    androidx.compose.ui.geometry.Size(textNode.size.width.toFloat(), textNode.size.height.toFloat()))
+                assertTrue("Full text must stay inside its clickable target: $fullTextBounds, $bounds",
+                    fullTextBounds.left >= bounds.left && fullTextBounds.right <= bounds.right &&
+                        fullTextBounds.top >= bounds.top && fullTextBounds.bottom <= bounds.bottom)
                 credit.performClick()
             }
             compose.onNodeWithTag("map-overlay").performClick()
@@ -139,5 +156,35 @@ class MapAttributionLayoutTest {
         assertEquals(List(5) { MapLibreOpenFreeMap.attribution.map { it.legalUri } }.flatten(), opened)
         assertEquals(5, overlayClicks)
         assertEquals(5, gestures)
+    }
+
+    private fun assertReadable(semantics: TextLayoutResult) {
+        val input = semantics.layoutInput
+        // Same measured-allocation reconstruction as ui-tests/MountedTextAssertions.kt:
+        // simple-string semantics omits paint minimum constraints and can report false width overflow.
+        val paint = compose.runOnIdle {
+            TextMeasurer(input.fontFamilyResolver, input.density, input.layoutDirection, cacheSize = 0).measure(
+                text = input.text, style = input.style, overflow = input.overflow, softWrap = input.softWrap,
+                maxLines = input.maxLines, placeholders = input.placeholders,
+                constraints = input.constraints.copy(minWidth = semantics.size.width, minHeight = semantics.size.height),
+                layoutDirection = input.layoutDirection, density = input.density,
+                fontFamilyResolver = input.fontFamilyResolver, skipCache = true,
+            )
+        }
+        val diagnostic = "credit=${input.text} size=${semantics.size} paragraph=${paint.multiParagraph.width}x${paint.multiParagraph.height}"
+        assertEquals(diagnostic, semantics.size, paint.size)
+        assertEquals(diagnostic, input.text, paint.layoutInput.text)
+        assertEquals(diagnostic, semantics.lineCount, paint.lineCount)
+        assertFalse(diagnostic, paint.hasVisualOverflow)
+        assertTrue(diagnostic, paint.lineCount > 0)
+        var covered = 0
+        for (line in 0 until paint.lineCount) {
+            assertFalse(diagnostic, paint.isLineEllipsized(line))
+            assertEquals(diagnostic, covered, paint.getLineStart(line))
+            covered = paint.getLineEnd(line)
+            assertTrue(diagnostic, paint.getLineLeft(line) >= 0f && paint.getLineRight(line) <= paint.size.width &&
+                paint.getLineTop(line) >= 0f && paint.getLineBottom(line) <= paint.size.height)
+        }
+        assertEquals(diagnostic, input.text.length, covered)
     }
 }

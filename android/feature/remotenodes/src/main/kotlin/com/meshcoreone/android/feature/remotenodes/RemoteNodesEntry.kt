@@ -13,6 +13,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.meshcoreone.android.core.contracts.FeatureRoute
 import com.meshcoreone.android.core.contracts.FeatureId
 import com.meshcoreone.android.core.l10n.R
@@ -26,6 +28,7 @@ import com.meshcoreone.android.feature.remotenodes.common.RemoteNodesText
 import com.meshcoreone.android.feature.remotenodes.dependencies.*
 import com.meshcoreone.android.feature.remotenodes.ui.*
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.flowOf
 
 private data class CatalogState(
     val catalog: RemoteNodesCatalog = RemoteNodesCatalog(emptyList(), emptyList(), emptyList()),
@@ -45,9 +48,13 @@ fun RemoteNodesEntry(
     onDismiss: () -> Unit = {},
     onJoinRoom: (RemoteNodeSessionDTO) -> Unit = {},
 ) {
+    val locations = remember(dependencies) { dependencies?.locations ?: flowOf(null) }
+    val userLocation by locations.collectAsStateWithLifecycle(
+        initialValue = null, minActiveState = Lifecycle.State.RESUMED,
+    )
     CompositionLocalProvider(
         LocalRemoteMapPreferences provides dependencies?.mapPreferences,
-        LocalRemoteMapUserLocation provides dependencies?.bestAvailableLocation,
+        LocalRemoteMapUserLocation provides userLocation,
     ) {
         RemoteNodesEntryContent(
             route, onNavigate, dependencies, cliContent, mapSurface, launch, onDismiss, onJoinRoom,

@@ -162,6 +162,20 @@ internal class ChannelsInMemoryStore(
         return synchronized(lock) { channels.filter { it.radioId == radioId }.sortedBy { it.index }.snapshot() }
     }
 
+    override suspend fun fetchChannelsForDisplay(radioId: RadioId): SnapshotList<ChannelDTO> {
+        fetchChannelsFailure?.let { throw it }
+        return synchronized(lock) {
+            channels.filter { it.radioId == radioId }.sortedBy { it.index }.map { row ->
+                val slot = row.radioId to row.index
+                val incarnation = occupants[slot].takeIf {
+                    row.isEnabled && channels.count { it.radioId == row.radioId && it.index == row.index } == 1
+                }
+                row.copy(occupantID = incarnation.takeIf { slot !in unresolvedOccupants },
+                    displayIncarnationID = incarnation)
+            }.snapshot()
+        }
+    }
+
     override suspend fun fetchChannel(radioId: RadioId, index: UByte): ChannelDTO? = synchronized(lock) {
         channels.firstOrNull { it.radioId == radioId && it.index == index }
     }

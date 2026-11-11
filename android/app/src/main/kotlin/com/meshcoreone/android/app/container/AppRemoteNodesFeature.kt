@@ -24,6 +24,7 @@ internal fun AppContainer.createRemoteNodesFeatureDependencies(): RemoteNodesUiD
     object : RemoteNodesUiDependencies {
         override val mapPreferences = this@createRemoteNodesFeatureDependencies.mapPreferences
         override val bestAvailableLocation get() = this@createRemoteNodesFeatureDependencies.bestAvailableLocation
+        override val locations = this@createRemoteNodesFeatureDependencies.nodesFeature.locations
         override val radioOptions = RemoteRadioOptions(
             RadioOptions.bandwidthsKHz, RadioOptions.spreadingFactors.toList(), RadioOptions.codingRates.toList(),
         )

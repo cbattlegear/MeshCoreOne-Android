@@ -31,8 +31,9 @@ object ChatConversationActions {
     /** Clears a channel on the radio, then removes its delivered notifications and refreshes the badge. */
     suspend fun deleteChannel(channel: ChannelDTO, services: ChatConversationServices?) {
         val resolved = services ?: throw ConversationActionError.ServicesUnavailable
-        resolved.clearChannel(channel.radioId, channel.index)
-        resolved.removeDeliveredNotifications(channel.radioId, channel.index)
+        val clearNotifications = resolved.captureChannelNotificationCleanup(channel)
+        resolved.clearChannel(channel)
+        clearNotifications()
         resolved.updateBadgeCount()
     }
 
@@ -101,11 +102,13 @@ class ChatListActions(
     /** Radio command: the row stays with a spinner until the ack; a failure or timeout leaves it with a retry alert. */
     fun deleteChannelConversation(channel: ChannelDTO) {
         if (holder.isDeletePending(channel.id)) return
+        val services = dependencies.conversationServices()
+        val clearOriginalSelection = dependencies.navigation.captureChannelSelectionCleanup(channel)
         holder.markDeleting(channel.id)
         scope.launch {
             try {
-                withDeleteTimeout("clearChannel") { ChatConversationActions.deleteChannel(channel, dependencies.conversationServices()) }
-                clearNavigationIfActive(ChatRoute.Channel(channel))
+                withDeleteTimeout("clearChannel") { ChatConversationActions.deleteChannel(channel, services) }
+                clearOriginalSelection()
                 holder.removeConversation(Conversation.Channel(channel))
             } catch (cancellation: CancellationException) {
                 throw cancellation

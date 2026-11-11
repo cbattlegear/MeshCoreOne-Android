@@ -6,6 +6,7 @@ import com.meshcoreone.android.core.model.DiscoveredNodeDTO
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.RemoteNodeSessionDTO
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 
 data class RemoteNodesCatalog(
     val contacts: List<ContactDTO>,
@@ -20,6 +21,9 @@ data class RemoteRadioOptions(val bandwidthsKHz: List<Double>, val spreadingFact
 interface RemoteNodesUiDependencies {
     val mapPreferences: com.meshcoreone.android.core.maps.MapPreferenceStore? get() = null
     val bestAvailableLocation: com.meshcoreone.android.core.model.Coordinate? get() = null
+    /** Foreground phone fixes and current-radio fallback; snapshot-only adapters retain their existing value. */
+    val locations: Flow<com.meshcoreone.android.core.model.Coordinate?>
+        get() = flow { emit(bestAvailableLocation) }
     val updates: Flow<RemoteNodesConnection>
     val radioOptions: RemoteRadioOptions
     suspend fun catalog(): RemoteNodesCatalog

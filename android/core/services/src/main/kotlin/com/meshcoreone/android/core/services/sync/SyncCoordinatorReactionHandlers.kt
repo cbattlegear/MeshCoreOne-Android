@@ -34,12 +34,11 @@ internal suspend fun SyncCoordinator.persistReactionIfNew(reaction: ReactionDTO,
     val exists = attempt { dependencies.dataStore.reactionExists(key, reaction.senderName, reaction.emoji) }
     if (exists == true) return false
     val result = contain("persistReactionAndUpdateSummary", null) {
-        dependencies.reactionService.persistReactionAndUpdateSummary(reaction, dependencies.dataStore)
+        dependencies.reactionService.persistReactionAndUpdateSummary(reaction, dependencies.dataStore) {
+            publishReactionPersisted(it)
+        }
     }
     if (result == null) return true
-    if (result.shouldNotify) {
-        dataEventBroadcaster.yield(SyncDataEvent.ReactionReceived(result.messageID, result.summary))
-    }
     return result.shouldNotify
 }
 

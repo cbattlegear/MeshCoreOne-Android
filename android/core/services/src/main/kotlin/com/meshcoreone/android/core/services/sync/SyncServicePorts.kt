@@ -92,7 +92,11 @@ interface SyncReactionServicing {
         id: UUID, radioId: RadioId, channelIndex: UByte, senderName: String, text: String, timestamp: UInt,
         dataStore: ReactionPersisting, onPersisted: suspend (SyncReactionPersistResult) -> Unit,
     ): List<SyncReactionPersistResult>?
-    suspend fun persistReactionAndUpdateSummary(reaction: ReactionDTO, dataStore: ReactionPersisting): SyncReactionPersistResult?
+    suspend fun persistReactionAndUpdateSummary(
+        reaction: ReactionDTO,
+        dataStore: ReactionPersisting,
+        onPersisted: ((SyncReactionPersistResult) -> Unit)? = null,
+    ): SyncReactionPersistResult?
     suspend fun findDMTargetMessage(messageHash: String, contactID: UUID): UUID?
     suspend fun queuePendingDMReaction(parsed: SyncParsedDMReaction, contactID: UUID, senderName: String, rawText: String, radioId: RadioId)
 

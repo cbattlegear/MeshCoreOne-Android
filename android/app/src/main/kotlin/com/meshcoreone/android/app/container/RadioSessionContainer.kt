@@ -254,11 +254,7 @@ class RadioSessionContainer private constructor(
         reactionService.persistIndexedChannelMessage(
             messageID, radioId, channelIndex, senderName, text, timestamp, dataStore,
         ) { result ->
-            if (result.shouldNotify) {
-                syncCoordinator.dataEventBroadcaster.yield(
-                    SyncDataEvent.ReactionReceived(result.messageID, result.summary),
-                )
-            }
+            syncCoordinator.publishReactionPersisted(result)
         } ?: throw IllegalStateException(
             "Could not persist pending channel reaction(s) for message $messageID; restored them to process custody",
         )

@@ -105,7 +105,7 @@ internal suspend fun SyncCoordinator.indexAndNotifyDirectMessage(
             dependencies.reactionService.persistIndexedDMMessage(
                 messageDTO.id, radioId, contact.id, messageText, timestamp, dependencies.dataStore,
             ) { result ->
-                if (result.shouldNotify) dataEventBroadcaster.yield(SyncDataEvent.ReactionReceived(result.messageID, result.summary))
+                publishReactionPersisted(result)
             }
         }
         if (persisted == null) log(DebugLogLevel.ERROR, "Failed to persist pending DM reactions for message ${messageDTO.id}; retained for retry")
@@ -138,7 +138,7 @@ internal suspend fun SyncCoordinator.indexAndNotifyChannelMessage(
             dependencies.reactionService.persistIndexedChannelMessage(
                 messageDTO.id, radioId, channelIndex, senderNodeName, messageText, timestamp, dependencies.dataStore,
             ) { result ->
-                if (result.shouldNotify) dataEventBroadcaster.yield(SyncDataEvent.ReactionReceived(result.messageID, result.summary))
+                publishReactionPersisted(result)
             }
         }
         if (persisted == null) log(DebugLogLevel.ERROR, "Failed to persist pending channel reactions for message ${messageDTO.id}; retained for retry")

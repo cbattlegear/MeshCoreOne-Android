@@ -20,6 +20,7 @@ import com.meshcoreone.android.feature.chats.timeline.ChatViewModel
 import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
 import java.util.UUID
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -308,6 +309,38 @@ class HistoryReactionReplayTest : RoomProcessTest() {
             assertEquals(outgoingWire, saved.rawText)
             assertEquals("$emoji:1", assertNotNull(store.fetchMessage(EntityKey(outgoing.radioId, outgoing.id))).reactionSummary)
             eventCollector.cancel()
+        }
+    }
+
+    @Test fun historyReplayRetainsItsNotificationAfterDataEventsFinish() = runTest {
+        withSession(this) { fixture ->
+            val target = target(fixture, direct = false)
+            store.saveMessage(target)
+            queue(fixture, direct = false)
+            val indexing = ReactionIndexing(
+                fixture.live.reactionService,
+                ReactionIndexScope.Channel(fixture.channel, "Me"),
+                onPersisted = { result ->
+                    fixture.harness.appState.publishReactionPersisted(fixture.channel.radioId, result)
+                },
+            )
+            fixture.live.syncCoordinator.finishDataEvents()
+
+            assertFailsWith<IllegalStateException> {
+                fixture.harness.container.chatsFeature.prepareTimelineMessages(listOf(target), indexing)
+            }
+            assertEquals(1, store.fetchReactions(EntityKey(target.radioId, target.id)).size)
+            assertEquals("$emoji:1", assertNotNull(store.fetchMessage(EntityKey(target.radioId, target.id))).reactionSummary)
+
+            val pending = fixture.live.reactionService.indexMessage(
+                target.id, fixture.channel.index, "Alice", target.text, target.timestamp,
+                target.radioId, includeCustody = true,
+            ).single()
+            fixture.live.reactionService.requeuePendingReaction(pending)
+            val retry = fixture.live.reactionService.persistIndexedChannelMessage(
+                target.id, target.radioId, fixture.channel.index, "Alice", target.text, target.timestamp, store,
+            )
+            assertEquals(listOf(true), retry?.map { it.shouldNotify })
         }
     }
 }

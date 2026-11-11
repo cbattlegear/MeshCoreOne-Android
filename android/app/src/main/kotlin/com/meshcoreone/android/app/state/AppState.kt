@@ -326,9 +326,7 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
         if (!result.shouldNotify) return
         val session = services?.takeIf { it.token.radioId == radioId }
             ?: throw IllegalStateException("No active radio session can publish reaction ${result.messageID}")
-        session.syncCoordinator.dataEventBroadcaster.yield(
-            SyncDataEvent.ReactionReceived(result.messageID, result.summary),
-        )
+        session.syncCoordinator.publishReactionPersisted(result)
     }
 
     /** Records the view-environment values the background refresh bakes with and returns the inputs for [conversation]. */

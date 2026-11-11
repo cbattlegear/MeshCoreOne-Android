@@ -107,8 +107,16 @@ internal class SyncReactionAdapter(
 
     override suspend fun persistReactionAndUpdateSummary(
         reaction: ReactionDTO, dataStore: ReactionPersisting,
-    ): SyncReactionPersistResult? = reactions.persistReactionAndUpdateSummary(reaction, dataStore)?.let {
-        SyncReactionPersistResult(it.messageID, it.summary, it.shouldNotify)
+        onPersisted: ((SyncReactionPersistResult) -> Unit)?,
+    ): SyncReactionPersistResult? {
+        val result = if (onPersisted == null) {
+            reactions.persistReactionAndUpdateSummary(reaction, dataStore)
+        } else {
+            reactions.persistReactionAndUpdateSummary(reaction, dataStore) {
+                onPersisted(SyncReactionPersistResult(it.messageID, it.summary, it.shouldNotify))
+            }
+        }
+        return result?.let { SyncReactionPersistResult(it.messageID, it.summary, it.shouldNotify) }
     }
 
     override suspend fun findDMTargetMessage(messageHash: String, contactID: UUID): UUID? =

@@ -139,6 +139,27 @@ class PendingReactionCustody {
         direct = direct.removeMatchingValues { it.sessionOwner == sessionOwner }
     }
 
+    internal fun acknowledgeNotification(reaction: ReactionDTO) = synchronized(lock) {
+        channel = channel.updateMatchingValues(
+            matchesValue = { owned ->
+                val pending = owned.value
+                pending.notificationPending && pending.radioId == reaction.radioId &&
+                    pending.channelIndex == reaction.channelIndex && pending.senderNodeName == reaction.senderName &&
+                    pending.parsed.emoji == reaction.emoji && pending.parsed.messageHash == reaction.messageHash
+            },
+            transform = { owned -> owned.copy(value = owned.value.copy(notificationPending = false)) },
+        )
+        direct = direct.updateMatchingValues(
+            matchesValue = { owned ->
+                val pending = owned.value
+                pending.notificationPending && pending.radioId == reaction.radioId &&
+                    pending.contactID == reaction.contactID && pending.senderName == reaction.senderName &&
+                    pending.parsed.emoji == reaction.emoji && pending.parsed.messageHash == reaction.messageHash
+            },
+            transform = { owned -> owned.copy(value = owned.value.copy(notificationPending = false)) },
+        )
+    }
+
     internal val counts: Pair<Int, Int> get() = synchronized(lock) { channel.count to direct.count }
 }
 
@@ -282,8 +303,36 @@ class ReactionService internal constructor(
     suspend fun persistReactionAndUpdateSummary(
         reaction: ReactionDTO,
         dataStore: ReactionPersisting,
+        onPersisted: ((ReactionPersistResult) -> Unit)? = null,
     ): ReactionPersistResult? = persistenceMutex.withLock {
-        persistReactionAndUpdateSummaryLocked(reaction, dataStore)
+        val result = persistReactionAndUpdateSummaryLocked(reaction, dataStore)
+        if (result?.shouldNotify == true && onPersisted != null) {
+            onPersisted(result)
+            acknowledgePendingNotification(reaction)
+        }
+        result
+    }
+
+    private fun acknowledgePendingNotification(reaction: ReactionDTO) {
+        synchronized(lock) {
+            pendingReactions = pendingReactions.updateMatchingValues(
+                matchesValue = { pending ->
+                    pending.notificationPending && pending.radioId == reaction.radioId &&
+                        pending.channelIndex == reaction.channelIndex && pending.senderNodeName == reaction.senderName &&
+                        pending.parsed.emoji == reaction.emoji && pending.parsed.messageHash == reaction.messageHash
+                },
+                transform = { it.copy(notificationPending = false) },
+            )
+            pendingDMReactions = pendingDMReactions.updateMatchingValues(
+                matchesValue = { pending ->
+                    pending.notificationPending && pending.radioId == reaction.radioId &&
+                        pending.contactID == reaction.contactID && pending.senderName == reaction.senderName &&
+                        pending.parsed.emoji == reaction.emoji && pending.parsed.messageHash == reaction.messageHash
+                },
+                transform = { it.copy(notificationPending = false) },
+            )
+        }
+        pendingReactionCustody?.acknowledgeNotification(reaction)
     }
 
     /**
@@ -581,6 +630,17 @@ internal class PendingQueue<K, V> private constructor(
             }
         }
         return PendingQueue(nextEntries, nextKeyOrders, nextOrder)
+    }
+
+    fun updateMatchingValues(matchesValue: (V) -> Boolean, transform: (V) -> V): PendingQueue<K, V> {
+        var nextEntries = entries
+        for ((key, values) in entries) {
+            val updated = values.map { entry ->
+                if (matchesValue(entry.value)) entry.copy(value = transform(entry.value)) else entry
+            }
+            if (updated != values) nextEntries = nextEntries + (key to updated)
+        }
+        return PendingQueue(nextEntries, keyOrders, nextOrder)
     }
 
     /** Appends [value] under [key] (a new key joins the end of the order), then evicts down to [maxCount]. */

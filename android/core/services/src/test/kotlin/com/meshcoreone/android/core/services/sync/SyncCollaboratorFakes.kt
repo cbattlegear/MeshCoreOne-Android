@@ -142,11 +142,17 @@ internal class FakeReactionService : SyncReactionServicing {
         return results
     }
 
-    override suspend fun persistReactionAndUpdateSummary(reaction: ReactionDTO, dataStore: ReactionPersisting): SyncReactionPersistResult? {
+    override suspend fun persistReactionAndUpdateSummary(
+        reaction: ReactionDTO,
+        dataStore: ReactionPersisting,
+        onPersisted: ((SyncReactionPersistResult) -> Unit)?,
+    ): SyncReactionPersistResult? {
         val exists = dataStore.reactionExists(EntityKey(reaction.radioId, reaction.messageID), reaction.senderName, reaction.emoji)
         if (!exists) dataStore.saveReaction(reaction)
         val summary = dataStore.fetchReactions(EntityKey(reaction.radioId, reaction.messageID)).joinToString(",") { it.emoji }
-        return SyncReactionPersistResult(reaction.messageID, summary, shouldNotify = !exists)
+        return SyncReactionPersistResult(reaction.messageID, summary, shouldNotify = !exists).also {
+            if (it.shouldNotify) onPersisted?.invoke(it)
+        }
     }
 
     override suspend fun findDMTargetMessage(messageHash: String, contactID: UUID): UUID? = cachedTargets[messageHash]

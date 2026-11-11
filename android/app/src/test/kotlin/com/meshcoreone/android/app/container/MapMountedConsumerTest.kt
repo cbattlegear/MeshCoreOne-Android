@@ -491,8 +491,8 @@ class MapMountedConsumerTest {
             }
         }
         compose.runOnIdle { dependencies.value = initial.copy(preferences = store) }
-        waitUntilAdvancingFrames { started.isCompleted }
         compose.onNodeWithTag("map:preferences-unavailable").assertDoesNotExist()
+        waitUntilAdvancingFrames { started.isCompleted }
         compose.onNodeWithText(text(R.string.l10n_app_map_map_controls_showlabels)).assertDoesNotExist()
         release.complete(Unit)
         waitUntilAdvancingFrames {

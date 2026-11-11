@@ -1564,7 +1564,7 @@ class MessagingRoomIntegrationTest {
     }
 
     @OriginalCase("MessageServiceSendTests::a genuine send exception still fails the DM through the outer catch()")
-    @Test fun genuineRawTransportFailureCommitsFailureAndRetiresActualAckTracking() = runTest(scheduler) {
+    @Test fun genuineRawTransportFailureRetainsTheUncertainActualWire() = runTest(scheduler) {
         seed()
         val g = RadioGeneration(59)
         g.start()
@@ -1577,10 +1577,14 @@ class MessagingRoomIntegrationTest {
             g.service.sendMessageWithRetry("boom", contact)
         })
         val message = store.fetchMessages(EntityKey(radio, contact.id)).single()
-        assertEquals(MessageStatus.FAILED, message.status)
+        assertEquals(MessageStatus.PENDING, message.status)
         assertEquals("boom", message.text)
-        assertEquals(0, g.service.pendingAckCount)
-        assertEquals(listOf(MessageStatusEvent.Failed(message.id)), completedStatuses(g, events))
+        assertEquals(1, g.service.pendingAckCount)
+        assertEquals(1, db.directAcks().currentUnresolvedClaims(radio.value, message.id))
+        assertTrue(g.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+            it.operation == "directUncertain.${message.id}" && it.cause === cause
+        })
+        assertTrue(completedStatuses(g, events).none { it is MessageStatusEvent.Failed })
         g.stop()
     }
 
@@ -4302,16 +4306,19 @@ class MessagingRoomIntegrationTest {
         assertTrue(g.firmware.incomingMessages.isEmpty()); assertTrue(p.close().isComplete); g.stop()
     }
 
-    @Test fun disconnectedInlineSendCommitsFailedInRoomButSettledAcceptedSendStaysSent() = runTest(scheduler) {
+    @Test fun disconnectedInlineSendRetainsUncertaintyButSettledAcceptedSendStaysSent() = runTest(scheduler) {
         seed(); val g = RadioGeneration(23); g.start(); g.signals.set(DeviceConnectionState.READY); g.firmware.acknowledge = false
         val settled = g.service.sendDirectMessage("settled before disconnect", contact)
         g.firmware.acceptanceGate = CompletableDeferred()
         val sending = backgroundScope.async { g.service.sendDirectMessage("inline at disconnect", contact) }
         runCurrent()
         val inline = store.fetchMessages(EntityKey(radio, contact.id)).single { it.text == "inline at disconnect" }
-        g.signals.set(DeviceConnectionState.DISCONNECTED); withTimeout(2000) { g.service.close() }
+        g.signals.set(DeviceConnectionState.DISCONNECTED); val report = withTimeout(2000) { g.service.close() }
         assertFailsWith<CancellationException> { sending.await() }
-        assertEquals(MessageStatus.FAILED, store.fetchMessage(EntityKey(radio, inline.id))?.status)
+        assertEquals(MessageStatus.PENDING, store.fetchMessage(EntityKey(radio, inline.id))?.status)
+        assertEquals(1, db.directAcks().currentUnresolvedClaims(radio.value, inline.id))
+        assertTrue(store.fetchPendingSendsForMessage(EntityKey(radio, inline.id)).isEmpty())
+        assertFalse(report.isComplete)
         assertEquals(MessageStatus.SENT, store.fetchMessage(EntityKey(radio, settled.id))?.status)
         assertEquals(contact.id, store.fetchContact(EntityKey(radio, contact.id))?.id)
         assertEquals(2, g.firmware.sent().size); g.stop()

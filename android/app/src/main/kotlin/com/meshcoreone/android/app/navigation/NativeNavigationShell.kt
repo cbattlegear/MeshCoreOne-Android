@@ -413,15 +413,29 @@ fun NativeNavigationShell(
                             },
                             actions = {
                                 if (state.selectedTab == AppTab.NODES) {
-                                    androidx.compose.material3.TextButton(
-                                        onClick = {
-                                            if (canNavigateFromCurrentRouteNow()) {
-                                                coordinator.navigate(FeatureRoute(FeatureId.REMOTE_NODES))
-                                            }
-                                        },
-                                        enabled = canNavigateFromCurrentRoute,
-                                        modifier = Modifier.heightIn(min = 48.dp).testTag("open-remote-nodes"),
-                                    ) { Text(stringResource(com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings.remoteNodesAuthManagement)) }
+                                    val remoteNodesLabel =
+                                        stringResource(com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings.remoteNodesAuthManagement)
+                                    val openRemoteNodes = {
+                                        if (canNavigateFromCurrentRouteNow()) {
+                                            coordinator.navigate(FeatureRoute(FeatureId.REMOTE_NODES))
+                                        }
+                                    }
+                                    if (useRail) {
+                                        androidx.compose.material3.TextButton(
+                                            onClick = openRemoteNodes,
+                                            enabled = canNavigateFromCurrentRoute,
+                                            modifier = Modifier.heightIn(min = 48.dp).testTag("open-remote-nodes"),
+                                        ) { Text(remoteNodesLabel) }
+                                    } else {
+                                        IconButton(
+                                            onClick = openRemoteNodes,
+                                            enabled = canNavigateFromCurrentRoute,
+                                            modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                                                .testTag("open-remote-nodes"),
+                                        ) {
+                                            Icon(MeshSymbol.NODES.vector, contentDescription = remoteNodesLabel)
+                                        }
+                                    }
                                 }
                                 IconButton(
                                     onClick = {

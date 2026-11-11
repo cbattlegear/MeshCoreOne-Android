@@ -199,6 +199,14 @@ class NavigationComposeTest {
             compose.onNodeWithTag("tab:${tab.name}").assertIsSelected()
             compose.onNodeWithTag("navigation-heading").assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading))
             compose.onNodeWithTag("fixture:root-${tab.name}").assertIsDisplayed()
+            if (tab == AppTab.NODES) {
+                compose.onNodeWithTag("open-remote-nodes").assert(
+                    SemanticsMatcher.expectValue(
+                        SemanticsProperties.ContentDescription,
+                        listOf(host.get().getString(com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings.remoteNodesAuthManagement)),
+                    ),
+                )
+            }
         }
         compose.onNodeWithTag("tab:CHATS").assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.StateDescription))
         compose.onNodeWithTag("open-radio-setup").assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp)

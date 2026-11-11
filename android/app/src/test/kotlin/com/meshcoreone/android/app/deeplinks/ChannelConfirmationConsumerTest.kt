@@ -35,6 +35,8 @@ import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import com.meshcoreone.android.core.model.ChannelFloodScope
 import com.meshcoreone.android.core.model.ChannelDTO
+import com.meshcoreone.android.core.model.MessageStatus
+import com.meshcoreone.android.core.model.QueuedChannelDispatchState
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -44,7 +46,6 @@ import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.services.sync.SyncClock
 import com.meshcoreone.android.core.services.contacts.ChannelMutationError
 import com.meshcoreone.android.core.services.contacts.ChannelDispatchFailure
-import com.meshcoreone.android.core.services.messaging.QueuedChannelRetainedException
 import com.meshcoreone.android.core.ui.UiText
 import com.meshcoreone.android.feature.chats.list.ChatLinkRouter
 import kotlinx.coroutines.CompletableDeferred
@@ -121,13 +122,17 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
             node.channelService.setChannelWithSecret(
                 node.token.radioId, 0u, "Before", Bytes.fromHex("00112233445566778899AABBCCDDEEFF"),
             )
-            val retained = assertFailsWith<QueuedChannelRetainedException> {
+            val retained = assertFails {
                 node.messageService.sendChannelMessage("uncertain original", 0u, node.token.radioId)
             }
             val rejection = assertNotNull(generateSequence<Throwable>(retained) { it.cause }
                 .filterIsInstance<MeshCoreException.DeviceError>()
                 .firstOrNull())
             assertEquals(2.toUByte(), rejection.code)
+            val pending = store.fetchPendingSends(node.token.radioId).single()
+            assertEquals(QueuedChannelDispatchState.UNCERTAIN, pending.channelDispatchState)
+            assertEquals(MessageStatus.PENDING,
+                store.fetchMessage(EntityKey(node.token.radioId, pending.messageID))?.status)
             val firmware = h.links.radios.single()
             val writes = firmware.sent.count { it[0].toInt() == 0x20 }
             h.container.navigation.stageChannelLink(ChannelLinkRequest(

@@ -203,7 +203,8 @@ class AppRemoteNodeCliCompletionTest {
     @Test fun mountedNodeVocabularyExcludesAppSessionsWithoutRemovingNodeCommands() = mounted(narrow = true) { harness ->
         key(Key.Tab)
         for (command in listOf("session", "logout", "login")) suggestion(command).assertDoesNotExist()
-        for (command in listOf("help", "clear", "ver")) suggestion(command).assertExists()
+        for (command in listOf("help", "ver")) suggestion(command).assertExists()
+        compose.onAllNodesWithTag("remote-cli-suggestion:clear").assertCountEquals(2)
         compose.runOnIdle {
             val suggestions = harness.holder.state.value.terminal.tabSuggestions!!
             assertFalse(suggestions.contains("session"))

@@ -131,7 +131,8 @@ internal fun AppRemoteNodeCli(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 suggestions.forEachIndexed { index, suggestion ->
-                    key(suggestion) {
+                    // The source vocabulary repeats labels; keyboard selection identifies the slot.
+                    key(index, suggestion) {
                         val selected = index == state.terminal.tabSelectionIndex
                         val bringIntoView = remember { BringIntoViewRequester() }
                         LaunchedEffect(selected) {

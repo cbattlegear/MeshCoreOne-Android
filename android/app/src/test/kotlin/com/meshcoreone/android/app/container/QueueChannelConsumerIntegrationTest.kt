@@ -11,6 +11,7 @@ import com.meshcoreone.android.core.runtime.RuntimeDisconnectReason
 import com.meshcoreone.android.core.services.contacts.ChannelDispatchFailure
 import com.meshcoreone.android.core.services.reactions.ReactionParser
 import com.meshcoreone.android.core.services.sync.SyncDataEvent
+import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import java.time.Instant
 import java.util.UUID
 import kotlin.coroutines.CoroutineContext
@@ -54,7 +55,7 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
     @Test fun actualFactoryAcceptedOutgoingChannelSendRequeuesReactionWhenPersistenceFails() = runTest {
         val failingStore = FailOnceReactionLookupStore(store, failOnCall = 2)
         withFactoryQueue(QueryReply.SUCCESS, persistenceOverride = failingStore) { f ->
-            f.awaitReactionPersistenceFailure()
+            f.awaitReactionPersistenceFailure(failingStore)
             assertEquals(
                 listOf("Remote Node"),
                 store.fetchReactions(EntityKey(f.radioId, f.message.id)).map { it.senderName },
@@ -84,10 +85,8 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
     @Test fun actualFactoryOutgoingChannelSendRequeuesReactionBatchAndPropagatesPersistenceCancellation() = runTest {
         val cancelledStore = FailOnceReactionLookupStore(store, CancellationException("Injected cancellation"))
         withFactoryQueue(QueryReply.SUCCESS, persistenceOverride = cancelledStore) { f ->
-            f.harness.eventually("reaction cancellation restores the pending batch") {
-                cancelledStore.failed &&
-                    f.pendingReactionSenders() == listOf("Remote Node", "Second Remote Node")
-            }
+            f.awaitReactionPersistenceFailure(cancelledStore)
+            assertEquals(listOf("Remote Node", "Second Remote Node"), f.pendingReactionSenders())
             assertTrue(f.reactionNotifications().isEmpty())
             val recovered = f.live.reactionService.indexMessage(
                 f.message.id, 0u, "Stored Node", f.message.text, f.message.timestamp,
@@ -427,13 +426,18 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
             }
         }
 
-        suspend fun awaitReactionPersistenceFailure() {
-            harness.eventually("the failed reaction batch is restored before retry") {
-                runBlocking {
-                    store.fetchReactions(EntityKey(radioId, message.id)).size == 1 &&
-                        pendingReactionSenders() == listOf("Second Remote Node") &&
-                        indexFailures().isNotEmpty()
+        suspend fun awaitReactionPersistenceFailure(failingStore: FailOnceReactionLookupStore) {
+            try {
+                harness.eventually("the injected reaction persistence failure is reached") {
+                    failingStore.failed
                 }
+            } catch (timeout: AssertionError) {
+                throw AssertionError(
+                    "${timeout.message}; reactionExists calls=${failingStore.lookupCount}, " +
+                        "wire=${queueWire()}, indexFailures=${indexFailures()}, " +
+                        "pending=${pendingReactionSenders()}",
+                    timeout,
+                )
             }
         }
 
@@ -471,7 +475,13 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
                 assertEquals(QueuedChannelDispatchState.UNCERTAIN, retained.channelDispatchState)
                 assertNotNull(retained.channelAttemptID)
             } else assertTrue(rows.isEmpty())
-            assertEquals(listOf(channel), store.fetchChannels(radioId))
+            val storedChannels = store.fetchChannels(radioId)
+            val expectedChannel = if (status == MessageStatus.SENT) {
+                channel.copy(lastMessageDate = assertNotNull(storedChannels.single().lastMessageDate))
+            } else {
+                channel
+            }
+            assertEquals(listOf(expectedChannel), storedChannels)
             assertEquals(foreignMessage, store.fetchMessage(EntityKey(foreignRadioId, foreignMessage.id)))
             assertEquals(listOf(foreignPending), store.fetchPendingSends(foreignRadioId))
         }
@@ -539,16 +549,17 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
     }
 
     private class FailOnceReactionLookupStore(
-        private val delegate: PersistenceStoreProtocol,
+        private val delegate: RoomPersistenceStore,
         private val failure: Exception = IllegalStateException("Injected reaction lookup failure"),
         private val failOnCall: Int = 1,
-    ) : PersistenceStoreProtocol by delegate {
-        private val lookupCount = java.util.concurrent.atomic.AtomicInteger()
+    ) : PersistenceStoreProtocol by delegate, QueuedChannelReadinessPersisting by delegate {
+        private val lookupCounter = java.util.concurrent.atomic.AtomicInteger()
+        val lookupCount: Int get() = lookupCounter.get()
         @Volatile var failed = false
             private set
 
         override suspend fun reactionExists(message: EntityKey, senderName: String, emoji: String): Boolean {
-            if (lookupCount.incrementAndGet() == failOnCall) {
+            if (lookupCounter.incrementAndGet() == failOnCall) {
                 failed = true
                 throw failure
             }

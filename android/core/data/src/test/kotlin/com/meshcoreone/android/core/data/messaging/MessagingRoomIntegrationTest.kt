@@ -504,19 +504,39 @@ class MessagingRoomIntegrationTest {
         retryCreationReplacement(maxAttempts = 0)
     }
 
-    @Test fun retryCallbackCanEditTheOriginalMessageBeforeItsWireSnapshot() = runTest(scheduler) {
+    @Test fun retryCallbackPayloadEditsRequireASeparateExplicitSend() = runTest(scheduler) {
         seed()
-        val g = RadioGeneration(235, config = MessageServiceConfig(maxAttempts = 1))
-        g.start(); g.service.startEventMonitoring()
-        val result = g.service.sendMessageWithRetry("before callback", contact, onMessageCreated = {
-            store.saveMessage(it.copy(text = "edited by callback", timestamp = it.timestamp - 1u))
-        })
-        val wire = g.firmware.sent().single()
-        assertEquals(Bytes.utf8("edited by callback"), wire.slice(13, wire.size))
-        assertEquals(base.epochSecond.toUInt() - 1u, wire.readUInt32LE(3))
-        assertEquals("edited by callback", result.text)
-        assertEquals(result, store.fetchMessage(EntityKey(radio, result.id)))
-        g.stop()
+        val edits: List<(MessageDTO) -> MessageDTO> = listOf(
+            { it.copy(text = "edited by callback") },
+            { it.copy(timestamp = it.timestamp - 1u) },
+            { it.copy(text = "edited together", timestamp = it.timestamp - 1u) },
+        )
+        for ((index, edit) in edits.withIndex()) {
+            val g = RadioGeneration(235L + index, config = MessageServiceConfig(maxAttempts = 1))
+            g.start(); g.service.startEventMonitoring()
+            val events = g.service.statusEvents()
+            var edited: MessageDTO? = null
+            assertFailsWith<PersistenceStoreException> {
+                g.service.sendMessageWithRetry("before callback", contact, onMessageCreated = {
+                    edited = edit(it)
+                    store.saveMessage(assertNotNull(edited))
+                })
+            }
+            val expected = assertNotNull(edited)
+            assertEquals(expected, store.fetchMessage(EntityKey(radio, expected.id)))
+            assertEquals(0, db.directAcks().currentIntents(radio.value, expected.id))
+            assertEquals(0, db.directAcks().currentUnresolvedClaims(radio.value, expected.id))
+            assertTrue(g.firmware.sent().isEmpty())
+
+            val explicit = g.service.sendPendingDirectMessage(expected.id, contact, preserveTimestamp = true)
+            val wire = g.firmware.sent().single()
+            assertEquals(Bytes.utf8(expected.text), wire.slice(13, wire.size))
+            assertEquals(expected.timestamp, wire.readUInt32LE(3))
+            assertEquals(expected.text, explicit.text)
+            assertEquals(explicit, store.fetchMessage(EntityKey(radio, expected.id)))
+            assertTrue(completedStatuses(g, events).none { it is MessageStatusEvent.Failed })
+            g.stop()
+        }
     }
 
     @Test fun zeroAttemptRetryReturnsSameIncarnationCallbackEditsWithoutSending() = runTest(scheduler) {

@@ -1838,7 +1838,7 @@ class MessagingRoomIntegrationTest {
         }
     }
 
-    @Test fun livePredictedAckDeliverySurvivesDifferentAcceptanceCodeInRetrySender() = runTest(scheduler) {
+    @Test fun retrySenderWaitsForConfirmedAckWhenEarlyPredictionDiffers() = runTest(scheduler) {
         earlyPredictedAckThenDifferentAcceptance(queued = false)
     }
 
@@ -2355,7 +2355,7 @@ class MessagingRoomIntegrationTest {
         if (replaceBeforeCompletion) assertEquals(accepted, store.fetchMessage(EntityKey(radio, id)))
     }
 
-    @Test fun livePredictedAckDeliverySurvivesDifferentAcceptanceCodeInQueue() = runTest(scheduler) {
+    @Test fun queuedSendWaitsForConfirmedAckWhenEarlyPredictionDiffers() = runTest(scheduler) {
         earlyPredictedAckThenDifferentAcceptance(queued = true)
     }
 

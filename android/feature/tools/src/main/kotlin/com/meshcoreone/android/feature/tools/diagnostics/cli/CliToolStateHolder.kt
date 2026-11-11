@@ -403,10 +403,7 @@ class CliToolStateHolder(
 
     /** Applies the clicked entry, independently of keyboard selection; ignores a dismissed entry. */
     fun applySuggestion(suggestion: String): Boolean {
-        val terminal = state.value.terminal
-        val index = terminal.tabSuggestions?.indexOf(suggestion) ?: -1
-        if (index < 0) return false
-        val (next, applied) = terminal.copy(tabSelectionIndex = index).applyingSelectedSuggestion()
+        val (next, applied) = state.value.terminal.applyingSuggestion(suggestion)
         updateTerminal { next }
         return applied
     }

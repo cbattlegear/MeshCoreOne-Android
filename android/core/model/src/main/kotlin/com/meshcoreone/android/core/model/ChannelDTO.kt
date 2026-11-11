@@ -48,6 +48,8 @@ data class ChannelDTO(
     val regionScope: String? = null,
     // Android-only lookup witness; never inferred from the reusable row ID or backup data.
     val occupantID: UUID? = null,
+    // Display/removal provenance only; it survives witness withdrawal and never authorizes an operation.
+    val displayIncarnationID: UUID? = null,
 ) {
     val floodScope: ChannelFloodScope get() = ChannelFloodScopeStorage(floodScopeModeRawValue, regionScope).scope
     val isMuted: Boolean get() = notificationLevel == NotificationLevel.MUTED
@@ -67,6 +69,7 @@ data class ChannelDTO(
     fun updating(info: ChannelInfo): ChannelDTO = copy(
         name = info.name, secret = info.secret,
         occupantID = occupantID.takeIf { info.index == index && info.secret == secret },
+        displayIncarnationID = displayIncarnationID.takeIf { info.index == index && info.secret == secret },
     )
     fun toChannelInfo(): ChannelInfo = ChannelInfo(index, name, secret)
 

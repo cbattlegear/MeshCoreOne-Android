@@ -513,9 +513,36 @@ class ChannelService(
         }
     }
 
-    /** Clears a channel by writing an empty name and zero secret, then deletes it locally. */
+    /** A displayed-row delete requires both its original occupant and this graph's actual lease. */
+    suspend fun clearChannel(expected: ChannelDTO) {
+        val lease = dispatchLease ?: throw ChannelDispatchFailure.RetiredSession()
+        if (lease.token.radioId != expected.radioId) throw ChannelDispatchFailure.RetiredSession()
+        val occupant = expected.occupantID ?: throw ChannelDispatchFailure.UnknownOccupant()
+        channelOperation(expected.radioId) { store, scope, completions ->
+            dispatchFence.requireReconciled(lease, scope, expected.index)
+            val current = store.fetchChannelOccupantSnapshot(expected.radioId, expected.index)
+                ?: throw ChannelDispatchFailure.UnknownOccupant()
+            if (!expected.isEnabled || current.occupantID != occupant ||
+                current.channel.id != expected.id || current.channel.radioId != expected.radioId ||
+                current.channel.index != expected.index || current.channel.secret != expected.secret ||
+                !current.channel.isEnabled
+            ) throw ChannelDispatchFailure.ReplacedOccupant()
+            dispatchFence.requireActive(lease)
+            clearChannelLocked(expected.radioId, expected.index, current.channel, store, scope, completions)
+        }
+    }
+
+    /** Trusted slot maintenance; displayed-row actions must use the exact-occupant overload. */
     suspend fun clearChannel(radioId: RadioId, index: UByte) = channelOperation(radioId) { store, scope, completions ->
         val channelToDelete = store.fetchChannel(radioId, index)
+        clearChannelLocked(radioId, index, channelToDelete, store, scope, completions)
+    }
+
+    private suspend fun clearChannelLocked(
+        radioId: RadioId, index: UByte, channelToDelete: ChannelDTO?,
+        store: ChannelPersisting, scope: ChannelIdentityWriteScope,
+        completions: MutableList<suspend () -> Unit>,
+    ) {
         dispatchLease?.let { dispatchFence.forgetReconciled(it, scope, listOf(index)) }
         store.beginChannelMutation(radioId, index)
         val dispatch = ChannelWriteDispatch()

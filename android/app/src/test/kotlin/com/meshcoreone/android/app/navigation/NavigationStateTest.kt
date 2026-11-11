@@ -42,6 +42,60 @@ import kotlin.coroutines.cancellation.CancellationException
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class NavigationStateTest {
+    @Test fun channelDeletionCleanupPreservesTheCurrentUnrelatedTabAndItsDetailChrome() {
+        val n = NavigationCoordinator()
+        val original = channel.copy(occupantID = UUID.randomUUID())
+        n.navigateToChannel(original)
+        val cleanup = n.captureChannelSelectionCleanup(original)
+        n.navigateToTool(ToolSelection.CLI)
+        val before = n.currentState
+        assertTrue(cleanup())
+        assertEquals(before.selectedTab, n.currentState.selectedTab)
+        assertEquals(before.activeStack, n.currentState.activeStack)
+        assertEquals(before.tabBarVisible, n.currentState.tabBarVisible)
+        assertEquals(before.selectedTool, n.currentState.selectedTool)
+        assertNull(n.currentState.chatsSelectedRoute)
+    }
+
+    @Test fun channelDeletionCleanupCannotPopAnEqualValueReopenedEntry() {
+        val n = NavigationCoordinator()
+        val original = channel.copy(occupantID = UUID.randomUUID())
+        n.navigateToChannel(original)
+        val cleanup = n.captureChannelSelectionCleanup(original)
+        n.back()
+        n.navigateToChannel(original.copy())
+        val replacement = n.currentState
+        assertFalse(cleanup())
+        assertEquals(replacement, n.currentState)
+        assertTrue(n.captureChannelSelectionCleanup(original)())
+        assertNull(n.currentState.chatsSelectedRoute)
+        assertFalse(n.currentState.canGoBack)
+    }
+
+    @Test fun channelDeletionCleanupUsesCommittedOwnerEvenWhilePublishedSelectionLags() = runTest {
+        val n = NavigationCoordinator()
+        n.replaceRadio(radio)
+        n.setNavigationReady(true)
+        val original = channel.copy(occupantID = UUID.randomUUID())
+        val replacement = original.copy(occupantID = UUID.randomUUID())
+        n.navigateToChannel(original)
+        val presented = n.publishedNavigation.value
+        val cleanup = n.captureChannelSelectionCleanup(original)
+        val gate = n.registerChatContactMount(ChatContactMount(presented.value.activeStack.last().id))
+        try {
+            assertEquals(NavigationOutcome.Navigated, n.handleNotification(
+                NotificationPayload.ChannelMessage(radio, channel.index, message), lookup(channel = replacement),
+            ))
+            assertEquals(presented, n.publishedNavigation.value)
+            val committed = n.currentState
+            assertEquals(ChatSelection.Channel(replacement), committed.chatsSelectedRoute)
+            assertFalse(cleanup())
+            assertFalse(n.captureChannelSelectionCleanup(original)())
+            assertEquals(committed, n.currentState)
+        } finally { gate.release() }
+        assertEquals(ChatSelection.Channel(replacement), n.state.value.chatsSelectedRoute)
+    }
+
     @get:Rule val executionName = TestName()
     @Before fun bindActualInputs() = emitNavigationExecutionBinding(javaClass.name, executionName.methodName, "jvm")
     private val radio = RadioId(UUID.fromString("00000000-0000-0000-0000-000000000011"))

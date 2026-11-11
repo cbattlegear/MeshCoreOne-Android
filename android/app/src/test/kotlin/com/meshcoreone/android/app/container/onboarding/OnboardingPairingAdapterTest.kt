@@ -1,6 +1,7 @@
 // AndroidOnly: WP-303 Pairing, Wi-Fi and demo adapter outcome mapping against fakes.
 package com.meshcoreone.android.app.container.onboarding
 
+import com.meshcoreone.android.app.container.SimulatorPreferenceRecoveryCancelled
 import com.meshcoreone.android.app.state.ConnectionUiSnapshot
 import com.meshcoreone.android.core.ble.BleError
 import com.meshcoreone.android.core.ble.BleTransportException
@@ -14,10 +15,14 @@ import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -114,5 +119,41 @@ class OnboardingPairingAdapterTest {
         val bound = AppOnboardingDemoPort(manager, CoroutineScope(UnconfinedTestDispatcher(testScheduler))) { connected = true }
         assertEquals(Outcome.Connected, bound.connectDemo())
         assertTrue(connected)
+    }
+
+    @Test fun `demo recovery dismissal does not swallow caller cancellation`() = runTest {
+        val manager = DemoModeManager(object : DemoModeDefaults {
+            override fun bool(forKey: String) = false
+            override suspend fun setAll(values: Map<String, Boolean>) = Unit
+        })
+        val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
+        val dismissed = AppOnboardingDemoPort(manager, scope) { throw SimulatorPreferenceRecoveryCancelled() }
+        assertEquals(Outcome.Cancelled, dismissed.connectDemo())
+
+        val external = CancellationException("caller cancelled")
+        var observed: CancellationException? = null
+        val child = launch {
+            val port = AppOnboardingDemoPort(manager, scope) {
+                currentCoroutineContext().cancel(external)
+                throw SimulatorPreferenceRecoveryCancelled()
+            }
+            try {
+                port.connectDemo()
+                fail("caller cancellation must propagate")
+            } catch (cancelled: CancellationException) {
+                observed = cancelled
+            }
+        }
+        child.join()
+        assertSame(external, observed)
+
+        val ordinary = CancellationException("transport cancelled")
+        val port = AppOnboardingDemoPort(manager, scope) { throw ordinary }
+        try {
+            port.connectDemo()
+            fail("transport cancellation must propagate")
+        } catch (cancelled: CancellationException) {
+            assertSame(ordinary, cancelled)
+        }
     }
 }

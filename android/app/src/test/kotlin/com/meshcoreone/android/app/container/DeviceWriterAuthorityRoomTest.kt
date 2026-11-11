@@ -142,7 +142,8 @@ class DeviceWriterAuthorityRoomTest : RoomProcessTest() {
         store.saveDevice(successor)
         store.setActiveDevice(successor.id)
         val staleSeed = DeviceDTO(
-            radioId = RadioId(UUID(0, 302)), publicKey = key(4), nodeName = "Simulator", isActive = true,
+            id = UUID(0, 302), radioId = RadioId(UUID(0, 302)),
+            publicKey = key(4), nodeName = "Simulator", isActive = true,
         )
         val seed = RoomSimulatorSeedStore(store)
         seed.saveDevice(staleSeed)

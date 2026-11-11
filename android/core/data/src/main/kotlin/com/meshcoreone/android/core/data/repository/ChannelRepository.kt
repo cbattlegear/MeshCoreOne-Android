@@ -82,6 +82,16 @@ internal class ChannelRepository(
         database.channels().forRadio(radioId.value).map { channelWithOrigin(it) }.snapshot()
     }
 
+    override suspend fun fetchChannelsForDisplay(radioId: RadioId): SnapshotList<ChannelDTO> =
+        context.read("fetchChannelsForDisplay") {
+            database.channels().forRadio(radioId.value).map { row ->
+                val incarnation = if (row.isEnabled &&
+                    database.channels().forIndex(row.radioId, row.index).singleOrNull()?.id == row.id
+                ) database.channelOccupants().stateForIndex(row.radioId, row.index)?.occupantID else null
+                channelWithOrigin(row).copy(displayIncarnationID = incarnation)
+            }.snapshot()
+        }
+
     override suspend fun fetchChannel(radioId: RadioId, index: UByte): ChannelDTO? = context.read("fetchChannelByIndex") {
         database.channels().forIndex(radioId.value, index.toLong()).firstOrNull()?.let { channelWithOrigin(it) }
     }

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-217 Simulator preference conflict recovery copy. -->
+<resources>
+    <string name="simulator_preference_recovery_device_details">Die Auswahl umfasst alle unten angezeigten Geräte- und Funkeinstellungen. Aktivstatus und letzte Verbindungszeit bleiben unverändert.</string>
+    <string name="simulator_preference_recovery_title">Simulator-Einstellungen auswählen</string>
+    <string name="simulator_preference_recovery_explanation">Es wurden zwei Sätze von Simulator-Einstellungen gefunden. Wähle einen Satz zum Behalten aus. Der andere Satz wird entfernt. Nachrichten, Kanäle, Kontakte und andere Funkgerätedaten werden nicht gelöscht. Beim Abbrechen bleiben beide Sätze erhalten.</string>
+    <string name="simulator_preference_recovery_current">Aktuelle Einstellungen behalten</string>
+    <string name="simulator_preference_recovery_recovered">Wiederhergestellte Einstellungen behalten</string>
+    <string name="simulator_preference_recovery_apply">Ausgewählte Einstellungen verwenden</string>
+    <string name="simulator_preference_recovery_applying">Auswahl wird gespeichert...</string>
+    <string name="simulator_preference_recovery_retry">Die Auswahl konnte nicht angewendet werden. Prüfe beide Sätze und wähle erneut.</string>
+    <string name="simulator_preference_recovery_not_set">Nicht festgelegt</string>
+    <string name="simulator_preference_recovery_empty_text">Leerer Text</string>
+    <string name="simulator_preference_recovery_no_regions">Keine gespeicherten Regionen</string>
+    <string name="simulator_preference_recovery_flood_scope">Standardbereich für Flood-Routing</string>
+    <string name="simulator_preference_recovery_repeat_frequency">Frequenz vor dem Wiederholungsmodus (MHz)</string>
+    <string name="simulator_preference_recovery_repeat_bandwidth">Bandbreite vor dem Wiederholungsmodus (kHz)</string>
+    <string name="simulator_preference_recovery_repeat_spreading_factor">Spreizfaktor vor dem Wiederholungsmodus</string>
+    <string name="simulator_preference_recovery_repeat_coding_rate">Codierrate vor dem Wiederholungsmodus</string>
+    <string name="simulator_preference_recovery_last_contact_sync">Letzte Kontaktsynchronisierung (Unix-Sekunden)</string>
+    <string name="simulator_preference_recovery_ocv_preset">Batteriespannungs-Voreinstellung</string>
+    <string name="simulator_preference_recovery_radio_preset">ID der angewendeten Funkgerät-Voreinstellung</string>
+    <string name="simulator_preference_recovery_custom_ocv">Benutzerdefinierte Batteriespannungswerte</string>
+    <string name="simulator_preference_recovery_known_regions">Bekannte Regionen</string>
+</resources>

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-217 Simulator preference conflict recovery copy. -->
+<resources>
+    <string name="simulator_preference_recovery_title">Choose simulator preferences</string>
+    <string name="simulator_preference_recovery_explanation">Two sets of simulator preferences were found. Choose one set to keep. The other set will be removed. Messages, channels, contacts, and other radio data will not be deleted. Cancel keeps both sets.</string>
+    <string name="simulator_preference_recovery_device_details">The selected set includes all device and radio settings shown below. Active status and last-connected time remain unchanged.</string>
+    <string name="simulator_preference_recovery_current">Keep current preferences</string>
+    <string name="simulator_preference_recovery_recovered">Keep recovered preferences</string>
+    <string name="simulator_preference_recovery_apply">Use selected preferences</string>
+    <string name="simulator_preference_recovery_applying">Saving your choice...</string>
+    <string name="simulator_preference_recovery_retry">Could not apply your choice. Review both sets and choose again.</string>
+    <string name="simulator_preference_recovery_not_set">Not set</string>
+    <string name="simulator_preference_recovery_empty_text">Empty text</string>
+    <string name="simulator_preference_recovery_no_regions">No saved regions</string>
+    <string name="simulator_preference_recovery_flood_scope">Default flood scope</string>
+    <string name="simulator_preference_recovery_repeat_frequency">Frequency before repeat mode (MHz)</string>
+    <string name="simulator_preference_recovery_repeat_bandwidth">Bandwidth before repeat mode (kHz)</string>
+    <string name="simulator_preference_recovery_repeat_spreading_factor">Spreading factor before repeat mode</string>
+    <string name="simulator_preference_recovery_repeat_coding_rate">Coding rate before repeat mode</string>
+    <string name="simulator_preference_recovery_last_contact_sync">Last contact sync (Unix seconds)</string>
+    <string name="simulator_preference_recovery_ocv_preset">Battery voltage preset</string>
+    <string name="simulator_preference_recovery_radio_preset">Applied radio preset ID</string>
+    <string name="simulator_preference_recovery_custom_ocv">Custom battery voltage values</string>
+    <string name="simulator_preference_recovery_known_regions">Known regions</string>
+</resources>

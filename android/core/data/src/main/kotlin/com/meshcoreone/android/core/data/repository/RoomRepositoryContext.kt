@@ -55,9 +55,12 @@ internal class RepositoryTransaction(
     var saves = false
         private set
     private val committed = mutableListOf<() -> Unit>()
+    private val precommitChecks = mutableListOf<suspend () -> Unit>()
 
     fun save() { saves = true }
     fun afterCommit(action: () -> Unit) { committed += action }
+    fun beforeCommit(action: suspend () -> Unit) { precommitChecks += action }
+    suspend fun checkBeforeCommit() { precommitChecks.forEach { it() } }
     fun complete() { committed.forEach { it() } }
 
     suspend fun rxRows(radioId: RadioId): List<RxLogEntryEntity> {
@@ -117,6 +120,7 @@ internal class RoomRepositoryContext(
             ) {
                 val value = transaction.block()
                 if (transaction.saves) transaction.persistPendingRx()
+                transaction.checkBeforeCommit()
                 value
             }
         }

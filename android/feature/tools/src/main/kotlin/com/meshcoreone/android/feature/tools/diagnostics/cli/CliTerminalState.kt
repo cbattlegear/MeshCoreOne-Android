@@ -113,6 +113,13 @@ data class CliTerminalState(
         return applyingCompletion(suggestions[index]).clearingTabState() to true
     }
 
+    /** Applies the clicked current candidate, independently of prior keyboard selection. */
+    fun applyingSuggestion(suggestion: String): Pair<CliTerminalState, Boolean> {
+        val index = tabSuggestions?.indexOf(suggestion) ?: -1
+        if (index < 0) return this to false
+        return copy(tabSelectionIndex = index).applyingSelectedSuggestion()
+    }
+
     /** Inserts pasted text at a UTF-16 cursor offset, clamped to the input and kept off a surrogate split. */
     fun pasting(text: String, cursorPosition: Int): CliTerminalState {
         var position = cursorPosition.coerceIn(0, currentInput.length)

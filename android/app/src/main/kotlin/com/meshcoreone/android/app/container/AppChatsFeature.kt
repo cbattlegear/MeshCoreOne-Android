@@ -83,6 +83,11 @@ import kotlinx.coroutines.launch
 import java.time.ZoneId
 
 class AppChatsFeature internal constructor(private val container: AppContainer) {
+    internal data class NavigationDeviceContext(
+        val radioId: RadioId,
+        val defaultFloodScopeName: String?,
+    )
+
     internal fun registerContactMount(mount: ChatContactMount) = container.registerChatContactMount(mount)
     internal fun sealContactMount(mount: ChatContactMount) = container.sealChatContactMount(mount)
     internal fun acceptContactOffers() = container.acceptChatContactOffers()
@@ -166,6 +171,15 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         .stateIn(scope, SharingStarted.Eagerly, app.connectionState)
     val currentRadioId = changes.map { app.currentRadioId }
         .stateIn(scope, SharingStarted.Eagerly, app.currentRadioId)
+    internal val navigationDeviceContext = changes.map {
+        app.connectedDevice?.let { device ->
+            NavigationDeviceContext(device.radioId, device.defaultFloodScopeName)
+        }
+    }.stateIn(
+        scope,
+        SharingStarted.Eagerly,
+        app.connectedDevice?.let { NavigationDeviceContext(it.radioId, it.defaultFloodScopeName) },
+    )
     internal val notificationSource = app.servicesVersion.map { container.sessions.current?.notificationService }
         .stateIn(scope, SharingStarted.Eagerly, container.sessions.current?.notificationService)
     val unreadCount = merge(changes, events().map { Unit }).map {

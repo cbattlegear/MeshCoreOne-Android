@@ -34,6 +34,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -71,6 +72,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.Hyphens
 import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.flow.collect
@@ -89,6 +91,8 @@ import com.meshcoreone.android.core.designsystem.LocalMeshTheme
 import com.meshcoreone.android.core.designsystem.MeshSymbol
 import com.meshcoreone.android.core.designsystem.themedCanvas
 import com.meshcoreone.android.feature.chats.ChatsEntry
+import com.meshcoreone.android.feature.chats.list.ChatConversationType as FeatureChatConversationType
+import com.meshcoreone.android.feature.chats.list.ui.rememberChatListStrings
 import com.meshcoreone.android.feature.map.MapEntry
 import com.meshcoreone.android.feature.map.MapFeatureDependencies
 import com.meshcoreone.android.feature.nodes.NodesEntry
@@ -128,6 +132,28 @@ private val LocalUnavailableOnboardingEntries = staticCompositionLocalOf<Set<Nav
 @Composable
 internal fun presentedNavigation(coordinator: NavigationCoordinator): NavigationStateStore.PublishedSnapshot =
     LocalPresentedNavigation.current ?: coordinator.publishedNavigation.collectAsStateWithLifecycle().value
+
+private data class ConversationNavigationHeader(val title: String, val subtitle: String?)
+
+@Composable
+private fun conversationNavigationHeader(
+    selection: ChatSelection?,
+    deviceContext: AppChatsFeature.NavigationDeviceContext?,
+): ConversationNavigationHeader? {
+    val conversation = when (selection) {
+        is ChatSelection.Direct -> FeatureChatConversationType.Dm(selection.contact)
+        is ChatSelection.Channel -> FeatureChatConversationType.Channel(selection.channel)
+        is ChatSelection.Room, null -> return null
+    }
+    val strings = rememberChatListStrings()
+    val defaultScopeName = deviceContext
+        ?.takeIf { it.radioId == conversation.radioId }
+        ?.defaultFloodScopeName
+    return ConversationNavigationHeader(
+        title = conversation.navigationTitle(strings),
+        subtitle = conversation.navigationSubtitle(strings, defaultScopeName).takeIf(String::isNotEmpty),
+    )
+}
 
 internal fun AppTab.titleResource(): Int = when (this) {
     AppTab.CHATS -> Strings.string.tab_chats
@@ -245,6 +271,11 @@ fun NativeNavigationShell(
         )
     }
     val labels = AppTab.entries.associateWith { stringResource(it.titleResource()) }
+    val selectedChat = if (state.selectedTab == AppTab.CHATS) {
+        (state.activeStack.lastOrNull()?.destination as? NavigationDestination.Chat)?.selection
+    } else null
+    val navigationDeviceContext = chats?.navigationDeviceContext?.collectAsStateWithLifecycle()?.value
+    val conversationHeader = conversationNavigationHeader(selectedChat, navigationDeviceContext)
     val unreadDescription = if (unreadCount > 0) {
         stringResource(Strings.string.l10n_app_localizable_tabs_chatsunreadaccessibilityvalue, unreadCount)
     } else ""
@@ -349,12 +380,25 @@ fun NativeNavigationShell(
                 topBar = {
                     Column {
                         TopAppBar(
-                            expandedHeight = 64.dp * fontScale,
+                            expandedHeight = (if (conversationHeader?.subtitle != null) 96.dp else 64.dp) * fontScale,
                             title = {
-                                Text(
-                                    stringResource(state.selectedTab.titleResource()),
-                                    modifier = Modifier.fillMaxWidth().testTag("navigation-heading").semantics { heading() },
-                                )
+                                Column(Modifier.fillMaxWidth()) {
+                                    Text(
+                                        conversationHeader?.title ?: labels.getValue(state.selectedTab),
+                                        modifier = Modifier.fillMaxWidth().testTag("navigation-heading").semantics { heading() },
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    conversationHeader?.subtitle?.let { subtitle ->
+                                        Text(
+                                            subtitle,
+                                            modifier = Modifier.fillMaxWidth().testTag("navigation-subtitle"),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                }
                             },
                             navigationIcon = {
                                 if (state.canGoBack) {

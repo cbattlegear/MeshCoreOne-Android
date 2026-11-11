@@ -25,6 +25,7 @@ internal object MapLineLayerSpecs {
     const val UNTRACED_LAYER = "mesh-untraced-lines"
     const val LOCATION_TRAIL_CASING_LAYER = "mesh-location-trail-casing"
     const val LOCATION_TRAIL_LAYER = "mesh-location-trail"
+    const val FIRST_MARKER_LAYER = "mesh-clusters"
     const val CASING_OPACITY = 0.8f
 
     private val untraced = LineLayerSpec(UNTRACED_LAYER, setOf(MapLineStyle.TRACE_UNTRACED), 2f, listOf(1.75f, 3.25f))
@@ -42,6 +43,16 @@ internal object MapLineLayerSpecs {
     val ordered: List<LineLayerSpec> = listOf(generic, untraced, trailCasing, trail)
     fun layersFor(lineStyleName: String): List<LineLayerSpec> =
         ordered.filter { spec -> spec.styles.any { it.name == lineStyleName } }
+
+    fun install(add: (LineLayerSpec) -> Unit, addBelow: (LineLayerSpec, String) -> Unit) {
+        ordered.forEach { spec ->
+            if (MapLineStyle.LOCATION_TRAIL in spec.styles) {
+                addBelow(spec, FIRST_MARKER_LAYER)
+            } else {
+                add(spec)
+            }
+        }
+    }
 }
 
 internal fun mapLineLayer(spec: LineLayerSpec, sourceId: String): LineLayer {

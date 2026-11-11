@@ -1,4 +1,5 @@
 // PortedFrom: MC1Tests/Views/RemoteNodes/NodeContactInfoSectionTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/RemoteNodes/Repeaters/NeighborSNRMapView.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.app.remotenodes
 
 import androidx.activity.ComponentActivity
@@ -84,6 +85,8 @@ class RemoteNodesComposeTest {
     private var renderedMap: MapPresentationState? = null
     private var renderedLabels = true
     private var renderedClusters = true
+    private var mapDisposals = 0
+    private val mapPresentations = mutableListOf<MapPresentationState>()
 
     @Before fun createHost() {
         host = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
@@ -105,9 +108,11 @@ class RemoteNodesComposeTest {
                         val map: RemoteNodesMapSurface = { state, clusters, labels, _, camera, select, modifier ->
                             SideEffect {
                                 renderedMap = state
+                                mapPresentations += state
                                 renderedLabels = labels
                                 renderedClusters = clusters
                             }
+                            DisposableEffect(Unit) { onDispose { mapDisposals++ } }
                             Column(modifier.testTag("synthetic-map")) {
                                 Text("Local map fixture: ${state.points.size} markers")
                                 Button({ state.points.firstOrNull()?.let(select) }) { Text("Select fixture report") }
@@ -198,6 +203,61 @@ class RemoteNodesComposeTest {
         compose.waitUntil(5_000) { fixture.historyReads > 0 }
         compose.onNodeWithTag("synthetic-map").assertDoesNotExist()
         compose.onAllNodesWithText(text(L.remoteNodesSettingsNoService)).onFirst().assertExists()
+    }
+
+    @Test fun liveNeighborCatalogUpdatesKeepTheMapMountedAndRetainTheFullCameraPose() {
+        val key = com.meshcoreone.android.core.protocol.bytes.Bytes(byteArrayOf(1, 2, 3, 4, 5, 6) + ByteArray(26))
+        val neighbor = fixture.contact.copy(
+            id = java.util.UUID(0, 312), publicKey = key, name = "Located neighbor",
+            latitude = 38.0, longitude = -121.0,
+        )
+        fixture.contacts = fixture.contacts + neighbor
+        show()
+        open()
+        compose.onNodeWithTag("remote-tab:TELEMETRY").performClick()
+        expand(L.remoteNodesStatusNeighbors)
+        compose.onNodeWithText(text(L.remoteNodesStatusViewOnMap)).performScrollTo().performClick()
+        waitForSyntheticMap()
+        nextCamera = MapCamera(GeoPoint(40.0, -120.0), .3, .4,
+            com.meshcoreone.android.core.maps.MapCameraPose(11.0, 25.0, 35.0))
+        compose.onNodeWithText("Move fixture camera").performScrollTo().performClick()
+        compose.waitUntil(5_000) { renderedMap?.camera == nextCamera }
+        val disposals = mapDisposals
+        mapPresentations.clear()
+
+        compose.runOnIdle {
+            fixture.contacts = fixture.contacts.map {
+                if (it.id == neighbor.id) it.copy(name = "Updated neighbor", latitude = 39.0) else it
+            }
+            fixture.publish()
+        }
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag("synthetic-map").fetchSemanticsNodes()
+            renderedMap?.points?.any { it.label == "Updated neighbor" && it.position.latitude == 39.0 } == true
+        }
+        assertEquals("Catalog refresh must not dispose the active map", disposals, mapDisposals)
+        assertTrue(mapPresentations.isNotEmpty())
+        assertTrue("Every catalog-refresh presentation must retain native camera pose",
+            mapPresentations.all { it.camera == nextCamera })
+
+        compose.runOnIdle {
+            fixture.sessions = listOf(fixture.session.copy(name = "Renamed repeater", lastBatteryMillivolts = 3990u))
+            fixture.publish()
+        }
+        compose.waitUntil(5_000) {
+            compose.onAllNodesWithTag("synthetic-map").fetchSemanticsNodes()
+            renderedMap?.points?.any { it.label == "Renamed repeater" } == true
+        }
+        assertEquals(disposals, mapDisposals)
+        assertEquals(nextCamera, requireNotNull(renderedMap).camera)
+        assertTrue(mapPresentations.all { it.camera == nextCamera })
+        compose.onNodeWithText(text(com.meshcoreone.android.core.l10n.generated.AppMapStrings.mapControlsCenterAll))
+            .performScrollTo().performClick()
+        compose.waitUntil(5_000) { renderedMap?.camera != nextCamera }
+        assertTrue(requireNotNull(renderedMap).points.any { it.label == "Updated neighbor" })
+        val centered = requireNotNull(requireNotNull(renderedMap).camera).center
+        assertEquals(38.35, centered.latitude, .0001)
+        assertEquals(-121.7, centered.longitude, .0001)
     }
 
     @Test fun remoteMapKeepsRetryUntilReplacementObservationDeliversPreferences() {

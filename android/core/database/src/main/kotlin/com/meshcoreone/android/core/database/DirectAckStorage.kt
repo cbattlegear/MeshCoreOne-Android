@@ -268,9 +268,18 @@ object DirectAckStorage {
             "THEN RAISE(ABORT,'direct ACK revision exhausted') END;" +
             "UPDATE $IDENTITIES SET revision = revision + 1 WHERE kind = 'message' AND ($predicate);"
 
-    private fun triggerDefinitions(db: SupportSQLiteDatabase): Map<String, String> {
+    private fun triggerDefinitions(
+        db: SupportSQLiteDatabase,
+        legacyDisplacedIntent: Boolean = false,
+    ): Map<String, String> {
         val messageColumns = columnNames(db, "messages")
         val pendingColumns = columnNames(db, "pending_sends")
+        val displacedMessage = "(SELECT messageID FROM pending_sends WHERE radioId = NEW.radioId AND id = NEW.id)"
+        val invalidateDisplaced = if (legacyDisplacedIntent) {
+            "UPDATE $CLAIMS SET current = 0 WHERE radioId = NEW.radioId AND messageId IN $displacedMessage;"
+        } else {
+            invalidate("NEW.radioId", displacedMessage)
+        }
         fun nulls(prefix: String, columns: List<String>) = columns.joinToString(",") { "`$prefix$it` = NULL" }
         fun eraseMessage(radio: String, id: String, condition: String = "1") =
             "UPDATE $CLAIMS SET current = 0,${nulls("snapshot_", messageColumns)} " +
@@ -319,15 +328,13 @@ object DirectAckStorage {
         put("direct_ack_pending_replace", "CREATE TRIGGER direct_ack_pending_replace BEFORE INSERT ON pending_sends " +
             "WHEN EXISTS(SELECT 1 FROM pending_sends WHERE radioId = NEW.radioId AND id = NEW.id " +
             "AND messageID != NEW.messageID) BEGIN " +
-            "UPDATE $CLAIMS SET current = 0 WHERE radioId = NEW.radioId AND messageId IN " +
-            "(SELECT messageID FROM pending_sends WHERE radioId = NEW.radioId AND id = NEW.id);" +
+            invalidateDisplaced +
             advanceMessageRevision("radioId = NEW.radioId AND id IN " +
                 "(SELECT messageID FROM pending_sends WHERE radioId = NEW.radioId AND id = NEW.id)") + " END")
         put("direct_ack_pending_update_replace", "CREATE TRIGGER direct_ack_pending_update_replace BEFORE UPDATE ON pending_sends " +
             "WHEN (OLD.radioId != NEW.radioId OR OLD.id != NEW.id) AND " +
             "EXISTS(SELECT 1 FROM pending_sends WHERE radioId = NEW.radioId AND id = NEW.id) BEGIN " +
-            "UPDATE $CLAIMS SET current = 0 WHERE radioId = NEW.radioId AND messageId IN " +
-            "(SELECT messageID FROM pending_sends WHERE radioId = NEW.radioId AND id = NEW.id);" +
+            invalidateDisplaced +
             advanceMessageRevision("radioId = NEW.radioId AND id IN " +
                 "(SELECT messageID FROM pending_sends WHERE radioId = NEW.radioId AND id = NEW.id)") + " END")
         put("direct_ack_pending_insert", "CREATE TRIGGER direct_ack_pending_insert AFTER INSERT ON pending_sends BEGIN " +
@@ -407,12 +414,32 @@ object DirectAckStorage {
         }
     }
 
-    fun verify(db: SupportSQLiteDatabase) {
+    val migration5To6: Migration = object : Migration(5, 6) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            val actual = installedTriggers(db)
+            val current = triggerDefinitions(db)
+            check(actual == current || actual == triggerDefinitions(db, legacyDisplacedIntent = true)) {
+                "Direct ACK schema-five fencing triggers are missing or changed"
+            }
+            db.execSQL("UPDATE direct_ack_leases SET active = 0 WHERE active != 0")
+            for (name in listOf("direct_ack_pending_replace", "direct_ack_pending_update_replace")) {
+                db.execSQL("DROP TRIGGER $name")
+                db.execSQL(current.getValue(name))
+            }
+            verify(db)
+        }
+    }
+
+    private fun installedTriggers(db: SupportSQLiteDatabase): Map<String, String> {
         val actual = mutableMapOf<String, String>()
         db.query("SELECT name,sql FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'direct_ack_%'").use {
             while (it.moveToNext()) actual[it.getString(0)] = it.getString(1)
         }
-        check(actual == triggerDefinitions(db)) { "Direct ACK all-writer fencing triggers are missing or changed" }
+        return actual
+    }
+
+    fun verify(db: SupportSQLiteDatabase) {
+        check(installedTriggers(db) == triggerDefinitions(db)) { "Direct ACK all-writer fencing triggers are missing or changed" }
     }
 
     fun eraseRestorePayloads(db: SupportSQLiteDatabase) {
@@ -426,7 +453,62 @@ object DirectAckStorage {
             "${nulls("message_", "messages")},${nulls("pending_", "pending_sends")}")
         db.execSQL("UPDATE direct_pending_completions SET current = 0," +
             "${nulls("message_", "messages")},${nulls("pending_", "pending_sends")}")
-        db.execSQL("UPDATE $IDENTITIES SET incarnation = lower(hex(randomblob(32))),revision = 0")
+        // Rotate handles without severing nonpayload wire history for rows that survive the restore.
+        db.execSQL("CREATE TEMP TABLE direct_ack_restore_identities (" +
+            "radioId TEXT NOT NULL,id TEXT NOT NULL,kind TEXT NOT NULL,previous TEXT NOT NULL,next TEXT NOT NULL," +
+            "PRIMARY KEY(radioId,id,kind))")
+        db.execSQL("INSERT INTO direct_ack_restore_identities " +
+            "SELECT radioId,id,kind,incarnation,lower(hex(randomblob(32))) FROM $IDENTITIES")
+        db.execSQL("""
+            UPDATE direct_ack_operations AS operation SET kind = 'EXPLICIT_RETRY:' || (
+                SELECT pending.next FROM direct_ack_restore_identities AS pending
+                WHERE pending.radioId = operation.radioId AND pending.id = operation.pendingId
+                  AND pending.kind = 'pending'
+            )
+            WHERE EXISTS (
+                SELECT 1 FROM direct_ack_restore_identities AS pending
+                JOIN pending_sends AS row ON row.radioId = pending.radioId AND row.id = pending.id
+                JOIN direct_ack_claims AS claim ON claim.radioId = operation.radioId
+                  AND claim.requestId = operation.claimId AND claim.messageId = row.messageID
+                JOIN direct_ack_restore_identities AS message ON message.radioId = claim.radioId
+                  AND message.id = claim.messageId AND message.kind = 'message'
+                  AND message.previous = claim.incarnation
+                WHERE pending.radioId = operation.radioId AND pending.id = operation.pendingId
+                  AND pending.kind = 'pending' AND operation.kind = 'EXPLICIT_RETRY:' || pending.previous
+            )
+        """.trimIndent())
+        db.execSQL("""
+            UPDATE direct_ack_claims AS claim SET incarnation = (
+                SELECT message.next FROM direct_ack_restore_identities AS message
+                WHERE message.radioId = claim.radioId AND message.id = claim.messageId
+                  AND message.kind = 'message'
+            )
+            WHERE EXISTS (
+                SELECT 1 FROM direct_ack_restore_identities AS message
+                WHERE message.radioId = claim.radioId AND message.id = claim.messageId
+                  AND message.kind = 'message' AND message.previous = claim.incarnation
+            )
+        """.trimIndent())
+        db.execSQL("""
+            UPDATE direct_ack_claims AS claim SET pendingIncarnation = (
+                SELECT pending.next FROM direct_ack_restore_identities AS pending
+                WHERE pending.radioId = claim.radioId AND pending.id = claim.pendingId
+                  AND pending.kind = 'pending'
+            )
+            WHERE EXISTS (
+                SELECT 1 FROM direct_ack_restore_identities AS pending
+                WHERE pending.radioId = claim.radioId AND pending.id = claim.pendingId
+                  AND pending.kind = 'pending' AND pending.previous = claim.pendingIncarnation
+            )
+        """.trimIndent())
+        db.execSQL("""
+            UPDATE $IDENTITIES AS identity SET incarnation = (
+                SELECT replacement.next FROM direct_ack_restore_identities AS replacement
+                WHERE replacement.radioId = identity.radioId AND replacement.id = identity.id
+                  AND replacement.kind = identity.kind
+            ), revision = 0
+        """.trimIndent())
+        db.execSQL("DROP TABLE direct_ack_restore_identities")
     }
 
     private fun install(db: SupportSQLiteDatabase) {

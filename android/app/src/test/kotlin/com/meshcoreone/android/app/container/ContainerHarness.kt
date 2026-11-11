@@ -316,6 +316,11 @@ abstract class RoomProcessTest {
         reportPathRecencyPhase("room-open|END")
     }
 
+    protected suspend fun restartProcessStore() {
+        store.close()
+        store = RoomPersistenceStore(db, owner)
+    }
+
     @After fun closeStore() {
         reportPathRecencyPhase("room-close|START")
         try { kotlinx.coroutines.runBlocking { store.close() } } finally {

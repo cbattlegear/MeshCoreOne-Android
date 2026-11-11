@@ -10,6 +10,12 @@ import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.ChannelHistoryPersisting
 import com.meshcoreone.android.core.contracts.domain.ChannelMessageCreation
+import com.meshcoreone.android.core.contracts.domain.DirectAckAuthority
+import com.meshcoreone.android.core.contracts.domain.DirectAckLease
+import com.meshcoreone.android.core.contracts.domain.DirectMessageCreationAuthority
+import com.meshcoreone.android.core.contracts.domain.DirectMessageCreationResult
+import com.meshcoreone.android.core.contracts.domain.DirectPendingCompletionAuthority
+import com.meshcoreone.android.core.contracts.domain.DirectQueueAuthority
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.InlineChannelAttemptPersisting
 import com.meshcoreone.android.core.contracts.domain.NotificationId
@@ -225,13 +231,26 @@ class NotificationActionAcceptanceTest : RoomProcessTest() {
         val persistence = object : PersistenceStoreProtocol by store,
             ChannelHistoryPersisting by store,
             QueuedChannelTerminalPersisting by store,
-            InlineChannelAttemptPersisting by store {
+            InlineChannelAttemptPersisting by store,
+            DirectAckAuthority by store,
+            DirectPendingCompletionAuthority by store,
+            DirectQueueAuthority by store,
+            DirectMessageCreationAuthority by store {
             override suspend fun saveMessage(dto: MessageDTO) {
                 if (holdBeforeWire) {
                     entered.complete(Unit)
                     awaitCancellation()
                 }
                 store.saveMessage(dto)
+            }
+            override suspend fun createDirectMessage(
+                lease: DirectAckLease, message: MessageDTO, creationRequestId: UUID, claimRequestId: UUID,
+            ): DirectMessageCreationResult {
+                if (holdBeforeWire) {
+                    entered.complete(Unit)
+                    awaitCancellation()
+                }
+                return store.createDirectMessage(lease, message, creationRequestId, claimRequestId)
             }
             override suspend fun createOrReconcileChannelMessage(
                 creation: ChannelMessageCreation, timestamp: UInt, createdAt: Instant,

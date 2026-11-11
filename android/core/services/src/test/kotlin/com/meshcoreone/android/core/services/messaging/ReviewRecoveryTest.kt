@@ -15,27 +15,30 @@ import org.junit.jupiter.api.TestFactory
 @OptIn(ExperimentalCoroutinesApi::class)
 class ReviewRecoveryTest {
     @TestFactory fun recovery() = listOf(
-        native("disconnect cancels an inline send but completes its persisted failed status") {
+        native("disconnect retains an inline send whose wire outcome is uncertain") {
             val h = Harness(this); h.start(); h.transport.holdMessageReplies = true
             val send = backgroundScope.async { h.service.sendDirectMessage("inline at disconnect", h.contact) }
             runCurrent(); val message = h.store.messages.values.single()
             h.signals.set(null, DeviceConnectionState.DISCONNECTED)
-            withTimeout(2000) { h.service.close() }
+            val report = withTimeout(2000) { h.service.close() }
             assertFailsWith<CancellationException> { send.await() }
-            assertEquals(MessageStatus.FAILED, h.stored(message.id).status)
+            assertEquals(MessageStatus.PENDING, h.stored(message.id).status)
+            assertFalse(report.isComplete)
+            assertTrue(h.diagnostics.any { it is MessagingDiagnostic.Failure && it.operation == "directUncertain.${message.id}" })
             assertEquals(0, h.service.pendingAckCount); assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size)
             assertNotNull(h.store.fetchContact(EntityKey(RADIO, CONTACT))); h.close()
         },
-        native("cancelling an inline backoff send fails its row rather than inventing a recoverable queue") {
-            val h = Harness(this); h.start(); h.transport.directError = 3u
+        native("cancelling an in-flight inline send retains uncertainty without inventing a recoverable queue") {
+            val h = Harness(this); h.start(); h.transport.holdMessageReplies = true
             val events = h.service.statusEvents()
             val send = backgroundScope.async { h.service.sendDirectMessage("inline cancellation", h.contact) }
             runCurrent(); val message = h.store.messages.values.single(); send.cancelAndJoin()
             advanceTimeBy(10_000); runCurrent()
-            assertEquals(MessageStatus.FAILED, h.stored(message.id).status)
+            assertEquals(MessageStatus.PENDING, h.stored(message.id).status)
             assertEquals(message.text, h.stored(message.id).text)
-            assertTrue(h.store.fetchPendingSends(RADIO).isEmpty()); assertEquals(0, h.service.pendingAckCount)
-            assertEquals(listOf(MessageStatusEvent.Failed(message.id)), statuses(h.service, events))
+            assertTrue(h.store.fetchPendingSends(RADIO).isEmpty()); assertEquals(1, h.service.pendingAckCount)
+            assertTrue(statuses(h.service, events).none { it is MessageStatusEvent.Failed })
+            assertTrue(h.diagnostics.any { it is MessagingDiagnostic.Failure && it.operation == "directUncertain.${message.id}" })
             assertEquals(1, h.sends(CommandCode.SEND_MESSAGE).size); h.close()
         },
         native("a durable inline DM or channel save completing at disconnect fails before any wire command") {
@@ -102,15 +105,23 @@ class ReviewRecoveryTest {
             h.store.updateMessageStatus(EntityKey(RADIO, message.id), MessageStatus.SENT)
             send.cancelAndJoin()
             assertEquals(MessageStatus.SENT, h.stored(message.id).status)
-            assertTrue(h.diagnostics.any { it is MessagingDiagnostic.StaleResult && it.operation == "failMessage" })
+            assertTrue(h.diagnostics.any { it is MessagingDiagnostic.StaleResult && it.operation == "interruptedDirectRetry" })
             assertFalse(h.service.close().isComplete); h.close()
         },
         native("cancelled send storage failure propagates cancellation and retains its exact teardown cause") {
-            val h = Harness(this); h.start(); h.transport.directError = 3u
+            val h = Harness(this); h.start()
+            val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+            h.transport.beforeReply = {
+                if (it[0] == CommandCode.RESET_PATH.rawValue) { entered.complete(Unit); release.await() }
+            }
+            val blocker = backgroundScope.async { h.session.resetPath(h.contact.publicKey) }
+            runCurrent(); assertTrue(entered.isCompleted)
             val send = backgroundScope.async { h.service.sendDirectMessage("failed failure commit", h.contact) }
             runCurrent(); val fault = storageFailure(); h.store.faults["updateMessageStatusUnlessDelivered"] = fault
+            assertTrue(h.sends(CommandCode.SEND_MESSAGE).isEmpty())
             send.cancelAndJoin()
             assertTrue(send.isCancelled); assertEquals(MessageStatus.PENDING, h.store.messages.values.single().status)
+            release.complete(Unit); runCurrent(); blocker.await()
             assertTrue(h.service.close().issues.any { it.cause === fault }); h.close()
         },
         native("an inline DM can be accepted while a queued DM awaits its end-to-end ACK") {

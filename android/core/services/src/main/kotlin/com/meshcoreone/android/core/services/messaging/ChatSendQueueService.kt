@@ -561,7 +561,8 @@ class ChatSendQueueService(
                                     retireDirectAttempt(entry)
                                 }
                                 DirectClaimRegistration.DEFINITELY_UNSENT -> retireDirectAttempt(entry, requireUnbegun = false)
-                                DirectClaimRegistration.REGISTERED -> Unit
+                                DirectClaimRegistration.REGISTERED ->
+                                    messageService.restoreInterruptedDirectRetry(entry.claimID, id)
                             }
                         }
                     }

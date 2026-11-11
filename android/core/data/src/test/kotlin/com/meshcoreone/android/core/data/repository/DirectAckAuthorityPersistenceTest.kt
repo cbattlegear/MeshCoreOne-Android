@@ -72,6 +72,12 @@ class DirectAckAuthorityPersistenceTest {
     ): Claim {
         val issued = lease ?: activate(target)
         target.saveMessage(row)
+        if (row.linkPreviewImageData != null || row.linkPreviewIconData != null || row.linkPreviewFetched) {
+            target.updateMessageLinkPreview(
+                entity(id = row.id), row.linkPreviewURL, row.linkPreviewTitle,
+                row.linkPreviewImageData, row.linkPreviewIconData, row.linkPreviewFetched,
+            )
+        }
         val request = UUID.randomUUID()
         val wire = UUID.randomUUID()
         val capture = assertIs<DirectAckIntentResult.Captured>(
@@ -346,7 +352,7 @@ class DirectAckAuthorityPersistenceTest {
         db.openHelper.writableDatabase.execSQL("PRAGMA recursive_triggers = OFF")
         db.openHelper.writableDatabase.execSQL(
             "UPDATE OR REPLACE pending_sends SET id = ? WHERE radioId = ? AND id = ?",
-            arrayOf(displacedPending.id.toString(), RADIO_A.value.toString(), replacementPending.id.toString()),
+            arrayOf(displacedPending.id.canonicalString(), RADIO_A.value.canonicalString(), replacementPending.id.canonicalString()),
         )
 
         assertEquals(replacement.id, store.fetchPendingSendsForMessage(entity(id = replacement.id)).single().messageID)
@@ -720,6 +726,55 @@ class DirectAckAuthorityPersistenceTest {
         }
     }
 
+    @Test fun definitelyUnsentInlineWireCannotSettleAndDoesNotPoisonALaterSameCode() = runTest {
+        val lease = activate()
+        val row = message(status = MessageStatus.PENDING)
+        val first = begin(row, lease = lease)
+        val request = UUID.randomUUID()
+        rejected(
+            store.recordDefinitelyUnsentInlineWire(first.attempt, UUID.randomUUID(), request),
+            DirectAckRejection.NOT_ELIGIBLE,
+        )
+        val recorded = assertIs<DirectAckMutationResult.Applied>(
+            store.recordDefinitelyUnsentInlineWire(first.attempt, first.wire, request),
+        ).receipt
+        assertEquals(DirectAckPermission.CURRENT, recorded.permission)
+        assertEquals(first.wire, recorded.definitelyUnsentWireRequestId)
+        assertEquals(recorded, assertIs<DirectAckMutationResult.AlreadyApplied>(
+            store.recordDefinitelyUnsentInlineWire(first.attempt, first.wire, request),
+        ).receipt)
+        rejected(store.recordDirectSendAccepted(first.attempt, first.wire, 123u), DirectAckRejection.NOT_ELIGIBLE)
+        rejected(store.registerDirectAckDispatch(first.attempt, UUID.randomUUID(), 123u), DirectAckRejection.NOT_ELIGIBLE)
+        rejected(store.settleDirectAck(first.attempt, 123u, 9u), DirectAckRejection.NOT_ELIGIBLE)
+
+        val nextIntent = capture(row, lease)
+        val nextWire = UUID.randomUUID()
+        val next = assertIs<DirectAckBeginResult.Begun>(
+            store.beginDirectAckAttempt(nextIntent.intent, nextWire, 123u),
+        ).attempt
+        assertIs<DirectAckMutationResult.Applied>(store.recordDirectSendAccepted(next, nextWire, 123u))
+        assertIs<DirectAckMutationResult.Applied>(store.settleDirectAck(next, 123u, 9u))
+        assertEquals(MessageStatus.DELIVERED, store.fetchMessage(entity(id = row.id))?.status)
+    }
+
+    @Test fun inlineUnsentProofCannotRetireQueuedAcceptedOrMultipleWireClaims() = runTest {
+        val lease = activate()
+        for (scenario in listOf("queued", "accepted", "multiple")) {
+            val row = message(status = MessageStatus.PENDING)
+            val queued = pending(messageID = row.id)
+            if (scenario == "queued") store.upsertPendingSend(queued)
+            val claim = begin(row, pendingId = queued.id.takeIf { scenario == "queued" }, lease = lease)
+            if (scenario == "accepted") store.recordDirectSendAccepted(claim.attempt, claim.wire, 123u)
+            if (scenario == "multiple") store.registerDirectAckDispatch(claim.attempt, UUID.randomUUID(), 456u)
+            rejected(
+                store.recordDefinitelyUnsentInlineWire(claim.attempt, claim.wire, UUID.randomUUID()),
+                DirectAckRejection.NOT_ELIGIBLE,
+            )
+            assertNull(observed(claim).definitelyUnsentWireRequestId)
+            assertEquals(DirectAckPermission.CURRENT, observed(claim).permission)
+        }
+    }
+
     @Test fun knownPriorWireCollisionCannotSettleAnExplicitRetryAcrossGenerations() = runTest {
         val firstLease = activate()
         val row = message(status = MessageStatus.PENDING)
@@ -978,6 +1033,50 @@ class DirectAckAuthorityPersistenceTest {
         assertIs<DirectQueueCaptureResult.Captured>(store.captureDirectQueueSelection(next, key, queued.id))
     }
 
+    @Test fun crossMessagePendingReplacementInvalidatesDisplacedInlineIntent() = runTest {
+        val lease = activate()
+        val raw = db.openHelper.writableDatabase
+        raw.execSQL("PRAGMA recursive_triggers = OFF")
+        val columns = raw.query("PRAGMA table_info(pending_sends)").use { cursor ->
+            buildList { while (cursor.moveToNext()) add(cursor.getString(1)) }
+        }
+        for (update in listOf(false, true)) {
+            val displacedMessage = message(status = MessageStatus.PENDING)
+            val replacingMessage = message(status = MessageStatus.PENDING)
+            store.saveMessage(displacedMessage)
+            store.saveMessage(replacingMessage)
+            val displaced = pending(messageID = displacedMessage.id)
+            val retained = pending(messageID = displacedMessage.id)
+            val mover = pending(messageID = replacingMessage.id)
+            db.pendingSends().insert(displaced.toEntity())
+            db.pendingSends().insert(retained.toEntity())
+            db.pendingSends().insert(mover.toEntity())
+            val inline = capture(displacedMessage, lease)
+            val parameters = arrayOf(displaced.id.canonicalString(), RADIO_A.value.canonicalString(), mover.id.canonicalString())
+            if (update) {
+                raw.execSQL("UPDATE OR REPLACE pending_sends SET id = ? WHERE radioId = ? AND id = ?", parameters)
+            } else {
+                val projection = columns.joinToString(",") { if (it == "id") "?" else "`$it`" }
+                raw.execSQL(
+                    "INSERT OR REPLACE INTO pending_sends SELECT $projection FROM pending_sends WHERE radioId = ? AND id = ?",
+                    parameters,
+                )
+            }
+
+            assertEquals(0, db.directAcks().currentIntents(RADIO_A.value, displacedMessage.id))
+            assertEquals(DirectAckRejection.INVALIDATED, assertIs<DirectAckBeginResult.Rejected>(
+                store.beginDirectAckAttempt(inline.intent, UUID.randomUUID(), 123u),
+            ).reason)
+            assertEquals(DirectAckIntentRetirement.NotCurrent, store.retireDirectAckIntent(lease, inline.receipt.requestId))
+            val selected = assertIs<DirectQueueCaptureResult.Captured>(
+                store.captureDirectQueueSelection(lease, entity(id = displacedMessage.id), retained.id),
+            )
+            assertIs<DirectAckIntentResult.Captured>(
+                store.captureDirectQueueIntent(selected.selection, UUID.randomUUID(), DirectAckMode.SEND),
+            )
+        }
+    }
+
     @Test fun queuedCompletionRequiresAcceptanceOrDeliveryNotRegistration() = runTest {
         val lease = activate()
         for (deliveryFirst in listOf(false, true)) {
@@ -1102,6 +1201,87 @@ class DirectAckAuthorityPersistenceTest {
         ).reason)
         assertEquals(row, store.fetchMessage(entity(id = row.id)))
         assertEquals(original, store.fetchPendingSendsForMessage(entity(id = row.id)).single())
+    }
+
+    @Test fun restorePreservesUnresolvedWiresButNotStaleHandlesOrRecreatedMessages() = runTest {
+        val lease = activate()
+        val row = message(status = MessageStatus.PENDING)
+        val original = pending(messageID = row.id)
+        store.upsertPendingSend(original)
+        val claim = begin(row, pendingId = original.id, lease = lease)
+        val before = assertNotNull(db.directAcks().incarnation(RADIO_A.value, row.id, "message"))
+
+        store.withBackupRestore { _, _ -> ImportResult() }
+
+        val after = assertNotNull(db.directAcks().incarnation(RADIO_A.value, row.id, "message"))
+        assertNotEquals(before.incarnation, after.incarnation)
+        rejected(store.settleDirectAck(claim.attempt, 123u, 1u))
+        assertEquals(DirectAckRejection.UNRESOLVED_OUTCOME, assertIs<DirectQueueCaptureResult.Rejected>(
+            store.captureDirectQueueSelection(lease, entity(id = row.id), original.id),
+        ).reason)
+        assertEquals(1, db.directAcks().collidingPriorWires(
+            RADIO_A.value, row.id, after.incarnation, UUID.randomUUID(), 123,
+        ))
+
+        store.deletePendingSend(entity(id = original.id))
+        store.deleteMessage(entity(id = row.id))
+        store.saveMessage(row)
+        store.upsertPendingSend(original)
+        assertIs<DirectQueueCaptureResult.Captured>(
+            store.captureDirectQueueSelection(lease, entity(id = row.id), original.id),
+        )
+    }
+
+    @Test fun restorePreservesOnlyTheExactPreviouslyAuthorizedRetryAndItsWireHistory() = runTest {
+        val lease = activate()
+        val row = message(status = MessageStatus.PENDING)
+        val original = pending(messageID = row.id)
+        store.upsertPendingSend(original)
+        begin(row, pendingId = original.id, lease = lease)
+        val retry = original.copy(id = UUID.randomUUID(), isResend = true)
+        store.replacePendingSendForRetry(row.id, retry)
+        val oldSelection = assertIs<DirectQueueCaptureResult.Captured>(
+            store.captureDirectQueueSelection(lease, entity(id = row.id), retry.id),
+        )
+        val beforeMessage = db.directAcks().incarnation(RADIO_A.value, row.id, "message")
+        val beforePending = db.directAcks().incarnation(RADIO_A.value, retry.id, "pending")
+        assertFailsWith<CancellationException> {
+            store.withBackupRestore { _, _ -> throw CancellationException("Controlled restore rollback") }
+        }
+        assertEquals(beforeMessage, db.directAcks().incarnation(RADIO_A.value, row.id, "message"))
+        assertEquals(beforePending, db.directAcks().incarnation(RADIO_A.value, retry.id, "pending"))
+        assertEquals(0, db.directAcks().unresolvedQueuedClaims(RADIO_A.value, row.id, retry.id))
+
+        store.withBackupRestore { _, _ -> ImportResult() }
+
+        assertEquals(DirectAckRejection.INVALIDATED, assertIs<DirectQueueBumpResult.Rejected>(
+            store.bumpDirectQueueSelection(oldSelection.selection, UUID.randomUUID()),
+        ).reason)
+        assertIs<DirectQueueCaptureResult.Captured>(
+            store.captureDirectQueueSelection(lease, entity(id = row.id), retry.id),
+        )
+        val persisted = store.fetchPendingSendsForMessage(entity(id = row.id)).single()
+        store.upsertPendingSend(persisted)
+        assertEquals(DirectAckRejection.UNRESOLVED_OUTCOME, assertIs<DirectQueueCaptureResult.Rejected>(
+            store.captureDirectQueueSelection(lease, entity(id = row.id), retry.id),
+        ).reason)
+        store.replacePendingSendForRetry(row.id, retry)
+        val fresh = assertIs<DirectQueueCaptureResult.Captured>(
+            store.captureDirectQueueSelection(lease, entity(id = row.id), retry.id),
+        )
+        val bumped = assertIs<DirectQueueBumpResult.Applied>(
+            store.bumpDirectQueueSelection(fresh.selection, UUID.randomUUID()),
+        ).receipt
+        val intent = assertIs<DirectAckIntentResult.Captured>(
+            store.captureDirectQueueIntent(bumped.selection, UUID.randomUUID(), DirectAckMode.RESEND),
+        )
+        val wire = UUID.randomUUID()
+        val successor = assertIs<DirectAckBeginResult.Begun>(
+            store.beginDirectAckAttempt(intent.intent, wire, 123u),
+        ).attempt
+        assertIs<DirectAckMutationResult.Applied>(store.recordDirectSendAccepted(successor, wire, 456u))
+        rejected(store.settleDirectAck(successor, 123u, 1u), DirectAckRejection.AMBIGUOUS_ACK)
+        assertIs<DirectAckMutationResult.Applied>(store.settleDirectAck(successor, 456u, 2u))
     }
 
     @Test fun transientClaimRemapRetainsOnlyItsOwnCurrentAuthority() = runTest {

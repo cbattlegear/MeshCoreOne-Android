@@ -142,13 +142,13 @@ class NativeMessagingTest {
             h.transport.pushAck(first, 222u); assertEquals(MessageStatus.DELIVERED, send.await().status)
             assertEquals(222u, h.stored(m.id).roundTripTime); assertEquals(2, h.sends(CommandCode.SEND_MESSAGE).size); h.close()
         },
-        native("poolBackoffUsesThreeRetriesWithExactInjectedTimingAndUnchangedAttemptByte") {
+        native("uncorrelatedPoolFullDoesNotAuthorizeAnAutomaticDirectReplay") {
             val h = Harness(this); h.start(); h.transport.directError = 3u
             val times = mutableListOf<Long>()
             h.transport.beforeReply = { if (it[0] == CommandCode.SEND_MESSAGE.rawValue) times += testScheduler.currentTime }
             val error = assertFailsWith<MessageServiceException> { h.service.sendDirectMessage("pool", h.contact) }
             assertEquals(3.toUByte(), assertIs<MeshCoreException.DeviceError>(assertIs<MessageServiceError.SessionError>(error.error).underlying).code)
-            assertEquals(listOf(0L, 500L, 1500L, 3500L), times)
+            assertEquals(listOf(0L), times)
             assertTrue(h.sends(CommandCode.SEND_MESSAGE).all { it[2] == 0.toUByte() }); h.close()
         },
         native("cancellingSendDuringBackoffStopsWireWorkAndPreservesThePendingRow") {

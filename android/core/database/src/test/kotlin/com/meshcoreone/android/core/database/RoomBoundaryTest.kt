@@ -36,10 +36,11 @@ class RoomBoundaryTest {
     @Test fun actualSqliteTablesColumnsPrimaryKeysForeignKeysAndIdentityMatchTheKspExport() = runTest {
         db.devices().count()
         val export = JSONObject(File(requireNotNull(System.getProperty("roomSchemaDirectory")),
-            "com.meshcoreone.android.core.database.MeshCoreDatabase\\5.json".replace('\\', File.separatorChar)).readText()).getJSONObject("database")
-        assertEquals(5, export.getInt("version")); assertEquals(28, export.getJSONArray("entities").length())
+            "com.meshcoreone.android.core.database.MeshCoreDatabase\\${MeshCoreDatabase.SCHEMA_VERSION}.json"
+                .replace('\\', File.separatorChar)).readText()).getJSONObject("database")
+        assertEquals(MeshCoreDatabase.SCHEMA_VERSION, export.getInt("version")); assertEquals(28, export.getJSONArray("entities").length())
         val sqlite = db.openHelper.readableDatabase
-        sqlite.query("PRAGMA user_version").use { assertTrue(it.moveToFirst()); assertEquals(5, it.getInt(0)) }
+        sqlite.query("PRAGMA user_version").use { assertTrue(it.moveToFirst()); assertEquals(MeshCoreDatabase.SCHEMA_VERSION, it.getInt(0)) }
         sqlite.query("SELECT identity_hash FROM room_master_table WHERE id=42").use {
             assertTrue(it.moveToFirst()); assertEquals(export.getString("identityHash"), it.getString(0))
         }

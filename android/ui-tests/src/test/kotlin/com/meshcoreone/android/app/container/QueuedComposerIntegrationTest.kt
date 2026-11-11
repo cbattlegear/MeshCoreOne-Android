@@ -357,6 +357,7 @@ class QueuedComposerIntegrationTest : RoomProcessTest() {
 
     private suspend fun localFailure(test: TestScope, persistence: Boolean) {
         for (kind in Kind.entries) {
+            restartProcessStore()
             val graph = graph(test)
             val h = graph.harness
             val failed = observeFailures(test, graph)
@@ -423,6 +424,7 @@ class QueuedComposerIntegrationTest : RoomProcessTest() {
 
     @Test fun failedSeenBookkeepingCannotSuppressDurableFailureEventOrRefresh() = runTest {
         for (kind in Kind.entries) {
+            restartProcessStore()
             val graph = graph(this)
             val h = graph.harness
             val failed = observeFailures(this, graph)

@@ -496,7 +496,8 @@ class SimulatorRxSeedBatchRoomTest : RepositoryTest() {
                 reopened.close()
             }
         } finally {
-            firstContext.close()
+            // The test simulates process loss by closing this database before reopening it.
+            if (firstDb.isOpen) firstContext.close()
             firstDb.close()
             context.deleteDatabase(name)
         }

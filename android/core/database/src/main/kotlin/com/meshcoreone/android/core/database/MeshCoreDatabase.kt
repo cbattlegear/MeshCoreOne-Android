@@ -23,7 +23,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         DirectPendingCompletionEntity::class,
         DirectAckIntentEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = true,
 )
 @TypeConverters(ValueConverters::class)
@@ -51,7 +51,7 @@ abstract class MeshCoreDatabase : RoomDatabase() {
     abstract fun channelSubmissions(): ChannelSubmissionDao
 
     companion object {
-        const val SCHEMA_VERSION = 5
+        const val SCHEMA_VERSION = 6
         val MIGRATION_1_2: Migration = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE messages ADD COLUMN channelOccupantID TEXT")
@@ -75,7 +75,10 @@ abstract class MeshCoreDatabase : RoomDatabase() {
         }
         fun open(context: Context, name: String = "meshcoreone.db"): MeshCoreDatabase =
             Room.databaseBuilder(context.applicationContext, MeshCoreDatabase::class.java, name)
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, DirectAckStorage.migration4To5)
+                .addMigrations(
+                    MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4,
+                    DirectAckStorage.migration4To5, DirectAckStorage.migration5To6,
+                )
                 .addCallback(DirectAckStorage.callback)
                 .build()
     }

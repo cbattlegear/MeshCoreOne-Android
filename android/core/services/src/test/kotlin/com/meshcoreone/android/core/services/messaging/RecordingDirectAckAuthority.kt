@@ -408,6 +408,9 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
         attempt: DirectAckAttempt, wireRequestId: UUID, predictedAckCode: UInt,
     ): DirectAckMutationResult {
         val value = resolve(attempt) ?: return DirectAckMutationResult.Rejected(DirectAckRejection.INVALID_HANDLE)
+        if (value.receipt.definitelyUnsentWireRequestId != null) {
+            return DirectAckMutationResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
+        }
         value.receipt.wires.firstOrNull { it.requestId == wireRequestId }?.let {
             return if (it.predictedAckCode == predictedAckCode) DirectAckMutationResult.AlreadyApplied(receipt(value))
             else DirectAckMutationResult.Rejected(DirectAckRejection.CONFLICT)
@@ -429,6 +432,9 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
             DirectAckMutationResult.AlreadyApplied(receipt(value))
         } else DirectAckMutationResult.Rejected(DirectAckRejection.CONFLICT)
         rejection(value)?.let { return it }
+        if (value.receipt.definitelyUnsentWireRequestId == wireRequestId) {
+            return DirectAckMutationResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
+        }
         store.authorityAccess("recordDirectSendAccepted")
         rejection(value)?.let { return it }
         if (value.receipt.phase == DirectAckPhase.REGISTERED) {
@@ -437,6 +443,31 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
         value.receipt = value.receipt.copy(wires = value.receipt.wires.map {
             if (it.requestId == wireRequestId) it.copy(acceptedAckCode = ackCode) else it
         }.snapshot())
+        return DirectAckMutationResult.Applied(receipt(value))
+    }
+
+    override suspend fun recordDefinitelyUnsentInlineWire(
+        attempt: DirectAckAttempt, wireRequestId: UUID, requestId: UUID,
+    ): DirectAckMutationResult {
+        val value = resolve(attempt) ?: return DirectAckMutationResult.Rejected(DirectAckRejection.INVALID_HANDLE)
+        definitelyUnsent[value.receipt.requestId]?.let { (priorRequest, priorWire) ->
+            if (priorRequest == requestId) {
+                return if (priorWire == wireRequestId) DirectAckMutationResult.AlreadyApplied(receipt(value))
+                else DirectAckMutationResult.Rejected(DirectAckRejection.CONFLICT)
+            }
+        }
+        rejection(value)?.let { return it }
+        if (hasCompetingIntent(value)) return DirectAckMutationResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
+        val wires = value.receipt.wires
+        if (value.pendingID != null || value.receipt.phase != DirectAckPhase.REGISTERED ||
+            wires.size != 1 || wires.single().requestId != wireRequestId || wires.single().acceptedAckCode != null ||
+            value.receipt.delivery != null || value.receipt.definitelyUnsentWireRequestId != null
+        ) return DirectAckMutationResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
+        store.authorityAccess("recordDefinitelyUnsentInlineWire")
+        rejection(value)?.let { return it }
+        if (hasCompetingIntent(value)) return DirectAckMutationResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
+        definitelyUnsent[value.receipt.requestId] = requestId to wireRequestId
+        value.receipt = value.receipt.copy(definitelyUnsentWireRequestId = wireRequestId)
         return DirectAckMutationResult.Applied(receipt(value))
     }
 
@@ -493,7 +524,10 @@ internal class RecordingDirectAckAuthority(private val store: RecordingStore) :
         }
         rejection(value)?.let { return it }
         if (hasCompetingIntent(value)) return DirectAckMutationResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
-        if (value.receipt.wires.none { it.predictedAckCode == ackCode || it.acceptedAckCode == ackCode }) {
+        if (value.receipt.wires.none {
+                it.requestId != value.receipt.definitelyUnsentWireRequestId &&
+                    (it.predictedAckCode == ackCode || it.acceptedAckCode == ackCode)
+            }) {
             return DirectAckMutationResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
         }
         if (attempts.values.any { other ->

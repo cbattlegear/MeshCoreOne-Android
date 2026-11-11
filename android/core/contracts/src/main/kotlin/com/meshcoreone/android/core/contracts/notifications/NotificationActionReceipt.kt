@@ -55,6 +55,12 @@ class NotificationActionReceipt : AbstractCoroutineContextElement(Key) {
         if (state == State.IN_FLIGHT) state = State.UNCERTAIN
     }
 
+    /** A registered attempt without durable proof of no dispatch cannot safely be replayed. */
+    @Synchronized
+    fun retainUncertain() {
+        if (state == State.READY || state == State.IN_FLIGHT) state = State.UNCERTAIN
+    }
+
     /** All requested mark-read writes returned; partial writes are not a committed action. */
     @Synchronized
     fun committed() {

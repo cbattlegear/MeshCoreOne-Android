@@ -268,7 +268,7 @@ class PendingDirectMessageCreationTest : RepositoryTest() {
             firstStore = RoomPersistenceStore(first, owner, clock)
             assertEquals(evolved, firstStore.createOrReconcilePendingDirectMessage(matching, 999u, AT.plusSeconds(1000)))
             assertEquals(listOf(evolved.toEntity()), first.messages().forIdentity(intent.messageID))
-            assertEquals(4, first.openHelper.readableDatabase.version)
+            assertEquals(MeshCoreDatabase.SCHEMA_VERSION, first.openHelper.readableDatabase.version)
         } finally {
             armed.set(false)
             releaseFirst.countDown()

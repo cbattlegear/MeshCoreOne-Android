@@ -223,7 +223,6 @@ class SourceSendTest {
             val m = h.message(MessageStatus.PENDING, text = "Test message",
                 timestamp = h.clock.wallClock.instant().epochSecond.toUInt())
             val ackCode = Bytes.of(0xAB, 0xCD, 0xEF, 0x12)
-            h.service.installPendingAck(h.tracking(m, code = ackCode))
             h.transport.expectedAckOverride = ackCode
             h.transport.suggestedTimeout = 5000u
             h.transport.acknowledge = true
@@ -281,9 +280,14 @@ class SourceSendTest {
         },
         original("MessageServiceSendTests", "a genuine send exception still fails the DM through the outer catch") {
             val h = Harness(this, sessionTimeout = 10.0, contact = sourceContact()); h.start(); h.transport.mock.failSends(2)
+            val events = h.service.statusEvents()
             assertFailsWith<Exception> { h.service.sendMessageWithRetry("boom", h.contact) }
-            assertEquals(MessageStatus.FAILED, h.store.fetchMessages(EntityKey(RADIO, h.contact.id), 10, 0).first().status)
-            assertEquals(MessageStatus.FAILED, h.store.messages.values.single().status); h.close()
+            val row = h.store.messages.values.single()
+            assertEquals(MessageStatus.PENDING, h.store.fetchMessages(EntityKey(RADIO, h.contact.id), 10, 0).first().status)
+            assertEquals(MessageStatus.PENDING, row.status)
+            assertEquals(1, h.service.pendingAckCount)
+            assertTrue(h.diagnostics.any { it is MessagingDiagnostic.Failure && it.operation == "directUncertain.${row.id}" })
+            assertTrue(statuses(h.service, events).none { it is MessageStatusEvent.Failed }); h.close()
         },
         original("MessageServiceSendTests", "checkExpiredAcks cannot fail a DM while its retry loop is still inside waitForEvent") {
             val dispatcher = EventDispatcher()

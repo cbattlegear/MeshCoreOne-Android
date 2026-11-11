@@ -10,6 +10,7 @@ import androidx.test.core.app.ApplicationProvider
 import java.io.File
 import java.util.UUID
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
@@ -112,6 +113,123 @@ class DirectAckStorageTest {
     @Test fun exportedV4MigratesThroughRoomWithoutChangingAnyMessageColumn() =
         exportedSchemaMigratesWithoutChangingMessageColumns(4)
 
+    @Test fun publishedSchemaFiveMigratesCorrectedTriggersAndRetainsUnresolvedWireHistory() =
+        schemaFiveMigratesAndRetainsUnresolvedWireHistory(legacyTriggers = true)
+
+    @Test fun correctedSchemaFiveMigratesAndRetainsUnresolvedWireHistory() =
+        schemaFiveMigratesAndRetainsUnresolvedWireHistory(legacyTriggers = false)
+
+    private fun schemaFiveMigratesAndRetainsUnresolvedWireHistory(legacyTriggers: Boolean) = runTest {
+        val name = "direct-ack-published-five-${UUID.randomUUID()}.db"
+        fun open() = Room.databaseBuilder(context, MeshCoreDatabase::class.java, name)
+            .setJournalMode(RoomDatabase.JournalMode.TRUNCATE)
+            .addMigrations(MeshCoreDatabase.MIGRATION_1_2, MeshCoreDatabase.MIGRATION_2_3,
+                MeshCoreDatabase.MIGRATION_3_4, DirectAckStorage.migration4To5, DirectAckStorage.migration5To6)
+            .addCallback(DirectAckStorage.callback).build()
+        val row = message().toEntity()
+        val lease = DirectAckLeaseEntity(row.radioId, UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), 1, 1, true)
+        val wireID = UUID.randomUUID()
+        val claimID = UUID.randomUUID()
+        val wire = DirectAckWireEntity(row.radioId, claimID, wireID, 42, null)
+        val pending = PendingSendEntity(
+            row.radioId, UUID.randomUUID(), row.id, 0, row.contactID, null, false, row.text, row.timestamp,
+            null, 1, row.createdAt, 1,
+        )
+        try {
+            val original = open()
+            try {
+                original.messages().insert(row)
+                original.pendingSends().insert(pending)
+                val identity = assertNotNull(original.directAcks().incarnation(row.radioId, row.id, "message"))
+                val pendingIdentity = assertNotNull(original.directAcks().incarnation(row.radioId, pending.id, "pending"))
+                original.directAcks().lease(lease)
+                original.directAcks().claim(DirectAckClaimEntity(
+                    claimID, lease.requestId, wireID, identity.incarnation, identity.revision, "REGISTERED", "SEND",
+                    row.statusRawValue, true, pending.id, pendingIdentity.incarnation, row.radioId, row.id, row,
+                ))
+                original.directAcks().wire(wire)
+                val sqlite = original.openHelper.writableDatabase
+                val displaced = "(SELECT messageID FROM pending_sends WHERE radioId = NEW.radioId AND id = NEW.id)"
+                val advance = "SELECT CASE WHEN EXISTS(SELECT 1 FROM direct_ack_incarnations WHERE kind = 'message' " +
+                    "AND (radioId = NEW.radioId AND id IN $displaced) AND revision = 9223372036854775807) " +
+                    "THEN RAISE(ABORT,'direct ACK revision exhausted') END;" +
+                    "UPDATE direct_ack_incarnations SET revision = revision + 1 WHERE kind = 'message' " +
+                    "AND (radioId = NEW.radioId AND id IN $displaced);"
+                if (legacyTriggers) for ((trigger, condition) in listOf(
+                    "direct_ack_pending_replace" to
+                        "BEFORE INSERT ON pending_sends WHEN EXISTS(SELECT 1 FROM pending_sends WHERE " +
+                            "radioId = NEW.radioId AND id = NEW.id AND messageID != NEW.messageID)",
+                    "direct_ack_pending_update_replace" to
+                        "BEFORE UPDATE ON pending_sends WHEN (OLD.radioId != NEW.radioId OR OLD.id != NEW.id) AND " +
+                            "EXISTS(SELECT 1 FROM pending_sends WHERE radioId = NEW.radioId AND id = NEW.id)",
+                )) {
+                    sqlite.execSQL("DROP TRIGGER $trigger")
+                    sqlite.execSQL("CREATE TRIGGER $trigger $condition BEGIN " +
+                        "UPDATE direct_ack_claims SET current = 0 WHERE radioId = NEW.radioId AND messageId IN $displaced;" +
+                        advance + " END")
+                }
+                sqlite.version = 5
+            } finally { original.close() }
+
+            val migrated = open()
+            try {
+                assertEquals(row, migrated.messages().byId(row.radioId, row.id))
+                assertFalse(migrated.directAcks().leases(row.radioId).single().active)
+                val retained = assertNotNull(migrated.directAcks().claim(row.radioId, claimID))
+                assertFalse(retained.current)
+                assertNull(retained.snapshot)
+                assertEquals(pending, migrated.pendingSends().byId(row.radioId, pending.id))
+                assertEquals(listOf(wire), migrated.directAcks().wires(row.radioId, claimID))
+                assertEquals(listOf(claimID), migrated.directAcks().unresolvedQueuedClaimsForRetry(row.radioId, row.id))
+                assertEquals(MeshCoreDatabase.SCHEMA_VERSION, migrated.openHelper.readableDatabase.version)
+                DirectAckStorage.verify(migrated.openHelper.readableDatabase)
+            } finally { migrated.close() }
+        } finally { context.deleteDatabase(name) }
+    }
+
+    @Test fun schemaFiveMigrationRejectsUnexpectedTriggersWithoutMutatingTheDatabase() = runTest {
+        val name = "direct-ack-untrusted-five-${UUID.randomUUID()}.db"
+        fun open() = Room.databaseBuilder(context, MeshCoreDatabase::class.java, name)
+            .setJournalMode(RoomDatabase.JournalMode.TRUNCATE)
+            .addMigrations(DirectAckStorage.migration5To6)
+            .addCallback(DirectAckStorage.callback).build()
+        val row = message().toEntity()
+        val lease = DirectAckLeaseEntity(row.radioId, UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), 1, 1, true)
+        val rogueTrigger = "CREATE TRIGGER direct_ack_pending_replace BEFORE INSERT ON pending_sends BEGIN SELECT 1; END"
+        try {
+            val original = open()
+            try {
+                original.messages().insert(row)
+                original.directAcks().lease(lease)
+                val sqlite = original.openHelper.writableDatabase
+                sqlite.execSQL("DROP TRIGGER direct_ack_pending_replace")
+                sqlite.execSQL(rogueTrigger)
+                sqlite.version = 5
+            } finally { original.close() }
+
+            val rejected = open()
+            try {
+                val failure = assertFailsWith<IllegalStateException> { rejected.openHelper.writableDatabase }
+                assertTrue(failure.message.orEmpty().contains("fencing triggers"))
+            } finally { rejected.close() }
+            SQLiteDatabase.openDatabase(context.getDatabasePath(name).absolutePath, null, SQLiteDatabase.OPEN_READONLY).use { db ->
+                assertEquals(5, db.version)
+                db.rawQuery("SELECT active FROM direct_ack_leases", null).use {
+                    assertTrue(it.moveToFirst())
+                    assertEquals(1, it.getInt(0))
+                }
+                db.rawQuery("SELECT text FROM messages", null).use {
+                    assertTrue(it.moveToFirst())
+                    assertEquals(row.text, it.getString(0))
+                }
+                db.rawQuery("SELECT sql FROM sqlite_master WHERE name = 'direct_ack_pending_replace'", null).use {
+                    assertTrue(it.moveToFirst())
+                    assertEquals(rogueTrigger, it.getString(0))
+                }
+            }
+        } finally { context.deleteDatabase(name) }
+    }
+
     private fun exportedSchemaMigratesWithoutChangingMessageColumns(version: Int) = runTest {
         val name = "direct-ack-migration-${UUID.randomUUID()}.db"
         val file = context.getDatabasePath(name)
@@ -167,12 +285,12 @@ class DirectAckStorageTest {
             val db = Room.databaseBuilder(context, MeshCoreDatabase::class.java, name)
                 .setJournalMode(RoomDatabase.JournalMode.TRUNCATE)
                 .addMigrations(MeshCoreDatabase.MIGRATION_1_2, MeshCoreDatabase.MIGRATION_2_3,
-                    MeshCoreDatabase.MIGRATION_3_4, DirectAckStorage.migration4To5)
+                    MeshCoreDatabase.MIGRATION_3_4, DirectAckStorage.migration4To5, DirectAckStorage.migration5To6)
                 .addCallback(DirectAckStorage.callback).build()
             try {
                 val row = assertNotNull(db.messages().byId(UUID.fromString(radio), UUID.fromString(message)))
                 assertEquals("retained text", row.text)
-                assertEquals(5, db.openHelper.readableDatabase.version)
+                assertEquals(MeshCoreDatabase.SCHEMA_VERSION, db.openHelper.readableDatabase.version)
                 val after = db.openHelper.readableDatabase.query("SELECT * FROM messages").use { cursor ->
                     assertTrue(cursor.moveToFirst())
                     (0 until cursor.columnCount).associate { index ->

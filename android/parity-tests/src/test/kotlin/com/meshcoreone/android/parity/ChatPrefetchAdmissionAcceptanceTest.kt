@@ -286,6 +286,7 @@ class ChatPrefetchAdmissionAcceptanceTest : RoomProcessTest() {
             assertNull(assertNotNull(f.content).aspect(CAT))
             assertEquals(message, store.fetchMessage(EntityKey(f.radio, message.id)))
         }
+        restartProcessStore()
         withApp { f ->
             f.http.probeDelay = 5_000
             val message = f.message(CAT)
@@ -319,6 +320,7 @@ class ChatPrefetchAdmissionAcceptanceTest : RoomProcessTest() {
             assertEquals(listOf(CAT), f.http.probes)
             assertEquals(beforeWire, f.harness.links.radios.single().sent)
         }
+        restartProcessStore()
         withApp(autoDM = true, autoChannel = false) { f ->
             val channel = seedReconciledChannel(ChannelDTO(radioId = f.radio, index = 0u, name = "Test"))
             val conversation = TimelineConversation.Channel(channel)

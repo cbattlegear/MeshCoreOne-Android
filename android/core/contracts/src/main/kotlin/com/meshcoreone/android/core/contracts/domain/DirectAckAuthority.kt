@@ -275,6 +275,17 @@ interface DirectAckAuthority {
     ): DirectAckMutationResult
 
     /**
+     * Record transport proof that an inline claim's sole registered wire could not be dispatched.
+     * The claim remains current for its own failure bookkeeping, but that wire cannot be accepted,
+     * settled, or dispatched again. A new send requires a new claim.
+     */
+    suspend fun recordDefinitelyUnsentInlineWire(
+        attempt: DirectAckAttempt,
+        wireRequestId: UUID,
+        requestId: UUID,
+    ): DirectAckMutationResult
+
+    /**
      * Own failure only; a competing same-value FAILED write is not this attempt's failure.
      * Neither failure nor retry/acceptance may regress a preexisting DELIVERED resend baseline.
      */

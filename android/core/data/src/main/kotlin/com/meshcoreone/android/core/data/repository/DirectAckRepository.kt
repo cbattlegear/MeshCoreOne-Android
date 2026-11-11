@@ -510,6 +510,9 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         predictedAckCode: UInt,
     ): DirectAckMutationResult = mutate("registerDirectAckDispatch", attempt) { issued, claim ->
         val dao = database.directAcks()
+        if (dao.operations(claim.radioId, claim.requestId).any { it.kind.startsWith("DEFINITELY_UNSENT:") }) {
+            return@mutate DirectAckMutationResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
+        }
         val existing = dao.wires(claim.radioId, claim.requestId).firstOrNull { it.requestId == wireRequestId }
         if (existing != null) return@mutate if (existing.predictedCode == predictedAckCode.toLong()) {
             DirectAckMutationResult.AlreadyApplied(receipt(claim, issued.lease))
@@ -537,6 +540,9 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
             DirectAckMutationResult.AlreadyApplied(receipt(claim, issued.lease))
         } else DirectAckMutationResult.Rejected(DirectAckRejection.CONFLICT)
         deny(claim, issued)?.let { return@mutate it }
+        if (dao.operations(claim.radioId, claim.requestId).any { it.kind == "DEFINITELY_UNSENT:$wireRequestId" }) {
+            return@mutate DirectAckMutationResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
+        }
         dao.wire(wire.copy(acceptedCode = ackCode.toLong()))
         val phase = if (claim.phase == DirectAckPhase.REGISTERED.name) DirectAckPhase.ACCEPTED.name else claim.phase
         val updated = renew(claim, phase)
@@ -568,6 +574,29 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         DirectAckMutationResult.Applied(receipt(retired, issued.lease))
     }
 
+    override suspend fun recordDefinitelyUnsentInlineWire(
+        attempt: DirectAckAttempt,
+        wireRequestId: UUID,
+        requestId: UUID,
+    ): DirectAckMutationResult = mutate("recordDefinitelyUnsentInlineWire", attempt) { issued, claim ->
+        val dao = database.directAcks()
+        val operation = DirectAckOperationEntity(
+            claim.radioId, claim.requestId, requestId, "DEFINITELY_UNSENT:$wireRequestId", null, null, null,
+        )
+        replay(claim, issued, operation)?.let { return@mutate it }
+        deny(claim, issued)?.let { return@mutate it }
+        if (hasCompetingIntent(claim)) return@mutate DirectAckMutationResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
+        val wires = dao.wires(claim.radioId, claim.requestId)
+        if (claim.pendingId != null || claim.phase != DirectAckPhase.REGISTERED.name ||
+            wires.size != 1 || wires.single().requestId != wireRequestId || wires.single().acceptedCode != null ||
+            dao.delivery(claim.radioId, claim.requestId) != null ||
+            dao.operations(claim.radioId, claim.requestId).any { it.kind.startsWith("DEFINITELY_UNSENT:") }
+        ) return@mutate DirectAckMutationResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
+        dao.operation(operation)
+        save()
+        DirectAckMutationResult.Applied(receipt(claim, issued.lease))
+    }
+
     override suspend fun recordDirectFailure(attempt: DirectAckAttempt): DirectAckMutationResult =
         mutate("recordDirectFailure", attempt) { issued, claim ->
             if (claim.phase == DirectAckPhase.FAILED.name) {
@@ -597,8 +626,13 @@ internal class DirectAckRepository(private val context: RoomRepositoryContext) :
         else DirectAckMutationResult.Rejected(DirectAckRejection.CONFLICT)
         deny(claim, issued)?.let { return@mutate it }
         if (hasCompetingIntent(claim)) return@mutate DirectAckMutationResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
+        val retiredWires = dao.operations(claim.radioId, claim.requestId)
+            .filter { it.kind.startsWith("DEFINITELY_UNSENT:") }
+            .map { it.kind.removePrefix("DEFINITELY_UNSENT:") }
+            .toSet()
         if (dao.wires(claim.radioId, claim.requestId).none {
-                it.predictedCode == ackCode.toLong() || it.acceptedCode == ackCode.toLong()
+                it.requestId.toString() !in retiredWires &&
+                    (it.predictedCode == ackCode.toLong() || it.acceptedCode == ackCode.toLong())
             }
         ) return@mutate DirectAckMutationResult.Rejected(DirectAckRejection.NOT_ELIGIBLE)
         if (dao.collidingPriorWires(

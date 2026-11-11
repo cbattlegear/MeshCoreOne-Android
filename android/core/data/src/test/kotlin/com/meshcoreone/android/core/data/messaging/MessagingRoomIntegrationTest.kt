@@ -13,11 +13,15 @@ import com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueService
 import com.meshcoreone.android.core.contracts.domain.errors.MessagePollingException
 import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceException
+import com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt
+import com.meshcoreone.android.core.data.backup.AppBackupService
+import com.meshcoreone.android.core.data.backup.BackupModelKind
 import com.meshcoreone.android.core.data.backup.backupEnvelope
 import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.data.repository.OriginalCase
 import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.database.DirectAckStorage
+import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.ByteWriter
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -101,7 +105,7 @@ class MessagingRoomIntegrationTest {
         val immediate = Executor { it.run() }
         return builder.addCallback(DirectAckStorage.callback).addMigrations(
             MeshCoreDatabase.MIGRATION_1_2, MeshCoreDatabase.MIGRATION_2_3,
-            MeshCoreDatabase.MIGRATION_3_4, DirectAckStorage.migration4To5,
+            MeshCoreDatabase.MIGRATION_3_4, DirectAckStorage.migration4To5, DirectAckStorage.migration5To6,
         )
             .allowMainThreadQueries().setQueryExecutor(immediate).setTransactionExecutor(immediate).build()
     }
@@ -1725,7 +1729,7 @@ class MessagingRoomIntegrationTest {
     }
 
     @OriginalCase("MessageServiceACKTests::finalizeSend preserves roundTripTime after listener-won delivery()")
-    @Test fun theRealListenerWinsBeforeAcceptanceAndFinalizationPreservesItsFirmwareRtt() = runTest(scheduler) {
+    @Test fun theRealListenerBuffersBeforeAcceptanceAndFinalizationPreservesItsFirmwareRtt() = runTest(scheduler) {
         exercisePublicFinalization(Bytes.of(0xAA, 0xBB, 0xCC, 0xDD), 500u, listenerWins = true)
     }
 
@@ -2665,6 +2669,55 @@ class MessagingRoomIntegrationTest {
         next.stop()
     }
 
+    @Test fun backupImportAndReconnectRetainAnUnknownWireUntilAnExplicitRetry() = runTest(scheduler) {
+        seed()
+        val storage = MeshCoreStorage.get(ApplicationProvider.getApplicationContext<android.content.Context>())
+        try {
+            val backup = AppBackupService(storage.backupPreferences, "test", "1")
+            val generation = RadioGeneration(272, config = MessageServiceConfig(maxAttempts = 1), sessionTimeout = 0.05)
+            generation.start()
+            generation.firmware.acceptanceGate = CompletableDeferred()
+            val message = generation.service.createPendingMessage("restore unknown wire", contact)
+            val original = PendingSendDTO.fromEnvelope(DirectMessageEnvelope(message.id, contact.id), radio)
+            store.upsertPendingSend(original)
+            generation.signals.set(DeviceConnectionState.READY)
+            generation.queue.hydrate(); runCurrent()
+            assertEquals(1, generation.firmware.sent().size)
+            advanceTimeBy(51); runCurrent(); generation.queue.awaitDrainCompletion()
+            val key = EntityKey(radio, message.id)
+            val retained = store.fetchPendingSendsForMessage(key).single()
+            assertEquals(1L, retained.attemptCount)
+            generation.stop()
+
+            val exported = backup.exportEnvelope(store)
+            val imported = backup.importBackup(exported, store)
+            assertEquals(1L, imported.counts.getValue(BackupModelKind.MESSAGES).skipped)
+            assertEquals(retained, store.fetchPendingSendsForMessage(key).single())
+
+            val next = RadioGeneration(273, config = MessageServiceConfig(maxAttempts = 1))
+            next.start(); next.service.startEventMonitoring()
+            next.signals.set(DeviceConnectionState.READY)
+            next.queue.hydrate(); runCurrent(); next.queue.awaitDrainCompletion()
+            assertTrue(next.firmware.sent().isEmpty())
+            assertEquals(retained, store.fetchPendingSendsForMessage(key).single())
+            assertTrue(next.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+                it.operation == "directUncertain.${original.id}"
+            })
+
+            val retry = retained.copy(id = UUID.randomUUID(), isResend = true, attemptCount = 0)
+            store.replacePendingSendForRetry(message.id, retry)
+            advanceTimeBy(1_100)
+            next.queue.signalDMEnqueued(assertNotNull(retry.directMessageEnvelope()))
+            runCurrent(); next.queue.awaitDrainCompletion()
+            assertEquals(1, next.firmware.sent().size)
+            assertEquals(MessageStatus.DELIVERED, store.fetchMessage(key)?.status)
+            assertTrue(store.fetchPendingSendsForMessage(key).isEmpty())
+            next.stop()
+        } finally {
+            storage.close()
+        }
+    }
+
     @Test fun explicitQueuedRetryAfterUnknownOutcomeDrainsSameOrDifferentPendingIdentity() = runTest(scheduler) {
         seed()
         for ((index, sameID) in listOf(false, true).withIndex()) {
@@ -2818,6 +2871,209 @@ class MessagingRoomIntegrationTest {
         assertEquals(MessageStatus.DELIVERED, store.fetchMessage(EntityKey(radio, message.id))?.status)
         assertTrue(store.fetchPendingSendsForMessage(EntityKey(radio, message.id)).isEmpty())
         successor.stop()
+    }
+
+    @Test fun definitelyUnsentInlineNotificationCanRetryTheSameCodeWithoutAFalseCollision() = runTest(scheduler) {
+        seed()
+        val generation = RadioGeneration(268, config = MessageServiceConfig(maxAttempts = 1))
+        generation.start(); generation.service.startEventMonitoring()
+        generation.signals.set(DeviceConnectionState.READY)
+        val gate = CompletableDeferred<Unit>()
+        val entered = CompletableDeferred<Unit>()
+        generation.firmware.beforeSend = {
+            if (it[0] == CommandCode.RESET_PATH.rawValue) { entered.complete(Unit); gate.await() }
+        }
+        val blocker = backgroundScope.async { generation.session.resetPath(contact.publicKey) }
+        runCurrent(); assertTrue(entered.isCompleted)
+        val message = generation.service.createPendingMessage("cancel inline before serializer", contact)
+        val receipt = NotificationActionReceipt()
+        val send = backgroundScope.async(receipt) {
+            generation.service.sendPendingDirectMessage(message.id, contact, preserveTimestamp = true)
+        }
+        runCurrent()
+        assertEquals(NotificationActionReceipt.State.IN_FLIGHT, receipt.state)
+        assertTrue(generation.firmware.sent().isEmpty())
+        send.cancelAndJoin()
+        assertFailsWith<CancellationException> { send.await() }
+        assertEquals(NotificationActionReceipt.State.READY, receipt.state)
+        assertEquals(MessageStatus.PENDING, store.fetchMessage(EntityKey(radio, message.id))?.status)
+        val input = ByteWriter().appendUInt32LE(message.timestamp).appendUInt8(0u)
+            .append(Bytes.utf8(message.text)).append(self).toBytes()
+        val oldCode = Bytes(MessageDigest.getInstance("SHA-256").digest(input.toByteArray())).prefix(4)
+        generation.firmware.pushAck(oldCode); runCurrent()
+        assertTrue(generation.diagnostics.filterIsInstance<MessagingDiagnostic.UnmatchedAcknowledgement>().isNotEmpty())
+        assertEquals(MessageStatus.PENDING, store.fetchMessage(EntityKey(radio, message.id))?.status)
+
+        gate.complete(Unit); runCurrent(); blocker.await()
+        generation.firmware.beforeSend = null
+        val delivered = withContext(receipt) {
+            generation.service.sendPendingDirectMessage(message.id, contact, preserveTimestamp = true)
+        }
+        assertTrue(receipt.isAccepted)
+        assertEquals(MessageStatus.DELIVERED, delivered.status)
+        assertEquals(MessageStatus.DELIVERED, store.fetchMessage(EntityKey(radio, message.id))?.status)
+        assertEquals(1, generation.firmware.sent().size)
+        generation.stop()
+    }
+
+    @Test fun uncorrelatedInlineNotificationErrorsRemainUncertainAndDoNotReplay() = runTest(scheduler) {
+        seed()
+        for ((index, code) in listOf(1u, 3u).withIndex()) {
+            val generation = RadioGeneration(269L + index, config = MessageServiceConfig(maxAttempts = 1))
+            generation.start(); generation.signals.set(DeviceConnectionState.READY)
+            generation.firmware.error = code.toUByte()
+            val message = generation.service.createPendingMessage("uncorrelated error $code", contact)
+            val receipt = NotificationActionReceipt()
+            val error = assertFailsWith<MessageServiceException> {
+                withContext(receipt) {
+                    generation.service.sendPendingDirectMessage(message.id, contact, preserveTimestamp = true)
+                }
+            }
+            assertEquals(code.toUByte(), assertIs<MeshCoreException.DeviceError>(
+                assertIs<MessageServiceError.SessionError>(error.error).underlying,
+            ).code)
+            assertEquals(NotificationActionReceipt.State.UNCERTAIN, receipt.state)
+            assertEquals(MessageStatus.PENDING, store.fetchMessage(EntityKey(radio, message.id))?.status)
+            assertEquals(1, generation.firmware.sent().size)
+            generation.firmware.error = null
+            assertFailsWith<MessageServiceException> {
+                withContext(receipt) {
+                    generation.service.sendPendingDirectMessage(message.id, contact, preserveTimestamp = true)
+                }
+            }
+            assertEquals(1, generation.firmware.sent().size)
+            generation.stop()
+        }
+    }
+
+    @Test fun uncorrelatedInlineErrorsKeepTheNonNotificationRowAndWireUncertain() = runTest(scheduler) {
+        exerciseUncorrelatedNonNotificationErrors(withRetry = false)
+    }
+
+    @Test fun uncorrelatedRetryErrorsKeepTheNonNotificationRowAndWireUncertain() = runTest(scheduler) {
+        exerciseUncorrelatedNonNotificationErrors(withRetry = true)
+    }
+
+    private suspend fun TestScope.exerciseUncorrelatedNonNotificationErrors(withRetry: Boolean) {
+        seed()
+        val generation = RadioGeneration(272, config = MessageServiceConfig(maxAttempts = 2))
+        generation.start(); generation.signals.set(DeviceConnectionState.READY)
+        val events = generation.service.statusEvents()
+        for ((index, code) in listOf(1u, 3u, 6u).withIndex()) {
+            generation.firmware.error = code.toUByte()
+            val text = "non-notification error $code"
+            val error = assertFailsWith<MessageServiceException> {
+                if (withRetry) generation.service.sendMessageWithRetry(text, contact)
+                else generation.service.sendDirectMessage(text, contact)
+            }
+            assertEquals(code.toUByte(), assertIs<MeshCoreException.DeviceError>(
+                assertIs<MessageServiceError.SessionError>(error.error).underlying,
+            ).code)
+            val row = store.fetchMessages(EntityKey(radio, contact.id)).single { it.text == text }
+            assertEquals(MessageStatus.PENDING, row.status)
+            assertEquals(1, db.directAcks().currentUnresolvedClaims(radio.value, row.id))
+            assertEquals(index + 1, generation.firmware.sent().size)
+        }
+        assertTrue(completedStatuses(generation, events).none { it is MessageStatusEvent.Failed })
+        generation.stop()
+    }
+
+    @Test fun priorAcceptedWireAndLaterUncorrelatedErrorClearRetryingWithoutFalseFailure() = runTest(scheduler) {
+        seed()
+        val generation = RadioGeneration(273, config = MessageServiceConfig(maxAttempts = 2))
+        generation.start(); generation.signals.set(DeviceConnectionState.READY)
+        generation.firmware.acknowledge = false
+        generation.firmware.beforeSend = {
+            if (it[0] == CommandCode.SEND_MESSAGE.rawValue && generation.firmware.sent().isNotEmpty()) {
+                generation.firmware.error = 1u
+            }
+        }
+        val events = generation.service.statusEvents()
+        val sending = backgroundScope.async {
+            runCatching { generation.service.sendMessageWithRetry("accepted then uncertain", contact) }
+        }
+        runCurrent()
+        assertEquals(1, generation.firmware.sent().size)
+        advanceTimeBy(20); runCurrent()
+        val failure = assertIs<MessageServiceException>(sending.await().exceptionOrNull())
+        assertEquals(1u.toUByte(), assertIs<MeshCoreException.DeviceError>(
+            assertIs<MessageServiceError.SessionError>(failure.error).underlying,
+        ).code)
+        val row = store.fetchMessages(EntityKey(radio, contact.id)).single()
+        assertEquals(MessageStatus.PENDING, row.status)
+        assertEquals(1, db.directAcks().currentUnresolvedClaims(radio.value, row.id))
+        assertEquals(2, generation.firmware.sent().size)
+        assertTrue(generation.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+            it.operation == "directUncertain.${row.id}"
+        })
+        assertTrue(completedStatuses(generation, events).none { it is MessageStatusEvent.Failed })
+        generation.stop()
+    }
+
+    @Test fun failedPreWireProofKeepsNotificationUncertainAndDoesNotFailTheRow() = runTest(scheduler) {
+        seed()
+        val proofFailure = PersistenceStoreException(PersistenceStoreError.SaveFailed("unsent proof unavailable"))
+        val failingAuthority = object : DirectRoles(store) {
+            override suspend fun recordDefinitelyUnsentInlineWire(
+                attempt: DirectAckAttempt, wireRequestId: UUID, requestId: UUID,
+            ): DirectAckMutationResult = throw proofFailure
+        }
+        val generation = RadioGeneration(274, failingAuthority, MessageServiceConfig(maxAttempts = 1))
+        generation.start(); generation.signals.set(DeviceConnectionState.READY)
+        val gate = CompletableDeferred<Unit>()
+        generation.firmware.acceptanceGate = gate
+        val blocker = backgroundScope.async { generation.service.sendDirectMessage("holds direct serializer", contact) }
+        runCurrent()
+        assertEquals(1, generation.firmware.sent().size)
+        val receipt = NotificationActionReceipt()
+        val held = backgroundScope.async(receipt) {
+            generation.service.sendDirectMessage("proof failure before wire", contact)
+        }
+        runCurrent()
+        val row = store.fetchMessages(EntityKey(radio, contact.id)).single { it.text == "proof failure before wire" }
+        assertEquals(NotificationActionReceipt.State.READY, receipt.state)
+        assertEquals(1, generation.firmware.sent().size)
+        held.cancelAndJoin()
+        assertFailsWith<CancellationException> { held.await() }
+        assertTrue(generation.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+            it.operation.startsWith("directUnsentRetirement.") && it.cause === proofFailure
+        })
+        assertEquals(NotificationActionReceipt.State.UNCERTAIN, receipt.state)
+        assertTrue(receipt.preventsReplay)
+        assertEquals(MessageStatus.PENDING, store.fetchMessage(EntityKey(radio, row.id))?.status)
+        assertEquals(1, db.directAcks().currentUnresolvedClaims(radio.value, row.id))
+        assertEquals(1, generation.firmware.sent().size)
+        assertFailsWith<MessageServiceException> {
+            withContext(receipt) { generation.service.sendDirectMessage("proof failure before wire", contact) }
+        }
+        gate.complete(Unit); runCurrent(); blocker.await()
+        generation.stop()
+    }
+
+    @Test fun provenUnsentNonNotificationCancellationFailsOnlyItsOwnInlineRow() = runTest(scheduler) {
+        seed()
+        val generation = RadioGeneration(275, config = MessageServiceConfig(maxAttempts = 1))
+        generation.start(); generation.signals.set(DeviceConnectionState.READY)
+        val events = generation.service.statusEvents()
+        val gate = CompletableDeferred<Unit>()
+        val entered = CompletableDeferred<Unit>()
+        generation.firmware.beforeSend = {
+            if (it[0] == CommandCode.RESET_PATH.rawValue) { entered.complete(Unit); gate.await() }
+        }
+        val blocker = backgroundScope.async { generation.session.resetPath(contact.publicKey) }
+        runCurrent(); assertTrue(entered.isCompleted)
+        val send = backgroundScope.async { generation.service.sendDirectMessage("definitely not sent", contact) }
+        runCurrent()
+        val row = store.fetchMessages(EntityKey(radio, contact.id)).single()
+        assertTrue(generation.firmware.sent().isEmpty())
+        send.cancelAndJoin()
+        assertFailsWith<CancellationException> { send.await() }
+        assertEquals(MessageStatus.FAILED, store.fetchMessage(EntityKey(radio, row.id))?.status)
+        assertEquals(listOf(row.id), completedStatuses(generation, events)
+            .filterIsInstance<MessageStatusEvent.Failed>().map { it.messageID })
+        gate.complete(Unit); runCurrent(); blocker.await()
+        assertTrue(generation.firmware.sent().isEmpty())
+        generation.stop()
     }
 
     @Test fun queuedCancellationAfterPhysicalWriteRemainsUncertainAcrossGenerations() = runTest(scheduler) {
@@ -3117,6 +3373,74 @@ class MessagingRoomIntegrationTest {
         g.stop()
     }
 
+    @Test fun inlinePreCaptureSendAgainHandsOffToTheUserRequestedQueueEntry() = runTest(scheduler) {
+        seed()
+        for ((index, successorFirst) in listOf(false, true).withIndex()) {
+            val entered = CompletableDeferred<MessageDTO>()
+            val release = CompletableDeferred<Unit>()
+            var created: MessageDTO? = null
+            val barrier = object : DirectRoles(store) {
+                override suspend fun createDirectMessage(
+                    lease: DirectAckLease, message: MessageDTO, creationRequestId: UUID, claimRequestId: UUID,
+                ): DirectMessageCreationResult {
+                    val result = super.createDirectMessage(lease, message, creationRequestId, claimRequestId)
+                    created = message
+                    return result
+                }
+
+                override suspend fun captureCreatedDirectIntent(creation: DirectMessageCreation): DirectAckIntentResult {
+                    entered.complete(assertNotNull(created))
+                    release.await()
+                    return super.captureCreatedDirectIntent(creation)
+                }
+            }
+            val g = RadioGeneration(270L + index, barrier, MessageServiceConfig(maxAttempts = 1))
+            g.start(); g.service.startEventMonitoring()
+            g.signals.set(DeviceConnectionState.READY)
+            g.queue.hydrate()
+            val events = g.service.statusEvents()
+            val inline = backgroundScope.async {
+                runCatching { g.service.sendDirectMessage("user requested retry $successorFirst", contact) }
+            }
+            try {
+                runCurrent()
+                assertTrue(entered.isCompleted)
+                val message = entered.await()
+                val key = EntityKey(radio, message.id)
+                val envelope = DirectMessageEnvelope(message.id, contact.id, isResend = true)
+                val pending = PendingSendDTO.fromEnvelope(envelope, radio)
+                store.replacePendingSendForRetry(message.id, pending)
+
+                if (successorFirst) {
+                    g.queue.signalDMEnqueued(envelope)
+                    runCurrent(); g.queue.awaitDrainCompletion()
+                }
+
+                release.complete(Unit)
+                runCurrent()
+                assertIs<PersistenceStoreException>(inline.await().exceptionOrNull())
+
+                if (!successorFirst) {
+                    assertEquals(MessageStatus.PENDING, store.fetchMessage(key)?.status)
+                    assertEquals(pending.id, store.fetchPendingSendsForMessage(key).single().id)
+                    assertTrue(g.firmware.sent().isEmpty())
+                    g.queue.signalDMEnqueued(envelope)
+                    runCurrent(); g.queue.awaitDrainCompletion()
+                }
+
+                val wire = g.firmware.sent().single()
+                assertEquals(Bytes.utf8(message.text), wire.slice(13, wire.size))
+                assertEquals(MessageStatus.DELIVERED, store.fetchMessage(key)?.status)
+                assertTrue(store.fetchPendingSendsForMessage(key).isEmpty())
+                assertTrue(completedStatuses(g, events).none { it is MessageStatusEvent.Failed && it.messageID == message.id })
+            } finally {
+                release.complete(Unit)
+                inline.cancelAndJoin()
+                g.stop()
+            }
+        }
+    }
+
     @Test fun queuedDispatchDerivesPayloadFromIssuedSnapshotNotPreCaptureDto() = runTest(scheduler) {
         dispatchFromIssuedSnapshot()
     }
@@ -3215,7 +3539,21 @@ class MessagingRoomIntegrationTest {
         code: Bytes, tripTime: UInt?, listenerWins: Boolean, rejectWriteAfterDelivery: Boolean = false,
     ) {
         seed()
-        val g = RadioGeneration(67, config = MessageServiceConfig(maxAttempts = 1, floodAfter = 5))
+        var writeGuardInstalled = false
+        val persistence = if (rejectWriteAfterDelivery) object : DirectRoles(store) {
+            override suspend fun settleDirectAck(
+                attempt: DirectAckAttempt, ackCode: UInt, roundTripTime: UInt?,
+            ): DirectAckMutationResult = super.settleDirectAck(attempt, ackCode, roundTripTime).also {
+                if (!writeGuardInstalled &&
+                    (it is DirectAckMutationResult.Applied || it is DirectAckMutationResult.AlreadyApplied)
+                ) {
+                    db.openHelper.writableDatabase.execSQL("CREATE TRIGGER reject_delivered_rewrite AFTER UPDATE ON messages " +
+                        "BEGIN SELECT RAISE(FAIL, 'finalization rewrote listener delivery'); END")
+                    writeGuardInstalled = true
+                }
+            }
+        } else store
+        val g = RadioGeneration(67, persistence, MessageServiceConfig(maxAttempts = 1, floodAfter = 5))
         g.start()
         val expectedCode = if (listenerWins) {
             val input = ByteWriter().appendUInt32LE(base.epochSecond.toUInt()).appendUInt8(0u)
@@ -3233,22 +3571,17 @@ class MessagingRoomIntegrationTest {
             g.firmware.acceptanceGate = gate
         }
         val sending = async { g.service.sendMessageWithRetry("Test message", contact) }
-        var writeGuardInstalled = false
         val delivered = try {
             runCurrent()
             if (listenerWins) {
                 assertFalse(sending.isCompleted)
                 val beforeAcceptance = store.fetchMessages(EntityKey(radio, contact.id)).single()
-                assertEquals(MessageStatus.DELIVERED, beforeAcceptance.status)
-                assertEquals(tripTime, beforeAcceptance.roundTripTime)
-                assertEquals(0, g.service.pendingAckCount)
-                if (rejectWriteAfterDelivery) {
-                    db.openHelper.writableDatabase.execSQL("CREATE TRIGGER reject_delivered_rewrite AFTER UPDATE ON messages " +
-                        "BEGIN SELECT RAISE(FAIL, 'finalization rewrote listener delivery'); END")
-                    writeGuardInstalled = true
-                }
+                assertEquals(MessageStatus.PENDING, beforeAcceptance.status)
+                assertNull(beforeAcceptance.roundTripTime)
+                assertEquals(1, g.service.pendingAckCount)
                 gate.complete(Unit)
                 runCurrent()
+                if (rejectWriteAfterDelivery) assertTrue(writeGuardInstalled)
             }
             sending.await()
         } finally {
@@ -3997,6 +4330,16 @@ class MessagingRoomIntegrationTest {
         assertEquals(pending.id, store.fetchPendingSends(radio).single().id)
         assertEquals(1L, store.fetchPendingSends(radio).single().attemptCount)
         advanceTimeBy(1000); runCurrent(); assertEquals(2, g.firmware.sent().size); g.stop()
+        val next = RadioGeneration(240)
+        next.start(); next.signals.set(DeviceConnectionState.READY)
+        next.queue.hydrate(); runCurrent(); next.queue.awaitDrainCompletion()
+        assertTrue(next.firmware.sent().isEmpty())
+        assertEquals(pending.id, store.fetchPendingSends(radio).single().id)
+        assertEquals(MessageStatus.PENDING, store.fetchMessage(EntityKey(radio, message.id))?.status)
+        assertTrue(next.diagnostics.filterIsInstance<MessagingDiagnostic.Failure>().any {
+            it.operation == "directUncertain.${pending.id}"
+        })
+        next.stop()
     }
 
     @Test fun malformedRoomEnvelopeDoesNotStopValidLaterHydrationOrLoseItsRepairableRow() = runTest(scheduler) {

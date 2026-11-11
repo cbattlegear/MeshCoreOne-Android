@@ -112,6 +112,7 @@ class MessageService(
         val acceptedCodes = mutableMapOf<UUID, Bytes>()
         val confirmedCodes = mutableSetOf<Bytes>()
         val bufferedAcknowledgements = mutableListOf<MeshAcknowledgement>()
+        var definitelyUnsentWire: UUID? = null
         var acknowledgementBufferOverflow = false
     }
     private data class DirectWireObservation(
@@ -601,6 +602,21 @@ class MessageService(
             }
         }
 
+    internal suspend fun restoreInterruptedDirectRetry(claimID: UUID, messageID: UUID) {
+        ownership.checkPersistenceCompletion("interruptedDirectRetry")
+        val state = directAuthority(messageID, claimID)
+        val observation = authority().inspectDirectAckAttempt(directLease(), claimID)
+        val receipt = (observation as? DirectAckObservation.Found)?.receipt
+            ?: throw authorityFailure("interrupted direct claim missing")
+        if (receipt.permission != DirectAckPermission.CURRENT) {
+            throw authorityFailure("interrupted direct claim is ${receipt.permission}")
+        }
+        if (receipt.message?.status == MessageStatus.RETRYING) {
+            directBookkeeping(state, "interruptedRetry", DirectAckBookkeeping.ReturnToPending)
+        }
+        ownership.checkPersistenceCompletion("interruptedDirectRetry.saved")
+    }
+
     internal suspend fun detachRetiredTrackingForQueuedSuccessor(messageID: UUID, claimID: UUID) {
         val state = synchronized(lock) {
             directAuthorities[messageID]?.takeIf { it.requestID != claimID }
@@ -634,28 +650,45 @@ class MessageService(
     }
 
     private suspend fun retireDefinitelyUnsentWire(
-        state: DirectAuthorityState, wireID: UUID, cancellation: CancellationException,
-    ) = withContext(NonCancellable) {
+        state: DirectAuthorityState, wireID: UUID, cause: Exception, queued: Boolean = true,
+    ): Boolean = withContext(NonCancellable) {
         val requestID = synchronized(lock) {
             state.operations.getOrPut("definitelyUnsent.$wireID", UUID::randomUUID)
         }
         try {
-            val result = try {
+            suspend fun record(): DirectAckMutationResult = if (queued) {
                 authority().retireDefinitelyUnsentQueuedAttempt(state.attempt, wireID, requestID)
+            } else {
+                authority().recordDefinitelyUnsentInlineWire(state.attempt, wireID, requestID)
+            }
+            val result = try {
+                record()
             } catch (first: PersistenceStoreException) {
-                try { authority().retireDefinitelyUnsentQueuedAttempt(state.attempt, wireID, requestID) }
+                try { record() }
                 catch (second: PersistenceStoreException) {
-                    first.addSuppressed(second)
+                    if (first !== second) first.addSuppressed(second)
                     throw first
                 }
             }
             val receipt = mutationReceipt(result)
             if (receipt.key != key(state.messageID) || receipt.requestId != state.requestID ||
-                receipt.definitelyUnsentWireRequestId != wireID || receipt.permission == DirectAckPermission.CURRENT
+                receipt.definitelyUnsentWireRequestId != wireID ||
+                (receipt.permission == DirectAckPermission.CURRENT) == queued
             ) throw authorityFailure("invalid definitely-unsent retirement receipt")
+            if (!queued) {
+                synchronized(lock) {
+                    state.definitelyUnsentWire = wireID
+                    if (directWireObservations[state.messageID]?.get(wireID)?.claimID == state.requestID) {
+                        directWireObservations[state.messageID]?.remove(wireID)
+                    }
+                }
+                retireBufferedAcknowledgements(state.messageID, state.attempt)
+            }
+            true
         } catch (failure: PersistenceStoreException) {
-            cancellation.addSuppressed(failure)
+            if (cause !== failure) cause.addSuppressed(failure)
             remember("directUnsentRetirement.${state.requestID}", failure)
+            false
         }
     }
 
@@ -891,10 +924,7 @@ class MessageService(
                 directWireObservations[state.messageID]?.values?.any {
                     it.claimID != state.requestID && (it.predicted == code || it.returned == code)
                 } == true
-            fun knownForCurrentWire(state: DirectAuthorityState): Boolean =
-                code in state.confirmedCodes || state.predictedCodes.any { (wireID, predicted) ->
-                    predicted == code && (state.acceptedCodes[wireID] == null || state.acceptedCodes[wireID] == code)
-                }
+            fun knownForCurrentWire(state: DirectAuthorityState): Boolean = code in state.confirmedCodes
             val found = pendingAcks.values.firstOrNull {
                 code in it.ackCodes && !it.isDelivered &&
                     (expectedAttempt == null || it.authority === expectedAttempt) &&
@@ -905,6 +935,7 @@ class MessageService(
                 if (found == null && (expectedAttempt == null || state.attempt === expectedAttempt) &&
                     state.correlateResponses && pendingAcks[id]?.authority === state.attempt &&
                     !ambiguous(state) && code !in state.confirmedCodes &&
+                    state.predictedCodes.keys.any { it != state.definitelyUnsentWire } &&
                     !state.acceptedCodes.keys.containsAll(state.predictedCodes.keys)) {
                     deferred = true
                     val acknowledgement = MeshAcknowledgement(code, tripTime)
@@ -1317,6 +1348,21 @@ class MessageService(
                         return@withLock
                     }
                     if (retainRegisteredQueuedOutcome && expectedAttempt != null) return@withLock
+                    if (expectedAttempt != null) {
+                        val uncertain = synchronized(lock) {
+                            val state = directAuthorities[messageID]
+                            state?.takeIf {
+                                it.attempt === expectedAttempt &&
+                                    it.wires.values.any { wire -> wire != it.definitelyUnsentWire }
+                            }
+                        }
+                        if (uncertain != null) {
+                            notificationReceipt?.retainUncertain()
+                            if (notificationReceipt == null) remember("directUncertain.$messageID", failure)
+                            restoreInterruptedDirectRetry(uncertain.requestID, messageID)
+                            return@withLock
+                        }
+                    }
                     val failUnsentInlineRow = notificationReceipt == null || failDefinitelyUnsentInline
                     if (notificationReceipt == null || notificationReceipt.state == NotificationActionReceipt.State.READY) {
                         if (failUnsentInlineRow) {
@@ -1472,36 +1518,31 @@ class MessageService(
             message
         }
 
-    private suspend fun <T> notificationWire(block: suspend (MessageWriteDispatch?) -> T): T {
+    private suspend fun <T> notificationWire(
+        state: DirectAuthorityState,
+        wireID: UUID,
+        block: suspend (MessageWriteDispatch) -> T,
+    ): T {
         val receipt = currentCoroutineContext()[NotificationActionReceipt]
-        if (receipt == null) return block(null)
         val dispatch = MessageWriteDispatch()
-        val ownsOutcome = receipt.state == NotificationActionReceipt.State.READY
+        val ownsOutcome = receipt?.state == NotificationActionReceipt.State.READY
         if (ownsOutcome) receipt.wireStarted()
         try {
             val result = block(dispatch)
             if (ownsOutcome) receipt.accepted()
             return result
         } catch (cancelled: CancellationException) {
+            val unsent = dispatch.cancellationDisposition == ChannelWriteCancellationDisposition.DEFINITELY_UNSENT &&
+                retireDefinitelyUnsentWire(state, wireID, cancelled, queued = false)
             if (ownsOutcome) {
-                if (dispatch.cancellationDisposition == ChannelWriteCancellationDisposition.DEFINITELY_UNSENT) {
-                    receipt.wireNotDispatched()
-                } else {
-                    receipt.uncertain()
-                }
+                if (unsent) receipt.wireNotDispatched() else receipt.uncertain()
             }
             throw cancelled
-        } catch (rejected: MeshCoreException.DeviceError) {
-            if (ownsOutcome) receipt.wireRejected()
-            throw rejected
         } catch (failure: Exception) {
             if (ownsOutcome) receipt.uncertain()
             throw failure
         }
     }
-
-    private suspend fun <T> inlineWire(block: suspend (MessageWriteDispatch?) -> T): T =
-        notificationWire(block)
 
     override suspend fun sendDirectMessage(text: String, contact: ContactDTO, textType: TextType, replyToID: UUID?): MessageDTO =
         withFreshNotificationAction("sendDirectMessage") {
@@ -1557,16 +1598,29 @@ class MessageService(
                     val tracking = trackPendingAck(
                         message.id, selected.id, predicted, checkInterval, selected.publicKey, registration.first.attempt,
                     )
-                    val info = withPoolBackoff(3u) {
-                        dmOperations.withLock {
-                            checkIdentity("sendDirectMessage.wire")
-                            requireCurrentDirectAuthority(registration.first)
-                            inlineWire { dispatch ->
-                                val timestamp = Instant.ofEpochSecond(captured.timestamp.toLong())
-                                if (dispatch == null) session.sendMessage(selected.publicKey, captured.text, timestamp)
-                                else session.sendMessage(selected.publicKey, captured.text, timestamp, dispatch = dispatch)
+                    var transportInvoked = false
+                    val info = try {
+                        withPoolBackoff(3u, retryOnDeviceError = false) {
+                            dmOperations.withLock {
+                                checkIdentity("sendDirectMessage.wire")
+                                requireCurrentDirectAuthority(registration.first)
+                                transportInvoked = true
+                                notificationWire(registration.first, registration.second) { dispatch ->
+                                    val timestamp = Instant.ofEpochSecond(captured.timestamp.toLong())
+                                    session.sendMessage(selected.publicKey, captured.text, timestamp, dispatch = dispatch)
+                                }
                             }
                         }
+                    } catch (cancelled: CancellationException) {
+                        if (!transportInvoked) {
+                            retireDefinitelyUnsentWire(registration.first, registration.second, cancelled, queued = false)
+                        }
+                        throw cancelled
+                    } catch (failure: Exception) {
+                        if (!transportInvoked) {
+                            retireDefinitelyUnsentWire(registration.first, registration.second, failure, queued = false)
+                        }
+                        throw failure
                     }
                     mergeSentInfo(message.id, predicted, info, 0u, null, registration.first)
                     Triple(info, tracking, predicted)
@@ -1942,7 +1996,7 @@ class MessageService(
                 var transportInvoked = false
                 val info = try {
                     synchronized(lock) { claim.acceptedWire }?.info ?:
-                        withPoolBackoff(3u, retryOnDeviceError = claim.pendingSendID == null) {
+                        withPoolBackoff(3u, retryOnDeviceError = false) {
                         dmOperations.withLock {
                             checkIdentity("retryDirectMessage.wire")
                             requireCurrentDirectAuthority(authorityState)
@@ -1963,21 +2017,23 @@ class MessageService(
                                     }
                                     throw cancelled
                                 }
-                            } else notificationWire { dispatch ->
+                            } else notificationWire(authorityState, wireID) { dispatch ->
+                                transportInvoked = true
                                 val timestamp = Instant.ofEpochSecond(stamp.toLong())
-                                if (dispatch == null) {
-                                    session.sendMessage(contact.publicKey.prefix(6), text, timestamp, attempt)
-                                } else {
-                                    session.sendMessage(contact.publicKey.prefix(6), text, timestamp, attempt, dispatch)
-                                }
+                                session.sendMessage(contact.publicKey.prefix(6), text, timestamp, attempt, dispatch)
                             }
                         }
                     }
                 } catch (cancelled: CancellationException) {
-                    if (claim.pendingSendID != null && !transportInvoked) {
-                        retireDefinitelyUnsentWire(authorityState, wireID, cancelled)
+                    if (!transportInvoked) {
+                        retireDefinitelyUnsentWire(authorityState, wireID, cancelled, queued = claim.pendingSendID != null)
                     }
                     throw cancelled
+                } catch (failure: Exception) {
+                    if (!transportInvoked) {
+                        retireDefinitelyUnsentWire(authorityState, wireID, failure, queued = claim.pendingSendID != null)
+                    }
+                    throw failure
                 } ?: return null
                 synchronized(lock) {
                     claim.lastSentInfo = info

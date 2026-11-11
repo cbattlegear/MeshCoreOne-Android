@@ -59,6 +59,7 @@ class LinkConsumerIntegrationTest : RoomProcessTest() {
 
     @Test fun canceledUnboundContactCaptureResolvesOnlyItsPermittedFirstGraph() = runTest {
         for ((replaceFirstGraph, selfLink) in listOf(false to false, true to false, false to true, true to true)) {
+            restartProcessStore()
             val h = ContainerHarness(this, store)
             h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Saved peer") }
             val reads = mutableListOf<RadioId>()
@@ -205,6 +206,7 @@ class LinkConsumerIntegrationTest : RoomProcessTest() {
 
     @Test fun canceledExternalCompletionWaitingForActualLifecycleMonitorHasNoEffectAndRetainsOrigin() = runTest {
         for (known in listOf(false, true)) {
+            restartProcessStore()
             val h = ContainerHarness(this, store)
             h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Saved peer") }
             val read = CompletableDeferred<Unit>()
@@ -306,6 +308,7 @@ class LinkConsumerIntegrationTest : RoomProcessTest() {
 
     @Test fun externalFirstBindingReresolvesOriginalCaptureAndReadsSavedPeerBeforeConsuming() = runTest {
         for (selfLink in listOf(false, true)) {
+            restartProcessStore()
             val h = ContainerHarness(this, store)
             h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Saved peer") }
             val resolvedUnbound = CountDownLatch(1)

@@ -449,6 +449,63 @@ class MapMountedConsumerTest {
         }
     }
 
+    @Test fun missingPreferenceDependencyReportsUnavailableAndRecoversWithThePendingFocusAndRealStore() {
+        var loads = 0
+        var consumed = 0
+        val target = GeoPoint(45.0, -110.0)
+        val initial = MapFeatureDependencies(source { loads++; content() }, offline())
+        val dependencies = mutableStateOf(initial)
+        var latest: MapPresentationState? = null
+        val presentations = mutableListOf<MapPresentationState>()
+        mount(
+            initial, focus = { target }, onFocusConsumed = { consumed++ },
+            onPresentation = { latest = it; presentations += it },
+            dependenciesProvider = { dependencies.value }, awaitReady = false,
+        )
+        compose.onNodeWithTag("map:preferences-unavailable").assertIsDisplayed()
+        compose.onNodeWithText(text(R.string.l10n_app_localizable_common_error_failedtoload)).assertIsDisplayed()
+        compose.onNodeWithTag("test-renderer").assertDoesNotExist()
+        compose.onNodeWithTag("map:preference-retry").assertDoesNotExist()
+        assertTrue(presentations.isEmpty())
+        assertEquals(0, loads)
+        assertEquals(0, consumed)
+        assertNull(MapFilterState.decode(runBlocking {
+            MeshCoreStorage.get(host.get()).preferences.get(AppStorageKey.mapFilterMainMap)
+        }))
+
+        val real = AppMapPreferences(
+            MeshCoreStorage.get(host.get()).preferences,
+            host.get().getSharedPreferences("shared-map", 0),
+        )
+        runBlocking {
+            real.setFilter(MapFilterHost.MAIN_MAP, MapFilterState(favoritesOnly = true))
+            MeshCoreStorage.get(host.get()).preferences.set(AppStorageKey.mapColorSchemePreference, "dark")
+        }
+        val started = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val store = object : MapPreferenceStore by real {
+            override fun observe(host: MapFilterHost) = kotlinx.coroutines.flow.flow {
+                started.complete(Unit)
+                release.await()
+                real.observe(host).collect { emit(it) }
+            }
+        }
+        compose.runOnIdle { dependencies.value = initial.copy(preferences = store) }
+        compose.onNodeWithTag("map:preferences-unavailable").assertDoesNotExist()
+        waitUntilAdvancingFrames { started.isCompleted }
+        compose.onNodeWithText(text(R.string.l10n_app_map_map_controls_showlabels)).assertDoesNotExist()
+        release.complete(Unit)
+        waitUntilAdvancingFrames {
+            compose.onAllNodesWithText(text(R.string.l10n_app_map_map_controls_showlabels)).fetchSemanticsNodes().isNotEmpty() &&
+                latest?.isDark == true && latest?.points?.none { it.id == contact.id } == true
+        }
+        assertEquals(1, loads)
+        assertEquals(1, consumed)
+        assertEquals(target, requireNotNull(latest).points.single { it.style == MapPinStyle.DROPPED_PIN }.position)
+        assertEquals(target, requireNotNull(latest).camera?.center)
+        assertTrue(runBlocking { real.observe(MapFilterHost.MAIN_MAP).first() }.filter.favoritesOnly)
+    }
+
     @Test fun successfulPreferenceWriteRestartsFailedObservationUntilNewValueArrives() {
         val real = AppMapPreferences(
             MeshCoreStorage.get(host.get()).preferences,
@@ -534,6 +591,7 @@ class MapMountedConsumerTest {
         restoration: StateRestorationTester? = null,
         onCameraCallback: ((MapCamera) -> Unit) -> Unit = {},
         onMapDispose: () -> Unit = {},
+        awaitReady: Boolean = true,
     ) {
         val bound = dependencies.copy(preferences = dependencies.preferences ?: AppMapPreferences(
             MeshCoreStorage.get(host.get()).preferences,
@@ -566,9 +624,11 @@ class MapMountedConsumerTest {
         }
         advanceFrames()
         compose.waitForIdle()
-        waitUntilAdvancingFrames {
-            compose.onAllNodesWithText(text(R.string.l10n_app_map_map_controls_centerall))
-                .fetchSemanticsNodes().isNotEmpty()
+        if (awaitReady) {
+            waitUntilAdvancingFrames {
+                compose.onAllNodesWithText(text(R.string.l10n_app_map_map_controls_centerall))
+                    .fetchSemanticsNodes().isNotEmpty()
+            }
         }
         compose.waitForIdle()
     }

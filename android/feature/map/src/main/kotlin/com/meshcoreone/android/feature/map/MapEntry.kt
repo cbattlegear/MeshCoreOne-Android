@@ -111,7 +111,27 @@ fun MapEntry(
         )
         return
     }
-    MapContent(dependencies, focus, onFocusConsumed, mapSurface)
+    val preferenceStore = dependencies.preferences
+    if (preferenceStore == null) {
+        MapPreferencesUnavailable()
+        return
+    }
+    MapContent(dependencies, preferenceStore, focus, onFocusConsumed, mapSurface)
+}
+
+private class MissingMapPreferences : IllegalStateException()
+
+@Composable
+private fun MapPreferencesUnavailable() {
+    val failure = remember { UiErrorMapper().present(MissingMapPreferences()) }
+    Box(Modifier.fillMaxSize().testTag("map:preferences-unavailable"), contentAlignment = Alignment.Center) {
+        Card(Modifier.padding(24.dp)) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(stringResource(R.string.tab_map), style = MaterialTheme.typography.headlineSmall)
+                Text(uiString(failure.content.message))
+            }
+        }
+    }
 }
 
 @Composable
@@ -151,13 +171,13 @@ private fun MapRuntimeUnavailable() {
 @Composable
 private fun MapContent(
     dependencies: MapFeatureDependencies,
+    preferenceStore: com.meshcoreone.android.core.maps.MapPreferenceStore,
     focus: GeoPoint?,
     onFocusConsumed: () -> Unit,
     mapSurface: OperationalMapSurface,
 ) {
     val context = LocalContext.current
     val preferences = remember(context) { context.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE) }
-    val preferenceStore = checkNotNull(dependencies.preferences) { "Process map preferences were not installed" }
     var settings by remember(dependencies) { mutableStateOf<MapPreferences?>(null) }
     var preferenceObservationError by remember { mutableStateOf<Exception?>(null) }
     var preferenceWriteError by remember { mutableStateOf<Exception?>(null) }

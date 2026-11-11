@@ -40,6 +40,7 @@ class RoomPersistenceStore private constructor(
     TracePathPersisting by diagnostics, DebugLogPersisting by diagnostics, LinkPreviewPersisting by diagnostics,
     RxLogPersisting by diagnostics, NodeSnapshotPersisting by diagnostics, MetadataPersisting by metadata,
     QueuedChannelTerminalPersisting by pending, QueuedChannelReadinessPersisting by pending,
+    InlineChannelAttemptPersisting by pending,
     ChannelSubmissionPersisting by pending {
     constructor(
         database: MeshCoreDatabase,
@@ -91,6 +92,11 @@ class RoomPersistenceStore private constructor(
     suspend fun saveSimulatorChannel(dto: ChannelDTO): Unit = channels.saveSimulatorChannel(dto)
 
     suspend fun saveSimulatorContact(dto: ContactDTO): Unit = contacts.saveSimulatorContact(dto)
+
+    suspend fun seedSimulatorRxBatchIfAbsent(
+        dtos: SnapshotList<RxLogEntryDTO>,
+    ): SnapshotList<SimulatorRxSeedOutcome> =
+        context.seedSimulatorRxBatch(dtos.map { it.toEntity() }).snapshot()
 
     suspend fun seedSimulatorConversation(
         plan: SimulatorConversationIdentityPlan,

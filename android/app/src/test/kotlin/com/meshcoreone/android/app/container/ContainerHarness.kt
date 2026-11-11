@@ -302,9 +302,10 @@ abstract class RoomProcessTest {
     protected suspend fun seedReconciledChannel(
         channel: com.meshcoreone.android.core.model.ChannelDTO,
         backing: RoomPersistenceStore = store,
-    ) {
+    ): com.meshcoreone.android.core.model.ChannelDTO {
         backing.saveChannel(channel)
         backing.saveChannel(channel.radioId, ChannelInfo(channel.index, channel.name, channel.secret))
+        return checkNotNull(backing.fetchChannel(channel.radioId, channel.index))
     }
 
     @Before fun openStore() {

@@ -50,7 +50,7 @@ class ChatSendQueueService(
     private var queryAccounting: QueryAccounting? = null
     private var recoveryPrepared = false
     private val completedDMs = mutableSetOf<UUID>()
-    private data class ChannelEntry(val pendingID: UUID, val envelope: ChannelMessageEnvelope)
+    private data class ChannelEntry(val pendingID: UUID, val envelope: ChannelMessageEnvelope, var countedAttempt: Attempt? = null)
     private val channelEntries = mutableMapOf<UUID, ChannelEntry>()
     private val uncertainChannelCounts = mutableSetOf<UUID>()
     private val indexedChannels = mutableSetOf<UUID>()
@@ -331,7 +331,7 @@ class ChatSendQueueService(
                 return
             }
             submissions.singleOrNull { it.id == entry.pendingID }
-        } catch (failure: PersistenceStoreException) { retainChannel(entry, failure); return }
+        } catch (failure: PersistenceStoreException) { retryChannelRead(entry, failure); return }
         if (pending == null) { completeChannel(entry); return }
         if (pending.kind != PendingSendKind.CHANNEL || pending.channelMessageEnvelope() != envelope) {
             retainChannel(entry, rejectedChannel(entry, QueuedChannelAttemptConflict.MISMATCHED_SUBMISSION))
@@ -363,11 +363,11 @@ class ChatSendQueueService(
         try {
             val accepted = messageService.sendQueuedChannel(entry.pendingID, envelope, attempt.preserveTimestamp)
             finishAcceptedChannel(entry, accepted.key)
-        } catch (cancelled: CancellationException) { throw cancelled }
-        catch (retained: QueuedChannelRetainedException) { retainChannel(entry, retained) }
-        catch (failure: PersistenceStoreException) { retainChannel(entry, failure) }
-        catch (failure: MessageServiceException) { channelFailure(envelope, attempt, failure) }
-        catch (failure: MeshCoreException) { channelFailure(envelope, attempt, failure) }
+        } catch (cancelled: CancellationException) { entry.countedAttempt = null; throw cancelled }
+        catch (retained: QueuedChannelRetainedException) { entry.countedAttempt = null; retainChannel(entry, retained) }
+        catch (failure: PersistenceStoreException) { retryChannelRead(entry, failure) }
+        catch (failure: MessageServiceException) { entry.countedAttempt = null; channelFailure(envelope, attempt, failure) }
+        catch (failure: MeshCoreException) { entry.countedAttempt = null; channelFailure(envelope, attempt, failure) }
     }
 
     private fun rejectedChannel(entry: ChannelEntry, reason: QueuedChannelAttemptConflict) =
@@ -378,14 +378,20 @@ class ChatSendQueueService(
         record("channelRetained.${entry.pendingID}", failure)
     }
 
+    private suspend fun retryChannelRead(entry: ChannelEntry, failure: PersistenceStoreException) {
+        if (failure.error == PersistenceStoreError.InvalidData) retainChannel(entry, failure)
+        else park(entry.envelope.messageID, failure)
+    }
+
     private suspend fun readyChannelAttempt(entry: ChannelEntry): Attempt? {
+        entry.countedAttempt?.let { return it }
         if (synchronized(lock) { entry.pendingID in uncertainChannelCounts }) return null
         try {
             if (dataStore.fetchPendingSendsForMessage(key(entry.envelope.messageID)).any { it.id != entry.pendingID }) {
                 retainChannel(entry, rejectedChannel(entry, QueuedChannelAttemptConflict.RETAINED_SUBMISSION))
                 return null
             }
-        } catch (failure: PersistenceStoreException) { retainChannel(entry, failure); return null }
+        } catch (failure: PersistenceStoreException) { retryChannelRead(entry, failure); return null }
         checkSendAdmission()
         val readiness = dataStore as? QueuedChannelReadinessPersisting
         if (readiness == null) {
@@ -411,7 +417,7 @@ class ChatSendQueueService(
             return null
         }
         ownership.check("channel.bump")
-        return Attempt(count, entry.pendingID)
+        return Attempt(count, entry.pendingID).also { entry.countedAttempt = it }
     }
 
     private suspend fun finishAcceptedChannel(entry: ChannelEntry, attemptKey: QueuedChannelAttemptKey) {
@@ -440,7 +446,7 @@ class ChatSendQueueService(
             triggers.clear()
             completeChannel(entry)
         } catch (cancelled: CancellationException) { throw cancelled }
-        catch (failure: PersistenceStoreException) { retainChannel(entry, failure) }
+        catch (failure: PersistenceStoreException) { retryChannelRead(entry, failure) }
         catch (retained: QueuedChannelRetainedException) { retainChannel(entry, retained) }
         catch (failure: MessageServiceException) { retainChannel(entry, failure) }
     }

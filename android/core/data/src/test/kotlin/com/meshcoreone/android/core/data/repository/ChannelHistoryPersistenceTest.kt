@@ -1,4 +1,4 @@
-// AndroidOnly: WP-202 Non-activated occupant-bound SQL history, late-save, restart and explicit unbound-history boundaries.
+// AndroidOnly: WP-202 Occupant-bound SQL history, late-save, restart and explicit unbound-history boundaries.
 package com.meshcoreone.android.core.data.repository
 
 import androidx.room.Room
@@ -20,6 +20,29 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Test
 
 class ChannelHistoryPersistenceTest : RepositoryTest() {
+    @Test fun zeroTimestampAndInsertReadbackPreserveTheActualChannelIntent() = runTest {
+        store.saveChannel(RADIO_A, info())
+        val scope = origin()
+        val creation = ChannelMessageCreation(UUID.randomUUID(), scope, "zero timestamp")
+        val created = store.createOrReconcileChannelMessage(creation, 0u, AT)
+        assertEquals(0u, created.timestamp)
+        assertEquals(created, store.fetchMessage(EntityKey(RADIO_A, created.id)))
+        assertEquals(created, store.createOrReconcileChannelMessage(creation, 99u, AT.plusSeconds(50)))
+        db.openHelper.writableDatabase.execSQL(
+            "CREATE TRIGGER ignore_channel_creation BEFORE INSERT ON messages BEGIN SELECT RAISE(IGNORE); END",
+        )
+        try {
+            val ignored = creation.copy(messageID = UUID.randomUUID())
+            val failure = assertFailsWith<PersistenceStoreException> {
+                store.createOrReconcileChannelMessage(ignored, 0u, AT)
+            }
+            assertEquals(PersistenceStoreError.InvalidData, failure.error)
+            assertNull(store.fetchMessage(EntityKey(RADIO_A, ignored.messageID)))
+        } finally {
+            db.openHelper.writableDatabase.execSQL("DROP TRIGGER ignore_channel_creation")
+        }
+    }
+
     private fun info(byte: Int = 1, index: UByte = 5u) =
         ChannelInfo(index, "channel", Bytes(ByteArray(16) { byte.toByte() }))
 

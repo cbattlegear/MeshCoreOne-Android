@@ -25,6 +25,7 @@ import com.meshcoreone.android.app.navigation.NavigationDestination
 import com.meshcoreone.android.app.navigation.channelFailureText
 import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.core.contracts.domain.ChannelIdentityWriteScope
+import com.meshcoreone.android.core.contracts.domain.ChannelHistoryPersisting
 import com.meshcoreone.android.core.contracts.domain.ChannelPersisting
 import com.meshcoreone.android.core.contracts.domain.ChannelOccupantSnapshot
 import com.meshcoreone.android.core.contracts.domain.EntityKey
@@ -34,10 +35,13 @@ import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import com.meshcoreone.android.core.model.ChannelFloodScope
 import com.meshcoreone.android.core.model.ChannelDTO
+import com.meshcoreone.android.core.model.MessageStatus
+import com.meshcoreone.android.core.model.QueuedChannelDispatchState
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.command.PacketBuilder
+import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.services.sync.SyncClock
 import com.meshcoreone.android.core.services.contacts.ChannelMutationError
@@ -115,9 +119,20 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
             h.settle()
             h.assertReady()
             val node = assertNotNull(h.sessions.current)
-            assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> {
+            node.channelService.setChannelWithSecret(
+                node.token.radioId, 0u, "Before", Bytes.fromHex("00112233445566778899AABBCCDDEEFF"),
+            )
+            val retained = assertFails {
                 node.messageService.sendChannelMessage("uncertain original", 0u, node.token.radioId)
             }
+            val rejection = assertNotNull(generateSequence<Throwable>(retained) { it.cause }
+                .filterIsInstance<MeshCoreException.DeviceError>()
+                .firstOrNull())
+            assertEquals(2.toUByte(), rejection.code)
+            val pending = store.fetchPendingSends(node.token.radioId).single()
+            assertEquals(QueuedChannelDispatchState.UNCERTAIN, pending.channelDispatchState)
+            assertEquals(MessageStatus.PENDING,
+                store.fetchMessage(EntityKey(node.token.radioId, pending.messageID))?.status)
             val firmware = h.links.radios.single()
             val writes = firmware.sent.count { it[0].toInt() == 0x20 }
             h.container.navigation.stageChannelLink(ChannelLinkRequest(
@@ -151,7 +166,7 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
 
     private fun interceptChannelPersistence(decorate: (ChannelPersisting) -> ChannelPersisting): PersistenceStoreProtocol {
         val channels = decorate(store)
-        return object : PersistenceStoreProtocol by store {
+        return object : PersistenceStoreProtocol by store, ChannelHistoryPersisting by store {
             override suspend fun <T> withChannelOperation(
                 block: suspend (ChannelPersisting, ChannelIdentityWriteScope) -> T,
             ): T = store.withChannelOperation { scoped, scope -> block(decorate(scoped), scope) }
@@ -175,6 +190,90 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
     }
 
     private enum class RegionReplacement { REUSED_ROW, RECREATED_ROW, ABA }
+
+    @Test
+    fun ordinaryRegionPreferenceFailureIsDiagnosedAndNavigatesToTheActuallySavedChannel() = runTest {
+        val failure = IllegalStateException("local preference unavailable after acknowledged join")
+        val records = java.util.Collections.synchronizedList(mutableListOf<java.util.logging.LogRecord>())
+        val logger = java.util.logging.Logger.getLogger("com.mc1.ChannelService")
+        val handler = object : java.util.logging.Handler() {
+            override fun publish(record: java.util.logging.LogRecord) { records += record }
+            override fun flush() {}
+            override fun close() {}
+        }
+        var rejectPreference = true
+        val persistence = interceptChannelPersistence { scoped -> object : ChannelPersisting by scoped {
+            override suspend fun setChannelFloodScope(key: EntityKey, floodScope: ChannelFloodScope) {
+                if (rejectPreference) throw failure
+                scoped.setChannelFloodScope(key, floodScope)
+            }
+        } }
+        val h = ContainerHarness(this, store, persistenceOverride = persistence)
+        h.links.configureRadio = { radio -> radio.respond = { frame -> when (frame[0].toInt()) {
+            0x1f -> listOf(emptyChannelReply(frame[1].toInt()))
+            0x20 -> listOf(Bytes.of(0))
+            else -> null
+        } } }
+        logger.addHandler(handler)
+        try {
+            h.container.foreground.activityStarted()
+            h.manager.connect(h.target())
+            h.settle()
+            h.assertReady()
+            h.eventually("initial channel sync completes") {
+                h.appState.syncCoordinator?.state == com.meshcoreone.android.core.services.sync.SyncState.Synced
+            }
+            val radio = assertNotNull(h.appState.currentRadioId)
+            val firmware = h.links.radios.single()
+            val navigation = h.container.navigation
+            val external = AppDeepLinkRouter(ContainerDeepLinkEnvironment(h.container, navigation))
+            val before = firmware.sent.count { it[0].toInt() == 0x20 }
+            compose.runOnUiThread {
+                host.get().setContent { MeshCoreTheme(motionScale = 0f) {
+                    NativeNavigationShell(navigation, chats = h.container.chatsFeature)
+                } }
+            }
+            for (index in 1..2) {
+                rejectPreference = index == 1
+                val secret = if (index == 1) Bytes.fromHex("00112233445566778899AABBCCDDEEFF")
+                    else Bytes.fromHex("FFEEDDCCBBAA99887766554433221100")
+                assertEquals(
+                    com.meshcoreone.android.app.deeplinks.DeepLinkRouteOutcome.ConfirmationStaged,
+                    external.routeExternal(
+                        "meshcore://channel/add?name=%23region-$index&secret=${secret.hexString}&region_scope=testregion",
+                    ),
+                )
+                compose.waitUntil(10_000) {
+                    h.scheduler.runCurrent()
+                    val confirm = compose.onAllNodesWithText(host.get().getString(L.commonOk)).fetchSemanticsNodes()
+                    confirm.size == 1 && !confirm.single().config.contains(SemanticsProperties.Disabled)
+                }
+                assertEquals(before + index - 1, firmware.sent.count { it[0].toInt() == 0x20 })
+                compose.onNodeWithText(host.get().getString(L.commonOk)).performClick()
+                h.eventually("confirmed region join navigates to its saved snapshot", virtualBudgetMillis = 0) {
+                    navigation.state.value.let {
+                        it.pendingChannelConfirmation == null &&
+                            (it.chatsSelectedRoute as? ChatSelection.Channel)?.channel?.name == "#region-$index"
+                    }
+                }
+                val saved = assertNotNull(store.fetchChannel(radio, index.toUByte()))
+                assertEquals(secret, saved.secret)
+                assertEquals(
+                    if (index == 1) ChannelFloodScope.Inherit else ChannelFloodScope.Region("testregion"), saved.floodScope,
+                )
+                assertEquals(ChatSelection.Channel(saved), navigation.state.value.chatsSelectedRoute)
+                assertEquals(before + index, firmware.sent.count { it[0].toInt() == 0x20 })
+                compose.onAllNodesWithText(host.get().getString(L.commonOk)).assertCountEquals(0)
+            }
+            val diagnostic = synchronized(records) { records.filter { it.thrown === failure } }.single()
+            assertEquals(java.util.logging.Level.SEVERE, diagnostic.level)
+            assertEquals("Failed to persist channel flood scope after join", diagnostic.message)
+        } finally {
+            logger.removeHandler(handler)
+            compose.runOnUiThread { host.get().setContent {} }
+            h.container.close()
+        }
+    }
 
     @Test fun joinedRegionAndMountedNavigationExcludeReusedRowReplacement() = runTest {
         joinedRegionExcludesReplacement(RegionReplacement.REUSED_ROW)
@@ -399,12 +498,25 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
         postSaveRetryControl(inCache = true, cancel = false, presentation = ConfirmationPresentation.HELD_TAB_RETURN)
     }
 
+    @Test
+    @Config(qualifiers = "en-rUS-w1080dp-h1000dp-mdpi")
+    fun cancellationBeforeRegionPreferenceCommitRetainsTheSavedJoinWithoutNavigatingOrReplaying() = runTest {
+        postSaveRetryControl(inCache = false, cancel = true, regionPersistedBeforeCancellation = false)
+    }
+
+    @Test
+    @Config(qualifiers = "en-rUS-w1080dp-h1000dp-mdpi")
+    fun cancellationAfterRegionPreferenceCommitRetainsTheExactRegionWithoutClaimingJoinSuccess() = runTest {
+        postSaveRetryControl(inCache = false, cancel = true, regionPersistedBeforeCancellation = true)
+    }
+
     private enum class ConfirmationPresentation {
         RESIZE, TAB_RETURN, ACTIVITY_RECREATION, HELD_TAB_RETURN, HELD_ACTIVITY_RECREATION,
     }
 
     private suspend fun TestScope.postSaveRetryControl(
         inCache: Boolean, cancel: Boolean, presentation: ConfirmationPresentation = ConfirmationPresentation.RESIZE,
+        regionPersistedBeforeCancellation: Boolean? = null,
     ) {
         val savedBy = java.util.concurrent.atomic.AtomicReference<Job?>(null)
         val returnedId = java.util.concurrent.atomic.AtomicReference<java.util.UUID?>(null)
@@ -428,12 +540,17 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
                 return id
             }
             override suspend fun fetchChannel(radioId: RadioId, index: UByte): ChannelDTO? {
-                if (!inCache) afterSaved()
+                if (!inCache && regionPersistedBeforeCancellation == null) afterSaved()
                 return scoped.fetchChannel(radioId, index)
             }
             override suspend fun fetchChannels(radioId: RadioId): SnapshotList<ChannelDTO> {
                 if (inCache) afterSaved()
                 return scoped.fetchChannels(radioId)
+            }
+            override suspend fun setChannelFloodScope(key: EntityKey, floodScope: ChannelFloodScope) {
+                if (regionPersistedBeforeCancellation == false) afterSaved()
+                scoped.setChannelFloodScope(key, floodScope)
+                if (regionPersistedBeforeCancellation == true) afterSaved()
             }
         } }
         val h = ContainerHarness(this, store, persistenceOverride = persistence)
@@ -510,8 +627,11 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
             assertEquals(returnedId.get(), saved.id)
             assertEquals("#test", saved.name)
             assertEquals(secret, saved.secret)
-            assertEquals(ChannelFloodScope.Region("testregion"), saved.floodScope,
-                "Local preference commits before the later read/cache failure while the saved occupant is still exclusive")
+            assertEquals(
+                if (regionPersistedBeforeCancellation == false) ChannelFloodScope.Inherit else ChannelFloodScope.Region("testregion"),
+                saved.floodScope,
+                "Only a completed local preference write may change the saved occupant's region",
+            )
             assertEquals(before + 1, firmware.sent.count { it[0].toInt() == 0x20 })
             assertEquals(first, navigation.state.value.pendingChannelConfirmation)
             compose.onNodeWithText(host.get().getString(L.commonOk)).assertIsNotEnabled()
@@ -523,13 +643,23 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
                 assertTrue(requestJob.isActive, "Presentation disposal must not cancel an already-consented write")
                 compose.onNodeWithText(host.get().getString(L.commonOk)).assertIsNotEnabled()
             }
-            if (cancel) requestJob.cancel(CancellationException("cancel after actual returned Room UUID"))
+            val cancellation = CancellationException("cancel after actual returned Room UUID")
+            if (cancel) requestJob.cancel(cancellation)
             else release.complete(Unit)
             compose.waitUntil(10_000) {
                 h.scheduler.runCurrent()
                 requestJob.isCompleted
             }
             assertEquals(cancel, requestJob.isCancelled)
+            if (cancel) {
+                val submission = h.container.chatsFeature.channelConfirmation(navigation, first.deliveryId, radio)
+                val outcome = assertIs<com.meshcoreone.android.feature.chats.channels.ChannelSheetError.AlreadyCommitted>(
+                    submission.holder.state.value.failure,
+                )
+                assertEquals(EntityKey(radio, saved.id), outcome.receipt.key)
+                assertTrue(generateSequence(outcome.cause) { it.cause }.any { it === cancellation },
+                    "The saved-write outcome must retain the initiating cancellation, not synthesize success")
+            }
             compose.onNodeWithText(host.get().getString(com.meshcoreone.android.R.string.platform_channel_already_saved))
                 .assertIsDisplayed()
             probe.set(false)

@@ -305,8 +305,7 @@ class ChatPrefetchAdmissionAcceptanceTest : RoomProcessTest() {
             f.awaitMessage(message)
             assertTrue(f.http.requests.isEmpty())
             assertTrue(f.safetyChecks.isEmpty())
-            val channel = ChannelDTO(radioId = f.radio, index = 0u, name = "Test")
-            store.saveChannel(channel)
+            val channel = seedReconciledChannel(ChannelDTO(radioId = f.radio, index = 0u, name = "Test"))
             val conversation = TimelineConversation.Channel(channel)
             val timeline = ChatViewModel(conversation, f.harness.container.chatsFeature.timeline(conversation), f.screenScope)
             timeline.start(); runCurrent()
@@ -321,8 +320,7 @@ class ChatPrefetchAdmissionAcceptanceTest : RoomProcessTest() {
             assertEquals(beforeWire, f.harness.links.radios.single().sent)
         }
         withApp(autoDM = true, autoChannel = false) { f ->
-            val channel = ChannelDTO(radioId = f.radio, index = 0u, name = "Test")
-            store.saveChannel(channel)
+            val channel = seedReconciledChannel(ChannelDTO(radioId = f.radio, index = 0u, name = "Test"))
             val conversation = TimelineConversation.Channel(channel)
             val timeline = ChatViewModel(conversation, f.harness.container.chatsFeature.timeline(conversation), f.screenScope)
             timeline.start(); runCurrent()

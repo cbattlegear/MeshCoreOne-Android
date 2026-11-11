@@ -15,6 +15,7 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.services.reactions.ReactionParser
 import com.meshcoreone.android.core.services.rendering.MessageFragment
+import com.meshcoreone.android.core.services.sync.SyncDataEvent
 import com.meshcoreone.android.feature.chats.timeline.ChatViewModel
 import com.meshcoreone.android.feature.chats.timeline.TimelineConversation
 import java.util.UUID
@@ -22,11 +23,14 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
 
@@ -240,6 +244,14 @@ class HistoryReactionReplayTest : RoomProcessTest() {
 
     @Test fun unknownChannelSenderSkipsOnlyThatMessageAndRetainsItsPendingReaction() = runTest {
         withSession(this) { fixture ->
+            val reactionEvents = mutableListOf<SyncDataEvent.ReactionReceived>()
+            val eventCoordinator = assertNotNull(fixture.harness.appState.services).syncCoordinator
+            assertSame(fixture.live.syncCoordinator, eventCoordinator)
+            val eventCollector = backgroundScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+                eventCoordinator.dataEventBroadcaster.subscribe().collect {
+                    if (it is SyncDataEvent.ReactionReceived) reactionEvents += it
+                }
+            }
             val incoming = target(fixture, direct = false)
             val outgoing = incoming.copy(id = UUID.randomUUID(), direction = MessageDirection.OUTGOING, senderNodeName = null)
             val unknownIncoming = incoming.copy(id = UUID.randomUUID(), senderNodeName = null, text = "unknown sender")
@@ -253,19 +265,41 @@ class HistoryReactionReplayTest : RoomProcessTest() {
             val feature = fixture.harness.container.chatsFeature
             val prepared = feature.prepareTimelineMessages(
                 listOf(outgoing, unknownIncoming, incoming),
-                ReactionIndexing(fixture.live.reactionService, ReactionIndexScope.Channel(fixture.channel, null)),
+                ReactionIndexing(
+                    fixture.live.reactionService,
+                    ReactionIndexScope.Channel(fixture.channel, null),
+                    onPersisted = { result ->
+                        fixture.harness.appState.publishReactionPersisted(fixture.channel.radioId, result)
+                    },
+                ),
             )
+            runCurrent()
             assertEquals(listOf(outgoing.id, unknownIncoming.id, incoming.id), prepared.map { it.id })
             assertNull(prepared[0].reactionSummary)
             assertNull(prepared[1].reactionSummary)
             assertEquals("$emoji:1", prepared[2].reactionSummary, "Unknown names must not abort the rest of the page")
+            assertEquals(listOf(SyncDataEvent.ReactionReceived(incoming.id, "$emoji:1")), reactionEvents)
             assertTrue(store.fetchReactions(EntityKey(outgoing.radioId, outgoing.id)).isEmpty())
             assertTrue(store.fetchReactions(EntityKey(unknownIncoming.radioId, unknownIncoming.id)).isEmpty())
             val retried = feature.prepareTimelineMessages(
                 listOf(outgoing),
-                ReactionIndexing(fixture.live.reactionService, ReactionIndexScope.Channel(fixture.channel, "Me")),
+                ReactionIndexing(
+                    fixture.live.reactionService,
+                    ReactionIndexScope.Channel(fixture.channel, "Me"),
+                    onPersisted = { result ->
+                        fixture.harness.appState.publishReactionPersisted(fixture.channel.radioId, result)
+                    },
+                ),
             )
+            runCurrent()
             assertEquals("$emoji:1", retried.single().reactionSummary)
+            assertEquals(
+                listOf(
+                    SyncDataEvent.ReactionReceived(incoming.id, "$emoji:1"),
+                    SyncDataEvent.ReactionReceived(outgoing.id, "$emoji:1"),
+                ),
+                reactionEvents,
+            )
             val saved = store.fetchReactions(EntityKey(outgoing.radioId, outgoing.id)).single()
             assertEquals("Carol", saved.senderName)
             assertEquals(fixture.channel.radioId, saved.radioId)
@@ -273,6 +307,7 @@ class HistoryReactionReplayTest : RoomProcessTest() {
             assertNull(saved.contactID)
             assertEquals(outgoingWire, saved.rawText)
             assertEquals("$emoji:1", assertNotNull(store.fetchMessage(EntityKey(outgoing.radioId, outgoing.id))).reactionSummary)
+            eventCollector.cancel()
         }
     }
 }

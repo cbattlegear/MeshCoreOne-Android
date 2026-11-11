@@ -694,11 +694,13 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             val results = when (val target = indexing.scope) {
                 is ReactionIndexScope.Direct -> indexing.service.persistIndexedDirectMessage(
                     message.id, radio, target.contact.id, message.text, message.reactionTimestamp, store,
+                    indexing.onPersisted,
                 )
                 is ReactionIndexScope.Channel -> {
                     val name = if (message.isOutgoing) target.localNodeName else message.senderNodeName
                     if (name == null) emptyList() else indexing.service.persistIndexedChannelMessage(
                         message.id, radio, target.channel.index, name, message.text, message.timestamp, store,
+                        indexing.onPersisted,
                     )
                 }
             }
@@ -723,12 +725,19 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         override val content get() = this@AppChatsFeature.content
         override suspend fun prepareMessages(messages: List<MessageDTO>): List<MessageDTO> {
             val current = container.sessions.current?.takeIf { it.token.radioId == radio } ?: return messages
-            return prepareTimelineMessages(messages, ReactionIndexing(current.reactionService, when (conversation) {
-                is TimelineConversation.Direct -> ReactionIndexScope.Direct(conversation.contact)
-                is TimelineConversation.Channel -> ReactionIndexScope.Channel(
-                    conversation.channel, app.connectedDevice?.takeIf { it.radioId == radio }?.nodeName,
-                )
-            }))
+            return prepareTimelineMessages(
+                messages,
+                ReactionIndexing(
+                    current.reactionService,
+                    when (conversation) {
+                        is TimelineConversation.Direct -> ReactionIndexScope.Direct(conversation.contact)
+                        is TimelineConversation.Channel -> ReactionIndexScope.Channel(
+                            conversation.channel, app.connectedDevice?.takeIf { it.radioId == radio }?.nodeName,
+                        )
+                    },
+                    onPersisted = { result -> app.publishReactionPersisted(radio, result) },
+                ),
+            )
         }
         override fun admissionIdentity() = container.sessions.current?.takeIf { it.token.radioId == radio }?.token
         override fun isCurrentAdmission(identity: SessionToken?) =

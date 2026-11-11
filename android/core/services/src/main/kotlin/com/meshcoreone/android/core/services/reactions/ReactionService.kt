@@ -260,8 +260,8 @@ class ReactionService internal constructor(
         }
     }
 
-    /** Clears all pending reactions (call on disconnect). */
-    internal fun clearPendingReactions() {
+    /** Clears this session's unmatched reactions while preserving process-owned unfinished persistence batches. */
+    fun clearPendingReactions() {
         val cleared = synchronized(lock) {
             val count = pendingReactions.count + pendingDMReactions.count
             pendingReactions = pendingReactions.cleared()

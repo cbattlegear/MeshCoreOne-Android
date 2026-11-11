@@ -127,6 +127,27 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
         }
     }
 
+    @Test fun actualFactoryOutgoingChannelSendPublishesAfterPostCommitReactionCancellation() = runTest {
+        val cancelledStore = SaveThenFailReactionStore(store, CancellationException("Committed then cancelled"))
+        withFactoryQueue(QueryReply.SUCCESS, persistenceOverride = cancelledStore) { f ->
+            f.harness.eventually("the committed reaction save is cancelled afterward") { cancelledStore.failed }
+            f.awaitAcceptedAttempt()
+            f.assertStored(MessageStatus.SENT, pending = false, reactionSummary = "👍:2")
+            assertEquals(
+                setOf("Remote Node", "Second Remote Node"),
+                store.fetchReactions(EntityKey(f.radioId, f.message.id)).map { it.senderName }.toSet(),
+            )
+            assertEquals(
+                listOf(
+                    SyncDataEvent.ReactionReceived(f.message.id, "👍:1"),
+                    SyncDataEvent.ReactionReceived(f.message.id, "👍:2"),
+                ),
+                f.reactionNotifications(),
+            )
+            f.assertSuccessfulWire()
+        }
+    }
+
     @Test fun actualFactoryConfiguredChannelRetainsTheOriginalEnvelopeAsUncertain() = runTest {
         withFactoryQueue(QueryReply.CONFIGURED) { f ->
             f.awaitUncertainAttempt()
@@ -603,6 +624,23 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
                 throw failure
             }
             return delegate.reactionExists(message, senderName, emoji)
+        }
+    }
+
+    private class SaveThenFailReactionStore(
+        private val delegate: RoomPersistenceStore,
+        private val failure: CancellationException,
+    ) : PersistenceStoreProtocol by delegate, QueuedChannelReadinessPersisting by delegate {
+        private val failedOnce = java.util.concurrent.atomic.AtomicBoolean()
+        @Volatile var failed = false
+            private set
+
+        override suspend fun saveReaction(reaction: ReactionDTO) {
+            delegate.saveReaction(reaction)
+            if (failedOnce.compareAndSet(false, true)) {
+                failed = true
+                throw failure
+            }
         }
     }
 }

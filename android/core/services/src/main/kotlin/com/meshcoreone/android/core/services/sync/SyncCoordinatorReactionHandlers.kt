@@ -36,8 +36,11 @@ internal suspend fun SyncCoordinator.persistReactionIfNew(reaction: ReactionDTO,
     val result = contain("persistReactionAndUpdateSummary", null) {
         dependencies.reactionService.persistReactionAndUpdateSummary(reaction, dependencies.dataStore)
     }
-    if (result != null) dataEventBroadcaster.yield(SyncDataEvent.ReactionReceived(result.messageID, result.summary))
-    return true
+    if (result == null) return true
+    if (result.shouldNotify) {
+        dataEventBroadcaster.yield(SyncDataEvent.ReactionReceived(result.messageID, result.summary))
+    }
+    return result.shouldNotify
 }
 
 /** Symmetric reaction-matching window around [anchor]; Swift traps on overflow, Kotlin saturates. */

@@ -132,6 +132,7 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
                 return store.reactionExists(message, senderName, emoji)
             }
         }
+
         val harness = ContainerHarness(this, store, persistenceOverride = persistence)
         val connectionTarget = harness.target()
         try {
@@ -176,6 +177,47 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
             assertEquals("$emoji:1", store.fetchMessage(EntityKey(radio, target.id))?.reactionSummary)
         } finally {
             harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+        }
+    }
+
+    @Test fun unmatchedReactionDoesNotCrossActualReconnect() = runTest {
+        val harness = ContainerHarness(this, store)
+        val connectionTarget = harness.target()
+        try {
+            harness.manager.connect(connectionTarget)
+            harness.eventually("first reaction session ready") {
+                harness.manager.connectionState == DeviceConnectionState.READY
+            }
+            val first = assertNotNull(harness.sessions.current)
+            val radio = first.token.radioId
+            store.saveChannel(radio, ChannelInfo(3u, "General", Bytes(ByteArray(16))))
+            val channel = assertNotNull(store.fetchChannel(radio, 3u))
+            val target = MessageDTO(
+                radioId = radio, channelIndex = channel.index, text = "Hello", timestamp = stamp,
+                createdAt = EPOCH, sortDate = EPOCH, senderNodeName = "Alice",
+                direction = MessageDirection.OUTGOING, status = MessageStatus.SENT,
+            )
+            val wire = first.reactionService.buildReactionText(emoji, "Alice", target.text, target.timestamp)
+            first.reactionService.queuePendingReaction(
+                assertNotNull(ReactionParser.parse(wire)), channel.index, "Carol", wire, radio,
+            )
+
+            harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            assertTrue(first.isTornDown)
+            harness.manager.connect(connectionTarget)
+            harness.eventually("replacement reaction session ready") {
+                harness.manager.connectionState == DeviceConnectionState.READY
+            }
+            val replacement = assertNotNull(harness.sessions.current)
+            assertNotSame(first.reactionService, replacement.reactionService)
+            store.saveMessage(target)
+            val results = replacement.reactionService.persistIndexedChannelMessage(
+                target.id, radio, channel.index, "Alice", target.text, target.timestamp, store,
+            )
+            assertEquals(emptyList(), results)
+            assertTrue(store.fetchReactions(EntityKey(radio, target.id)).isEmpty())
+        } finally {
+            harness.container.close()
         }
     }
 

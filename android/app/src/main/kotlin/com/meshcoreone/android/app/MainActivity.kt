@@ -26,6 +26,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import com.meshcoreone.android.app.container.AppContainer
 import com.meshcoreone.android.app.container.AppConnectionRecoveryDialogs
+import com.meshcoreone.android.app.container.SimulatorPreferenceRecoveryDialog
 import com.meshcoreone.android.app.container.AppConnectionStatus
 import com.meshcoreone.android.app.container.createToolsFeatureDependencies
 import com.meshcoreone.android.app.container.createToolsDiagnosticsDependencies
@@ -213,6 +214,8 @@ open class MainActivity : ComponentActivity() {
             val screen: @Composable () -> Unit = {
                 val answer = resolved
                 val connectionRecovery = answer?.container?.appState?.connectionUI?.state?.collectAsState()?.value
+                val simulatorRecovery = answer?.container?.simulatorPreferenceRecovery
+                val simulatorPrompt = simulatorRecovery?.prompt?.collectAsStateWithLifecycle()?.value
                 val shellVisible = onboardingShellVisible(host.navigation, answer?.container?.onboarding)
                 if (answer == null) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
@@ -257,15 +260,19 @@ open class MainActivity : ComponentActivity() {
                             },
                         )
                     }
-                    answer.container?.let { AppConnectionRecoveryDialogs(it.appState) }
+                    if (simulatorPrompt != null && simulatorRecovery != null) {
+                        SimulatorPreferenceRecoveryDialog(simulatorRecovery)
+                    } else {
+                        answer.container?.let { AppConnectionRecoveryDialogs(it.appState) }
+                    }
                 }
                 AppRootRecoveryDialogs(
                     navigation = host.navigation,
                     pendingExternalRoute = host.pendingExternalRoute,
-                    showExternalLinkFailure = answer != null && answer.failure == null,
+                    showExternalLinkFailure = answer != null && answer.failure == null && simulatorPrompt == null,
                     shellVisible = answer != null && answer.failure == null && shellVisible,
                     nodesAvailable = answer?.container?.nodesFeature != null,
-                    connectionRecoveryVisible = connectionRecovery?.showingConnectionFailedAlert == true ||
+                    connectionRecoveryVisible = simulatorPrompt != null || connectionRecovery?.showingConnectionFailedAlert == true ||
                         connectionRecovery?.otherAppWarningDeviceId != null,
                     onRetryContactLink = host::retryContactLink,
                     onCancelContactLink = host::cancelContactLink,

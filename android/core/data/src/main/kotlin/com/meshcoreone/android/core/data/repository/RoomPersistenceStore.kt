@@ -57,6 +57,17 @@ class RoomPersistenceStore private constructor(
     override suspend fun setSessionNotificationLevel(key: EntityKey, level: NotificationLevel) =
         rooms.setSessionNotificationLevel(key, level)
 
+    suspend fun saveSimulatorDevice(dto: DeviceDTO): Unit = devices.saveSimulatorDevice(dto)
+
+    suspend fun simulatorDevicePreferenceConflict(dto: DeviceDTO): SimulatorDevicePreferenceConflict? =
+        devices.simulatorDevicePreferenceConflict(dto)
+
+    suspend fun resolveSimulatorDevicePreferenceConflict(
+        dto: DeviceDTO,
+        expected: SimulatorDevicePreferenceConflict,
+        choice: SimulatorPreferenceChoice,
+    ): Unit = devices.resolveSimulatorDevicePreferenceConflict(dto, expected, choice)
+
     suspend fun existingNodeStatusSnapshotKeys(): SnapshotSet<Pair<Bytes, Long>> =
         context.read("existingNodeStatusSnapshotKeys") {
             database.nodeSnapshots().backupAll().map { snapshotBackupKey(it.toDTO()) }.snapshotSet()

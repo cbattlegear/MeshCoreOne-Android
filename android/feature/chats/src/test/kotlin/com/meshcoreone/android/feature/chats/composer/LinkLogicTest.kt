@@ -238,6 +238,22 @@ class LinkLogicTest {
     }
 
     @Test
+    fun `manual load rechecks a newly populated cache before DNS or a fetch`() = scenario {
+        val port = FakePreviewPort()
+        val holder = LinkPreviewStateHolder(
+            data.url, false, port, { error("Newly cached data requires no DNS") }, { false }, scope,
+            autoResolve = false,
+        )
+        holder.start()
+        assertEquals(LinkPreviewCardState.TapToLoad(data.url), holder.state.value)
+        port.cached = data
+        holder.manualLoad()
+        assertEquals(LinkPreviewCardState.Loaded(data), holder.state.value)
+        assertTrue(port.calls.isEmpty())
+        holder.close()
+    }
+
+    @Test
     fun `failures hide the card and cancellation is never swallowed`() = scenario {
         val reported = ArrayList<Throwable>()
         val port = FakePreviewPort().apply { failure = IllegalStateException("boom") }

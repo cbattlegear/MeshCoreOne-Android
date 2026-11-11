@@ -121,7 +121,7 @@ class LinkPreviewStateHolder(
                 mutableState.value = LinkPreviewCardState.Malware(url)
                 return
             }
-            val cached = if (manual) null else port.cachedPreview(url)
+            val cached = port.cachedPreview(url)
             if (cached != null) {
                 mutableState.value = LinkPreviewCardState.Loaded(cached)
                 return

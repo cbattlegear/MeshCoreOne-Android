@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-311 Explicit URI copy independent of installed share targets. -->
+<resources>
+    <string name="contact_link_copy">Copy contact link</string>
+    <string name="contact_link_copied">Contact link copied</string>
+</resources>

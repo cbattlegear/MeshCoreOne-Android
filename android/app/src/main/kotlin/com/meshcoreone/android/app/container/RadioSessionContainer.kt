@@ -16,6 +16,7 @@ import com.meshcoreone.android.core.contracts.domain.TeardownReport
 import com.meshcoreone.android.core.contracts.domain.UnreadCounts
 import com.meshcoreone.android.core.contracts.domain.DebugLogRetention
 import com.meshcoreone.android.core.model.RadioId
+import com.meshcoreone.android.core.model.ReactionDTO
 import com.meshcoreone.android.core.model.TransportType
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.protocol.model.BatteryInfo
@@ -66,6 +67,7 @@ import com.meshcoreone.android.core.services.remote.asRemoteNodeSessionPort
 import com.meshcoreone.android.core.services.remote.remoteAdminStore
 import com.meshcoreone.android.core.services.remote.remoteNodeStore
 import com.meshcoreone.android.core.services.sync.SyncCoordinator
+import com.meshcoreone.android.core.services.sync.SyncDataEvent
 import com.meshcoreone.android.core.services.sync.SyncDependencies
 import com.meshcoreone.android.core.services.sync.SyncRetryController
 import com.meshcoreone.android.core.services.sync.SyncRetryServices
@@ -231,7 +233,7 @@ class RadioSessionContainer private constructor(
     val chatSendQueueService = ChatSendQueueService(
         token, dataStore, messageService, MessagingChannelQuery { index -> channelService.fetchChannel(index) },
         OutgoingChannelReactionIndexer { id, channelIndex, senderName, text, timestamp ->
-            reactionService.indexMessage(id, channelIndex, senderName, text, timestamp)
+            indexOutgoingChannelReactions(id, channelIndex, senderName, text, timestamp)
         },
         inputs.connection.signals, scope,
         config = env.chatSendQueueConfig,
@@ -239,6 +241,49 @@ class RadioSessionContainer private constructor(
         progress = chatSendQueueProgress,
         onQueryAccounting = env.onChannelQueryAccounting,
     )
+
+    private suspend fun indexOutgoingChannelReactions(
+        messageID: UUID,
+        channelIndex: UByte,
+        senderName: String,
+        text: String,
+        timestamp: UInt,
+    ) {
+        val matches = reactionService.indexMessage(messageID, channelIndex, senderName, text, timestamp)
+        var next = 0
+        try {
+            while (next < matches.size) {
+                val pending = matches[next]
+                val result = reactionService.persistReactionAndUpdateSummary(
+                    ReactionDTO(
+                        messageID = messageID,
+                        emoji = pending.parsed.emoji,
+                        senderName = pending.senderNodeName,
+                        messageHash = pending.parsed.messageHash,
+                        rawText = pending.rawText,
+                        receivedAt = pending.receivedAt,
+                        channelIndex = pending.channelIndex,
+                        radioId = pending.radioId,
+                    ),
+                    dataStore,
+                )
+                if (result == null) {
+                    matches.drop(next).forEach(reactionService::requeuePendingReaction)
+                    throw IllegalStateException(
+                        "Could not persist pending channel reaction(s) for message $messageID; restored them to the queue",
+                    )
+                }
+                syncCoordinator.dataEventBroadcaster.yield(
+                    SyncDataEvent.ReactionReceived(result.messageID, result.summary),
+                )
+                next++
+            }
+        } catch (cancelled: CancellationException) {
+            matches.drop(next).forEach(reactionService::requeuePendingReaction)
+            throw cancelled
+        }
+    }
+
     override val notificationActionHandler = NotificationActionHandler(
         dataStore, NotificationMessageSender(messageService), notificationService,
         NotificationRoomReader(roomServerService), ConversationsNotifierAdapter(syncCoordinator),

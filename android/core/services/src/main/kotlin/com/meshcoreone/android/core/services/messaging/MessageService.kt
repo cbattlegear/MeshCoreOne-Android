@@ -1178,6 +1178,7 @@ class MessageService(
                         val retained = if (settlement is QueuedChannelRetainedException) settlement else retain(settlement)
                         retainedFailure = retained
                         cancelled.addSuppressed(retained)
+                        if (wireAccepted) return@dispatch ChannelPrewireResult.CancelledAccepted(cancelled)
                         throw cancelled
                     }
                     if (wireAccepted) return@dispatch ChannelPrewireResult.CancelledAccepted(cancelled)

@@ -324,11 +324,11 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 val failed = store.fetchFailedSendConversationKeys(radioId)
                 if (radioId == MockDataProvider.simulatorRadioId) return failed
                 val current = mutableSetOf<UUID>()
-                for (channel in store.fetchChannels(radioId)) {
-                    if (channel.id !in failed.channelIDs) continue
+                for (channel in channels) {
+                    if (channel.radioId != radioId || channel.id !in failed.channelIDs) continue
                     try {
                         if (channelHistory.countUnseenChannelTimelineFailures(
-                                channelOrigin(radioId, channel.index, channel.occupantID),
+                                channelOrigin(radioId, channel.channelIndex, channel.occupantID),
                             ) > 0) current += channel.id
                     } catch (failure: PersistenceStoreException) {
                         if (failure.cause !is ChannelHistoryRejected) throw failure
@@ -857,12 +857,23 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 is MessageEvent.RoomMessageFailed -> emptyList()
             }
             for (id in ids) {
-                val message = store.fetchMessage(EntityKey(radio, id)) ?: continue
-                val belongs = when (conversation) {
-                    is TimelineConversation.Direct -> message.contactID == conversation.contact.id
-                    is TimelineConversation.Channel -> message.channelIndex == conversation.channel.index
+                val stored = store.fetchMessage(EntityKey(radio, id)) ?: continue
+                val message = when (conversation) {
+                    is TimelineConversation.Direct -> stored.takeIf { it.contactID == conversation.contact.id }
+                    is TimelineConversation.Channel -> {
+                        val channel = conversation.channel
+                        when {
+                            stored.contactID != null || stored.channelIndex != channel.index -> null
+                            radio == MockDataProvider.simulatorRadioId -> stored
+                            stored.channelOccupantID != channel.occupantID &&
+                                !(stored.channelOccupantID == null && stored.direction == MessageDirection.INCOMING) -> null
+                            else -> channelHistory.fetchChannelTimelineMessage(
+                                channelOrigin(radio, channel.index, channel.occupantID), EntityKey(radio, id),
+                            )
+                        }
+                    }
                 }
-                if (belongs) {
+                if (message != null) {
                     if (event is MessageEvent.MessageFailed && !message.failureSeen) {
                         markFailedSendSeenIfVisible(message)
                         app.refreshConversations()

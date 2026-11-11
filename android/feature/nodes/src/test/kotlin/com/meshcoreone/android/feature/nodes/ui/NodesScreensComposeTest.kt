@@ -320,7 +320,51 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
         }
     }
 
+    protected fun awaitCondition(predicate: () -> Boolean) {
+        repeat(100) {
+            advanceFrames()
+            if (predicate()) return
+            Thread.sleep(10)
+        }
+        assertTrue(predicate(), "The mounted operation did not complete")
+    }
+
     abstract class DiscoveryLiveComposeTestBase : NodesScreensComposeTestBase(deterministicFrames = true) {
+        @Test
+        fun heldBackgroundRefreshKeepsTheScrolledListMountedAndRetainsItsAnchor() {
+            val harness = Harness().connect()
+            val radio = checkNotNull(harness.session.radioId)
+            harness.store.discovered += (0..19).map {
+                Fixtures.node(radioId = radio, name = "Node ${it.toString().padStart(2, '0')}")
+            }
+            mount { DiscoveryScreen(harness.dependencies) }
+            awaitText("Node 00")
+            fun list() = allSemanticsNodes().single { it.config.contains(SemanticsActions.ScrollToIndex) }
+            val listId = list().id
+            controller.get().runOnUiThread {
+                assertTrue(checkNotNull(list().config[SemanticsActions.ScrollToIndex].action).invoke(10))
+            }
+            awaitText("Node 10")
+            val offset = list().config[SemanticsProperties.VerticalScrollAxisRange].value()
+            assertTrue(offset > 0f, "The regression must start from a genuinely scrolled list")
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            harness.store.fetchDiscoveredGate = { entered.complete(Unit); release.await() }
+            controller.get().runOnUiThread {
+                val index = harness.store.discovered.indexOfFirst { it.name == "Node 10" }
+                harness.store.discovered[index] = harness.store.discovered[index].copy(name = "Node 10!")
+                harness.session.versions.value++
+            }
+            awaitCondition { entered.isCompleted }
+            assertEquals(listId, list().id, "A pending background refresh must not dispose the lazy list")
+            assertEquals(offset, list().config[SemanticsProperties.VerticalScrollAxisRange].value())
+            assertTrue(isDisplayed(awaitText("Node 10")))
+            release.complete(Unit)
+            awaitText("Node 10!")
+            assertEquals(listId, list().id)
+            assertEquals(offset, list().config[SemanticsProperties.VerticalScrollAxisRange].value())
+        }
+
         @Test
         fun mountedDiscoveryReloadsNewRowsAndExternalContactAdmissionOnVersionChanges() {
             val harness = Harness().connect()
@@ -1396,14 +1440,6 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
             advanceFrames()
         }
 
-        private fun awaitCondition(predicate: () -> Boolean) {
-            repeat(100) {
-                advanceFrames()
-                if (predicate()) return
-                Thread.sleep(10)
-            }
-            assertTrue(predicate(), "The mounted operation did not complete")
-        }
     }
 
     abstract class ContactShareComposeTestBase : NodesScreensComposeTestBase() {

@@ -69,7 +69,7 @@ class DiscoveryLiveStoreTest : RoomProcessTest() {
             waitForText(host.get().getString(C.contactsDiscoveryAdd))
             store.saveContact(ContactDTO(
                 radioId = radio, publicKey = latest.publicKey, name = latest.name,
-                typeRawValue = ContactType.REPEATER.rawValue,
+                typeRawValue = ContactType.REPEATER.rawValue, lastHeardTimestamp = null,
             ))
             h.appState.bumpContactsVersion()
             waitForText(host.get().getString(C.contactsDiscoveryAdded))

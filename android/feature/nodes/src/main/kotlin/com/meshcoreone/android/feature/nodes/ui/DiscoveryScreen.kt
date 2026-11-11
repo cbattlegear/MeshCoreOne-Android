@@ -133,7 +133,7 @@ internal fun DiscoveryScreen(
             }
         }
         when {
-            !state.hasLoadedOnce || state.isLoading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            !state.hasLoadedOnce -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
             }
             state.visibleNodes.isEmpty() -> DiscoveryEmpty(search, Modifier.fillMaxSize())

@@ -4,6 +4,7 @@ package com.meshcoreone.android.core.services.sync
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.DebugLogLevel
+import com.meshcoreone.android.core.model.DeliveryContext
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.RadioId
@@ -27,7 +28,7 @@ private suspend inline fun <T> attempt(block: () -> T): T? = try {
  * Persists a reaction if it does not already exist, broadcasting the updated summary on success.
  * A failed existence check counts as "not present" (Swift `try?` then `exists != true`).
  *
- * @return true when the reaction was new and handed to the reaction service
+ * @return true only when persistence completed and the reaction was notification-eligible
  */
 internal suspend fun SyncCoordinator.persistReactionIfNew(reaction: ReactionDTO, dependencies: SyncDependencies): Boolean {
     val key = EntityKey(reaction.radioId, reaction.messageID)
@@ -38,7 +39,7 @@ internal suspend fun SyncCoordinator.persistReactionIfNew(reaction: ReactionDTO,
             publishReactionPersisted(it)
         }
     }
-    if (result == null) return true
+    if (result == null) return false
     return result.shouldNotify
 }
 
@@ -116,6 +117,7 @@ internal suspend fun SyncCoordinator.handleChannelReaction(
     receiveTime: Instant,
     radioId: RadioId,
     dependencies: SyncDependencies,
+    deliveryContext: DeliveryContext = DeliveryContext.Live,
 ): Boolean {
     val codecs = dependencies.codecs
     codecs.meshCoreOpenParser.parse(text)?.let {
@@ -128,49 +130,51 @@ internal suspend fun SyncCoordinator.handleChannelReaction(
     val parsed = reactions.tryProcessAsReaction(text) ?: return false
     val senderName = senderNodeName ?: "Unknown"
 
-    fun reaction(messageID: UUID) = ReactionDTO(
-        messageID = messageID, emoji = parsed.emoji, senderName = senderName, messageHash = parsed.messageHash,
-        rawText = text, channelIndex = channelIndex, radioId = radioId,
+    val incoming = SyncIncomingChannelReaction(
+        parsed, channelIndex, senderName, text, radioId, receiveTime, selfNodeName, deliveryContext,
     )
 
-    val cachedTarget = contain("findTargetMessage", null) { reactions.findTargetMessage(parsed, channelIndex) }
-    if (cachedTarget != null) {
-        if (persistReactionIfNew(reaction(cachedTarget), dependencies)) {
-            log(DebugLogLevel.DEBUG, "Saved reaction ${parsed.emoji} to message $cachedTarget")
+    var stored: MessageDTO? = null
+    val targetID = try {
+        reactions.findTargetMessage(parsed, channelIndex) ?: run {
+            stored = dependencies.dataStore.findChannelMessageForReaction(
+                radioId, channelIndex, parsed, selfNodeName.ifEmpty { null },
+                reactionTimestampWindow(receiveTime), REACTION_LOOKUP_LIMIT,
+            )
+            stored?.id
         }
+    } catch (failure: Exception) {
+        // Retention cannot suspend: the caller may already be cancelled by session retirement.
+        reactions.retainIncomingChannelReaction(incoming)
+        failure.rethrowIfCallerCancelled()
+        log(DebugLogLevel.ERROR, "Channel reaction target lookup failed; retained for indexed replay: ${failure.syncDescription()}")
+        return true
+    }
+    if (targetID == null) {
+        reactions.queueIncomingChannelReaction(incoming)
         return true
     }
 
-    val window = reactionTimestampWindow(receiveTime)
-    log(DebugLogLevel.DEBUG, "DB lookup: selfNodeName='$selfNodeName', targetSender=${parsed.targetSender}, hash=${parsed.messageHash}")
-    val stored = attempt {
-        dependencies.dataStore.findChannelMessageForReaction(
-            radioId, channelIndex, parsed, selfNodeName.ifEmpty { null }, window, REACTION_LOOKUP_LIMIT,
-        )
-    }
-    if (stored != null) {
-        if (persistReactionIfNew(reaction(stored.id), dependencies)) {
-            indexStoredReactionTarget(stored, channelIndex, selfNodeName, reactions)
-            log(DebugLogLevel.DEBUG, "Saved reaction ${parsed.emoji} to message ${stored.id} via DB lookup")
+    val result = contain("persistIncomingChannelReaction", null) {
+        reactions.persistIncomingChannelReaction(incoming, targetID, dependencies.dataStore) {
+            publishReactionPersisted(it)
         }
+    }
+    if (result == null) {
+        log(DebugLogLevel.ERROR, "Channel reaction persistence incomplete; retained for indexed replay")
         return true
     }
-
-    contain("queuePendingReaction", Unit) { reactions.queuePendingReaction(parsed, channelIndex, senderName, text, radioId) }
+    stored?.let { target ->
+        val targetSenderName = candidateSenderName(target, selfNodeName)
+        if (targetSenderName != null) contain("persistIndexedChannelMessage", null) {
+            reactions.persistIndexedChannelMessage(
+                target.id, radioId, channelIndex, targetSenderName, target.text, target.reactionTimestamp,
+                dependencies.dataStore,
+            ) { publishReactionPersisted(it) }
+        }
+    }
+    if (result.shouldNotify) log(DebugLogLevel.DEBUG, "Saved reaction ${parsed.emoji} to message $targetID")
     return true
-}
-
-/** Indexes a DB-found target for future reactions; pending matches are not needed (DB fallback covers them). */
-private suspend fun SyncCoordinator.indexStoredReactionTarget(
-    target: MessageDTO,
-    channelIndex: UByte,
-    selfNodeName: String,
-    reactions: SyncReactionServicing,
-) {
-    val targetSenderName = candidateSenderName(target, selfNodeName) ?: return
-    contain("indexMessage", emptyList()) {
-        reactions.indexMessage(target.id, channelIndex, targetSenderName, target.text, target.reactionTimestamp)
-    }
 }
 
 /** The sender name a reaction hash covers: our own node name for outgoing rows. */

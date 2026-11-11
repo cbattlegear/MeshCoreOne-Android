@@ -100,6 +100,25 @@ internal class FakeReactionService : SyncReactionServicing {
     var cachedTargets: MutableMap<String, UUID> = java.util.concurrent.ConcurrentHashMap()
     @Volatile var parseChannelReaction: (String) -> ParsedReaction? = { null }
 
+    override fun queueIncomingChannelReaction(reaction: SyncIncomingChannelReaction) {
+        queued += reaction.rawText
+    }
+
+    override fun retainIncomingChannelReaction(reaction: SyncIncomingChannelReaction) {
+        queued += reaction.rawText
+    }
+
+    override suspend fun persistIncomingChannelReaction(
+        reaction: SyncIncomingChannelReaction, targetMessageID: UUID, dataStore: ReactionPersisting,
+        onPersisted: (SyncReactionPersistResult) -> Unit,
+    ): SyncReactionPersistResult? = persistReactionAndUpdateSummary(
+        ReactionDTO(
+            messageID = targetMessageID, emoji = reaction.parsed.emoji, senderName = reaction.senderName,
+            messageHash = reaction.parsed.messageHash, rawText = reaction.rawText, radioId = reaction.radioId,
+            channelIndex = reaction.channelIndex, receivedAt = reaction.receivedAt,
+        ), dataStore, onPersisted,
+    )
+
     override suspend fun indexDMMessage(id: UUID, contactID: UUID, text: String, timestamp: UInt): List<SyncPendingDMReaction> {
         indexed += id to text
         return emptyList()

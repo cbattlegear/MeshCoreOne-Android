@@ -736,7 +736,7 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                 is ReactionIndexScope.Channel -> {
                     val name = if (message.isOutgoing) target.localNodeName else message.senderNodeName
                     if (name == null) emptyList() else indexing.service.persistIndexedChannelMessage(
-                        message.id, radio, target.channel.index, name, message.text, message.timestamp, store,
+                        message.id, radio, target.channel.index, name, message.text, message.reactionTimestamp, store,
                         indexing.onPersisted,
                     )
                 }

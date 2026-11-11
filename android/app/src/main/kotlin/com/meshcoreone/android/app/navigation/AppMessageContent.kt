@@ -128,7 +128,9 @@ internal fun AppMessageContent(
                     content.previews(message, url),
                     UrlSafetyPort { bundledPreview || previewUrlSafety.isSafe(it) },
                     MalwareDomainPort { host -> if (bundledPreview) false else malwareCheck(host) },
-                    scope, ComposerDiagnostics(report))
+                    scope, ComposerDiagnostics(report),
+                    autoResolve = autoResolve,
+                )
             }
             var previewRefreshPending by remember(content, url, holder) { mutableStateOf(false) }
             LaunchedEffect(content, url, holder) {

@@ -81,9 +81,9 @@ object LinkOpenPolicy {
 
 /**
  * One link-preview card's lifecycle. Cached content remains available offline after the malware
- * blocklist check; the SSRF guard runs before any new automatic or manual network fetch. A tap on
- * the disabled card fetches once; repeated taps while loading are ignored, and cancellation is
- * never converted into a failure.
+ * blocklist check. Automatic-network consent is checked before the DNS-backed SSRF guard, which
+ * still runs before every new automatic or manual fetch. A tap on the disabled card fetches once;
+ * repeated taps while loading are ignored, and cancellation is never converted into a failure.
  */
 class LinkPreviewStateHolder(
     private val url: String,
@@ -93,6 +93,7 @@ class LinkPreviewStateHolder(
     private val malware: MalwareDomainPort,
     private val scope: CoroutineScope,
     private val diagnostics: ComposerDiagnostics = ComposerDiagnostics { _, _ -> },
+    private val autoResolve: Boolean = true,
 ) {
     private val mutableState = MutableStateFlow<LinkPreviewCardState>(LinkPreviewCardState.Hidden)
     val state: StateFlow<LinkPreviewCardState> = mutableState.asStateFlow()
@@ -123,6 +124,10 @@ class LinkPreviewStateHolder(
             val cached = if (manual) null else port.cachedPreview(url)
             if (cached != null) {
                 mutableState.value = LinkPreviewCardState.Loaded(cached)
+                return
+            }
+            if (!manual && !autoResolve) {
+                mutableState.value = LinkPreviewCardState.TapToLoad(url)
                 return
             }
             if (!safety.isSafe(url)) return hide()

@@ -57,8 +57,8 @@ class MapLibreOfflineBackend internal constructor(
     }
 
     override suspend fun resume(packId: UUID) {
+        resumeError(packId)?.let { throw it }
         val region = synchronized(regions) { regions[packId] } ?: return
-        OpenFreeMapOfflineSuspension.errorFor(region.styleUri)?.let { throw it }
         region.setActive(true)
         mutate(packId) { it.copy(state = OfflinePackState.DOWNLOADING) }
     }

@@ -29,6 +29,7 @@ class MapLibreOfflineSuspensionTest {
         val region = Region(request.id)
         val manager = Regions(listOf(region))
         val backend = MapLibreOfflineBackend(MapLibreOpenFreeMap.STYLE_URI, this, manager)
+        assertSame(suspended, runCatching { backend.resume(request.id) }.exceptionOrNull())
         yield()
         val controller = OfflineMapController(backend, emptyMap(), { error("No disk probe") }, { error("No network probe") })
         assertSame(suspended, controller.downloadError)

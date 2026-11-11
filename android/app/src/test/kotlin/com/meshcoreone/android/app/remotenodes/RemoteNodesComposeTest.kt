@@ -252,8 +252,10 @@ class RemoteNodesComposeTest {
         assertEquals(nextCamera, requireNotNull(renderedMap).camera)
         assertTrue(mapPresentations.all { it.camera == nextCamera })
         compose.onNodeWithText(text(com.meshcoreone.android.core.l10n.generated.AppMapStrings.mapControlsCenterAll))
-            .performScrollTo().performClick()
-        compose.waitUntil(5_000) { renderedMap?.camera != nextCamera }
+            .performScrollTo().assertIsEnabled()
+            .performSemanticsAction(SemanticsActions.OnClick) { click -> assertTrue(click()) }
+        compose.waitForIdle()
+        assertNotEquals("Center All must replace the panned camera", nextCamera, requireNotNull(renderedMap).camera)
         assertTrue(requireNotNull(renderedMap).points.any { it.label == "Updated neighbor" })
         val centered = requireNotNull(requireNotNull(renderedMap).camera).center
         assertEquals(38.35, centered.latitude, .0001)

@@ -691,54 +691,23 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
         }
         check(messages.all { it.radioId == radio }) { "Reaction indexing crossed a conversation radio" }
         return messages.map { message ->
-            val reactions = when (val target = indexing.scope) {
-                is ReactionIndexScope.Direct -> indexing.service.indexDMMessage(
-                    message.id, target.contact.id, message.text, message.reactionTimestamp,
-                ).map { pending ->
-                    check(pending.radioId == radio) { "Pending direct reaction belongs to another radio" }
-                    ReactionDTO(
-                        messageID = message.id, emoji = pending.parsed.emoji, senderName = pending.senderName,
-                        messageHash = pending.parsed.messageHash, rawText = pending.rawText,
-                        contactID = target.contact.id, radioId = pending.radioId,
-                    ) to { indexing.service.requeuePendingDMReaction(pending) }
-                }
+            val results = when (val target = indexing.scope) {
+                is ReactionIndexScope.Direct -> indexing.service.persistIndexedDirectMessage(
+                    message.id, radio, target.contact.id, message.text, message.reactionTimestamp, store,
+                )
                 is ReactionIndexScope.Channel -> {
                     val name = if (message.isOutgoing) target.localNodeName else message.senderNodeName
-                    if (name == null) emptyList() else indexing.service.indexMessage(
-                        message.id, target.channel.index, name, message.text, message.timestamp,
-                    ).map { pending ->
-                        check(pending.radioId == radio) { "Pending channel reaction belongs to another radio" }
-                        ReactionDTO(
-                            messageID = message.id, emoji = pending.parsed.emoji, senderName = pending.senderNodeName,
-                            messageHash = pending.parsed.messageHash, rawText = pending.rawText,
-                            channelIndex = pending.channelIndex, radioId = pending.radioId,
-                        ) to { indexing.service.requeuePendingReaction(pending) }
-                    }
-                }
-            }
-            var updated = message
-            var completed = 0
-            try {
-                for ((reaction, _) in reactions) {
-                    kotlinx.coroutines.currentCoroutineContext().ensureActive()
-                    val key = EntityKey(message.radioId, message.id)
-                    val result = if (store.reactionExists(key, reaction.senderName, reaction.emoji)) {
-                        // A prior save may have committed before summary reconciliation failed or was cancelled.
-                        indexing.service.reconcileSummary(key, store)
-                    } else {
-                        indexing.service.persistReactionAndUpdateSummary(reaction, store)
-                    }
-                    val summary = result?.summary ?: throw PersistenceStoreException(
-                        PersistenceStoreError.SaveFailed("History reaction replay did not complete"),
+                    if (name == null) emptyList() else indexing.service.persistIndexedChannelMessage(
+                        message.id, radio, target.channel.index, name, message.text, message.timestamp, store,
                     )
-                    updated = updated.copy(reactionSummary = summary)
-                    completed++
                 }
-            } finally {
-                // Indexing drains the whole batch; a failure must retain the current and all later matches.
-                reactions.drop(completed).forEach { (_, requeue) -> requeue() }
             }
-            updated
+            val persisted = results ?: throw PersistenceStoreException(
+                PersistenceStoreError.SaveFailed("History reaction replay did not complete"),
+            )
+            if (persisted.isEmpty()) message else {
+                message.copy(reactionSummary = persisted.last().summary)
+            }
         }
     }
 

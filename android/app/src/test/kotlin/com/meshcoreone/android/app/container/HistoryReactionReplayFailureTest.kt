@@ -125,6 +125,64 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
     @Test fun directCancelledReplayPrecedesANewArrivalUnderItsDrainedKey() = runTest { restoreOrder(this, true, true, true) }
     @Test fun channelCancelledReplayPrecedesANewArrivalUnderItsDrainedKey() = runTest { restoreOrder(this, false, true, true) }
 
+    @Test fun channelUnfinishedIndexedReactionSurvivesActualReconnect() = runTest {
+        var fail = true
+        val persistence = object : PersistenceStoreProtocol by store, ChannelHistoryPersisting by store {
+            override suspend fun reactionExists(message: EntityKey, senderName: String, emoji: String): Boolean {
+                if (fail) {
+                    fail = false
+                    throw PersistenceStoreException(PersistenceStoreError.FetchFailed("Injected pre-disconnect failure"))
+                }
+                return store.reactionExists(message, senderName, emoji)
+            }
+        }
+        val harness = ContainerHarness(this, store, persistenceOverride = persistence)
+        val connectionTarget = harness.target()
+        try {
+            harness.manager.connect(connectionTarget)
+            harness.eventually("first reaction session ready") {
+                harness.manager.connectionState == DeviceConnectionState.READY
+            }
+            val first = assertNotNull(harness.sessions.current)
+            val radio = first.token.radioId
+            store.saveChannel(radio, ChannelInfo(3u, "General", Bytes(ByteArray(16))))
+            val channel = assertNotNull(store.fetchChannel(radio, 3u))
+            val target = MessageDTO(
+                radioId = radio, channelIndex = channel.index, text = "Hello", timestamp = stamp,
+                createdAt = EPOCH, sortDate = EPOCH, senderNodeName = "Alice",
+                direction = MessageDirection.OUTGOING, status = MessageStatus.SENT,
+            )
+            store.saveMessage(target)
+            val wire = first.reactionService.buildReactionText(emoji, "Alice", target.text, target.timestamp)
+            first.reactionService.queuePendingReaction(
+                assertNotNull(ReactionParser.parse(wire)), channel.index, "Carol", wire, radio,
+            )
+
+            assertNull(first.reactionService.persistIndexedChannelMessage(
+                target.id, radio, channel.index, "Alice", target.text, target.timestamp, persistence,
+            ))
+
+            harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+            assertTrue(first.isTornDown)
+            harness.manager.connect(connectionTarget)
+            harness.eventually("replacement reaction session ready") {
+                harness.manager.connectionState == DeviceConnectionState.READY
+            }
+            val replacement = assertNotNull(harness.sessions.current)
+            assertNotSame(first.reactionService, replacement.reactionService)
+            val results = replacement.reactionService.persistIndexedChannelMessage(
+                target.id, radio, channel.index, "Alice", target.text, target.timestamp, store,
+            )
+            assertEquals(1, results?.size)
+            val saved = store.fetchReactions(EntityKey(radio, target.id)).single()
+            assertEquals("Carol", saved.senderName)
+            assertEquals(wire, saved.rawText)
+            assertEquals("$emoji:1", store.fetchMessage(EntityKey(radio, target.id))?.reactionSummary)
+        } finally {
+            harness.manager.disconnect(RuntimeDisconnectReason.USER_INITIATED)
+        }
+    }
+
     private suspend fun restoreOrder(test: TestScope, direct: Boolean, cancel: Boolean, sameKeyArrival: Boolean) {
         val entered = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
@@ -177,8 +235,10 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
                 )
             }
             fun drain(text: String): List<Any> = if (direct) {
-                service.indexDMMessage(UUID.randomUUID(), contact.id, text, stamp)
-            } else service.indexMessage(UUID.randomUUID(), channel.index, "Alice", text, stamp)
+                service.indexDMMessage(UUID.randomUUID(), contact.id, text, stamp, radio, includeCustody = true)
+            } else service.indexMessage(
+                UUID.randomUUID(), channel.index, "Alice", text, stamp, radio, includeCustody = true,
+            )
             queue("Hello", "First")
             queue("Hello", "Second")
             repeat(98) { queue("foreign $it", "Foreign $it") }
@@ -546,11 +606,13 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
                     history.cancelAndJoin()
                     assertTrue(history.isCancelled)
                     val retained = if (direct) {
-                        val pending = service.indexDMMessage(target.id, contact.id, "Hello", stamp)
+                        val pending = service.indexDMMessage(target.id, contact.id, "Hello", stamp, radio, includeCustody = true)
                         pending.forEach(service::requeuePendingDMReaction)
                         pending.map { it.senderName }
                     } else {
-                        val pending = service.indexMessage(target.id, channel.index, "Alice", "Hello", stamp)
+                        val pending = service.indexMessage(
+                            target.id, channel.index, "Alice", "Hello", stamp, radio, includeCustody = true,
+                        )
                         pending.forEach(service::requeuePendingReaction)
                         pending.map { it.senderNodeName }
                     }
@@ -706,21 +768,21 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
                 )
             }
             fun drain(): Drained = if (direct) {
-                val batch = service.indexDMMessage(target.id, contact.id, target.text, target.reactionTimestamp)
+                val batch = service.indexDMMessage(
+                    target.id, contact.id, target.text, target.reactionTimestamp, radio, includeCustody = true,
+                )
                 Drained(batch) { batch.forEach(service::requeuePendingDMReaction) }
             } else {
-                val batch = service.indexMessage(target.id, channel.index, "Alice", target.text, target.timestamp)
+                val batch = service.indexMessage(
+                    target.id, channel.index, "Alice", target.text, target.timestamp, radio, includeCustody = true,
+                )
                 Drained(batch) { batch.forEach(service::requeuePendingReaction) }
             }
             val original = drain()
             assertEquals(3, original.values.size)
             original.restore()
             val gate = if (cancel) CompletableDeferred<Unit>() else null
-            val occurrence = when (fault) {
-                Fault.EXISTS -> 3
-                Fault.EXISTS_LOCKED -> 4
-                else -> 2
-            }
+            val occurrence = 2
             persistence.arm(fault, occurrence = occurrence, cancellationGate = gate)
             if (gate != null) {
                 val attempt = test.launch { viewModel.refresh() }

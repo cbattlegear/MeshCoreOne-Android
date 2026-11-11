@@ -52,6 +52,24 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
         }
     }
 
+    @Test fun actualFactoryDuplicatePendingChannelReactionNotifiesOnlyOnce() = runTest {
+        withFactoryQueue(
+            QueryReply.SUCCESS,
+            reactionSenders = listOf("Remote Node", "Remote Node"),
+        ) { f ->
+            f.awaitAcceptedAttempt()
+            f.assertStored(MessageStatus.SENT, pending = false, reactionSummary = "👍:1")
+            f.awaitReactionNotification()
+            assertEquals(
+                listOf(SyncDataEvent.ReactionReceived(f.message.id, "👍:1")),
+                f.reactionNotifications(),
+            )
+            assertEquals(1, store.fetchReactions(EntityKey(f.radioId, f.message.id)).size)
+            assertTrue(f.pendingReactionSenders().isEmpty())
+            f.assertSuccessfulWire()
+        }
+    }
+
     @Test fun actualFactoryAcceptedOutgoingChannelSendRequeuesReactionWhenPersistenceFails() = runTest {
         val failingStore = FailOnceReactionLookupStore(store, failOnCall = 2)
         withFactoryQueue(QueryReply.SUCCESS, persistenceOverride = failingStore) { f ->
@@ -199,9 +217,10 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
     private suspend fun TestScope.withFactoryQueue(
         reply: QueryReply,
         persistenceOverride: PersistenceStoreProtocol = store,
+        reactionSenders: List<String> = listOf("Remote Node", "Second Remote Node"),
         body: suspend (Fixture) -> Unit,
     ) {
-        val f = Fixture(this, reply, persistenceOverride)
+        val f = Fixture(this, reply, persistenceOverride, reactionSenders)
         var primary: Throwable? = null
         try {
             f.start()
@@ -264,6 +283,7 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
         private val test: TestScope,
         private val reply: QueryReply,
         private val persistenceOverride: PersistenceStoreProtocol,
+        private val reactionSenders: List<String>,
     ) {
         private val recovery = RecoveryGate(StandardTestDispatcher(test.testScheduler))
         val harness = ContainerHarness(test, store,
@@ -372,7 +392,7 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
             assertEquals(listOf(pending), store.fetchPendingSends(radioId))
             assertEquals(message, store.fetchMessage(EntityKey(radioId, message.id)))
             assertTrue(firmware.sent.none { it[0] == 3.toUByte() }, "No channel write before actual runtime READY")
-            if (reply == QueryReply.SUCCESS) queuePendingChannelReaction()
+            if (reply == QueryReply.SUCCESS) queuePendingChannelReaction(reactionSenders)
             holdContacts = false
             firmware.push(Bytes.of(2) + le32(0))
             firmware.push(Bytes.of(4) + le32(0))
@@ -412,19 +432,21 @@ class QueueChannelConsumerIntegrationTest : RoomProcessTest() {
             }
         }
 
-        private fun queuePendingChannelReaction() {
+        private fun queuePendingChannelReaction(senders: List<String>) {
             val before = Instant.now()
             pendingReactionRaw = live.reactionService.buildReactionText("👍", "Stored Node", message.text, message.timestamp)
             val parsed = assertNotNull(ReactionParser.parse(pendingReactionRaw))
-            listOf("Remote Node", "Second Remote Node").forEach { sender ->
+            senders.forEach { sender ->
                 live.reactionService.queuePendingReaction(parsed, 0u, sender, pendingReactionRaw, radioId)
             }
             pendingReactionArrivalRange = before..Instant.now()
-            assertEquals(listOf("Remote Node", "Second Remote Node"), pendingReactionSenders())
+            assertEquals(senders, pendingReactionSenders())
         }
 
         fun pendingReactionSenders(): List<String> =
-            live.reactionService.indexMessage(message.id, 0u, "Stored Node", message.text, message.timestamp)
+            live.reactionService.indexMessage(
+                message.id, 0u, "Stored Node", message.text, message.timestamp, radioId, includeCustody = true,
+            )
                 .also { matches -> matches.forEach(live.reactionService::requeuePendingReaction) }
                 .map { it.senderNodeName }
 

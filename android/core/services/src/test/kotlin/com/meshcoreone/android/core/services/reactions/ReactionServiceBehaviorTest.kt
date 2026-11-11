@@ -3,6 +3,7 @@ package com.meshcoreone.android.core.services.reactions
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.ParsedReaction
+import com.meshcoreone.android.core.contracts.domain.ReactionPersisting
 import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.model.RadioId
@@ -19,6 +20,10 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.yield
 import org.junit.jupiter.api.DynamicTest
 import org.junit.jupiter.api.TestFactory
 
@@ -167,6 +172,110 @@ class ReactionServiceBehaviorTest {
                 assertFailsWith<CancellationException> {
                     ReactionService().persistReactionAndUpdateSummary(reaction(UUID.randomUUID(), "👍", "A", Instant.now(), newRadioId()), store)
                 }
+            }
+        },
+        test("unfinished indexed reactions survive replacement ReactionService instances") {
+            blocking {
+                val custody = PendingReactionCustody()
+                val mutex = kotlinx.coroutines.sync.Mutex()
+                val radio = newRadioId()
+                val messageID = UUID.randomUUID()
+                val store = ReactionsInMemoryReactionStore().apply { failOn("reactionExists") }
+                val oldService = ReactionService(ReactionsTickingClock(), mutex, custody)
+                val raw = oldService.buildReactionText("👍", "Target", "message", stamp)
+                oldService.queuePendingReaction(
+                    requireNotNull(ReactionParser.parse(raw)), 0u, "Sender", raw, radio,
+                )
+
+                assertNull(oldService.persistIndexedChannelMessage(
+                    messageID, radio, 0u, "Target", "message", stamp, store,
+                ))
+                store.clearFailures()
+
+                val replacement = ReactionService(ReactionsTickingClock(), mutex, custody)
+                val results = replacement.persistIndexedChannelMessage(
+                    messageID, radio, 0u, "Target", "message", stamp, store,
+                )
+                assertEquals(1, results?.size)
+                assertEquals(listOf("Sender"), store.fetchReactions(EntityKey(radio, messageID)).map { it.senderName })
+            }
+        },
+        test("summary recovery preserves the unpublished reaction notification") {
+            blocking {
+                val custody = PendingReactionCustody()
+                val radio = newRadioId()
+                val messageID = UUID.randomUUID()
+                val store = ReactionsInMemoryReactionStore().apply { failOn("updateMessageReactionSummary") }
+                val service = ReactionService(ReactionsTickingClock(), kotlinx.coroutines.sync.Mutex(), custody)
+                val raw = service.buildReactionText("👍", "Target", "message", stamp)
+                service.queuePendingReaction(
+                    requireNotNull(ReactionParser.parse(raw)), 0u, "Sender", raw, radio,
+                )
+                val notifications = mutableListOf<ReactionPersistResult>()
+
+                assertNull(service.persistIndexedChannelMessage(
+                    messageID, radio, 0u, "Target", "message", stamp, store,
+                ) { notifications += it })
+                assertTrue(notifications.isEmpty())
+                assertEquals(1, store.fetchReactions(EntityKey(radio, messageID)).size)
+
+                store.clearFailures()
+                val retried = service.persistIndexedChannelMessage(
+                    messageID, radio, 0u, "Target", "message", stamp, store,
+                ) { notifications += it }
+                assertEquals(listOf(true), retried?.map { it.shouldNotify })
+                assertEquals(listOf(true), notifications.map { it.shouldNotify })
+                assertEquals("👍:1", store.summary(EntityKey(radio, messageID)))
+            }
+        },
+        test("history failure and accepted-send retry serialize around the same indexed batch") {
+            blocking {
+                val custody = PendingReactionCustody()
+                val mutex = kotlinx.coroutines.sync.Mutex()
+                val radio = newRadioId()
+                val messageID = UUID.randomUUID()
+                val store = ReactionsInMemoryReactionStore()
+                val entered = CompletableDeferred<Unit>()
+                val release = CompletableDeferred<Unit>()
+                val failing = object : ReactionPersisting by store {
+                    private var first = true
+                    override suspend fun reactionExists(message: EntityKey, senderName: String, emoji: String): Boolean {
+                        if (first) {
+                            first = false
+                            entered.complete(Unit)
+                            release.await()
+                            throw IllegalStateException("Injected history replay failure")
+                        }
+                        return store.reactionExists(message, senderName, emoji)
+                    }
+                }
+                val historyService = ReactionService(ReactionsTickingClock(), mutex, custody)
+                val outgoingService = ReactionService(ReactionsTickingClock(), mutex, custody)
+                val raw = historyService.buildReactionText("👍", "Target", "message", stamp)
+                historyService.queuePendingReaction(
+                    requireNotNull(ReactionParser.parse(raw)), 0u, "Sender", raw, radio,
+                )
+
+                val results = coroutineScope {
+                    val historyAttempt = async {
+                        historyService.persistIndexedChannelMessage(
+                            messageID, radio, 0u, "Target", "message", stamp, failing,
+                        )
+                    }
+                    entered.await()
+                    val outgoingAttempt = async {
+                        outgoingService.persistIndexedChannelMessage(
+                            messageID, radio, 0u, "Target", "message", stamp, store,
+                        )
+                    }
+                    yield()
+                    assertFalse(outgoingAttempt.isCompleted, "Outgoing drain must wait for the in-flight history batch")
+                    release.complete(Unit)
+                    assertNull(historyAttempt.await())
+                    outgoingAttempt.await()
+                }
+                assertEquals(1, results?.size)
+                assertEquals(listOf("Sender"), store.fetchReactions(EntityKey(radio, messageID)).map { it.senderName })
             }
         },
     )

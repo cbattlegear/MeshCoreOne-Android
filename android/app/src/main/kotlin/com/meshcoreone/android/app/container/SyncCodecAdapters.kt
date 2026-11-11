@@ -70,9 +70,10 @@ internal class GapReporter(private val sink: (String) -> Unit) {
 
 internal class SyncReactionAdapter(
     private val reactions: ReactionService,
+    private val radioId: RadioId? = null,
 ) : SyncReactionServicing {
     override suspend fun indexDMMessage(id: UUID, contactID: UUID, text: String, timestamp: UInt): List<SyncPendingDMReaction> =
-        reactions.indexDMMessage(id, contactID, text, timestamp).map {
+        reactions.indexDMMessage(id, contactID, text, timestamp, radioId).map {
             SyncPendingDMReaction(
                 SyncParsedDMReaction(it.parsed.emoji, it.parsed.messageHash), it.contactID, it.senderName, it.rawText, it.radioId,
             )
@@ -80,14 +81,34 @@ internal class SyncReactionAdapter(
 
     override suspend fun indexMessage(
         id: UUID, channelIndex: UByte, senderName: String, text: String, timestamp: UInt,
-    ): List<SyncPendingReaction> = reactions.indexMessage(id, channelIndex, senderName, text, timestamp).map {
+    ): List<SyncPendingReaction> = reactions.indexMessage(id, channelIndex, senderName, text, timestamp, radioId).map {
         SyncPendingReaction(it.parsed, it.channelIndex, it.senderNodeName, it.rawText, it.radioId)
     }
+
+    override suspend fun persistIndexedDMMessage(
+        id: UUID, radioId: RadioId, contactID: UUID, text: String, timestamp: UInt, dataStore: ReactionPersisting,
+        onPersisted: suspend (SyncReactionPersistResult) -> Unit,
+    ): List<SyncReactionPersistResult>? =
+        reactions.persistIndexedDirectMessage(id, radioId, contactID, text, timestamp, dataStore) {
+            onPersisted(SyncReactionPersistResult(it.messageID, it.summary, it.shouldNotify))
+        }?.map {
+            SyncReactionPersistResult(it.messageID, it.summary, it.shouldNotify)
+        }
+
+    override suspend fun persistIndexedChannelMessage(
+        id: UUID, radioId: RadioId, channelIndex: UByte, senderName: String, text: String, timestamp: UInt,
+        dataStore: ReactionPersisting, onPersisted: suspend (SyncReactionPersistResult) -> Unit,
+    ): List<SyncReactionPersistResult>? =
+        reactions.persistIndexedChannelMessage(id, radioId, channelIndex, senderName, text, timestamp, dataStore) {
+            onPersisted(SyncReactionPersistResult(it.messageID, it.summary, it.shouldNotify))
+        }?.map {
+            SyncReactionPersistResult(it.messageID, it.summary, it.shouldNotify)
+        }
 
     override suspend fun persistReactionAndUpdateSummary(
         reaction: ReactionDTO, dataStore: ReactionPersisting,
     ): SyncReactionPersistResult? = reactions.persistReactionAndUpdateSummary(reaction, dataStore)?.let {
-        SyncReactionPersistResult(it.messageID, it.summary)
+        SyncReactionPersistResult(it.messageID, it.summary, it.shouldNotify)
     }
 
     override suspend fun findDMTargetMessage(messageHash: String, contactID: UUID): UUID? =

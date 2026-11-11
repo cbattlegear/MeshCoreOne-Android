@@ -110,6 +110,38 @@ internal class FakeReactionService : SyncReactionServicing {
         return synchronized(pendingForNextIndex) { pendingForNextIndex.toList().also { pendingForNextIndex.clear() } }
     }
 
+    override suspend fun persistIndexedDMMessage(
+        id: UUID, radioId: RadioId, contactID: UUID, text: String, timestamp: UInt, dataStore: ReactionPersisting,
+        onPersisted: suspend (SyncReactionPersistResult) -> Unit,
+    ): List<SyncReactionPersistResult> {
+        val results = indexDMMessage(id, contactID, text, timestamp).map { pending ->
+            persistReactionAndUpdateSummary(
+            ReactionDTO(messageID = id, emoji = pending.parsed.emoji, senderName = pending.senderName,
+                messageHash = pending.parsed.messageHash, rawText = pending.rawText,
+                contactID = contactID, radioId = radioId),
+            dataStore,
+            ) ?: return emptyList()
+        }
+        results.forEach { onPersisted(it) }
+        return results
+    }
+
+    override suspend fun persistIndexedChannelMessage(
+        id: UUID, radioId: RadioId, channelIndex: UByte, senderName: String, text: String, timestamp: UInt,
+        dataStore: ReactionPersisting, onPersisted: suspend (SyncReactionPersistResult) -> Unit,
+    ): List<SyncReactionPersistResult> {
+        val results = indexMessage(id, channelIndex, senderName, text, timestamp).map { pending ->
+            persistReactionAndUpdateSummary(
+            ReactionDTO(messageID = id, emoji = pending.parsed.emoji, senderName = pending.senderNodeName,
+                messageHash = pending.parsed.messageHash, rawText = pending.rawText,
+                channelIndex = pending.channelIndex, radioId = pending.radioId),
+            dataStore,
+            ) ?: return emptyList()
+        }
+        results.forEach { onPersisted(it) }
+        return results
+    }
+
     override suspend fun persistReactionAndUpdateSummary(reaction: ReactionDTO, dataStore: ReactionPersisting): SyncReactionPersistResult? {
         dataStore.saveReaction(reaction)
         val summary = dataStore.fetchReactions(EntityKey(reaction.radioId, reaction.messageID)).joinToString(",") { it.emoji }

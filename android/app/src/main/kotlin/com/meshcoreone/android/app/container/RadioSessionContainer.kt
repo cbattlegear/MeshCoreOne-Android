@@ -16,7 +16,6 @@ import com.meshcoreone.android.core.contracts.domain.TeardownReport
 import com.meshcoreone.android.core.contracts.domain.UnreadCounts
 import com.meshcoreone.android.core.contracts.domain.DebugLogRetention
 import com.meshcoreone.android.core.model.RadioId
-import com.meshcoreone.android.core.model.ReactionDTO
 import com.meshcoreone.android.core.model.TransportType
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.protocol.model.BatteryInfo
@@ -146,7 +145,10 @@ class RadioSessionContainer private constructor(
     // region Services (constructed in dependency order; every dependency exists before its consumer)
 
     override val syncCoordinator = SyncCoordinator(scope, env.syncClock, env.logSink)
-    override val reactionService = ReactionService(persistenceMutex = reactionPersistenceMutex)
+    override val reactionService = ReactionService(
+        persistenceMutex = reactionPersistenceMutex,
+        pendingReactionCustody = env.pendingReactionCustody,
+    )
     val heardRepeatsService = HeardRepeatsService(dataStore)
     override val rxLogService = RxLogService(
         session, RxLogServiceStore.from(dataStore), HeardRepeatProcessingAdapter(heardRepeatsService), scope,
@@ -249,39 +251,17 @@ class RadioSessionContainer private constructor(
         text: String,
         timestamp: UInt,
     ) {
-        val matches = reactionService.indexMessage(messageID, channelIndex, senderName, text, timestamp)
-        var next = 0
-        try {
-            while (next < matches.size) {
-                val pending = matches[next]
-                val result = reactionService.persistReactionAndUpdateSummary(
-                    ReactionDTO(
-                        messageID = messageID,
-                        emoji = pending.parsed.emoji,
-                        senderName = pending.senderNodeName,
-                        messageHash = pending.parsed.messageHash,
-                        rawText = pending.rawText,
-                        receivedAt = pending.receivedAt,
-                        channelIndex = pending.channelIndex,
-                        radioId = pending.radioId,
-                    ),
-                    dataStore,
-                )
-                if (result == null) {
-                    matches.drop(next).forEach(reactionService::requeuePendingReaction)
-                    throw IllegalStateException(
-                        "Could not persist pending channel reaction(s) for message $messageID; restored them to the queue",
-                    )
-                }
+        reactionService.persistIndexedChannelMessage(
+            messageID, radioId, channelIndex, senderName, text, timestamp, dataStore,
+        ) { result ->
+            if (result.shouldNotify) {
                 syncCoordinator.dataEventBroadcaster.yield(
                     SyncDataEvent.ReactionReceived(result.messageID, result.summary),
                 )
-                next++
             }
-        } catch (cancelled: CancellationException) {
-            matches.drop(next).forEach(reactionService::requeuePendingReaction)
-            throw cancelled
-        }
+        } ?: throw IllegalStateException(
+            "Could not persist pending channel reaction(s) for message $messageID; restored them to process custody",
+        )
     }
 
     override val notificationActionHandler = NotificationActionHandler(
@@ -308,7 +288,7 @@ class RadioSessionContainer private constructor(
         channelService = channelService,
         messagePollingService = messagePollingService,
         notificationService = SyncNotificationsAdapter(notificationService),
-        reactionService = SyncReactionAdapter(reactionService),
+        reactionService = SyncReactionAdapter(reactionService, radioId),
         advertisementService = syncAdvertisement,
         rxLogService = SyncRxLogAdapter(rxLogService),
         heardRepeatsService = SyncHeardRepeatsAdapter(heardRepeatsService),

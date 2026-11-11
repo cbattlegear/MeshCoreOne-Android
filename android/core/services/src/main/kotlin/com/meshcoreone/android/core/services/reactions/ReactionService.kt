@@ -28,6 +28,7 @@ data class PendingReaction(
     val receivedAt: Instant,
     internal val queueKeyOrder: Long? = null,
     internal val queueEntryOrder: Long? = null,
+    internal val notificationPending: Boolean = false,
 )
 
 /** A DM reaction waiting for its target message to be indexed. */
@@ -40,10 +41,62 @@ data class PendingDMReaction(
     val receivedAt: Instant,
     internal val queueKeyOrder: Long? = null,
     internal val queueEntryOrder: Long? = null,
+    internal val notificationPending: Boolean = false,
 )
 
 /** Result of persisting a reaction. */
-data class ReactionPersistResult(val messageID: UUID, val summary: String)
+data class ReactionPersistResult(val messageID: UUID, val summary: String, val shouldNotify: Boolean = true)
+
+/**
+ * Process-owned custody for matched reactions whose persistence did not finish. Unlike ordinary unmatched
+ * reactions, these must survive connection teardown so an accepted-send retry can finish the same work.
+ */
+class PendingReactionCustody {
+    private val lock = Any()
+    private val channel = ArrayList<PendingReaction>()
+    private val direct = ArrayList<PendingDMReaction>()
+
+    internal fun requeue(pending: PendingReaction) = synchronized(lock) {
+        channel += pending
+        if (channel.size > ReactionService.MAX_PENDING_REACTIONS) channel.removeAt(0)
+    }
+
+    internal fun requeue(pending: PendingDMReaction) = synchronized(lock) {
+        direct += pending
+        if (direct.size > ReactionService.MAX_PENDING_REACTIONS) direct.removeAt(0)
+    }
+
+    internal fun takeChannel(
+        radioId: RadioId?,
+        channelIndex: UByte,
+        targetSender: String,
+        messageHash: String,
+    ): List<PendingReaction> = synchronized(lock) {
+        val matched = channel.filter {
+            (radioId == null || it.radioId == radioId) &&
+                it.channelIndex == channelIndex &&
+                SwiftText.canonical(it.parsed.targetSender) == SwiftText.canonical(targetSender) &&
+                it.parsed.messageHash == messageHash
+        }
+        channel.removeAll(matched.toSet())
+        matched
+    }
+
+    internal fun takeDirect(
+        radioId: RadioId?,
+        contactID: UUID,
+        messageHash: String,
+    ): List<PendingDMReaction> = synchronized(lock) {
+        val matched = direct.filter {
+            (radioId == null || it.radioId == radioId) &&
+                it.contactID == contactID && it.parsed.messageHash == messageHash
+        }
+        direct.removeAll(matched.toSet())
+        matched
+    }
+
+    internal val counts: Pair<Int, Int> get() = synchronized(lock) { channel.size to direct.size }
+}
 
 /**
  * Service for handling emoji reactions on channel and DM messages: hash-indexed target lookup through the
@@ -51,18 +104,22 @@ data class ReactionPersistResult(val messageID: UUID, val summary: String)
  *
  * Swift isolates this in an actor. Here the pending queues are immutable values swapped under one lock that
  * is never held across a suspension; [MessageLRUCache] has its own lock. A separate mutex serializes
- * complete persistence/summary operations across suspension. The process factory shares that mutex
- * across connection generations; queues and caches remain session-owned. Nothing is scheduled, so no coroutine
- * scope is needed; [clock] stamps `receivedAt` on queued reactions.
+ * complete persistence/summary operations across suspension. The process factory shares that mutex and
+ * [PendingReactionCustody] across connection generations; caches and unmatched queues remain session-owned.
+ * Nothing is scheduled, so no coroutine scope is needed; [clock] stamps `receivedAt` on queued reactions.
  */
 class ReactionService internal constructor(
     private val messageCache: MessageLRUCache,
     private val clock: Clock,
     private val persistenceMutex: Mutex = Mutex(),
+    private val pendingReactionCustody: PendingReactionCustody? = null,
 ) {
     /** A service with its own message cache; [clock] also stamps the cache's `indexedAt`. */
-    constructor(clock: Clock = Clock.systemUTC(), persistenceMutex: Mutex = Mutex()) :
-        this(MessageLRUCache(clock = clock), clock, persistenceMutex)
+    constructor(
+        clock: Clock = Clock.systemUTC(),
+        persistenceMutex: Mutex = Mutex(),
+        pendingReactionCustody: PendingReactionCustody? = null,
+    ) : this(MessageLRUCache(clock = clock), clock, persistenceMutex, pendingReactionCustody)
 
     private val logger: Logger = Logger.getLogger("ReactionService")
     private val lock = Any()
@@ -82,19 +139,32 @@ class ReactionService internal constructor(
     private data class PendingDMReactionKey(val contactID: UUID, val messageHash: String)
 
     /** Indexes a message for reaction matching and returns any pending reactions that now match. */
-    fun indexMessage(id: UUID, channelIndex: UByte, senderName: String, text: String, timestamp: UInt): List<PendingReaction> {
+    fun indexMessage(
+        id: UUID,
+        channelIndex: UByte,
+        senderName: String,
+        text: String,
+        timestamp: UInt,
+        radioId: RadioId? = null,
+        includeCustody: Boolean = false,
+    ): List<PendingReaction> {
         messageCache.index(messageID = id, channelIndex = channelIndex, senderName = senderName, text = text, timestamp = timestamp)
-        // Check pending queue for matching reactions.
-        val key = PendingReactionKey.of(channelIndex, senderName, ReactionParser.generateMessageHash(text, timestamp))
+        val hash = ReactionParser.generateMessageHash(text, timestamp)
+        val key = PendingReactionKey.of(channelIndex, senderName, hash)
+        val retained = if (includeCustody) {
+            pendingReactionCustody?.takeChannel(radioId, channelIndex, senderName, hash).orEmpty()
+        } else emptyList()
         val matched = synchronized(lock) {
             val (remaining, taken) = pendingReactions.take(key) { value, keyOrder, entryOrder ->
                 value.copy(queueKeyOrder = keyOrder, queueEntryOrder = entryOrder)
             }
             pendingReactions = remaining
-            taken
-        } ?: return emptyList()
-        logger.fine { "Matched ${matched.size} pending reaction(s) to message $id" }
-        return matched
+            taken.orEmpty()
+        }
+        if (retained.isEmpty() && matched.isEmpty()) return emptyList()
+        val allMatches = retained + matched
+        logger.fine { "Matched ${allMatches.size} pending reaction(s) to message $id" }
+        return allMatches
     }
 
     /** Builds channel reaction wire text: `@[sender]emoji` then newline and hash. */
@@ -129,11 +199,14 @@ class ReactionService internal constructor(
 
     /** Returns an unfinished history replay to the bounded queue without replacing its arrival metadata. */
     fun requeuePendingReaction(pending: PendingReaction) {
-        val key = PendingReactionKey.of(pending.channelIndex, pending.parsed.targetSender, pending.parsed.messageHash)
-        synchronized(lock) {
-            pendingReactions = pendingReactions.enqueue(
-                key, pending, MAX_PENDING_REACTIONS, pending.queueKeyOrder, pending.queueEntryOrder,
-            )
+        val custody = pendingReactionCustody
+        if (custody != null) custody.requeue(pending) else {
+            val key = PendingReactionKey.of(pending.channelIndex, pending.parsed.targetSender, pending.parsed.messageHash)
+            synchronized(lock) {
+                pendingReactions = pendingReactions.enqueue(
+                    key, pending, MAX_PENDING_REACTIONS, pending.queueKeyOrder, pending.queueEntryOrder,
+                )
+            }
         }
     }
 
@@ -159,6 +232,91 @@ class ReactionService internal constructor(
         reaction: ReactionDTO,
         dataStore: ReactionPersisting,
     ): ReactionPersistResult? = persistenceMutex.withLock {
+        persistReactionAndUpdateSummaryLocked(reaction, dataStore)
+    }
+
+    /**
+     * Atomically takes and persists every channel reaction matching a message. The shared persistence lock spans
+     * both indexing and storage so an overlapping history replay cannot hide an unfinished batch from an accepted
+     * send retry.
+     */
+    suspend fun persistIndexedChannelMessage(
+        id: UUID,
+        radioId: RadioId,
+        channelIndex: UByte,
+        senderName: String,
+        text: String,
+        timestamp: UInt,
+        dataStore: ReactionPersisting,
+        onPersisted: suspend (ReactionPersistResult) -> Unit = {},
+    ): List<ReactionPersistResult>? = persistenceMutex.withLock {
+        val matches = indexMessage(id, channelIndex, senderName, text, timestamp, radioId, includeCustody = true)
+        if (matches.any { it.radioId != radioId }) {
+            matches.forEach(::requeuePendingReaction)
+            throw IllegalStateException("Pending channel reactions belong to another radio")
+        }
+        persistMatched(
+            matches,
+            dataStore,
+            ::requeuePendingReaction,
+            { it.notificationPending },
+            { it.copy(notificationPending = true) },
+            onPersisted,
+        ) { pending ->
+            ReactionDTO(
+                messageID = id,
+                emoji = pending.parsed.emoji,
+                senderName = pending.senderNodeName,
+                messageHash = pending.parsed.messageHash,
+                rawText = pending.rawText,
+                receivedAt = pending.receivedAt,
+                channelIndex = pending.channelIndex,
+                radioId = pending.radioId,
+            )
+        }
+    }
+
+    /** Atomically takes and persists every DM reaction matching a message. */
+    suspend fun persistIndexedDirectMessage(
+        id: UUID,
+        radioId: RadioId,
+        contactID: UUID,
+        text: String,
+        timestamp: UInt,
+        dataStore: ReactionPersisting,
+        onPersisted: suspend (ReactionPersistResult) -> Unit = {},
+    ): List<ReactionPersistResult>? = persistenceMutex.withLock {
+        val matches = indexDMMessage(id, contactID, text, timestamp, radioId, includeCustody = true)
+        if (matches.any { it.radioId != radioId }) {
+            matches.forEach(::requeuePendingDMReaction)
+            throw IllegalStateException("Pending direct reactions belong to another radio")
+        }
+        persistMatched(
+            matches,
+            dataStore,
+            ::requeuePendingDMReaction,
+            { it.notificationPending },
+            { it.copy(notificationPending = true) },
+            onPersisted,
+        ) { pending ->
+            ReactionDTO(
+                messageID = id,
+                emoji = pending.parsed.emoji,
+                senderName = pending.senderName,
+                messageHash = pending.parsed.messageHash,
+                rawText = pending.rawText,
+                receivedAt = pending.receivedAt,
+                contactID = pending.contactID,
+                radioId = pending.radioId,
+            )
+        }
+    }
+
+    private suspend fun persistReactionAndUpdateSummaryLocked(
+        reaction: ReactionDTO,
+        dataStore: ReactionPersisting,
+        onSaved: () -> Unit = {},
+    ): ReactionPersistResult? {
         val message = EntityKey(reaction.radioId, reaction.messageID)
         val exists = try {
             dataStore.reactionExists(message, reaction.senderName, reaction.emoji)
@@ -166,17 +324,69 @@ class ReactionService internal constructor(
             throw error
         } catch (error: Exception) {
             logger.log(Level.SEVERE, "Failed to check reaction for message ${reaction.messageID}: ${error.message}", error)
-            return@withLock null
+            return null
         }
         try {
-            if (!exists) dataStore.saveReaction(reaction)
+            if (!exists) {
+                dataStore.saveReaction(reaction)
+                onSaved()
+            }
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
             logger.log(Level.SEVERE, "Failed to save reaction for message ${reaction.messageID}: ${error.message}", error)
-            return@withLock null
+            return null
         }
-        reconcileSummaryLocked(message, dataStore)
+        return reconcileSummaryLocked(message, dataStore)?.copy(shouldNotify = !exists)
+    }
+
+    private suspend fun <T> persistMatched(
+        matches: List<T>,
+        dataStore: ReactionPersisting,
+        requeue: (T) -> Unit,
+        isNotificationPending: (T) -> Boolean,
+        markNotificationPending: (T) -> T,
+        onPersisted: suspend (ReactionPersistResult) -> Unit,
+        toDTO: (T) -> ReactionDTO,
+    ): List<ReactionPersistResult>? {
+        val results = ArrayList<ReactionPersistResult>(matches.size)
+        var next = 0
+        var retryCurrentNotification = false
+        try {
+            while (next < matches.size) {
+                val pending = matches[next]
+                retryCurrentNotification = isNotificationPending(pending)
+                val result = persistReactionAndUpdateSummaryLocked(toDTO(pending), dataStore) {
+                    retryCurrentNotification = true
+                }
+                if (result == null) {
+                    requeue(if (retryCurrentNotification) markNotificationPending(pending) else pending)
+                    matches.drop(next + 1).forEach(requeue)
+                    return null
+                }
+                val completed = result.copy(shouldNotify = result.shouldNotify || retryCurrentNotification)
+                results += completed
+                retryCurrentNotification = completed.shouldNotify
+                onPersisted(completed)
+                next++
+                retryCurrentNotification = false
+            }
+        } catch (cancelled: CancellationException) {
+            if (next < matches.size) {
+                val pending = matches[next]
+                requeue(if (retryCurrentNotification) markNotificationPending(pending) else pending)
+                matches.drop(next + 1).forEach(requeue)
+            }
+            throw cancelled
+        } catch (failure: Exception) {
+            if (next < matches.size) {
+                val pending = matches[next]
+                requeue(if (retryCurrentNotification) markNotificationPending(pending) else pending)
+                matches.drop(next + 1).forEach(requeue)
+            }
+            throw failure
+        }
+        return results
     }
 
     /** Rebuilds a committed reaction's summary without saving or replacing the reaction row again. */
@@ -208,18 +418,31 @@ class ReactionService internal constructor(
     // MARK: - DM Reactions
 
     /** Indexes a DM message for reaction matching and returns any pending reactions that now match. */
-    fun indexDMMessage(id: UUID, contactID: UUID, text: String, timestamp: UInt): List<PendingDMReaction> {
+    fun indexDMMessage(
+        id: UUID,
+        contactID: UUID,
+        text: String,
+        timestamp: UInt,
+        radioId: RadioId? = null,
+        includeCustody: Boolean = false,
+    ): List<PendingDMReaction> {
         messageCache.indexDM(messageID = id, contactID = contactID, text = text, timestamp = timestamp)
-        val key = PendingDMReactionKey(contactID, ReactionParser.generateMessageHash(text, timestamp))
+        val hash = ReactionParser.generateMessageHash(text, timestamp)
+        val key = PendingDMReactionKey(contactID, hash)
+        val retained = if (includeCustody) {
+            pendingReactionCustody?.takeDirect(radioId, contactID, hash).orEmpty()
+        } else emptyList()
         val matched = synchronized(lock) {
             val (remaining, taken) = pendingDMReactions.take(key) { value, keyOrder, entryOrder ->
                 value.copy(queueKeyOrder = keyOrder, queueEntryOrder = entryOrder)
             }
             pendingDMReactions = remaining
-            taken
-        } ?: return emptyList()
-        logger.fine { "Matched ${matched.size} pending DM reaction(s) to message $id" }
-        return matched
+            taken.orEmpty()
+        }
+        if (retained.isEmpty() && matched.isEmpty()) return emptyList()
+        val allMatches = retained + matched
+        logger.fine { "Matched ${allMatches.size} pending DM reaction(s) to message $id" }
+        return allMatches
     }
 
     /** Finds the target DM message ID by hash and contact: the most recently indexed match. */
@@ -242,16 +465,24 @@ class ReactionService internal constructor(
 
     /** Returns an unfinished history replay to the bounded queue without replacing its arrival metadata. */
     fun requeuePendingDMReaction(pending: PendingDMReaction) {
-        val key = PendingDMReactionKey(pending.contactID, pending.parsed.messageHash)
-        synchronized(lock) {
-            pendingDMReactions = pendingDMReactions.enqueue(
-                key, pending, MAX_PENDING_REACTIONS, pending.queueKeyOrder, pending.queueEntryOrder,
-            )
+        val custody = pendingReactionCustody
+        if (custody != null) custody.requeue(pending) else {
+            val key = PendingDMReactionKey(pending.contactID, pending.parsed.messageHash)
+            synchronized(lock) {
+                pendingDMReactions = pendingDMReactions.enqueue(
+                    key, pending, MAX_PENDING_REACTIONS, pending.queueKeyOrder, pending.queueEntryOrder,
+                )
+            }
         }
     }
 
     /** Test-visible total of queued reactions (channel, DM). */
-    internal val pendingCounts: Pair<Int, Int> get() = synchronized(lock) { pendingReactions.count to pendingDMReactions.count }
+    internal val pendingCounts: Pair<Int, Int>
+        get() {
+            val local = synchronized(lock) { pendingReactions.count to pendingDMReactions.count }
+            val retained = pendingReactionCustody?.counts ?: (0 to 0)
+            return (local.first + retained.first) to (local.second + retained.second)
+        }
 
     internal companion object {
         const val MAX_PENDING_REACTIONS: Int = 100

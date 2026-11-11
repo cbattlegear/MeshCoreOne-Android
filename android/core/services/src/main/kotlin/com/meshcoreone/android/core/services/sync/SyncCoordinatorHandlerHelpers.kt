@@ -101,15 +101,16 @@ internal suspend fun SyncCoordinator.indexAndNotifyDirectMessage(
     radioId: RadioId,
 ) {
     if (contact != null) {
-        val pending = contain("indexDMMessage", emptyList()) {
-            dependencies.reactionService.indexDMMessage(messageDTO.id, contact.id, messageText, timestamp)
+        val persisted = contain("indexDMMessage", null) {
+            dependencies.reactionService.persistIndexedDMMessage(
+                messageDTO.id, radioId, contact.id, messageText, timestamp, dependencies.dataStore,
+            ) { result ->
+                if (result.shouldNotify) dataEventBroadcaster.yield(SyncDataEvent.ReactionReceived(result.messageID, result.summary))
+            }
         }
-        for (match in pending) {
-            val reaction = ReactionDTO(
-                messageID = messageDTO.id, emoji = match.parsed.emoji, senderName = match.senderName,
-                messageHash = match.parsed.messageHash, rawText = match.rawText, contactID = contact.id, radioId = radioId,
-            )
-            if (persistReactionIfNew(reaction, dependencies)) log(DebugLogLevel.DEBUG, "Processed pending DM reaction ${match.parsed.emoji}")
+        if (persisted == null) log(DebugLogLevel.ERROR, "Failed to persist pending DM reactions for message ${messageDTO.id}; retained for retry")
+        persisted.orEmpty().filter { it.shouldNotify }.forEach { result ->
+            log(DebugLogLevel.DEBUG, "Processed pending DM reaction for message ${result.messageID}")
         }
         dependencies.dataStore.updateContactLastMessage(EntityKey(radioId, contact.id), clock.now())
     }
@@ -133,17 +134,14 @@ internal suspend fun SyncCoordinator.indexAndNotifyChannelMessage(
 ) {
     // Index with the original timestamp so pending reactions can match.
     if (senderNodeName != null) {
-        val pending = contain("indexMessage", emptyList()) {
-            dependencies.reactionService.indexMessage(messageDTO.id, channelIndex, senderNodeName, messageText, timestamp)
+        val persisted = contain("indexMessage", null) {
+            dependencies.reactionService.persistIndexedChannelMessage(
+                messageDTO.id, radioId, channelIndex, senderNodeName, messageText, timestamp, dependencies.dataStore,
+            ) { result ->
+                if (result.shouldNotify) dataEventBroadcaster.yield(SyncDataEvent.ReactionReceived(result.messageID, result.summary))
+            }
         }
-        for (match in pending) {
-            val reaction = ReactionDTO(
-                messageID = messageDTO.id, emoji = match.parsed.emoji, senderName = match.senderNodeName,
-                messageHash = match.parsed.messageHash, rawText = match.rawText, channelIndex = match.channelIndex,
-                radioId = match.radioId,
-            )
-            persistReactionIfNew(reaction, dependencies)
-        }
+        if (persisted == null) log(DebugLogLevel.ERROR, "Failed to persist pending channel reactions for message ${messageDTO.id}; retained for retry")
     }
     if (channel != null) dependencies.dataStore.updateChannelLastMessage(EntityKey(radioId, channel.id), clock.now())
     if (!isBlockedSender(senderNodeName)) {

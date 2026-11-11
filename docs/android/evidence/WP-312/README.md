@@ -1,7 +1,9 @@
 # WP-312 MapLibre/OpenFreeMap candidate evidence
 
-**Status:** MapLibre/OpenFreeMap implementation candidate complete; hosted
-exact-head checks remain the authoritative merge gate.
+**Status:** Historical MapLibre/OpenFreeMap candidate evidence. Current
+offline-download policy compliance is incomplete; see the
+[source-confirmed policy gap](../../deviations/WP-312.md#current-offline-download-policy-gap).
+Hosted exact-head checks verify code, not provider permission or transfer limits.
 
 ## Revisions and scope
 
@@ -42,9 +44,14 @@ Apache notice and adds exact upstream BSD notices:
 
 OpenFreeMap code is MIT; the remotely served Liberty/OpenMapTiles/OSM resources
 are not redistributed in the APK. Their required credits are visible on the
-map. OpenFreeMap's official documentation states that its public instance has
-no request limits and separately publishes weekly MBTiles/PMTiles/Btrfs
-snapshots for self-hosting.
+map. The unrestricted public map-view/request statement must not be used as
+an unrestricted offline-download allowance. As checked on 2026-11-11, the
+[Mobile Apps quick start](https://openfreemap.org/quick_start/) and
+[Terms of Service](https://openfreemap.org/tos/) specify at most 3,000 tiles
+or 50 MB per download, at most four parallel requests, and a unique User-Agent
+identifying the app; larger downloads require provider contact. Separately
+published self-hosting datasets do not establish permission for unbounded
+OfflineManager region requests.
 
 ## Implemented behavior
 
@@ -58,8 +65,10 @@ snapshots for self-hosting.
 - OfflineManager create/progress/pause/resume/delete lifecycle for the visible
   OpenFreeMap base-map region, with typed low-storage/network failures,
   cancellation cleanup, persisted metadata and destructive confirmation.
-- Honest offline scope: MapLibre-managed base regions are supported; satellite,
-  topographic and arbitrary local-MBTiles mounting are not claimed.
+- Implemented offline lifecycle: MapLibre-managed base regions; satellite,
+  topographic and arbitrary local-MBTiles mounting are not claimed. Current
+  per-download budgets and four-request concurrency enforcement are missing;
+  lifecycle implementation/tests below do not establish provider compliance.
 
 ## Actual local verification
 
@@ -88,7 +97,7 @@ This is static packaging evidence, not execution on a 16 KiB device.
 
 | Acceptance | Status |
 | --- | --- |
-| `WP-312-behavior` | Implemented: base map, overlays, filtering, clustering, camera persistence/focus, snapshots, attribution and offline base-region lifecycle. Satellite/topographic absence is explicit. |
+| `WP-312-behavior` | Implemented: base map, overlays, filtering, clustering, camera persistence/focus, snapshots, attribution and offline base-region lifecycle. Current offline-provider budget/concurrency compliance is incomplete. Satellite/topographic absence is explicit. |
 | `WP-312-boundaries` | Implemented/tested locally: no GPS permission dependency, cache/snapshot lifecycle, pause/resume/delete, network loss, cancellation, low disk and static 16 KiB packaging. Physical-device execution is not claimed. |
 | `WP-312-source-test-parity` | Shared map algebra and snapshot/offline parameter families are covered by 20 nonzero JVM cases; feature-specific downstream map builders remain consumers of these WP-312 seams in their owning WPs. |
 

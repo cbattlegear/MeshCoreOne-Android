@@ -255,7 +255,7 @@ object AndroidAppContainerFactory {
                 },
                 offlineMaps = offlineMaps,
                 phoneLocation = {
-                    locationProducing.currentLocation?.let {
+                    locationProducing.currentAuthorizedLocation?.let {
                         com.meshcoreone.android.core.model.Coordinate(it.latitude, it.longitude)
                     }
                 },

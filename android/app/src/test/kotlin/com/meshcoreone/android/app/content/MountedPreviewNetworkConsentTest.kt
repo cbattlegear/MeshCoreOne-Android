@@ -87,7 +87,8 @@ class MountedPreviewNetworkConsentTest {
             }
             assertEquals(0, dns.get(), "automatic network consent includes DNS, not just HTTP")
             compose.onNodeWithContentDescription(tapLabel).assertHasClickAction().performClick()
-            compose.waitUntil(10_000) { dns.get() == 1 }
+            compose.waitUntil(10_000) { dns.get() > 0 }
+            assertEquals(1, dns.get())
             compose.waitUntil(10_000) {
                 compose.onAllNodesWithContentDescription(tapLabel).fetchSemanticsNodes().isEmpty()
             }
@@ -159,8 +160,9 @@ class MountedPreviewNetworkConsentTest {
                     listOf(InetAddress.getByAddress(byteArrayOf(10, 0, 0, 1)))
                 }
             })
-            compose.waitUntil(10_000) { dns.get() == 1 }
+            compose.waitUntil(10_000) { dns.get() > 0 }
             compose.waitForIdle()
+            assertEquals(1, dns.get(), "one authorized safety lookup for channel=$isChannel")
             compose.onNodeWithContentDescription(
                 AppChatsStrings.chatsPreviewTapAccessibility(fixture.context.resources, "private.example"),
             ).assertDoesNotExist()

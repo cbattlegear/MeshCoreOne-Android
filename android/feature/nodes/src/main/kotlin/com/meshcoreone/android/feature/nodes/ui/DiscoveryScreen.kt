@@ -79,7 +79,8 @@ internal fun DiscoveryScreen(
             combine(
                 dependencies.session.connectionSnapshots(),
                 dependencies.session.contactVersions(),
-            ) { connection, version -> connection to version }.collectLatest {
+                holder.reloadRequests,
+            ) { connection, version, localRevision -> Triple(connection, version, localRevision) }.collectLatest {
                 holder.loadDiscoveredNodes(clearErrorOnStart = false)
             }
         }

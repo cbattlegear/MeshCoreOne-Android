@@ -342,22 +342,13 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
         @Test
         fun heldRefreshCannotResurrectMountedClearedRows() = verifyHeldMutation(clear = true)
 
-        private fun verifyHeldMutation(clear: Boolean) {
-            val harness = Harness().connect()
-            val radio = checkNotNull(harness.session.radioId)
-            harness.store.discovered += Fixtures.node(radioId = radio, name = "Remove while refreshing")
-            mount { DiscoveryScreen(harness.dependencies) }
-            awaitText("Remove while refreshing")
-            val entered = CompletableDeferred<Unit>()
-            val release = CompletableDeferred<Unit>()
-            var returned = false
-            harness.store.fetchContactKeysGate = {
-                entered.complete(Unit)
-                release.await()
-                returned = true
-            }
-            controller.get().runOnUiThread { harness.session.versions.value++ }
-            awaitCondition { entered.isCompleted }
+        @Test
+        fun heldRemoveCompletionRestartsAPendingReplacementRadioRead() = verifyHeldWriteReplacement(clear = false)
+
+        @Test
+        fun heldClearCompletionRestartsAPendingReplacementRadioRead() = verifyHeldWriteReplacement(clear = true)
+
+        private fun clickMutation(clear: Boolean) {
             val context = controller.get()
             if (clear) {
                 click(awaitAction(context.getString(C.contactsListSort)))
@@ -368,11 +359,95 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
             } else {
                 click(awaitAction(context.getString(C.contactsDiscoveryRemove)))
             }
-            awaitText(context.getString(C.contactsDiscoveryEmptyTitle))
+        }
+
+        private fun verifyHeldWriteReplacement(clear: Boolean) {
+            val harness = Harness().connect()
+            val radio = checkNotNull(harness.session.radioId)
+            harness.store.discovered += Fixtures.node(radioId = radio, name = "Old radio row")
+            val writeEntered = CompletableDeferred<Unit>()
+            val releaseWrite = CompletableDeferred<Unit>()
+            val heldWrite: suspend () -> Unit = { writeEntered.complete(Unit); releaseWrite.await() }
+            if (clear) harness.store.clearDiscoveredGate = heldWrite else harness.store.deleteDiscoveredGate = heldWrite
+            mount { DiscoveryScreen(harness.dependencies) }
+            awaitText("Old radio row")
+            clickMutation(clear)
+            awaitCondition { writeEntered.isCompleted }
+            val replacement = Harness().connect()
+            val replacementRadio = checkNotNull(replacement.session.radioId)
+            val latest = Fixtures.node(radioId = replacementRadio, name = "New radio row")
+            replacement.store.discovered += latest
+            val readEntered = CompletableDeferred<Unit>()
+            val releaseRead = CompletableDeferred<Unit>()
+            var readExited = false
+            replacement.store.fetchContactKeysGate = {
+                if (!readEntered.isCompleted) {
+                    readEntered.complete(Unit)
+                    try {
+                        releaseRead.await()
+                    } finally {
+                        readExited = true
+                    }
+                }
+            }
+            controller.get().runOnUiThread {
+                harness.session.offlineStore = replacement.store
+                harness.session.servicesStore = replacement.store
+                harness.session.radioId = replacementRadio
+                harness.session.contacts = replacement.contactService
+                harness.session.device = replacement.session.device
+            }
+            awaitCondition { readEntered.isCompleted }
+            releaseWrite.complete(Unit)
+            awaitText(latest.name)
+            assertTrue(readExited, "Mutation completion must replace the invalidated new-radio read")
+            releaseRead.complete(Unit)
+            advanceFrames()
+            assertEquals(listOf(latest), replacement.store.discovered)
             assertTrue(harness.store.discovered.isEmpty())
+            assertTrue(replacement.store.discoveredFetches >= 2, "Discarding a read must not discard its invalidation")
+            assertTrue(isDisplayed(awaitText(latest.name)))
+        }
+
+        private fun verifyHeldMutation(clear: Boolean) {
+            val harness = Harness().connect()
+            val radio = checkNotNull(harness.session.radioId)
+            harness.store.discovered += Fixtures.node(radioId = radio, name = "Remove while refreshing")
+            mount { DiscoveryScreen(harness.dependencies) }
+            awaitText("Remove while refreshing")
+            val survivor = Fixtures.node(radioId = radio, name = "Surviving node", publicKey = Fixtures.repeated(0x72))
+            if (!clear) {
+                harness.store.discovered += survivor
+                harness.store.contacts += Fixtures.contact(radioId = radio, publicKey = survivor.publicKey)
+            }
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            var returned = false
+            harness.store.fetchContactKeysGate = {
+                if (!entered.isCompleted) {
+                    entered.complete(Unit)
+                    try {
+                        release.await()
+                    } finally {
+                        returned = true
+                    }
+                }
+            }
+            controller.get().runOnUiThread { harness.session.versions.value++ }
+            awaitCondition { entered.isCompleted }
+            val context = controller.get()
+            clickMutation(clear)
+            if (clear) {
+                awaitText(context.getString(C.contactsDiscoveryEmptyTitle))
+                assertTrue(harness.store.discovered.isEmpty())
+            } else {
+                awaitText(survivor.name)
+                awaitText(context.getString(C.contactsDiscoveryAdded))
+                assertEquals(listOf(survivor), harness.store.discovered)
+            }
             release.complete(Unit)
-            awaitCondition { returned }
-            assertTrue(isDisplayed(awaitText(context.getString(C.contactsDiscoveryEmptyTitle))))
+            awaitCondition { returned && harness.store.discoveredFetches >= 3 }
+            assertTrue(isDisplayed(awaitText(if (clear) context.getString(C.contactsDiscoveryEmptyTitle) else survivor.name)))
             assertFalse(allSemanticsNodes().any {
                 it.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { text -> text.text == "Remove while refreshing" }
             })

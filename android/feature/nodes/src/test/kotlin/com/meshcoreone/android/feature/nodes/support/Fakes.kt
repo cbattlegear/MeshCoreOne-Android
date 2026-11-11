@@ -68,6 +68,8 @@ internal class FakeDataStore : NodesDataStore {
     var fetchDiscoveredError: Exception? = null
     var fetchDiscoveredGate: (suspend () -> Unit)? = null
     var fetchContactKeysGate: (suspend () -> Unit)? = null
+    var deleteDiscoveredGate: (suspend () -> Unit)? = null
+    var clearDiscoveredGate: (suspend () -> Unit)? = null
     var discoveredFetches = 0
     var fetchContactsGate: (suspend () -> Unit)? = null
     var fetchContactBehavior: (suspend (RadioId, Bytes) -> ContactDTO?)? = null
@@ -108,10 +110,12 @@ internal class FakeDataStore : NodesDataStore {
 
     override suspend fun deleteDiscoveredNode(key: EntityKey) {
         deletedDiscovered += key
+        deleteDiscoveredGate?.invoke()
         discovered.removeAll { it.id == key.id }
     }
 
     override suspend fun clearDiscoveredNodes(radioId: RadioId) {
+        clearDiscoveredGate?.invoke()
         discovered.removeAll { it.radioId == radioId }
     }
 }

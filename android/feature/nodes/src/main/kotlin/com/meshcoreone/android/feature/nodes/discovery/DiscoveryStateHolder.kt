@@ -47,6 +47,9 @@ class DiscoveryStateHolder(
 ) {
     private val mutableState = MutableStateFlow(DiscoveryState())
     val state: StateFlow<DiscoveryState> = mutableState.asStateFlow()
+    private val mutableReloadRequests = MutableStateFlow(0)
+    /** Mutation completion asks the mounted collector to replace any discarded read with current data. */
+    val reloadRequests: StateFlow<Int> = mutableReloadRequests.asStateFlow()
 
     private data class FilterInputs(
         val searchText: String = "",
@@ -123,13 +126,15 @@ class DiscoveryStateHolder(
     suspend fun deleteDiscoveredNode(node: DiscoveredNodeDTO) {
         val dataStore = session.offlineDataStore() ?: return
         invalidateLoads()
-        removeFromList(node)
+        if (knownRadioId() == node.radioId) removeFromList(node)
         try {
-            if (reportingFailure { dataStore.deleteDiscoveredNode(EntityKey(node.radioId, node.id)) }) {
+            if (reportingFailure { dataStore.deleteDiscoveredNode(EntityKey(node.radioId, node.id)) } &&
+                knownRadioId() == node.radioId) {
                 removeFromList(node)
             }
         } finally {
             invalidateLoads()
+            mutableReloadRequests.update { it + 1 }
         }
     }
 
@@ -151,11 +156,14 @@ class DiscoveryStateHolder(
         try {
             return reportingFailure {
                 dataStore.clearDiscoveredNodes(radioId)
-                mutableState.update { it.copy(discoveredNodes = emptyList()) }
-                applyFilter()
+                if (knownRadioId() == radioId) {
+                    mutableState.update { it.copy(discoveredNodes = emptyList()) }
+                    applyFilter()
+                }
             }
         } finally {
             invalidateLoads()
+            mutableReloadRequests.update { it + 1 }
         }
     }
 

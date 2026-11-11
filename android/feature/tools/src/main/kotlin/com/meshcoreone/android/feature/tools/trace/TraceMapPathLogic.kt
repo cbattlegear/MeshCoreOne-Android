@@ -29,7 +29,14 @@ data class TraceMapPinFilter(val favoritesOnly: Boolean = false, val showDiscove
 data class RepeaterPathInfo(val inPath: Boolean, val hopIndex: Int?, val isLastHop: Boolean)
 
 /** An engine-neutral pin: the map layer chooses styles from [inPath]. */
-data class TraceMapPin(val id: UUID, val coordinate: Coordinate, val inPath: Boolean, val hopIndex: Int?, val label: String?)
+data class TraceMapPin(
+    val id: UUID,
+    val coordinate: Coordinate,
+    val inPath: Boolean,
+    val hopIndex: Int?,
+    val label: String?,
+    val accessibilityLabel: String? = label,
+)
 
 data class TraceMapBadge(val id: UUID, val coordinate: GeoPoint, val distanceMeters: Double, val snr: Double)
 
@@ -121,6 +128,7 @@ class TraceMapPathLogic(private val trace: TracePathStateHolder) {
                 pin.id, GeoPoint(pin.coordinate.latitude, pin.coordinate.longitude),
                 if (pin.inPath) MapPinStyle.REPEATER_RING_WHITE else MapPinStyle.REPEATER,
                 label = pin.label, clusterable = true, hopIndex = pin.hopIndex,
+                accessibilityLabel = pin.accessibilityLabel,
             )
         } + badges.map { badge ->
             MapMarker(
@@ -206,6 +214,7 @@ class TraceMapPathLogic(private val trace: TracePathStateHolder) {
 
     /** Map traces are always single traces. */
     suspend fun runTrace() {
+        if (!trace.current.canRunTraceWhenConnected) return
         trace.setBatchEnabled(false)
         trace.runTrace()
     }
@@ -240,7 +249,7 @@ class TraceMapPathLogic(private val trace: TracePathStateHolder) {
         val contactPins = visibleContactPins(repeatersWithLocation, members, filter).map { repeater ->
             val info = pathState[repeater.id]
             TraceMapPin(repeater.id, Coordinate(repeater.latitude, repeater.longitude), info?.inPath ?: false,
-                info?.hopIndex, if (showLabels) repeater.displayName else null)
+                info?.hopIndex, if (showLabels) repeater.displayName else null, repeater.displayName)
         }
         val contactKeys = trace.current.availableNodes.map { it.publicKey }.toSet()
         val discovered = visibleDiscoveredPins(trace.current.discoveredRepeaters, contactKeys, members, filter)
@@ -248,7 +257,7 @@ class TraceMapPathLogic(private val trace: TracePathStateHolder) {
         val discoveredPins = discovered.map { node ->
             val info = pathState[node.id]
             TraceMapPin(node.id, Coordinate(node.latitude, node.longitude), info?.inPath ?: false,
-                info?.hopIndex, if (showLabels) node.name else null)
+                info?.hopIndex, if (showLabels) node.name else null, node.name)
         }
         pins = contactPins + discoveredPins
     }

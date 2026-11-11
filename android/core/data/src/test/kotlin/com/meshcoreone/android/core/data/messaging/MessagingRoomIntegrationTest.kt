@@ -958,7 +958,7 @@ class MessagingRoomIntegrationTest {
         val receipt = g.service.sendChannelMessage("Hello channel", 0u, radio)
         val pending = assertNotNull(before)
         assertEquals(MessageDTO(id = receipt.id, radioId = radio, channelIndex = 0u, text = "Hello channel",
-            timestamp = base.epochSecond.toUInt(), createdAt = base), pending)
+            timestamp = base.epochSecond.toUInt(), createdAt = base, channelOccupantID = snapshot.occupantID), pending)
         assertEquals(pending.copy(status = MessageStatus.SENT), store.fetchMessage(EntityKey(radio, receipt.id)))
         assertEquals(listOf(MessageStatusEvent.StatusResolved(receipt.id, MessageStatus.SENT, null)),
             completedStatuses(g, events))
@@ -974,7 +974,8 @@ class MessagingRoomIntegrationTest {
         val message = g.service.createPendingChannelMessage("Hello channel", 0u, radio)
         assertEquals(snapshot.occupantID, message.channelOccupantID)
         val events = g.service.statusEvents()
-        assertFailsWith<MessageServiceException> { g.service.sendPendingChannelMessage(message.id) }
+        val failure = assertFails { g.service.sendPendingChannelMessage(message.id) }
+        assertIs<ChannelDispatchFailure.UnreconciledSession>(failure.cause)
         assertEquals(message.copy(status = MessageStatus.FAILED), store.fetchMessage(EntityKey(radio, message.id)))
         assertTrue(g.firmware.channelSent().isEmpty())
         assertTrue(completedStatuses(g, events).isEmpty(), "The queue owns pending-send failure publication")
@@ -987,8 +988,8 @@ class MessagingRoomIntegrationTest {
         val snapshot = seedChannel(0u, "Test Channel", Bytes(ByteArray(16) { 0xAA.toByte() }))
         val message = MessageDTO(radioId = radio, channelIndex = 0u, text = "Hello channel",
             timestamp = 42u, createdAt = base.minusSeconds(1), status = MessageStatus.FAILED,
-            heardRepeats = 3, sendCount = 1)
-        store.saveMessage(message)
+            heardRepeats = 3, sendCount = 1, channelOccupantID = snapshot.occupantID)
+        store.saveChannelMessage(message, ChannelHistoryScope.from(snapshot))
         val g = RadioGeneration(55)
         g.start()
         g.firmware.configureChannel(snapshot.channel)

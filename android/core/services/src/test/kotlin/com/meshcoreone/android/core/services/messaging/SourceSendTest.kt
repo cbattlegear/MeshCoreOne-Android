@@ -126,8 +126,8 @@ class SourceSendTest {
             }.error); h.close()
         },
         original("MessageServiceSendTests", "sendChannelMessage saves message to dataStore before send attempt") {
-            val h = Harness(this, sessionTimeout = 5.0)
-            assertFailsWith<MessageServiceException> { h.service.sendChannelMessage("Hello channel", 0u, RADIO) }
+            val h = Harness(this, sessionTimeout = 5.0); h.store.seedChannelCreation()
+            assertFailsWith<QueuedChannelRetainedException> { h.service.sendChannelMessage("Hello channel", 0u, RADIO) }
             val messages = h.store.fetchMessages(RADIO, 0u, 10, 0)
             assertTrue(messages.isNotEmpty())
             assertEquals("Hello channel", messages.first().text)
@@ -177,7 +177,7 @@ class SourceSendTest {
             val h = Harness(this, sessionTimeout = 5.0); h.store.seedChannelCreation()
             val m = h.service.createPendingChannelMessage("Hello channel", 0u, RADIO)
             assertEquals(MessageStatus.PENDING, m.status)
-            assertFailsWith<MessageServiceException> { h.service.sendPendingChannelMessage(m.id) }
+            assertFailsWith<QueuedChannelRetainedException> { h.service.sendPendingChannelMessage(m.id) }
             assertEquals(MessageStatus.FAILED, assertNotNull(h.store.fetchMessage(EntityKey(RADIO, m.id))).status); h.close()
         },
         original("MessageServiceSendTests", "resendChannelMessage throws when message not found") {

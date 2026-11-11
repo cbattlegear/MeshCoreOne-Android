@@ -79,6 +79,7 @@ class FailedSendThreadRecoveryOriginalTest : RoomProcessTest() {
         withRig {
             val channel = channel(3)
             val message = saveMessage(channelIndex = channel.index)
+            assertNotNull(holder.requestConversationReload()).join()
             holder.refreshFailedSendIndicators()
             assertTrue(holder.state.value.conversationHasFailedSend(channel.id))
             val conversation = TimelineConversation.Channel(channel)
@@ -214,6 +215,7 @@ class FailedSendThreadRecoveryOriginalTest : RoomProcessTest() {
             val foreign = message.copy(id = UUID.randomUUID(), radioId = otherRadio)
             store.saveChannel(channel.copy(id = UUID.randomUUID(), radioId = otherRadio))
             store.saveMessage(foreign)
+            assertNotNull(holder.requestConversationReload()).join()
             harness.container.navigation.navigateToChannel(channel)
 
             failure(TimelineConversation.Channel(channel), message)
@@ -391,15 +393,16 @@ class FailedSendThreadRecoveryOriginalTest : RoomProcessTest() {
         ).also { store.saveContact(it) }
     }
 
-    private suspend fun channel(index: Int) = ChannelDTO(
+    private suspend fun channel(index: Int) = seedReconciledChannel(ChannelDTO(
         radioId = radio, index = index.toUByte(), name = "General", secret = Bytes.EMPTY, lastMessageDate = NOW,
-    ).also { store.saveChannel(it) }
+    ))
 
     private suspend fun saveMessage(
         contactID: UUID? = null, channelIndex: UByte? = null, status: MessageStatus = MessageStatus.FAILED,
     ) = MessageDTO(
         radioId = radio, contactID = contactID, channelIndex = channelIndex, text = "hello",
         timestamp = 1_700_000_000u, createdAt = NOW, direction = MessageDirection.OUTGOING, status = status,
+        channelOccupantID = channelIndex?.let { store.fetchChannel(radio, it)?.occupantID },
     ).also { store.saveMessage(it) }
 
     private suspend fun saved(message: MessageDTO) =

@@ -9,6 +9,9 @@ import android.content.res.Configuration
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.ChannelHistoryPersisting
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.contracts.domain.QueuedChannelReadinessPersisting
 import com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueServiceError
 import com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueServiceException
 import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceError
@@ -16,6 +19,8 @@ import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceExcept
 import com.meshcoreone.android.core.model.MessageStatus
 import com.meshcoreone.android.core.model.OCVPreset
 import com.meshcoreone.android.core.model.TextType
+import com.meshcoreone.android.core.model.PendingSendDTO
+import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.model.BatteryInfo
@@ -24,7 +29,9 @@ import com.meshcoreone.android.core.services.contacts.ChannelServiceError
 import com.meshcoreone.android.platform.shortcuts.*
 import java.util.Locale
 import kotlin.test.*
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
@@ -37,8 +44,17 @@ class ShortcutIndependentOracleTest : RoomProcessTest() {
     }
     private val text = AndroidShortcutText(context)
 
-    private suspend fun connected(test: TestScope, channel: Boolean = false): ContainerHarness {
-        val h = ContainerHarness(test, store)
+    private suspend fun connected(
+        test: TestScope, channel: Boolean = false, channelQueueReadEntered: CompletableDeferred<Unit>? = null,
+    ): ContainerHarness {
+        val persistence = if (channelQueueReadEntered != null) object :
+            PersistenceStoreProtocol by store, ChannelHistoryPersisting by store, QueuedChannelReadinessPersisting by store {
+            override suspend fun fetchPendingSendsForMessage(key: EntityKey): SnapshotList<PendingSendDTO> {
+                channelQueueReadEntered.complete(Unit)
+                awaitCancellation()
+            }
+        } else store
+        val h = ContainerHarness(test, store, persistenceOverride = persistence)
         h.links.configureRadio = { firmware ->
             firmware.knownContacts += contactFrame(key(4), "Independent peer")
             firmware.respond = { frame ->
@@ -106,7 +122,8 @@ class ShortcutIndependentOracleTest : RoomProcessTest() {
     }
 
     @Test fun actualChannelAdapterAcceptsExactUtf8BudgetRejectsOneMoreAndRechecksChangedLiveName() = runTest {
-        val h = connected(this, channel = true)
+        val queueReadEntered = CompletableDeferred<Unit>()
+        val h = connected(this, channel = true, channelQueueReadEntered = queueReadEntered)
         try {
             val adapter = AppShortcutRadio(h.container)
             val radio = assertNotNull(adapter.currentRadioId)
@@ -140,13 +157,19 @@ class ShortcutIndependentOracleTest : RoomProcessTest() {
             val exact = "\u6d4b".repeat(43) + "ab"
             assertEquals(131, exact.toByteArray(Charsets.UTF_8).size)
             adapter.queueMessage(ShortcutRecipient.Channel(channel), exact)
-            assertNotNull(h.sessions.current).chatSendQueueService.awaitDrainCompletion()
             val messages = store.fetchMessages(radio, 0u, 100, 0)
             assertEquals(setOf("x".repeat(137), exact), messages.map { it.text }.toSet())
             assertTrue(messages.all { it.channelOccupantID == occupant })
-            assertTrue(messages.all { it.status == MessageStatus.SENT })
-            assertTrue(store.fetchPendingSends(radio).isEmpty())
-            assertEquals(2, h.links.radios.single().sent.count { it[0].toInt() == 3 })
+            val pending = store.fetchPendingSends(radio)
+            assertEquals(2, pending.size)
+            assertEquals(messages.map { it.id }.toSet(), pending.map { it.messageID }.toSet())
+            pending.forEach {
+                assertEquals(occupant, it.channelOccupantID)
+                assertEquals(occupant, assertNotNull(it.channelMessageEnvelope()).channelOccupantID)
+            }
+            queueReadEntered.await()
+            assertEquals(DeviceConnectionState.READY, h.manager.connectionState)
+            assertTrue(h.links.radios.single().sent.none { it[0].toInt() == 3 })
         } finally { h.container.close() }
     }
 

@@ -14,4 +14,11 @@ data class QueuedChannelRetirement(val status: MessageStatus, val statusChanged:
  */
 interface QueuedChannelTerminalPersisting {
     suspend fun retireDefinitelyUnsentQueuedChannelAttempt(key: QueuedChannelAttemptKey): QueuedChannelRetirement
+
+    /**
+     * The caller supplies genuine definitely-unsent proof for the exact latest DISPATCHING attempt.
+     * Settlement, pending deletion and FAILED-unless-DELIVERED commit together, never exposing READY.
+     * Failure rolls back to DISPATCHING; a missing row or lost return cannot mint another receipt.
+     */
+    suspend fun settleAndRetireDefinitelyUnsentQueuedChannelAttempt(key: QueuedChannelAttemptKey): QueuedChannelRetirement
 }

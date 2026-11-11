@@ -80,7 +80,9 @@ class ChannelDraftRecoveryPersistenceTest : RepositoryTest() {
         // Raw persisted legacy evidence cannot be manufactured by the guarded enqueue API.
         for (row in queued) db.pendingSends().insert(row.toEntity())
         val before = store.fetchPendingSends(RADIO_A)
-        assertEquals(listOf(deliveredWithPending, retained), store.fetchRecoverableChannelDrafts(RADIO_A).toList())
+        assertEquals(listOf(retained), store.fetchRecoverableChannelDrafts(RADIO_A).toList())
+        assertEquals(listOf(retained), store.fetchRecoverableChannelDrafts(RADIO_A, 1, 0).toList())
+        assertTrue(store.fetchRecoverableChannelDrafts(RADIO_A, 1, 1).isEmpty())
         assertEquals(before, store.fetchPendingSends(RADIO_A))
         assertEquals(retained, store.fetchMessage(EntityKey(RADIO_A, retained.id)))
         assertEquals(deliveredWithPending, store.fetchMessage(EntityKey(RADIO_A, deliveredWithPending.id)))

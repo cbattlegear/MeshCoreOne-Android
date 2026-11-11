@@ -19,7 +19,7 @@ internal class ResourceChatListStrings(private val resources: Resources) : ChatL
 
 /** Recreated when the locale/configuration changes so labels never go stale. */
 @Composable
-internal fun rememberChatListStrings(): ChatListStrings {
+fun rememberChatListStrings(): ChatListStrings {
     val configuration = LocalConfiguration.current
     val resources = LocalContext.current.resources
     return remember(configuration, resources) { ResourceChatListStrings(resources) }

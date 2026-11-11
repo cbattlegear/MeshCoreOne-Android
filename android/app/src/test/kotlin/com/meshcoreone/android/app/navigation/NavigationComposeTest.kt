@@ -34,7 +34,9 @@ import androidx.navigationevent.NavigationEventTransitionState
 import androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner
 import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.core.designsystem.*
+import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
 import com.meshcoreone.android.core.model.ChannelDTO
+import com.meshcoreone.android.core.model.ChannelFloodScope
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.RadioId
@@ -197,11 +199,63 @@ class NavigationComposeTest {
             compose.onNodeWithTag("tab:${tab.name}").assertIsSelected()
             compose.onNodeWithTag("navigation-heading").assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading))
             compose.onNodeWithTag("fixture:root-${tab.name}").assertIsDisplayed()
+            if (tab == AppTab.NODES) {
+                compose.onNodeWithTag("open-remote-nodes").assert(
+                    SemanticsMatcher.expectValue(
+                        SemanticsProperties.ContentDescription,
+                        listOf(host.get().getString(com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings.remoteNodesAuthManagement)),
+                    ),
+                )
+            }
         }
         compose.onNodeWithTag("tab:CHATS").assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.StateDescription))
         compose.onNodeWithTag("open-radio-setup").assertHeightIsAtLeast(48.dp).assertWidthIsAtLeast(48.dp)
         capture("tabs-selected-settings")
     }
+
+    @Test fun selectedConversationChromeTracksDirectAndChannelRoutes() {
+        val radio = RadioId(UUID(0, 61))
+        val direct = ContactDTO(
+            radioId = radio,
+            publicKey = Bytes(byteArrayOf(1)),
+            name = "Alice",
+            nickname = "Ally",
+            outPathLength = 2u,
+            lastHeardTimestamp = null,
+        )
+        compose.runOnIdle { navigation.navigateToChat(direct) }
+        compose.onNodeWithTag("navigation-heading").assertTextEquals("Ally")
+        compose.onNodeWithTag("navigation-subtitle").assertTextEquals(
+            AppChatsStrings.chatsConnectionStatusDirect(host.get().resources, direct.pathHopCount.toInt()),
+        )
+
+        val floodRouted = direct.copy(id = UUID(0, 62), name = "Flood peer", nickname = null, outPathLength = 255u)
+        compose.runOnIdle { navigation.navigateToChat(floodRouted) }
+        compose.onNodeWithTag("navigation-heading").assertTextEquals("Flood peer")
+        compose.onNodeWithTag("navigation-subtitle").assertTextEquals(
+            host.get().getString(AppChatsStrings.chatsConnectionStatusFloodRouting),
+        )
+
+        val channel = ChannelDTO(radioId = radio, index = 3u, name = "Operations")
+            .withFloodScope(ChannelFloodScope.Region("Germany"))
+        compose.runOnIdle { navigation.navigateToChannel(channel) }
+        compose.onNodeWithTag("navigation-heading").assertTextEquals("Operations")
+        compose.onNodeWithTag("navigation-subtitle").assertTextEquals(
+            AppChatsStrings.chatsChannelHeaderRegion(host.get().resources, "Germany"),
+        )
+
+        compose.runOnIdle { navigation.selectTab(AppTab.NODES) }
+        compose.onNodeWithTag("navigation-heading").assertTextEquals(
+            host.get().getString(com.meshcoreone.android.core.l10n.R.string.tab_nodes),
+        )
+        compose.onNodeWithTag("navigation-subtitle").assertDoesNotExist()
+        compose.runOnIdle { navigation.selectTab(AppTab.CHATS) }
+        compose.onNodeWithTag("navigation-heading").assertTextEquals("Operations")
+        compose.onNodeWithTag("navigation-subtitle").assertTextEquals(
+            AppChatsStrings.chatsChannelHeaderRegion(host.get().resources, "Germany"),
+        )
+    }
+
     @Test fun inactiveTabDraftAndDetailFocusSurviveWindowResizeWithoutAnotherConnectionOwner() {
         compose.onNodeWithTag("editor:root-CHATS").performTextInput("retained draft")
         compose.onNodeWithTag("tab:NODES").performClick()

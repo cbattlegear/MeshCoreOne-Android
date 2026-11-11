@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-407 Native platform labels not present in the pinned Apple localization catalog. -->
+<!-- AndroidOnly: WP-306 Localizable native link-handler guidance; raw intent failures remain diagnostic-only. -->
+<!-- AndroidOnly: WP-405 Channel allocation and postcommit recovery guidance. -->
+<resources>
+    <string name="platform_open_source_licenses">开源许可证</string>
+    <string name="platform_system_language">系统语言</string>
+    <string name="platform_chat_link_unavailable">无法打开此链接。请检查是否已安装允许处理此链接的应用，然后重试。</string>
+    <string name="platform_channel_sync_incomplete">部分无线电频道槽位尚未同步。添加频道前，请等待同步完成或重新连接。</string>
+    <string name="platform_channel_reconciliation_required">无法确认上一次频道操作。在本次应用会话中，后续频道写入已被阻止；仅重新连接无法解除此状态。</string>
+    <string name="platform_channel_already_saved">频道已保存，但未能完成设置。请在“聊天”中查看；此确认不会再次写入频道。</string>
+    <string name="platform_channel_delete_stale">此频道已更改或无法确认其身份。删除前，请刷新“聊天”并重新选择该频道。</string>
+    <string name="platform_channel_delete_unreconciled">当前连接尚未确认此频道。删除前，请等待频道同步完成。</string>
+</resources>

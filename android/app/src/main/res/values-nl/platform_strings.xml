@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: WP-407 Native platform labels not present in the pinned Apple localization catalog. -->
+<!-- AndroidOnly: WP-306 Localizable native link-handler guidance; raw intent failures remain diagnostic-only. -->
+<!-- AndroidOnly: WP-405 Channel allocation and postcommit recovery guidance. -->
+<resources>
+    <string name="platform_open_source_licenses">Opensourcelicenties</string>
+    <string name="platform_system_language">Systeemtaal</string>
+    <string name="platform_chat_link_unavailable">Deze link kon niet worden geopend. Controleer of er een app is geïnstalleerd die deze link mag openen en probeer het opnieuw.</string>
+    <string name="platform_channel_sync_incomplete">Sommige radiokanaalslots zijn niet gesynchroniseerd. Wacht op de synchronisatie of maak opnieuw verbinding voordat je een kanaal toevoegt.</string>
+    <string name="platform_channel_reconciliation_required">De vorige kanaalbewerking kon niet worden bevestigd. Verdere schrijfbewerkingen naar kanalen zijn voor deze app-sessie geblokkeerd; opnieuw verbinding maken alleen heft deze blokkering niet op.</string>
+    <string name="platform_channel_already_saved">Het kanaal is opgeslagen, maar de instelling kon niet worden voltooid. Controleer het onder Chats; deze bevestiging schrijft het niet opnieuw.</string>
+    <string name="platform_channel_delete_stale">Dit kanaal is gewijzigd of de identiteit kan niet worden bevestigd. Vernieuw Chats en selecteer het kanaal opnieuw voordat je het verwijdert.</string>
+    <string name="platform_channel_delete_unreconciled">Dit kanaal is niet bevestigd op de huidige verbinding. Wacht op de kanaalsynchronisatie voordat je het verwijdert.</string>
+</resources>

@@ -35,6 +35,8 @@ interface TracePathRunDao : RowWriter<TracePathRunEntity> {
 
 @Dao
 interface RxLogDao : RowWriter<RxLogEntryEntity> {
+    @Query("SELECT COUNT(*) FROM rx_log_entries WHERE radioId >= upper(:radioId) AND radioId <= lower(:radioId) AND radioId = :radioId COLLATE NOCASE AND id >= upper(:id) AND id <= lower(:id) AND id = :id COLLATE NOCASE")
+    suspend fun countSimulatorIdentity(radioId: UUID, id: UUID): Long
     @Query("SELECT * FROM rx_log_entries WHERE radioId = :radioId ORDER BY receivedAt_seconds DESC, receivedAt_nanos DESC LIMIT :limit")
     suspend fun newest(radioId: UUID, limit: Long): List<RxLogEntryEntity>
     @Query("SELECT * FROM rx_log_entries WHERE radioId = :radioId AND id = :id")

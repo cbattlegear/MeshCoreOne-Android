@@ -159,7 +159,7 @@ class AppChatContent internal constructor(
     }
     internal val renderInvalidations: Flow<Unit> = merge(
         rendering.map { Unit }, resolutions.map { Unit }, mapPreviews.network.map { Unit },
-        mapPreviews.snapshots.resolutions.map { Unit },
+        mapPreviews.snapshots.revision.map { Unit },
     )
     internal fun applyRenderPreferences(base: EnvInputs) = base.copy(
         autoPlayGIFs = rendering.value[AppStorageKey.autoPlayGIFs],

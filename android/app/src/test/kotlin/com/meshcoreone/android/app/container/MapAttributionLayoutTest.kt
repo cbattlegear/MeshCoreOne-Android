@@ -124,7 +124,7 @@ class MapAttributionLayoutTest {
                 credit.performClick()
             }
             compose.onNodeWithTag("map-overlay").performClick()
-            compose.onNodeWithTag("map-viewport").performTouchInput { click(bottomLeft + androidx.compose.ui.geometry.Offset(8f, -8f)) }
+            compose.onNodeWithTag("map-viewport").performTouchInput { click(bottomCenter + androidx.compose.ui.geometry.Offset(0f, -4f)) }
             assertEquals(1, viewportMounts)
             assertEquals(0, viewportDisposals)
         }

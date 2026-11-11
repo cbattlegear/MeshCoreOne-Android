@@ -6,6 +6,7 @@ import com.meshcoreone.android.core.contracts.domain.ParsedReaction
 import com.meshcoreone.android.core.contracts.domain.ReactionPersisting
 import com.meshcoreone.android.core.contracts.notifications.ChannelNotificationTarget
 import com.meshcoreone.android.core.model.ContactDTO
+import com.meshcoreone.android.core.model.DeliveryContext
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.NotificationLevel
 import com.meshcoreone.android.core.model.RadioId
@@ -80,8 +81,26 @@ data class SyncPendingDMReaction(
 /** WP-216 `reactions.ReactionPersistResult`. */
 data class SyncReactionPersistResult(val messageID: UUID, val summary: String, val shouldNotify: Boolean = true)
 
+/** Context captured by sync before a classified native channel reaction starts target lookup. */
+data class SyncIncomingChannelReaction(
+    val parsed: ParsedReaction,
+    val channelIndex: UByte,
+    val senderName: String,
+    val rawText: String,
+    val radioId: RadioId,
+    val receivedAt: Instant,
+    val localNodeName: String,
+    val deliveryContext: DeliveryContext,
+)
+
 /** `ReactionService` (WP-216). Future implementer: `reactions.ReactionService`. */
 interface SyncReactionServicing {
+    fun queueIncomingChannelReaction(reaction: SyncIncomingChannelReaction)
+    fun retainIncomingChannelReaction(reaction: SyncIncomingChannelReaction)
+    suspend fun persistIncomingChannelReaction(
+        reaction: SyncIncomingChannelReaction, targetMessageID: UUID, dataStore: ReactionPersisting,
+        onPersisted: (SyncReactionPersistResult) -> Unit,
+    ): SyncReactionPersistResult?
     suspend fun indexDMMessage(id: UUID, contactID: UUID, text: String, timestamp: UInt): List<SyncPendingDMReaction>
     suspend fun indexMessage(id: UUID, channelIndex: UByte, senderName: String, text: String, timestamp: UInt): List<SyncPendingReaction>
     suspend fun persistIndexedDMMessage(

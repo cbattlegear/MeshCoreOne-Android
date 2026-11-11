@@ -8,10 +8,12 @@ import com.meshcoreone.android.core.model.ReactionDTO
 import com.meshcoreone.android.core.model.RxLogEntryDTO
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.contracts.domain.ParsedReaction
+import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.services.messaging.ChannelRXCorrelation
 import com.meshcoreone.android.core.services.reactions.HeardRepeatsService
 import com.meshcoreone.android.core.services.reactions.MeshCoreOpenReactionParser
 import com.meshcoreone.android.core.services.reactions.ParsedDMReaction
+import com.meshcoreone.android.core.services.reactions.PendingReaction
 import com.meshcoreone.android.core.services.reactions.ReactionParser
 import com.meshcoreone.android.core.services.reactions.ReactionService
 import com.meshcoreone.android.core.services.remote.CLIResponse
@@ -20,6 +22,7 @@ import com.meshcoreone.android.core.services.sync.SyncCLIEchoParsing
 import com.meshcoreone.android.core.services.sync.SyncChannelRXCorrelating
 import com.meshcoreone.android.core.services.sync.SyncDeduplicationKeying
 import com.meshcoreone.android.core.services.sync.SyncHeardRepeatsServicing
+import com.meshcoreone.android.core.services.sync.SyncIncomingChannelReaction
 import com.meshcoreone.android.core.services.sync.SyncMentionDetecting
 import com.meshcoreone.android.core.services.sync.SyncMeshCoreOpenReactionParsing
 import com.meshcoreone.android.core.services.sync.SyncMessageCodecs
@@ -72,6 +75,25 @@ internal class SyncReactionAdapter(
     private val reactions: ReactionService,
     private val radioId: RadioId? = null,
 ) : SyncReactionServicing {
+    private fun SyncIncomingChannelReaction.pending() = PendingReaction(
+        parsed, channelIndex, senderName, rawText, radioId, receivedAt,
+        localNodeName = localNodeName, deliveryContext = deliveryContext,
+    )
+
+    override fun queueIncomingChannelReaction(reaction: SyncIncomingChannelReaction) =
+        reactions.queuePendingReaction(reaction.pending())
+
+    override fun retainIncomingChannelReaction(reaction: SyncIncomingChannelReaction) =
+        reactions.requeuePendingReaction(reaction.pending())
+
+    override suspend fun persistIncomingChannelReaction(
+        reaction: SyncIncomingChannelReaction, targetMessageID: UUID, dataStore: ReactionPersisting,
+        onPersisted: (SyncReactionPersistResult) -> Unit,
+    ): SyncReactionPersistResult? =
+        reactions.persistIncomingChannelReaction(reaction.pending(), EntityKey(reaction.radioId, targetMessageID), dataStore) {
+            onPersisted(SyncReactionPersistResult(it.messageID, it.summary, it.shouldNotify))
+        }?.let { SyncReactionPersistResult(it.messageID, it.summary, it.shouldNotify) }
+
     override suspend fun indexDMMessage(id: UUID, contactID: UUID, text: String, timestamp: UInt): List<SyncPendingDMReaction> =
         reactions.indexDMMessage(id, contactID, text, timestamp, radioId).map {
             SyncPendingDMReaction(

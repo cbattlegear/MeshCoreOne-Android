@@ -1,6 +1,8 @@
 // AndroidOnly: WP-214 Native ingestion, reaction, discovery, containment and Swift text-semantics cases.
 package com.meshcoreone.android.core.services.sync
 
+import com.meshcoreone.android.core.contracts.domain.ReactionPersisting
+
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.ParsedReaction
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
@@ -288,6 +290,26 @@ class SyncNativeIngestionTests {
 
     @TestFactory
     fun reactionsRoomsAndCLI(): List<DynamicTest> = listOf(
+        nativeCase("an incomplete legacy persistence result is not reported as saved") {
+            val radioId = newRadio()
+            val store = SyncInMemoryStore.createTestDataStore(radioId)
+            val services = SyncTestServices(store)
+            val coordinator = coordinator()
+            val reactions = object : SyncReactionServicing by services.reactions {
+                override suspend fun persistReactionAndUpdateSummary(
+                    reaction: ReactionDTO, dataStore: ReactionPersisting,
+                    onPersisted: ((SyncReactionPersistResult) -> Unit)?,
+                ): SyncReactionPersistResult? = null
+            }
+            val reaction = ReactionDTO(
+                messageID = UUID.randomUUID(), emoji = "x", senderName = "Bob", messageHash = "hash",
+                rawText = "raw", channelIndex = 0u, radioId = radioId,
+            )
+            assertFalse(coordinator.persistReactionIfNew(
+                reaction, services.dependencies().copy(reactionService = reactions),
+            ))
+            assertTrue(store.allReactions().isEmpty())
+        },
         nativeCase("channel reaction to a cached target persists once and broadcasts the summary") {
             val radioId = newRadio()
             val store = SyncInMemoryStore.createTestDataStore(radioId)

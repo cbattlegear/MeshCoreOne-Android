@@ -6,6 +6,7 @@ import com.meshcoreone.android.core.contracts.domain.ParsedReaction
 import com.meshcoreone.android.core.contracts.domain.ReactionPersisting
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.ReactionDTO
+import com.meshcoreone.android.core.model.DeliveryContext
 import com.meshcoreone.android.core.services.rendering.MessageCandidate
 import com.meshcoreone.android.core.services.rendering.MessageLRUCache
 import com.meshcoreone.android.core.services.rendering.SwiftText
@@ -30,6 +31,8 @@ data class PendingReaction(
     internal val queueEntryOrder: Long? = null,
     internal val notificationPending: Boolean = false,
     internal val targetEntity: EntityKey? = null,
+    val localNodeName: String? = null,
+    val deliveryContext: DeliveryContext? = null,
 )
 
 /** A DM reaction waiting for its target message to be indexed. */
@@ -281,13 +284,18 @@ class ReactionService internal constructor(
         rawText: String,
         radioId: RadioId,
     ) {
-        val key = PendingReactionKey.of(channelIndex, parsed.targetSender, parsed.messageHash)
         val pending = PendingReaction(parsed, channelIndex, senderNodeName, rawText, radioId, clock.instant())
+        queuePendingReaction(pending)
+        logger.fine { "Queued pending reaction ${parsed.emoji} for ${parsed.targetSender}" }
+    }
+
+    /** Queues a proven target miss without replacing sync's original receive context. */
+    fun queuePendingReaction(pending: PendingReaction) {
         val custody = pendingReactionCustody
         if (custody == null) synchronized(lock) {
+            val key = PendingReactionKey.of(pending.channelIndex, pending.parsed.targetSender, pending.parsed.messageHash)
             pendingReactions = pendingReactions.enqueue(key, pending, MAX_PENDING_REACTIONS)
         } else custody.queue(pending, sessionOwner)
-        logger.fine { "Queued pending reaction ${parsed.emoji} for ${parsed.targetSender}" }
     }
 
     /** Returns an unfinished history replay to the bounded queue without replacing its arrival metadata. */
@@ -316,6 +324,40 @@ class ReactionService internal constructor(
     }
 
     // MARK: - Persistence
+
+    /** Uses indexed replay's failure custody for an incoming reaction whose target is already known. */
+    suspend fun persistIncomingChannelReaction(
+        pending: PendingReaction,
+        target: EntityKey,
+        dataStore: ReactionPersisting,
+        onPersisted: (ReactionPersistResult) -> Unit,
+    ): ReactionPersistResult? {
+        require(pending.radioId == target.radioId)
+        val matched = pending.copy(targetEntity = target)
+        val dto = ReactionDTO(
+            messageID = target.id, emoji = matched.parsed.emoji, senderName = matched.senderNodeName,
+            messageHash = matched.parsed.messageHash, rawText = matched.rawText,
+            receivedAt = matched.receivedAt, channelIndex = matched.channelIndex, radioId = matched.radioId,
+        )
+        var acquired = false
+        try {
+            return persistenceMutex.withLock {
+                acquired = true
+                persistMatched(
+                    listOf(matched), dataStore, ::requeuePendingReaction,
+                    { it.notificationPending }, { it.copy(notificationPending = true) },
+                    onPersisted = { result ->
+                        onPersisted(result)
+                        if (result.shouldNotify) acknowledgePendingNotification(dto)
+                    },
+                    toDTO = { dto },
+                )?.single()
+            }
+        } catch (cancelled: CancellationException) {
+            if (!acquired) requeuePendingReaction(matched)
+            throw cancelled
+        }
+    }
 
     /**
      * Persists a reaction unless the store already has its sender/emoji, then rebuilds the summary from the

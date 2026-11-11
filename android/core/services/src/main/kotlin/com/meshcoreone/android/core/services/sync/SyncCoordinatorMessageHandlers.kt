@@ -209,7 +209,7 @@ internal suspend fun SyncCoordinator.handleIncomingMessage(
             if (isBlockedSender(wire.senderNodeName)) return
             if (handleChannelReaction(
                     wire.text, resolvedKind.message.channelIndex, wire.senderNodeName, selfNodeName, receiveTime,
-                    radioId, dependencies,
+                    radioId, dependencies, context,
                 )
             ) return
         }

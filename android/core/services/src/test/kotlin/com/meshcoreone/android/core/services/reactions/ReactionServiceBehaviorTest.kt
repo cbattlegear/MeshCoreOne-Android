@@ -22,7 +22,9 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.yield
 import org.junit.jupiter.api.DynamicTest
@@ -273,6 +275,41 @@ class ReactionServiceBehaviorTest {
                 )
                 assertEquals(1, results?.size)
                 assertEquals(listOf("Sender"), store.fetchReactions(EntityKey(radio, messageID)).map { it.senderName })
+            }
+        },
+        test("native channel cancellation while waiting for persistence retains the original target and context") {
+            blocking {
+                coroutineScope {
+                    val custody = PendingReactionCustody()
+                    val mutex = kotlinx.coroutines.sync.Mutex(locked = true)
+                    val radio = newRadioId()
+                    val target = EntityKey(radio, UUID.randomUUID())
+                    val store = ReactionsInMemoryReactionStore()
+                    val service = ReactionService(ReactionsTickingClock(), mutex, custody)
+                    val raw = service.buildReactionText("👍", "Target", "message", stamp)
+                    val pending = PendingReaction(
+                        requireNotNull(ReactionParser.parse(raw)), 0u, "Sender", raw, radio,
+                        Instant.ofEpochSecond(stamp.toLong()),
+                        localNodeName = "Local",
+                        deliveryContext = com.meshcoreone.android.core.model.DeliveryContext.InitialSync(Instant.EPOCH),
+                    )
+                    val waiting = async(start = CoroutineStart.UNDISPATCHED) {
+                        service.persistIncomingChannelReaction(pending, target, store) {}
+                    }
+                    waiting.cancelAndJoin()
+                    service.clearPendingReactions()
+                    mutex.unlock()
+                    val replacement = ReactionService(ReactionsTickingClock(), mutex, custody)
+                    val retained = replacement.indexMessage(
+                        target.id, 0u, "Target", "message", stamp, radio, includeCustody = true,
+                    ).single()
+                    assertEquals(pending.copy(targetEntity = target), retained.copy(queueKeyOrder = null, queueEntryOrder = null))
+                    replacement.requeuePendingReaction(retained)
+                    assertEquals(1, replacement.persistIndexedChannelMessage(
+                        target.id, radio, 0u, "Target", "message", stamp, store,
+                    )?.size)
+                    assertEquals(pending.receivedAt, store.fetchReactions(target).single().receivedAt)
+                }
             }
         },
         test("live publication claims an indexed reaction notification after its save failed") {

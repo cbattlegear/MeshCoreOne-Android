@@ -79,9 +79,14 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import com.meshcoreone.android.core.l10n.generated.AppToolsStrings
+import com.meshcoreone.android.core.l10n.generated.WidgetLocalizableStrings
+import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.feature.tools.diagnostics.cli.CliOutputLine
 import com.meshcoreone.android.feature.tools.diagnostics.cli.CliOutputType
 import com.meshcoreone.android.feature.tools.diagnostics.cli.CliTerminalController
@@ -99,6 +104,9 @@ import com.meshcoreone.android.feature.tools.diagnostics.rxlog.RxLogRouteFilter
 import com.meshcoreone.android.feature.tools.diagnostics.rxlog.RxLogStateHolder
 import com.meshcoreone.android.feature.tools.navigation.ToolSelection
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 private enum class DiagnosticsPage(val title: Int) {
     CLI(AppToolsStrings.toolsCli),
@@ -119,6 +127,7 @@ fun ToolsDiagnosticsScreen(
     }
     var selected by rememberSaveable(initialPage) { mutableStateOf(initialPage) }
     val connectionVersion by dependencies.connectionVersion.collectAsStateWithLifecycle()
+    val connectionState by dependencies.connectionState.collectAsStateWithLifecycle(DeviceConnectionState.DISCONNECTED)
     Column(modifier.fillMaxSize()) {
         Row(
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 8.dp),
@@ -136,7 +145,7 @@ fun ToolsDiagnosticsScreen(
         HorizontalDivider()
         when (selected) {
             DiagnosticsPage.CLI -> CliScreen(dependencies, connectionVersion, Modifier.fillMaxSize())
-            DiagnosticsPage.RX_LOG -> RxLogScreen(dependencies, connectionVersion, Modifier.fillMaxSize())
+            DiagnosticsPage.RX_LOG -> RxLogScreen(dependencies, connectionVersion, connectionState, Modifier.fillMaxSize())
             DiagnosticsPage.NOISE_FLOOR -> NoiseFloorScreen(dependencies, connectionVersion, Modifier.fillMaxSize())
         }
     }
@@ -274,7 +283,12 @@ private fun CliScreen(dependencies: ToolsDiagnosticsDependencies, connectionVers
 }
 
 @Composable
-private fun RxLogScreen(dependencies: ToolsDiagnosticsDependencies, connectionVersion: Int, modifier: Modifier) {
+private fun RxLogScreen(
+    dependencies: ToolsDiagnosticsDependencies,
+    connectionVersion: Int,
+    connectionState: DeviceConnectionState,
+    modifier: Modifier,
+) {
     val context = LocalContext.current
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
@@ -284,13 +298,29 @@ private fun RxLogScreen(dependencies: ToolsDiagnosticsDependencies, connectionVe
     val state by holder.state.collectAsStateWithLifecycle()
     var listState by remember { mutableStateOf(RxLogListState()) }
     var confirmClear by remember { mutableStateOf(false) }
-    val connected = dependencies.isConnected()
+    val connected = dependencies.isConnected() && connectionState != DeviceConnectionState.DISCONNECTED
     val shareLabel = stringResource(AppChatsStrings.chatsImageViewerShare)
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val subscriptionLock = remember { Mutex() }
 
-    LaunchedEffect(dependencies, connectionVersion) {
-        holder.configure(dependencies.rxLog)
-        holder.subscribe()
-        holder.loadNodeNames()
+    LaunchedEffect(dependencies, connectionVersion, connectionState, lifecycle) {
+        // Old connection/lifecycle cleanup must finish before the next subscription takes ownership.
+        subscriptionLock.withLock {
+            holder.configure(dependencies.rxLog)
+            if (!connected) {
+                holder.unsubscribe()
+                return@withLock
+            }
+            lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                try {
+                    holder.subscribe()
+                    holder.loadNodeNames()
+                    awaitCancellation()
+                } finally {
+                    holder.unsubscribe()
+                }
+            }
+        }
     }
     DisposableEffect(holder) { onDispose(holder::unsubscribe) }
 
@@ -319,6 +349,13 @@ private fun RxLogScreen(dependencies: ToolsDiagnosticsDependencies, connectionVe
                     Text(stringResource(AppToolsStrings.toolsRxLogDelete))
                 }
             }
+        }
+        if (connected) state.packetsPerMinute?.let { rate ->
+            Text(
+                WidgetLocalizableStrings.lldPacketsPerMinute(resources, rate),
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                style = MaterialTheme.typography.bodyMedium,
+            )
         }
         FilterRows(state.routeFilter, state.decryptFilter, listState, holder, { listState = it })
         val entries = listState.displayEntries(state)

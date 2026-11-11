@@ -76,6 +76,7 @@ class DisconnectedCliTest {
         isConnected = { true },
         localPublicKeyPrefix = { null },
         connectionVersion = version,
+        connectionState = MutableStateFlow(com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY),
     )
 
     @Suppress("DEPRECATION")

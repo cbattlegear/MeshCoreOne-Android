@@ -70,17 +70,15 @@ internal fun RemoteNodeStatusContent(
                         storedFilter.favoritesOnly, storedFilter.showDiscovered, storedFilter.showChat,
                         storedFilter.showRepeater, storedFilter.showRoom,
                     )
-                    val holder = remember(session, repeaterState.neighbors, catalog, repeaterState.neighborKeyDisplayByteCount, locale, userLocation) {
-                        NeighborSNRMapStateHolder(
-                            NeighborSNRMapInputs(
-                                session, repeaterState.neighbors, catalog.contacts, catalog.discoveredNodes,
-                                userLocation, repeaterState.neighborKeyDisplayByteCount,
-                            ), filter, locale,
-                        )
+                    val inputs = NeighborSNRMapInputs(
+                        session, repeaterState.neighbors, catalog.contacts, catalog.discoveredNodes,
+                        userLocation, repeaterState.neighborKeyDisplayByteCount,
+                    )
+                    val holder = remember(session.id, session.radioId, session.publicKey, locale) {
+                        NeighborSNRMapStateHolder(inputs, filter, locale)
                     }
                     val neighborMap by holder.state.collectAsStateWithLifecycle()
-                    LaunchedEffect(holder) { holder.onAppear() }
-                    LaunchedEffect(holder, filter) { holder.onFilterChange(filter) }
+                    LaunchedEffect(holder, inputs, filter) { holder.onInputsChange(inputs, filter) }
                     RemoteToggle(
                         com.meshcoreone.android.core.l10n.generated.AppSettingsStrings.trustedContactsFavoritesOnly,
                         filter.favoritesOnly, { enabled ->

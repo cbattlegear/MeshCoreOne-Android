@@ -259,14 +259,16 @@ class MessageService(
     private suspend fun prepareDirect(
         id: UUID, requestID: UUID, contact: ContactDTO, mode: DirectAckMode, pendingSendID: UUID?,
         isResend: Boolean = false, selection: DirectQueueSelection? = null,
-        creation: DirectMessageCreation? = null, retryCreation: Boolean = false,
+        creation: DirectMessageCreation? = null, retryCreationMessage: MessageDTO? = null,
     ): PreparedDirect {
         synchronized(lock) { directIntentMessages += id }
         require(selection == null || creation == null)
+        require(retryCreationMessage == null || creation != null)
         val lease = directLease()
         val result = try {
             when {
-                creation != null && retryCreation -> creationAuthority().captureCreatedDirectRetryIntent(creation, mode)
+                creation != null && retryCreationMessage != null ->
+                    creationAuthority().captureCreatedDirectRetryIntent(creation, mode)
                 creation != null -> creationAuthority().captureCreatedDirectIntent(creation)
                 selection != null -> queueAuthority().captureDirectQueueIntent(selection, requestID, mode)
                 else -> authority().captureDirectAckIntent(lease, key(id), requestID, mode, pendingSendID)
@@ -304,6 +306,10 @@ class MessageService(
             }
             if (message.radioId != token.radioId || message.contactID != contact.id || contact.radioId != token.radioId) {
                 throw MessageServiceException(MessageServiceError.ContactNotFound)
+            }
+            if (retryCreationMessage != null &&
+                (message.text != retryCreationMessage.text || message.timestamp != retryCreationMessage.timestamp)) {
+                throw authorityFailure("retry creation payload changed")
             }
             val selected = dataStore.fetchContact(key(requireNotNull(message.contactID)))
                 ?: throw MessageServiceException(MessageServiceError.ContactNotFound)
@@ -1797,7 +1803,7 @@ class MessageService(
         if (config.maxAttempts > 0) checkIdentity("retryDirectMessage")
         val prepared = prepareDirect(
             row.id, claimID, contact, mode, pendingSendID, resend, selection, creation,
-            retryCreation = creation != null,
+            retryCreationMessage = row.takeIf { creation != null },
         )
         return DirectSendClaim(
             claimID, row.id, prepared.contact.id, prepared.contact.publicKey, prepared.message.text,

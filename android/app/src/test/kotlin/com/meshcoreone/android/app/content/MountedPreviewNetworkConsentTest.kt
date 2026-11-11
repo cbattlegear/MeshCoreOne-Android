@@ -15,6 +15,7 @@ import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
 import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.datastore.AppStorageKey
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
+import com.meshcoreone.android.core.datastore.PreferenceKey
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
 import com.meshcoreone.android.core.model.MessageDTO
@@ -24,6 +25,7 @@ import com.meshcoreone.android.core.services.content.HttpFetchAttempt
 import com.meshcoreone.android.core.services.content.UrlSafetyChecker
 import com.meshcoreone.android.feature.chats.composer.UrlSafetyPort
 import java.io.File
+import java.net.InetAddress
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
@@ -142,6 +144,31 @@ class MountedPreviewNetworkConsentTest {
         }
     }
 
+    @Test
+    fun `authorized automatic lookup still rejects a private DNS target before HTTP`() = runTest {
+        for (isChannel in listOf(false, true)) withContent(isChannel) { fixture ->
+            fixture.storage.preferences.set(
+                if (isChannel) AppStorageKey.linkPreviewsAutoResolveChannels else AppStorageKey.linkPreviewsAutoResolveDM,
+                true,
+            )
+            val url = "https://private.example/article"
+            val dns = AtomicInteger()
+            fixture.mount(url, UrlSafetyPort { requested ->
+                UrlSafetyChecker.isSafe(requested) {
+                    dns.incrementAndGet()
+                    listOf(InetAddress.getByAddress(byteArrayOf(10, 0, 0, 1)))
+                }
+            })
+            compose.waitUntil(10_000) { dns.get() == 1 }
+            compose.waitForIdle()
+            compose.onNodeWithContentDescription(
+                AppChatsStrings.chatsPreviewTapAccessibility(fixture.context.resources, "private.example"),
+            ).assertDoesNotExist()
+            assertTrue(fixture.requests.isEmpty())
+            assertNull(fixture.store.fetchLinkPreview(url))
+        }
+    }
+
     private inner class Fixture(
         val context: Context,
         val storage: MeshCoreStorage,
@@ -204,7 +231,10 @@ class MountedPreviewNetworkConsentTest {
             override fun getFilesDir(): File = directory
         }
         val storage = MeshCoreStorage.get(context)
-        storage.markMalwareRefreshRecent()
+        storage.preferences.set(
+            PreferenceKey.DecimalKey("MalwareDomainFilter.lastRefresh", 0.0),
+            System.currentTimeMillis() / 1000.0,
+        )
         val database = Room.inMemoryDatabaseBuilder(context, MeshCoreDatabase::class.java)
             .allowMainThreadQueries().build()
         val store = RoomPersistenceStore(database, backgroundScope)

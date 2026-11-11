@@ -407,6 +407,57 @@ class MessagingRoomIntegrationTest {
         g.stop()
     }
 
+    @Test fun deliveredQueuedSendRecoversItsPendingRowAfterReconnectWithoutAnotherWire() = runTest(scheduler) {
+        seed()
+        val barrier = DirectCompletionBarrier()
+        val first = RadioGeneration(270, barrier, MessageServiceConfig(maxAttempts = 1, minTimeout = 0.0))
+        first.start(); first.service.startEventMonitoring()
+        val message = first.service.createPendingMessage("delivered before dequeue", contact)
+        val pending = PendingSendDTO.fromEnvelope(DirectMessageEnvelope(message.id, contact.id), radio)
+        store.upsertPendingSend(pending)
+        first.signals.set(DeviceConnectionState.READY); first.queue.hydrate(); runCurrent()
+        assertTrue(barrier.entered.isCompleted)
+        val delivered = assertNotNull(store.fetchMessage(EntityKey(radio, message.id)))
+        assertEquals(MessageStatus.DELIVERED, delivered.status)
+        assertEquals(1, first.firmware.sent().size)
+        assertEquals(1L, store.fetchPendingSends(radio).single().attemptCount)
+        first.stop()
+
+        val next = RadioGeneration(271)
+        next.start(); next.signals.set(DeviceConnectionState.READY); next.queue.hydrate()
+        runCurrent(); next.queue.awaitDrainCompletion()
+        assertEquals(delivered, store.fetchMessage(EntityKey(radio, message.id)))
+        assertTrue(store.fetchPendingSends(radio).isEmpty())
+        assertTrue(next.firmware.sent().isEmpty())
+        assertEquals(0, next.queue.queuedEnvelopeCount)
+        next.stop()
+    }
+
+    @Test fun deliveredQueuedSendCannotRecoverAnIdenticalPendingReplacementAfterReconnect() = runTest(scheduler) {
+        seed()
+        val barrier = DirectCompletionBarrier()
+        val first = RadioGeneration(272, barrier, MessageServiceConfig(maxAttempts = 1, minTimeout = 0.0))
+        first.start(); first.service.startEventMonitoring()
+        val message = first.service.createPendingMessage("replacement after delivery", contact)
+        store.upsertPendingSend(PendingSendDTO.fromEnvelope(DirectMessageEnvelope(message.id, contact.id), radio))
+        first.signals.set(DeviceConnectionState.READY); first.queue.hydrate(); runCurrent()
+        assertTrue(barrier.entered.isCompleted)
+        val delivered = assertNotNull(store.fetchMessage(EntityKey(radio, message.id)))
+        assertEquals(MessageStatus.DELIVERED, delivered.status)
+        val replacement = store.fetchPendingSends(radio).single()
+        first.stop()
+        store.upsertPendingSend(replacement)
+
+        val next = RadioGeneration(273)
+        next.start(); next.signals.set(DeviceConnectionState.READY); next.queue.hydrate()
+        runCurrent(); next.queue.awaitDrainCompletion()
+        assertEquals(delivered, store.fetchMessage(EntityKey(radio, message.id)))
+        assertEquals(listOf(replacement), store.fetchPendingSends(radio))
+        assertTrue(next.firmware.sent().isEmpty())
+        assertEquals(1, next.queue.queuedEnvelopeCount)
+        next.stop()
+    }
+
     @Test fun noDispatchCaptureCannotDeleteSameIdPendingReplacementAfterSuspension() = runTest(scheduler) {
         seed()
         val barrier = DirectCompletionBarrier()
@@ -3309,6 +3360,72 @@ class MessagingRoomIntegrationTest {
         assertEquals(1, generation.firmware.sent().size)
         assertTrue(store.fetchPendingSends(radio).isEmpty())
         assertEquals(MessageStatus.DELIVERED, store.fetchMessage(EntityKey(radio, row.id))?.status)
+        generation.stop()
+    }
+
+    @Test fun queuedTransientRemapFailureParksAndReplaysBeforeSending() = runTest(scheduler) {
+        queuedTransientRemapRecovery(lostReturn = false)
+    }
+
+    @Test fun queuedTransientRemapLostReturnParksAndReplaysBeforeSending() = runTest(scheduler) {
+        queuedTransientRemapRecovery(lostReturn = true)
+    }
+
+    private suspend fun TestScope.queuedTransientRemapRecovery(lostReturn: Boolean) {
+        seed()
+        val requests = mutableListOf<UUID>()
+        val fault = PersistenceStoreException(PersistenceStoreError.SaveFailed("controlled remap failure"))
+        var rejectPreWire = true
+        val racing = object : DirectRoles(store) {
+            override suspend fun captureDirectQueueIntent(
+                selection: DirectQueueSelection, requestId: UUID, mode: DirectAckMode,
+            ): DirectAckIntentResult {
+                if (rejectPreWire) {
+                    rejectPreWire = false
+                    throw MessageServiceException(MessageServiceError.NotConnected)
+                }
+                return super.captureDirectQueueIntent(selection, requestId, mode)
+            }
+
+            override suspend fun mutateDirectQueueSelection(
+                selection: DirectQueueSelection, requestId: UUID, mutation: DirectQueueMutation,
+            ): DirectQueueMutationResult {
+                if (mutation == DirectQueueMutation.ReturnToPending) {
+                    requests += requestId
+                    if (requests.size == 1) {
+                        if (lostReturn) {
+                            assertIs<DirectQueueMutationResult.Applied>(
+                                super.mutateDirectQueueSelection(selection, requestId, mutation),
+                            )
+                        }
+                        throw fault
+                    }
+                }
+                return super.mutateDirectQueueSelection(selection, requestId, mutation)
+            }
+        }
+        val generation = RadioGeneration(if (lostReturn) 275 else 274, racing, MessageServiceConfig(maxAttempts = 1))
+        generation.start(); generation.service.startEventMonitoring()
+        val row = MessageDTO(
+            radioId = radio, contactID = contact.id, text = "recover pre-wire remap",
+            timestamp = 100u, createdAt = base, status = MessageStatus.RETRYING,
+        )
+        store.saveMessage(row)
+        val pending = PendingSendDTO.fromEnvelope(DirectMessageEnvelope(row.id, contact.id), radio)
+        store.upsertPendingSend(pending)
+        generation.signals.set(DeviceConnectionState.READY); generation.queue.hydrate(); runCurrent()
+        assertEquals(1, requests.size)
+        assertEquals(if (lostReturn) MessageStatus.PENDING else MessageStatus.RETRYING,
+            store.fetchMessage(EntityKey(radio, row.id))?.status)
+        assertEquals(1L, store.fetchPendingSends(radio).single().attemptCount)
+        assertTrue(generation.firmware.sent().isEmpty())
+
+        generation.queue.transportDidOpen(); runCurrent(); generation.queue.awaitDrainCompletion()
+        assertEquals(2, requests.size)
+        assertEquals(1, requests.distinct().size)
+        assertEquals(1, generation.firmware.sent().size)
+        assertEquals(MessageStatus.DELIVERED, store.fetchMessage(EntityKey(radio, row.id))?.status)
+        assertTrue(store.fetchPendingSends(radio).isEmpty())
         generation.stop()
     }
 

@@ -1,4 +1,5 @@
 // PortedFrom: MC1Services/Sources/MC1Services/Services/ChannelService.swift@db14559b39d32322b06477c6ae676112f583db50
+// WP-405 Native adaptation: allocate through acknowledgement/save in the shared channel operation.
 package com.meshcoreone.android.core.services.contacts
 
 import com.meshcoreone.android.core.contracts.domain.ChannelPersisting
@@ -24,11 +25,14 @@ import com.meshcoreone.android.core.protocol.model.sha256
 import com.meshcoreone.android.core.protocol.session.ChannelSessionOps
 import com.meshcoreone.android.core.protocol.session.ChannelWriteDispatch
 import com.meshcoreone.android.core.protocol.session.ChannelWriteCancellationDisposition
+import java.util.logging.Level
 import java.util.logging.Logger
 import kotlin.random.Random
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Channel (group) management: CRUD, secret hashing and device sync.
@@ -54,6 +58,9 @@ class ChannelService(
     }
     private val logger = Logger.getLogger("com.mc1.ChannelService")
     private val lock = Any()
+    private val cacheUpdates = Mutex()
+    private var uncertainWrite: Throwable? = null
+    private val knownSlots = mutableMapOf<RadioId, Set<UByte>>()
     private var isSyncing = false
     private var syncAccounting: CompletableDeferred<Unit>? = null
     private var requiresFreshSession = false
@@ -88,6 +95,7 @@ class ChannelService(
         }
         try {
             return channelOperation(radioId) { store, scope, completions ->
+                knownSlots[radioId] = emptySet()
                 dispatchLease?.let {
                     dispatchFence.forgetReconciled(it, scope, (0 until maxChannels.toInt()).map(Int::toUByte))
                 }
@@ -189,10 +197,11 @@ class ChannelService(
         }
         val vacatedSlots = occupiedBeforeSync - channels.map { it.index }.toSet()
         val changedSlots = vacatedSlots + secretChangedIndices(priorChannels.orEmpty(), pass.configured)
+        knownSlots[radioId] = (pass.configured.map { it.index } + pass.unconfiguredIndices).toSet()
         recordReconciled(scope, pass.configured.map { info -> info.index })
         completions += {
             if (changedSlots.isNotEmpty()) currentHandler()?.invoke(radioId, changedSlots.snapshotSet())
-            decryptionCache?.updateChannels(channels)
+            refreshDecryptionCache(radioId)
         }
         return ChannelSyncResult(pass.configured.size.toLong(), pass.syncErrors.snapshot())
     }
@@ -208,6 +217,7 @@ class ChannelService(
         }
         try {
             return channelOperation(radioId) { store, scope, completions ->
+                knownSlots[radioId] = knownSlots[radioId].orEmpty() - indices.toSet()
                 dispatchLease?.let { dispatchFence.forgetReconciled(it, scope, indices) }
                 logger.info("Retrying ${indices.size} failed channels: $indices")
                 // Brief delay before retry to allow transient issues to resolve.
@@ -237,10 +247,11 @@ class ChannelService(
                     return@channelOperation ChannelSyncResult(0, (pass.syncErrors + failures).snapshot())
                 }
                 val changedSlots = secretChangedIndices(priorChannels, pass.configured)
+                knownSlots[radioId] = knownSlots[radioId].orEmpty() + pass.configured.map { it.index }
                 recordReconciled(scope, pass.configured.map { info -> info.index })
                 completions += {
                     if (changedSlots.isNotEmpty()) currentHandler()?.invoke(radioId, changedSlots.snapshotSet())
-                    decryptionCache?.updateChannels(allChannels)
+                    refreshDecryptionCache(radioId)
                 }
                 ChannelSyncResult(pass.configured.size.toLong(), pass.syncErrors.snapshot())
             }
@@ -317,6 +328,81 @@ class ChannelService(
 
     // region Writes
 
+    suspend fun createChannelWithSecret(
+        radioId: RadioId, maxChannels: UByte, name: String, secret: Bytes,
+        regionScope: String? = null,
+        onCommitted: (EntityKey, UByte) -> Unit = { _, _ -> },
+    ): ChannelDTO {
+        if (!validateSecret(secret)) throw ChannelServiceError.SecretHashingFailed()
+        return allocateChannel(radioId, maxChannels, name, secret, false, regionScope, onCommitted)
+    }
+
+    suspend fun joinHashtagChannel(
+        radioId: RadioId, maxChannels: UByte, name: String,
+        onCommitted: (EntityKey, UByte) -> Unit = { _, _ -> },
+    ): ChannelDTO = allocateChannel(radioId, maxChannels, name, hashSecret(name), true, null, onCommitted)
+
+    private suspend fun allocateChannel(
+        radioId: RadioId, maxChannels: UByte, name: String, secret: Bytes, reuseName: Boolean,
+        regionScope: String?,
+        onCommitted: (EntityKey, UByte) -> Unit,
+    ): ChannelDTO {
+        var committed: EntityKey? = null
+        var committedIndex: UByte? = null
+        var primaryFailure: Throwable? = null
+        try {
+            val needsRead = channelOperation(radioId) { store, _, _ ->
+                val known = knownSlots[radioId].orEmpty()
+                val existing = reuseName && store.fetchChannels(radioId).any {
+                    it.index in known && it.name.equals(name, ignoreCase = true)
+                }
+                !existing && (1 until maxChannels.toInt()).any { it.toUByte() !in known }
+            }
+            if (needsRead) syncChannels(radioId, maxChannels, usePipelinedRead = false)
+            return channelOperation(radioId) { store, scope, completions ->
+                val known = knownSlots[radioId].orEmpty()
+                val channels = store.fetchChannels(radioId)
+                if (reuseName) channels.firstOrNull {
+                    it.index in known && it.name.equals(name, ignoreCase = true)
+                }?.let { return@channelOperation it }
+                val unresolved = (1 until maxChannels.toInt()).map(Int::toUByte).filterNot { it in known }
+                if (unresolved.isNotEmpty()) throw ChannelMutationError.SyncIncomplete(unresolved.snapshot())
+                val used = channels.map { it.index }.toSet()
+                val index = (1 until maxChannels.toInt()).map(Int::toUByte).firstOrNull { it !in used }
+                    ?: throw ChannelMutationError.NoAvailableSlots()
+                writeChannelLocked(radioId, index, name, secret, store, scope, completions) { key ->
+                    committed = key
+                    committedIndex = index
+                }
+                regionScope?.takeIf(String::isNotEmpty)?.let { region ->
+                    // Replacement must not interleave between the saved occupant and its local preference.
+                    val key = requireNotNull(committed)
+                    try {
+                        store.setChannelFloodScope(key, ChannelFloodScope.Region(region))
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (failure: Exception) {
+                        logger.log(Level.SEVERE, "Failed to persist channel flood scope after join", failure)
+                    }
+                }
+                store.fetchChannel(radioId, index) ?: throw ChannelServiceError.ChannelNotFound()
+            }
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            throw failure
+        } finally {
+            committed?.let { key ->
+                try {
+                    onCommitted(key, requireNotNull(committedIndex))
+                } catch (observerFailure: Throwable) {
+                    val primary = primaryFailure
+                    if (primary == null) throw observerFailure
+                    if (primary !== observerFailure) primary.addSuppressed(observerFailure)
+                }
+            }
+        }
+    }
+
     /** Sets (creates or updates) a channel on the device, hashing [passphrase] into its secret. */
     suspend fun setChannel(radioId: RadioId, index: UByte, name: String, passphrase: String) =
         writeChannel(radioId, index, name, hashSecret(passphrase))
@@ -329,29 +415,43 @@ class ChannelService(
 
     /** Writes to the radio, mirrors locally, and notifies when an existing occupant's secret changed. */
     private suspend fun writeChannel(radioId: RadioId, index: UByte, name: String, secret: Bytes) {
-        val truncatedName = name.utf8Prefix(ProtocolLimits.MAX_USABLE_NAME_BYTES)
         channelOperation(radioId) { store, scope, completions ->
-            val prior = store.fetchChannel(radioId, index)
-            dispatchLease?.let { dispatchFence.forgetReconciled(it, scope, listOf(index)) }
-            store.beginChannelMutation(radioId, index)
-            val dispatch = ChannelWriteDispatch()
-            var acknowledged = false
-            try {
-                session.setChannel(index, truncatedName, secret, dispatch)
-                acknowledged = true
-                store.saveChannel(radioId, ChannelInfo(index, truncatedName, secret))
-            } catch (error: Exception) {
-                quarantineUnsettledWrite(dispatch, acknowledged, error)
-                if (error is MeshCoreException) throw ChannelServiceError.SessionError(error)
-                throw error
-            }
-            if (isChannelConfigured(truncatedName, secret)) recordReconciled(scope, listOf(index))
-            val channels = store.fetchChannels(radioId)
-            completions += {
-                if (prior != null && prior.secret != secret) currentHandler()?.invoke(radioId, setOf(index).snapshotSet())
-                decryptionCache?.updateChannels(channels)
-            }
+            writeChannelLocked(radioId, index, name, secret, store, scope, completions)
         }
+    }
+
+    private suspend fun writeChannelLocked(
+        radioId: RadioId, index: UByte, name: String, secret: Bytes,
+        store: ChannelPersisting, scope: ChannelIdentityWriteScope,
+        completions: MutableList<suspend () -> Unit>, onSaved: (EntityKey) -> Unit = {},
+    ) {
+        val truncatedName = name.utf8Prefix(ProtocolLimits.MAX_USABLE_NAME_BYTES)
+        val prior = store.fetchChannel(radioId, index)
+        dispatchLease?.let { dispatchFence.forgetReconciled(it, scope, listOf(index)) }
+        store.beginChannelMutation(radioId, index)
+        val dispatch = ChannelWriteDispatch()
+        var acknowledged = false
+        try {
+            session.setChannel(index, truncatedName, secret, dispatch)
+            acknowledged = true
+            val id = store.saveChannel(radioId, ChannelInfo(index, truncatedName, secret))
+            onSaved(EntityKey(radioId, id))
+        } catch (error: Exception) {
+            quarantineUnsettledWrite(dispatch, acknowledged, error)
+            if (error is MeshCoreException) throw ChannelServiceError.SessionError(error)
+            throw error
+        }
+        knownSlots[radioId] = knownSlots[radioId].orEmpty() + index
+        completions += {
+            if (prior != null && prior.secret != secret) currentHandler()?.invoke(radioId, setOf(index).snapshotSet())
+            refreshDecryptionCache(radioId)
+        }
+        if (isChannelConfigured(truncatedName, secret)) recordReconciled(scope, listOf(index))
+    }
+
+    private suspend fun refreshDecryptionCache(radioId: RadioId) {
+        if (decryptionCache == null) return
+        cacheUpdates.withLock { decryptionCache.updateChannels(dataStore.fetchChannels(radioId)) }
     }
 
     private suspend fun recordReconciled(scope: ChannelIdentityWriteScope, indices: Collection<UByte>) {
@@ -368,7 +468,10 @@ class ChannelService(
         val definitelyUnsent = !acknowledged && failure is CancellationException &&
             dispatch.cancellationDisposition == ChannelWriteCancellationDisposition.DEFINITELY_UNSENT
         val rejected = !acknowledged && failure is MeshCoreException.DeviceError
-        if (!definitelyUnsent && !rejected) dispatchLease?.let { dispatchFence.quarantine(it, failure) }
+        if (!definitelyUnsent && !rejected) {
+            uncertainWrite = failure
+            dispatchLease?.let { dispatchFence.quarantine(it, failure) }
+        }
     }
 
     /**
@@ -380,16 +483,34 @@ class ChannelService(
         operation: suspend (ChannelPersisting, ChannelIdentityWriteScope, MutableList<suspend () -> Unit>) -> T,
     ): T {
         val completions = mutableListOf<suspend () -> Unit>()
-        val result = dataStore.withChannelOperation { store, scope ->
-            val lease = dispatchLease
-            if (lease == null) operation(store, scope, completions)
-            else {
-                require(lease.token.radioId == radioId) { "Channel operation belongs to a different radio" }
-                dispatchFence.withScopedMutation(lease, scope) { operation(store, scope, completions) }
+        var primaryFailure: Throwable? = null
+        try {
+            return dataStore.withChannelOperation { store, scope ->
+                uncertainWrite?.let { throw ChannelMutationError.ReconciliationRequired(it) }
+                synchronized(lock) { if (requiresFreshSession) throw ChannelServiceError.NotConnected() }
+                val lease = dispatchLease
+                if (lease == null) operation(store, scope, completions)
+                else {
+                    require(lease.token.radioId == radioId) { "Channel operation belongs to a different radio" }
+                    dispatchFence.withScopedMutation(lease, scope) { operation(store, scope, completions) }
+                }
             }
+        } catch (failure: Throwable) {
+            primaryFailure = failure
+            throw failure
+        } finally {
+            var completionFailure: Throwable? = null
+            for (completion in completions) {
+                try {
+                    completion()
+                } catch (failure: Throwable) {
+                    val primary = primaryFailure ?: completionFailure
+                    if (primary == null) completionFailure = failure
+                    else if (primary !== failure) primary.addSuppressed(failure)
+                }
+            }
+            completionFailure?.let { throw it }
         }
-        completions.forEach { it() }
-        return result
     }
 
     /** Clears a channel by writing an empty name and zero secret, then deletes it locally. */
@@ -410,10 +531,10 @@ class ChannelService(
             if (error is MeshCoreException) throw ChannelServiceError.SessionError(error)
             throw error
         }
-        val channels = store.fetchChannels(radioId)
+        knownSlots[radioId] = knownSlots[radioId].orEmpty() + index
         completions += {
             currentHandler()?.invoke(radioId, setOf(index).snapshotSet())
-            decryptionCache?.updateChannels(channels)
+            refreshDecryptionCache(radioId)
         }
     }
 

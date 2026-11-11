@@ -418,6 +418,21 @@ class ChannelAttemptRecoveryTest {
             assertTrue(h.sends(CommandCode.SEND_CHANNEL_MESSAGE).isEmpty())
             h.channelFence.withMutation(h.channelLease) { }
         },
+        native("prewire-begin-save-rejection-keeps-independent-dispatch-and-reconnect-usable") {
+            val h = Harness(this); h.start()
+            val row = h.pending(h.message(MessageStatus.PENDING, 0u))
+            val failure = storageFailure()
+            h.store.faults["beginQueuedChannelAttempt"] = failure
+            val retained = assertFailsWith<QueuedChannelRetainedException> {
+                h.service.sendQueuedChannel(row.id, requireNotNull(row.channelMessageEnvelope()), true)
+            }
+            assertSame(failure, retained.cause)
+            h.store.faults.clear()
+            assertEquals(row, h.store.pending.getValue(EntityKey(RADIO, row.id)))
+            assertTrue(h.store.channelAttempts.isEmpty())
+            assertTrue(h.sends(CommandCode.SEND_CHANNEL_MESSAGE).isEmpty())
+            assertPrewireFailureKeepsSharedFenceUsable(h, row)
+        },
         native("uncertain-wire-still-quarantines-the-same-radio-fence") {
             val h = Harness(this); h.start()
             val row = h.pending(h.message(MessageStatus.PENDING, 0u))
@@ -555,6 +570,7 @@ class ChannelAttemptRecoveryTest {
             assertEquals(QueuedChannelDispatchState.DISPATCHING, h.store.pending.getValue(EntityKey(RADIO, row.id)).channelDispatchState)
             assertEquals(1, h.store.channelAttempts.size)
             assertTrue(h.sends(CommandCode.SEND_CHANNEL_MESSAGE).isEmpty())
+            assertPrewireFailureKeepsSharedFenceUsable(h, row)
         },
         native("crash-after-dispatching-before-wire-does-not-replay-on-replacement") {
             val first = Harness(this); first.start()
@@ -584,6 +600,9 @@ class ChannelAttemptRecoveryTest {
             assertTrue(beginFailure.suppressed.any { it === readFailure })
             assertTrue(h.sends(CommandCode.SEND_CHANNEL_MESSAGE).isEmpty())
             assertEquals(QueuedChannelDispatchState.DISPATCHING, h.store.pending.getValue(EntityKey(RADIO, row.id)).channelDispatchState)
+            h.store.after = null
+            h.store.faults.clear()
+            assertPrewireFailureKeepsSharedFenceUsable(h, row)
         },
         native("accepted-settlement-return-loss-reads-back-exact-key-and-never-replays") {
             val h = Harness(this); h.start()
@@ -1166,6 +1185,42 @@ class ChannelAttemptRecoveryTest {
             assertEquals(1, next.store.calls.count { it == "incrementReadyQueuedChannelAttemptCount" })
             assertEquals(message, next.stored(message.id))
             next.close()
+        }
+    }
+
+    private suspend fun assertPrewireFailureKeepsSharedFenceUsable(h: Harness, row: PendingSendDTO) {
+        val retained = h.store.pending.getValue(EntityKey(RADIO, row.id))
+        val attempts = h.store.channelAttempts.filterKeys { it.pendingID == row.id }
+        val message = h.stored(row.messageID)
+        val independent = h.pending(h.message(MessageStatus.PENDING, 0u, text = "independent before reconnect"))
+        val accepted = h.service.sendQueuedChannel(independent.id, requireNotNull(independent.channelMessageEnvelope()), true)
+        assertEquals(QueuedChannelAttemptPhase.ACCEPTED, accepted.phase)
+        assertEquals(1, h.sends(CommandCode.SEND_CHANNEL_MESSAGE).size)
+        h.close()
+
+        val successor = Harness(h.test, store = h.store, generation = 2)
+        successor.start()
+        val lease = h.channelFence.openSession(
+            successor.token, successor.session, ChannelDispatchAdmission(successor.token, successor.session),
+        )
+        val service = MessageService(
+            successor.token, successor.localPublicKey, successor.session, h.store, successor.signals, successor.scope,
+            clock = successor.clock, jitter = { 1.0 }, channelDispatchLease = lease,
+        )
+        try {
+            h.channelFence.withMutation(lease) { scope ->
+                h.channelFence.recordReconciled(lease, scope, listOf(requireNotNull(row.channelIndex)))
+            }
+            val next = successor.pending(successor.message(MessageStatus.PENDING, 0u, text = "independent after reconnect"))
+            val nextAccepted = service.sendQueuedChannel(next.id, requireNotNull(next.channelMessageEnvelope()), true)
+            assertEquals(QueuedChannelAttemptPhase.ACCEPTED, nextAccepted.phase)
+            assertEquals(1, successor.sends(CommandCode.SEND_CHANNEL_MESSAGE).size)
+            assertEquals(retained, h.store.pending.getValue(EntityKey(RADIO, row.id)))
+            assertEquals(attempts, h.store.channelAttempts.filterKeys { it.pendingID == row.id })
+            assertEquals(message, h.stored(row.messageID))
+        } finally {
+            service.close()
+            h.channelFence.retire(lease)
         }
     }
 

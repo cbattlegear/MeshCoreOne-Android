@@ -444,8 +444,9 @@ fun NativeNavigationShell(
             }
         }
         if (nodes != null) AppPendingContact(nodes, coordinator)
-        if (chats != null && state.selectedTab == AppTab.CHATS) {
-            AppPendingRoomAuthentication(chats, coordinator, state)
+        if (chats != null) {
+            if (state.selectedTab == AppTab.CHATS) AppPendingRoomAuthentication(chats, coordinator, state)
+            AppPendingChannel(chats, coordinator, visible = state.selectedTab == AppTab.CHATS)
         }
     }
 }

@@ -55,6 +55,18 @@ fun interface ChannelDecryptionCache {
 /** Fired when slots' occupants change (vacated or rewritten with a different secret). */
 typealias SlotOccupantChangedHandler = suspend (RadioId, Set<UByte>) -> Unit
 
+// WP-405 Native adaptation: allocation failures without a retained protocol receipt.
+sealed class ChannelMutationError(message: String, cause: Throwable? = null) : Exception(message, cause) {
+    class NoAvailableSlots : ChannelMutationError("No available channel slots")
+    class SyncIncomplete(val unresolvedIndices: com.meshcoreone.android.core.model.SnapshotList<UByte>) : ChannelMutationError(
+        "Some radio channel slots are not synchronized. Wait for synchronization or reconnect before adding a channel.",
+    )
+    class ReconciliationRequired(cause: Throwable) : ChannelMutationError(
+        "A channel write may have reached the radio without being saved. Reconnect and verify channels before trying again.",
+        cause,
+    )
+}
+
 /** Injectable sleep for retry backoff, so tests never wait on wall time. */
 fun interface ChannelServiceClock {
     suspend fun sleep(duration: Duration)

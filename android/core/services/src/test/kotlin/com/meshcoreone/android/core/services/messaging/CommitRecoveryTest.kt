@@ -6,6 +6,7 @@ import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceExcept
 import com.meshcoreone.android.core.contracts.notifications.NotificationActionReceipt
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
+import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.event.MessageSentInfo
 import com.meshcoreone.android.core.protocol.session.MessageWriteDispatch
 import com.meshcoreone.android.core.protocol.model.CommandCode
@@ -20,6 +21,45 @@ import org.junit.jupiter.api.TestFactory
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class CommitRecoveryTest {
+    @TestFactory fun legacyChannelDiagnostics() = listOf(
+        native("legacyChannelUncertaintyReportsOutsideTheOperationAndPreservesItsPrimaryCause") {
+            val h = Harness(this)
+            h.store.seedChannelCreation()
+            h.start()
+            h.transport.channelError = 2u
+            val identity = ChannelIdentityMutex()
+            val fence = ChannelDispatchFence(identity)
+            val lease = fence.openSession(h.token, h.session, ChannelDispatchAdmission(h.token, h.session))
+            identity.withChannelOperationScope { fence.recordReconciled(lease, it, listOf(0u)) }
+            val reportFailure = IllegalStateException("diagnostic observer")
+            var observedOutsideOperation = false
+            val service = MessageService(h.token, SELF, h.session, h.store, h.signals, h.scope, clock = h.clock,
+                reporter = MessagingIssueReporter {
+                    runBlocking {
+                        withTimeout(1_000) {
+                            identity.withChannelOperation { observedOutsideOperation = true }
+                        }
+                    }
+                    throw reportFailure
+                }, channelDispatchLease = lease)
+            try {
+                val failure = assertFailsWith<QueuedChannelRetainedException> {
+                    service.sendChannelMessage("diagnostic boundary", 0u, RADIO)
+                }
+                val rejection = assertNotNull(generateSequence<Throwable>(failure) { it.cause }
+                    .filterIsInstance<MeshCoreException.DeviceError>().firstOrNull())
+                assertEquals(2.toUByte(), rejection.code)
+                assertTrue(observedOutsideOperation)
+                assertTrue(failure.suppressed.any { it === reportFailure })
+                assertEquals(MessageStatus.PENDING, h.store.messages.values.single().status)
+                assertEquals(1, h.sends(CommandCode.SEND_CHANNEL_MESSAGE).size)
+            } finally {
+                service.close()
+                fence.retire(lease)
+            }
+        },
+    )
+
     @Test fun committedCreationReceiptRetainsTheExactReturnedRow() {
         val proposed = MessageDTO(
             id = UUID.randomUUID(), radioId = RADIO, channelIndex = 0u, text = "original",
@@ -307,8 +347,12 @@ class CommitRecoveryTest {
                 runCurrent()
                 assertEquals(1, h.sends(destination.wire).size)
                 if (destination == Destination.CHANNEL) {
-                    assertIs<QueuedChannelRetainedException>(call.await())
+                    val failure = assertIs<QueuedChannelRetainedException>(call.await())
+                    val rejection = generateSequence<Throwable>(failure) { it.cause }
+                        .filterIsInstance<MeshCoreException.DeviceError>().firstOrNull()
+                    assertEquals(2.toUByte(), assertNotNull(rejection).code)
                     assertEquals(NotificationActionReceipt.State.UNCERTAIN, receipt.state)
+                    assertTrue(receipt.preventsReplay)
                     assertEquals(MessageStatus.PENDING, h.store.messages.values.single().status)
                     advanceTimeBy(1_000); runCurrent()
                     assertEquals(1, attempts)
@@ -475,7 +519,12 @@ class CommitRecoveryTest {
                 if (destination == Destination.DIRECT) h.transport.directError = 1u else h.transport.channelError = 1u
                 val receipt = NotificationActionReceipt()
                 if (destination == Destination.CHANNEL) {
-                    assertFailsWith<QueuedChannelRetainedException> { withContext(receipt) { destination.send(h.service) } }
+                    val failure = assertFailsWith<QueuedChannelRetainedException> {
+                        withContext(receipt) { destination.send(h.service) }
+                    }
+                    val rejection = generateSequence<Throwable>(failure) { it.cause }
+                        .filterIsInstance<MeshCoreException.DeviceError>().firstOrNull()
+                    assertEquals(1.toUByte(), assertNotNull(rejection).code)
                     assertEquals(NotificationActionReceipt.State.UNCERTAIN, receipt.state)
                     assertEquals(MessageStatus.PENDING, h.store.messages.values.single().status)
                     assertTrue(receipt.preventsReplay)
@@ -708,12 +757,18 @@ class CommitRecoveryTest {
                 store.saveMessage(it)
             }
         }
-        val identity = ChannelIdentityMutex()
-        val fence = ChannelDispatchFence(identity)
-        val lease = fence.openSession(h.token, session, ChannelDispatchAdmission(h.token, session))
-        identity.withChannelOperationScope { fence.recordReconciled(lease, it, listOf(0u)) }
+        val lease = if (session === h.session) h.channelLease else {
+            val identity = ChannelIdentityMutex()
+            val fence = ChannelDispatchFence(identity)
+            fence.openSession(h.token, session, ChannelDispatchAdmission(h.token, session)).also { lease ->
+                identity.withChannelOperationScope { fence.recordReconciled(lease, it, listOf(0u)) }
+            }
+        }
         val service = MessageService(h.token, SELF, session, creationStore, h.signals, h.scope, clock = h.clock,
             reporter = MessagingIssueReporter { h.diagnostics += it }, channelDispatchLease = lease)
-        try { block(service) } finally { service.close(); fence.retire(lease) }
+        try { block(service) } finally {
+            service.close()
+            if (session !== h.session) lease.owner.retire(lease)
+        }
     }
 }

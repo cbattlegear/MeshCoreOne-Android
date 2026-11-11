@@ -271,6 +271,7 @@ internal class ChannelRepository(
         block: suspend RepositoryTransaction.() -> T,
     ): T = if (identityScope == null) context.write(operation, flushBeforeRollback, block)
         else context.channelWrite(operation, flushBeforeRollback, identityScope, block)
+
     internal sealed interface SimulatorChannelSeedPlan {
         sealed interface Existing : SimulatorChannelSeedPlan
         sealed interface New : SimulatorChannelSeedPlan

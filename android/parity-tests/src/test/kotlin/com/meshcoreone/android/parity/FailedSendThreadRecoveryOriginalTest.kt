@@ -79,6 +79,7 @@ class FailedSendThreadRecoveryOriginalTest : RoomProcessTest() {
         withRig {
             val channel = channel(3)
             val message = saveMessage(channelIndex = channel.index)
+            assertNotNull(holder.requestConversationReload()).join()
             holder.refreshFailedSendIndicators()
             assertTrue(holder.state.value.conversationHasFailedSend(channel.id))
             val conversation = TimelineConversation.Channel(channel)
@@ -214,6 +215,7 @@ class FailedSendThreadRecoveryOriginalTest : RoomProcessTest() {
             val foreign = message.copy(id = UUID.randomUUID(), radioId = otherRadio)
             store.saveChannel(channel.copy(id = UUID.randomUUID(), radioId = otherRadio))
             store.saveMessage(foreign)
+            assertNotNull(holder.requestConversationReload()).join()
             harness.container.navigation.navigateToChannel(channel)
 
             failure(TimelineConversation.Channel(channel), message)

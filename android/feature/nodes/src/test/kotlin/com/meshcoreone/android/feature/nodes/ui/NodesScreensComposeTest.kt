@@ -130,6 +130,16 @@ class NodesLocationApi31ComposeTest : NodesScreensComposeTestBase.NodesLocationC
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class NodesLocationApi37ComposeTest : NodesScreensComposeTestBase.NodesLocationComposeTestBase()
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [31], qualifiers = "w360dp-h900dp-mdpi")
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+class DiscoveryLiveApi31ComposeTest : NodesScreensComposeTestBase.DiscoveryLiveComposeTestBase()
+
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [37], qualifiers = "w360dp-h900dp-mdpi")
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+class DiscoveryLiveApi37ComposeTest : NodesScreensComposeTestBase.DiscoveryLiveComposeTestBase()
+
 abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false) {
     protected lateinit var controller: ActivityController<ComponentActivity>
     private val frameClock = if (deterministicFrames) BroadcastFrameClock() else null
@@ -307,6 +317,263 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
         repeat(6) {
             Shadows.shadowOf(Looper.getMainLooper()).idle()
             Shadows.shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(16))
+        }
+    }
+
+    protected fun awaitCondition(predicate: () -> Boolean) {
+        repeat(100) {
+            advanceFrames()
+            if (predicate()) return
+            Thread.sleep(10)
+        }
+        assertTrue(predicate(), "The mounted operation did not complete")
+    }
+
+    abstract class DiscoveryLiveComposeTestBase : NodesScreensComposeTestBase(deterministicFrames = true) {
+        private var menuOpen = false
+        override fun rootView(): View =
+            ShadowDialog.getLatestDialog()?.takeIf { it.isShowing }?.window?.decorView ?: if (menuOpen) {
+                checkNotNull(WindowInspector.getGlobalWindowViews().lastOrNull { it.isShown })
+            } else super.rootView()
+
+        @Test
+        fun heldRefreshCannotResurrectAMountedRemovedRow() = verifyHeldMutation(clear = false)
+
+        @Test
+        fun heldRefreshCannotResurrectMountedClearedRows() = verifyHeldMutation(clear = true)
+
+        @Test
+        fun heldRemoveCompletionRestartsAPendingReplacementRadioRead() = verifyHeldWriteReplacement(clear = false)
+
+        @Test
+        fun heldClearCompletionRestartsAPendingReplacementRadioRead() = verifyHeldWriteReplacement(clear = true)
+
+        private fun clickMutation(clear: Boolean) {
+            val context = controller.get()
+            if (clear) {
+                click(awaitAction(context.getString(C.contactsListSort)))
+                menuOpen = true
+                click(awaitAction(context.getString(C.contactsDiscoveryClear)))
+                menuOpen = false
+                click(awaitAction(context.getString(C.contactsDiscoveryClearConfirm)))
+            } else {
+                click(awaitAction(context.getString(C.contactsDiscoveryRemove)))
+            }
+        }
+
+        private fun verifyHeldWriteReplacement(clear: Boolean) {
+            val harness = Harness().connect()
+            val radio = checkNotNull(harness.session.radioId)
+            harness.store.discovered += Fixtures.node(radioId = radio, name = "Old radio row")
+            val writeEntered = CompletableDeferred<Unit>()
+            val releaseWrite = CompletableDeferred<Unit>()
+            val heldWrite: suspend () -> Unit = { writeEntered.complete(Unit); releaseWrite.await() }
+            if (clear) harness.store.clearDiscoveredGate = heldWrite else harness.store.deleteDiscoveredGate = heldWrite
+            mount { DiscoveryScreen(harness.dependencies) }
+            awaitText("Old radio row")
+            clickMutation(clear)
+            awaitCondition { writeEntered.isCompleted }
+            val replacement = Harness().connect()
+            val replacementRadio = checkNotNull(replacement.session.radioId)
+            val latest = Fixtures.node(radioId = replacementRadio, name = "New radio row")
+            replacement.store.discovered += latest
+            val readEntered = CompletableDeferred<Unit>()
+            val releaseRead = CompletableDeferred<Unit>()
+            var readExited = false
+            replacement.store.fetchContactKeysGate = {
+                if (!readEntered.isCompleted) {
+                    readEntered.complete(Unit)
+                    try {
+                        releaseRead.await()
+                    } finally {
+                        readExited = true
+                    }
+                }
+            }
+            controller.get().runOnUiThread {
+                harness.session.offlineStore = replacement.store
+                harness.session.servicesStore = replacement.store
+                harness.session.radioId = replacementRadio
+                harness.session.contacts = replacement.contactService
+                harness.session.device = replacement.session.device
+            }
+            awaitCondition { readEntered.isCompleted }
+            releaseWrite.complete(Unit)
+            awaitText(latest.name)
+            assertTrue(readExited, "Mutation completion must replace the invalidated new-radio read")
+            releaseRead.complete(Unit)
+            advanceFrames()
+            assertEquals(listOf(latest), replacement.store.discovered)
+            assertTrue(harness.store.discovered.isEmpty())
+            assertTrue(replacement.store.discoveredFetches >= 2, "Discarding a read must not discard its invalidation")
+            assertTrue(isDisplayed(awaitText(latest.name)))
+        }
+
+        private fun verifyHeldMutation(clear: Boolean) {
+            val harness = Harness().connect()
+            val radio = checkNotNull(harness.session.radioId)
+            harness.store.discovered += Fixtures.node(radioId = radio, name = "Remove while refreshing")
+            mount { DiscoveryScreen(harness.dependencies) }
+            awaitText("Remove while refreshing")
+            val survivor = Fixtures.node(radioId = radio, name = "Surviving node", publicKey = Fixtures.repeated(0x72))
+            if (!clear) {
+                harness.store.discovered += survivor
+                harness.store.contacts += Fixtures.contact(radioId = radio, publicKey = survivor.publicKey)
+            }
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            var returned = false
+            harness.store.fetchContactKeysGate = {
+                if (!entered.isCompleted) {
+                    entered.complete(Unit)
+                    try {
+                        release.await()
+                    } finally {
+                        returned = true
+                    }
+                }
+            }
+            controller.get().runOnUiThread { harness.session.versions.value++ }
+            awaitCondition { entered.isCompleted }
+            val context = controller.get()
+            clickMutation(clear)
+            if (clear) {
+                awaitText(context.getString(C.contactsDiscoveryEmptyTitle))
+                assertTrue(harness.store.discovered.isEmpty())
+            } else {
+                awaitText(survivor.name)
+                awaitText(context.getString(C.contactsDiscoveryAdded))
+                assertEquals(listOf(survivor), harness.store.discovered)
+            }
+            release.complete(Unit)
+            awaitCondition { returned && harness.store.discoveredFetches >= 3 }
+            assertTrue(isDisplayed(awaitText(if (clear) context.getString(C.contactsDiscoveryEmptyTitle) else survivor.name)))
+            assertFalse(allSemanticsNodes().any {
+                it.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { text -> text.text == "Remove while refreshing" }
+            })
+            assertTrue(harness.contactService.calls.isEmpty())
+        }
+
+        @Test
+        fun heldBackgroundRefreshKeepsTheScrolledListMountedAndRetainsItsAnchor() {
+            val harness = Harness().connect()
+            val radio = checkNotNull(harness.session.radioId)
+            harness.store.discovered += (0..19).map {
+                Fixtures.node(radioId = radio, name = "Node ${it.toString().padStart(2, '0')}")
+            }
+            mount { DiscoveryScreen(harness.dependencies) }
+            awaitText("Node 00")
+            fun list() = allSemanticsNodes().single { it.config.contains(SemanticsActions.ScrollToIndex) }
+            val listId = list().id
+            controller.get().runOnUiThread {
+                assertTrue(checkNotNull(list().config[SemanticsActions.ScrollToIndex].action).invoke(10))
+            }
+            awaitText("Node 10")
+            val offset = list().config[SemanticsProperties.VerticalScrollAxisRange].value()
+            assertTrue(offset > 0f, "The regression must start from a genuinely scrolled list")
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            harness.store.fetchDiscoveredGate = { entered.complete(Unit); release.await() }
+            controller.get().runOnUiThread {
+                val index = harness.store.discovered.indexOfFirst { it.name == "Node 10" }
+                harness.store.discovered[index] = harness.store.discovered[index].copy(name = "Node 10!")
+                harness.session.versions.value++
+            }
+            awaitCondition { entered.isCompleted }
+            assertEquals(listId, list().id, "A pending background refresh must not dispose the lazy list")
+            assertEquals(offset, list().config[SemanticsProperties.VerticalScrollAxisRange].value())
+            assertTrue(isDisplayed(awaitText("Node 10")))
+            release.complete(Unit)
+            awaitText("Node 10!")
+            assertEquals(listId, list().id)
+            assertEquals(offset, list().config[SemanticsProperties.VerticalScrollAxisRange].value())
+        }
+
+        @Test
+        fun mountedDiscoveryReloadsNewRowsAndExternalContactAdmissionOnVersionChanges() {
+            val harness = Harness().connect()
+            val radio = checkNotNull(harness.session.radioId)
+            val first = Fixtures.node(radioId = radio, name = "First discovery")
+            val latest = Fixtures.node(radioId = radio, name = "Late discovery", publicKey = Fixtures.repeated(0x71))
+            harness.store.discovered += first
+            mount { DiscoveryScreen(harness.dependencies) }
+            awaitText(first.name)
+            controller.get().runOnUiThread {
+                harness.store.discovered.clear()
+                harness.store.discovered += latest
+                harness.session.versions.value++
+            }
+            awaitText(latest.name)
+            assertFalse(allSemanticsNodes().any {
+                it.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { text -> text.text == first.name }
+            })
+            assertNotNull(actionNode(controller.get().getString(C.contactsDiscoveryAdd)))
+            controller.get().runOnUiThread {
+                harness.store.contacts += Fixtures.contact(radioId = radio, publicKey = latest.publicKey)
+                harness.session.versions.value++
+            }
+            awaitText(controller.get().getString(C.contactsDiscoveryAdded))
+            assertTrue(actionNode(controller.get().getString(C.contactsDiscoveryAdd)) == null)
+            assertTrue(harness.contactService.calls.isEmpty(), "External persistence refresh must not send an add command")
+        }
+
+        @Test
+        fun sameRadioReplacementCancelsHeldDiscoveryReadAndShowsTheReplacementStore() {
+            val harness = Harness().connect()
+            val radio = checkNotNull(harness.session.radioId)
+            harness.store.discovered += Fixtures.node(radioId = radio, name = "Retired discovery")
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            var cancelled = false
+            harness.store.fetchDiscoveredGate = {
+                entered.complete(Unit)
+                try {
+                    release.await()
+                } finally {
+                    cancelled = true
+                }
+            }
+            mount { DiscoveryScreen(harness.dependencies) }
+            awaitCondition { entered.isCompleted }
+            val replacement = Harness().connect(radio)
+            replacement.store.discovered += Fixtures.node(radioId = radio, name = "Replacement discovery")
+            controller.get().runOnUiThread {
+                harness.session.offlineStore = replacement.store
+                harness.session.servicesStore = replacement.store
+                harness.session.contacts = replacement.contactService
+                harness.session.device = replacement.session.device
+            }
+            awaitText("Replacement discovery")
+            assertTrue(cancelled, "The old fetch must be cancelled, not publish after the replacement read")
+            release.complete(Unit)
+            advanceFrames()
+            assertFalse(allSemanticsNodes().any {
+                it.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { text -> text.text == "Retired discovery" }
+            })
+            assertTrue(harness.contactService.calls.isEmpty())
+            assertTrue(replacement.contactService.calls.isEmpty())
+        }
+
+        @Test
+        fun stoppedDiscoveryDoesNotReadAndResumingLoadsLatestPersistedRows() {
+            val harness = Harness().connect()
+            val radio = checkNotNull(harness.session.radioId)
+            harness.store.discovered += Fixtures.node(radioId = radio, name = "Before stop")
+            mount { DiscoveryScreen(harness.dependencies) }
+            awaitText("Before stop")
+            controller.pause().stop()
+            advanceFrames()
+            val reads = harness.store.discoveredFetches
+            harness.store.discovered.clear()
+            harness.store.discovered += Fixtures.node(radioId = radio, name = "While stopped")
+            harness.session.versions.value++
+            advanceFrames()
+            assertEquals(reads, harness.store.discoveredFetches, "A stopped screen must not read the store")
+            controller.start().resume().visible()
+            controller.windowFocusChanged(true)
+            awaitText("While stopped")
+            assertTrue(harness.store.discoveredFetches > reads)
+            assertTrue(harness.contactService.calls.isEmpty())
         }
     }
 
@@ -1297,14 +1564,6 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
             advanceFrames()
         }
 
-        private fun awaitCondition(predicate: () -> Boolean) {
-            repeat(100) {
-                advanceFrames()
-                if (predicate()) return
-                Thread.sleep(10)
-            }
-            assertTrue(predicate(), "The mounted operation did not complete")
-        }
     }
 
     abstract class ContactShareComposeTestBase : NodesScreensComposeTestBase() {

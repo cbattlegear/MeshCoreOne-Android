@@ -16,9 +16,59 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.milliseconds
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
 import org.junit.Test
 
 class DiscoveryNativeTest {
+    @Test
+    fun `background reload does not dismiss an unacknowledged add failure`() = scenario {
+        val harness = Harness(clock).connect()
+        val radio = checkNotNull(harness.session.radioId)
+        val relay = node(radioId = radio, name = "Offline relay")
+        harness.store.discovered += relay
+        val holder = DiscoveryStateHolder(harness.dependencies, scope)
+        holder.loadDiscoveredNodes()
+        harness.session.state = DeviceConnectionState.DISCONNECTED
+        holder.addNode(relay)
+        val failure = holder.state.value.errorMessage
+        assertEquals(NodesMessage.res(R.string.l10n_app_contacts_contacts_add_error_notconnected), failure)
+        holder.loadDiscoveredNodes(clearErrorOnStart = false)
+        assertEquals(failure, holder.state.value.errorMessage)
+        assertEquals(listOf(relay), holder.state.value.visibleNodes)
+        holder.clearError()
+        assertNull(holder.state.value.errorMessage)
+    }
+
+    @Test
+    fun `held refresh cannot resurrect removed rows or publish a stale failure after remove or clear`() = scenario {
+        for (clear in listOf(false, true)) for (fails in listOf(false, true)) {
+            val harness = Harness(clock).connect()
+            val radio = checkNotNull(harness.session.radioId)
+            val relay = node(radioId = radio, name = "Held relay")
+            harness.store.discovered += relay
+            val holder = DiscoveryStateHolder(harness.dependencies, scope)
+            holder.loadDiscoveredNodes()
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            harness.store.fetchContactKeysGate = {
+                entered.complete(Unit)
+                release.await()
+                if (fails) throw java.io.IOException("Retired refresh failed")
+            }
+            val read = scope.launch { holder.loadDiscoveredNodes(clearErrorOnStart = false) }
+            entered.await()
+            if (clear) assertTrue(holder.clearAllDiscoveredNodes()) else holder.deleteDiscoveredNode(relay)
+            assertTrue(holder.state.value.visibleNodes.isEmpty())
+            assertTrue(harness.store.discovered.isEmpty())
+            release.complete(Unit)
+            read.join()
+            assertTrue(holder.state.value.visibleNodes.isEmpty(), "clear=$clear fails=$fails must not resurrect the captured row")
+            assertFalse(holder.state.value.isLoading)
+            assertNull(holder.state.value.errorMessage, "A superseded read failure must not overwrite the successful mutation")
+        }
+    }
+
     @Test
     fun `adding a node sends its frame and marks it added after reload`() = scenario {
         val harness = Harness(clock).connect()

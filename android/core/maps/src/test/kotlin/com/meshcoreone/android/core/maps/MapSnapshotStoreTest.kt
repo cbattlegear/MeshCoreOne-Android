@@ -16,6 +16,43 @@ import org.junit.Test
 
 class MapSnapshotStoreTest {
     @Test
+    fun conflatedRevisionRetainsTheLastBurstChangeAndFailureInvalidationWithoutPerKeyDelivery() = runBlocking {
+        val store = MapSnapshotStore(object : MapSnapshotRenderer<String> {
+            override suspend fun render(request: MapSnapshotRequest): String? = null
+        }, this, { it.length.toLong() })
+        val requests = (0 until 70).map { MapSnapshotRequest(1.0, it / 1000.0, false, false) }
+        try {
+            val held = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            val values = mutableListOf<Long>()
+            val collector = async(start = CoroutineStart.UNDISPATCHED) {
+                store.revision.first {
+                    values += it
+                    if (it == 0L) {
+                        held.complete(Unit)
+                        release.await()
+                    }
+                    it == 140L
+                }
+            }
+            held.await()
+            for (request in requests) {
+                val resolved = async(start = CoroutineStart.UNDISPATCHED) { store.resolutions.first { it == request } }
+                store.request(request)
+                resolved.await()
+            }
+            assertTrue(requests.all(store::isResolved))
+            assertEquals(70L, store.revision.value)
+            store.clearFailures()
+            assertTrue(requests.none(store::isResolved))
+            assertEquals(140L, store.revision.value)
+            release.complete(Unit)
+            collector.await()
+            assertEquals(listOf(0L, 140L), values)
+        } finally { store.close() }
+    }
+
+    @Test
     fun requestNormalizesJitterSignedZeroAndOfflineDarkness() {
         val negativeZero = MapSnapshotRequest(-0.000004, 1.23456789, true, false)
         val positiveZero = MapSnapshotRequest(0.0, 1.23456789, true, false)

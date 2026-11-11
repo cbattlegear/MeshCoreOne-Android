@@ -66,6 +66,11 @@ internal class FakeDataStore : NodesDataStore {
     val discovered = mutableListOf<DiscoveredNodeDTO>()
     var fetchContactsError: Exception? = null
     var fetchDiscoveredError: Exception? = null
+    var fetchDiscoveredGate: (suspend () -> Unit)? = null
+    var fetchContactKeysGate: (suspend () -> Unit)? = null
+    var deleteDiscoveredGate: (suspend () -> Unit)? = null
+    var clearDiscoveredGate: (suspend () -> Unit)? = null
+    var discoveredFetches = 0
     var fetchContactsGate: (suspend () -> Unit)? = null
     var fetchContactBehavior: (suspend (RadioId, Bytes) -> ContactDTO?)? = null
     val touched = mutableListOf<Pair<Bytes, Instant>>()
@@ -85,7 +90,10 @@ internal class FakeDataStore : NodesDataStore {
     }
 
     override suspend fun fetchBlockedContacts(radioId: RadioId): List<ContactDTO> = contacts.filter { it.radioId == radioId && it.isBlocked }
-    override suspend fun fetchContactPublicKeys(radioId: RadioId): Set<Bytes> = contacts.filter { it.radioId == radioId }.map { it.publicKey }.toSet()
+    override suspend fun fetchContactPublicKeys(radioId: RadioId): Set<Bytes> {
+        fetchContactKeysGate?.invoke()
+        return contacts.filter { it.radioId == radioId }.map { it.publicKey }.toSet()
+    }
 
     override suspend fun touchContactHeard(radioId: RadioId, publicKey: Bytes, date: Instant): Boolean {
         touched += publicKey to date
@@ -93,16 +101,21 @@ internal class FakeDataStore : NodesDataStore {
     }
 
     override suspend fun fetchDiscoveredNodes(radioId: RadioId): List<DiscoveredNodeDTO> {
+        discoveredFetches++
+        val snapshot = discovered.filter { it.radioId == radioId }
+        fetchDiscoveredGate?.invoke()
         fetchDiscoveredError?.let { throw it }
-        return discovered.filter { it.radioId == radioId }
+        return snapshot
     }
 
     override suspend fun deleteDiscoveredNode(key: EntityKey) {
         deletedDiscovered += key
+        deleteDiscoveredGate?.invoke()
         discovered.removeAll { it.id == key.id }
     }
 
     override suspend fun clearDiscoveredNodes(radioId: RadioId) {
+        clearDiscoveredGate?.invoke()
         discovered.removeAll { it.radioId == radioId }
     }
 }
@@ -215,6 +228,8 @@ internal class FakeNotificationCleanup : NodesNotificationCleanup {
 internal class FakeSession : NodesSession {
     private val connection = MutableStateFlow(NodesConnectionSnapshot(null, null))
     override fun connectionSnapshots() = connection
+    val versions = MutableStateFlow(0)
+    override fun contactVersions() = versions
     var state: DeviceConnectionState = DeviceConnectionState.READY
         set(value) {
             field = value

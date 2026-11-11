@@ -5,11 +5,13 @@ import android.content.Context
 import java.time.Instant
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 class MapLibreOfflineBackend internal constructor(
@@ -45,9 +47,12 @@ class MapLibreOfflineBackend internal constructor(
 
     override suspend fun delete(packId: UUID) {
         val region = synchronized(regions) { regions[packId] } ?: return
-        region.delete()
-        synchronized(regions) { regions.remove(packId) }
-        _packs.update { current -> current.filterNot { it.id == packId } }
+        // Native deletion cannot be cancelled; finish its callback and bookkeeping after panel dismissal.
+        withContext(NonCancellable) {
+            region.delete()
+            synchronized(regions) { regions.remove(packId) }
+            _packs.update { current -> current.filterNot { it.id == packId } }
+        }
     }
 
     override suspend fun pause(packId: UUID) {

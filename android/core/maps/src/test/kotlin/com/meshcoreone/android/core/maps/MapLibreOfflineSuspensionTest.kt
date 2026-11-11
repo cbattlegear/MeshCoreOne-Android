@@ -93,6 +93,36 @@ class MapLibreOfflineSuspensionTest {
         assertFalse(region.deleted)
     }
 
+    @Test fun initiatedDeletionFinishesBookkeepingAfterThePanelCallerIsCancelled() = runBlocking<Unit> {
+        val region = Region(request.id)
+        val completion = CompletableDeferred<Unit>()
+        region.deletion = completion
+        val backend = MapLibreOfflineBackend(MapLibreOpenFreeMap.STYLE_URI, this, Regions(listOf(region)))
+        yield()
+        val deletion = launch { backend.delete(request.id) }
+        yield()
+        assertTrue(region.deletionStarted)
+        deletion.cancel()
+        yield()
+        assertFalse(deletion.isCompleted)
+        assertEquals(request.id, backend.packs.value.single().id)
+        completion.complete(Unit)
+        deletion.join()
+        assertTrue(region.deleted)
+        assertTrue(backend.packs.value.isEmpty())
+    }
+
+    @Test fun failedNativeDeletionRetainsTheSavedPackAndSurfacesFailure() = runBlocking<Unit> {
+        val region = Region(request.id)
+        val failure = IllegalStateException("Native deletion failed")
+        region.deletion = CompletableDeferred<Unit>().also { it.completeExceptionally(failure) }
+        val backend = MapLibreOfflineBackend(MapLibreOpenFreeMap.STYLE_URI, this, Regions(listOf(region)))
+        yield()
+        assertSame(failure, runCatching { backend.delete(request.id) }.exceptionOrNull())
+        assertFalse(region.deleted)
+        assertEquals(request.id, backend.packs.value.single().id)
+    }
+
     @Test fun anotherProviderRetainsCreatePauseResumeDeleteAndCancellation() = runBlocking<Unit> {
         val manager = Regions(emptyList())
         val backend = MapLibreOfflineBackend("https://example.invalid/style", this, manager)
@@ -131,11 +161,17 @@ class MapLibreOfflineSuspensionTest {
     ) : MapLibreOfflineRegion {
         val activations = mutableListOf<Boolean>()
         var deleted = false
+        var deletionStarted = false
+        var deletion: CompletableDeferred<Unit>? = null
         private var progressListener: (OfflineRegionProgress) -> Unit = {}
         private var failureListener: () -> Unit = {}
         override fun setActive(active: Boolean) { activations += active }
         override suspend fun status() = progress
-        override suspend fun delete() { deleted = true }
+        override suspend fun delete() {
+            deletionStarted = true
+            deletion?.await()
+            deleted = true
+        }
         override fun observe(onProgress: (OfflineRegionProgress) -> Unit, onFailure: () -> Unit) {
             progressListener = onProgress
             failureListener = onFailure

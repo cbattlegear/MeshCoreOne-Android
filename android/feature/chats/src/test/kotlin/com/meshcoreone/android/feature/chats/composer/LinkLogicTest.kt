@@ -217,6 +217,27 @@ class LinkLogicTest {
     }
 
     @Test
+    fun `manual consent enters loading before suspended DNS so a second tap cannot restart it`() = scenario {
+        val port = FakePreviewPort().apply { manual = LinkPreviewOutcome.Loaded(data) }
+        val safetyResult = CompletableDeferred<Boolean>()
+        var safetyCalls = 0
+        val holder = LinkPreviewStateHolder(
+            data.url, false, port, { safetyCalls++; safetyResult.await() }, { false }, scope,
+            autoResolve = false,
+        )
+        holder.start()
+        holder.manualLoad()
+        assertEquals(LinkPreviewCardState.Loading(data.url), holder.state.value)
+        assertNull(holder.manualLoad())
+        assertEquals(1, safetyCalls)
+        assertTrue(port.calls.isEmpty())
+        safetyResult.complete(true)
+        assertEquals(LinkPreviewCardState.Loaded(data), holder.state.value)
+        assertEquals(listOf("manual"), port.calls)
+        holder.close()
+    }
+
+    @Test
     fun `failures hide the card and cancellation is never swallowed`() = scenario {
         val reported = ArrayList<Throwable>()
         val port = FakePreviewPort().apply { failure = IllegalStateException("boom") }

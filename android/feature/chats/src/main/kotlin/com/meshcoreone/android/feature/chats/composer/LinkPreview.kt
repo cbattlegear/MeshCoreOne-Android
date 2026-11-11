@@ -130,8 +130,8 @@ class LinkPreviewStateHolder(
                 mutableState.value = LinkPreviewCardState.TapToLoad(url)
                 return
             }
-            if (!safety.isSafe(url)) return hide()
             mutableState.value = LinkPreviewCardState.Loading(url)
+            if (!safety.isSafe(url)) return hide()
             val outcome = if (manual) port.manualFetch(url) else port.preview(url, isChannelMessage)
             mutableState.value = when (outcome) {
                 is LinkPreviewOutcome.Loaded -> LinkPreviewCardState.Loaded(outcome.data)

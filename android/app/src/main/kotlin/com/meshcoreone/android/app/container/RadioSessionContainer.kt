@@ -148,6 +148,7 @@ class RadioSessionContainer private constructor(
     val heardRepeatsService = HeardRepeatsService(dataStore)
     override val rxLogService = RxLogService(
         session, RxLogServiceStore.from(dataStore), HeardRepeatProcessingAdapter(heardRepeatsService), scope,
+        clock = env.sessionClock.wallClock,
         diagnostics = persistentRxLogDiagnostics(),
     )
 

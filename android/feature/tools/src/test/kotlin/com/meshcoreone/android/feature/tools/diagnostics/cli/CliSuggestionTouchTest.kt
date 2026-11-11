@@ -69,6 +69,7 @@ class CliSuggestionTouchTest {
         isConnected = { true },
         localPublicKeyPrefix = { null },
         connectionVersion = MutableStateFlow(0),
+        connectionState = MutableStateFlow(com.meshcoreone.android.core.contracts.domain.DeviceConnectionState.READY),
     )
 
     @Before fun mountScreen() {

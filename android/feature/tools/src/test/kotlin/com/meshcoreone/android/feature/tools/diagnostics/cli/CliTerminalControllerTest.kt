@@ -126,6 +126,21 @@ class CliTerminalControllerTest {
     }
 
     @Test
+    fun `confirmed execution clears surviving choices and resets the cursor using the captured command`() {
+        type("lo")
+        controller.onTabComplete()
+        assertTrue(terminal.tabSuggestions != null)
+        controller.onConfirmedCommand("help")
+        scheduler.runCurrent()
+        assertEquals("", terminal.currentInput)
+        assertEquals(0, cursor)
+        assertEquals("", terminal.ghostText)
+        assertNull(terminal.tabSuggestions)
+        assertEquals(listOf("help"), terminal.commandHistory)
+        assertTrue(terminal.outputLines.any { it.text == "Available commands:" })
+    }
+
+    @Test
     fun `editing the input clears tab selection`() {
         type("lo")
         controller.onTabComplete()

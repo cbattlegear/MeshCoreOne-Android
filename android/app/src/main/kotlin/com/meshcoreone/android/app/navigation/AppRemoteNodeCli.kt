@@ -233,7 +233,7 @@ internal fun AppRemoteNodeCli(
             dismissButton = { TextButton({ pending = null }) { Text(stringResource(L.remoteNodesCancel)) } },
             confirmButton = { TextButton({
                 pending = null
-                if (canSend) holder.executeCommand(command)
+                if (canSend) controller.onConfirmedCommand(command)
             }, Modifier.heightIn(min = 48.dp).testTag("remote-cli-confirm"), enabled = canSend) { Text(stringResource(L.remoteNodesSettingsOk)) } },
         )
     }

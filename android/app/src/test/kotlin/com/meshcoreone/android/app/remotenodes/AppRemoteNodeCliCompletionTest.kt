@@ -110,13 +110,16 @@ class AppRemoteNodeCliCompletionTest {
         compose.waitUntil { harness.requests.size == before + 1 }
         compose.waitForIdle()
         compose.runOnIdle {
+            assertEquals(before + 1, harness.requests.size)
             assertEquals(
                 Request(EntityKey(harness.fixture.radio, harness.fixture.session.id), command, 10.seconds),
                 harness.requests.last(),
             )
             assertEquals(command, harness.holder.state.value.terminal.commandHistory.last())
+            assertEquals("", harness.holder.ghostText)
         }
         assertInput("")
+        compose.onNodeWithTag("remote-cli-suggestions").assertDoesNotExist()
     }
 
     @Test fun keyboardDisplaysCyclesAndAcceptsBeforeConfirmingTheActualCandidate() = mounted { harness ->
@@ -244,6 +247,17 @@ class AppRemoteNodeCliCompletionTest {
         assertNotSubmitted(harness)
         key(Key.Enter)
         confirm(harness, "log stop")
+    }
+
+    @Test fun unselectedChoicesDoNotInventACandidateOrSurviveAConfirmedSend() = mounted { harness ->
+        type("log st")
+        key(Key.Tab)
+        suggestion("start").assertIsNotSelected()
+        suggestion("stop").assertIsNotSelected()
+        key(Key.Enter)
+        compose.onNode(hasText("log st") and hasAnyAncestor(isDialog())).assertIsDisplayed()
+        compose.runOnIdle { assertTrue(harness.requests.isEmpty()) }
+        confirm(harness, "log st")
     }
 
     @Test fun completionStillRequiresConfirmationAndCurrentPermissionToSend() = mounted { harness ->

@@ -268,7 +268,10 @@ private class MapLibreSurfaceController(
             CircleLayer(FIXED_LAYER, FIXED_SOURCE)
                 .withProperties(circleColor(get("color")), circleRadius(get("radius")), circleStrokeColor(get("casing")), circleStrokeWidth(2f)),
         )
-        MapLineLayerSpecs.ordered.forEach { style.addLayer(mapLineLayer(it, LINES_SOURCE)) }
+        MapLineLayerSpecs.install(
+            add = { style.addLayer(mapLineLayer(it, LINES_SOURCE)) },
+            addBelow = { spec, anchor -> style.addLayerBelow(mapLineLayer(spec, LINES_SOURCE), anchor) },
+        )
         style.addLayer(
             SymbolLayer(LABELS_LAYER, FIXED_SOURCE)
                 .withProperties(
@@ -373,7 +376,7 @@ private class MapLibreSurfaceController(
         private const val CLUSTERED_SOURCE = "mesh-clustered"
         private const val FIXED_SOURCE = "mesh-fixed"
         private const val LINES_SOURCE = "mesh-lines"
-        private const val CLUSTERS_LAYER = "mesh-clusters"
+        private const val CLUSTERS_LAYER = MapLineLayerSpecs.FIRST_MARKER_LAYER
         private const val CLUSTER_COUNT_LAYER = "mesh-cluster-count"
         private const val POINTS_LAYER = "mesh-points"
         private const val CLUSTER_LABELS_LAYER = "mesh-cluster-labels"

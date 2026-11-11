@@ -1,11 +1,44 @@
 // AndroidOnly: WP-312 Ancillary style-table checks reconciled from the preserved 3ca57f86 draft.
-// These do not substitute for real history-builder geometry or installed-layer assertions.
+// Includes production installation-command coverage, not native JNI/pixel evidence.
 package com.meshcoreone.android.core.maps
 
 import org.junit.Assert.*
 import org.junit.Test
 
 class MapLocationTrailStyleTest {
+    @Test fun productionInstallerKeepsTrailCasingAndStrokeBelowEveryMarkerWithoutMovingTraceLayers() {
+        // Model the provider/point stack already installed when the production renderer adds lines.
+        val markers = listOf("mesh-clusters", "mesh-cluster-count", "mesh-points", "mesh-cluster-labels", "mesh-fixed-points")
+        val layers = mutableListOf("provider-ground", "provider-roads").apply { addAll(markers) }
+        val anchored = mutableListOf<Pair<String, String>>()
+        MapLineLayerSpecs.install(
+            add = { layers += it.layerId },
+            addBelow = { spec, anchor ->
+                anchored += spec.layerId to anchor
+                val index = layers.indexOf(anchor)
+                assertTrue("Missing native insertion anchor $anchor", index >= 0)
+                layers.add(index, spec.layerId)
+            },
+        )
+        assertEquals(
+            listOf(
+                "provider-ground", "provider-roads", "mesh-location-trail-casing", "mesh-location-trail",
+                "mesh-clusters", "mesh-cluster-count", "mesh-points", "mesh-cluster-labels", "mesh-fixed-points",
+                "mesh-lines-layer", "mesh-untraced-lines",
+            ),
+            layers,
+        )
+        assertEquals(
+            listOf("mesh-location-trail-casing" to "mesh-clusters", "mesh-location-trail" to "mesh-clusters"),
+            anchored,
+        )
+        for (marker in markers) {
+            assertTrue(layers.indexOf("mesh-location-trail") < layers.indexOf(marker))
+        }
+        assertEquals(listOf("provider-ground", "provider-roads"), layers.take(2))
+        assertEquals(layers.size, layers.distinct().size)
+    }
+
     @Test fun dashedTrailSpecPreservesOriginalParametersAndDrawOrder() {
         val casing = MapLineLayerSpecs.ordered.single { it.layerId == "mesh-location-trail-casing" }
         val main = MapLineLayerSpecs.ordered.single { it.layerId == "mesh-location-trail" }

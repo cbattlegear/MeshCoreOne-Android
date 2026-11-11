@@ -47,6 +47,8 @@ class ChatListActionsTest {
         rig.holder.requestConversationReload()?.join()
         rig.actions.deleteChannelConversation(original)
         entered.await()
+        assertEquals(listOf(original), services.capturedNotificationChannels)
+        assertTrue(services.calls.isEmpty(), "Capture must not remove posts before the clear succeeds")
         rig.deps.data.channels = listOf(replacement)
         rig.holder.requestConversationReload()?.join()
         release.complete(Unit)
@@ -120,6 +122,8 @@ class ChatListActionsTest {
         assertEquals(1, rig.holder.state.value.allConversations.size)
         assertEquals(general.id, rig.holder.state.value.channelDeleteFailure?.channel?.id)
         assertTrue(rig.holder.state.value.deletingIds.isEmpty())
+        assertEquals(listOf(general), services.capturedNotificationChannels)
+        assertTrue(services.calls.isEmpty(), "A failed clear must not remove notifications or update the badge")
     }
 
     @Test

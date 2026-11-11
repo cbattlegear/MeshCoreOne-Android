@@ -405,6 +405,23 @@ class NotificationPolicyNativeTests {
 
     @TestFactory
     fun removal(): List<DynamicTest> = listOf(
+        nativeCase("channel-delete cleanup removes only the pre-clear post snapshot and never relists") {
+            val h = NotificationHarness(this)
+            val payload = NotificationPayload.ChannelMessage(RADIO_A, 2u, messageID)
+            h.delivery.show("original", payload)
+            h.delivery.show("reused", payload)
+            h.delivery.show("other-radio", NotificationPayload.ChannelMessage(RADIO_B, 2u, messageID))
+            val cleanup = h.service.captureDeliveredChannelCleanup(2u, RADIO_A)
+            assertEquals(listOf("original", "reused", "other-radio").map(::NotificationId), h.delivery.shownIds)
+            h.delivery.show("reused", payload)
+            h.delivery.show("replacement", payload)
+            cleanup()
+            assertEquals(1, h.delivery.listCalls)
+            assertEquals(listOf("reused", "other-radio", "replacement").map(::NotificationId), h.delivery.shownIds)
+            assertEquals(listOf(SnapshotRemovalOutcome.REMOVED, SnapshotRemovalOutcome.SUPERSEDED),
+                h.delivery.lastSnapshotOutcomes)
+            assertTrue(h.delivery.removals.isEmpty())
+        },
         nativeCase("snapshot cleanup preserves same-ID posts arriving after contact channel and room selection") {
             val contact = EntityKey(RADIO_A, contactID)
             val session = UUID.randomUUID()

@@ -31,8 +31,9 @@ object ChatConversationActions {
     /** Clears a channel on the radio, then removes its delivered notifications and refreshes the badge. */
     suspend fun deleteChannel(channel: ChannelDTO, services: ChatConversationServices?) {
         val resolved = services ?: throw ConversationActionError.ServicesUnavailable
+        val clearNotifications = resolved.captureChannelNotificationCleanup(channel)
         resolved.clearChannel(channel)
-        resolved.removeDeliveredNotifications(channel.radioId, channel.index)
+        clearNotifications()
         resolved.updateBadgeCount()
     }
 

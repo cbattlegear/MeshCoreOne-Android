@@ -465,8 +465,8 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
                     ) throw com.meshcoreone.android.core.services.contacts.ChannelDispatchFailure.RetiredSession()
                     current.channelService.clearChannel(channel)
                 }
-                override suspend fun removeDeliveredNotifications(radioId: RadioId, channelIndex: UByte) =
-                    current.notificationService.removeDeliveredNotifications(channelIndex, radioId)
+                override suspend fun captureChannelNotificationCleanup(channel: ChannelDTO) =
+                    current.notificationService.captureDeliveredChannelCleanup(channel.index, channel.radioId)
                 override suspend fun leaveRoom(session: RemoteNodeSessionDTO) =
                     this@AppChatsFeature.session(session.radioId).roomServerService.leaveRoom(
                         EntityKey(session.radioId, session.id), session.publicKey,

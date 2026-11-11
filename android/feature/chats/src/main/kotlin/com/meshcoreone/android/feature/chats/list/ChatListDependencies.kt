@@ -47,7 +47,8 @@ interface ChatConversationServices {
     /** Pushes the favorite flag to the device and returns once it is confirmed. */
     suspend fun setContactFavorite(contactId: UUID, isFavorite: Boolean)
     suspend fun clearChannel(channel: ChannelDTO)
-    suspend fun removeDeliveredNotifications(radioId: RadioId, channelIndex: UByte)
+    /** Captures exact posts before clear; the returned cleanup must run only after clear succeeds. */
+    suspend fun captureChannelNotificationCleanup(channel: ChannelDTO): suspend () -> Unit
 
     /** Leaves the room session then removes its backing contact. */
     suspend fun leaveRoom(session: RemoteNodeSessionDTO)

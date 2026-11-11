@@ -101,6 +101,7 @@ internal class FakeData : ChatListDataSource {
 
 internal class FakeServices : ChatConversationServices {
     val calls = mutableListOf<String>()
+    val capturedNotificationChannels = mutableListOf<ChannelDTO>()
     var failClearChannel: Exception? = null
     var failLeaveRoom: Exception? = null
     var clearChannelGate: (suspend () -> Unit)? = null
@@ -110,7 +111,10 @@ internal class FakeServices : ChatConversationServices {
         failClearChannel?.let { throw it }
         calls += "clear:${channel.index}"
     }
-    override suspend fun removeDeliveredNotifications(radioId: RadioId, channelIndex: UByte) { calls += "removeNotifications:$channelIndex" }
+    override suspend fun captureChannelNotificationCleanup(channel: ChannelDTO): suspend () -> Unit {
+        capturedNotificationChannels += channel
+        return { calls += "removeNotifications:${channel.index}" }
+    }
     override suspend fun leaveRoom(session: RemoteNodeSessionDTO) {
         failLeaveRoom?.let { throw it }
         calls += "leave:${session.id}"

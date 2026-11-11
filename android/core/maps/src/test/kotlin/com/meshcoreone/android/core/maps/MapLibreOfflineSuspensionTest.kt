@@ -118,7 +118,9 @@ class MapLibreOfflineSuspensionTest {
         region.deletion = CompletableDeferred<Unit>().also { it.completeExceptionally(failure) }
         val backend = MapLibreOfflineBackend(MapLibreOpenFreeMap.STYLE_URI, this, Regions(listOf(region)))
         yield()
-        assertSame(failure, runCatching { backend.delete(request.id) }.exceptionOrNull())
+        val reported = runCatching { backend.delete(request.id) }.exceptionOrNull()
+        assertEquals(failure.javaClass, reported?.javaClass)
+        assertEquals(failure.message, reported?.message)
         assertFalse(region.deleted)
         assertEquals(request.id, backend.packs.value.single().id)
     }

@@ -685,7 +685,7 @@ class ShortcutQueueIntegrationTest : RoomProcessTest() {
             assertEquals(0, h.links.radios.single().sent.count { it[0].toInt() == 2 })
             h.container.close()
             assertEquals(0, h.links.radios.single().sent.count { it[0].toInt() == 2 })
-            val attemptsBeforeReopen = backing.fetchPendingSendsForMessage(keys.first()).single().attemptCount
+            val attemptsBeforeReopen = assertNotNull(backing.fetchPendingSendsForMessage(keys.first()).single().attemptCount)
             assertTrue(attemptsBeforeReopen in 0L..1L)
             backing.close()
             owner.cancel()

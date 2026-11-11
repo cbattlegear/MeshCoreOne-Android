@@ -105,10 +105,10 @@ internal class FakeServices : ChatConversationServices {
     var failLeaveRoom: Exception? = null
     var clearChannelGate: (suspend () -> Unit)? = null
     override suspend fun setContactFavorite(contactId: UUID, isFavorite: Boolean) { calls += "fav:$contactId:$isFavorite" }
-    override suspend fun clearChannel(radioId: RadioId, index: UByte) {
+    override suspend fun clearChannel(channel: ChannelDTO) {
         clearChannelGate?.invoke()
         failClearChannel?.let { throw it }
-        calls += "clear:$index"
+        calls += "clear:${channel.index}"
     }
     override suspend fun removeDeliveredNotifications(radioId: RadioId, channelIndex: UByte) { calls += "removeNotifications:$channelIndex" }
     override suspend fun leaveRoom(session: RemoteNodeSessionDTO) {
@@ -119,6 +119,7 @@ internal class FakeServices : ChatConversationServices {
 }
 
 internal class FakeNavigation : ChatListNavigation {
+    override fun captureChannelSelectionCleanup(channel: ChannelDTO): () -> Boolean = { false }
     override val pendingChatContact = MutableStateFlow<ContactDTO?>(null)
     override val pendingChannel = MutableStateFlow<ChannelDTO?>(null)
     override val pendingRoomSession = MutableStateFlow<RemoteNodeSessionDTO?>(null)

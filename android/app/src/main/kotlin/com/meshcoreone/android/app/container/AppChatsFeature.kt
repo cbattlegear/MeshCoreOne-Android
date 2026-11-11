@@ -24,6 +24,7 @@ import com.meshcoreone.android.core.contracts.domain.ChannelHistoryConflict
 import com.meshcoreone.android.core.contracts.domain.ChannelHistoryRejected
 import com.meshcoreone.android.core.contracts.domain.MessageWindow
 import com.meshcoreone.android.core.contracts.domain.EntityKey
+import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreError
 import com.meshcoreone.android.core.contracts.domain.errors.MessageServiceError
@@ -379,6 +380,8 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             }
             override fun acknowledgePendingRoute(route: ChatRoute) =
                 container.navigation.acknowledgePendingChatRoute(route)
+            override fun captureChannelSelectionCleanup(channel: ChannelDTO) =
+                container.navigation.captureChannelSelectionCleanup(channel)
             override fun clearPendingRoomAuthentication() = container.navigation.clearPendingRoomAuthentication()
         }
         override val links = object : ChatLinkEnvironment {
@@ -456,8 +459,12 @@ class AppChatsFeature internal constructor(private val container: AppContainer) 
             return object : ChatConversationServices {
                 override suspend fun setContactFavorite(contactId: UUID, isFavorite: Boolean) =
                     session(current.token.radioId).contactService.setContactFavorite(key(contactId), isFavorite)
-                override suspend fun clearChannel(radioId: RadioId, index: UByte) =
-                    session(radioId).channelService.clearChannel(radioId, index)
+                override suspend fun clearChannel(channel: ChannelDTO) {
+                    if (container.sessions.current !== current || channel.radioId != current.token.radioId ||
+                        app.connectionState != DeviceConnectionState.READY
+                    ) throw com.meshcoreone.android.core.services.contacts.ChannelDispatchFailure.RetiredSession()
+                    current.channelService.clearChannel(channel)
+                }
                 override suspend fun removeDeliveredNotifications(radioId: RadioId, channelIndex: UByte) =
                     current.notificationService.removeDeliveredNotifications(channelIndex, radioId)
                 override suspend fun leaveRoom(session: RemoteNodeSessionDTO) =

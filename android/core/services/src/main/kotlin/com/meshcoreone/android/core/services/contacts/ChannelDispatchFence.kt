@@ -208,6 +208,16 @@ class ChannelDispatchFence(
 
     internal fun requireActive(lease: Lease) = requireCurrent(lease)
 
+    internal suspend fun requireReconciled(
+        lease: Lease, scope: ChannelIdentityWriteScope, index: UByte,
+    ) {
+        identity.requireChannelOperationScope(scope)
+        synchronized(stateLock) {
+            requireCurrent(lease)
+            if (index !in lease.reconciledSlots) throw ChannelDispatchFailure.UnreconciledSession()
+        }
+    }
+
     suspend fun forgetReconciled(
         lease: Lease, scope: ChannelIdentityWriteScope, indices: Collection<UByte>,
     ) {

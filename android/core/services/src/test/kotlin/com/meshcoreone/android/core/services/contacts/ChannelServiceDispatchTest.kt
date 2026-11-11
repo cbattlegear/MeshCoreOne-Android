@@ -33,6 +33,100 @@ import org.junit.jupiter.api.Test
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class ChannelServiceDispatchTest {
+    @Test
+    fun displayedDeleteRejectsReplacementAndEqualValueAbaBeforeAnyDestructiveEffect() = runTest {
+        for (aba in listOf(false, true)) {
+            val f = Fixture()
+            val service = f.service()
+            f.reconcile()
+            val snapshot = assertNotNull(f.store.fetchChannelOccupantSnapshot(f.radio, 0u))
+            val original = snapshot.channel.copy(occupantID = snapshot.occupantID)
+            service.setChannelWithSecret(f.radio, 0u, "replacement", channelsSecret(2))
+            if (aba) service.setChannelWithSecret(f.radio, 0u, original.name, original.secret)
+            f.store.saveTestMessage(f.radio, 0u, "successor history")
+            val before = assertNotNull(f.store.fetchChannelOccupantSnapshot(f.radio, 0u))
+            val writes = f.session.recordedSetChannels.toList()
+            assertFailsWith<ChannelDispatchFailure.ReplacedOccupant> { service.clearChannel(original) }
+            assertEquals(writes, f.session.recordedSetChannels)
+            assertEquals(before, f.store.fetchChannelOccupantSnapshot(f.radio, 0u))
+            assertEquals("successor history", f.store.fetchMessages(f.radio, 0u).single().text)
+            f.send(before.occupantID)
+        }
+    }
+
+    @Test
+    fun displayedDeleteRequiresProvedOriginAndOriginalReconciledSession() = runTest {
+        val f = Fixture()
+        f.store.saveChannel(f.radio, f.original)
+        val snapshot = assertNotNull(f.store.fetchChannelOccupantSnapshot(f.radio, 0u))
+        val original = snapshot.channel.copy(occupantID = snapshot.occupantID)
+        assertFailsWith<ChannelDispatchFailure.UnknownOccupant> { f.service().clearChannel(original.copy(occupantID = null)) }
+        assertFailsWith<ChannelDispatchFailure.UnreconciledSession> { f.service().clearChannel(original) }
+        assertFailsWith<ChannelDispatchFailure.RetiredSession> {
+            ChannelService(f.session, f.store, null).clearChannel(original)
+        }
+        f.reconcile()
+        val oldService = f.service()
+        f.fence.retire(f.lease)
+        val successor = ChannelsMockSession()
+        val next = f.token.copy(generation = Generation(2))
+        f.fence.openSession(next, successor, ChannelDispatchAdmission(next, successor))
+        assertFailsWith<ChannelDispatchFailure.RetiredSession> { oldService.clearChannel(original) }
+        assertTrue(f.session.recordedSetChannels.isEmpty())
+        assertTrue(successor.recordedSetChannels.isEmpty())
+        assertEquals(snapshot, f.store.fetchChannelOccupantSnapshot(f.radio, 0u))
+    }
+
+    @Test
+    fun validDisplayedDeleteExcludesReplacementUntilItsAcknowledgedDeletionCompletes() = runTest {
+        val f = Fixture()
+        val service = f.service()
+        f.reconcile()
+        val original = assertNotNull(f.store.fetchChannelOccupantSnapshot(f.radio, 0u)).let {
+            it.channel.copy(occupantID = it.occupantID)
+        }
+        f.store.saveTestMessage(f.radio, 0u, "original history")
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        f.session.beforeSetChannel = { entered.complete(Unit); release.await() }
+        val deleting = async { service.clearChannel(original) }
+        entered.await()
+        val replacing = async { f.service().setChannelWithSecret(f.radio, 0u, "successor", channelsSecret(2)) }
+        runCurrent()
+        assertFalse(replacing.isCompleted)
+        assertEquals(1, f.session.recordedSetChannels.size)
+        release.complete(Unit)
+        deleting.await()
+        replacing.await()
+        assertEquals(listOf("", "successor"), f.session.recordedSetChannels.map { it.name })
+        assertEquals("successor", f.store.fetchChannel(f.radio, 0u)?.name)
+        assertTrue(f.store.fetchMessages(f.radio, 0u).isEmpty())
+        assertNotEquals(original.occupantID, f.store.fetchChannelOccupantID(f.radio, 0u))
+    }
+
+    @Test
+    fun unknownDisplayedDeleteCancellationPreservesHistoryAndQuarantinesSuccessor() = runTest {
+        val f = Fixture()
+        f.reconcile()
+        val original = assertNotNull(f.store.fetchChannelOccupantSnapshot(f.radio, 0u)).let {
+            it.channel.copy(occupantID = it.occupantID)
+        }
+        f.store.saveTestMessage(f.radio, 0u, "preserved")
+        val failure = CancellationException("unknown SET outcome")
+        f.session.stubbedSetChannelError = failure
+        assertSame(failure, assertFailsWith<CancellationException> { f.service().clearChannel(original) })
+        assertEquals("preserved", f.store.fetchMessages(f.radio, 0u).single().text)
+        assertNotNull(f.store.fetchChannel(f.radio, 0u))
+        assertNull(f.store.fetchChannelOccupantID(f.radio, 0u))
+        f.fence.retire(f.lease)
+        val next = f.token.copy(generation = Generation(2))
+        val successor = ChannelsMockSession()
+        assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> {
+            f.fence.openSession(next, successor, ChannelDispatchAdmission(next, successor))
+        }
+        assertTrue(successor.recordedSetChannels.isEmpty())
+    }
+
     private class Fixture {
         val gate = ChannelIdentityMutex()
         val fence = ChannelDispatchFence(gate)

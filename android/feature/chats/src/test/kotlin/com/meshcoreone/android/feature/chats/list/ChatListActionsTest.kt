@@ -27,6 +27,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.delay
@@ -34,6 +35,30 @@ import kotlinx.coroutines.withTimeout
 import org.junit.Test
 
 class ChatListActionsTest {
+    @Test
+    fun `late channel deletion cannot hide or mask a same-ID replacement`() = scenario {
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val services = FakeServices().apply { clearChannelGate = { entered.complete(Unit); release.await() } }
+        val rig = Rig(this, FakeDependencies(services = services))
+        val original = channel("A").copy(occupantID = UUID.randomUUID())
+        val replacement = original.copy(occupantID = UUID.randomUUID())
+        rig.deps.data.channels = listOf(original)
+        rig.holder.requestConversationReload()?.join()
+        rig.actions.deleteChannelConversation(original)
+        entered.await()
+        rig.deps.data.channels = listOf(replacement)
+        rig.holder.requestConversationReload()?.join()
+        release.complete(Unit)
+        settle()
+        assertEquals(listOf(replacement), rig.holder.state.value.channels)
+        assertEquals(listOf(Conversation.Channel(replacement)), rig.holder.state.value.allConversations)
+        assertTrue(rig.holder.state.value.pendingRemovalIds.isEmpty())
+        rig.holder.requestConversationReload()?.join()
+        assertEquals(listOf(Conversation.Channel(replacement)), rig.holder.state.value.allConversations)
+        assertTrue(rig.cleared.isEmpty(), "Channel cleanup must not consult the rendered-selection callback")
+    }
+
     private class Rig(scenario: Scenario, val deps: FakeDependencies = FakeDependencies()) {
         val holder = ChatListStateHolder(deps, scenario.scope)
         val navigated = mutableListOf<ChatRoute>()

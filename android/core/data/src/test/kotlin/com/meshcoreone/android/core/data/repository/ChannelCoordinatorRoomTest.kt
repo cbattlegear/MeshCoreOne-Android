@@ -58,8 +58,9 @@ class ChannelCoordinatorRoomTest : RepositoryTest() {
         override suspend fun setChannel(index: UByte, name: String, secret: Bytes) {
             sent += ChannelInfo(index, name, secret)
         }
-        override suspend fun setChannel(index: UByte, name: String, secret: Bytes, dispatch: ChannelWriteDispatch) =
+        override suspend fun setChannel(index: UByte, name: String, secret: Bytes, dispatch: ChannelWriteDispatch) {
             setChannel(index, name, secret)
+        }
     }
 
     @OriginalCase("ChannelServiceTests::clearChannel deletes the row and its messages, then fires the slot handler()")

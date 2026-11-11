@@ -25,6 +25,7 @@ import com.meshcoreone.android.app.navigation.NavigationDestination
 import com.meshcoreone.android.app.navigation.channelFailureText
 import com.meshcoreone.android.core.contracts.AppTab
 import com.meshcoreone.android.core.contracts.domain.ChannelIdentityWriteScope
+import com.meshcoreone.android.core.contracts.domain.ChannelHistoryPersisting
 import com.meshcoreone.android.core.contracts.domain.ChannelPersisting
 import com.meshcoreone.android.core.contracts.domain.ChannelOccupantSnapshot
 import com.meshcoreone.android.core.contracts.domain.EntityKey
@@ -34,10 +35,13 @@ import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
 import com.meshcoreone.android.core.model.ChannelFloodScope
 import com.meshcoreone.android.core.model.ChannelDTO
+import com.meshcoreone.android.core.model.MessageStatus
+import com.meshcoreone.android.core.model.QueuedChannelDispatchState
 import com.meshcoreone.android.core.model.RadioId
 import com.meshcoreone.android.core.model.SnapshotList
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.command.PacketBuilder
+import com.meshcoreone.android.core.protocol.config.MeshCoreException
 import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.services.sync.SyncClock
 import com.meshcoreone.android.core.services.contacts.ChannelMutationError
@@ -115,9 +119,20 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
             h.settle()
             h.assertReady()
             val node = assertNotNull(h.sessions.current)
-            assertFailsWith<ChannelDispatchFailure.UnsettledDispatch> {
+            node.channelService.setChannelWithSecret(
+                node.token.radioId, 0u, "Before", Bytes.fromHex("00112233445566778899AABBCCDDEEFF"),
+            )
+            val retained = assertFails {
                 node.messageService.sendChannelMessage("uncertain original", 0u, node.token.radioId)
             }
+            val rejection = assertNotNull(generateSequence<Throwable>(retained) { it.cause }
+                .filterIsInstance<MeshCoreException.DeviceError>()
+                .firstOrNull())
+            assertEquals(2.toUByte(), rejection.code)
+            val pending = store.fetchPendingSends(node.token.radioId).single()
+            assertEquals(QueuedChannelDispatchState.UNCERTAIN, pending.channelDispatchState)
+            assertEquals(MessageStatus.PENDING,
+                store.fetchMessage(EntityKey(node.token.radioId, pending.messageID))?.status)
             val firmware = h.links.radios.single()
             val writes = firmware.sent.count { it[0].toInt() == 0x20 }
             h.container.navigation.stageChannelLink(ChannelLinkRequest(
@@ -151,7 +166,7 @@ class ChannelConfirmationConsumerTest : RoomProcessTest() {
 
     private fun interceptChannelPersistence(decorate: (ChannelPersisting) -> ChannelPersisting): PersistenceStoreProtocol {
         val channels = decorate(store)
-        return object : PersistenceStoreProtocol by store {
+        return object : PersistenceStoreProtocol by store, ChannelHistoryPersisting by store {
             override suspend fun <T> withChannelOperation(
                 block: suspend (ChannelPersisting, ChannelIdentityWriteScope) -> T,
             ): T = store.withChannelOperation { scoped, scope -> block(decorate(scoped), scope) }

@@ -51,6 +51,8 @@ import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.Generation
 import com.meshcoreone.android.core.contracts.domain.MonitoringOptions
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
+import com.meshcoreone.android.core.contracts.domain.ChannelHistoryPersisting
+import com.meshcoreone.android.core.contracts.domain.ChannelHistoryScope
 import com.meshcoreone.android.core.contracts.domain.NotificationId
 import com.meshcoreone.android.core.contracts.domain.ProcessEpoch
 import com.meshcoreone.android.core.contracts.domain.SessionToken
@@ -1270,8 +1272,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             connect(h)
             val radio = assertNotNull(h.appState.currentRadioId)
             val contact = store.fetchContact(radio, key(20))!!
-            val channel = ChannelDTO(radioId = radio, index = 3u, name = "Notification channel")
-            store.saveChannel(channel)
+            val channel = seedReconciledChannel(ChannelDTO(radioId = radio, index = 3u, name = "Notification channel"))
             mount(h)
             val service = assertNotNull(h.sessions.current).notificationService
             val callback = assertNotNull(service.onNotificationTapped)
@@ -2058,8 +2059,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             connect(h)
             val radio = assertNotNull(h.appState.currentRadioId)
             val contact = store.fetchContact(radio, key(20))!!
-            val channel = ChannelDTO(radioId = radio, index = 1u, name = "Reaction channel")
-            store.saveChannel(channel)
+            val channel = seedReconciledChannel(ChannelDTO(radioId = radio, index = 1u, name = "Reaction channel"))
             mount(h)
             for (isChannel in listOf(false, true)) {
                 val message = MessageDTO(
@@ -2101,15 +2101,15 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
             val olderRead = CompletableDeferred<Unit>()
             val releaseOlder = CompletableDeferred<Unit>()
             val holdOlder = AtomicBoolean(false)
-            val persistence = object : PersistenceStoreProtocol by store {
-                override suspend fun fetchMessages(
-                    radioId: RadioId, channelIndex: UByte, limit: Long, offset: Long,
+            val persistence = object : PersistenceStoreProtocol by store, ChannelHistoryPersisting by store {
+                override suspend fun fetchChannelTimeline(
+                    origin: ChannelHistoryScope, limit: Long, offset: Long,
                 ): SnapshotList<MessageDTO> {
-                    if (holdOlder.get() && channelIndex == expectedIndex && offset > 0) {
+                    if (holdOlder.get() && origin.channelIndex == expectedIndex && offset > 0) {
                         olderRead.complete(Unit)
                         releaseOlder.await()
                     }
-                    return store.fetchMessages(radioId, channelIndex, limit, offset)
+                    return store.fetchChannelTimeline(origin, limit, offset)
                 }
             }
             val h = ContainerHarness(this, store, persistenceOverride = persistence)
@@ -2118,8 +2118,7 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 connect(h)
                 val radio = assertNotNull(h.appState.currentRadioId)
                 val contact = assertNotNull(store.fetchContact(radio, key(20)))
-                val channel = ChannelDTO(radioId = radio, index = expectedIndex, name = "Incoming reaction channel")
-                store.saveChannel(channel)
+                val channel = seedReconciledChannel(ChannelDTO(radioId = radio, index = expectedIndex, name = "Incoming reaction channel"))
                 val outgoingMessage = MessageDTO(
                     radioId = radio, contactID = contact.id, text = "Outgoing conversation",
                     timestamp = 10u, createdAt = EPOCH, direction = MessageDirection.INCOMING,

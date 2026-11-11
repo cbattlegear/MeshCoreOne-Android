@@ -1,4 +1,4 @@
-// AndroidOnly: WP-201 Non-activated original-occupant history contract; unbound history requires a separate disposition.
+// AndroidOnly: WP-201 Original-occupant history and explicit native display disposition.
 package com.meshcoreone.android.core.contracts.domain
 
 import com.meshcoreone.android.core.model.MessageDTO
@@ -18,8 +18,9 @@ class ChannelHistoryRejected(
 ) : Exception(reason.name)
 
 /**
- * Kept separate from MessagePersisting: existing consumers are not activated by this prerequisite.
- * A scoped read rejects any unbound row in its slot rather than returning silently partial history.
+ * Strict history reads reject any unbound row rather than returning silently partial history.
+ * Active display reads keep source-compatible unbound incoming rows, without stamping an origin,
+ * while unbound outgoing drafts remain exclusively in ChannelDraftRecoveryPersisting.
  * A read scope is not a wire permit; dispatch still needs its independently owned atomic fence.
  */
 interface ChannelHistoryPersisting {
@@ -34,6 +35,12 @@ interface ChannelHistoryPersisting {
     // Both arguments carry the initiating proof. This never fills null proof from the current slot.
     suspend fun saveChannelMessage(dto: MessageDTO, origin: ChannelHistoryScope)
     suspend fun validateChannelMessageOrigin(message: EntityKey): ChannelHistoryScope
+    suspend fun fetchChannelTimeline(origin: ChannelHistoryScope, limit: Long = 50, offset: Long = 0): SnapshotList<MessageDTO>
+    suspend fun fetchChannelTimelineWindow(origin: ChannelHistoryScope, anchorSortDate: Instant?, floorLimit: Long): MessageWindow
+    suspend fun countUnseenChannelTimelineFailures(origin: ChannelHistoryScope): Long
+    suspend fun fetchChannelTimelineMessage(origin: ChannelHistoryScope, message: EntityKey): MessageDTO?
+    suspend fun markChannelTimelineFailuresSeen(origin: ChannelHistoryScope)
+    suspend fun clearChannelTimelineUnread(origin: ChannelHistoryScope)
     suspend fun fetchChannelHistory(origin: ChannelHistoryScope, limit: Long = 50, offset: Long = 0): SnapshotList<MessageDTO>
     suspend fun fetchChannelHistoryWindow(origin: ChannelHistoryScope, anchorSortDate: Instant?, floorLimit: Long): MessageWindow
     suspend fun countChannelHistory(origin: ChannelHistoryScope): Long

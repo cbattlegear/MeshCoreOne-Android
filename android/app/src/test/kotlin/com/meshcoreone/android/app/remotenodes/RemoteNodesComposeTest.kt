@@ -139,7 +139,7 @@ class RemoteNodesComposeTest {
             if (compose.onAllNodesWithTag("synthetic-map").fetchSemanticsNodes().isNotEmpty()) return
             Thread.sleep(10)
         }
-        error("Synthetic map did not appear after remote-map preference retry")
+        error("Synthetic map did not appear after remote-map preferences became ready")
     }
 
     @Test fun neighborHostUsesRealPersistedFilterAndLiveRestoreWithoutLosingThePannedCamera() {
@@ -331,6 +331,16 @@ class RemoteNodesComposeTest {
     }
 
     @Test fun disconnectedHistoryHasChartsReportSelectionAttributionAndNoRadioWrites() {
+        val real = requireNotNull(fixture.mapPreferences)
+        val observationStarted = CompletableDeferred<Unit>()
+        val releasePreferences = CompletableDeferred<Unit>()
+        fixture.mapPreferences = object : MapPreferenceStore by real {
+            override fun observe(host: MapFilterHost) = kotlinx.coroutines.flow.flow {
+                observationStarted.complete(Unit)
+                releasePreferences.await()
+                real.observe(host).collect { emit(it) }
+            }
+        }
         fixture.connection = fixture.connection.copy(ready = false)
         fixture.sessions = emptyList()
         fixture.publish()
@@ -338,6 +348,11 @@ class RemoteNodesComposeTest {
         compose.onNodeWithText(text(L.remoteNodesHistoryOverviewTitle)).performClick()
         compose.onNodeWithTag("remote-history-content").assertExists()
         compose.onNodeWithText("3.9 V", substring = true).assertExists()
+        settleMapComposition()
+        compose.waitUntil(5_000) { observationStarted.isCompleted }
+        compose.onNodeWithTag("synthetic-map", useUnmergedTree = true).assertDoesNotExist()
+        releasePreferences.complete(Unit)
+        waitForSyntheticMap()
         compose.onNodeWithTag("synthetic-map", useUnmergedTree = true).performScrollTo().assertExists()
         compose.onNodeWithText("Select fixture report").performClick()
         compose.onAllNodesWithText("37.7000", substring = true).onFirst().assertExists()
@@ -345,8 +360,9 @@ class RemoteNodesComposeTest {
         capture("history-fixture")
         compose.onNodeWithText(text(L.remoteNodesStatusViewOnMap)).performScrollTo().performClick()
         compose.onNodeWithTag("remote-history-full-map").assertExists()
-        compose.onNode(hasText("Move fixture camera") and hasAnyAncestor(hasTestTag("remote-history-full-map")))
-            .performScrollTo().assertExists()
+        val fullMapCamera = hasText("Move fixture camera") and hasAnyAncestor(hasTestTag("remote-history-full-map"))
+        compose.waitUntil(5_000) { compose.onAllNodes(fullMapCamera).fetchSemanticsNodes().size == 1 }
+        compose.onNode(fullMapCamera).performScrollTo().assertExists()
         assertTrue(fixture.commands.isEmpty())
     }
 

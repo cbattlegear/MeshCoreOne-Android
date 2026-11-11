@@ -19,6 +19,7 @@ import com.meshcoreone.android.core.model.RoomMessageDTO
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.ContactType
 import com.meshcoreone.android.feature.chats.list.ChatListDataSource
+import com.meshcoreone.android.feature.chats.list.ChatChannelKey
 import com.meshcoreone.android.feature.chats.list.ChatListDiagnostics
 import com.meshcoreone.android.feature.chats.list.ChatListEvent
 import com.meshcoreone.android.feature.chats.list.ChatListFeatureDependencies
@@ -60,6 +61,8 @@ class FailedSendBadgeRecoveryOriginalTest : RoomProcessTest() {
         withRig {
             val channel = channel(4)
             val other = channel(7)
+            assertNotNull(holder.requestConversationReload()).join()
+            queriedRadios.clear()
             store.saveMessage(message(channelIndex = channel.index))
             holder.refreshFailedSendIndicators()
 
@@ -121,6 +124,8 @@ class FailedSendBadgeRecoveryOriginalTest : RoomProcessTest() {
             val contact = contact()
             val channel = channel(2)
             val room = room()
+            assertNotNull(holder.requestConversationReload()).join()
+            queriedRadios.clear()
             store.saveMessage(message(contactID = contact.id))
             store.saveMessage(message(channelIndex = channel.index))
             store.saveRoomMessage(radio, roomMessage(room))
@@ -350,10 +355,12 @@ class FailedSendBadgeRecoveryOriginalTest : RoomProcessTest() {
         var fetchFailure: Exception? = null
         private val native = harness.container.chatsFeature.listFor(radio)
         private val data = object : ChatListDataSource by native.data {
-            override suspend fun fetchFailedSendConversationKeys(radioId: RadioId): FailedSendConversationKeys {
+            override suspend fun fetchFailedSendConversationKeys(
+                radioId: RadioId, channels: List<ChatChannelKey>,
+            ): FailedSendConversationKeys {
                 queriedRadios += radioId
                 fetchFailure?.let { throw it }
-                val keys = native.data.fetchFailedSendConversationKeys(radioId)
+                val keys = native.data.fetchFailedSendConversationKeys(radioId, channels)
                 afterFetch(keys)
                 return keys
             }
@@ -394,8 +401,8 @@ class FailedSendBadgeRecoveryOriginalTest : RoomProcessTest() {
     }
 
     private suspend fun channel(index: Int): ChannelDTO =
-        ChannelDTO(radioId = radio, index = index.toUByte(), name = "General", secret = Bytes.EMPTY,
-            lastMessageDate = NOW).also { store.saveChannel(it) }
+        seedReconciledChannel(ChannelDTO(radioId = radio, index = index.toUByte(), name = "General", secret = Bytes.EMPTY,
+            lastMessageDate = NOW))
 
     private suspend fun room(): RemoteNodeSessionDTO {
         val id = UUID.randomUUID()
@@ -405,10 +412,11 @@ class FailedSendBadgeRecoveryOriginalTest : RoomProcessTest() {
         ).also { store.saveRemoteNodeSessionDTO(it) }
     }
 
-    private fun message(contactID: UUID? = null, channelIndex: UByte? = null) = MessageDTO(
+    private suspend fun message(contactID: UUID? = null, channelIndex: UByte? = null) = MessageDTO(
         radioId = radio, contactID = contactID, channelIndex = channelIndex, text = "hello",
         timestamp = 1_700_000_000u, createdAt = NOW, direction = MessageDirection.OUTGOING,
         status = MessageStatus.FAILED,
+        channelOccupantID = channelIndex?.let { store.fetchChannel(radio, it)?.occupantID },
     )
 
     private fun roomMessage(room: RemoteNodeSessionDTO) = RoomMessageDTO(

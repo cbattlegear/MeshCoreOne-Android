@@ -1,6 +1,7 @@
 // PortedFrom: MC1/Views/Chats/Components/Fragments/MapPreviewFragmentView.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1/Views/Settings/Sections/MapPreviewSettingsSection.swift@db14559b39d32322b06477c6ae676112f583db50
 // PortedFrom: MC1Tests/AppState/NavigationCoordinatorTests.swift@db14559b39d32322b06477c6ae676112f583db50
+// PortedFrom: MC1/Views/Map/MapView.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.app.platform
 
 import android.content.Context
@@ -10,6 +11,8 @@ import android.os.Build
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
@@ -23,6 +26,8 @@ import com.meshcoreone.android.app.navigation.AppMessageContent
 import com.meshcoreone.android.app.navigation.NativeNavigationShell
 import com.meshcoreone.android.app.navigation.chatMapPreviewCoordinate
 import com.meshcoreone.android.core.contracts.AppTab
+import com.meshcoreone.android.core.contracts.FeatureId
+import com.meshcoreone.android.core.contracts.FeatureRoute
 import com.meshcoreone.android.core.datastore.AppStorageKey
 import com.meshcoreone.android.core.datastore.MeshCoreStorage
 import com.meshcoreone.android.core.designsystem.AppColorSchemePreference
@@ -31,12 +36,20 @@ import com.meshcoreone.android.core.l10n.generated.AppMapStrings as M
 import com.meshcoreone.android.core.l10n.generated.AppSettingsStrings as S
 import com.meshcoreone.android.core.maps.MapSnapshotRenderer
 import com.meshcoreone.android.core.maps.MapSnapshotRequest
+import com.meshcoreone.android.core.maps.MapFilterHost
+import com.meshcoreone.android.core.maps.OfflineMapController
+import com.meshcoreone.android.core.maps.UnavailableOfflineMapBackend
+import com.meshcoreone.android.feature.map.MapEntry
+import com.meshcoreone.android.feature.map.MapFeatureContent
+import com.meshcoreone.android.feature.map.MapFeatureDataSource
+import com.meshcoreone.android.feature.map.MapFeatureDependencies
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.services.content.BoundedHttpFetching
 import com.meshcoreone.android.core.services.content.HttpFetchAttempt
 import java.util.UUID
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.*
 import org.junit.Assert.*
 import org.junit.After
@@ -437,6 +450,110 @@ class ChatMapPreviewTest : RoomProcessTest() {
             val reopened = MeshCoreStorage.get(context)
             try { assertFalse(reopened.preferences.get(AppStorageKey.showMapPreviewThumbnails)) }
             finally { reopened.close() }
+        }
+    }
+
+    @Test fun mapsSettingsMigratesPrivateSwitchesBeforeAnyMapIsOpened() = runTest {
+        assertSharedMapSettings(authoritativeValues = false)
+    }
+
+    @Test fun mapsSettingsUsesRestoredValuesInsteadOfConflictingPrivateSwitches() = runTest {
+        assertSharedMapSettings(authoritativeValues = true)
+    }
+
+    private suspend fun TestScope.assertSharedMapSettings(authoritativeValues: Boolean) {
+        withFixture {
+            val legacy = context.getSharedPreferences("shared-map", Context.MODE_PRIVATE)
+            assertTrue(legacy.edit().clear()
+                .putBoolean("cluster-v1", authoritativeValues)
+                .putBoolean("labels-v1", authoritativeValues)
+                .putString("camera-v1", "10,20,0.5,0.5").commit())
+            if (authoritativeValues) {
+                storage.preferences.set(AppStorageKey.mapClusteringEnabled, false)
+                storage.preferences.set(AppStorageKey.mapShowLabels, false)
+            }
+            val settings = AppSettingsFeature.create(h.container, storage)
+            fun cluster() = compose.onAllNodes(isToggleable())[0]
+            fun labels() = compose.onAllNodes(isToggleable())[1]
+            fun mountSettings() {
+                compose.runOnUiThread {
+                    host.setContent { MeshCoreTheme(motionScale = 0f) { AppMapSettings(settings) {} } }
+                }
+                compose.waitUntil(10_000) {
+                    h.settle()
+                    compose.onAllNodes(isToggleable() and isEnabled()).fetchSemanticsNodes().size == 3
+                }
+            }
+            mountSettings()
+            cluster().assertIsOff()
+            labels().assertIsOff()
+            val migrated = storage.preferences.snapshot()
+            assertEquals(false, migrated.stored(AppStorageKey.mapClusteringEnabled))
+            assertEquals(false, migrated.stored(AppStorageKey.mapShowLabels))
+            assertFalse(legacy.contains("cluster-v1"))
+            assertFalse(legacy.contains("labels-v1"))
+            cluster().performClick()
+            labels().performClick()
+            compose.waitUntil(10_000) {
+                h.settle()
+                runBlocking {
+                    val snapshot = storage.preferences.snapshot()
+                    snapshot[AppStorageKey.mapClusteringEnabled] && snapshot[AppStorageKey.mapShowLabels]
+                }
+            }
+            cluster().assertIsOn()
+            labels().assertIsOn()
+            val shared = AppMapPreferences(storage.preferences, legacy)
+            for (mapHost in MapFilterHost.entries) {
+                val value = shared.observe(mapHost).first()
+                assertTrue(value.clustering)
+                assertTrue(value.labels)
+            }
+            var rendered: Pair<Boolean, Boolean>? = null
+            val dependencies = MapFeatureDependencies(
+                MapFeatureDataSource { MapFeatureContent() },
+                OfflineMapController(UnavailableOfflineMapBackend, emptyMap(),
+                    { error("No download") }, { error("No download") }),
+                preferences = shared,
+            )
+            compose.runOnUiThread {
+                host.setContent { MeshCoreTheme(motionScale = 0f) {
+                    MapEntry(FeatureRoute(FeatureId.MAP), { error("No navigation") }, dependencies,
+                        mapSurface = { _, clustering, showLabels, _, _, overlay ->
+                            SideEffect { rendered = clustering to showLabels }
+                            Box { overlay() }
+                        })
+                } }
+            }
+            compose.waitUntil(10_000) {
+                compose.onAllNodes(isRoot()).fetchSemanticsNodes()
+                rendered == (true to true)
+            }
+            storage.preferences.set(AppStorageKey.mapClusteringEnabled, false)
+            storage.preferences.set(AppStorageKey.mapShowLabels, false)
+            compose.waitUntil(10_000) {
+                compose.onAllNodes(isRoot()).fetchSemanticsNodes()
+                rendered == (false to false)
+            }
+            mountSettings()
+            cluster().assertIsOff()
+            labels().assertIsOff()
+            storage.preferences.set(AppStorageKey.mapClusteringEnabled, true)
+            storage.preferences.set(AppStorageKey.mapShowLabels, true)
+            compose.waitUntil(10_000) {
+                h.settle()
+                compose.onAllNodes(isToggleable() and isOn()).fetchSemanticsNodes().size == 3
+            }
+            val backup = storage.backupPreferences.snapshotForBackup().presentValues
+            assertEquals(com.meshcoreone.android.core.datastore.PreferenceValue.BooleanValue(true),
+                backup["mapClusteringEnabled"])
+            assertEquals(com.meshcoreone.android.core.datastore.PreferenceValue.BooleanValue(true),
+                backup["mapShowLabels"])
+            assertFalse(legacy.contains("cluster-v1"))
+            assertFalse(legacy.contains("labels-v1"))
+            assertEquals("10,20,0.5,0.5", legacy.getString("camera-v1", null))
+            assertTrue(storage.preferences.get(AppStorageKey.showMapPreviewThumbnails))
+            assertFalse(storage.preferences.get(AppStorageKey.linkPreviewsEnabled))
         }
     }
 

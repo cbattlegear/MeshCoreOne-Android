@@ -107,10 +107,13 @@ internal class MessageRepository(
             id = creation.messageID, radioId = origin.radioId, channelIndex = origin.channelIndex,
             text = creation.text, timestamp = timestamp, createdAt = createdAt, textType = creation.textType,
             channelOccupantID = origin.expectedOccupantID,
-        )
-        database.messages().insert(row.toEntity())
+        ).toEntityPreservingTimestamp()
+        database.messages().insert(row)
         save()
-        row
+        val stored = database.messages().byId(origin.radioId.value, creation.messageID)
+            ?: invalidData("Inserted channel message is missing")
+        if (stored != row) invalidData("Inserted channel message is missing or changed")
+        stored.toDTO()
     }
 
     override suspend fun saveChannelMessage(dto: MessageDTO, origin: ChannelHistoryScope) =
@@ -152,6 +155,71 @@ internal class MessageRepository(
             displayMessages(database.messages().newestForChannelOccupant(
                 origin.radioId.value, origin.channelIndex.toLong(), origin.expectedOccupantID, limit, offset,
             ))
+        }
+
+    override suspend fun fetchChannelTimeline(origin: ChannelHistoryScope, limit: Long, offset: Long): SnapshotList<MessageDTO> =
+        context.read("fetchChannelTimeline") {
+            queryBounds(limit, offset)
+            requireCurrentChannelOrigin(origin)
+            displayMessages(database.messages().newestChannelTimeline(
+                origin.radioId.value, origin.channelIndex.toLong(), origin.expectedOccupantID, limit, offset,
+            ))
+        }
+
+    override suspend fun fetchChannelTimelineWindow(
+        origin: ChannelHistoryScope, anchorSortDate: Instant?, floorLimit: Long,
+    ): MessageWindow = context.read("fetchChannelTimelineWindow") {
+        queryBounds(floorLimit)
+        requireCurrentChannelOrigin(origin)
+        val atAnchor = anchorSortDate?.let {
+            database.messages().countChannelTimelineAtOrAfter(
+                origin.radioId.value, origin.channelIndex.toLong(), origin.expectedOccupantID, it.epochSecond, it.nano,
+            )
+        } ?: 0
+        val limit = maxOf(floorLimit, atAnchor)
+        window(database.messages().newestChannelTimeline(
+            origin.radioId.value, origin.channelIndex.toLong(), origin.expectedOccupantID, checkedIncrement(limit),
+        ), limit)
+    }
+
+    override suspend fun countUnseenChannelTimelineFailures(origin: ChannelHistoryScope): Long =
+        context.read("countUnseenChannelTimelineFailures") {
+            requireCurrentChannelOrigin(origin)
+            database.messages().countUnseenChannelOccupantFailures(
+                origin.radioId.value, origin.channelIndex.toLong(), origin.expectedOccupantID,
+            )
+        }
+
+    override suspend fun fetchChannelTimelineMessage(origin: ChannelHistoryScope, message: EntityKey): MessageDTO? =
+        context.read("fetchChannelTimelineMessage") {
+            requireCurrentChannelOrigin(origin)
+            if (message.radioId != origin.radioId) rejectHistory(ChannelHistoryConflict.MESSAGE_DESTINATION_MISMATCH, origin, message)
+            val row = database.messages().byId(message.radioId.value, message.id)?.toDTO() ?: return@read null
+            if (row.channelIndex != origin.channelIndex || row.contactID != null) {
+                rejectHistory(ChannelHistoryConflict.MESSAGE_DESTINATION_MISMATCH, origin, message)
+            }
+            if (row.channelOccupantID != origin.expectedOccupantID &&
+                !(row.channelOccupantID == null && row.direction == MessageDirection.INCOMING)) {
+                rejectHistory(ChannelHistoryConflict.ORIGIN_MISMATCH, origin, message)
+            }
+            row
+        }
+
+    override suspend fun markChannelTimelineFailuresSeen(origin: ChannelHistoryScope) =
+        context.write("markChannelTimelineFailuresSeen") {
+            requireCurrentChannelOrigin(origin)
+            database.messages().markChannelOccupantFailuresSeen(
+                origin.radioId.value, origin.channelIndex.toLong(), origin.expectedOccupantID,
+            )
+            save()
+        }
+
+    override suspend fun clearChannelTimelineUnread(origin: ChannelHistoryScope) =
+        context.write("clearChannelTimelineUnread") {
+            requireCurrentChannelOrigin(origin)
+            val channel = database.channels().forIndex(origin.radioId.value, origin.channelIndex.toLong()).single()
+            database.channels().upsert(channel.copy(unreadCount = 0))
+            save()
         }
 
     override suspend fun fetchChannelHistoryWindow(

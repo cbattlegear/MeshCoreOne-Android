@@ -58,9 +58,8 @@ class ChatOpenScopeAcceptanceTest : RoomProcessTest() {
             first.open()
             assertEquals(REGION_TEST, scopes(firmware).last())
             val beforeOther = scopes(firmware).size
-            val other = channel.copy(id = java.util.UUID.randomUUID(), index = 1u)
-                .withFloodScope(ChannelFloodScope.AllRegions)
-            store.saveChannel(other)
+            val other = seedReconciledChannel(channel.copy(id = java.util.UUID.randomUUID(), index = 1u)
+                .withFloodScope(ChannelFloodScope.AllRegions))
             viewModel(h, other).open()
             first.open()
             assertEquals(listOf(UNSCOPED, REGION_TEST), scopes(firmware).drop(beforeOther),
@@ -169,7 +168,8 @@ class ChatOpenScopeAcceptanceTest : RoomProcessTest() {
         val conversation = TimelineConversation.Channel(channel)
         return ChatViewModel(conversation, h.container.chatsFeature.timeline(conversation), backgroundScope)
     }
-    private fun channel(radio: RadioId) = ChannelDTO(radioId = radio, index = 0u, name = "Test", unreadCount = 9)
+    private suspend fun channel(radio: RadioId) =
+        seedReconciledChannel(ChannelDTO(radioId = radio, index = 0u, name = "Test", unreadCount = 9))
     private fun scopes(firmware: FirmwareRadio) = firmware.sent.filter { it[0] == 0x36.toUByte() }
     private companion object {
         val UNSCOPED = Bytes.fromHex("3601")

@@ -516,12 +516,16 @@ class MessagingRoomIntegrationTest {
             g.start(); g.service.startEventMonitoring()
             val events = g.service.statusEvents()
             var edited: MessageDTO? = null
-            assertFailsWith<PersistenceStoreException> {
+            val failure = assertFailsWith<PersistenceStoreException> {
                 g.service.sendMessageWithRetry("before callback", contact, onMessageCreated = {
                     edited = edit(it)
                     store.saveMessage(assertNotNull(edited))
                 })
             }
+            assertEquals(
+                PersistenceStoreError.SaveFailed("Direct ACK authority: retry creation payload changed"),
+                failure.error,
+            )
             val expected = assertNotNull(edited)
             assertEquals(expected, store.fetchMessage(EntityKey(radio, expected.id)))
             assertEquals(0, db.directAcks().currentIntents(radio.value, expected.id))
@@ -537,6 +541,21 @@ class MessagingRoomIntegrationTest {
             assertTrue(completedStatuses(g, events).none { it is MessageStatusEvent.Failed })
             g.stop()
         }
+    }
+
+    @Test fun retryCallbackStatusEditPreservesTheOriginalAuthorizedPayload() = runTest(scheduler) {
+        seed()
+        val g = RadioGeneration(238, config = MessageServiceConfig(maxAttempts = 1))
+        g.start(); g.service.startEventMonitoring()
+        val result = g.service.sendMessageWithRetry("original payload", contact, onMessageCreated = {
+            store.saveMessage(it.copy(status = MessageStatus.RETRYING))
+        })
+        val wire = g.firmware.sent().single()
+        assertEquals(Bytes.utf8("original payload"), wire.slice(13, wire.size))
+        assertEquals(base.epochSecond.toUInt(), wire.readUInt32LE(3))
+        assertEquals("original payload", result.text)
+        assertEquals(result, store.fetchMessage(EntityKey(radio, result.id)))
+        g.stop()
     }
 
     @Test fun zeroAttemptRetryReturnsSameIncarnationCallbackEditsWithoutSending() = runTest(scheduler) {

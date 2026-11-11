@@ -27,7 +27,9 @@ import com.meshcoreone.android.core.services.device.SettingsEvent
 import com.meshcoreone.android.core.services.rendering.ChatCoordinatorRegistry
 import com.meshcoreone.android.core.services.rendering.DraftStore
 import com.meshcoreone.android.core.services.rendering.EnvInputs
+import com.meshcoreone.android.core.services.reactions.ReactionPersistResult
 import com.meshcoreone.android.core.services.sync.SyncCoordinator
+import com.meshcoreone.android.core.services.sync.SyncDataEvent
 import com.meshcoreone.android.core.ui.StatusPillState
 import com.meshcoreone.android.core.ui.UiText
 import java.time.Duration
@@ -316,8 +318,16 @@ class AppState(private val deps: AppStateDependencies) : MessageEventHost {
         registry = ::ensureChatCoordinatorRegistry,
         dataStore = { offlineDataStore },
         reactionService = { radio -> services?.takeIf { it.token.radioId == radio }?.reactionService },
+        onReactionPersisted = ::publishReactionPersisted,
         connectedDeviceNodeName = { radio -> connectedDevice?.takeIf { it.radioId == radio }?.nodeName },
     )
+
+    internal fun publishReactionPersisted(radioId: RadioId, result: ReactionPersistResult) {
+        if (!result.shouldNotify) return
+        val session = services?.takeIf { it.token.radioId == radioId }
+            ?: throw IllegalStateException("No active radio session can publish reaction ${result.messageID}")
+        session.syncCoordinator.publishReactionPersisted(result)
+    }
 
     /** Records the view-environment values the background refresh bakes with and returns the inputs for [conversation]. */
     fun chatEnvInputs(conversation: ChatConversationType?, snapshot: ChatEnvSnapshot): EnvInputs {

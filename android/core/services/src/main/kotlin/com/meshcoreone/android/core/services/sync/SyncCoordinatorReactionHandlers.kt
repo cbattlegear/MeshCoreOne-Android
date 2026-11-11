@@ -34,10 +34,12 @@ internal suspend fun SyncCoordinator.persistReactionIfNew(reaction: ReactionDTO,
     val exists = attempt { dependencies.dataStore.reactionExists(key, reaction.senderName, reaction.emoji) }
     if (exists == true) return false
     val result = contain("persistReactionAndUpdateSummary", null) {
-        dependencies.reactionService.persistReactionAndUpdateSummary(reaction, dependencies.dataStore)
+        dependencies.reactionService.persistReactionAndUpdateSummary(reaction, dependencies.dataStore) {
+            publishReactionPersisted(it)
+        }
     }
-    if (result != null) dataEventBroadcaster.yield(SyncDataEvent.ReactionReceived(result.messageID, result.summary))
-    return true
+    if (result == null) return true
+    return result.shouldNotify
 }
 
 /** Symmetric reaction-matching window around [anchor]; Swift traps on overflow, Kotlin saturates. */

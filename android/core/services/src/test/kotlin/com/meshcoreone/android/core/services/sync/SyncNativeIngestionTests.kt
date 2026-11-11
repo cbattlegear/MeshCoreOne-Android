@@ -3,6 +3,7 @@ package com.meshcoreone.android.core.services.sync
 
 import com.meshcoreone.android.core.contracts.domain.EntityKey
 import com.meshcoreone.android.core.contracts.domain.ParsedReaction
+import com.meshcoreone.android.core.contracts.domain.PersistenceStoreProtocol
 import com.meshcoreone.android.core.model.BlockedChannelSenderDTO
 import com.meshcoreone.android.core.model.ChannelDTO
 import com.meshcoreone.android.core.model.DeliveryContext
@@ -10,6 +11,7 @@ import com.meshcoreone.android.core.model.DebugLogLevel
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageDirection
 import com.meshcoreone.android.core.model.MessageStatus
+import com.meshcoreone.android.core.model.ReactionDTO
 import com.meshcoreone.android.core.model.RemoteNodeRole
 import com.meshcoreone.android.core.model.RemoteNodeSessionDTO
 import com.meshcoreone.android.core.model.RoomMessageDTO
@@ -17,8 +19,13 @@ import com.meshcoreone.android.core.protocol.bytes.Bytes
 import com.meshcoreone.android.core.protocol.model.ContactType
 import java.time.Instant
 import java.util.UUID
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collect
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.DynamicTest
@@ -301,6 +308,57 @@ class SyncNativeIngestionTests {
             assertEquals(listOf(target.id), store.allMessages().map { it.id }, "a reaction is never saved as a message")
             assertEquals(1, store.allReactions().size)
             assertEquals(1, received.values.count { it is SyncDataEvent.ReactionReceived })
+            collector.cancel()
+        },
+        nativeCase("live reaction duplicate after accepted-send replay does not broadcast twice") {
+            val radioId = newRadio()
+            val store = SyncInMemoryStore.createTestDataStore(radioId)
+            val target = MessageDTO(
+                radioId = radioId, channelIndex = 0u, text = "target", timestamp = 1u,
+                direction = MessageDirection.INCOMING, status = MessageStatus.DELIVERED,
+            )
+            store.saveMessage(target)
+            val services = SyncTestServices(store)
+            val coordinator = coordinator()
+            val outerLookupStarted = CompletableDeferred<Unit>()
+            val releaseOuterLookup = CompletableDeferred<Unit>()
+            var firstLookup = true
+            val gatedStore = object : PersistenceStoreProtocol by store {
+                override suspend fun reactionExists(message: EntityKey, senderName: String, emoji: String): Boolean {
+                    if (firstLookup) {
+                        firstLookup = false
+                        outerLookupStarted.complete(Unit)
+                        releaseOuterLookup.await()
+                        return false
+                    }
+                    return store.reactionExists(message, senderName, emoji)
+                }
+            }
+            val reaction = ReactionDTO(
+                messageID = target.id, emoji = "\uD83D\uDC4D", senderName = "Alice", messageHash = "abcd",
+                rawText = "+1 abcd", channelIndex = 0u, radioId = radioId,
+            )
+            val received = ValueTracker<SyncDataEvent>()
+            val collector = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                coordinator.dataEventBroadcaster.subscribe().collect { received.record(it) }
+            }
+            val livePersistence = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                coordinator.persistReactionIfNew(reaction, services.dependencies().copy(dataStore = gatedStore))
+            }
+            outerLookupStarted.await()
+            val acceptedReplay = assertNotNull(services.reactions.persistReactionAndUpdateSummary(reaction, store))
+            assertTrue(acceptedReplay.shouldNotify)
+            coordinator.dataEventBroadcaster.yield(
+                SyncDataEvent.ReactionReceived(acceptedReplay.messageID, acceptedReplay.summary),
+            )
+            releaseOuterLookup.complete(Unit)
+            livePersistence.join()
+            settle()
+            assertEquals(1, store.allReactions().size)
+            assertEquals(
+                listOf(SyncDataEvent.ReactionReceived(target.id, acceptedReplay.summary)),
+                received.values.filterIsInstance<SyncDataEvent.ReactionReceived>(),
+            )
             collector.cancel()
         },
         nativeCase("channel reaction without a target is queued, not saved") {

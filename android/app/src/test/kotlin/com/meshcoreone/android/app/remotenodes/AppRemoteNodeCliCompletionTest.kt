@@ -56,6 +56,7 @@ class AppRemoteNodeCliCompletionTest {
         val holder = NodeCliStateHolder(scope, ResourcesDiagnosticsText(activity.resources))
         val requests = mutableListOf<Request>()
         var enabled by mutableStateOf(true)
+        var narrow by mutableStateOf(false)
     }
 
     private fun mounted(narrow: Boolean = false, test: (Harness) -> Unit) {
@@ -64,10 +65,11 @@ class AppRemoteNodeCliCompletionTest {
         try {
             host.get().actionBar?.hide()
             val harness = Harness(host.get(), scope)
+            harness.narrow = narrow
             host.get().setContent {
-                CompositionLocalProvider(LocalDensity provides Density(1f, if (narrow) 2f else 1f)) {
+                CompositionLocalProvider(LocalDensity provides Density(1f, if (harness.narrow) 2f else 1f)) {
                     MeshCoreTheme(theme = ThemeRegistry.default, motionScale = 0f) {
-                        Box(Modifier.width(if (narrow) 320.dp else 1080.dp)) {
+                        Box(Modifier.width(if (harness.narrow) 320.dp else 1080.dp)) {
                             AppRemoteNodeCli(harness.fixture.session, { session, command, timeout ->
                                 harness.requests += Request(session, command, timeout)
                                 "response: $command"
@@ -156,7 +158,7 @@ class AppRemoteNodeCliCompletionTest {
                 compose.onNodeWithTag("remote-cli-suggestions").assertDoesNotExist()
                 compose.onNode(isDialog()).assertDoesNotExist()
                 compose.runOnIdle { assertEquals(before, harness.requests.size) }
-                compose.onNodeWithTag("remote-cli-submit").performClick()
+                compose.onNodeWithTag("remote-cli-submit").performScrollTo().assertIsDisplayed().performClick()
                 confirm(harness, "log $chosen")
             }
         }
@@ -198,7 +200,7 @@ class AppRemoteNodeCliCompletionTest {
         confirm(harness, "ver")
     }
 
-    @Test fun mountedNodeVocabularyExcludesAppSessionsWithoutRemovingNodeCommands() = mounted { harness ->
+    @Test fun mountedNodeVocabularyExcludesAppSessionsWithoutRemovingNodeCommands() = mounted(narrow = true) { harness ->
         key(Key.Tab)
         for (command in listOf("session", "logout", "login")) suggestion(command).assertDoesNotExist()
         for (command in listOf("help", "clear", "ver")) suggestion(command).assertExists()
@@ -213,6 +215,34 @@ class AppRemoteNodeCliCompletionTest {
         assertInput("log ")
         compose.onNodeWithTag("remote-cli-suggestions").assertDoesNotExist()
         assertNotSubmitted(harness)
+
+        type("")
+        key(Key.Tab)
+        val count = compose.runOnIdle { harness.holder.state.value.terminal.tabSuggestions!!.size }
+        repeat(count) { key(Key.Tab) }
+        suggestion("ver").assertIsSelected().assertIsDisplayed()
+        assertInput("")
+        compose.onNodeWithTag("remote-cli-submit").assertIsEnabled().performScrollTo().performClick()
+        assertInput("ver ")
+        assertNotSubmitted(harness)
+        compose.onNodeWithTag("remote-cli-submit").performClick()
+        confirm(harness, "ver")
+    }
+
+    @Test fun windowAndFontChangesPreserveTheSelectedCandidateWithoutSending() = mounted { harness ->
+        type("log st")
+        repeat(3) { key(Key.Tab) }
+        for (narrow in listOf(true, false)) {
+            compose.runOnIdle { harness.narrow = narrow }
+            suggestion("stop").assertIsSelected().assertIsDisplayed()
+            assertInput("log st")
+            assertNotSubmitted(harness)
+        }
+        key(Key.Enter)
+        assertInput("log stop ")
+        assertNotSubmitted(harness)
+        key(Key.Enter)
+        confirm(harness, "log stop")
     }
 
     @Test fun completionStillRequiresConfirmationAndCurrentPermissionToSend() = mounted { harness ->

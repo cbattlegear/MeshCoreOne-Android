@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -75,6 +77,13 @@ internal fun AppRemoteNodeCli(
     val historyDown = stringResource(AppToolsStrings.toolsCliHistoryDown)
     val tabComplete = stringResource(AppToolsStrings.toolsCliTabComplete)
     val success = stringResource(L.remoteNodesSettingsSuccess)
+    val submit: () -> Unit = {
+        if (canSend && !holder.isWaitingForResponse) {
+            controller.onSubmit { command ->
+                if (command.isNotBlank()) pending = command
+            }
+        }
+    }
     LaunchedEffect(holder) {
         holder.configure(session.name) { command, timeout ->
             check(canSend) { noService }
@@ -115,6 +124,35 @@ internal fun AppRemoteNodeCli(
                 }
             }
         }
+        state.terminal.tabSuggestions?.let { suggestions ->
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(androidx.compose.foundation.rememberScrollState())
+                    .testTag("remote-cli-suggestions"),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                suggestions.forEachIndexed { index, suggestion ->
+                    key(suggestion) {
+                        val selected = index == state.terminal.tabSelectionIndex
+                        val bringIntoView = remember { BringIntoViewRequester() }
+                        LaunchedEffect(selected) {
+                            if (selected) bringIntoView.bringIntoView()
+                        }
+                        FilterChip(
+                            selected = selected,
+                            onClick = {
+                                if (canSend && !holder.isWaitingForResponse && holder.applySuggestion(suggestion)) {
+                                    controller.onSelectionChanged(holder.currentInput.length)
+                                }
+                            },
+                            label = { Text(suggestion) },
+                            enabled = canSend && !state.isWaitingForResponse,
+                            modifier = Modifier.heightIn(min = 48.dp).bringIntoViewRequester(bringIntoView)
+                                .testTag("remote-cli-suggestion:$suggestion"),
+                        )
+                    }
+                }
+            }
+        }
         OutlinedTextField(
             TextFieldValue(state.terminal.currentInput, TextRange(terminal.cursorPosition)),
             { controller.onTextChanged(it.text.replace("\n", ""), it.selection.end) },
@@ -124,17 +162,20 @@ internal fun AppRemoteNodeCli(
                     Key.DirectionUp -> { controller.onHistoryUp(); true }
                     Key.DirectionDown -> { controller.onHistoryDown(); true }
                     Key.Tab -> { controller.onTabComplete(); true }
-                    Key.Enter, Key.NumPadEnter -> {
-                        if (state.terminal.currentInput.isNotBlank()) pending = state.terminal.currentInput
-                        true
+                    Key.Escape -> {
+                        if (holder.state.value.terminal.tabSuggestions != null) {
+                            holder.clearTabState()
+                            true
+                        } else false
                     }
+                    Key.Enter, Key.NumPadEnter -> { submit(); true }
                     else -> false
                 }
             }, enabled = canSend && !state.isWaitingForResponse,
             label = { Text(holder.promptText) }, singleLine = true,
             supportingText = { Text(state.terminal.ghostText) },
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-            keyboardActions = KeyboardActions(onSend = { if (canSend) pending = state.terminal.currentInput }),
+            keyboardActions = KeyboardActions(onSend = { submit() }),
         )
         Row(Modifier.horizontalScroll(androidx.compose.foundation.rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TextButton(
@@ -145,7 +186,12 @@ internal fun AppRemoteNodeCli(
             TextButton(controller::onHistoryUp, Modifier.semantics { contentDescription = historyUp }) { Text("↑") }
             TextButton(controller::onHistoryDown, Modifier.semantics { contentDescription = historyDown }) { Text("↓") }
             TextButton({ controller.onTabComplete() }, Modifier.semantics { contentDescription = tabComplete }) { Text("Tab") }
-            Button({ pending = state.terminal.currentInput }, enabled = canSend && !state.isWaitingForResponse && state.terminal.currentInput.isNotBlank()) {
+            Button(
+                submit,
+                Modifier.testTag("remote-cli-submit"),
+                enabled = canSend && !state.isWaitingForResponse &&
+                    (state.terminal.currentInput.isNotBlank() || state.terminal.tabSelectionIndex != null),
+            ) {
                 Text(stringResource(L.remoteNodesSettingsOk))
             }
             if (terminal.showCancel) TextButton(controller::onCancel) { Text(stringResource(L.remoteNodesCancel)) }

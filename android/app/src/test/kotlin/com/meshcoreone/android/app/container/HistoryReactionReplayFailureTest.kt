@@ -273,9 +273,9 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
                 )
             }
             fun drain(text: String): List<Any> = if (direct) {
-                service.indexDMMessage(UUID.randomUUID(), contact.id, text, stamp, radio, includeCustody = true)
+                service.indexDMMessage(target.id, contact.id, text, stamp, radio, includeCustody = true)
             } else service.indexMessage(
-                UUID.randomUUID(), channel.index, "Alice", text, stamp, radio, includeCustody = true,
+                target.id, channel.index, "Alice", text, stamp, radio, includeCustody = true,
             )
             queue("Hello", "First")
             queue("Hello", "Second")
@@ -680,8 +680,12 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
                 queueKeyOrder = 0, queueEntryOrder = it.toLong())
         }
         pending.forEach(service::requeuePendingReaction)
-        assertTrue(service.indexMessage(UUID.randomUUID(), 4u, "Caf\u00e9", "Hello", stamp).isEmpty())
-        assertEquals(pending.drop(1), service.indexMessage(UUID.randomUUID(), 3u, "Caf\u00e9", "Hello", stamp))
+        val targetID = UUID.randomUUID()
+        assertTrue(service.indexMessage(targetID, 4u, "Caf\u00e9", "Hello", stamp).isEmpty())
+        assertEquals(
+            pending.drop(1).map { it.copy(targetEntity = EntityKey(radio, targetID)) },
+            service.indexMessage(targetID, 3u, "Caf\u00e9", "Hello", stamp),
+        )
     }
 
     @Test fun restoredDirectMatchesKeepTheirMetadataAndTheExistingQueueBound() {
@@ -695,8 +699,12 @@ class HistoryReactionReplayFailureTest : RoomProcessTest() {
                 queueKeyOrder = 0, queueEntryOrder = it.toLong())
         }
         pending.forEach(service::requeuePendingDMReaction)
-        assertTrue(service.indexDMMessage(UUID.randomUUID(), UUID.randomUUID(), "Hello", stamp).isEmpty())
-        assertEquals(pending.drop(1), service.indexDMMessage(UUID.randomUUID(), contact, "Hello", stamp))
+        val targetID = UUID.randomUUID()
+        assertTrue(service.indexDMMessage(targetID, UUID.randomUUID(), "Hello", stamp).isEmpty())
+        assertEquals(
+            pending.drop(1).map { it.copy(targetEntity = EntityKey(radio, targetID)) },
+            service.indexDMMessage(targetID, contact, "Hello", stamp),
+        )
     }
 
     /** All unselected operations delegate to the production Room store, including the actual writes. */

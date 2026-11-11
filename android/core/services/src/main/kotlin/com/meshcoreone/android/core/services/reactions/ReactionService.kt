@@ -29,6 +29,7 @@ data class PendingReaction(
     internal val queueKeyOrder: Long? = null,
     internal val queueEntryOrder: Long? = null,
     internal val notificationPending: Boolean = false,
+    internal val targetEntity: EntityKey? = null,
 )
 
 /** A DM reaction waiting for its target message to be indexed. */
@@ -42,6 +43,7 @@ data class PendingDMReaction(
     internal val queueKeyOrder: Long? = null,
     internal val queueEntryOrder: Long? = null,
     internal val notificationPending: Boolean = false,
+    internal val targetEntity: EntityKey? = null,
 )
 
 /** Result of persisting a reaction. */
@@ -97,6 +99,7 @@ class PendingReactionCustody {
         channelIndex: UByte,
         targetSender: String,
         messageHash: String,
+        messageID: UUID,
         sessionOwner: UUID,
         includeProcess: Boolean,
     ): List<PendingReaction> = synchronized(lock) {
@@ -106,9 +109,14 @@ class PendingReactionCustody {
                     key.channelIndex == channelIndex &&
                     key.targetSender == SwiftText.canonical(targetSender) && key.messageHash == messageHash
             },
-            { value -> includeProcess || value.sessionOwner == sessionOwner },
+            { owned ->
+                val pending = owned.value
+                (includeProcess || owned.sessionOwner == sessionOwner) &&
+                    (pending.targetEntity == null || pending.targetEntity == EntityKey(pending.radioId, messageID))
+            },
         ) { owned, keyOrder, entryOrder ->
-            owned.value.copy(queueKeyOrder = keyOrder, queueEntryOrder = entryOrder)
+            val pending = owned.value.copy(queueKeyOrder = keyOrder, queueEntryOrder = entryOrder)
+            pending.copy(targetEntity = pending.targetEntity ?: EntityKey(pending.radioId, messageID))
         }
         channel = remaining
         matched
@@ -118,6 +126,7 @@ class PendingReactionCustody {
         radioId: RadioId?,
         contactID: UUID,
         messageHash: String,
+        messageID: UUID,
         sessionOwner: UUID,
         includeProcess: Boolean,
     ): List<PendingDMReaction> = synchronized(lock) {
@@ -126,9 +135,14 @@ class PendingReactionCustody {
                 (radioId == null || key.radioId == radioId) &&
                     key.contactID == contactID && key.messageHash == messageHash
             },
-            { value -> includeProcess || value.sessionOwner == sessionOwner },
+            { owned ->
+                val pending = owned.value
+                (includeProcess || owned.sessionOwner == sessionOwner) &&
+                    (pending.targetEntity == null || pending.targetEntity == EntityKey(pending.radioId, messageID))
+            },
         ) { owned, keyOrder, entryOrder ->
-            owned.value.copy(queueKeyOrder = keyOrder, queueEntryOrder = entryOrder)
+            val pending = owned.value.copy(queueKeyOrder = keyOrder, queueEntryOrder = entryOrder)
+            pending.copy(targetEntity = pending.targetEntity ?: EntityKey(pending.radioId, messageID))
         }
         direct = remaining
         matched
@@ -144,6 +158,7 @@ class PendingReactionCustody {
             matchesValue = { owned ->
                 val pending = owned.value
                 pending.notificationPending && pending.radioId == reaction.radioId &&
+                    pending.targetEntity == EntityKey(reaction.radioId, reaction.messageID) &&
                     pending.channelIndex == reaction.channelIndex && pending.senderNodeName == reaction.senderName &&
                     pending.parsed.emoji == reaction.emoji && pending.parsed.messageHash == reaction.messageHash
             },
@@ -153,6 +168,7 @@ class PendingReactionCustody {
             matchesValue = { owned ->
                 val pending = owned.value
                 pending.notificationPending && pending.radioId == reaction.radioId &&
+                    pending.targetEntity == EntityKey(reaction.radioId, reaction.messageID) &&
                     pending.contactID == reaction.contactID && pending.senderName == reaction.senderName &&
                     pending.parsed.emoji == reaction.emoji && pending.parsed.messageHash == reaction.messageHash
             },
@@ -218,16 +234,22 @@ class ReactionService internal constructor(
         val hash = ReactionParser.generateMessageHash(text, timestamp)
         val key = PendingReactionKey.of(channelIndex, senderName, hash)
         val retained = if (includeCustody) {
-            pendingReactionCustody?.takeChannel(radioId, channelIndex, senderName, hash, sessionOwner, true).orEmpty()
+            pendingReactionCustody?.takeChannel(radioId, channelIndex, senderName, hash, id, sessionOwner, true).orEmpty()
         } else {
-            pendingReactionCustody?.takeChannel(radioId, channelIndex, senderName, hash, sessionOwner, false).orEmpty()
+            pendingReactionCustody?.takeChannel(radioId, channelIndex, senderName, hash, id, sessionOwner, false).orEmpty()
         }
         val matched = synchronized(lock) {
-            val (remaining, taken) = pendingReactions.take(key) { value, keyOrder, entryOrder ->
-                value.copy(queueKeyOrder = keyOrder, queueEntryOrder = entryOrder)
+            val (remaining, taken) = pendingReactions.takeMatchingEntries(
+                matchesKey = { it == key },
+                matchesValue = { pending ->
+                    pending.targetEntity == null || pending.targetEntity == EntityKey(pending.radioId, id)
+                },
+            ) { value, keyOrder, entryOrder ->
+                val pending = value.copy(queueKeyOrder = keyOrder, queueEntryOrder = entryOrder)
+                pending.copy(targetEntity = pending.targetEntity ?: EntityKey(pending.radioId, id))
             }
             pendingReactions = remaining
-            taken.orEmpty()
+            taken
         }
         if (retained.isEmpty() && matched.isEmpty()) return emptyList()
         val allMatches = retained + matched
@@ -318,6 +340,7 @@ class ReactionService internal constructor(
             pendingReactions = pendingReactions.updateMatchingValues(
                 matchesValue = { pending ->
                     pending.notificationPending && pending.radioId == reaction.radioId &&
+                        pending.targetEntity == EntityKey(reaction.radioId, reaction.messageID) &&
                         pending.channelIndex == reaction.channelIndex && pending.senderNodeName == reaction.senderName &&
                         pending.parsed.emoji == reaction.emoji && pending.parsed.messageHash == reaction.messageHash
                 },
@@ -326,6 +349,7 @@ class ReactionService internal constructor(
             pendingDMReactions = pendingDMReactions.updateMatchingValues(
                 matchesValue = { pending ->
                     pending.notificationPending && pending.radioId == reaction.radioId &&
+                        pending.targetEntity == EntityKey(reaction.radioId, reaction.messageID) &&
                         pending.contactID == reaction.contactID && pending.senderName == reaction.senderName &&
                         pending.parsed.emoji == reaction.emoji && pending.parsed.messageHash == reaction.messageHash
                 },
@@ -530,16 +554,22 @@ class ReactionService internal constructor(
         val hash = ReactionParser.generateMessageHash(text, timestamp)
         val key = PendingDMReactionKey(contactID, hash)
         val retained = if (includeCustody) {
-            pendingReactionCustody?.takeDirect(radioId, contactID, hash, sessionOwner, true).orEmpty()
+            pendingReactionCustody?.takeDirect(radioId, contactID, hash, id, sessionOwner, true).orEmpty()
         } else {
-            pendingReactionCustody?.takeDirect(radioId, contactID, hash, sessionOwner, false).orEmpty()
+            pendingReactionCustody?.takeDirect(radioId, contactID, hash, id, sessionOwner, false).orEmpty()
         }
         val matched = synchronized(lock) {
-            val (remaining, taken) = pendingDMReactions.take(key) { value, keyOrder, entryOrder ->
-                value.copy(queueKeyOrder = keyOrder, queueEntryOrder = entryOrder)
+            val (remaining, taken) = pendingDMReactions.takeMatchingEntries(
+                matchesKey = { it == key },
+                matchesValue = { pending ->
+                    pending.targetEntity == null || pending.targetEntity == EntityKey(pending.radioId, id)
+                },
+            ) { value, keyOrder, entryOrder ->
+                val pending = value.copy(queueKeyOrder = keyOrder, queueEntryOrder = entryOrder)
+                pending.copy(targetEntity = pending.targetEntity ?: EntityKey(pending.radioId, id))
             }
             pendingDMReactions = remaining
-            taken.orEmpty()
+            taken
         }
         if (retained.isEmpty() && matched.isEmpty()) return emptyList()
         val allMatches = retained + matched

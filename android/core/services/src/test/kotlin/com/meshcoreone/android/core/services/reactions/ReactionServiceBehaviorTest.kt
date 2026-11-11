@@ -139,6 +139,80 @@ class ReactionServiceBehaviorTest {
     private fun reaction(messageID: UUID, emoji: String, sender: String, receivedAt: Instant, radio: RadioId) =
         ReactionDTO(messageID = messageID, emoji = emoji, senderName = sender, messageHash = "abcdefgh", rawText = "raw", receivedAt = receivedAt, radioId = radio)
 
+    private fun assertChannelNotificationStaysWithTarget(shared: Boolean) {
+        blocking {
+            val custody = if (shared) PendingReactionCustody() else null
+            val radio = newRadioId()
+            val service = ReactionService(ReactionsTickingClock(), kotlinx.coroutines.sync.Mutex(), custody)
+            val store = ReactionsInMemoryReactionStore().apply { failOn("updateMessageReactionSummary") }
+            val text = "same text"
+            val aliceID = UUID.randomUUID()
+            val bobID = UUID.randomUUID()
+            val aliceRaw = service.buildReactionText("👍", "Alice", text, stamp)
+            val aliceParsed = requireNotNull(ReactionParser.parse(aliceRaw))
+            val bobRaw = service.buildReactionText("👍", "Bob", text, stamp)
+            val bobParsed = requireNotNull(ReactionParser.parse(bobRaw))
+            assertEquals(aliceParsed.messageHash, bobParsed.messageHash)
+            service.queuePendingReaction(aliceParsed, 0u, "Carol", aliceRaw, radio)
+
+            assertNull(service.persistIndexedChannelMessage(aliceID, radio, 0u, "Alice", text, stamp, store))
+            store.clearFailures()
+            assertTrue(service.indexMessage(bobID, 0u, "Bob", text, stamp, radio).isEmpty())
+
+            val notifications = mutableListOf<ReactionPersistResult>()
+            val bobResult = service.persistReactionAndUpdateSummary(
+                ReactionDTO(
+                    messageID = bobID, emoji = bobParsed.emoji, senderName = "Carol",
+                    messageHash = bobParsed.messageHash, rawText = bobRaw, channelIndex = 0u, radioId = radio,
+                ),
+                store,
+            ) { notifications += it }
+            assertTrue(bobResult?.shouldNotify == true)
+
+            val aliceRetry = service.persistIndexedChannelMessage(
+                aliceID, radio, 0u, "Alice", text, stamp, store,
+            ) { notifications += it }
+            assertEquals(listOf(true), aliceRetry?.map { it.shouldNotify })
+            assertEquals(listOf(bobID, aliceID), notifications.map { it.messageID })
+        }
+    }
+
+    private fun assertDirectNotificationStaysWithTarget(shared: Boolean) {
+        blocking {
+            val custody = if (shared) PendingReactionCustody() else null
+            val radio = newRadioId()
+            val contactID = UUID.randomUUID()
+            val service = ReactionService(ReactionsTickingClock(), kotlinx.coroutines.sync.Mutex(), custody)
+            val store = ReactionsInMemoryReactionStore().apply { failOn("updateMessageReactionSummary") }
+            val text = "same text"
+            val aliceID = UUID.randomUUID()
+            val bobID = UUID.randomUUID()
+            val raw = service.buildDMReactionText("👍", text, stamp)
+            val parsed = requireNotNull(ReactionParser.parseDM(raw))
+            service.queuePendingDMReaction(parsed, contactID, "Carol", raw, radio)
+
+            assertNull(service.persistIndexedDirectMessage(aliceID, radio, contactID, text, stamp, store))
+            store.clearFailures()
+            assertTrue(service.indexDMMessage(bobID, contactID, text, stamp, radio).isEmpty())
+
+            val notifications = mutableListOf<ReactionPersistResult>()
+            val bobResult = service.persistReactionAndUpdateSummary(
+                ReactionDTO(
+                    messageID = bobID, emoji = parsed.emoji, senderName = "Carol",
+                    messageHash = parsed.messageHash, rawText = raw, contactID = contactID, radioId = radio,
+                ),
+                store,
+            ) { notifications += it }
+            assertTrue(bobResult?.shouldNotify == true)
+
+            val aliceRetry = service.persistIndexedDirectMessage(
+                aliceID, radio, contactID, text, stamp, store,
+            ) { notifications += it }
+            assertEquals(listOf(true), aliceRetry?.map { it.shouldNotify })
+            assertEquals(listOf(bobID, aliceID), notifications.map { it.messageID })
+        }
+    }
+
     @TestFactory
     fun persistence(): List<DynamicTest> = listOf(
         test("persistReactionAndUpdateSummary saves, rebuilds the summary from stored reactions and writes it back") {
@@ -245,6 +319,18 @@ class ReactionServiceBehaviorTest {
                 assertEquals(1, store.fetchReactions(EntityKey(radio, messageID)).size)
             }
         },
+        test("local channel notifications remain bound to their resolved target") {
+            assertChannelNotificationStaysWithTarget(shared = false)
+        },
+        test("shared channel notifications remain bound to their resolved target") {
+            assertChannelNotificationStaysWithTarget(shared = true)
+        },
+        test("local direct notifications remain bound to their resolved target") {
+            assertDirectNotificationStaysWithTarget(shared = false)
+        },
+        test("shared direct notifications remain bound to their resolved target") {
+            assertDirectNotificationStaysWithTarget(shared = true)
+        },
         test("outgoing indexer retains its notification after data events finish") {
             blocking {
                 val custody = PendingReactionCustody()
@@ -275,6 +361,7 @@ class ReactionServiceBehaviorTest {
             blocking {
                 val custody = PendingReactionCustody()
                 val radio = newRadioId()
+                val targetID = UUID.randomUUID()
                 val service = ReactionService(ReactionsTickingClock(), kotlinx.coroutines.sync.Mutex(), custody)
                 val raw = service.buildReactionText("👍", "Target", "message", stamp)
                 val parsed = requireNotNull(ReactionParser.parse(raw))
@@ -282,7 +369,7 @@ class ReactionServiceBehaviorTest {
                 service.queuePendingReaction(parsed, 0u, "Cleared", raw, radio)
 
                 val unfinished = service.indexMessage(
-                    UUID.randomUUID(), 0u, "Target", "message", stamp, radio,
+                    targetID, 0u, "Target", "message", stamp, radio,
                 ).first()
                 service.requeuePendingReaction(unfinished)
                 service.clearPendingReactions()
@@ -290,7 +377,7 @@ class ReactionServiceBehaviorTest {
                 assertEquals(1 to 0, service.pendingCounts)
                 val replacement = ReactionService(ReactionsTickingClock(), kotlinx.coroutines.sync.Mutex(), custody)
                 val restored = replacement.indexMessage(
-                    UUID.randomUUID(), 0u, "Target", "message", stamp, radio, includeCustody = true,
+                    targetID, 0u, "Target", "message", stamp, radio, includeCustody = true,
                 )
                 assertEquals(listOf("Retained"), restored.map { it.senderNodeName })
                 assertTrue(replacement.indexMessage(

@@ -45,5 +45,6 @@ data class MapFeatureDependencies(
     val offlineMaps: OfflineMapController,
     val updates: Flow<MapFeatureUpdate> = emptyFlow(),
     val actions: MapFeatureActions? = null,
+    /** Absent bindings display an unavailable state; the feature never creates private defaults. */
     val preferences: com.meshcoreone.android.core.maps.MapPreferenceStore? = null,
 )

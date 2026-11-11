@@ -66,6 +66,8 @@ internal class FakeDataStore : NodesDataStore {
     val discovered = mutableListOf<DiscoveredNodeDTO>()
     var fetchContactsError: Exception? = null
     var fetchDiscoveredError: Exception? = null
+    var fetchDiscoveredGate: (suspend () -> Unit)? = null
+    var discoveredFetches = 0
     var fetchContactsGate: (suspend () -> Unit)? = null
     var fetchContactBehavior: (suspend (RadioId, Bytes) -> ContactDTO?)? = null
     val touched = mutableListOf<Pair<Bytes, Instant>>()
@@ -93,8 +95,11 @@ internal class FakeDataStore : NodesDataStore {
     }
 
     override suspend fun fetchDiscoveredNodes(radioId: RadioId): List<DiscoveredNodeDTO> {
+        discoveredFetches++
+        val snapshot = discovered.filter { it.radioId == radioId }
+        fetchDiscoveredGate?.invoke()
         fetchDiscoveredError?.let { throw it }
-        return discovered.filter { it.radioId == radioId }
+        return snapshot
     }
 
     override suspend fun deleteDiscoveredNode(key: EntityKey) {
@@ -215,6 +220,8 @@ internal class FakeNotificationCleanup : NodesNotificationCleanup {
 internal class FakeSession : NodesSession {
     private val connection = MutableStateFlow(NodesConnectionSnapshot(null, null))
     override fun connectionSnapshots() = connection
+    val versions = MutableStateFlow(0)
+    override fun contactVersions() = versions
     var state: DeviceConnectionState = DeviceConnectionState.READY
         set(value) {
             field = value

@@ -245,11 +245,21 @@ class DurableRetryIntegrationTest : RoomProcessTest() {
             harness.container.chatsFeature.sendAgain(
                 assertNotNull(store.fetchMessage(messageKey(message))), TimelineConversation.Direct(contact),
             )
-            harness.eventually("explicit replacement is delivered") {
-                kotlinx.coroutines.runBlocking {
-                    store.fetchMessage(messageKey(message))?.status == MessageStatus.DELIVERED &&
-                        store.fetchPendingSendsForMessage(messageKey(message)).isEmpty()
+            try {
+                harness.eventually("explicit replacement is delivered") {
+                    kotlinx.coroutines.runBlocking {
+                        store.fetchMessage(messageKey(message))?.status == MessageStatus.DELIVERED &&
+                            store.fetchPendingSendsForMessage(messageKey(message)).isEmpty()
+                    }
                 }
+            } catch (failure: AssertionError) {
+                val sends = harness.links.radios.map { radio -> radio.sent.filter(::isSend).map { it.hexString } }
+                throw AssertionError(
+                    "Explicit retry: message=${store.fetchMessage(messageKey(message))}, " +
+                        "pending=${store.fetchPendingSendsForMessage(messageKey(message))}, sends=$sends, " +
+                        "diagnostics=${harness.messagingDiagnostics}",
+                    failure,
+                )
             }
             assertNotNull(explicitPending).let {
                 assertTrue(it.isResend)

@@ -330,6 +330,55 @@ abstract class NodesScreensComposeTestBase(deterministicFrames: Boolean = false)
     }
 
     abstract class DiscoveryLiveComposeTestBase : NodesScreensComposeTestBase(deterministicFrames = true) {
+        private var menuOpen = false
+        override fun rootView(): View =
+            ShadowDialog.getLatestDialog()?.takeIf { it.isShowing }?.window?.decorView ?: if (menuOpen) {
+                checkNotNull(WindowInspector.getGlobalWindowViews().lastOrNull { it.isShown })
+            } else super.rootView()
+
+        @Test
+        fun heldRefreshCannotResurrectAMountedRemovedRow() = verifyHeldMutation(clear = false)
+
+        @Test
+        fun heldRefreshCannotResurrectMountedClearedRows() = verifyHeldMutation(clear = true)
+
+        private fun verifyHeldMutation(clear: Boolean) {
+            val harness = Harness().connect()
+            val radio = checkNotNull(harness.session.radioId)
+            harness.store.discovered += Fixtures.node(radioId = radio, name = "Remove while refreshing")
+            mount { DiscoveryScreen(harness.dependencies) }
+            awaitText("Remove while refreshing")
+            val entered = CompletableDeferred<Unit>()
+            val release = CompletableDeferred<Unit>()
+            var returned = false
+            harness.store.fetchContactKeysGate = {
+                entered.complete(Unit)
+                release.await()
+                returned = true
+            }
+            controller.get().runOnUiThread { harness.session.versions.value++ }
+            awaitCondition { entered.isCompleted }
+            val context = controller.get()
+            if (clear) {
+                click(awaitAction(context.getString(C.contactsListSort)))
+                menuOpen = true
+                click(awaitAction(context.getString(C.contactsDiscoveryClear)))
+                menuOpen = false
+                click(awaitAction(context.getString(C.contactsDiscoveryClearConfirm)))
+            } else {
+                click(awaitAction(context.getString(C.contactsDiscoveryRemove)))
+            }
+            awaitText(context.getString(C.contactsDiscoveryEmptyTitle))
+            assertTrue(harness.store.discovered.isEmpty())
+            release.complete(Unit)
+            awaitCondition { returned }
+            assertTrue(isDisplayed(awaitText(context.getString(C.contactsDiscoveryEmptyTitle))))
+            assertFalse(allSemanticsNodes().any {
+                it.config.getOrElse(SemanticsProperties.Text) { emptyList() }.any { text -> text.text == "Remove while refreshing" }
+            })
+            assertTrue(harness.contactService.calls.isEmpty())
+        }
+
         @Test
         fun heldBackgroundRefreshKeepsTheScrolledListMountedAndRetainsItsAnchor() {
             val harness = Harness().connect()

@@ -19,6 +19,8 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -56,12 +58,14 @@ class DiscoveryStateHolder(
     /** Last filter inputs, re-applied whenever the underlying data changes. */
     private var lastInputs = FilterInputs()
     private var reloadJob: Job? = null
+    private var loadRevision = 0L
     private val session get() = dependencies.session
 
     /** Test/preview seam for the Swift model's publicly settable properties. */
     internal fun seed(transform: (DiscoveryState) -> DiscoveryState) = mutableState.update(transform)
 
-    suspend fun loadDiscoveredNodes() {
+    suspend fun loadDiscoveredNodes(clearErrorOnStart: Boolean = true) {
+        val revision = ++loadRevision
         val dataStore = session.offlineDataStore()
         val radioId = knownRadioId()
         if (dataStore == null || radioId == null) {
@@ -82,17 +86,21 @@ class DiscoveryStateHolder(
             applyFilter()
             return
         }
-        mutableState.update { it.copy(isLoading = true, errorMessage = null) }
+        mutableState.update { it.copy(isLoading = true, errorMessage = if (clearErrorOnStart) null else it.errorMessage) }
         try {
             val nodes = dataStore.fetchDiscoveredNodes(radioId)
             // One batch query for all contact public keys, not one round-trip per node.
             val addedKeys = dataStore.fetchContactPublicKeys(radioId)
+            currentCoroutineContext().ensureActive()
+            if (revision != loadRevision) return
             mutableState.update { it.copy(discoveredNodes = nodes, addedPublicKeys = addedKeys) }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (error: Exception) {
+            if (revision != loadRevision) return
             mutableState.update { it.copy(errorMessage = failure(error)) }
         }
+        if (revision != loadRevision) return
         mutableState.update { it.copy(hasLoadedOnce = true, isLoading = false) }
         applyFilter()
     }
@@ -114,19 +122,40 @@ class DiscoveryStateHolder(
 
     suspend fun deleteDiscoveredNode(node: DiscoveredNodeDTO) {
         val dataStore = session.offlineDataStore() ?: return
+        invalidateLoads()
+        removeFromList(node)
+        try {
+            if (reportingFailure { dataStore.deleteDiscoveredNode(EntityKey(node.radioId, node.id)) }) {
+                removeFromList(node)
+            }
+        } finally {
+            invalidateLoads()
+        }
+    }
+
+    private fun removeFromList(node: DiscoveredNodeDTO) {
         mutableState.update { current -> current.copy(discoveredNodes = current.discoveredNodes.filterNot { it.id == node.id }) }
         applyFilter()
-        reportingFailure { dataStore.deleteDiscoveredNode(EntityKey(node.radioId, node.id)) }
+    }
+
+    private fun invalidateLoads() {
+        loadRevision++
+        mutableState.update { it.copy(isLoading = false) }
     }
 
     /** Clears every discovered node; returns true on success so the UI can announce it. */
     suspend fun clearAllDiscoveredNodes(): Boolean {
         val dataStore = session.offlineDataStore() ?: return false
         val radioId = knownRadioId() ?: return false
-        return reportingFailure {
-            dataStore.clearDiscoveredNodes(radioId)
-            mutableState.update { it.copy(discoveredNodes = emptyList()) }
-            applyFilter()
+        invalidateLoads()
+        try {
+            return reportingFailure {
+                dataStore.clearDiscoveredNodes(radioId)
+                mutableState.update { it.copy(discoveredNodes = emptyList()) }
+                applyFilter()
+            }
+        } finally {
+            invalidateLoads()
         }
     }
 

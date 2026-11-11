@@ -80,7 +80,7 @@ internal fun DiscoveryScreen(
                 dependencies.session.connectionSnapshots(),
                 dependencies.session.contactVersions(),
             ) { connection, version -> connection to version }.collectLatest {
-                holder.loadDiscoveredNodes()
+                holder.loadDiscoveredNodes(clearErrorOnStart = false)
             }
         }
     }

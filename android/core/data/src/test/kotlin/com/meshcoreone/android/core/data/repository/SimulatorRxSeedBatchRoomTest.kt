@@ -294,6 +294,8 @@ class SimulatorRxSeedBatchRoomTest : RepositoryTest() {
             val pendingBefore = repository.read("triggerPendingBaseline") { pendingRx.toMap() }
             val mutations = listOf(
                 "UPDATE rx_log_entries SET packetHash = 'trigger mutation' WHERE id = '${second.id.canonicalString()}';",
+                "UPDATE rx_log_entries SET packetHash = 'transient mutation' WHERE id = '${second.id.canonicalString()}'; " +
+                    "UPDATE rx_log_entries SET packetHash = '${second.packetHash}' WHERE id = '${second.id.canonicalString()}';",
                 "DELETE FROM rx_log_entries WHERE radioId = '${radio.value.canonicalString()}' " +
                     "AND id = '${stored.first().id.canonicalString()}';",
                 "UPDATE rx_log_entries SET id = lower(id) WHERE id = '${second.id.canonicalString()}';",
@@ -308,6 +310,7 @@ class SimulatorRxSeedBatchRoomTest : RepositoryTest() {
                     assertIs<PersistenceStoreError.SaveFailed>(failure.error)
                     assertSame(failure, issues.last())
                     assertEquals(before, rawRows())
+                    assertEquals(0, temporaryAuditObjects())
                     assertEquals(pendingBefore, repository.read("triggerPendingAfterRollback") { pendingRx.toMap() })
                     assertEquals(0L, repository.rxInitiatedSaveCount)
                 } finally {
@@ -315,12 +318,21 @@ class SimulatorRxSeedBatchRoomTest : RepositoryTest() {
                 }
             }
             assertEquals(SimulatorRxSeedPresence.STORED, repository.seedSimulatorRxBatch(listOf(first, second))[0].presence)
+            assertEquals(0, temporaryAuditObjects())
             assertEquals(1000L, db.rxLogs().count(radio.value))
             assertEquals(pending, db.rxLogs().byId(RADIO_B.value, pending.id))
         } finally {
             repository.close()
         }
     }
+
+    private fun temporaryAuditObjects(): Int =
+        db.openHelper.writableDatabase.query(
+            "SELECT count(*) FROM sqlite_temp_master WHERE name LIKE 'simulator_rx_audit_%'",
+        ).use { cursor ->
+            check(cursor.moveToFirst())
+            cursor.getInt(0)
+        }
 
     @Test fun secondFixtureAndDeleteFailuresRollbackEveryInsertionPendingWriteAndPruneBeforeRetry() = runTest {
         val stored = storedRows(1100)

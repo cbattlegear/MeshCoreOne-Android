@@ -82,40 +82,45 @@ internal suspend fun RepositoryTransaction.insertSimulatorRxBatchIfAbsent(
 
     val state = SimulatorRxBatchPreimages(database, radios)
     state.capture()
-    // The real pending map precedes newly appended fixtures in the original generic batch.
-    for (pending in pendingRx.values) state.write(pending, insert = false)
-    for ((row, decision) in rows.zip(decisions)) {
-        if (decision == SimulatorRxSeedResult.INSERTED) {
-            if (dao.countSimulatorIdentity(row.radioId, row.id) != 0L) simulatorRxBatchFailed()
-            state.write(row, insert = true)
-        }
-    }
-
-    val insertedIDs = rows.zip(decisions).filter { it.second == SimulatorRxSeedResult.INSERTED }
-        .map { it.first.id }.toSet()
-    for (radio in radios) {
-        val count = dao.count(radio.value)
-        if (count > checkedAdd(RxLogRetention.KEEP_COUNT, RxLogRetention.PRUNE_THRESHOLD)) {
-            val excess = count - RxLogRetention.KEEP_COUNT
-            val victims = dao.oldest(radio.value, excess)
-            if (victims.size.toLong() != excess || victims.map { it.id }.distinct().size != victims.size) {
-                simulatorRxBatchFailed()
+    state.startAudit()
+    try {
+        // The real pending map precedes newly appended fixtures in the original generic batch.
+        for (pending in pendingRx.values) state.write(pending, insert = false)
+        for ((row, decision) in rows.zip(decisions)) {
+            if (decision == SimulatorRxSeedResult.INSERTED) {
+                if (dao.countSimulatorIdentity(row.radioId, row.id) != 0L) simulatorRxBatchFailed()
+                state.write(row, insert = true)
             }
-            if (radio.value == rows.first().radioId && victims.any { it.id in insertedIDs }) simulatorRxBatchFailed()
-            for (victim in victims) state.delete(victim)
-            if (dao.count(radio.value) != RxLogRetention.KEEP_COUNT) simulatorRxBatchFailed()
         }
+
+        val insertedIDs = rows.zip(decisions).filter { it.second == SimulatorRxSeedResult.INSERTED }
+            .map { it.first.id }.toSet()
+        for (radio in radios) {
+            val count = dao.count(radio.value)
+            if (count > checkedAdd(RxLogRetention.KEEP_COUNT, RxLogRetention.PRUNE_THRESHOLD)) {
+                val excess = count - RxLogRetention.KEEP_COUNT
+                val victims = dao.oldest(radio.value, excess)
+                if (victims.size.toLong() != excess || victims.map { it.id }.distinct().size != victims.size) {
+                    simulatorRxBatchFailed()
+                }
+                if (radio.value == rows.first().radioId && victims.any { it.id in insertedIDs }) simulatorRxBatchFailed()
+                for (victim in victims) state.delete(victim)
+                if (dao.count(radio.value) != RxLogRetention.KEEP_COUNT) simulatorRxBatchFailed()
+            }
+        }
+        state.verify()
+        val outcomes = rows.zip(decisions) { row, decision ->
+            val count = dao.countSimulatorIdentity(row.radioId, row.id)
+            if (count > 1L || (decision == SimulatorRxSeedResult.INSERTED &&
+                    (count != 1L || dao.byId(row.radioId, row.id) != row))
+            ) simulatorRxBatchFailed()
+            SimulatorRxSeedOutcome(row.id, decision,
+                if (count == 0L) SimulatorRxSeedPresence.PRUNED else SimulatorRxSeedPresence.STORED)
+        }
+        return SimulatorRxSeedBatchWrite(outcomes, inserted = true)
+    } finally {
+        state.stopAudit()
     }
-    state.verify()
-    val outcomes = rows.zip(decisions) { row, decision ->
-        val count = dao.countSimulatorIdentity(row.radioId, row.id)
-        if (count > 1L || (decision == SimulatorRxSeedResult.INSERTED &&
-                (count != 1L || dao.byId(row.radioId, row.id) != row))
-        ) simulatorRxBatchFailed()
-        SimulatorRxSeedOutcome(row.id, decision,
-            if (count == 0L) SimulatorRxSeedPresence.PRUNED else SimulatorRxSeedPresence.STORED)
-    }
-    return SimulatorRxSeedBatchWrite(outcomes, inserted = true)
 }
 
 private typealias RawRxKey = Pair<String, String>
@@ -126,23 +131,50 @@ private class SimulatorRxBatchPreimages(
     private val radios: Set<RadioId>,
 ) {
     private val expected = linkedMapOf<RadioId, MutableMap<RawRxKey, RawRxRow>>()
+    private val audit = "simulator_rx_audit_${UUID.randomUUID().toString().replace("-", "")}"
 
     fun capture() {
         for (radio in radios) expected[radio] = snapshot(radio).toMutableMap()
     }
 
+    fun startAudit() {
+        val sql = database.openHelper.writableDatabase
+        // TEMP triggers record intermediate writes, including mutations a later write would hide.
+        sql.execSQL("CREATE TEMP TABLE $audit (operation TEXT, oldRadio, oldId, newRadio, newId)")
+        try {
+            sql.execSQL("CREATE TEMP TRIGGER ${audit}_insert AFTER INSERT ON rx_log_entries " +
+                "BEGIN INSERT INTO $audit VALUES ('INSERT', NULL, NULL, NEW.radioId, NEW.id); END")
+            sql.execSQL("CREATE TEMP TRIGGER ${audit}_update AFTER UPDATE ON rx_log_entries " +
+                "BEGIN INSERT INTO $audit VALUES ('UPDATE', OLD.radioId, OLD.id, NEW.radioId, NEW.id); END")
+            sql.execSQL("CREATE TEMP TRIGGER ${audit}_delete AFTER DELETE ON rx_log_entries " +
+                "BEGIN INSERT INTO $audit VALUES ('DELETE', OLD.radioId, OLD.id, NULL, NULL); END")
+        } catch (failure: Exception) {
+            stopAudit()
+            throw failure
+        }
+    }
+
+    fun stopAudit() {
+        val sql = database.openHelper.writableDatabase
+        for (event in listOf("insert", "update", "delete")) {
+            sql.execSQL("DROP TRIGGER IF EXISTS temp.${audit}_$event")
+        }
+        sql.execSQL("DROP TABLE IF EXISTS temp.$audit")
+    }
+
     suspend fun write(row: RxLogEntryEntity, insert: Boolean) {
         currentCoroutineContext().ensureActive()
         val dao = database.rxLogs()
+        val radio = RadioId(row.radioId)
+        val key = row.radioId.canonicalString() to row.id.canonicalString()
+        val operation = if (insert || key !in expected.getValue(radio)) "INSERT" else "UPDATE"
         if (insert) dao.insert(row) else dao.upsert(row)
+        requireOnlyMutation(operation, if (operation == "UPDATE") key else null, key)
         if (dao.byId(row.radioId, row.id) != row ||
             dao.countSimulatorIdentity(row.radioId, row.id) != 1L
         ) simulatorRxBatchFailed()
-        val radio = RadioId(row.radioId)
-        val key = row.radioId.canonicalString() to row.id.canonicalString()
-        val actual = snapshot(radio)
+        val actual = snapshotKey(key)
         expected.getValue(radio)[key] = actual[key] ?: simulatorRxBatchFailed()
-        verify()
     }
 
     suspend fun delete(row: RxLogEntryEntity) {
@@ -153,8 +185,27 @@ private class SimulatorRxBatchPreimages(
             dao.countSimulatorIdentity(row.radioId, row.id) != 0L
         ) simulatorRxBatchFailed()
         val key = row.radioId.canonicalString() to row.id.canonicalString()
+        requireOnlyMutation("DELETE", key, null)
         if (expected.getValue(RadioId(row.radioId)).remove(key) == null) simulatorRxBatchFailed()
-        verify()
+    }
+
+    private fun requireOnlyMutation(operation: String, old: RawRxKey?, new: RawRxKey?) {
+        val sql = database.openHelper.writableDatabase
+        sql.query("SELECT operation, oldRadio, oldId, newRadio, newId FROM temp.$audit").use { cursor ->
+            if (!cursor.moveToNext() || cursor.getType(0) != Cursor.FIELD_TYPE_STRING ||
+                cursor.getString(0) != operation || cursor.auditKey(1) != old || cursor.auditKey(3) != new ||
+                cursor.moveToNext()
+            ) simulatorRxBatchFailed()
+        }
+        sql.execSQL("DELETE FROM temp.$audit")
+    }
+
+    private fun Cursor.auditKey(column: Int): RawRxKey? {
+        if (isNull(column) && isNull(column + 1)) return null
+        if (getType(column) != Cursor.FIELD_TYPE_STRING || getType(column + 1) != Cursor.FIELD_TYPE_STRING) {
+            simulatorRxBatchFailed()
+        }
+        return getString(column) to getString(column + 1)
     }
 
     fun verify() {
@@ -162,11 +213,17 @@ private class SimulatorRxBatchPreimages(
     }
 
     private fun snapshot(radio: RadioId): Map<RawRxKey, RawRxRow> =
-        database.openHelper.writableDatabase.query(
+        snapshotQuery(
             "SELECT * FROM rx_log_entries WHERE radioId >= upper(?) AND radioId <= lower(?) " +
                 "AND radioId = ? COLLATE NOCASE ORDER BY radioId, id",
             arrayOf(radio.value.canonicalString(), radio.value.canonicalString(), radio.value.canonicalString()),
-        ).use { cursor ->
+        )
+
+    private fun snapshotKey(key: RawRxKey): Map<RawRxKey, RawRxRow> =
+        snapshotQuery("SELECT * FROM rx_log_entries WHERE radioId = ? AND id = ?", arrayOf(key.first, key.second))
+
+    private fun snapshotQuery(query: String, args: Array<String>): Map<RawRxKey, RawRxRow> =
+        database.openHelper.writableDatabase.query(query, args).use { cursor ->
             val radioColumn = cursor.getColumnIndexOrThrow("radioId")
             val idColumn = cursor.getColumnIndexOrThrow("id")
             buildMap {

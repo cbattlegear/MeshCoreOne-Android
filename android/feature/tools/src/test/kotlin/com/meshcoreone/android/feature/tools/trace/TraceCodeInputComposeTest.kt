@@ -3,6 +3,7 @@
 // AndroidOnly: WP-314 TS-13 Mounted Save/name actions persist through the real holder.
 // AndroidOnly: WP-314 TS-14 Mounted comparisons consume actual saved history and trace responses.
 // AndroidOnly: WP-314 TS-19 Mounted hash-width actions respect the live radio's firmware capability.
+// AndroidOnly: WP-314 TS-12 Mounted failure recovery copies the captured attempted path.
 // AndroidOnly: WP-314 Mounted trace-map controls expose real preferences and trace state.
 package com.meshcoreone.android.feature.tools.trace
 
@@ -313,12 +314,147 @@ class TraceCodeInputComposeTest {
         assertEquals(EnglishTraceStrings.sendFailed, h.state.errorMessage)
         assertTrue(texts().contains(EnglishTraceStrings.sendFailed))
         assertEquals("sendTrace", h.diagnostics.failures.single().first)
-        assertFalse(texts().contains(host.get().getString(C.contactsTraceMapViewResults)))
+        click(host.get().getString(C.contactsTraceMapViewResults))
+        assertTrue(texts().contains("AA"))
+        click(host.get().getString(C.contactsTraceListCopyPath))
+        assertEquals("AA", clipboardText())
+        click(host.get().getString(L.commonDone))
 
         sender.failure = null
         click(runLabel)
         assertEquals(2, sender.sent.size)
         assertTrue(h.state.isRunning)
+    }
+
+    @Test fun listTimeoutCopiesTheCapturedMultibytePathAndRejectsRetiredActions() {
+        val h = configured()
+        val sender = FakeTraceSender()
+        h.deps.sender = sender
+        h.holder.setTraceHashMode(1u)
+        h.holder.addNode(contact(0xA1, 0x10, name = "First"))
+        h.holder.addNode(contact(0xB2, 0x20, name = "Second"))
+        h.complete { h.holder.runTrace() }
+        assertEquals(Bytes.of(0xA1, 0x10, 0xB2, 0x20, 0xA1, 0x10), sender.sent.single().path)
+        mountPathList(h, fontScale = 2f)
+        h.time.advanceBy(30.seconds)
+        settle()
+        scrollToTraceResults(h)
+        assertEquals("A110,B220,A110", assertNotNull(h.state.result).tracedPathString)
+        assertTrue(texts().contains(EnglishTraceStrings.noResponse))
+        assertTrue(texts().contains("A110,B220,A110"))
+        val label = host.get().getString(C.contactsTraceListCopyPath)
+        val staleAction = assertNotNull(button(label).config[SemanticsActions.OnClick].action)
+        click(label)
+        assertEquals("A110,B220,A110", clipboardText())
+
+        setClipboardText("unchanged")
+        host.get().runOnUiThread {
+            h.holder.addNode(contact(0xC3, 0x30, name = "Later edit"))
+            assertTrue(staleAction())
+        }
+        settle()
+        assertNull(h.state.displayedResult)
+        assertEquals("unchanged", clipboardText())
+    }
+
+    @Test fun allFailedBatchShowsTheActualAttemptOnTheMapAndRetiresCopyWithConnection() {
+        val h = connectedMapHarness()
+        val sender = FakeTraceSender(failure = IllegalStateException("radio send failed"))
+        h.deps.sender = sender
+        h.holder.setTraceHashMode(2u)
+        h.holder.addNode(contact(0xA1, 0x10, 0xB2, 0x20, name = "Tower"))
+        h.holder.setBatchEnabled(true)
+        h.holder.setBatchSize(1)
+        mountPathMap(h)
+        h.start { h.holder.runBatchTrace() }
+        settle()
+        assertEquals(1, h.state.completedResults.size)
+        assertEquals("A110B220", assertNotNull(h.state.displayedResult).tracedPathString)
+        click(host.get().getString(C.contactsTraceMapViewResults))
+        assertTrue(texts().contains(EnglishTraceStrings.sendFailed))
+        assertTrue(texts().contains("A110B220"))
+        val label = host.get().getString(C.contactsTraceListCopyPath)
+        val staleAction = assertNotNull(button(label).config[SemanticsActions.OnClick].action)
+        click(label)
+        assertEquals("A110B220", clipboardText())
+
+        setClipboardText("unchanged")
+        host.get().runOnUiThread {
+            h.holder.retireConnection()
+            assertTrue(staleAction())
+        }
+        settle()
+        assertEquals("unchanged", clipboardText())
+        assertFalse(ShadowDialog.getLatestDialog()?.isShowing == true)
+    }
+
+    @Test fun emptyAttemptCopiesAnEmptyPathWithoutInventingAReplacement() {
+        val h = configured()
+        h.holder.editStateForTesting {
+            it.copy(result = TraceResult.timeout(Bytes.EMPTY, 2, EnglishTraceStrings.noResponse))
+        }
+        mountTraceResults(h)
+        assertTrue(texts().contains(EnglishTraceStrings.noResponse))
+        setClipboardText("previous")
+        click(host.get().getString(C.contactsTraceListCopyPath))
+        assertEquals("", clipboardText())
+    }
+
+    @Test fun failureCardCopiesThreeByteChunksFromTheResultNotTheEditor() {
+        val h = configured()
+        val attempted = Bytes.of(0xA1, 0xB2, 0xC3, 0xD4, 0xE5, 0xF6)
+        h.holder.addNode(contact(0x11, name = "Different editor path"))
+        h.holder.editStateForTesting {
+            it.copy(result = TraceResult.sendFailed(EnglishTraceStrings.sendFailed, attempted, 3))
+        }
+        mountTraceResults(h)
+        assertTrue(texts().contains("A1B2C3,D4E5F6"))
+        click(host.get().getString(C.contactsTraceListCopyPath))
+        assertEquals("A1B2C3,D4E5F6", clipboardText())
+    }
+
+    @Test fun retainedCopyActionDoesNotCopyAReplacementFailureAfterRecomposition() {
+        val h = configured()
+        val sender = FakeTraceSender(failure = IllegalStateException("radio send failed"))
+        h.deps.sender = sender
+        h.holder.addNode(contact(0xAA, name = "Tower"))
+        h.complete { h.holder.runTrace() }
+        mountTraceResults(h)
+        val label = host.get().getString(C.contactsTraceListCopyPath)
+        val staleAction = assertNotNull(button(label).config[SemanticsActions.OnClick].action)
+        val oldResult = assertNotNull(h.state.result)
+
+        h.complete { h.holder.runTrace() }
+        settle()
+        scrollToTraceResults(h)
+        assertTrue(assertNotNull(h.state.result).id != oldResult.id)
+        setClipboardText("unchanged")
+        host.get().runOnUiThread { assertTrue(staleAction()) }
+        settle()
+        assertEquals("unchanged", clipboardText())
+        click(label)
+        assertEquals("AA", clipboardText())
+    }
+
+    @Test fun mixedBatchStillShowsItsSuccessfulResultAfterALaterFailure() {
+        val h = connectedMapHarness()
+        val sender = FakeTraceSender()
+        h.deps.sender = sender
+        h.holder.addNode(contact(0xAA, name = "Tower"))
+        h.holder.setBatchEnabled(true)
+        h.holder.setBatchSize(2)
+        mountPathMap(h)
+        h.start { h.holder.runBatchTrace() }
+        h.respond(sender.sent.single().tag, listOf(node(0xAA, 6.0), node(null, 3.0)), RADIO)
+        sender.failure = IllegalStateException("radio send failed")
+        h.time.advanceBy(500.milliseconds)
+        settle()
+        assertEquals(listOf(true, false), h.state.completedResults.map { it.success })
+        assertTrue(assertNotNull(h.state.displayedResult).success)
+        click(host.get().getString(C.contactsTraceMapViewResults))
+        assertTrue(texts().contains("2. Tower"))
+        assertTrue(texts().contains("SNR: 6.0 dB"))
+        assertFalse(texts().contains(host.get().getString(C.contactsTraceListCopyPath)))
     }
 
     @Test fun mapResultsRetainCancelledBatchProgressAndSuccessfulHopDetails() {
@@ -618,7 +754,10 @@ class TraceCodeInputComposeTest {
         h.time.advanceBy(FloodTraceTimeout.sanitized((h.deps.sender as FakeTraceSender).suggestedTimeoutMs))
         settle()
         scrollToTraceResults(h)
-        assertNull(h.state.result)
+        val failure = assertNotNull(h.state.result)
+        assertFalse(failure.success)
+        assertEquals(EnglishTraceStrings.noResponse, failure.errorMessage)
+        assertEquals("AA", failure.tracedPathString)
         assertNotNull(h.state.errorMessage)
         assertNotNull(h.state.previousRun)
         assertFalse(texts().any { it.startsWith("vs.") })
@@ -3382,6 +3521,16 @@ class TraceCodeInputComposeTest {
         val clipboard = host.get().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("trace codes", text))
         click("Paste from clipboard")
+    }
+
+    private fun clipboardText(): String? {
+        val clipboard = host.get().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        return clipboard.primaryClip?.getItemAt(0)?.coerceToText(host.get())?.toString()
+    }
+
+    private fun setClipboardText(text: String) {
+        val clipboard = host.get().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("test", text))
     }
 
     private fun setInput(text: String) {

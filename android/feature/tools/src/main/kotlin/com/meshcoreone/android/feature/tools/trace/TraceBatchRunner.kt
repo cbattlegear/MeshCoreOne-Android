@@ -62,9 +62,10 @@ internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
         if (!isCurrent(operation) || holder.pendingTag != tag) return
         if (sent == null) {
             holder.setError(holder.strings.sendFailed)
+            val failed = TraceResult.sendFailed(holder.strings.sendFailed, pathData, TraceHashModes.hashSize(dispatch.mode))
             holder.pendingPathHash = null
             holder.current.activeSavedPath?.let { holder.appendRunInBackground(it, holder.failedRun()) }
-            holder.update { it.copy(isRunning = false) }
+            holder.update { it.copy(isRunning = false, result = failed) }
             holder.pendingTag = null
             holder.pendingDeviceId = null
             pendingMode = null
@@ -75,10 +76,11 @@ internal class TraceBatchRunner(private val holder: TracePathStateHolder) {
             holder.time.sleep(timeout)
             if (!isCurrent(operation) || holder.pendingTag != tag) return@launch
             holder.setError(holder.strings.noResponse)
+            val timedOut = TraceResult.timeout(pathData, TraceHashModes.hashSize(dispatch.mode), holder.strings.noResponse)
             holder.pendingPathHash = null
             val savedPath = holder.current.activeSavedPath
             holder.traceJob = null
-            holder.update { it.copy(isRunning = false) }
+            holder.update { it.copy(isRunning = false, result = timedOut) }
             holder.pendingTag = null
             holder.pendingDeviceId = null
             pendingMode = null

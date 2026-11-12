@@ -2060,7 +2060,34 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
     }
 
     @Test fun reactionNotificationAnchorsReachActualMountedTimelinesAndSurviveWindowChanges() = runTest {
-        val h = ContainerHarness(this, store)
+        reactionNotificationAnchors(this, holdHistory = true)
+    }
+
+    @Test fun reactionNotificationAnchorsCanBeConsumedBeforeTheMountedStateIsInspected() = runTest {
+        reactionNotificationAnchors(this, holdHistory = false)
+    }
+
+    private suspend fun reactionNotificationAnchors(test: TestScope, holdHistory: Boolean) {
+        val historyGate = AtomicReference<Pair<CompletableDeferred<Unit>, CompletableDeferred<Unit>>?>(null)
+        suspend fun awaitHistoryRelease() {
+            historyGate.get()?.let { (started, release) ->
+                started.complete(Unit)
+                release.await()
+            }
+        }
+        val persistence = object : PersistenceStoreProtocol by store, ChannelHistoryPersisting by store {
+            override suspend fun fetchMessages(contact: EntityKey, limit: Long, offset: Long): SnapshotList<MessageDTO> {
+                awaitHistoryRelease()
+                return store.fetchMessages(contact, limit, offset)
+            }
+            override suspend fun fetchChannelTimeline(
+                origin: ChannelHistoryScope, limit: Long, offset: Long,
+            ): SnapshotList<MessageDTO> {
+                awaitHistoryRelease()
+                return store.fetchChannelTimeline(origin, limit, offset)
+            }
+        }
+        val h = ContainerHarness(test, store, persistenceOverride = persistence)
         h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Reaction peer") }
         try {
             connect(h)
@@ -2073,19 +2100,48 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                     radioId = radio, contactID = if (isChannel) null else contact.id,
                     channelIndex = if (isChannel) channel.index else null,
                     text = "Anchored reaction ${if (isChannel) "channel" else "direct"}",
-                    timestamp = 100u, createdAt = EPOCH, direction = MessageDirection.INCOMING,
+                    timestamp = 100u, createdAt = EPOCH, direction = MessageDirection.INCOMING, isRead = true,
                 )
                 store.saveMessage(message)
+                for (index in 1..65) {
+                    store.saveMessage(message.copy(
+                        id = UUID.randomUUID(), text = "Newer reaction history $index",
+                        timestamp = (100 + index).toUInt(), createdAt = EPOCH.plusSeconds(index.toLong()),
+                        sortDate = EPOCH.plusSeconds(index.toLong()),
+                    ))
+                }
+                val firstPage = if (isChannel) {
+                    store.fetchChannelTimeline(
+                        ChannelHistoryScope(radio, channel.index, assertNotNull(channel.occupantID)), 50, 0,
+                    )
+                } else store.fetchMessages(EntityKey(radio, contact.id), 50, 0)
+                assertEquals(50, firstPage.size)
+                assertTrue(firstPage.none { it.id == message.id }, "The anchor must require older history")
+                val historyStarted = CompletableDeferred<Unit>()
+                val releaseHistory = CompletableDeferred<Unit>()
+                if (holdHistory) historyGate.set(historyStarted to releaseHistory)
                 assertTrue(h.container.handleNotificationResponse(NotificationResponse(
                     NotificationPayload.Reaction(message.id, if (isChannel) null else EntityKey(radio, contact.id),
                         if (isChannel) channel.index else null, if (isChannel) radio else null),
                     null, null,
                 )))
-                assertEquals(message.id, h.container.navigation.state.value.pendingScrollToMessageID)
-                await(h) {
-                    compose.onAllNodesWithTag("timeline-bubble:${message.id}", useUnmergedTree = true)
-                        .fetchSemanticsNodes().isNotEmpty()
+                val navigation = h.container.navigation
+                if (holdHistory) {
+                    val request = assertNotNull(navigation.state.value.pendingMessageScroll)
+                    assertEquals(message.id, request.messageId)
+                    assertEquals(navigation.state.value.activeStack.last().id, request.entryId)
+                    await(h) { historyStarted.isCompleted }
+                    assertEquals(request, navigation.state.value.pendingMessageScroll)
+                    historyGate.set(null)
+                    releaseHistory.complete(Unit)
                 }
+                // A mounted timeline can acknowledge the one-shot request before the tap call returns.
+                await(h) {
+                    navigation.state.value.pendingMessageScroll == null &&
+                        compose.onAllNodesWithTag("timeline-bubble:${message.id}", useUnmergedTree = true)
+                            .fetchSemanticsNodes().isNotEmpty()
+                }
+                assertNull(navigation.state.value.pendingScrollToMessageID)
                 compose.onNodeWithTag("timeline-bubble:${message.id}", useUnmergedTree = true).assertIsDisplayed()
                 val stack = h.container.navigation.state.value.activeStack
                 val selection = h.container.navigation.state.value.chatsSelectedRoute
@@ -2094,13 +2150,18 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                     compose.onNodeWithTag(if (dp < 600) "navigation-hidden" else "navigation-rail").assertIsDisplayed()
                     assertEquals(stack, h.container.navigation.state.value.activeStack)
                     assertEquals(selection, h.container.navigation.state.value.chatsSelectedRoute)
+                    assertNull(navigation.state.value.pendingMessageScroll)
                     compose.onNodeWithTag("timeline-bubble:${message.id}", useUnmergedTree = true).assertIsDisplayed()
                 }
                 compose.runOnUiThread { host.get().onBackPressedDispatcher.onBackPressed() }
                 compose.waitForIdle()
                 assertEquals(stack.dropLast(1), h.container.navigation.state.value.activeStack)
             }
-        } finally { unmount(); h.container.close() }
+        } finally {
+            historyGate.getAndSet(null)?.second?.complete(Unit)
+            unmount()
+            h.container.close()
+        }
     }
 
     @Test fun animatedOutgoingChatCannotConsumeAReplacementReactionWhileTheIncomingHistoryIsHeld() = runTest {

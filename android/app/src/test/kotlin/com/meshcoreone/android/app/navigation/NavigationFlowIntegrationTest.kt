@@ -2089,12 +2089,14 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
         }
         val h = ContainerHarness(test, store, persistenceOverride = persistence)
         h.links.configureRadio = { it.knownContacts += contactFrame(key(20), "Reaction peer") }
+        var waitingFor = "the mounted shell"
         try {
             connect(h)
             val radio = assertNotNull(h.appState.currentRadioId)
             val contact = store.fetchContact(radio, key(20))!!
             val channel = seedReconciledChannel(ChannelDTO(radioId = radio, index = 1u, name = "Reaction channel"))
             mount(h)
+            compose.waitForIdle()
             for (isChannel in listOf(false, true)) {
                 val message = MessageDTO(
                     radioId = radio, contactID = if (isChannel) null else contact.id,
@@ -2130,12 +2132,14 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                     val request = assertNotNull(navigation.state.value.pendingMessageScroll)
                     assertEquals(message.id, request.messageId)
                     assertEquals(navigation.state.value.activeStack.last().id, request.entryId)
+                    waitingFor = "initial history (channel=$isChannel, held=$holdHistory)"
                     await(h) { historyStarted.isCompleted }
                     assertEquals(request, navigation.state.value.pendingMessageScroll)
                     historyGate.set(null)
                     releaseHistory.complete(Unit)
                 }
                 // A mounted timeline can acknowledge the one-shot request before the tap call returns.
+                waitingFor = "acknowledged target ${message.id} (channel=$isChannel, held=$holdHistory)"
                 await(h) {
                     navigation.state.value.pendingMessageScroll == null &&
                         compose.onAllNodesWithTag("timeline-bubble:${message.id}", useUnmergedTree = true)
@@ -2157,6 +2161,12 @@ class NavigationFlowIntegrationTest : RoomProcessTest() {
                 compose.waitForIdle()
                 assertEquals(stack.dropLast(1), h.container.navigation.state.value.activeStack)
             }
+        } catch (failure: androidx.compose.ui.test.ComposeTimeoutException) {
+            throw AssertionError(
+                "Timed out waiting for $waitingFor; navigation=${h.container.navigation.state.value}\n" +
+                    compose.onRoot(useUnmergedTree = true).printToString(),
+                failure,
+            )
         } finally {
             historyGate.getAndSet(null)?.second?.complete(Unit)
             unmount()

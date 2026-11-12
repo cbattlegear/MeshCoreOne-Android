@@ -53,6 +53,7 @@ class ContactQrShareStateHolder(
     val qrSpec: ContactQrSpec = ContactQrSpec(contactUri)
     val publicKeyText: String = ContactShareContent.spacedPublicKeyHex(publicKey)
     val copyFeedback = CopyFeedback(dependencies.clock, scope)
+    val linkCopyFeedback = CopyFeedback(dependencies.clock, scope)
 
     fun sharePayload(subject: String): ContactShareTextPayload = ContactShareTextPayload(contactUri, subject)
 

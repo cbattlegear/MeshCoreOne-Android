@@ -526,6 +526,7 @@ internal fun ContactShareDialog(
 ) {
     val context = LocalContext.current
     val copied by holder.copyFeedback.showing.collectAsStateWithLifecycle()
+    val linkCopied by holder.linkCopyFeedback.showing.collectAsStateWithLifecycle()
     val shareSubject = stringResource(C.contactsQrShareSubject)
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -569,6 +570,18 @@ internal fun ContactShareDialog(
             ) {
                 ContactQrCode(holder.qrSpec, holder.contactName)
                 Text(holder.publicKeyText, fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+                TextButton(
+                    modifier = Modifier.heightIn(min = 48.dp),
+                    enabled = !linkCopied,
+                    onClick = {
+                        val payload = holder.sharePayload(shareSubject)
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        clipboard.setPrimaryClip(ClipData.newPlainText(holder.contactName, payload.copyText))
+                        holder.linkCopyFeedback.trigger()
+                    },
+                ) {
+                    Text(stringResource(if (linkCopied) R.string.contact_link_copied else R.string.contact_link_copy))
+                }
             }
         },
     )

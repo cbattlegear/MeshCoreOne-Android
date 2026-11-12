@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="contact_link_copy">연락처 링크 복사</string>
+    <string name="contact_link_copied">연락처 링크 복사됨</string>
+</resources>

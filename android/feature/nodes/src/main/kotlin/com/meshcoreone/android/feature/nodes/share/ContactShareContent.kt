@@ -24,14 +24,15 @@ class ContactShareContent(private val codec: ContactUriCodec) {
 
 /**
  * What the system share sheet receives for a contact URI (`ContactURIActivityItem`). iOS returned an
- * empty `String` placeholder so the sheet classified the item as text and offered Copy; on Android the
- * equivalent is a `text/plain` send whose text is the URI string (never a `Uri` stream or a view
- * intent), with the subject carried separately.
+ * empty `String` placeholder so the sheet classified the item as text and offered Copy. Android uses
+ * a `text/plain` send whose text is the URI string (never a `Uri` stream or a view intent), with the
+ * subject carried separately. The app supplies its own URI Copy action: installed chooser targets
+ * are not guaranteed to include Copy.
  */
 data class ContactShareTextPayload(val text: String, val subject: String) {
     val mimeType: String get() = PLAIN_TEXT_MIME
 
-    /** The value delivered for a copy-to-clipboard target: the URI string itself. */
+    /** The value consumed by the in-app contact-link clipboard action. */
     val copyText: String get() = text
 
     companion object {

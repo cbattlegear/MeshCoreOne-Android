@@ -1028,11 +1028,14 @@ internal fun TraceResultCard(result: TraceResult?, state: TracePathState, canCop
             if (result != null && !result.success) {
                 Text(stringResource(C.contactsTraceListRoundTripPath), style = MaterialTheme.typography.bodySmall)
                 Text(result.tracedPathString, style = MaterialTheme.typography.bodyMedium)
+                val copyResult = {
+                    if (canCopyResult(result)) clipboard.setText(AnnotatedString(result.tracedPathString))
+                }
                 TextButton(
-                    onClick = {
-                        if (canCopyResult(result)) clipboard.setText(AnnotatedString(result.tracedPathString))
+                    onClick = copyResult,
+                    modifier = Modifier.sizeIn(minHeight = 48.dp).semantics {
+                        onClick { copyResult(); true }
                     },
-                    modifier = Modifier.sizeIn(minHeight = 48.dp),
                 ) { Text(stringResource(C.contactsTraceListCopyPath)) }
             }
             val showBatchStats = state.batchEnabled && state.batchPresentationActive

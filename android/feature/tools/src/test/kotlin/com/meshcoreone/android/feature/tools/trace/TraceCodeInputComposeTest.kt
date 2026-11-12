@@ -413,6 +413,29 @@ class TraceCodeInputComposeTest {
         assertEquals("A1B2C3,D4E5F6", clipboardText())
     }
 
+    @Test fun retainedCopyActionDoesNotCopyAReplacementFailureAfterRecomposition() {
+        val h = configured()
+        val sender = FakeTraceSender(failure = IllegalStateException("radio send failed"))
+        h.deps.sender = sender
+        h.holder.addNode(contact(0xAA, name = "Tower"))
+        h.complete { h.holder.runTrace() }
+        mountTraceResults(h)
+        val label = host.get().getString(C.contactsTraceListCopyPath)
+        val staleAction = assertNotNull(button(label).config[SemanticsActions.OnClick].action)
+        val oldResult = assertNotNull(h.state.result)
+
+        h.complete { h.holder.runTrace() }
+        settle()
+        scrollToTraceResults(h)
+        assertTrue(assertNotNull(h.state.result).id != oldResult.id)
+        setClipboardText("unchanged")
+        host.get().runOnUiThread { assertTrue(staleAction()) }
+        settle()
+        assertEquals("unchanged", clipboardText())
+        click(label)
+        assertEquals("AA", clipboardText())
+    }
+
     @Test fun mixedBatchStillShowsItsSuccessfulResultAfterALaterFailure() {
         val h = connectedMapHarness()
         val sender = FakeTraceSender()
@@ -731,7 +754,10 @@ class TraceCodeInputComposeTest {
         h.time.advanceBy(FloodTraceTimeout.sanitized((h.deps.sender as FakeTraceSender).suggestedTimeoutMs))
         settle()
         scrollToTraceResults(h)
-        assertNull(h.state.result)
+        val failure = assertNotNull(h.state.result)
+        assertFalse(failure.success)
+        assertEquals(EnglishTraceStrings.noResponse, failure.errorMessage)
+        assertEquals("AA", failure.tracedPathString)
         assertNotNull(h.state.errorMessage)
         assertNotNull(h.state.previousRun)
         assertFalse(texts().any { it.startsWith("vs.") })

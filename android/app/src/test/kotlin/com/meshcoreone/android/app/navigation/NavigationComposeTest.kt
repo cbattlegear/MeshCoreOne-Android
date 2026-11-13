@@ -199,6 +199,8 @@ class NavigationComposeTest {
             compose.onNodeWithTag("tab:${tab.name}").assertIsSelected()
             compose.onNodeWithTag("navigation-heading").assert(SemanticsMatcher.keyIsDefined(SemanticsProperties.Heading))
             compose.onNodeWithTag("fixture:root-${tab.name}").assertIsDisplayed()
+            // Bottom-nav roots never show an Up arrow; pushed screens do (covered by the Back tests below).
+            compose.onNodeWithTag("navigation-back").assertDoesNotExist()
             if (tab == AppTab.NODES) {
                 compose.onNodeWithTag("open-remote-nodes").assert(
                     SemanticsMatcher.expectValue(

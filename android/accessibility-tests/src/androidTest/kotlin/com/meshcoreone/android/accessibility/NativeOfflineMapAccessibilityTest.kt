@@ -17,6 +17,7 @@ import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.isRoot
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextReplacement
@@ -167,6 +168,8 @@ class NativeOfflineMapAccessibilityTest : DeviceAccessibilityHarness() {
                 }
             }
         }
+        // Offline maps is an entry in the "Map options" menu.
+        compose.onNodeWithTag("map:options-menu").performClick()
         val open = compose.onNode(hasText(title) and hasClickAction())
         assertFont200Unclipped(compose.onNode(hasText(title) and
             SemanticsMatcher.keyIsDefined(SemanticsActions.GetTextLayoutResult), useUnmergedTree = true))
@@ -233,7 +236,7 @@ class NativeOfflineMapAccessibilityTest : DeviceAccessibilityHarness() {
     private fun closePanel() {
         panelAction(done).assertIsEnabled().performClick()
         compose.onNode(hasText(regionLabel) and hasSetTextAction()).assertDoesNotExist()
-        compose.onNode(hasText(title) and hasClickAction()).assertIsDisplayed()
+        compose.onNodeWithTag("map:options-menu").assertIsDisplayed()
     }
 
     private fun dialogRoot(): View {

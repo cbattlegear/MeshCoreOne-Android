@@ -2,6 +2,8 @@
 package com.meshcoreone.android.feature.map
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -53,7 +55,8 @@ internal fun MapZoomControls(
         tonalElevation = 3.dp,
         shadowElevation = 4.dp,
     ) {
-        Column {
+        // IntrinsicSize.Min keeps the full-width dividers from stretching the floating column across the map.
+        Column(Modifier.width(IntrinsicSize.Min)) {
             IconButton(onZoomIn, ControlTarget.testTag("map:zoom-in")) {
                 Icon(MapGlyphs.Plus, stringResource(R.string.map_zoom_in))
             }

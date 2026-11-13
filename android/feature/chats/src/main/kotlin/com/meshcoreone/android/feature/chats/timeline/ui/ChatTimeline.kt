@@ -167,6 +167,25 @@ fun ChatTimeline(
         listState.scrollToItem(position.index, position.offset)
         callbacks.onInitialAnchorConsumed()
     }
+    val follow = remember { TimelineFollowTracker() }
+    val newestKey = visualRows.firstOrNull()?.stableKey
+    LaunchedEffect(newestKey) {
+        val previousKey = follow.trackedNewestKey
+        follow.trackedNewestKey = newestKey
+        val newestIsOutgoing = (visualRows.firstOrNull() as? TimelineRow.Message)?.message?.isOutgoing == true
+        if (shouldFollowLatest(previousKey, newestKey, follow.wasAtLatest, newestIsOutgoing)) {
+            follow.wasAtLatest = true
+            listState.animateScrollToItem(0)
+            callbacks.onJumpToLatest()
+        } else if (newestKey != null) {
+            // Not following: publish the real position, which the collector withheld during the key change.
+            val atLatest = isViewportAtLatest(listState.layoutInfo.visibleItemsInfo.map { it.index }, visualRows.size)
+            follow.wasAtLatest = atLatest
+            val anchor = (visualRows.getOrNull(listState.firstVisibleItemIndex) as? TimelineRow.Message)
+                ?.message?.id?.let { TimelineScrollAnchor(it, listState.firstVisibleItemScrollOffset) }
+            callbacks.onScrollPositionChanged(anchor, atLatest)
+        }
+    }
     LaunchedEffect(listState, visualRows) {
         var previousVisibleIndices: List<Int>? = null
         snapshotFlow {
@@ -176,7 +195,10 @@ fun ChatTimeline(
                 listState.firstVisibleItemScrollOffset,
             )
         }.collect { (visible, firstVisibleIndex, firstVisibleOffset) ->
-            val atLatest = visible.any { it == 0 } || visualRows.isEmpty()
+            val atLatest = isViewportAtLatest(visible, visualRows.size)
+            // A newer row shifted the viewport; the follow effect decides before the position is reported.
+            if (visualRows.firstOrNull()?.stableKey != follow.trackedNewestKey) return@collect
+            follow.wasAtLatest = atLatest
             val anchor = (visualRows.getOrNull(firstVisibleIndex) as? TimelineRow.Message)
                 ?.message?.id?.let { TimelineScrollAnchor(it, firstVisibleOffset) }
             if (anchor != null) {

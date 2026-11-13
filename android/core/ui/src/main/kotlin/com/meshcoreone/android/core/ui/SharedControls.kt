@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -142,7 +141,7 @@ fun <Id : Any> GlassFilterBar(
         horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
         for (choice in choices) {
             FilterChip(selected = choice.id == selected, onClick = { onSelect(choice.id) },
-                enabled = !isSearching, modifier = Modifier.sharedTouchTarget(),
+                enabled = !isSearching,
                 label = { Text(uiString(choice.title), style = MaterialTheme.typography.labelLarge) })
         }
     }

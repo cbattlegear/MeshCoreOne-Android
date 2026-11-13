@@ -113,6 +113,8 @@ import com.meshcoreone.android.app.container.AppChatsFeature
 import com.meshcoreone.android.app.container.onboarding.AppOnboarding
 import com.meshcoreone.android.feature.tools.los.LineOfSightEntry
 import com.meshcoreone.android.feature.tools.los.LineOfSightFeatureDependencies
+import com.meshcoreone.android.core.ui.ChatComposeRequests
+import com.meshcoreone.android.core.ui.LocalChatComposeRequests
 import com.meshcoreone.android.core.ui.UiErrorMapper
 import com.meshcoreone.android.core.ui.uiString
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
@@ -284,6 +286,9 @@ fun NativeNavigationShell(
     val unreadDescription = if (unreadCount > 0) {
         stringResource(Strings.string.l10n_app_localizable_tabs_chatsunreadaccessibilityvalue, unreadCount)
     } else ""
+    val chatComposeRequests = remember { ChatComposeRequests() }
+    val showChatCompose = chats != null && state.selectedTab == AppTab.CHATS &&
+        state.activeStack.lastOrNull()?.destination == NavigationDestination.Root(AppTab.CHATS)
     val snackbar = remember { SnackbarHostState() }
     val failureMessage = when (val failure = state.failure) {
         null -> null
@@ -417,6 +422,11 @@ fun NativeNavigationShell(
                                 }
                             },
                             actions = {
+                                if (showChatCompose) {
+                                    ChatComposeMenu(onRequest = { kind ->
+                                        if (canNavigateFromCurrentRouteNow()) chatComposeRequests.request(kind)
+                                    }, enabled = canNavigateFromCurrentRoute)
+                                }
                                 if (state.selectedTab == AppTab.NODES) {
                                     val remoteNodesLabel =
                                         stringResource(com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings.remoteNodesAuthManagement)
@@ -492,6 +502,7 @@ fun NativeNavigationShell(
                         ) {
                             CompositionLocalProvider(
                                 LocalNavigationEntryId provides entry.id,
+                                LocalChatComposeRequests provides chatComposeRequests,
                                 LocalPresentedNavigation provides latestPresented,
                                 LocalOnboardingRetention provides onboardingRetention,
                                 LocalOnboardingEntries provides latestOnboardingEntries,

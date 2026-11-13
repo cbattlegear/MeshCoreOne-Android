@@ -73,8 +73,9 @@ internal fun RemoteNodeAuthenticationDialog(
         }
         previousCountdown = state.authSecondsRemaining
     }
-    // A stray tap outside must not throw away a login that is already on the air; back and Stop end the attempt first.
-    val dismiss = { if (state.isAuthenticating) holder.cancel() else onCancel() }
+    // Cancel and Back end the attempt and close the sheet (Swift parity); a stray tap outside is ignored while a login
+    // is on the air, because it would silently throw that login away.
+    val dismiss = { holder.cancel(); onCancel() }
     AlertDialog(
         onDismissRequest = dismiss,
         properties = DialogProperties(dismissOnClickOutside = !state.isAuthenticating),
@@ -129,7 +130,7 @@ internal fun RemoteNodeAuthenticationDialog(
         },
         dismissButton = {
             TextButton(dismiss, Modifier.heightIn(min = 48.dp).testTag("remote-login-cancel")) {
-                Text(stringResource(if (state.isAuthenticating) R.string.remote_login_stop else L.remoteNodesCancel))
+                Text(stringResource(L.remoteNodesCancel))
             }
         },
         confirmButton = {

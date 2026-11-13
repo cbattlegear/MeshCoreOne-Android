@@ -25,7 +25,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -52,6 +51,7 @@ import com.meshcoreone.android.core.ui.AvatarImageCache
 import com.meshcoreone.android.core.ui.ErrorBanner
 import com.meshcoreone.android.core.ui.FilterChoice
 import com.meshcoreone.android.core.ui.GlassFilterBar
+import com.meshcoreone.android.core.ui.MeshSearchField
 import com.meshcoreone.android.core.ui.UiErrorState
 import com.meshcoreone.android.core.ui.UiRecovery
 import com.meshcoreone.android.core.ui.UiText
@@ -109,7 +109,7 @@ fun ChatsListScreen(
         },
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
-            SearchField(state.searchText, callbacks.onSearchChange)
+            MeshSearchField(state.searchText, callbacks.onSearchChange, stringResource(AppChatsStrings.chatsSearchPlaceholder))
             FilterBar(state.selectedFilter, state.searchText.isNotEmpty(), callbacks.onFilterChange)
             state.errorBanner?.let { message ->
                 ErrorBanner(
@@ -179,15 +179,6 @@ private fun NewMessageMenu(onNewChat: () -> Unit, onNewChannel: () -> Unit) {
             )
         }
     }
-}
-
-@Composable
-private fun SearchField(text: String, onChange: (String) -> Unit) {
-    OutlinedTextField(
-        value = text, onValueChange = onChange, singleLine = true,
-        placeholder = { Text(stringResource(AppChatsStrings.chatsSearchPlaceholder)) },
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).sharedTouchTarget(),
-    )
 }
 
 @Composable

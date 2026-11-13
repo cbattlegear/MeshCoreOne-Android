@@ -36,6 +36,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import com.meshcoreone.android.core.ui.MeshSearchField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -130,12 +131,10 @@ internal fun NodesListScreen(
     }
 
     Column(modifier.fillMaxSize()) {
-        OutlinedTextField(
+        MeshSearchField(
             value = search,
             onValueChange = { search = it },
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-            label = { Text(stringResource(C.contactsListSearchPrompt)) },
-            singleLine = true,
+            placeholder = stringResource(C.contactsListSearchPrompt),
         )
         Row(
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),

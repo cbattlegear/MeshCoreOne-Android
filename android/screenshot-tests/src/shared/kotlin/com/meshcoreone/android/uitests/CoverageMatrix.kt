@@ -27,9 +27,12 @@ object CoverageMatrix {
     val widths = listOf(360, 744, 834)
     val fonts = listOf(1f, 2f)
 
+    // Themes whose effective scheme is forced dark (Ember is a Swift original; Gradient is Android-only).
+    private val darkOnlyThemes = setOf(ThemeId.EMBER, ThemeId.GRADIENT)
+
     // This oracle is independent of the candidate ThemeRegistry's preferredColorScheme property.
     val themeFrames: List<ScreenCase> = ThemeId.entries.flatMap { theme ->
-        val schemes = if (theme == ThemeId.EMBER) listOf(ColorScheme.DARK) else ColorScheme.entries
+        val schemes = if (theme in darkOnlyThemes) listOf(ColorScheme.DARK) else ColorScheme.entries
         schemes.map { scheme ->
             ScreenCase(
                 id = "theme-${theme.rawValue}-${scheme.name.lowercase()}",
@@ -45,7 +48,7 @@ object CoverageMatrix {
             ScreenCase(
                 id = "system-${theme.rawValue}-${if (dark) "dark" else "light"}",
                 theme = theme, preference = AppColorSchemePreference.SYSTEM, systemDark = dark,
-                expectedScheme = if (theme == ThemeId.EMBER || dark) ColorScheme.DARK else ColorScheme.LIGHT,
+                expectedScheme = if (theme in darkOnlyThemes || dark) ColorScheme.DARK else ColorScheme.LIGHT,
             )
         }
     }
@@ -61,7 +64,7 @@ object CoverageMatrix {
     }
 
     fun assertThemeWindowFontCoverage() {
-        check(themeWindowFontCases.size == 57)
+        check(themeWindowFontCases.size == 63)
         for (frame in themeFrames) {
             val cases = themeWindowFontCases.filter { it.theme == frame.theme && it.expectedScheme == frame.expectedScheme }
             check(cases.map { it.widthDp }.toSet() == widths.toSet())

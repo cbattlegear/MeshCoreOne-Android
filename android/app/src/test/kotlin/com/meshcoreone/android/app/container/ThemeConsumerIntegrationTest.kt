@@ -131,7 +131,7 @@ class ThemeConsumerIntegrationTest : RoomProcessTest() {
             assertEquals(ThemeId.DEFAULT, assertIs<ThemeServiceState.Ready>(service.state.value).selection.current.id)
             assertFalse(storage.preferences.snapshot().contains(AppearanceStorageKey.selectedThemeID))
             assertFalse(storage.preferences.snapshot().contains(AppearanceStorageKey.appColorSchemePreference))
-            assertEquals(10, service.availableToCurrentUser.size)
+            assertEquals(11, service.availableToCurrentUser.size)
             assertTrue(h.sessions.current == null)
         }
     }

@@ -54,8 +54,8 @@ class ConversationComposeTest {
     )
 
     @Test fun allNineteenEffectiveThemeFramesRenderDeterministically() {
-        org.junit.Assert.assertEquals(10, CoverageMatrix.themeFrames.map { it.theme }.toSet().size)
-        org.junit.Assert.assertEquals(19, CoverageMatrix.themeFrames.size)
+        org.junit.Assert.assertEquals(11, CoverageMatrix.themeFrames.map { it.theme }.toSet().size)
+        org.junit.Assert.assertEquals(21, CoverageMatrix.themeFrames.size)
         CoverageMatrix.assertThemeWindowFontCoverage()
         for (case in CoverageMatrix.themeWindowFontCases) cases.capture(case, output("themes"))
         cases.show(ScreenCase(

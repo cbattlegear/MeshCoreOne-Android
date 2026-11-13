@@ -22,7 +22,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExtendedFloatingActionButton
+import com.meshcoreone.android.core.designsystem.AccentExtendedFab
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -273,7 +273,7 @@ fun ChatTimeline(
         }
         if (!state.isAtLatest || state.newMessageCount > 0) {
             val label = stringResource(AppChatsStrings.chatsScrollButtonScrollToBottomAccessibilityLabel)
-            ExtendedFloatingActionButton(
+            AccentExtendedFab(
                 onClick = {
                     scope.launch {
                         listState.animateScrollToItem(0)

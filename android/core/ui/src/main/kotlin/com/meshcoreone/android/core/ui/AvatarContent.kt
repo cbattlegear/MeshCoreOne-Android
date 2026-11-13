@@ -35,6 +35,7 @@ import com.meshcoreone.android.core.designsystem.AvatarCategory
 import com.meshcoreone.android.core.designsystem.LocalMeshTheme
 import com.meshcoreone.android.core.designsystem.MeshSymbol
 import com.meshcoreone.android.core.designsystem.readableGlyph
+import com.meshcoreone.android.core.designsystem.accentBorder
 import com.meshcoreone.android.core.designsystem.toComposeColor
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.model.RemoteNodeRole
@@ -124,7 +125,7 @@ fun ContactAvatar(
     val glyph = readableGlyph(frame.avatarGlyphColor(fill, false), fill)
     val fontScale = LocalDensity.current.fontScale.coerceAtLeast(1f)
     val diameter = size * fontScale
-    Box(modifier.size(diameter).clip(CircleShape).background(fill.toComposeColor())
+    Box(modifier.size(diameter).clip(CircleShape).background(fill.toComposeColor()).accentBorder(1.5.dp, CircleShape)
         .semantics { contentDescription = name }, contentAlignment = Alignment.Center) {
         if (image is AvatarImageState.Ready) {
             Image(image.image, null, Modifier.size(diameter), contentScale = ContentScale.Crop)
@@ -147,7 +148,7 @@ fun NodeAvatar(role: RemoteNodeRole, size: Dp, label: UiText, modifier: Modifier
     val glyph = readableGlyph(frame.avatarGlyphColor(fill, frame.theme.usesCategoryAvatarOverride), fill)
     val description = uiString(label)
     val diameter = size * LocalDensity.current.fontScale.coerceAtLeast(1f)
-    Box(modifier.size(diameter).clip(CircleShape).background(fill.toComposeColor())
+    Box(modifier.size(diameter).clip(CircleShape).background(fill.toComposeColor()).accentBorder(1.5.dp, CircleShape)
         .semantics { contentDescription = description }, contentAlignment = Alignment.Center) {
         Icon((if (role == RemoteNodeRole.ROOM_SERVER) MeshSymbol.ROOM else MeshSymbol.RADIO).vector,
             null, Modifier.size(diameter * 0.45f), tint = glyph.toComposeColor())
@@ -161,7 +162,7 @@ fun CategoryAvatar(category: AvatarCategory, size: Dp, label: UiText, modifier: 
     val glyph = readableGlyph(frame.avatarGlyphColor(fill, frame.theme.usesCategoryAvatarOverride), fill)
     val description = uiString(label)
     val diameter = size * LocalDensity.current.fontScale.coerceAtLeast(1f)
-    Box(modifier.size(diameter).clip(CircleShape).background(fill.toComposeColor())
+    Box(modifier.size(diameter).clip(CircleShape).background(fill.toComposeColor()).accentBorder(1.5.dp, CircleShape)
         .semantics { contentDescription = description }, contentAlignment = Alignment.Center) {
         Icon(when (category) {
             AvatarCategory.CHANNEL -> MeshSymbol.HASHTAG

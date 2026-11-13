@@ -114,8 +114,8 @@ class MessageActionAvailabilityComposeTest {
     @Test fun incomingPrefixOnlyChannelCannotBlock() = verify(message(channelIndex = 0u, senderKeyPrefix = Bytes.of(0xAA)), Expected())
 
     @Test fun everyEffectiveThemeRetainsOffersAndOneReadAcrossLoadingAndLoadedWidthChanges() {
-        assertEquals(19, CoverageMatrix.themeFrames.size)
-        assertEquals(10, CoverageMatrix.themeFrames.map { it.theme }.toSet().size)
+        assertEquals(21, CoverageMatrix.themeFrames.size)
+        assertEquals(11, CoverageMatrix.themeFrames.map { it.theme }.toSet().size)
         for (frame in CoverageMatrix.themeFrames) {
             verify(message(channelIndex = 0u), Expected(named = true), resize = true, frame = frame)
         }

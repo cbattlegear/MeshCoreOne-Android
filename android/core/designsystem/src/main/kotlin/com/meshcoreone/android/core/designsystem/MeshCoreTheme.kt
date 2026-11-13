@@ -19,6 +19,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.colorspace.ColorSpaces
 import androidx.compose.ui.platform.LocalDensity
@@ -144,8 +147,25 @@ fun ThemeServiceHost(
     ) { content(state) }
 }
 
-fun Modifier.themedCanvas(frame: ThemeFrame): Modifier =
-    if (frame.theme.surfaces == null) this else background(frame.canvas.toComposeColor())
+fun Modifier.themedCanvas(frame: ThemeFrame): Modifier = when {
+    frame.theme.surfaces == null -> this
+    frame.canvasGlow == null -> background(frame.canvas.toComposeColor())
+    else -> {
+        val canvas = frame.canvas.toComposeColor()
+        val glow = frame.canvasGlow.toComposeColor()
+        drawBehind {
+            drawRect(canvas)
+            // AndroidOnly: soft radial glow rising from the bottom edge, fading to the flat canvas tier.
+            drawRect(
+                Brush.radialGradient(
+                    listOf(glow, canvas),
+                    center = Offset(size.width / 2f, size.height),
+                    radius = maxOf(size.width, size.height * 0.6f),
+                ),
+            )
+        }
+    }
+}
 
 fun Modifier.themedRowBackground(frame: ThemeFrame, flatten: Boolean = false): Modifier =
     if (frame.theme.surfaces?.rowFill(flatten) == null) this else background(frame.card.toComposeColor())

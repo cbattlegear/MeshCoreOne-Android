@@ -107,9 +107,9 @@ class ThemeServiceTest {
         }
     }
     @OriginalCase("ThemeServicePureTests::with no purchases, only the default theme is available and paid themes throw on setCurrent()")
-    @Test fun approvedUnlockedAdaptationMakesAllTenSelectableWithoutPurchases() = runBlocking<Unit> {
+    @Test fun approvedUnlockedAdaptationMakesAllElevenSelectableWithoutPurchases() = runBlocking<Unit> {
         harness { h, s ->
-            assertEquals(10, s.availableToCurrentUser.size)
+            assertEquals(11, s.availableToCurrentUser.size)
             for (theme in s.availableToCurrentUser) {
                 s.setCurrent(theme.id)
                 assertEquals(theme.id, ready(s).selection.current.id)

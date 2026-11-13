@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- AndroidOnly: names of Android-only themes (no Swift source string). -->
+<resources>
+    <string name="theme_name_gradient">"Dégradé"</string>
+</resources>

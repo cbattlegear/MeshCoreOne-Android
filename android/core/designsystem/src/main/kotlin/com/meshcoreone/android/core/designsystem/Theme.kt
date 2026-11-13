@@ -8,10 +8,13 @@
 package com.meshcoreone.android.core.designsystem
 
 import com.meshcoreone.android.core.model.SnapshotList
+import com.meshcoreone.android.core.model.snapshot
 
 enum class ThemeId(val rawValue: String) {
     DEFAULT("default"), EMBER("ember"), FERN("fern"), MARINE("marine"), OLIVE("olive"),
-    LAVENDER("lavender"), SAKURA("sakura"), SOLARIZED("solarized"), NORD("nord"), CATPPUCCIN("catppuccin");
+    LAVENDER("lavender"), SAKURA("sakura"), SOLARIZED("solarized"), NORD("nord"), CATPPUCCIN("catppuccin"),
+    // AndroidOnly: not in the pinned Swift registry; see AndroidOnlyThemes.kt.
+    GRADIENT("gradient");
 
     companion object {
         fun fromRawValue(raw: String): ThemeId? = entries.firstOrNull { it.rawValue == raw }
@@ -69,6 +72,12 @@ data class Theme(
     val surfaces: ThemeSurfaces? = null,
     val categoryAvatarOverride: CategoryAvatarColors? = null,
     val categoryHues: CategoryHues? = null,
+    /** AndroidOnly: optional cyan-to-green accent gradient; null keeps the solid accent everywhere. */
+    val accentGradient: AdaptiveGradient? = null,
+    /** AndroidOnly: preferred primary text color (otherwise roles derive text from black). */
+    val inkColor: AdaptiveColor? = null,
+    /** AndroidOnly: soft radial glow painted over the canvas tier. */
+    val canvasGlow: AdaptiveColor? = null,
 ) {
     val chromeTint: AdaptiveColor? get() = if (id == ThemeId.DEFAULT) null else accentColor
     val usesCategoryAvatarOverride: Boolean get() = categoryAvatarOverride != null
@@ -90,6 +99,9 @@ data class Theme(
             surfaces?.canvas?.resolve(effective, highContrast) ?: system.canvas,
             surfaces?.card?.resolve(effective, highContrast) ?: system.card,
             surfaces?.card?.resolve(effective, highContrast) ?: system.incomingBubble,
+            accentGradient?.resolve(effective, highContrast),
+            inkColor?.resolve(effective, highContrast),
+            canvasGlow?.resolve(effective, highContrast),
         )
     }
 }
@@ -104,6 +116,9 @@ data class ThemeFrame(
     val canvas: ThemeColor,
     val card: ThemeColor,
     val incomingBubble: ThemeColor,
+    val gradient: AccentGradient? = null,
+    val ink: ThemeColor? = null,
+    val canvasGlow: ThemeColor? = null,
 ) {
     val avatarSurfaceLuminances: SnapshotList<Double> get() = SnapshotList.of(canvas.luminance, incomingBubble.luminance)
     val categorySurfaceLuminance: Double get() = canvas.luminance
@@ -119,7 +134,8 @@ data class ThemeFrame(
 }
 
 object ThemeRegistry {
-    val allThemes: SnapshotList<Theme> get() = GeneratedThemes.allThemes
+    /** The pinned Swift themes (generated) followed by the Android-only additions. */
+    val allThemes: SnapshotList<Theme> = (GeneratedThemes.allThemes + AndroidOnlyThemes.all).snapshot()
     val default: Theme get() = theme(ThemeId.DEFAULT) ?: throw ThemeResourceFailure("default")
     fun theme(id: ThemeId): Theme? = allThemes.firstOrNull { it.id == id }
     fun theme(raw: String): Theme? = ThemeId.fromRawValue(raw)?.let(::theme)

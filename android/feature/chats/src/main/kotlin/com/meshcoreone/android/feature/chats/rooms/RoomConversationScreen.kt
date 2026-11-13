@@ -76,7 +76,6 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.designsystem.AppColors
 import com.meshcoreone.android.core.designsystem.accentBackgroundIf
-import com.meshcoreone.android.core.designsystem.accentBrushOrNull
 import com.meshcoreone.android.core.designsystem.LocalMeshTheme
 import com.meshcoreone.android.core.designsystem.WCAGContrast
 import com.meshcoreone.android.core.designsystem.accessibleForeground
@@ -416,15 +415,15 @@ private fun RoomMessageRowContent(
                 }
                 val gradientBubble = message.isFromSelf && message.status != MessageStatus.FAILED
                 Surface(
-                    modifier = Modifier.testTag("room-bubble:${message.id}")
-                        .accentBackgroundIf(gradientBubble, MaterialTheme.shapes.large),
-                    color = if (gradientBubble && accentBrushOrNull() != null) androidx.compose.ui.graphics.Color.Transparent else bubble.toComposeColor(),
+                    modifier = Modifier.testTag("room-bubble:${message.id}"),
+                    color = bubble.toComposeColor(),
                     contentColor = foreground.toComposeColor(),
                     shape = MaterialTheme.shapes.large,
                 ) {
                     MessageBody(
                         message.text, message.isFromSelf, currentUserName = null, onLink = { onLink(it) },
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        modifier = Modifier.accentBackgroundIf(gradientBubble, MaterialTheme.shapes.large)
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
                         baseColor = preferredForeground.toComposeColor(),
                         backgroundColor = bubble.toComposeColor(),
                     )

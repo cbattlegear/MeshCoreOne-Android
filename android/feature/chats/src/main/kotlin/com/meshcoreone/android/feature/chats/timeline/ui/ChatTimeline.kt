@@ -624,15 +624,15 @@ private fun MessageBubble(
         val solid = (if (outgoing) roles.outgoingBubble else roles.incomingBubble).toComposeColor()
         val shape = MaterialTheme.shapes.medium
         CompositionLocalProvider(LocalBubbleBackground provides if (gradientBubble) roles.outgoingBubble.toComposeColor() else null) {
+        // The Surface paints the opaque start stop (what contrast is measured against); the gradient is laid over it.
         Surface(
-            modifier = Modifier.widthIn(max = 640.dp).testTag("timeline-bubble:${row.message.id}")
-                .accentBackgroundIf(gradientBubble, shape).then(actionsModifier),
-            color = if (gradientBubble) Color.Transparent else solid,
+            modifier = Modifier.widthIn(max = 640.dp).testTag("timeline-bubble:${row.message.id}").then(actionsModifier),
+            color = if (gradientBubble) roles.outgoingBubble.toComposeColor() else solid,
             contentColor = if (gradientBubble) roles.onAccentGradient.toComposeColor()
                 else (if (outgoing) roles.onOutgoingBubble else roles.onIncomingBubble).toComposeColor(),
             shape = shape,
         ) {
-            Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Column(Modifier.accentBackgroundIf(gradientBubble, shape).padding(horizontal = 12.dp, vertical = 8.dp)) {
                 if (showSenderName && !outgoing && row.message.isChannelMessage && row.startsGroup) {
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                         val sender = checkNotNull(resolution)

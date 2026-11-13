@@ -20,6 +20,7 @@ import com.meshcoreone.android.core.designsystem.toComposeColor
 import com.meshcoreone.android.core.designsystem.ThemeColor
 import com.meshcoreone.android.core.designsystem.ThemeRegistry
 import com.meshcoreone.android.core.designsystem.WCAGContrast
+import com.meshcoreone.android.core.designsystem.toComposeColor
 import com.meshcoreone.android.core.designsystem.toThemeColor
 import com.meshcoreone.android.core.model.MessageDTO
 import com.meshcoreone.android.core.model.MessageDirection
@@ -55,11 +56,18 @@ internal fun auditMessagingContrast(
         createdAt = Instant.ofEpochSecond(100), status = MessageStatus.DELIVERED,
     ))
     var surface = Color.Unspecified
+    // AndroidOnly: gradient themes paint own bubbles as a brush; contrast is then proven on BOTH gradient stops.
+    var gradientStops: List<ThemeColor>? = null
     content {
         MeshCoreTheme(selected.value, preference.value, highContrast = high.value, motionScale = 0f) {
             val roles = LocalMeshTheme.current.roles
-            val color = (if (outgoing.value) roles.outgoingBubble else roles.incomingBubble).toComposeColor()
-            SideEffect { surface = color }
+            val gradient = roles.accentGradient
+            val stops = if (outgoing.value) gradient?.stops else null
+            val color = when {
+                stops != null -> stops.first().toComposeColor()
+                else -> (if (outgoing.value) roles.outgoingBubble else roles.incomingBubble).toComposeColor()
+            }
+            SideEffect { surface = color; gradientStops = stops }
             surfaceContent {
                 ChatTimeline(
                     ChatTimelineState(messages = listOf(message.value),
@@ -97,7 +105,8 @@ internal fun auditMessagingContrast(
                     )
                     val layout = textLayout(node)
                     assertFont200Unclipped(node)
-                    val background = paintedBackground(node, surface)
+                    val stops = gradientStops
+                    val background = if (stops != null) surface.toThemeColor() else paintedBackground(node, surface)
                     val annotated = layout.layoutInput.text
                     val emitted = annotated.spanStyles + annotated.getLinkAnnotations(0, annotated.length).mapNotNull { link ->
                         link.item.styles?.style?.let { androidx.compose.ui.text.AnnotatedString.Range(it, link.start, link.end) }
@@ -109,7 +118,10 @@ internal fun auditMessagingContrast(
                             .fold(androidx.compose.ui.text.SpanStyle()) { combined, span -> combined.merge(span.item) }
                         assertTrue("Unresolved emitted foreground at $start-$end", style.color.isSpecified)
                         val fill = if (style.background.isSpecified) style.background.toThemeColor().compositeOver(background) else background
-                        val ratio = WCAGContrast.contrastRatio(style.color.toThemeColor(), fill)
+                        val ratio = (stops?.map { stop ->
+                            val stopFill = if (style.background.isSpecified) style.background.toThemeColor().compositeOver(stop) else stop
+                            WCAGContrast.contrastRatio(style.color.toThemeColor(), stopFill)
+                        } ?: listOf(WCAGContrast.contrastRatio(style.color.toThemeColor(), fill))).min()
                         val identityToken = formatted.tokens.any {
                             it.start <= start && it.end >= end && it.color == LinkColor.MENTION_IDENTITY
                         }

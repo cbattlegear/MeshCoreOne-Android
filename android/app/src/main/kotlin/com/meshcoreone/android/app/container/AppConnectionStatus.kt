@@ -48,7 +48,7 @@ fun AppConnectionStatus(
         overlayQuiescent = tipHostVisible,
     )
     Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        Box(Modifier.fillMaxWidth().padding(vertical = 2.dp), contentAlignment = Alignment.Center) {
             SyncingPillView(
                 container.appState.statusPillState(ui, connection.state),
                 SyncingPillActions(onDisconnectedTap),

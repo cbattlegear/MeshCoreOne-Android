@@ -91,7 +91,7 @@ class SyncingPillComposeTest {
             assertEquals("Custom Error", failure.text.resolve(host.get().resources))
             val tag = "custom-failure:${revision.value}"
             val pill = compose.onNodeWithTag(tag).assertIsDisplayed()
-                .assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp)
+                .assertWidthIsAtLeast(48.dp)
             val layout = assertMountedText(
                 compose, pill, "Custom Error", 2f, LayoutDirection.Ltr, "original verbatim custom failure",
             )

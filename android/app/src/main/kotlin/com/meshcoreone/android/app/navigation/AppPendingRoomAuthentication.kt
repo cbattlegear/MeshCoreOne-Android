@@ -82,6 +82,7 @@ internal fun AppPendingRoomAuthentication(
             onRetryLookup = {
                 if (retryJob?.isActive != true) retryJob = scope.launch { holder.prepareAuthentication() }
             },
+            onCancelAttempt = { authenticationJob?.cancel() },
         )
     }
 }

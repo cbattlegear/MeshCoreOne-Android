@@ -48,6 +48,12 @@ data class RoomConversationState(
     val isAuthenticating: Boolean = false,
     val authenticationContact: ContactDTO? = null,
     val authenticationLookupComplete: Boolean = false,
+    /** The remembered password offered to the sheet; null when none is stored. */
+    val savedPassword: String? = null,
+    /** What the running login is waiting for; null while the radio has not accepted it yet. */
+    val loginProgress: RoomLoginProgress? = null,
+    /** When the running login began ([RoomConversationStateHolder] clock), for the elapsed-time readout. */
+    val authenticationStartedAtMillis: Long? = null,
     val failure: Throwable? = null,
 )
 
@@ -56,6 +62,7 @@ class RoomConversationStateHolder(
     private val dependencies: RoomConversationDependencies,
     private val scope: CoroutineScope,
     private val awaitReloadDebounce: suspend () -> Unit = { delay(RELOAD_DEBOUNCE) },
+    private val nowMillis: () -> Long = System::currentTimeMillis,
 ) {
     private val mutableState = MutableStateFlow(RoomConversationState(session))
     val state: StateFlow<RoomConversationState> = mutableState
@@ -169,13 +176,26 @@ class RoomConversationStateHolder(
             if (contact != null && (contact.radioId != session.radioId || contact.publicKey != session.publicKey)) {
                 throw PersistenceStoreException(PersistenceStoreError.InvalidData)
             }
-            mutableState.update { it.copy(authenticationContact = contact, authenticationLookupComplete = true) }
+            val saved = contact?.let { readSavedPassword(it) }
+            mutableState.update {
+                it.copy(authenticationContact = contact, authenticationLookupComplete = true, savedPassword = saved)
+            }
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (failure: Exception) {
             mutableState.update { it.copy(authenticationLookupComplete = true, failure = failure) }
             dependencies.diagnostics.report("find room contact", failure)
         }
+    }
+
+    /** A storage failure reads as "nothing saved", like Swift's `try?` lookup; the sheet then starts empty. */
+    private suspend fun readSavedPassword(contact: ContactDTO): String? = try {
+        dependencies.service.savedPassword(contact)
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (failure: Exception) {
+        dependencies.diagnostics.report("read saved room password", failure)
+        null
     }
 
     suspend fun authenticate(password: String?, rememberPassword: Boolean): Boolean {
@@ -185,33 +205,64 @@ class RoomConversationStateHolder(
         return true
     }
 
+    /**
+     * Logs in with [password] as typed: an empty string is a guest login (rooms without a password), `null` falls back
+     * to the stored password, and anything past [MAX_PASSWORD_LENGTH] characters is dropped like the node would.
+     */
     suspend fun authenticateForNavigation(password: String?, rememberPassword: Boolean): RemoteNodeSessionDTO? {
         if (!authentication.tryLock()) return null
         try {
             val current = mutableState.value
             val contact = current.authenticationContact ?: return null
-            mutableState.update { it.copy(isAuthenticating = true, failure = null) }
+            mutableState.update {
+                it.copy(
+                    isAuthenticating = true, failure = null, loginProgress = null,
+                    authenticationStartedAtMillis = nowMillis(),
+                )
+            }
             try {
-                val joined = dependencies.service.join(contact, password?.takeIf(String::isNotEmpty), rememberPassword)
+                val joined = dependencies.service.join(contact, password?.let { truncatedPassword(it) }, rememberPassword) { progress ->
+                    mutableState.update { it.copy(loginProgress = progress) }
+                }
                 currentCoroutineContext().ensureActive()
                 if (joined.radioId != current.session.radioId || joined.publicKey != current.session.publicKey ||
                     !joined.isRoom
                 ) throw PersistenceStoreException(PersistenceStoreError.InvalidData)
                 if (!joined.isConnected) throw MessageServiceException(MessageServiceError.NotConnected)
+                forgetSavedPasswordIfUnchecked(contact, current.savedPassword != null, rememberPassword)
                 mutableState.update {
-                    it.copy(session = joined, isAuthenticating = false)
+                    it.copy(session = joined, isAuthenticating = false, loginProgress = null, authenticationStartedAtMillis = null)
                 }
                 return joined
             } catch (cancelled: CancellationException) {
-                mutableState.update { it.copy(isAuthenticating = false) }
+                mutableState.update {
+                    it.copy(isAuthenticating = false, loginProgress = null, authenticationStartedAtMillis = null)
+                }
                 throw cancelled
             } catch (failure: Exception) {
-                mutableState.update { it.copy(isAuthenticating = false, failure = failure) }
+                mutableState.update {
+                    it.copy(
+                        isAuthenticating = false, failure = failure, loginProgress = null,
+                        authenticationStartedAtMillis = null,
+                    )
+                }
                 dependencies.diagnostics.report("authenticate room", failure)
                 return null
             }
         } finally {
             authentication.unlock()
+        }
+    }
+
+    /** Swift deletes the saved password when the user unchecks "Remember Password" and the login succeeds. */
+    private suspend fun forgetSavedPasswordIfUnchecked(contact: ContactDTO, hadSaved: Boolean, remember: Boolean) {
+        if (!hadSaved || remember) return
+        try {
+            dependencies.service.forgetPassword(contact)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            dependencies.diagnostics.report("forget saved room password", failure)
         }
     }
 
@@ -328,6 +379,31 @@ class RoomConversationStateHolder(
 
     companion object {
         const val GROUPING_GAP_SECONDS = 300L
+
+        /** MeshCore rooms accept 15-character passwords (Swift `NodeAuthenticationSheet.maxPasswordLength`). */
+        const val MAX_PASSWORD_LENGTH = 15
+
+        private val GRAPHEME = java.util.regex.Pattern.compile("\\X")
+
+        /** Swift `Character` count: extended grapheme clusters, so an emoji with a skin tone counts once. */
+        fun characterCount(text: String): Int {
+            val matcher = GRAPHEME.matcher(text)
+            var count = 0
+            while (matcher.find()) count += 1
+            return count
+        }
+
+        /** The first [MAX_PASSWORD_LENGTH] characters of [password]. */
+        fun truncatedPassword(password: String): String {
+            val matcher = GRAPHEME.matcher(password)
+            var end = 0
+            var count = 0
+            while (count < MAX_PASSWORD_LENGTH && matcher.find()) {
+                end = matcher.end()
+                count += 1
+            }
+            return if (matcher.find()) password.substring(0, end) else password
+        }
         private val RELOAD_DEBOUNCE = 50.milliseconds
 
         fun rows(messages: List<RoomMessageDTO>): List<RoomMessageRow> = messages.mapIndexed { index, message ->

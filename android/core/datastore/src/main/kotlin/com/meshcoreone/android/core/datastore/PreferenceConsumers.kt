@@ -60,10 +60,15 @@ class AppearancePreferenceStore(private val preferences: PreferenceStore) {
             "default", "ember", "fern", "marine", "olive", "lavender", "sakura", "solarized", "nord", "catppuccin",
             "gradient", // AndroidOnly: not in the pinned Swift registry
         ).snapshot()
+        /** AndroidOnly: the theme a fresh install shows before the user picks one. */
+        const val FRESH_INSTALL_THEME_ID = "gradient"
         val COLOR_SCHEMES: SnapshotList<String> = listOf("system", "light", "dark").snapshot()
 
         private fun appearance(snapshot: PreferenceSnapshot) = AppearanceSelection(
-            snapshot[AppearanceStorageKey.selectedThemeID].takeIf { it in UNLOCKED_THEME_IDS } ?: "default",
+            // AndroidOnly: a theme that was never chosen resolves to Gradient (see docs/android/deviations/WP-301.md); an
+            // explicit "default" choice and corrupt values keep the Swift fallback.
+            snapshot.stored(AppearanceStorageKey.selectedThemeID)?.takeIf { it in UNLOCKED_THEME_IDS }
+                ?: if (snapshot.stored(AppearanceStorageKey.selectedThemeID) == null) FRESH_INSTALL_THEME_ID else "default",
             snapshot[AppearanceStorageKey.appColorSchemePreference].takeIf { it in COLOR_SCHEMES } ?: "system",
         )
     }

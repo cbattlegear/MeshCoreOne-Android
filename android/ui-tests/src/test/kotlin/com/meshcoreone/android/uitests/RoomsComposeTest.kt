@@ -1983,7 +1983,7 @@ class RoomsComposeTest {
         }
         val inputs = CoverageMatrix.themeWindowFontCases
         CoverageMatrix.assertThemeWindowFontCoverage()
-        assertEquals(57, inputs.size)
+        assertEquals(63, inputs.size)
         val captures = ConversationScreenCases(compose, host.get(), setContent = { host.get().setContent(content = it) })
         val output = File(requireNotNull(System.getProperty("wp502ScreenshotDirectory")), "sdk31/room-avatars")
         for (case in inputs) {
@@ -2475,7 +2475,7 @@ class RoomsComposeTest {
         val inputs = CoverageMatrix.themeWindowFontCases.mapIndexed { index, case ->
             case.copy(id = "room-${case.id}", heightDp = 1000, locale = CoverageMatrix.locales[index % 12])
         }
-        assertEquals(57, inputs.size)
+        assertEquals(63, inputs.size)
         assertEquals(CoverageMatrix.locales.toSet(), inputs.map { it.locale }.toSet())
         fun surface(index: Int) = (index / 3 + index % 3) % 3
         assertEquals(

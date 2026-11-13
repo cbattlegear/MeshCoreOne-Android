@@ -33,7 +33,13 @@ class ThemePolicyTest {
     @OriginalCase("ThemeRegistryTests::allThemes holds the ten built-ins()")
     @Test fun registryOrder() {
         assertEquals(listOf("default", "ember", "fern", "marine", "olive", "lavender", "sakura", "solarized", "nord", "catppuccin"),
-            ThemeRegistry.allThemes.map { it.id.rawValue })
+            ThemeRegistry.allThemes.take(10).map { it.id.rawValue })
+    }
+    @Test fun androidOnlyThemesFollowTheTenSourceThemes() {
+        assertEquals(listOf("gradient"), ThemeRegistry.allThemes.drop(10).map { it.id.rawValue })
+        assertEquals(ThemeId.GRADIENT, ThemeRegistry.theme("gradient")?.id)
+        assertNull(ThemeRegistry.theme("gradient")?.sourceProductID)
+        assertEquals(ThemeId.entries.map { it.rawValue }, ThemeRegistry.allThemes.map { it.id.rawValue })
     }
     @OriginalCase("ThemeRegistryTests::theme(forID:) resolves known IDs and returns nil for unknown()")
     @Test fun registryLookup() {
@@ -54,14 +60,15 @@ class ThemePolicyTest {
         assertEquals(expected, ThemeRegistry.allThemes.mapNotNull { it.sourceProductID }.toSet())
         assertEquals("io.pocketmesh.app.theme.ember", ThemeRegistry.theme("ember")?.sourceProductID)
     }
-    @OriginalCase("ThemeRegistryTests::only Ember forces a color scheme, and it forces dark()")
+    @OriginalCase("ThemeRegistryTests::only Ember forces a color scheme, and it forces dark()") // plus the Android-only Gradient
     @Test fun forcedScheme() {
-        assertEquals(listOf(ThemeId.EMBER), ThemeRegistry.allThemes.filter { it.preferredColorScheme != null }.map { it.id })
+        assertEquals(listOf(ThemeId.EMBER, ThemeId.GRADIENT), ThemeRegistry.allThemes.filter { it.preferredColorScheme != null }.map { it.id })
+        assertEquals(ColorScheme.DARK, ThemeRegistry.theme("gradient")?.preferredColorScheme)
         assertEquals(ColorScheme.DARK, ThemeRegistry.theme("ember")?.preferredColorScheme)
     }
     @OriginalCase("ThemeRegistryTests::theme IDs are unique()")
     @Test fun uniqueIDs() {
-        assertEquals(10, ThemeRegistry.allThemes.map { it.id }.toSet().size)
+        assertEquals(11, ThemeRegistry.allThemes.map { it.id }.toSet().size)
     }
     @OriginalCase("ThemeStructureTests::Default theme paints no surfaces()")
     @Test fun defaultHasNoSurfaces() { assertNull(ThemeRegistry.default.surfaces) }
@@ -118,12 +125,12 @@ class ThemePolicyTest {
         for (theme in ThemeRegistry.allThemes) for (preference in AppColorSchemePreference.entries) {
             for (system in ColorScheme.entries) for (high in listOf(false, true)) {
                 val chosen = theme.effectiveColorScheme(preference) ?: system
-                assertEquals(if (theme.id == ThemeId.EMBER) ColorScheme.DARK else preference.colorScheme ?: system,
+                assertEquals(if (theme.id == ThemeId.EMBER || theme.id == ThemeId.GRADIENT) ColorScheme.DARK else preference.colorScheme ?: system,
                     theme.resolve(chosen, high).colorScheme)
                 combinations++
             }
         }
-        assertEquals(120, combinations)
+        assertEquals(132, combinations)
     }
     @Test fun rowFlatteningAndSourceCardMetrics() {
         val surfaces = assertNotNull(ThemeRegistry.theme("marine")?.surfaces)

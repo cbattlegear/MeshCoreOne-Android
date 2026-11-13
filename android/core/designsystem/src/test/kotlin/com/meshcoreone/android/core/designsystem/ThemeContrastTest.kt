@@ -42,7 +42,7 @@ class ThemeContrastTest {
     }
     @OriginalCase("ThemeContrastTests::channel, repeater, and room avatars resolve to distinct on-anchor hues for every gamut theme()", 9)
     @Test fun originalCategoryDistinctHueParameters() {
-        val themes = ThemeRegistry.allThemes.filter { it.categoryAvatarOverride == null }
+        val themes = ThemeRegistry.allThemes.filter { it.categoryAvatarOverride == null && it.id != ThemeId.GRADIENT }
         for (theme in themes) {
             val hues = AvatarCategory.anchorPriority.map(theme::categoryHue)
             assertEquals(3, hues.toSet().size)

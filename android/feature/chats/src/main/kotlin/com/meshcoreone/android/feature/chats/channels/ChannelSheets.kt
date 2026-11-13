@@ -5,6 +5,7 @@
 // PortedFrom: MC1/Views/Chats/Sheets/JoinHashtagChannelView.swift@db14559b39d32322b06477c6ae676112f583db50
 package com.meshcoreone.android.feature.chats.channels
 
+import com.meshcoreone.android.core.designsystem.AccentButton
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -277,7 +278,7 @@ private fun ChannelNameAndSecretForm(
 
 @Composable
 private fun SubmitButton(isSubmitting: Boolean, label: Int, enabled: Boolean = true, onClick: () -> Unit) {
-    Button(
+    AccentButton(
         onClick,
         enabled = enabled && !isSubmitting,
         modifier = Modifier.fillMaxWidth().sharedTouchTarget(),

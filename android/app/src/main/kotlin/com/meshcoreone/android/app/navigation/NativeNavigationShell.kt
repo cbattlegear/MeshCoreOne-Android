@@ -28,7 +28,6 @@ import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Badge
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -89,6 +88,9 @@ import com.meshcoreone.android.core.contracts.FeatureRoute
 import com.meshcoreone.android.core.contracts.domain.PersistenceStoreException
 import com.meshcoreone.android.core.designsystem.LocalMeshTheme
 import com.meshcoreone.android.core.designsystem.MeshSymbol
+import com.meshcoreone.android.core.designsystem.AccentBadge
+import com.meshcoreone.android.core.designsystem.accentTint
+import com.meshcoreone.android.core.designsystem.accentUnderline
 import com.meshcoreone.android.core.designsystem.themedCanvas
 import com.meshcoreone.android.feature.chats.ChatsEntry
 import com.meshcoreone.android.feature.chats.list.ChatConversationType as FeatureChatConversationType
@@ -345,7 +347,12 @@ fun NativeNavigationShell(
                         .semantics {
                             if (tab == AppTab.CHATS && unreadDescription.isNotEmpty()) stateDescription = unreadDescription
                         },
-                    icon = { Icon(tab.symbol().vector, contentDescription = if (useRail) label else null) },
+                    icon = {
+                        Icon(
+                            tab.symbol().vector, contentDescription = if (useRail) label else null,
+                            modifier = Modifier.accentTint(enabled = state.selectedTab == tab),
+                        )
+                    },
                     label = if (useRail) null else ({
                         Text(
                             label,
@@ -355,7 +362,7 @@ fun NativeNavigationShell(
                         )
                     }),
                     badge = if (tab == AppTab.CHATS && unreadCount > 0) ({
-                        Badge(
+                        AccentBadge(
                             Modifier.wrapContentWidth(unbounded = true).width(IntrinsicSize.Max)
                                 .semantics { hideFromAccessibility() },
                         ) {
@@ -385,6 +392,7 @@ fun NativeNavigationShell(
                 topBar = {
                     Column {
                         TopAppBar(
+                            modifier = Modifier.accentUnderline(),
                             expandedHeight = (if (conversationHeader?.subtitle != null) 96.dp else 64.dp) * fontScale,
                             title = {
                                 Column(Modifier.fillMaxWidth()) {

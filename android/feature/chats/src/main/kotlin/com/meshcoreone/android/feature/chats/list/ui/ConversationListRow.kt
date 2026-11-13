@@ -26,6 +26,7 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
+import com.meshcoreone.android.core.l10n.generated.AppContactsStrings
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings
 import com.meshcoreone.android.core.model.NotificationLevel
 import com.meshcoreone.android.core.model.snapshot
@@ -92,7 +93,7 @@ internal fun ConversationListRow(
         SwipeActionsContainer(
             rowIdentity = conversation.id.toString(),
             actions = actions.snapshot(),
-            actionsLabel = UiText.Resource(AppChatsStrings.chatsComposeNewMessage),
+            actionsLabel = UiText.Resource(AppContactsStrings.contactsDiscoveryMenu),
             onAction = { id -> ConversationAction.fromId(id)?.let(onAction) },
         ) {
             Box {
@@ -102,7 +103,7 @@ internal fun ConversationListRow(
                         .selectedRowHighlight(isSelected)
                         .combinedClickable(enabled = enabled, onClick = onClick, onLongClick = { menuOpen = true })
                         .sharedTouchTarget()
-                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                        .padding(horizontal = RowHorizontalPadding, vertical = 6.dp)
                         .semantics(mergeDescendants = true) {
                             contentDescription = description
                             role = Role.Button

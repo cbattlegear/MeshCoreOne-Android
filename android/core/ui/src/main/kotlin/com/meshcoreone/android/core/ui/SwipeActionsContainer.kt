@@ -22,7 +22,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
-import com.meshcoreone.android.core.designsystem.MeshSymbol
 import com.meshcoreone.android.core.model.SnapshotList
 import kotlin.math.abs
 
@@ -54,7 +53,7 @@ fun SwipeActionsContainer(
         Box(Modifier.weight(1f)) { content() }
         Box {
             IconButton({ open = true }, modifier = Modifier.sharedTouchTarget()) {
-                Icon(MeshSymbol.SETTINGS.vector, uiString(actionsLabel))
+                Icon(SharedGlyphs.MoreVertical, uiString(actionsLabel))
             }
             DropdownMenu(open, { open = false }) {
                 for (action in actions) DropdownMenuItem(

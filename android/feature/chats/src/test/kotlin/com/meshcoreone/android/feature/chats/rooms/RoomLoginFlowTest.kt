@@ -102,6 +102,14 @@ class RoomLoginFlowTest {
     }
 
     @Test
+    fun `a pasted line break never reaches the node`() = runBlocking {
+        val (holder, service) = rig()
+        holder.prepareAuthentication()
+        holder.authenticateForNavigation("secret\r\n", true)
+        assertEquals("secret", service.joinPassword)
+    }
+
+    @Test
     fun `passwords are cut to fifteen characters and emoji count once`() = runBlocking {
         val (holder, service) = rig()
         holder.prepareAuthentication()

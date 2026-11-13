@@ -221,7 +221,7 @@ class RoomConversationStateHolder(
                 )
             }
             try {
-                val joined = dependencies.service.join(contact, password?.let { truncatedPassword(it) }, rememberPassword) { progress ->
+                val joined = dependencies.service.join(contact, password?.let { truncatedPassword(it.filterNot { c -> c == '\n' || c == '\r' }) }, rememberPassword) { progress ->
                     mutableState.update { it.copy(loginProgress = progress) }
                 }
                 currentCoroutineContext().ensureActive()

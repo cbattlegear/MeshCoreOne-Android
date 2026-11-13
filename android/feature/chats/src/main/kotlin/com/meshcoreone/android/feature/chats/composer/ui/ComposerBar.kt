@@ -15,11 +15,12 @@ import androidx.compose.foundation.text.KeyboardOptions
 import com.meshcoreone.android.core.ui.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilledIconButton
+import com.meshcoreone.android.core.ui.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -211,7 +212,11 @@ private fun ComposerField(
         },
         isError = state.isOverLimit,
         maxLines = MAX_VISIBLE_LINES,
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(24.dp),
+        colors = OutlinedTextFieldDefaults.colors(
+            unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
+            focusedBorderColor = MaterialTheme.colorScheme.outline,
+        ),
         keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
     )
 }

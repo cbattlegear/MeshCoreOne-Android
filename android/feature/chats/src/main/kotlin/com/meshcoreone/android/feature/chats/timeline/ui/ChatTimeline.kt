@@ -40,6 +40,17 @@ import com.meshcoreone.android.core.ui.CircularProgressIndicator
 import com.meshcoreone.android.core.designsystem.AccentExtendedFab
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.background
+import androidx.compose.material3.contentColorFor
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.graphics.Color
+import com.meshcoreone.android.core.designsystem.LocalMeshTheme
+import com.meshcoreone.android.core.designsystem.accentBackgroundIf
+import com.meshcoreone.android.core.designsystem.accentBrushOrNull
+import com.meshcoreone.android.core.designsystem.toComposeColor
+import com.meshcoreone.android.feature.chats.composer.ui.LocalBubbleBackground
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -453,30 +464,38 @@ internal fun resolveInitialTimelinePosition(
 
 @Composable
 private fun DayDivider(row: TimelineRow.DayDivider) {
-    Text(
-        DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).format(row.date),
-        style = MaterialTheme.typography.labelMedium,
-        textAlign = TextAlign.Center,
-        modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp).semantics { heading() },
-    )
+    Box(Modifier.fillMaxWidth().padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
+        Text(
+            DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).format(row.date),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            modifier = Modifier
+                .background(MaterialTheme.colorScheme.surfaceVariant, CircleShape)
+                .padding(horizontal = 12.dp, vertical = 4.dp)
+                .semantics { heading() },
+        )
+    }
 }
 
 @Composable
 private fun UnreadDivider() {
     val label = stringResource(AppChatsStrings.chatsDividerNewMessages)
-    Text(
-        label,
-        color = MaterialTheme.colorScheme.primary,
-        style = MaterialTheme.typography.labelLarge,
-        textAlign = TextAlign.Center,
-        modifier = Modifier
+    Row(
+        Modifier
             .fillMaxWidth()
-            .padding(vertical = 8.dp)
-            .semantics {
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .semantics(mergeDescendants = true) {
                 heading()
                 contentDescription = label
             },
-    )
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        HorizontalDivider(Modifier.weight(1f), color = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f))
+        Text(label, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge, textAlign = TextAlign.Center)
+        HorizontalDivider(Modifier.weight(1f), color = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f))
+    }
 }
 
 @Composable
@@ -600,11 +619,18 @@ private fun MessageBubble(
                     }
                 }
             }
+        // Own, non-failed bubbles carry the theme's accent gradient; every other bubble keeps its solid role color.
+        val gradientBubble = outgoing && row.message.status != MessageStatus.FAILED && accentBrushOrNull() != null
+        val solid = (if (outgoing) roles.outgoingBubble else roles.incomingBubble).toComposeColor()
+        val shape = MaterialTheme.shapes.medium
+        CompositionLocalProvider(LocalBubbleBackground provides if (gradientBubble) roles.outgoingBubble.toComposeColor() else null) {
         Surface(
-            modifier = Modifier.widthIn(max = 640.dp).testTag("timeline-bubble:${row.message.id}").then(actionsModifier),
-            color = (if (outgoing) roles.outgoingBubble else roles.incomingBubble).toComposeColor(),
-            contentColor = (if (outgoing) roles.onOutgoingBubble else roles.onIncomingBubble).toComposeColor(),
-            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.widthIn(max = 640.dp).testTag("timeline-bubble:${row.message.id}")
+                .accentBackgroundIf(gradientBubble, shape).then(actionsModifier),
+            color = if (gradientBubble) Color.Transparent else solid,
+            contentColor = if (gradientBubble) roles.onAccentGradient.toComposeColor()
+                else (if (outgoing) roles.onOutgoingBubble else roles.onIncomingBubble).toComposeColor(),
+            shape = shape,
         ) {
             Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                 if (showSenderName && !outgoing && row.message.isChannelMessage && row.startsGroup) {
@@ -648,6 +674,7 @@ private fun MessageBubble(
                     contentColor = (if (outgoing) roles.onOutgoingBubble else roles.onIncomingBubble).toComposeColor(),
                 )
             }
+        }
         }
     }
 }

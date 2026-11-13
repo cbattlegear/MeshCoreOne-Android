@@ -75,6 +75,9 @@ private fun mentionFill(preferred: ThemeColor, bubble: ThemeColor, alpha: Float,
     return fill(preferred.mix(neutral, high))
 }
 
+/** AndroidOnly: the opaque color a bubble actually paints (gradient bubbles supply their start stop) for text contrast. */
+internal val LocalBubbleBackground = androidx.compose.runtime.compositionLocalOf<Color?> { null }
+
 /** One `AnnotatedString` from the token model: base color, then per-token color, underline, bold, self-mention fill. */
 internal fun FormattedMessage.toAnnotatedString(
     base: Color,
@@ -133,8 +136,9 @@ fun MessageBody(
     previewUrl: String? = null,
     style: TextStyle = MaterialTheme.typography.bodyLarge,
     baseColor: Color = LocalContentColor.current,
-    backgroundColor: Color = (if (isOutgoing) LocalMeshTheme.current.roles.outgoingBubble
-        else LocalMeshTheme.current.roles.incomingBubble).toComposeColor(),
+    backgroundColor: Color = LocalBubbleBackground.current
+        ?: (if (isOutgoing) LocalMeshTheme.current.roles.outgoingBubble
+            else LocalMeshTheme.current.roles.incomingBubble).toComposeColor(),
 ) {
     val reading = MecpReading.lines(text, LocalResources.current)
     if (reading != null) {

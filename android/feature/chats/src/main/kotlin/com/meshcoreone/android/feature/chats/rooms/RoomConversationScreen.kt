@@ -13,6 +13,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -74,6 +75,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.designsystem.AppColors
+import com.meshcoreone.android.core.designsystem.accentBackgroundIf
+import com.meshcoreone.android.core.designsystem.accentBrushOrNull
 import com.meshcoreone.android.core.designsystem.LocalMeshTheme
 import com.meshcoreone.android.core.designsystem.WCAGContrast
 import com.meshcoreone.android.core.designsystem.accessibleForeground
@@ -261,11 +264,12 @@ fun RoomConversationContent(
         )
         state.failure?.let { failure ->
             Row(
-                Modifier.fillMaxWidth().clickable(onClick = onDismissError).padding(12.dp),
+                Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                    .clickable(role = androidx.compose.ui.semantics.Role.Button, onClick = onDismissError).padding(12.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(failureText(failure), color = MaterialTheme.colorScheme.onErrorContainer, modifier = Modifier.weight(1f))
-                Text("×")
+                Text("×", Modifier.clearAndSetSemantics {})
             }
         }
         when {
@@ -410,9 +414,11 @@ private fun RoomMessageRowContent(
                     }
                     Spacer(Modifier.width(avatarGap))
                 }
+                val gradientBubble = message.isFromSelf && message.status != MessageStatus.FAILED
                 Surface(
-                    modifier = Modifier.testTag("room-bubble:${message.id}"),
-                    color = bubble.toComposeColor(),
+                    modifier = Modifier.testTag("room-bubble:${message.id}")
+                        .accentBackgroundIf(gradientBubble, MaterialTheme.shapes.large),
+                    color = if (gradientBubble && accentBrushOrNull() != null) androidx.compose.ui.graphics.Color.Transparent else bubble.toComposeColor(),
                     contentColor = foreground.toComposeColor(),
                     shape = MaterialTheme.shapes.large,
                 ) {

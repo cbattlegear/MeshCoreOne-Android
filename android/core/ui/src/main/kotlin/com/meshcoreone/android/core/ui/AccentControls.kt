@@ -15,6 +15,9 @@ import androidx.compose.material3.ButtonElevation
 import androidx.compose.material3.CircularProgressIndicator as M3CircularProgressIndicator
 import androidx.compose.material3.FilterChip as M3FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.FilledIconButton as M3FilledIconButton
+import androidx.compose.material3.IconButtonColors
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LinearProgressIndicator as M3LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ProgressIndicatorDefaults
@@ -139,4 +142,29 @@ fun FilterChip(
             selectedBorderColor = Color.Transparent, borderWidth = 1.dp,
         ),
     )
+}
+
+/** Filled round icon button (send, confirm): gradient container on gradient themes while enabled, stock Material otherwise. */
+@Composable
+fun FilledIconButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    shape: Shape = IconButtonDefaults.filledShape,
+    colors: IconButtonColors? = null,
+    content: @Composable () -> Unit,
+) {
+    val brush = accentBrushOrNull()
+    if (brush != null && enabled && colors == null) {
+        M3FilledIconButton(
+            onClick, modifier.background(brush, shape), enabled, shape,
+            IconButtonDefaults.filledIconButtonColors(
+                containerColor = Color.Transparent,
+                contentColor = LocalMeshTheme.current.roles.onAccentGradient.toComposeColor(),
+            ),
+            content = content,
+        )
+    } else {
+        M3FilledIconButton(onClick, modifier, enabled, shape, colors ?: IconButtonDefaults.filledIconButtonColors(), content = content)
+    }
 }

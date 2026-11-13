@@ -88,8 +88,9 @@ internal fun MapControls(
     Card(
         modifier.padding(8.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),
         ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
     ) {
         Column(Modifier.padding(horizontal = 8.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(
@@ -101,7 +102,7 @@ internal fun MapControls(
                 FilterChip(
                     selected = filtersOpen || filtersActive,
                     onClick = { filtersOpen = !filtersOpen },
-                    modifier = ControlSize.testTag("map:filters-toggle"),
+                    modifier = Modifier.testTag("map:filters-toggle"),
                     label = {
                         Text(stringResource(
                             if (filtersActive) R.string.l10n_app_map_map_controls_filteractive
@@ -218,7 +219,7 @@ private fun OptionsMenu(
     Box {
         AssistChip(
             onClick = { open = true },
-            modifier = ControlSize.testTag("map:options-menu"),
+            modifier = Modifier.testTag("map:options-menu"),
             label = { Text(stringResource(R.string.l10n_app_map_map_controls_mapoptions)) },
         )
         DropdownMenu(open, { open = false }) {
@@ -272,34 +273,29 @@ private fun FilterPanel(
     ) {
         FilterChip(
             selected = filter.favoritesOnly,
-            modifier = ControlSize,
             onClick = { onFilter { it.setFavoritesOnly(!it.favoritesOnly) } },
             label = { Text(stringResource(R.string.l10n_app_contacts_contacts_pathedit_filter_favorites)) },
         )
         FilterChip(
             selected = filter.showDiscovered,
-            modifier = ControlSize,
             enabled = !filter.favoritesOnly,
             onClick = { onFilter { it.setShowDiscovered(!it.showDiscovered) } },
             label = { Text(stringResource(R.string.l10n_app_map_map_callout_discovered)) },
         )
         FilterChip(
             selected = clustering,
-            modifier = ControlSize,
             onClick = { onClustering(!clustering) },
             label = { Text(stringResource(R.string.l10n_app_map_map_controls_clusternodes)) },
         )
         FilterChip(
             selected = labels,
-            modifier = ControlSize,
             onClick = { onLabels(!labels) },
             label = { Text(stringResource(R.string.l10n_app_map_map_controls_showlabels)) },
         )
         ContactMapType.entries.forEach { type ->
             FilterChip(
                 selected = filter.allows(type),
-                modifier = ControlSize,
-                enabled = !filter.favoritesOnly,
+                    enabled = !filter.favoritesOnly,
                 onClick = { onFilter { it.setContactType(type, !it.allows(type), MapFilterHost.MAIN_MAP) } },
                 label = {
                     Text(stringResource(when (type) {

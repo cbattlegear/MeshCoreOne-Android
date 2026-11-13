@@ -18,34 +18,24 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.meshcoreone.android.core.designsystem.MeshSymbol
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
 import com.meshcoreone.android.core.model.snapshot
 import com.meshcoreone.android.core.ui.AvatarImageCache
@@ -71,14 +61,12 @@ data class ChatsListCallbacks(
     val onFilterChange: (ChatFilter) -> Unit,
     val onOpen: (ChatRoute) -> Unit,
     val onAction: (Conversation, ConversationAction) -> Unit,
-    val onNewChat: () -> Unit,
-    val onNewChannel: () -> Unit,
     val onDismissBanner: () -> Unit,
 )
 
 private val bannerId: UUID = UUID.fromString("00000000-0000-0000-0000-000000000306")
 
-/** Stateless Chats list: top bar, search, filter chips, rows with swipe/long-press actions and empty/loading/error states. */
+/** Stateless Chats list (the app shell owns the single top bar): search, filter chips, rows with swipe/long-press actions and empty/loading/error states. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatsListScreen(
@@ -101,12 +89,6 @@ fun ChatsListScreen(
     Scaffold(
         modifier = modifier,
         contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Top),
-        topBar = {
-            TopAppBar(
-                title = { Text(stringResource(AppChatsStrings.chatsTitle), Modifier.semantics { heading() }) },
-                actions = { NewMessageMenu(callbacks.onNewChat, callbacks.onNewChannel) },
-            )
-        },
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
             SearchField(state.searchText, callbacks.onSearchChange)
@@ -157,26 +139,6 @@ private fun ConversationList(
                 )
                 HorizontalDivider(Modifier.padding(start = 72.dp))
             }
-        }
-    }
-}
-
-@Composable
-private fun NewMessageMenu(onNewChat: () -> Unit, onNewChannel: () -> Unit) {
-    var open by remember { mutableStateOf(false) }
-    Box {
-        IconButton({ open = true }, Modifier.sharedTouchTarget()) {
-            Icon(MeshSymbol.MESSAGES.vector, stringResource(AppChatsStrings.chatsComposeNewMessage))
-        }
-        DropdownMenu(open, { open = false }) {
-            DropdownMenuItem(
-                text = { Text(stringResource(AppChatsStrings.chatsComposeNewChat)) },
-                onClick = { open = false; onNewChat() }, modifier = Modifier.sharedTouchTarget(),
-            )
-            DropdownMenuItem(
-                text = { Text(stringResource(AppChatsStrings.chatsComposeNewChannel)) },
-                onClick = { open = false; onNewChannel() }, modifier = Modifier.sharedTouchTarget(),
-            )
         }
     }
 }

@@ -142,7 +142,7 @@ class AppSettingsFeature private constructor(
         private set
     private val selectionScanGate by lazy {
         val platform = requireNotNull(container.onboarding)
-        DeviceScanCoordinator(scope, platform.pairing, platform.demo, platform.permissions, {})
+        DeviceScanCoordinator(scope, platform.pairing, platform.demo, platform.permissions, onConnected = {})
     }
 
     private val selectionPermissionKind: OnboardingPermissionKind?

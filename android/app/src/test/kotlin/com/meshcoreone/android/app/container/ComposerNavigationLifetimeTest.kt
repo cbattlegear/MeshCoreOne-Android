@@ -12,6 +12,7 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.app.navigation.AppChatConversationScreen
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
+import com.meshcoreone.android.core.contracts.domain.DirectAckAuthority
 import com.meshcoreone.android.core.contracts.domain.ChannelHistoryRejected
 import com.meshcoreone.android.core.contracts.domain.ChannelHistoryPersisting
 import com.meshcoreone.android.core.contracts.domain.ChannelIdentityWriteScope
@@ -349,7 +350,7 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
         }
         val persistence = object : PersistenceStoreProtocol by store, ChannelHistoryPersisting by store,
             QueuedChannelReadinessPersisting by store, QueuedChannelTerminalPersisting by store,
-            ChannelSubmissionPersisting by store {
+            ChannelSubmissionPersisting by store, DirectAckAuthority by store {
             override suspend fun <T> withChannelOperation(
                 block: suspend (ChannelPersisting, ChannelIdentityWriteScope) -> T,
             ): T {

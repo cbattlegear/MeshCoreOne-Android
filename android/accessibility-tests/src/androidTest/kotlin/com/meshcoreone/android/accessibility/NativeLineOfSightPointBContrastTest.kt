@@ -32,7 +32,7 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class NativeLineOfSightPointBContrastTest : DeviceAccessibilityHarness() {
-    @Test fun selectedPointBLabelClearsItsNativeGreenPaintInAll38EffectiveFrames() {
+    @Test fun selectedPointBLabelClearsItsNativeGreenPaintInAllEffectiveFrames() {
         val radio = RadioId(UUID(0, 321))
         val first = ContactDTO(id = UUID(0, 322), radioId = radio,
             publicKey = Bytes(ByteArray(32) { 0x11 }), name = "First endpoint",
@@ -122,7 +122,7 @@ class NativeLineOfSightPointBContrastTest : DeviceAccessibilityHarness() {
                 }
             }
         }
-        assertEquals(38, frames)
+        assertEquals(40, frames)
         assertEquals(1, reads)
         assertEquals(listOf(Coordinate(first.latitude, first.longitude), Coordinate(second.latitude, second.longitude)), elevations)
         assertTrue("Point B label fails unchanged4.5:1 contrast: ${failures.joinToString()}", failures.isEmpty())

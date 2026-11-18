@@ -46,6 +46,6 @@ class NativeMessagingAccessibilityTest : NativeAccessibilityHarness() {
     @Test fun auditAllowsASmallFailureOnlyLiveRegionWithoutAnnouncingOtherRows() =
         audit.auditAllowsASmallFailureOnlyLiveRegionWithoutAnnouncingOtherRows()
 
-    @Test fun renderedDirectAndChannelSpansClearTheirPaintedBubblesInAll38EffectiveFrames() =
-        audit.renderedDirectAndChannelSpansClearTheirPaintedBubblesInAll38EffectiveFrames()
+    @Test fun renderedDirectAndChannelSpansClearTheirPaintedBubblesInAllEffectiveFrames() =
+        audit.renderedDirectAndChannelSpansClearTheirPaintedBubblesInAllEffectiveFrames()
 }

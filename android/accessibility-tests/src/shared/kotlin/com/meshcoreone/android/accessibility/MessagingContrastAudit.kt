@@ -121,7 +121,7 @@ internal fun auditMessagingContrast(
             }
         }
     }
-    assertEquals("Do not silently narrow the effective frame family", 38, frames)
+    assertEquals("Do not silently narrow the effective frame family", 40, frames)
     assertTrue("Zero span measurements is not acceptance", spans >= 76)
     assertTrue("Actual painted-feature contrast below 4.5:1: ${failures.joinToString()}", failures.isEmpty())
 }

@@ -7,7 +7,7 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class NativeMessagingContrastAccessibilityTest : DeviceAccessibilityHarness() {
-    @Test fun renderedDirectAndChannelSpansClearTheirPaintedBubblesInAll38EffectiveFrames() {
+    @Test fun renderedDirectAndChannelSpansClearTheirPaintedBubblesInAllEffectiveFrames() {
         auditMessagingContrast(compose, ::content, { AuditSurface(it) },
             ::textLayout, ::assertFont200Unclipped, ::paintedBackground)
     }

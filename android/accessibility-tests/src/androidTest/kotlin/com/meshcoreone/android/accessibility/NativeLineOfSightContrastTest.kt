@@ -32,7 +32,7 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class NativeLineOfSightContrastTest : DeviceAccessibilityHarness() {
-    @Test fun selectedSavedEndpointTextClearsItsNativePaintInAll38EffectiveFrames() {
+    @Test fun selectedSavedEndpointTextClearsItsNativePaintInAllEffectiveFrames() {
         val radio = RadioId(UUID(0, 311))
         val contact = ContactDTO(id = UUID(0, 312), radioId = radio,
             publicKey = Bytes(ByteArray(32) { 0x77 }), name = "Saved endpoint",
@@ -115,7 +115,7 @@ class NativeLineOfSightContrastTest : DeviceAccessibilityHarness() {
                 }
             }
         }
-        assertEquals("Do not silently reduce the effective theme/scheme/contrast family", 38, frames)
+        assertEquals("Do not silently reduce the effective theme/scheme/contrast family", 40, frames)
         assertEquals(1, reads)
         assertEquals(1, elevations)
         assertTrue("Selected endpoint text fails unchanged 4.5:1 contrast: ${failures.joinToString()}", failures.isEmpty())

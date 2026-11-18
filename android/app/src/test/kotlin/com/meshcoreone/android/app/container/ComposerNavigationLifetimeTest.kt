@@ -13,6 +13,9 @@ import androidx.test.core.app.ApplicationProvider
 import com.meshcoreone.android.app.navigation.AppChatConversationScreen
 import com.meshcoreone.android.core.contracts.domain.DeviceConnectionState
 import com.meshcoreone.android.core.contracts.domain.DirectAckAuthority
+import com.meshcoreone.android.core.contracts.domain.DirectMessageCreationAuthority
+import com.meshcoreone.android.core.contracts.domain.DirectPendingCompletionAuthority
+import com.meshcoreone.android.core.contracts.domain.DirectQueueAuthority
 import com.meshcoreone.android.core.contracts.domain.ChannelHistoryRejected
 import com.meshcoreone.android.core.contracts.domain.ChannelHistoryPersisting
 import com.meshcoreone.android.core.contracts.domain.ChannelIdentityWriteScope
@@ -350,7 +353,9 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
         }
         val persistence = object : PersistenceStoreProtocol by store, ChannelHistoryPersisting by store,
             QueuedChannelReadinessPersisting by store, QueuedChannelTerminalPersisting by store,
-            ChannelSubmissionPersisting by store, DirectAckAuthority by store {
+            ChannelSubmissionPersisting by store, DirectAckAuthority by store,
+            DirectQueueAuthority by store, DirectPendingCompletionAuthority by store,
+            DirectMessageCreationAuthority by store {
             override suspend fun <T> withChannelOperation(
                 block: suspend (ChannelPersisting, ChannelIdentityWriteScope) -> T,
             ): T {
@@ -451,7 +456,8 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
             radio.knownContacts += contactFrame(peerKey, "Lifetime peer")
             radio.respond = { frame ->
                 when (frame[0].toInt()) {
-                    2, 3 -> listOf(Bytes.of(1, if (channel) 6 else 2))
+                    2 -> sentAndDelivered(frame, radio.publicKey)
+                    3 -> listOf(Bytes.of(1, 6))
                     0x20 -> {
                         firmwareChannels[frame[1]] = Bytes.of(0x12) + frame.slice(1, frame.size)
                         listOf(Bytes.of(0))
@@ -481,14 +487,14 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                 ChannelDTO(radioId = radio, index = 0u, name = "Lifetime channel").also { store.saveChannel(it) }
             }
             val target = if (channel) ComposerTarget.Channel(slot) else ComposerTarget.Direct(contact)
-            suspend fun radioErrorAccounted(id: UUID): Boolean {
+            suspend fun dispatchAccounted(id: UUID): Boolean {
                 val message = store.fetchMessage(EntityKey(radio, id))
                 val pending = store.fetchPendingSendsForMessage(EntityKey(radio, id))
                 return if (channel) {
                     message?.status == (if (pending.singleOrNull()?.isResend == true) MessageStatus.FAILED else MessageStatus.PENDING) &&
                         pending.singleOrNull()?.channelDispatchState == QueuedChannelDispatchState.UNCERTAIN &&
                         pending.single().channelOccupantID == message.channelOccupantID
-                } else message?.status == MessageStatus.FAILED && pending.isEmpty()
+                } else message?.status == MessageStatus.DELIVERED && pending.isEmpty()
             }
             val conversation = if (channel) TimelineConversation.Channel(slot) else TimelineConversation.Direct(contact)
             val feature = h.container.chatsFeature
@@ -834,7 +840,7 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                         feature.timeline(conversation).retryService.retry(rows.single(), conversation)
                         h.eventually("explicit Retry on the original occupant sends exactly once") {
                             runBlocking {
-                                radioErrorAccounted(rows.single().id) &&
+                                dispatchAccounted(rows.single().id) &&
                                     h.links.radios.single().sent.count { it[0].toInt() == 3 } == 1
                             }
                         }
@@ -862,7 +868,7 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                 h.manager.connect(connectionTarget)
                 h.eventually("replacement drains the one durable queue row") {
                     runBlocking {
-                        radioErrorAccounted(saved.id)
+                        dispatchAccounted(saved.id)
                     }
                 }
                 assertEquals(1, h.links.radios.sumOf { link -> link.sent.count { it[0].toInt() == if (channel) 3 else 2 } })
@@ -887,7 +893,7 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
                 assertEquals(if (channel) slot.index else null, saved.channelIndex)
                 h.eventually("real queue accounts exactly one physical send") {
                     runBlocking {
-                        radioErrorAccounted(saved.id)
+                        dispatchAccounted(saved.id)
                     }
                 }
                 assertEquals(1, h.links.radios.single().sent.count { it[0].toInt() == if (channel) 3 else 2 })

@@ -157,24 +157,20 @@ fun ChatTimeline(
     val savedViewportAnchor = savedViewportMessageId?.let {
         TimelineScrollAnchor(UUID.fromString(it), savedViewportOffset)
     }
+    LaunchedEffect(state.initialAnchor, state.initialAnchorConsumed, visualRows, initialAnchorRequestId) {
+        if (state.initialAnchorConsumed || visualRows.isEmpty()) return@LaunchedEffect
+        val position = resolveInitialTimelinePosition(state.initialAnchor, savedViewportAnchor, visualRows)
+            ?: return@LaunchedEffect
+        listState.scrollToItem(position.index, position.offset)
+        callbacks.onInitialAnchorConsumed()
+    }
     val follow = remember(listState) { TimelineFollowTracker() }
     val newestKey = visualRows.firstOrNull()?.stableKey
-    LaunchedEffect(listState, state.initialAnchor, state.initialAnchorConsumed, visualRows, initialAnchorRequestId) {
-        if (newestKey == null) {
-            follow.trackedNewestKey = null
-            return@LaunchedEffect
-        }
+    LaunchedEffect(listState, newestKey, state.initialAnchorConsumed, initialAnchorRequestId) {
         val previousKey = follow.trackedNewestKey?.takeIf { key -> visualRows.any { it.stableKey == key } }
-        val pinned = follow.wasAtLatest
-        if (!state.initialAnchorConsumed) {
-            val position = resolveInitialTimelinePosition(state.initialAnchor, savedViewportAnchor, visualRows)
-            if (position != null) {
-                listState.scrollToItem(position.index, position.offset)
-                callbacks.onInitialAnchorConsumed()
-            }
-        } else {
+        if (state.initialAnchorConsumed) {
             val newestIsOutgoing = (visualRows.firstOrNull() as? TimelineRow.Message)?.message?.isOutgoing == true
-            if (shouldFollowLatest(previousKey, newestKey, pinned, newestIsOutgoing)) {
+            if (shouldFollowLatest(previousKey, newestKey, follow.wasAtLatest, newestIsOutgoing)) {
                 listState.scrollToItem(0)
             }
         }

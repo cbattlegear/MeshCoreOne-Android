@@ -31,6 +31,7 @@ import com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueService
 import com.meshcoreone.android.core.contracts.domain.errors.ChatSendQueueServiceError
 import com.meshcoreone.android.core.designsystem.MeshCoreTheme
 import com.meshcoreone.android.core.data.repository.RoomPersistenceStore
+import com.meshcoreone.android.core.database.DirectAckStorage
 import com.meshcoreone.android.core.database.MeshCoreDatabase
 import com.meshcoreone.android.core.model.*
 import com.meshcoreone.android.core.protocol.bytes.Bytes
@@ -279,6 +280,7 @@ class ComposerNavigationLifetimeTest : RoomProcessTest() {
         private val owner = CoroutineScope(ownerJob + Dispatchers.Default)
         private val immediate = java.util.concurrent.Executor { it.run() }
         val database = Room.databaseBuilder(context, MeshCoreDatabase::class.java, name)
+            .addCallback(DirectAckStorage.callback)
             .allowMainThreadQueries().setQueryExecutor(immediate).setTransactionExecutor(immediate).build()
         val store = RoomPersistenceStore(database, owner)
 

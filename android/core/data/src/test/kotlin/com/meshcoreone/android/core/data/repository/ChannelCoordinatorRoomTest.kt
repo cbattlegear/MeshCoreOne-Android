@@ -9,7 +9,6 @@ import com.meshcoreone.android.core.protocol.event.ChannelInfo
 import com.meshcoreone.android.core.protocol.event.MeshTransportError
 import com.meshcoreone.android.core.protocol.session.ChannelFetchResult
 import com.meshcoreone.android.core.protocol.session.ChannelSessionOps
-import com.meshcoreone.android.core.protocol.session.ChannelWriteDispatch
 import com.meshcoreone.android.core.services.contacts.ChannelDecryptionCache
 import com.meshcoreone.android.core.services.contacts.ChannelService
 import com.meshcoreone.android.core.services.contacts.ChannelServiceClock
@@ -22,7 +21,7 @@ class ChannelCoordinatorRoomTest : RepositoryTest() {
     private fun info(index: Int, name: String = "ch$index", byte: Int = 0xAB) =
         ChannelInfo(index.toUByte(), name, secret(byte))
 
-    private class Session(
+    private open class Session(
         private val rows: List<ChannelInfo>,
         private val missing: Set<UByte> = emptySet(),
         private val failedReads: Set<UByte> = emptySet(),
@@ -41,7 +40,7 @@ class ChannelCoordinatorRoomTest : RepositoryTest() {
         }
         private fun row(index: UByte) = rows.singleOrNull { it.index == index }
             ?: ChannelInfo(index, "", Bytes(ByteArray(16)))
-        override suspend fun setChannel(index: UByte, name: String, secret: Bytes) =
+        override suspend fun setChannel(index: UByte, name: String, secret: Bytes): Unit =
             error("This read-only sync fixture must not write a radio channel")
     }
 
@@ -53,13 +52,10 @@ class ChannelCoordinatorRoomTest : RepositoryTest() {
         }
     }
 
-    private class Writes : ChannelSessionOps by Session(emptyList()) {
+    private class Writes : Session(emptyList()) {
         val sent = mutableListOf<ChannelInfo>()
         override suspend fun setChannel(index: UByte, name: String, secret: Bytes) {
             sent += ChannelInfo(index, name, secret)
-        }
-        override suspend fun setChannel(index: UByte, name: String, secret: Bytes, dispatch: ChannelWriteDispatch) {
-            setChannel(index, name, secret)
         }
     }
 

@@ -131069,7 +131069,7 @@
     "android/core/l10n/src/test/resources/l10n-source-zh-Hans.json": "d427d3f1fd685fe78f302ee249891fea2120f03619fd1298eb44346166419817"
   },
   "generator": "tools/android-port/l10n_convert.py",
-  "generator_sha256": "97728789cb296b0443c2cf0b64fff188294cf2d50d469f5f8cd03adca3822593",
+  "generator_sha256": "c1071ae61bd8efc78563e8f1d32d3b0605bd558a3f91835f944e4ca60e0f0f5a",
   "inputs": [
     {
       "blob_sha": "3e71e1458a06af55d0fdd0330e93601f668f2038",

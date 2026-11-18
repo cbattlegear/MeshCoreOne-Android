@@ -66,6 +66,7 @@ import com.meshcoreone.android.core.l10n.R
 import com.meshcoreone.android.core.l10n.generated.AppContactsStrings as C
 import com.meshcoreone.android.core.model.ContactDTO
 import com.meshcoreone.android.core.protocol.model.ContactType
+import com.meshcoreone.android.core.ui.MeshSearchField
 import com.meshcoreone.android.feature.nodes.NodesNavigation
 import com.meshcoreone.android.feature.nodes.add.AddContactStateHolder
 import com.meshcoreone.android.feature.nodes.add.PublicKeyStatus
@@ -135,12 +136,11 @@ internal fun NodesListScreen(
     val syncScope = key(connection, radioId) { rememberCoroutineScope() }
     LazyColumn(modifier.fillMaxSize()) {
         item(key = "search") {
-            OutlinedTextField(
+            MeshSearchField(
                 value = search,
                 onValueChange = { search = it },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-                label = { Text(stringResource(C.contactsListSearchPrompt)) },
-                singleLine = true,
+                prompt = stringResource(C.contactsListSearchPrompt),
+                floatingLabel = true,
             )
         }
         item(key = "segments") {

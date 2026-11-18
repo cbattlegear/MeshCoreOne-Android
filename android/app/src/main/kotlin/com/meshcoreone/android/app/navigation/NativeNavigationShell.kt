@@ -287,8 +287,7 @@ fun NativeNavigationShell(
         stringResource(Strings.string.l10n_app_localizable_tabs_chatsunreadaccessibilityvalue, unreadCount)
     } else ""
     val chatComposeRequests = remember { ChatComposeRequests() }
-    val showChatCompose = chats != null && state.selectedTab == AppTab.CHATS &&
-        state.activeStack.lastOrNull()?.destination == NavigationDestination.Root(AppTab.CHATS)
+    val chatRadio = chats?.currentRadioId?.collectAsStateWithLifecycle()?.value
     val snackbar = remember { SnackbarHostState() }
     val failureMessage = when (val failure = state.failure) {
         null -> null
@@ -328,6 +327,12 @@ fun NativeNavigationShell(
         val width = maxWidth.value
         LaunchedEffect(coordinator, width) { coordinator.measureWindow(width) }
         val useRail = NavigationLayout.usesRail(width)
+        val tileListDetail = NavigationLayout.tilesListDetail(width) &&
+            !(state.selectedTab == AppTab.TOOLS && state.selectedTool?.prefersCollapsedSidebar == true)
+        val destination = state.activeStack.lastOrNull()?.destination
+        val showChatCompose = chatRadio != null && state.selectedTab == AppTab.CHATS &&
+            (destination == NavigationDestination.Root(AppTab.CHATS) ||
+                tileListDetail && destination is NavigationDestination.Chat)
         val hideNavigation = if (useRail) {
             state.selectedTab == AppTab.TOOLS && state.selectedTool?.prefersCollapsedSidebar == true
         } else !state.tabBarVisible
@@ -424,7 +429,9 @@ fun NativeNavigationShell(
                             actions = {
                                 if (showChatCompose) {
                                     ChatComposeMenu(onRequest = { kind ->
-                                        if (canNavigateFromCurrentRouteNow()) chatComposeRequests.request(kind)
+                                        if (canNavigateFromCurrentRouteNow() && chats?.currentRadioId?.value == chatRadio) {
+                                            chatComposeRequests.request(kind)
+                                        }
                                     }, enabled = canNavigateFromCurrentRoute)
                                 }
                                 if (state.selectedTab == AppTab.NODES) {
@@ -473,8 +480,6 @@ fun NativeNavigationShell(
                 // A root on another tab has Chats behind it, so native predictive Back previews the real target.
                 val backStack = if (state.selectedTab == AppTab.CHATS) active
                 else state.stacks.getValue(AppTab.CHATS) + active
-                val tileListDetail = NavigationLayout.tilesListDetail(width) &&
-                    !(state.selectedTab == AppTab.TOOLS && state.selectedTool?.prefersCollapsedSidebar == true)
                 val strategy = remember(tileListDetail) {
                     ListDetailStrategy(
                         tiled = tileListDetail,

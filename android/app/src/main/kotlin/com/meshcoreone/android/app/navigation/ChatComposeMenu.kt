@@ -21,7 +21,7 @@ import com.meshcoreone.android.core.designsystem.MeshSymbol
 import com.meshcoreone.android.core.l10n.generated.AppChatsStrings
 import com.meshcoreone.android.core.ui.ChatComposeRequest
 
-/** New chat / new channel menu shown in the top bar while the Chats list is the visible root. */
+/** New chat / new channel menu shown in the top bar while the Chats list is visible. */
 @Composable
 internal fun ChatComposeMenu(onRequest: (ChatComposeRequest) -> Unit, enabled: Boolean) {
     var open by remember { mutableStateOf(false) }

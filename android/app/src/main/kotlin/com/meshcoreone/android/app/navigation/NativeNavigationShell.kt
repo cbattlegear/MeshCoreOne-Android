@@ -115,6 +115,8 @@ import com.meshcoreone.android.app.container.AppChatsFeature
 import com.meshcoreone.android.app.container.onboarding.AppOnboarding
 import com.meshcoreone.android.feature.tools.los.LineOfSightEntry
 import com.meshcoreone.android.feature.tools.los.LineOfSightFeatureDependencies
+import com.meshcoreone.android.core.ui.ChatComposeRequests
+import com.meshcoreone.android.core.ui.LocalChatComposeRequests
 import com.meshcoreone.android.core.ui.UiErrorMapper
 import com.meshcoreone.android.core.ui.uiString
 import com.meshcoreone.android.core.l10n.generated.AppLocalizableStrings as L
@@ -286,6 +288,8 @@ fun NativeNavigationShell(
     val unreadDescription = if (unreadCount > 0) {
         stringResource(Strings.string.l10n_app_localizable_tabs_chatsunreadaccessibilityvalue, unreadCount)
     } else ""
+    val chatComposeRequests = remember { ChatComposeRequests() }
+    val chatRadio = chats?.currentRadioId?.collectAsStateWithLifecycle()?.value
     val snackbar = remember { SnackbarHostState() }
     val failureMessage = when (val failure = state.failure) {
         null -> null
@@ -325,6 +329,12 @@ fun NativeNavigationShell(
         val width = maxWidth.value
         LaunchedEffect(coordinator, width) { coordinator.measureWindow(width) }
         val useRail = NavigationLayout.usesRail(width)
+        val tileListDetail = NavigationLayout.tilesListDetail(width) &&
+            !(state.selectedTab == AppTab.TOOLS && state.selectedTool?.prefersCollapsedSidebar == true)
+        val destination = state.activeStack.lastOrNull()?.destination
+        val showChatCompose = chatRadio != null && state.selectedTab == AppTab.CHATS &&
+            (destination == NavigationDestination.Root(AppTab.CHATS) ||
+                tileListDetail && destination is NavigationDestination.Chat)
         val hideNavigation = if (useRail) {
             state.selectedTab == AppTab.TOOLS && state.selectedTool?.prefersCollapsedSidebar == true
         } else !state.tabBarVisible
@@ -426,6 +436,13 @@ fun NativeNavigationShell(
                                 }
                             },
                             actions = {
+                                if (showChatCompose) {
+                                    ChatComposeMenu(onRequest = { kind ->
+                                        if (canNavigateFromCurrentRouteNow() && chats?.currentRadioId?.value == chatRadio) {
+                                            chatComposeRequests.request(kind)
+                                        }
+                                    }, enabled = canNavigateFromCurrentRoute)
+                                }
                                 if (state.selectedTab == AppTab.NODES) {
                                     val remoteNodesLabel =
                                         stringResource(com.meshcoreone.android.core.l10n.generated.AppRemoteNodesStrings.remoteNodesAuthManagement)
@@ -472,8 +489,6 @@ fun NativeNavigationShell(
                 // A root on another tab has Chats behind it, so native predictive Back previews the real target.
                 val backStack = if (state.selectedTab == AppTab.CHATS) active
                 else state.stacks.getValue(AppTab.CHATS) + active
-                val tileListDetail = NavigationLayout.tilesListDetail(width) &&
-                    !(state.selectedTab == AppTab.TOOLS && state.selectedTool?.prefersCollapsedSidebar == true)
                 val strategy = remember(tileListDetail) {
                     ListDetailStrategy(
                         tiled = tileListDetail,
@@ -501,6 +516,7 @@ fun NativeNavigationShell(
                         ) {
                             CompositionLocalProvider(
                                 LocalNavigationEntryId provides entry.id,
+                                LocalChatComposeRequests provides chatComposeRequests,
                                 LocalPresentedNavigation provides latestPresented,
                                 LocalOnboardingRetention provides onboardingRetention,
                                 LocalOnboardingEntries provides latestOnboardingEntries,

@@ -134,7 +134,8 @@ internal fun NodesListScreen(
         MeshSearchField(
             value = search,
             onValueChange = { search = it },
-            placeholder = stringResource(C.contactsListSearchPrompt),
+            prompt = stringResource(C.contactsListSearchPrompt),
+            floatingLabel = true,
         )
         Row(
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),

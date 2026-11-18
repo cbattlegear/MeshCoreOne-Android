@@ -28,16 +28,21 @@ import androidx.compose.ui.unit.dp
 fun MeshSearchField(
     value: String,
     onValueChange: (String) -> Unit,
-    placeholder: String,
+    prompt: String,
     modifier: Modifier = Modifier,
+    floatingLabel: Boolean = false,
 ) {
+    val promptContent: @Composable () -> Unit = {
+        Text(prompt, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
         modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).sharedTouchTarget(),
         singleLine = true,
         shape = CircleShape,
-        placeholder = { Text(placeholder, color = MaterialTheme.colorScheme.onSurfaceVariant) },
+        label = if (floatingLabel) promptContent else null,
+        placeholder = if (floatingLabel) null else promptContent,
         leadingIcon = { Icon(SearchGlyph, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
         keyboardOptions = KeyboardOptions(
             capitalization = KeyboardCapitalization.None, keyboardType = KeyboardType.Text, imeAction = ImeAction.Search,

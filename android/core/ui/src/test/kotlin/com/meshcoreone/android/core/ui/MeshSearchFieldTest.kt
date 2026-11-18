@@ -8,6 +8,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performTextInput
@@ -44,5 +46,16 @@ class MeshSearchFieldTest {
         compose.onNodeWithText("Search nodes").performTextInput("relay")
         compose.waitForIdle()
         assertEquals("relay", text)
+    }
+
+    @Test
+    fun `floating label still names the field when populated`() {
+        controller.get().setContent {
+            MeshCoreTheme(motionScale = 0f) {
+                MeshSearchField("relay", {}, "Search nodes", floatingLabel = true)
+            }
+        }
+        compose.onNode(hasSetTextAction() and hasText("Search nodes"))
+            .assertIsDisplayed()
     }
 }

@@ -52,15 +52,23 @@ data class MaterialRoles(
     val incomingBubble: ThemeColor,
     val onIncomingBubble: ThemeColor,
     val incomingHashtag: ThemeColor,
+    /** AndroidOnly: contrast-fitted accent gradient stops (null = solid [primary] everywhere). */
+    val accentGradient: AccentGradient? = null,
+    /** AndroidOnly: text/icon color that clears the AA floor on both gradient stops. */
+    val onAccentGradient: ThemeColor = onPrimary,
 ) {
     companion object {
         fun from(frame: ThemeFrame): MaterialRoles {
             val floor = WCAGContrast.floor(frame.highContrast)
-            val primary = accessibleForegroundOnSurfaces(frame.accent, listOf(frame.canvas, frame.card, frame.incomingBubble), floor)
+            val surfaceTiers = listOf(frame.canvas, frame.card, frame.incomingBubble)
+            val primary = accessibleForegroundOnSurfaces(frame.accent, surfaceTiers, floor)
+            val gradient = frame.gradient?.let { fitGradient(it, surfaceTiers) }
+            val ink = frame.ink ?: ThemeColor.BLACK
+            val muted = frame.ink?.let { frame.canvas.mix(it, 0.78) } ?: ThemeColor.BLACK
             val primaryContainer = frame.canvas.mix(frame.accent, if (frame.highContrast) 0.10 else 0.15)
             val secondaryContainer = frame.card
             val secondary = accessibleForeground(frame.hashtag, frame.canvas, floor)
-            val tertiarySeed = frame.categoryAvatarColor(AvatarCategory.ROOM)
+            val tertiarySeed = gradient?.end ?: frame.categoryAvatarColor(AvatarCategory.ROOM)
             val tertiary = accessibleForeground(tertiarySeed, frame.canvas, floor)
             val tertiaryContainer = frame.canvas.mix(tertiarySeed, 0.12)
             val error = accessibleForeground(ThemeColor.hex(0xFF3B30), frame.canvas, floor)
@@ -72,17 +80,22 @@ data class MaterialRoles(
                 accessibleForeground(secondary, secondaryContainer, floor),
                 tertiary, readableGlyph(ThemeColor.WHITE, tertiary), tertiaryContainer,
                 accessibleForeground(tertiary, tertiaryContainer, floor),
-                frame.canvas, accessibleForeground(ThemeColor.BLACK, frame.canvas, floor),
-                frame.card, accessibleForeground(ThemeColor.BLACK, frame.card, floor),
-                frame.incomingBubble, accessibleForeground(ThemeColor.BLACK, frame.incomingBubble, floor),
-                accessibleForeground(frame.accent, frame.canvas, 3.0), frame.canvas.mix(primary, 0.25),
+                frame.canvas, accessibleForeground(ink, frame.canvas, floor),
+                frame.card, accessibleForeground(ink, frame.card, floor),
+                frame.incomingBubble, accessibleForeground(muted, frame.incomingBubble, floor),
+                outline(frame, UI_COMPONENT_FLOOR), frame.canvas.mix(primary, 0.25),
                 error, readableGlyph(ThemeColor.WHITE, error), errorContainer,
                 accessibleForeground(error, errorContainer, floor),
                 frame.accent, readableGlyph(frame.outgoingText, frame.accent), frame.incomingBubble,
-                accessibleForeground(ThemeColor.BLACK, frame.incomingBubble, floor),
+                accessibleForeground(ink, frame.incomingBubble, floor),
                 accessibleForeground(frame.hashtag, frame.incomingBubble, WCAGContrast.AA_FLOOR),
+                gradient, gradient?.let { glyphOnGradient(frame.outgoingText, it, floor) } ?: readableGlyph(frame.outgoingText, primary),
             )
         }
+
+        /** Essential component boundaries (fields, toggles) need 3:1; ink-based themes use a muted ink instead of the accent. */
+        private fun outline(frame: ThemeFrame, floor: Double): ThemeColor =
+            accessibleForeground(frame.ink?.let { frame.canvas.mix(it, 0.55) } ?: frame.accent, frame.canvas, floor)
     }
 
     fun signalColor(role: SignalColorRole): ThemeColor = accessibleForeground(

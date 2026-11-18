@@ -22,7 +22,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExtendedFloatingActionButton
+import com.meshcoreone.android.core.designsystem.AccentExtendedFab
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -159,31 +159,47 @@ fun ChatTimeline(
     }
     LaunchedEffect(state.initialAnchor, state.initialAnchorConsumed, visualRows, initialAnchorRequestId) {
         if (state.initialAnchorConsumed || visualRows.isEmpty()) return@LaunchedEffect
-        val position = resolveInitialTimelinePosition(
-            state.initialAnchor,
-            savedViewportAnchor,
-            visualRows,
-        ) ?: return@LaunchedEffect
+        val position = resolveInitialTimelinePosition(state.initialAnchor, savedViewportAnchor, visualRows)
+            ?: return@LaunchedEffect
         listState.scrollToItem(position.index, position.offset)
         callbacks.onInitialAnchorConsumed()
     }
+    val follow = remember(listState) { TimelineFollowTracker() }
+    val newestKey = visualRows.firstOrNull()?.stableKey
+    LaunchedEffect(listState, newestKey, state.initialAnchorConsumed, initialAnchorRequestId) {
+        val previousKey = follow.trackedNewestKey?.takeIf { key -> visualRows.any { it.stableKey == key } }
+        if (state.initialAnchorConsumed) {
+            val newestIsOutgoing = (visualRows.firstOrNull() as? TimelineRow.Message)?.message?.isOutgoing == true
+            if (shouldFollowLatest(previousKey, newestKey, follow.wasAtLatest, newestIsOutgoing)) {
+                listState.scrollToItem(0)
+            }
+        }
+        follow.trackedNewestKey = newestKey
+    }
     LaunchedEffect(listState, visualRows) {
         var previousVisibleIndices: List<Int>? = null
+        val rowsByKey = visualRows.associateBy(TimelineRow::stableKey)
         snapshotFlow {
+            if (newestKey != follow.trackedNewestKey) return@snapshotFlow null
             Triple(
-                listState.layoutInfo.visibleItemsInfo.map { it.index },
+                listState.layoutInfo.visibleItemsInfo.map { it.index to it.key },
                 listState.firstVisibleItemIndex,
                 listState.firstVisibleItemScrollOffset,
             )
-        }.collect { (visible, firstVisibleIndex, firstVisibleOffset) ->
-            val atLatest = visible.any { it == 0 } || visualRows.isEmpty()
-            val anchor = (visualRows.getOrNull(firstVisibleIndex) as? TimelineRow.Message)
+        }.collect { viewport ->
+            val (items, firstVisibleIndex, firstVisibleOffset) = viewport ?: return@collect
+            if (items.isEmpty() && newestKey != null) return@collect
+            val atLatest = isViewportAtLatest(items.map { (_, key) -> key }, newestKey)
+            follow.wasAtLatest = atLatest
+            val firstVisibleKey = items.firstOrNull { (index, _) -> index == firstVisibleIndex }?.second as? String
+            val anchor = (rowsByKey[firstVisibleKey] as? TimelineRow.Message)
                 ?.message?.id?.let { TimelineScrollAnchor(it, firstVisibleOffset) }
             if (anchor != null) {
                 savedViewportOffset = anchor.offset
                 savedViewportMessageId = anchor.messageId.toString()
             }
             callbacks.onScrollPositionChanged(anchor, atLatest)
+            val visible = items.map { (index, _) -> index }
             if (visible != previousVisibleIndices &&
                 visible.any { it >= visualRows.lastIndex - 3 } && state.hasMoreMessages && !state.isLoadingOlder
             ) {
@@ -273,7 +289,7 @@ fun ChatTimeline(
         }
         if (!state.isAtLatest || state.newMessageCount > 0) {
             val label = stringResource(AppChatsStrings.chatsScrollButtonScrollToBottomAccessibilityLabel)
-            ExtendedFloatingActionButton(
+            AccentExtendedFab(
                 onClick = {
                     scope.launch {
                         listState.animateScrollToItem(0)

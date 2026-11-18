@@ -25,7 +25,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -37,6 +36,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
@@ -52,6 +52,7 @@ import com.meshcoreone.android.core.ui.AvatarImageCache
 import com.meshcoreone.android.core.ui.ErrorBanner
 import com.meshcoreone.android.core.ui.FilterChoice
 import com.meshcoreone.android.core.ui.GlassFilterBar
+import com.meshcoreone.android.core.ui.MeshSearchField
 import com.meshcoreone.android.core.ui.UiErrorState
 import com.meshcoreone.android.core.ui.UiRecovery
 import com.meshcoreone.android.core.ui.UiText
@@ -109,7 +110,7 @@ fun ChatsListScreen(
         },
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
-            SearchField(state.searchText, callbacks.onSearchChange)
+            MeshSearchField(state.searchText, callbacks.onSearchChange, stringResource(AppChatsStrings.chatsSearchPlaceholder))
             FilterBar(state.selectedFilter, state.searchText.isNotEmpty(), callbacks.onFilterChange)
             state.errorBanner?.let { message ->
                 ErrorBanner(
@@ -139,6 +140,7 @@ private fun ConversationList(
     callbacks: ChatsListCallbacks,
 ) {
     val referenceDate = remember(clock, rows) { clock.instant() }
+    val dividerInset = conversationDividerInset(LocalDensity.current.fontScale)
     LazyColumn(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))) {
         items(rows, key = { it.id }) { conversation ->
             val route = ChatRoute.from(conversation)
@@ -155,7 +157,7 @@ private fun ConversationList(
                     onClick = { callbacks.onOpen(route) },
                     onAction = { callbacks.onAction(conversation, it) },
                 )
-                HorizontalDivider(Modifier.padding(start = 72.dp))
+                HorizontalDivider(Modifier.padding(start = dividerInset))
             }
         }
     }
@@ -179,15 +181,6 @@ private fun NewMessageMenu(onNewChat: () -> Unit, onNewChannel: () -> Unit) {
             )
         }
     }
-}
-
-@Composable
-private fun SearchField(text: String, onChange: (String) -> Unit) {
-    OutlinedTextField(
-        value = text, onValueChange = onChange, singleLine = true,
-        placeholder = { Text(stringResource(AppChatsStrings.chatsSearchPlaceholder)) },
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).sharedTouchTarget(),
-    )
 }
 
 @Composable

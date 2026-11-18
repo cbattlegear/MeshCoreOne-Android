@@ -34,7 +34,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import com.meshcoreone.android.core.designsystem.AvatarCategory
+import com.meshcoreone.android.core.designsystem.accentBackground
 import com.meshcoreone.android.core.designsystem.LocalMeshTheme
 import com.meshcoreone.android.core.designsystem.MeshSymbol
 import com.meshcoreone.android.core.designsystem.readableGlyph
@@ -56,6 +59,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 internal val AvatarSize = 44.dp
+internal val RowHorizontalPadding = 16.dp
+internal val RowAvatarGap = 12.dp
+
+/** Divider start inset: row padding + avatar (which grows with font size) + gap, so every divider lines up with the text. */
+internal fun conversationDividerInset(fontScale: Float): androidx.compose.ui.unit.Dp =
+    RowHorizontalPadding + AvatarSize * fontScale.coerceAtLeast(1f) + RowAvatarGap
 
 /** Display data a row needs beyond the [Conversation] itself. */
 data class ConversationRowModel(
@@ -75,7 +84,7 @@ internal fun ConversationRowContent(
     modifier: Modifier = Modifier,
 ) {
     val conversation = model.conversation
-    Row(modifier, horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(RowAvatarGap), verticalAlignment = Alignment.CenterVertically) {
         ConversationAvatar(conversation, model.title, avatarCache)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -155,6 +164,11 @@ internal fun NotificationLevelIndicator(level: NotificationLevel) {
     Icon(symbol.vector, stringResource(label), Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
+/** Accent-state badges use the theme gradient when it has one; muted/outline states stay flat so they read as inactive. */
+@Composable
+private fun unreadFill(accented: Boolean, shape: Shape, solid: Color): Modifier =
+    if (accented) Modifier.accentBackground(shape, solid) else Modifier.background(solid, shape)
+
 /** Mention "@" badge and unread-count capsule; the accent applies per notification level. */
 @Composable
 internal fun UnreadBadges(unreadCount: Long, unreadMentionCount: Long, level: NotificationLevel) {
@@ -163,12 +177,20 @@ internal fun UnreadBadges(unreadCount: Long, unreadMentionCount: Long, level: No
     // The row's merged description announces the count; the visual badges stay out of the semantic tree.
     Row(Modifier.clearAndSetSemantics { }, horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
         if (unreadMentionCount > 0) {
-            Box(Modifier.size(20.dp).clip(CircleShape).background(mentionColor), contentAlignment = Alignment.Center) {
+            Box(
+                Modifier.size(20.dp).clip(CircleShape)
+                    .then(unreadFill(level != NotificationLevel.MUTED, CircleShape, mentionColor)),
+                contentAlignment = Alignment.Center,
+            ) {
                 Text("@", color = MaterialTheme.colorScheme.onPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
             }
         }
         if (unreadCount > 0) {
-            Box(Modifier.clip(RoundedCornerShape(50)).background(unreadColor).padding(horizontal = 6.dp, vertical = 2.dp)) {
+            Box(
+                Modifier.clip(RoundedCornerShape(50))
+                    .then(unreadFill(level == NotificationLevel.ALL, RoundedCornerShape(50), unreadColor))
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
+            ) {
                 Text(unreadCount.toString(), color = MaterialTheme.colorScheme.onPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
             }
         }
